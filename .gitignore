@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.turbo/
+
+# Rust
+server/target/
+
+# Editors / OS
+.DS_Store

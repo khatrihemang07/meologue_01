@@ -1,0 +1,10 @@
+{
+  "name": "@meologue/web",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "build": "echo \"web: nothing to build yet\"",
+    "lint": "biome check .",
+    "format": "biome format --write ."
+  }
+}

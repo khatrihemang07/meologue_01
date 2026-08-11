@@ -1,0 +1,10 @@
+{
+  "name": "@meologue/core",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "build": "echo \"core: nothing to build yet\"",
+    "lint": "biome check .",
+    "format": "biome format --write ."
+  }
+}
