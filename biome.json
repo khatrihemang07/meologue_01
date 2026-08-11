@@ -7,7 +7,7 @@
   },
   "files": {
     "ignoreUnknown": true,
-    "includes": ["**", "!server", "!**/dist"]
+    "includes": ["**", "!server", "!**/dist", "!**/generated"]
   },
   "formatter": {
     "enabled": true,

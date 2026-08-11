@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: meologue-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: meologue
+      POSTGRES_PASSWORD: meologue
+      POSTGRES_DB: meologue
+    ports:
+      - "5432:5432"
+    volumes:
+      - meologue-pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U meologue -d meologue"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+volumes:
+  meologue-pgdata:
