@@ -1,7 +1,7 @@
 /**
- * The DOM half of continuous sync (ticket 11): @meologue/core's scheduler is
- * DOM-free, so visibility, focus, and online state are read and observed
- * here and injected into it as `isVisible`/`subscribe`.
+ * The web implementation of the wake-signals seam (ticket 12): @meologue/core's
+ * scheduler is DOM-free, so visibility, focus, and online state are read and
+ * observed here and injected into it as `isVisible`/`subscribe`.
  */
 export function isTabVisible(): boolean {
   return document.visibilityState === "visible";

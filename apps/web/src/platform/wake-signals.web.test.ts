@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { isTabVisible, subscribeToWakeEvents } from "./continuous-sync-signals";
+import { isTabVisible, subscribeToWakeEvents } from "./wake-signals.web";
 
 function setVisibility(state: DocumentVisibilityState) {
   Object.defineProperty(document, "visibilityState", {

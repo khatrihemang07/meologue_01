@@ -1,9 +1,9 @@
 import type { Entry, EntryStore } from "@meologue/core";
 import { SYNC_INTERVAL_MS, startContinuousSync, sync } from "@meologue/core";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { isTabVisible, subscribeToWakeEvents } from "@/lib/continuous-sync-signals";
 import { normalizeEntryBody } from "@/lib/entry-text";
 import { syncTransport } from "@/lib/sync-transport";
+import { isTabVisible, subscribeToWakeEvents } from "@/platform/wake-signals";
 
 export interface UseHistoryResult {
   entries: Entry[];

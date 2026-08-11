@@ -9,20 +9,40 @@ import { defineConfig } from "vite";
 // what keeps CORS configuration off the Rust server entirely.
 const SERVER_PROXY_TARGET = "http://localhost:41207";
 
-export default defineConfig({
-  plugins: [react(), tailwindcss()],
-  resolve: {
-    alias: {
-      "@": path.resolve(import.meta.dirname, "./src"),
+// The build-time platform seam (ticket 12): one Vite application whose
+// per-target files (e.g. `src/platform/wake-signals.<target>.ts`) are
+// selected here, via `--mode <target>`, rather than branched at runtime —
+// so a target's build never bundles another target's platform code. Any
+// mode outside this set (e.g. vitest's "test", or an unqualified
+// `vite build`'s "production") falls back to "web", so existing scripts and
+// the web build stay unchanged in behaviour.
+const BUILD_TARGETS = ["web", "android", "macos"];
+
+export default defineConfig(({ mode }) => {
+  const target = BUILD_TARGETS.includes(mode) ? mode : "web";
+
+  return {
+    plugins: [react(), tailwindcss()],
+    resolve: {
+      alias: [
+        {
+          find: "@/platform/wake-signals",
+          replacement: path.resolve(
+            import.meta.dirname,
+            `./src/platform/wake-signals.${target}.ts`,
+          ),
+        },
+        { find: "@", replacement: path.resolve(import.meta.dirname, "./src") },
+      ],
     },
-  },
-  server: {
-    proxy: {
-      "/v1": SERVER_PROXY_TARGET,
+    server: {
+      proxy: {
+        "/v1": SERVER_PROXY_TARGET,
+      },
     },
-  },
-  test: {
-    environment: "jsdom",
-    setupFiles: ["./src/test/setup.ts"],
-  },
+    test: {
+      environment: "jsdom",
+      setupFiles: ["./src/test/setup.ts"],
+    },
+  };
 });

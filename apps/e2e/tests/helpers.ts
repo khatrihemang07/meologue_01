@@ -37,7 +37,7 @@ export async function sendEntry(page: Page, body: string): Promise<void> {
 /**
  * Real OS-level tab backgrounding isn't controllable through Playwright, so
  * this drives the Page Visibility API directly, the same signal `apps/web`'s
- * continuous-sync wiring listens to (see continuous-sync-signals.ts).
+ * continuous-sync wiring listens to (see wake-signals.web.ts).
  */
 export async function setTabHidden(page: Page, hidden: boolean): Promise<void> {
   await page.evaluate((hidden) => {

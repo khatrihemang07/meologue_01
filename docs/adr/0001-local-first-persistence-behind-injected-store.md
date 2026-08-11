@@ -37,3 +37,13 @@ changing.
 Every later ticket that touches persistence talks to the store interface, not to a database
 directly. The fake implementation is expected to be replaced, not extended into a permanent
 storage engine.
+
+## Correction (2026-08-12)
+
+The "Decision" section above says the interface is backed by a fake (in-memory) implementation.
+That was true when this ADR was written; the store the web app actually ships,
+`LocalEntryStore` (`apps/web/src/lib/local-entry-store.ts`), is backed by `localStorage` and
+persists across reloads — browser-local, not in-memory. A separate in-memory fake,
+`InMemoryEntryStore` (`packages/core/src/test-support/in-memory-entry-store.ts`), does exist, but
+only as test support. Left uncorrected in place rather than rewritten, per this repo's convention
+of flagging drift instead of silently editing history.
