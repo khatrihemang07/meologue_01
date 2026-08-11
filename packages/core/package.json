@@ -2,14 +2,18 @@
   "name": "@meologue/core",
   "private": true,
   "version": "0.0.0",
+  "type": "module",
   "scripts": {
     "build": "echo \"core: nothing to build yet\"",
     "lint": "biome check .",
     "format": "biome format --write .",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
     "generate:wire-types": "cargo run --quiet --manifest-path ../../server/Cargo.toml -- openapi > ./src/generated/openapi.json && openapi-typescript ./src/generated/openapi.json -o ./src/generated/wire.ts"
   },
   "devDependencies": {
     "openapi-typescript": "^7.13.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10"
   }
 }

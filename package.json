@@ -9,6 +9,7 @@
     "build": "turbo run build",
     "lint": "turbo run lint",
     "format": "turbo run format",
+    "test": "turbo run test",
     "biome:check": "biome check .",
     "biome:format": "biome format --write ."
   },
