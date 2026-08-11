@@ -5,6 +5,8 @@ A personal log. Type a thought, press Send, and it shows up on your other device
 Local-first: writes land locally first and sync in the background, so the app stays usable
 when the server doesn't. Self-hosted — a single Rust binary and a Postgres container.
 
+![meologue screenshot](docs/screenshot.png)
+
 ## Run it
 
 Needs Node 20+, pnpm, Rust, and Docker.
@@ -12,14 +14,33 @@ Needs Node 20+, pnpm, Rust, and Docker.
 ```bash
 pnpm install
 docker compose up -d          # Postgres on :5432
+```
 
+Then pick **one** of the two workflows below — they both bind `:41207`, so don't run them
+at the same time.
+
+### Dev mode (hot reload)
+
+Two long-running processes, each in its **own terminal tab** (`cargo run` blocks, so chaining
+`pnpm dev` after it on the same line never gets to run it):
+
+```bash
+# terminal A
 cd server && cargo run        # API on :41207, migrations apply on boot
+```
+
+```bash
+# terminal B
 pnpm dev                      # app on :5173, proxying /v1 to the server
 ```
 
-Two processes in dev. The client only ever uses relative URLs, so it never needs to know
-the server's address — Vite proxies `/v1` during development, and in production the server
-serves the app itself:
+The client only ever uses relative URLs, so it never needs to know the server's address —
+Vite proxies `/v1` during development.
+
+### Production-style (single process)
+
+One terminal, no Vite dev server. Build the static app, then let the server serve both the
+app and the API on one port:
 
 ```bash
 pnpm --filter @meologue/web build
