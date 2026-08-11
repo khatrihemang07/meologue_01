@@ -12,7 +12,7 @@ pnpm --filter @meologue/e2e test:e2e
 ```
 
 Playwright's `webServer` (see `playwright.config.ts`) runs `scripts/e2e-server.sh`, which starts
-Postgres via `docker compose`, builds the web app, and boots the server on `:8090` — the same
+Postgres via `docker compose`, builds the web app, and boots the server on `:41217` — the same
 production serving path from `server/README.md`, exercised for real. Docker must be running.
 
 This suite is intentionally kept out of `pnpm test` (see root `turbo.json`): it needs Docker, a

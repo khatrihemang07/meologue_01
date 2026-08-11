@@ -24,7 +24,7 @@ async fn main() -> anyhow::Result<()> {
     let port: u16 = env::var("PORT")
         .ok()
         .and_then(|p| p.parse().ok())
-        .unwrap_or(8080);
+        .unwrap_or(41207);
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await?;
     println!("meologue-server listening on :{port}");
     axum::serve(listener, app).await?;

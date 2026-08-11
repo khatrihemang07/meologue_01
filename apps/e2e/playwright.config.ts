@@ -1,9 +1,9 @@
 import path from "node:path";
 import { defineConfig, devices } from "@playwright/test";
 
-// A dedicated port, distinct from the :8080 a developer's own `cargo run`
+// A dedicated port, distinct from the :41207 a developer's own `cargo run`
 // might already be using — the e2e run gets its own server instance.
-const PORT = 8090;
+const PORT = 41217;
 export const BASE_URL = `http://localhost:${PORT}`;
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..");

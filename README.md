@@ -13,7 +13,7 @@ Needs Node 20+, pnpm, Rust, and Docker.
 pnpm install
 docker compose up -d          # Postgres on :5432
 
-cd server && cargo run        # API on :8080, migrations apply on boot
+cd server && cargo run        # API on :41207, migrations apply on boot
 pnpm dev                      # app on :5173, proxying /v1 to the server
 ```
 
@@ -23,7 +23,7 @@ serves the app itself:
 
 ```bash
 pnpm --filter @meologue/web build
-cd server && cargo run        # app + API together on :8080
+cd server && cargo run        # app + API together on :41207
 ```
 
 That single port is the one to open from another device. The server binds `0.0.0.0`, so a

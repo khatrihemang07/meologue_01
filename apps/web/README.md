@@ -9,6 +9,6 @@ yet; see ticket #10 for wiring up Send/History.
 pnpm dev
 ```
 
-The dev server proxies `/v1/*` to the Rust server at `http://localhost:8080`, so the client
+The dev server proxies `/v1/*` to the Rust server at `http://localhost:41207`, so the client
 only ever uses relative URLs and never needs to know its own host. Run the server separately
 (`cargo run` in `server/`, with Postgres up via `docker-compose up -d`) for requests to resolve.

@@ -7,7 +7,7 @@ The Rust server. Owns the wire contract (see `docs/adr/`).
 ```sh
 docker compose up -d          # Postgres, from the repo root
 pnpm --filter @meologue/web build   # from the repo root — builds apps/web/dist
-cargo run                     # applies migrations, then serves the app on :8080
+cargo run                     # applies migrations, then serves the app on :41207
 ```
 
 `DATABASE_URL` defaults to `postgres://meologue:meologue@localhost:5432/meologue`, matching
