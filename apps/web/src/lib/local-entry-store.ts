@@ -43,11 +43,12 @@ function writeEntries(entries: Entry[]): void {
   localStorage.setItem(ENTRIES_KEY, JSON.stringify(entries));
 }
 
-// A stable sort (guaranteed by the spec since ES2019): Entries with the same
-// createdAt millisecond keep the relative order they were upserted in —
-// their actual arrival order — rather than an arbitrary id-based tiebreak.
+// Newest first. A stable sort (guaranteed by the spec since ES2019): Entries
+// with the same createdAt millisecond keep the relative order they were
+// upserted in — their actual arrival order — rather than an arbitrary
+// id-based tiebreak.
 function sortByCreatedAt(entries: Entry[]): Entry[] {
   return [...entries].sort((a, b) =>
-    a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0,
+    a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0,
   );
 }

@@ -1,19 +1,10 @@
 import type { Entry } from "@meologue/core";
-import { useEffect, useRef } from "react";
 
 interface EntryListProps {
   entries: Entry[];
 }
 
 export function EntryList({ entries }: EntryListProps) {
-  const bottomRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (entries.length > 0) {
-      bottomRef.current?.scrollIntoView({ block: "end" });
-    }
-  }, [entries]);
-
   if (entries.length === 0) {
     return <p className="text-center text-sm text-muted-foreground">History will appear here.</p>;
   }
@@ -28,7 +19,6 @@ export function EntryList({ entries }: EntryListProps) {
           {entry.body}
         </div>
       ))}
-      <div ref={bottomRef} />
     </div>
   );
 }

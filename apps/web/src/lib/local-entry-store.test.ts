@@ -49,7 +49,7 @@ describe("LocalEntryStore", () => {
 
     await store.upsert([later, earlierFirst, earlierSecond]);
 
-    expect((await store.list()).map((e) => e.id)).toEqual(["b", "a", "c"]);
+    expect((await store.list()).map((e) => e.id)).toEqual(["c", "b", "a"]);
   });
 
   it("breaks createdAt ties by arrival order, not by id", async () => {

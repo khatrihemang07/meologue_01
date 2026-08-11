@@ -13,7 +13,7 @@ export class InMemoryEntryStore implements EntryStore {
   async list(): Promise<Entry[]> {
     return [...this.entries.values()].sort((a, b) => {
       if (a.createdAt !== b.createdAt) {
-        return a.createdAt < b.createdAt ? -1 : 1;
+        return a.createdAt < b.createdAt ? 1 : -1;
       }
       return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
     });

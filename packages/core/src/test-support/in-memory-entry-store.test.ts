@@ -33,7 +33,7 @@ describe("InMemoryEntryStore", () => {
 
     await store.upsert([later, earlierTieB, earlierTieA]);
 
-    expect((await store.list()).map((e) => e.id)).toEqual(["a", "b", "c"]);
+    expect((await store.list()).map((e) => e.id)).toEqual(["c", "a", "b"]);
   });
 
   it("returns only Entries with a null sequence from pending()", async () => {
