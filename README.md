@@ -71,11 +71,36 @@ change `VITE_SERVER_URL` to a different host, update the exception in
 `android/app/src/main/res/xml/network_security_config.xml` — Android blocks cleartext traffic
 by default, so the tailnet host needs an explicit exception there.
 
+### macOS
+
+A Tauri v2 shell, buildable with Command Line Tools alone — no Xcode needed. Needs the Tauri
+CLI (`cargo install tauri-cli --version "^2"`) in addition to Rust. Build the web app for the
+`macos` target with the tailnet address baked in (same `VITE_SERVER_URL` as Android, see ADR
+0006), then build and launch the native app:
+
+```bash
+VITE_SERVER_URL=http://<your-tailnet-address>:41207 pnpm --filter @meologue/web build:macos
+cd apps/web/macos && cargo tauri build --debug
+open target/debug/bundle/macos/meologue.app
+```
+
+The macOS shell reuses the web `wake-signals` implementation unchanged (`wake-signals.macos.ts`
+just re-exports it) — a WKWebView has the same `visibilitychange`/`focus`/`online` events a
+browser tab does.
+
+The `apps/web/macos` crate is committed as source (its `target/` build output is not) — Tauri
+has no regeneration story, so a fresh checkout without it simply can't build the app. If you
+change `VITE_SERVER_URL` to a different host, update `bundle.macOS.exceptionDomain` in
+`macos/tauri.conf.json` — macOS's App Transport Security blocks plain-HTTP loads by default, so
+the tailnet host needs the same kind of explicit exception Android's
+`network_security_config.xml` carves out.
+
 ## Layout
 
 ```
-apps/web       React 19, Vite, Tailwind v4, shadcn/ui — also the source of the Android shell
+apps/web       React 19, Vite, Tailwind v4, shadcn/ui — also the source of the Android and macOS shells
 apps/web/android  Capacitor's generated Android project (committed as source)
+apps/web/macos    Tauri v2 crate for the macOS shell (committed as source)
 apps/e2e       Playwright, against the production serving path
 packages/core  sync engine and domain types — no React, no DOM
 server         Rust, Axum, sqlx, Postgres
@@ -124,5 +149,5 @@ client's timestamp, because when you wrote a thought is what you'll care about l
 ## Not built yet
 
 SQLite and full-text search (the local store is browser-local for now, behind the interface
-that SQLite will implement), offline PWA, macOS, editing, conflict copies, export, release
-signing, app icons beyond the template defaults.
+that SQLite will implement), offline PWA, editing, conflict copies, export, release signing,
+app icons beyond the template defaults.
