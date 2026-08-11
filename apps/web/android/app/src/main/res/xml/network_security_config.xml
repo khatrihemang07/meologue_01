@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android blocks cleartext traffic by default (targetSdkVersion 28+). The app
+  talks to the meologue server over `http` on the tailnet (ticket 14) rather
+  than `https`, since the server has no certificate — so this carves out a
+  narrow exception for that one host rather than allowing cleartext globally.
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">100.106.24.91</domain>
+    </domain-config>
+</network-security-config>

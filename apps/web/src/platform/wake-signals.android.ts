@@ -1,15 +1,32 @@
+import { App } from "@capacitor/app";
+
 /**
- * Placeholder Android implementation of the wake-signals seam (ticket 12).
- * The Android WebView doesn't expose the DOM visibility/focus/online events
- * this seam is built around, so a real implementation (likely bridging
- * lifecycle callbacks from native code) arrives with the Android ticket.
- * Until then: always visible, never wakes on its own — the interval in
- * @meologue/core's scheduler is what keeps sync running.
+ * Android's implementation of the wake-signals seam (ticket 12), backed by
+ * Capacitor's app-lifecycle events rather than DOM signals (ticket 14):
+ * backgrounding a WebView doesn't reliably flip `document.visibilityState`,
+ * and `window.online` frequently never fires at all. Connectivity changes
+ * are deliberately not listened for — a failed poll just retries on the
+ * next interval tick.
+ *
+ * Visible defaults to true: the app always launches in the foreground, and
+ * `subscribeToWakeEvents` — wired up as soon as the app mounts — is what
+ * keeps this current from then on.
  */
+let visible = true;
+
 export function isTabVisible(): boolean {
-  return true;
+  return visible;
 }
 
-export function subscribeToWakeEvents(_wake: () => void): () => void {
-  return () => {};
+export function subscribeToWakeEvents(wake: () => void): () => void {
+  const listenerHandle = App.addListener("appStateChange", ({ isActive }) => {
+    visible = isActive;
+    if (isActive) {
+      wake();
+    }
+  });
+
+  return () => {
+    void listenerHandle.then((listener) => listener.remove());
+  };
 }
