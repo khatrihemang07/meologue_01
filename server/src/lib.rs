@@ -5,12 +5,18 @@ use std::path::Path;
 
 use axum::{Router, routing::post};
 use sqlx::PgPool;
+use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 
 /// Serves `/v1/sync` plus the built web app out of `static_dir`, falling
 /// back to its `index.html` app shell for any other path — one process, one
 /// port, one URL, so a phone on the same network can just open an address
 /// (ticket 11).
+///
+/// CORS is wide open rather than restricted to a known origin: ADR 0003
+/// already trusts any Device that can reach the server at all, so an origin
+/// check would gate nothing a reachable attacker doesn't already have
+/// (ticket 13).
 pub fn router(pool: PgPool, static_dir: impl AsRef<Path>) -> Router {
     let static_dir = static_dir.as_ref();
     let index_html = static_dir.join("index.html");
@@ -20,4 +26,5 @@ pub fn router(pool: PgPool, static_dir: impl AsRef<Path>) -> Router {
         .route("/v1/sync", post(sync::sync_handler))
         .with_state(pool)
         .fallback_service(app_shell)
+        .layer(CorsLayer::permissive())
 }

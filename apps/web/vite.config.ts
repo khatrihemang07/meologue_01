@@ -4,9 +4,11 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
-// The client only ever uses relative URLs (e.g. `/v1/sync`) and never learns
-// its own host — this proxy is what makes that possible in dev, and is also
-// what keeps CORS configuration off the Rust server entirely.
+// With VITE_SERVER_URL unset (its default — see ADR 0006), the client uses
+// relative URLs (e.g. `/v1/sync`) and never learns its own host; this proxy
+// is what makes that work in dev, standing in for same-origin production
+// serving (ticket 11). The server still needs CORS (ticket 13) because a
+// built app running inside Capacitor or Tauri has no such origin to share.
 const SERVER_PROXY_TARGET = "http://localhost:41207";
 
 // The build-time platform seam (ticket 12): one Vite application whose

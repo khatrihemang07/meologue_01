@@ -12,6 +12,8 @@ const request: Parameters<SyncTransport>[0] = {
 describe("syncTransport", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    vi.resetModules();
   });
 
   it("posts the request to /v1/sync and returns the parsed response", async () => {
@@ -38,5 +40,22 @@ describe("syncTransport", () => {
     );
 
     await expect(syncTransport(request)).rejects.toThrow();
+  });
+
+  it("prefixes the request with VITE_SERVER_URL when set at build time", async () => {
+    vi.stubEnv("VITE_SERVER_URL", "https://phone.example:41207");
+    vi.resetModules();
+
+    const responseBody = { entries: [], cursor: 0 };
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => responseBody }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { syncTransport: rebuiltSyncTransport } = await import("./sync-transport");
+    await rebuiltSyncTransport(request);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://phone.example:41207/v1/sync",
+      expect.objectContaining({ method: "POST" }),
+    );
   });
 });

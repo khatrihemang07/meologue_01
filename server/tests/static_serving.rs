@@ -7,12 +7,11 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use sqlx::PgPool;
 use tower::ServiceExt;
-use uuid::Uuid;
+
+mod common;
 
 fn make_static_dir() -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("meologue-static-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&dir).unwrap();
-    fs::write(dir.join("index.html"), "<html>app shell</html>").unwrap();
+    let dir = common::make_static_dir("static-serving");
     fs::write(dir.join("app.js"), "console.log('hi')").unwrap();
     dir
 }
