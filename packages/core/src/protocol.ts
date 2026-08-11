@@ -4,3 +4,6 @@
  */
 export const PROTOCOL_VERSION = 1;
 export const SYNC_BATCH_SIZE = 500;
+
+/** The continuous-sync poll interval — "a few seconds" is the agreed bar for "live". */
+export const SYNC_INTERVAL_MS = 5000;

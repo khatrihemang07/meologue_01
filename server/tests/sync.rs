@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use chrono::Utc;
@@ -8,8 +10,14 @@ use sqlx::PgPool;
 use tower::ServiceExt;
 use uuid::Uuid;
 
+// These tests only ever hit /v1/sync, never a static asset — any directory
+// that exists is fine as the (otherwise unused) static_dir.
+fn empty_static_dir() -> PathBuf {
+    std::env::current_dir().unwrap()
+}
+
 async fn post_sync(pool: &PgPool, body: Value) -> (StatusCode, Value) {
-    let app = meologue_server::router(pool.clone());
+    let app = meologue_server::router(pool.clone(), empty_static_dir());
     let response = app
         .oneshot(
             Request::builder()

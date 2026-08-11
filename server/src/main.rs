@@ -4,6 +4,8 @@ use meologue_server::openapi;
 use sqlx::postgres::PgPoolOptions;
 
 const DEFAULT_DATABASE_URL: &str = "postgres://meologue:meologue@localhost:5432/meologue";
+// Relative to the server crate's own directory (cwd when run via `cargo run` from `server/`).
+const DEFAULT_STATIC_DIR: &str = "../apps/web/dist";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -16,7 +18,8 @@ async fn main() -> anyhow::Result<()> {
     let pool = PgPoolOptions::new().connect(&database_url).await?;
     sqlx::migrate!().run(&pool).await?;
 
-    let app = meologue_server::router(pool);
+    let static_dir = env::var("STATIC_DIR").unwrap_or_else(|_| DEFAULT_STATIC_DIR.to_string());
+    let app = meologue_server::router(pool, static_dir);
 
     let port: u16 = env::var("PORT")
         .ok()

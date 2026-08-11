@@ -1,0 +1,14 @@
+{
+  "name": "@meologue/e2e",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "test:e2e": "playwright test",
+    "lint": "biome check ."
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.1",
+    "@types/node": "^24.13.3"
+  }
+}

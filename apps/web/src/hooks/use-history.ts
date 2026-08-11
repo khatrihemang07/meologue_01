@@ -1,6 +1,7 @@
 import type { Entry, EntryStore } from "@meologue/core";
-import { sync } from "@meologue/core";
+import { SYNC_INTERVAL_MS, startContinuousSync, sync } from "@meologue/core";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { isTabVisible, subscribeToWakeEvents } from "@/lib/continuous-sync-signals";
 import { normalizeEntryBody } from "@/lib/entry-text";
 import { syncTransport } from "@/lib/sync-transport";
 
@@ -12,9 +13,11 @@ export interface UseHistoryResult {
 /**
  * Owns this Device's History: sync orchestration against an injected store
  * (ADR 0001 — the store's concrete implementation is a composition-root
- * concern, not this hook's) and the on-demand sync engine wired to the
+ * concern, not this hook's) and the continuous sync engine wired to the
  * server. An Entry renders from the local write immediately; sync runs
- * afterward and again silently refreshes the view once anything changes.
+ * afterward and keeps running — on an interval while the tab is visible,
+ * and on regaining focus/coming online — silently refreshing the view
+ * whenever anything changes (ticket 11).
  */
 export function useHistory(store: EntryStore, deviceId: string): UseHistoryResult {
   const [entries, setEntries] = useState<Entry[]>([]);
@@ -24,8 +27,8 @@ export function useHistory(store: EntryStore, deviceId: string): UseHistoryResul
     setEntries(await store.list());
   }, [store]);
 
-  // Coalesces overlapping calls (e.g. a Send arriving mid-startup-sync) into
-  // the single in-flight sync rather than racing two against the same store.
+  // Coalesces overlapping calls (e.g. a Send arriving mid-poll) into the
+  // single in-flight sync rather than racing two against the same store.
   const runSync = useCallback((): Promise<void> => {
     syncInFlight.current ??= (async () => {
       await sync({ store, transport: syncTransport, deviceId });
@@ -45,10 +48,15 @@ export function useHistory(store: EntryStore, deviceId: string): UseHistoryResul
   }, [runSync]);
 
   useEffect(() => {
-    void (async () => {
-      await refresh();
-      await runSyncSilently();
-    })();
+    void refresh();
+
+    const handle = startContinuousSync({
+      run: runSyncSilently,
+      intervalMs: SYNC_INTERVAL_MS,
+      isVisible: isTabVisible,
+      subscribe: subscribeToWakeEvents,
+    });
+    return () => handle.stop();
   }, [refresh, runSyncSilently]);
 
   const sendEntry = useCallback(
