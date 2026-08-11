@@ -22,16 +22,16 @@ at the same time.
 ### Dev mode (hot reload)
 
 Two long-running processes, each in its **own terminal tab** (`cargo run` blocks, so chaining
-`pnpm dev` after it on the same line never gets to run it):
+the second command after it on the same line never gets to run it):
 
 ```bash
 # terminal A
-cd server && cargo run        # API on :41207, migrations apply on boot
+cd server && cargo run                # API on :41207, migrations apply on boot
 ```
 
 ```bash
 # terminal B
-pnpm dev                      # app on :5173, proxying /v1 to the server
+pnpm --filter @meologue/web dev       # app on :5173, proxying /v1 to the server
 ```
 
 The client only ever uses relative URLs, so it never needs to know the server's address —
