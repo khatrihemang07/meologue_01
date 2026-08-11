@@ -41,15 +41,26 @@ describe("LocalEntryStore", () => {
     expect(all[0]).toEqual(second);
   });
 
-  it("orders Entries by createdAt, breaking ties by id", async () => {
+  it("orders Entries by createdAt", async () => {
     const store = new LocalEntryStore();
     const later = entry({ id: "c", createdAt: "2026-01-02T00:00:00.000Z" });
-    const earlierTieB = entry({ id: "b", createdAt: "2026-01-01T00:00:00.000Z" });
-    const earlierTieA = entry({ id: "a", createdAt: "2026-01-01T00:00:00.000Z" });
+    const earlierFirst = entry({ id: "b", createdAt: "2026-01-01T00:00:00.000Z" });
+    const earlierSecond = entry({ id: "a", createdAt: "2026-01-01T00:00:00.000Z" });
 
-    await store.upsert([later, earlierTieB, earlierTieA]);
+    await store.upsert([later, earlierFirst, earlierSecond]);
 
-    expect((await store.list()).map((e) => e.id)).toEqual(["a", "b", "c"]);
+    expect((await store.list()).map((e) => e.id)).toEqual(["b", "a", "c"]);
+  });
+
+  it("breaks createdAt ties by arrival order, not by id", async () => {
+    const store = new LocalEntryStore();
+    const sentFirst = entry({ id: "z-sent-first", createdAt: "2026-01-01T00:00:00.000Z" });
+    const sentSecond = entry({ id: "a-sent-second", createdAt: "2026-01-01T00:00:00.000Z" });
+
+    await store.upsert([sentFirst]);
+    await store.upsert([sentSecond]);
+
+    expect((await store.list()).map((e) => e.id)).toEqual(["z-sent-first", "a-sent-second"]);
   });
 
   it("returns only Entries with a null sequence from pending()", async () => {

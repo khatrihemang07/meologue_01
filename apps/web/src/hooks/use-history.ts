@@ -1,9 +1,7 @@
-import type { Entry } from "@meologue/core";
+import type { Entry, EntryStore } from "@meologue/core";
 import { sync } from "@meologue/core";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { getDeviceId } from "@/lib/device-id";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { normalizeEntryBody } from "@/lib/entry-text";
-import { LocalEntryStore } from "@/lib/local-entry-store";
 import { syncTransport } from "@/lib/sync-transport";
 
 export interface UseHistoryResult {
@@ -12,35 +10,46 @@ export interface UseHistoryResult {
 }
 
 /**
- * Owns this Device's History: the browser-local store, its id, and the
- * on-demand sync engine wired to the server. An Entry renders from the local
- * write immediately; sync runs afterward and again silently refreshes the
- * view once anything changes.
+ * Owns this Device's History: sync orchestration against an injected store
+ * (ADR 0001 — the store's concrete implementation is a composition-root
+ * concern, not this hook's) and the on-demand sync engine wired to the
+ * server. An Entry renders from the local write immediately; sync runs
+ * afterward and again silently refreshes the view once anything changes.
  */
-export function useHistory(): UseHistoryResult {
-  const store = useMemo(() => new LocalEntryStore(), []);
-  const deviceId = useMemo(() => getDeviceId(), []);
+export function useHistory(store: EntryStore, deviceId: string): UseHistoryResult {
   const [entries, setEntries] = useState<Entry[]>([]);
+  const syncInFlight = useRef<Promise<void> | null>(null);
 
   const refresh = useCallback(async () => {
     setEntries(await store.list());
   }, [store]);
 
-  const runSync = useCallback(async () => {
-    await sync({ store, transport: syncTransport, deviceId });
-    await refresh();
+  // Coalesces overlapping calls (e.g. a Send arriving mid-startup-sync) into
+  // the single in-flight sync rather than racing two against the same store.
+  const runSync = useCallback((): Promise<void> => {
+    syncInFlight.current ??= (async () => {
+      await sync({ store, transport: syncTransport, deviceId });
+      await refresh();
+    })().finally(() => {
+      syncInFlight.current = null;
+    });
+    return syncInFlight.current;
   }, [store, deviceId, refresh]);
+
+  const runSyncSilently = useCallback(async () => {
+    try {
+      await runSync();
+    } catch (error) {
+      console.error("meologue: sync failed", error);
+    }
+  }, [runSync]);
 
   useEffect(() => {
     void (async () => {
       await refresh();
-      try {
-        await runSync();
-      } catch (error) {
-        console.error("meologue: startup sync failed", error);
-      }
+      await runSyncSilently();
     })();
-  }, [refresh, runSync]);
+  }, [refresh, runSyncSilently]);
 
   const sendEntry = useCallback(
     (raw: string) => {
@@ -61,15 +70,10 @@ export function useHistory(): UseHistoryResult {
       void (async () => {
         await store.upsert([entry]);
         await refresh();
-
-        try {
-          await runSync();
-        } catch (error) {
-          console.error("meologue: sync failed", error);
-        }
+        await runSyncSilently();
       })();
     },
-    [deviceId, store, refresh, runSync],
+    [deviceId, store, refresh, runSyncSilently],
   );
 
   return { entries, sendEntry };
