@@ -5,7 +5,7 @@ use sqlx::postgres::PgPoolOptions;
 
 const DEFAULT_DATABASE_URL: &str = "postgres://meologue:meologue@localhost:5432/meologue";
 // Relative to the server crate's own directory (cwd when run via `cargo run` from `server/`).
-const DEFAULT_STATIC_DIR: &str = "../apps/web/dist";
+const DEFAULT_STATIC_DIR: &str = "../apps/web/dist/web";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

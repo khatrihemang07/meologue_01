@@ -11,5 +11,5 @@ pnpm --filter @meologue/web build
 
 cd server
 export DATABASE_URL="${DATABASE_URL:-postgres://meologue:meologue@localhost:5432/meologue}"
-export STATIC_DIR="../apps/web/dist"
+export STATIC_DIR="../apps/web/dist/web"
 exec cargo run

@@ -25,6 +25,10 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react(), tailwindcss()],
+    // Nested under the same `target` used for the platform-file alias above,
+    // so each target's bundle lands in its own directory and a build for one
+    // target can never overwrite another's (ticket 17).
+    build: { outDir: `dist/${target}` },
     resolve: {
       alias: [
         {

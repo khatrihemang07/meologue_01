@@ -8,7 +8,7 @@ import type { CapacitorConfig } from "@capacitor/cli";
 const config: CapacitorConfig = {
   appId: "com.meologue.app",
   appName: "meologue",
-  webDir: "dist",
+  webDir: "dist/android",
   server: {
     androidScheme: "http",
   },

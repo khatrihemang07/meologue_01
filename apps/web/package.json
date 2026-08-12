@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "pnpm build:web",
     "build:web": "tsc -b && vite build --mode web",
     "build:android": "tsc -b && vite build --mode android",
     "build:macos": "tsc -b && vite build --mode macos",

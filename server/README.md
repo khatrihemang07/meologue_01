@@ -6,14 +6,14 @@ The Rust server. Owns the wire contract (see `docs/adr/`).
 
 ```sh
 docker compose up -d          # Postgres, from the repo root
-pnpm --filter @meologue/web build   # from the repo root — builds apps/web/dist
+pnpm --filter @meologue/web build   # from the repo root
 cargo run                     # applies migrations, then serves the app on :41207
 ```
 
 `DATABASE_URL` defaults to `postgres://meologue:meologue@localhost:5432/meologue`, matching
 `docker-compose.yml`; override it to point elsewhere.
 
-`STATIC_DIR` defaults to `../apps/web/dist` (i.e. the built web app, relative to this crate);
+`STATIC_DIR` defaults to `../apps/web/dist/web` (i.e. the built web app, relative to this crate);
 override it if you're running the binary from somewhere else. One process serves both the API
 and the built app on one port — open that port's address from any device on the same network
 (e.g. a phone) to get a working app; no separate web server or CORS configuration needed.
