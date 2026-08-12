@@ -38,6 +38,17 @@ pnpm install
 docker compose up -d          # Postgres on :5432
 ```
 
+To stop Postgres again:
+
+```bash
+docker compose stop           # container and data both stay
+docker compose down           # also removes the container and network
+```
+
+`stop` is the one you want day to day — `docker compose start` brings it back. Postgres is
+`restart: unless-stopped`, so it returns after a reboot until you stop it explicitly. Neither
+command touches your Entries; only `down -v` does, and it discards all of them on this machine.
+
 Then pick a platform. All three talk to the same server, so start it first.
 
 ### Web
