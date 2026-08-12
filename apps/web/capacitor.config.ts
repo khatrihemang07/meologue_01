@@ -12,6 +12,15 @@ const config: CapacitorConfig = {
   server: {
     androidScheme: "http",
   },
+  // The Android shell is a sibling app directory, not a child of the web app:
+  // `apps/android` alongside `apps/macos`. Capacitor would otherwise generate
+  // `android/` next to this config file. This config stays here because it
+  // describes how the web app is packaged, and keeping it here is what lets
+  // `apps/android` hold the native project alone — no second package.json and
+  // no duplicated Capacitor dependencies.
+  android: {
+    path: "../android",
+  },
 };
 
 export default config;
