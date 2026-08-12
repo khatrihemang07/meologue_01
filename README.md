@@ -5,12 +5,7 @@ A personal log. Type a thought, press Send, and it shows up on your other device
 ![The meologue web app: a text box reading "What's on your mind?" above a list of recent entries](docs/screenshot-web.png)
 
 Local-first: writes land on the device first and sync in the background, so the app keeps working
-when the server doesn't. Self-hosted — a single Rust binary and a Postgres container. One codebase
-runs on the web, Android, and macOS.
-
-| macOS | Android |
-| --- | --- |
-| <img src="docs/screenshot-macos.png" alt="meologue running as a native macOS window" width="420"> | <img src="docs/screenshot-android.png" alt="meologue running as an Android app" width="196"> |
+when the server doesn't. Self-hosted — a single Rust binary and a Postgres container.
 
 ## What it does
 
@@ -24,6 +19,15 @@ runs on the web, Android, and macOS.
 Entries are **append-only and immutable** — no edit, no delete. An entry is closer to a thought you
 had at a moment than to a document you maintain. That constraint is why there is no conflict
 resolution anywhere in the codebase: two devices can never disagree about an entry.
+
+## One app, three platforms
+
+The screenshot above is the web app. These are the same UI, built from the same source, running as
+a native macOS window and an installed Android app — not a browser pointed at a website.
+
+| macOS | Android |
+| --- | --- |
+| <img src="docs/screenshot-macos.png" alt="meologue running as a native macOS window, with the composer above a list of entries" width="440"> | <img src="docs/screenshot-android.png" alt="meologue running as an Android app, showing the same composer and entry list" width="200"> |
 
 ## Run it
 
