@@ -4,7 +4,14 @@ import { Link } from "react-router";
 import { Shell } from "@/components/shell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { readServerUrl, readTheme, type Theme, writeServerUrl, writeTheme } from "@/lib/settings";
+import {
+  normaliseServerUrl,
+  readServerUrl,
+  readTheme,
+  type Theme,
+  writeServerUrl,
+  writeTheme,
+} from "@/lib/settings";
 import { applyTheme } from "@/lib/theme";
 
 const THEME_OPTIONS: { value: Theme; label: string }[] = [
@@ -28,9 +35,11 @@ export function SettingsPage() {
 
   function saveServerUrl() {
     writeServerUrl(serverUrl);
-    // Reflect back the normalised (trimmed, trailing-slash-stripped) value
-    // rather than leaving whatever the user typed sitting in the field.
-    setServerUrl(readServerUrl());
+    // Show the normalised (trimmed, trailing-slash-stripped) value rather
+    // than whatever the user typed. Computed, not read back from storage: a
+    // refused write would make a read-back return the previous value and
+    // blank the field the user just filled in.
+    setServerUrl(normaliseServerUrl(serverUrl));
   }
 
   return (

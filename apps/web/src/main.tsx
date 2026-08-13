@@ -10,9 +10,10 @@ if (!rootElement) {
   throw new Error("#root element not found");
 }
 
-// Applied before the first render, not inside a component, so the `dark`
-// class is already on <html> for React's first paint — localStorage is
-// synchronous, so there is no flash of the wrong theme to correct later.
+// index.html already applied the theme inline, before the browser's first
+// paint — this bundle is a deferred module and would otherwise run after the
+// stylesheet had painted the light palette. Re-applying here keeps the whole
+// resolution in one place for every later change, and costs one class toggle.
 applyTheme(readTheme());
 watchSystemTheme();
 

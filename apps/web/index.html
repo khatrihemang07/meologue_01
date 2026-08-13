@@ -5,6 +5,27 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Meologue</title>
+    <!--
+      Puts the theme class on <html> before the browser's first paint. This has
+      to be an inline, blocking script rather than main.tsx: the app bundle is a
+      deferred module, so the stylesheet lands and paints :root's light palette
+      while the bundle is still being fetched. Verified as a real flash of white
+      when reloading a Device set to Dark. Keep the key and the resolution below
+      in step with src/lib/settings.ts and src/lib/theme.ts — main.tsx applies
+      the same theme again once it runs, so this is a paint-time head start, not
+      a second source of truth.
+    -->
+    <script>
+      try {
+        const stored = localStorage.getItem("meologue.theme");
+        const dark =
+          stored === "dark" ||
+          (stored !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+        document.documentElement.classList.toggle("dark", dark);
+      } catch {
+        // Storage refused (private browsing) — fall through to the light default.
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>

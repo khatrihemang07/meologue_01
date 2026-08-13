@@ -22,7 +22,7 @@ class MemoryStorage implements Storage {
   }
 
   getItem(key: string): string | null {
-    return this.#data.has(key) ? (this.#data.get(key) as string) : null;
+    return this.#data.get(key) ?? null;
   }
 
   key(index: number): string | null {

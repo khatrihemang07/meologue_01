@@ -1,8 +1,5 @@
 import { readTheme, type Theme } from "@/lib/settings";
 
-// `.dark` and `@custom-variant dark (&:is(.dark *))` in index.css already
-// carry a complete dark palette; nothing applies the class anywhere, so
-// that half of the stylesheet has been dead code until this file.
 const DARK_MEDIA_QUERY = "(prefers-color-scheme: dark)";
 
 function prefersDark(): boolean {
@@ -14,10 +11,13 @@ function resolve(theme: Theme): "light" | "dark" {
 }
 
 /**
- * Toggles the `dark` class on the document root. index.css pairs `:root`
- * and `.dark` each with their own `color-scheme`, so this same toggle also
- * carries scrollbars and native form controls over to the dark palette —
- * no separate style to set here.
+ * Toggles the `dark` class on the document root, switching index.css's
+ * `.dark` palette on. index.css pairs `:root` and `.dark` each with their
+ * own `color-scheme`, so this same toggle also carries scrollbars and
+ * native form controls over — no separate style to set here.
+ *
+ * index.html runs the same resolution inline before first paint; this is
+ * what keeps it applied as the theme changes afterwards.
  */
 export function applyTheme(theme: Theme): void {
   document.documentElement.classList.toggle("dark", resolve(theme) === "dark");

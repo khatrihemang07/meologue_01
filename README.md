@@ -85,7 +85,8 @@ device over adb. Needs the Android SDK command-line tools and a JDK, with `ANDRO
 `JAVA_HOME` set.
 
 Unlike the web build, a packaged app has no same-origin server to talk to, so its address is baked
-in at build time (`VITE_SERVER_URL`, see ADR 0008). Point it at a tailnet address — that stays
+in at build time (`VITE_SERVER_URL`, see ADR 0006 for why, and ADR 0008 for the runtime override
+that now sits in front of it). Point it at a tailnet address — that stays
 reachable when you change networks, which a LAN address does not. The in-app Settings page can
 override this address at runtime without a rebuild — useful for pointing an already-installed app
 at a different Server — but the OS-level cleartext exceptions below are still keyed to one

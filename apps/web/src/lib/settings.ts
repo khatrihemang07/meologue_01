@@ -48,10 +48,18 @@ export function readServerUrl(): string {
   }
 }
 
+/**
+ * Exported so the Settings page can show the user exactly what was stored
+ * without reading it back — a read-back would return the *previous* value
+ * when the write was refused, silently blanking what they typed.
+ */
+export function normaliseServerUrl(url: string): string {
+  return url.trim().replace(/\/$/, "");
+}
+
 export function writeServerUrl(url: string): void {
-  const normalised = url.trim().replace(/\/$/, "");
   try {
-    localStorage.setItem(SERVER_URL_KEY, normalised);
+    localStorage.setItem(SERVER_URL_KEY, normaliseServerUrl(url));
   } catch {
     // Refused write — sync keeps using whatever value it last read.
   }
