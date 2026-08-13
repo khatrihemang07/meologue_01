@@ -15,7 +15,7 @@ export class InMemoryEntryStore implements EntryStore {
       if (a.createdAt !== b.createdAt) {
         return a.createdAt < b.createdAt ? 1 : -1;
       }
-      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+      return a.id > b.id ? -1 : a.id < b.id ? 1 : 0;
     });
   }
 
