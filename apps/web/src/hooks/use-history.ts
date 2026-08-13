@@ -56,6 +56,10 @@ export function useHistory(store: EntryStore, deviceId: string): UseHistoryResul
       isVisible: isTabVisible,
       subscribe: subscribeToWakeEvents,
     });
+    // Navigating away from the history page (e.g. to Settings, ticket 25)
+    // unmounts this hook, and this cleanup stops continuous sync with it;
+    // navigating back remounts the hook and sync resumes. Intended — there's
+    // no History on screen to keep fresh while the page is somewhere else.
     return () => handle.stop();
   }, [refresh, runSyncSilently]);
 
