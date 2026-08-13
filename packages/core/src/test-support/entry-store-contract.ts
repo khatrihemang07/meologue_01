@@ -34,9 +34,9 @@ export function entryStoreContract(createStore: () => EntryStore | Promise<Entry
     expect(all[0]).toEqual(second);
   });
 
-  // Newest first by createdAt. Ties break by id descending — Entry ids
-  // become time-ordered (uuidv7) shortly, and an ascending tiebreak would
-  // order same-millisecond Entries oldest-first inside a newest-first list.
+  // Newest first by createdAt. Ties break by id descending — Entry ids are
+  // time-ordered (uuidv7), and an ascending tiebreak would order
+  // same-millisecond Entries oldest-first inside a newest-first list.
   it("orders Entries by createdAt descending, breaking ties by id descending", async () => {
     const later = entry({ id: "c", createdAt: "2026-01-02T00:00:00.000Z" });
     const earlierTieB = entry({ id: "b", createdAt: "2026-01-01T00:00:00.000Z" });

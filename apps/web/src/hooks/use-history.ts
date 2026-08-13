@@ -1,5 +1,5 @@
 import type { Entry, EntryStore } from "@meologue/core";
-import { SYNC_INTERVAL_MS, startContinuousSync, sync } from "@meologue/core";
+import { mintId, SYNC_INTERVAL_MS, startContinuousSync, sync } from "@meologue/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { normalizeEntryBody } from "@/lib/entry-text";
 import { syncTransport } from "@/lib/sync-transport";
@@ -67,7 +67,7 @@ export function useHistory(store: EntryStore, deviceId: string): UseHistoryResul
       }
 
       const entry: Entry = {
-        id: crypto.randomUUID(),
+        id: mintId(),
         deviceId,
         body,
         createdAt: new Date().toISOString(),
