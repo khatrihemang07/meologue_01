@@ -39,13 +39,16 @@ export default defineConfig(({ mode }) => {
           ),
         },
         {
-          find: "@/platform/entry-store",
-          replacement: path.resolve(import.meta.dirname, `./src/platform/entry-store.${target}.ts`),
+          find: "@/platform/sqlite-driver",
+          replacement: path.resolve(
+            import.meta.dirname,
+            `./src/platform/sqlite-driver.${target}.ts`,
+          ),
         },
         { find: "@", replacement: path.resolve(import.meta.dirname, "./src") },
       ],
     },
-    // sqlite-worker.web.ts (only ever reachable from entry-store.web.ts) uses a
+    // sqlite-worker.web.ts (only ever reachable from sqlite-driver.web.ts) uses a
     // static `import`; Vite's default worker output format (iife) can't contain
     // one, so module workers need this set explicitly.
     worker: { format: "es" },

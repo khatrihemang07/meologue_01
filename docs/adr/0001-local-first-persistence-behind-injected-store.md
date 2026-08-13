@@ -47,3 +47,9 @@ persists across reloads — browser-local, not in-memory. A separate in-memory f
 `InMemoryEntryStore` (`packages/core/src/test-support/in-memory-entry-store.ts`), does exist, but
 only as test support. Left uncorrected in place rather than rewritten, per this repo's convention
 of flagging drift instead of silently editing history.
+
+## Correction (2026-08-13)
+
+`LocalEntryStore` and its browser-local Device id, described in the correction above, no longer
+exist (ticket 24). All three platforms now open the SQLite store behind the same injected
+`EntryStore` interface this ADR established; `localStorage` appears nowhere in the app.

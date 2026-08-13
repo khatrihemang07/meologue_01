@@ -1,4 +1,5 @@
 import type { EntryStore } from "@meologue/core";
+import { open } from "@meologue/core";
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { Composer } from "@/components/composer";
@@ -6,12 +7,20 @@ import { EntryList } from "@/components/entry-list";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useHistory } from "@/hooks/use-history";
 import { SecondTabError, StorageUnavailableError } from "@/lib/entry-store-errors";
-import { openEntryStore } from "@/platform/entry-store";
+import { createDriver } from "@/platform/sqlite-driver";
 
 type EntryStoreState =
   | { status: "loading" }
   | { status: "ready"; store: EntryStore; deviceId: string }
   | { status: "error"; message: string };
+
+// This is the composition root for the sqlite-driver seam (ticket 24): each
+// platform file supplies only a driver, and the store is opened here, once,
+// rather than duplicated per platform.
+async function openEntryStore() {
+  const driver = await createDriver();
+  return open(driver);
+}
 
 // A Device has exactly one store for the life of a page load, so this is
 // memoized at module scope rather than per-mount: React 19's StrictMode

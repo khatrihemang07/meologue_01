@@ -3,7 +3,7 @@
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
     "paths": {
       "@/platform/wake-signals": ["./src/platform/wake-signals.web.ts"],
-      "@/platform/entry-store": ["./src/platform/entry-store.web.ts"],
+      "@/platform/sqlite-driver": ["./src/platform/sqlite-driver.web.ts"],
       "@/*": ["./src/*"]
     },
     "target": "es2023",

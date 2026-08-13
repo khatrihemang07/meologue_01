@@ -177,6 +177,5 @@ The generated output is committed, so a fresh checkout doesn't need a Rust toolc
 
 ## Not built yet
 
-SQLite and full-text search (the local store is browser-local for now, behind the interface that
-SQLite will implement), offline PWA, editing, conflict copies, export, release signing, app icons
-beyond the template defaults, and browser access over plain HTTP from another device.
+Full-text search, offline PWA, editing, conflict copies, export, release signing, app icons beyond
+the template defaults, and browser access over plain HTTP from another device.
