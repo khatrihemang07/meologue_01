@@ -1,15 +1,16 @@
 import type { EntryStore } from "@meologue/core";
-import { getDeviceId } from "@/lib/device-id";
-import { LocalEntryStore } from "@/lib/local-entry-store";
+import { open } from "@meologue/core";
+import { TauriSqliteDriver } from "./tauri-sqlite-driver";
 
 /**
- * macOS's entry-store seam — unchanged from ticket 21: the browser-local
- * store, wrapped as async to match the shared signature. Used to reuse
- * entry-store.android.ts (identical at the time), but ticket 22 moved
- * Android onto its own real SQLite driver, so that file no longer
- * describes macOS's behaviour; this now stands alone until macOS gets its
- * own SQLite driver in a later ticket.
+ * macOS's entry-store seam (ticket 23): opens the SQLite store behind
+ * `@tauri-apps/plugin-sql` rather than the browser-local store this used
+ * before. Existing local data is not migrated — entries already synced
+ * return from the server on the first pull, and only never-synced entries
+ * are lost, the trade ticket 22 accepted for Android and carried over here.
  */
 export async function openEntryStore(): Promise<{ store: EntryStore; deviceId: string }> {
-  return { store: new LocalEntryStore(), deviceId: getDeviceId() };
+  const driver = new TauriSqliteDriver();
+  await driver.connect();
+  return open(driver);
 }
