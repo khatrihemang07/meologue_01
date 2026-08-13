@@ -31,7 +31,7 @@ a native macOS window and an installed Android app — not a browser pointed at 
 
 ## Run it
 
-Needs Node 20+, pnpm, Rust, and Docker.
+Needs Node 22+, pnpm, Rust, and Docker.
 
 ```bash
 pnpm install
@@ -72,10 +72,11 @@ cd server && cargo run                # app + API together on :41207
 The web build talks to its own origin, so it never needs to know the server's address.
 
 > **Reaching it from another device's browser doesn't work yet.** The server binds `0.0.0.0`, so the
-> port is reachable across your LAN or tailnet — but the app calls `crypto.randomUUID()`, which
-> browsers expose only in a [secure context](https://developer.mozilla.org/en-US/docs/Web/Security/Secure_Contexts).
-> Over plain HTTP to anything other than `localhost`, the app renders a blank page. Use the native
-> apps below for other devices, or put the server behind TLS.
+> port is reachable across your LAN or tailnet — but the web app stores Entries in SQLite over OPFS,
+> which browsers only allow in a [secure context](https://developer.mozilla.org/en-US/docs/Web/Security/Secure_Contexts).
+> Over plain HTTP to anything other than `localhost`, the app shows an explicit "can't store Entries
+> here" message instead of a blank page. Use the native apps below for other devices, or put the
+> server behind TLS.
 
 ### Android
 

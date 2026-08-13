@@ -38,9 +38,20 @@ export default defineConfig(({ mode }) => {
             `./src/platform/wake-signals.${target}.ts`,
           ),
         },
+        {
+          find: "@/platform/entry-store",
+          replacement: path.resolve(import.meta.dirname, `./src/platform/entry-store.${target}.ts`),
+        },
         { find: "@", replacement: path.resolve(import.meta.dirname, "./src") },
       ],
     },
+    // sqlite-worker.web.ts (only ever reachable from entry-store.web.ts) uses a
+    // static `import`; Vite's default worker output format (iife) can't contain
+    // one, so module workers need this set explicitly.
+    worker: { format: "es" },
+    // @sqlite.org/sqlite-wasm's own wasm loader doesn't survive Vite's dev-time
+    // dependency pre-bundling (its docs call this out for the worker usage).
+    optimizeDeps: { exclude: ["@sqlite.org/sqlite-wasm"] },
     server: {
       proxy: {
         "/v1": SERVER_PROXY_TARGET,

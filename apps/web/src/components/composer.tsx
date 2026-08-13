@@ -5,13 +5,19 @@ import { normalizeEntryBody } from "@/lib/entry-text";
 
 interface ComposerProps {
   onSend: (body: string) => void;
+  /**
+   * Sending before the store finishes its async open would look identical
+   * to a normal Send but silently never persist (ticket 21) — the disabled
+   * state guards that window rather than trusting callers not to send early.
+   */
+  disabled?: boolean;
 }
 
-export function Composer({ onSend }: ComposerProps) {
+export function Composer({ onSend, disabled = false }: ComposerProps) {
   const [value, setValue] = useState("");
 
   const send = () => {
-    if (normalizeEntryBody(value) === null) {
+    if (disabled || normalizeEntryBody(value) === null) {
       return;
     }
     onSend(value);
@@ -32,8 +38,9 @@ export function Composer({ onSend }: ComposerProps) {
         value={value}
         onChange={(event) => setValue(event.target.value)}
         onKeyDown={handleKeyDown}
+        disabled={disabled}
       />
-      <Button className="self-end" onClick={send}>
+      <Button className="self-end" onClick={send} disabled={disabled}>
         Send
       </Button>
     </div>

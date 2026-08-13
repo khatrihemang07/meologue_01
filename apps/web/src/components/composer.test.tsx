@@ -49,4 +49,23 @@ describe("Composer", () => {
 
     expect(onSend).toHaveBeenCalledWith("hello");
   });
+
+  it("disables the textarea and Send button while disabled", () => {
+    const onSend = vi.fn();
+    render(<Composer onSend={onSend} disabled />);
+
+    expect(getTextarea()).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+  });
+
+  it("ignores Enter and the Send button while disabled", () => {
+    const onSend = vi.fn();
+    render(<Composer onSend={onSend} disabled />);
+
+    fireEvent.change(getTextarea(), { target: { value: "hello" } });
+    fireEvent.keyDown(getTextarea(), { key: "Enter" });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(onSend).not.toHaveBeenCalled();
+  });
 });
