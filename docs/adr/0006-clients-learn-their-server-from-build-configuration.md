@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Superseded by [0008](0008-device-settings-are-local-configuration-outside-the-entry-store.md)
 
 ## Context
 

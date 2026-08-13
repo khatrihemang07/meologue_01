@@ -31,3 +31,18 @@ test("the gear link on the history page navigates to Settings", async ({ page })
   await expect(page).toHaveURL("/settings");
   await expect(page.getByText("Settings")).toBeVisible();
 });
+
+// Unit tests already cover applyTheme/watchSystemTheme in isolation; what
+// only a real page load can prove is that the class survives past a hard
+// reload of the actual production build — i.e. that main.tsx really does
+// apply it before first paint, from real localStorage, not a mock of it.
+test("choosing Dark in Settings survives a hard reload", async ({ page }) => {
+  await page.goto("/settings");
+  await page.getByRole("button", { name: "Dark" }).click();
+
+  await expect(page.locator("html")).toHaveClass(/dark/);
+
+  await page.reload();
+
+  await expect(page.locator("html")).toHaveClass(/dark/);
+});

@@ -44,6 +44,11 @@ A Device's record of how far it has Synced. A Cursor only ever advances — it m
 to which a Device has already received every Entry there is to receive, so that Syncing again
 only needs to ask for what came after.
 
+### Server
+
+The thing a Device Syncs through. Every Device exchanges Entries with the Server rather than with
+other Devices directly.
+
 ## Terms we avoid
 
 ### "message"

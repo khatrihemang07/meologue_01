@@ -85,8 +85,11 @@ device over adb. Needs the Android SDK command-line tools and a JDK, with `ANDRO
 `JAVA_HOME` set.
 
 Unlike the web build, a packaged app has no same-origin server to talk to, so its address is baked
-in at build time (`VITE_SERVER_URL`, see ADR 0006). Point it at a tailnet address — that stays
-reachable when you change networks, which a LAN address does not.
+in at build time (`VITE_SERVER_URL`, see ADR 0008). Point it at a tailnet address — that stays
+reachable when you change networks, which a LAN address does not. The in-app Settings page can
+override this address at runtime without a rebuild — useful for pointing an already-installed app
+at a different Server — but the OS-level cleartext exceptions below are still keyed to one
+hardcoded address, so a runtime override only reaches a Server the OS already trusts.
 
 ```bash
 VITE_SERVER_URL=http://<your-tailnet-address>:41207 pnpm --filter @meologue/web build:android
@@ -173,9 +176,12 @@ The generated output is committed, so a fresh checkout doesn't need a Rust toolc
 - `CONTEXT.md` — the glossary. Use these words; the code does.
 - `docs/adr/` — why things are the way they are, including the three most likely to surprise you:
   there is no authentication (trust is network-level), the sync insert takes an advisory lock on
-  purpose, and clients learn their server address at build time.
+  purpose, and a client's server address is a build-time default that Settings can override at
+  runtime, never synced.
 
 ## Not built yet
 
 Full-text search, offline PWA, editing, conflict copies, export, release signing, app icons beyond
-the template defaults, and browser access over plain HTTP from another device.
+the template defaults, and browser access over plain HTTP from another device. Settings has no
+sync-status UI, so a bad runtime Server URL fails silently to the console rather than surfacing in
+the app — the obvious next step, not yet built.
