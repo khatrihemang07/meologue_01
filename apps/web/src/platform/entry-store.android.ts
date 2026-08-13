@@ -1,13 +1,16 @@
 import type { EntryStore } from "@meologue/core";
-import { getDeviceId } from "@/lib/device-id";
-import { LocalEntryStore } from "@/lib/local-entry-store";
+import { open } from "@meologue/core";
+import { CapacitorSqliteDriver } from "./capacitor-sqlite-driver";
 
 /**
- * Android's entry-store seam (ticket 21) — unchanged from before this
- * ticket: the browser-local store, wrapped as async to match the shared
- * signature. Gets its own real SQLite driver in a later ticket, at which
- * point only this file changes.
+ * Android's entry-store seam (ticket 22): opens the SQLite store behind
+ * `@capacitor-community/sqlite` rather than the browser-local store this
+ * used before. Existing local data is not migrated — entries already
+ * synced return from the server on the first pull, and only never-synced
+ * entries are lost, the trade accepted for this ticket.
  */
 export async function openEntryStore(): Promise<{ store: EntryStore; deviceId: string }> {
-  return { store: new LocalEntryStore(), deviceId: getDeviceId() };
+  const driver = new CapacitorSqliteDriver();
+  await driver.connect();
+  return open(driver);
 }
