@@ -20,8 +20,13 @@
     "generate:wire-types": "cargo run --quiet --manifest-path ../../server/Cargo.toml -- openapi > ./src/generated/openapi.json && openapi-typescript ./src/generated/openapi.json -o ./src/generated/wire.ts"
   },
   "devDependencies": {
+    "@types/node": "^24.13.3",
+    "drizzle-kit": "^0.31.10",
     "openapi-typescript": "^7.13.0",
     "typescript": "^5.9.3",
     "vitest": "^4.1.10"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.45.2"
   }
 }
