@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Tauri merges this file into the generated Info.plist. App Transport Security blocks
+  cleartext HTTP by default; tauri.conf.json's `bundle.macOS.exceptionDomain` can only name
+  one host, but the Server URL (ticket 26) is typed at runtime and can be any address on the
+  user's network, so no single hardcoded domain can anticipate it. NSAllowsArbitraryLoads
+  lifts the restriction for every host instead. The server has no certificate to offer
+  (ADR 0003: trust is network-level, not transport-level), so `http` cleartext is the only
+  way this app ever reaches it.
+-->
+<plist version="1.0">
+<dict>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
+</dict>
+</plist>
