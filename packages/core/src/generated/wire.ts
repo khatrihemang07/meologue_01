@@ -4,6 +4,29 @@
  */
 
 export interface paths {
+    "/v1/health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Answers whether an address is actually a meologue Server, and which
+         *     protocol it speaks — without touching the database, so a Server whose
+         *     Postgres is down still identifies itself. Unlike `/v1/sync`, this never
+         *     rejects on protocol version: its whole job is letting the caller compare
+         *     versions themselves. See ADR 0010.
+         */
+        get: operations["health_handler"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/sync": {
         parameters: {
             query?: never;
@@ -44,6 +67,11 @@ export interface components {
             /** Format: int64 */
             seq: number;
         };
+        HealthResponse: {
+            /** Format: int32 */
+            protocol_version: number;
+            service: string;
+        };
         SyncRequest: {
             /** Format: uuid */
             device_id: string;
@@ -67,6 +95,26 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    health_handler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description This address is a meologue Server speaking protocol_version */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HealthResponse"];
+                };
+            };
+        };
+    };
     sync_handler: {
         parameters: {
             query?: never;

@@ -18,9 +18,12 @@ override it if you're running the binary from somewhere else. One process serves
 and the built app on one port — open that port's address from any device on the same network
 (e.g. a phone) to get a working app; no separate web server or CORS configuration needed.
 
-## Endpoint
+## Endpoints
 
-`POST /v1/sync` — see `docs/adr/0002-*` and `docs/adr/0004-*` for the design.
+- `GET /v1/health` — a service marker and protocol version, so a Device can tell this is a
+  meologue Server before trusting it with Entries. Never touches the database and never rejects
+  on protocol version — see `docs/adr/0010-*`.
+- `POST /v1/sync` — see `docs/adr/0002-*` and `docs/adr/0004-*` for the design.
 
 ## Serving the web app
 

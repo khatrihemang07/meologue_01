@@ -1,9 +1,13 @@
+pub mod health;
 pub mod openapi;
 pub mod sync;
 
 use std::path::Path;
 
-use axum::{Router, routing::post};
+use axum::{
+    Router,
+    routing::{get, post},
+};
 use sqlx::PgPool;
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
@@ -23,6 +27,7 @@ pub fn router(pool: PgPool, static_dir: impl AsRef<Path>) -> Router {
     let app_shell = ServeDir::new(static_dir).fallback(ServeFile::new(index_html));
 
     Router::new()
+        .route("/v1/health", get(health::health_handler))
         .route("/v1/sync", post(sync::sync_handler))
         .with_state(pool)
         .fallback_service(app_shell)

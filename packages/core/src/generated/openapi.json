@@ -9,6 +9,27 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/v1/health": {
+      "get": {
+        "tags": [
+          "crate::health"
+        ],
+        "summary": "Answers whether an address is actually a meologue Server, and which\nprotocol it speaks — without touching the database, so a Server whose\nPostgres is down still identifies itself. Unlike `/v1/sync`, this never\nrejects on protocol version: its whole job is letting the caller compare\nversions themselves. See ADR 0010.",
+        "operationId": "health_handler",
+        "responses": {
+          "200": {
+            "description": "This address is a meologue Server speaking protocol_version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/sync": {
       "post": {
         "tags": [
@@ -99,6 +120,22 @@
           "seq": {
             "type": "integer",
             "format": "int64"
+          }
+        }
+      },
+      "HealthResponse": {
+        "type": "object",
+        "required": [
+          "service",
+          "protocol_version"
+        ],
+        "properties": {
+          "protocol_version": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "service": {
+            "type": "string"
           }
         }
       },
