@@ -1,6 +1,5 @@
-import { ArrowLeft } from "lucide-react";
 import { useState } from "react";
-import { Link } from "react-router";
+import { BackLink } from "@/components/nav-links";
 import { Shell } from "@/components/shell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -44,13 +43,7 @@ export function SettingsPage() {
 
   return (
     <Shell title="Settings">
-      <Link
-        to="/"
-        className="inline-flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
-      >
-        <ArrowLeft aria-hidden="true" className="size-4" />
-        Back
-      </Link>
+      <BackLink />
 
       <div className="flex flex-col gap-2">
         <span className="text-sm font-medium">Theme</span>

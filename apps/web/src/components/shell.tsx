@@ -7,7 +7,7 @@ interface ShellProps {
   action?: ReactNode;
   message?: string;
   children: ReactNode;
-  /** Rendered below the card, outside it — e.g. the history page's EntryList. */
+  /** Rendered below the card, outside it — e.g. the Composer page's History. */
   footer?: ReactNode;
 }
 

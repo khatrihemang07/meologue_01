@@ -1,10 +1,10 @@
 import type { Entry } from "@meologue/core";
 
-interface EntryListProps {
+interface HistoryProps {
   entries: Entry[];
 }
 
-export function EntryList({ entries }: EntryListProps) {
+export function History({ entries }: HistoryProps) {
   if (entries.length === 0) {
     return <p className="text-center text-sm text-muted-foreground">History will appear here.</p>;
   }

@@ -24,12 +24,43 @@ test("/settings loads directly, survives a hard reload, and a back link returns 
   await expect(page.getByText(body)).toBeVisible();
 });
 
-test("the gear link on the history page navigates to Settings", async ({ page }) => {
+test("the gear link on the composer navigates to Settings", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("link", { name: "Settings" }).click();
 
   await expect(page).toHaveURL("/settings");
   await expect(page.getByText("Settings")).toBeVisible();
+});
+
+// ticket 27 — History becomes its own route, sharing the store and sync
+// loop that the composer at "/" opens, via a layout route above both.
+test("/history loads directly, survives a hard reload, and a back link returns to a working composer", async ({
+  page,
+}) => {
+  await page.goto("/history");
+  await expect(page.getByText("History", { exact: true })).toBeVisible();
+
+  await page.reload();
+  await expect(page.getByText("History", { exact: true })).toBeVisible();
+
+  await page.getByRole("link", { name: /back/i }).click();
+  await expect(page).toHaveURL("/");
+
+  const body = uniqueEntryBody("history-route");
+  await sendEntry(page, body);
+  await expect(page.getByText(body)).toBeVisible();
+});
+
+test("an Entry sent from the composer appears on /history", async ({ page }) => {
+  const body = uniqueEntryBody("shared-history");
+  await page.goto("/");
+  await sendEntry(page, body);
+  await expect(page.getByText(body)).toBeVisible();
+
+  await page.getByRole("link", { name: "History" }).click();
+
+  await expect(page).toHaveURL("/history");
+  await expect(page.getByText(body)).toBeVisible();
 });
 
 // Unit tests already cover applyTheme/watchSystemTheme in isolation; what
@@ -67,14 +98,22 @@ test("the theme is on the document before the app bundle runs", async ({ page })
 });
 
 // The store is memoized at module scope so a second open can't race the
-// first for the OPFS pool lock. Routing away and back remounts the page and
-// re-runs its effect, which is exactly the path that would reopen it — a
-// reopened store surfaces the second-tab message instead of the History.
-test("routing to Settings and back does not reopen the store", async ({ page }) => {
+// first for the OPFS pool lock. Routing away and back remounts EntryStoreLayout
+// (ticket 27) and re-runs its effect, which is exactly the path that would
+// reopen it — a reopened store surfaces the second-tab message instead of
+// the History.
+test("routing between /, /history and /settings does not reopen the store", async ({ page }) => {
   const body = uniqueEntryBody("round-trip");
   await page.goto("/");
   await sendEntry(page, body);
   await expect(page.getByText(body)).toBeVisible();
+
+  await page.getByRole("link", { name: "History" }).click();
+  await expect(page).toHaveURL("/history");
+  await expect(page.getByText(body)).toBeVisible();
+
+  await page.getByRole("link", { name: /back/i }).click();
+  await expect(page).toHaveURL("/");
 
   await page.getByRole("link", { name: "Settings" }).click();
   await expect(page).toHaveURL("/settings");
@@ -83,4 +122,30 @@ test("routing to Settings and back does not reopen the store", async ({ page }) 
 
   await expect(page.getByText(body)).toBeVisible();
   await expect(page.getByText(/already open in another tab/i)).toHaveCount(0);
+});
+
+// ADR 0009's central claim: the sync loop is no longer tied to the
+// lifecycle of the component that used to own it, so it keeps running even
+// while EntryStoreLayout — and every page nested under it — is unmounted.
+// Counting real /v1/sync requests while parked on Settings is a direct
+// check of that, rather than inferring it from timing on the way back.
+test("the sync loop keeps making requests while the user is on Settings", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("link", { name: "Settings" }).click();
+  await expect(page).toHaveURL("/settings");
+
+  let syncRequestsWhileOnSettings = 0;
+  const onRequest = (request: import("@playwright/test").Request) => {
+    if (request.url().endsWith("/v1/sync")) {
+      syncRequestsWhileOnSettings++;
+    }
+  };
+  page.on("request", onRequest);
+
+  // Longer than one poll interval (SYNC_INTERVAL_MS is 5s) so a loop still
+  // running fires at least once more while this page sits on Settings.
+  await page.waitForTimeout(6_000);
+
+  page.off("request", onRequest);
+  expect(syncRequestsWhileOnSettings).toBeGreaterThan(0);
 });

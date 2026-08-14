@@ -1,4 +1,6 @@
 import { BrowserRouter, Route, Routes } from "react-router";
+import { ComposerPage } from "@/pages/composer-page";
+import { EntryStoreLayout } from "@/pages/entry-store-layout";
 import { HistoryPage } from "@/pages/history-page";
 import { SettingsPage } from "@/pages/settings-page";
 
@@ -8,11 +10,19 @@ import { SettingsPage } from "@/pages/settings-page";
 // resolution falls back to the app shell the same way. No route segment
 // below may ever contain a "." — Capacitor's fallback check treats a dot in
 // the last path segment as a request for a real file, not the app shell.
+//
+// EntryStoreLayout wraps only `/` and `/history` (ticket 27): both read the
+// Entry store and History through it, opened and synced exactly once.
+// Settings is a sibling, not a child of that layout — ADR 0008 requires it
+// to stay usable even when the store never reaches "ready".
 function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={<HistoryPage />} />
+        <Route element={<EntryStoreLayout />}>
+          <Route path="/" element={<ComposerPage />} />
+          <Route path="/history" element={<HistoryPage />} />
+        </Route>
         <Route path="/settings" element={<SettingsPage />} />
       </Routes>
     </BrowserRouter>
