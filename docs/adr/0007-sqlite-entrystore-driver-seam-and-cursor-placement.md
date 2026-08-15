@@ -83,11 +83,18 @@ asks for everything again — so the two must fail together, which means they mu
   actually stored, not ahead of it — the next sync re-fetches a page it already has (redundant,
   not lossy) rather than skipping one it doesn't (lossy).
 
-This stops holding the moment any of those three changes: a migration with an `ALTER TABLE` or a
-data backfill (no longer safely re-runnable), a multi-statement write that isn't a single
-upsert, or a write ordering where the Cursor could advance ahead of the Entries it claims to
-account for. Whoever changes one of those adds a transaction; this paragraph is what they're
-overriding.
+This stops holding the moment any of those three changes: a migration with an `ALTER TABLE` or an
+*unguarded* data backfill (one with no condition stopping it from re-inserting what a prior,
+interrupted run already committed), a multi-statement write that isn't a single upsert, or a write
+ordering where the Cursor could advance ahead of the Entries it claims to account for. Whoever
+changes one of those adds a transaction; this paragraph is what they're overriding.
+
+**Amendment (ADR 0014):** the search-index migration adds a data backfill
+(`INSERT ... SELECT ... WHERE id NOT IN (...)`) without a transaction. This doesn't override the
+paragraph above — the backfill's own `WHERE id NOT IN (...)` is exactly the re-run guard the
+*unguarded* qualifier carves out, and it's one statement, which SQLite already runs atomically on
+its own even outside an explicit transaction. A backfill only needs the transaction this ADR
+describes when it lacks that kind of guard.
 
 **`drizzle-kit push` must never be run against this project.** `push` diffs a schema against a
 live database and applies the difference directly — it doesn't consult or write our migration

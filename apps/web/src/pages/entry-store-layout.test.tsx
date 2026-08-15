@@ -33,6 +33,7 @@ function createFakeStore(): EntryStore {
     pending: vi.fn(async () => []),
     getCursor: vi.fn(async () => 0),
     setCursor: vi.fn(async () => {}),
+    search: vi.fn(async () => []),
   };
 }
 

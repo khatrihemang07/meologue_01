@@ -63,4 +63,56 @@ export function entryStoreContract(createStore: () => EntryStore | Promise<Entry
 
     expect(await store.getCursor()).toBe(7);
   });
+
+  it("search finds Entries by a word prefix, in History's order", async () => {
+    const task = entry({
+      id: "a",
+      body: "a recurring task",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    const theme = entry({
+      id: "b",
+      body: "recurring theme in art",
+      createdAt: "2026-01-02T00:00:00.000Z",
+    });
+    const unrelated = entry({ id: "c", body: "buy milk", createdAt: "2026-01-03T00:00:00.000Z" });
+
+    await store.upsert([task, theme, unrelated]);
+
+    expect((await store.search("recur")).map((e) => e.id)).toEqual(["b", "a"]);
+  });
+
+  it("search does not match a word that merely contains the query, not as a prefix", async () => {
+    await store.upsert([entry({ id: "a", body: "a recurring task" })]);
+
+    expect(await store.search("urring")).toEqual([]);
+  });
+
+  it("search treats quotes, wildcards and boolean-looking words as literal text, never throwing", async () => {
+    await store.upsert([entry({ id: "a", body: 'AND OR NOT "quoted" * text' })]);
+
+    // A literal match on the body's own text — if this were parsed as
+    // query syntax instead of searched for, it either wouldn't match, or
+    // would throw.
+    expect((await store.search('AND OR NOT "quoted" *')).map((e) => e.id)).toEqual(["a"]);
+    await expect(store.search('he said "hello')).resolves.toEqual([]);
+    await expect(store.search("!!!")).resolves.toEqual([]);
+  });
+
+  it("search treats an empty or whitespace-only query as matching nothing", async () => {
+    await store.upsert([entry({ id: "a", body: "anything at all" })]);
+
+    expect(await store.search("")).toEqual([]);
+    expect(await store.search("   ")).toEqual([]);
+  });
+
+  it("search redelivering the same Entry via upsert does not duplicate results", async () => {
+    const original = entry({ id: "a", body: "recurring task", seq: null });
+    const synced = entry({ id: "a", body: "recurring task", seq: 1 });
+
+    await store.upsert([original]);
+    await store.upsert([synced]);
+
+    expect((await store.search("recur")).map((e) => e.id)).toEqual(["a"]);
+  });
 }

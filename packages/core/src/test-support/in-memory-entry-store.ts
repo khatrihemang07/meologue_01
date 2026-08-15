@@ -36,4 +36,43 @@ export class InMemoryEntryStore implements EntryStore {
   async setCursor(seq: number): Promise<void> {
     this.cursor = seq;
   }
+
+  async search(query: string): Promise<Entry[]> {
+    const queryTokens = tokenize(query);
+    if (queryTokens.length === 0) {
+      return [];
+    }
+    const all = await this.list();
+    return all.filter((entry) => matchesPrefixPhrase(tokenize(entry.body), queryTokens));
+  }
+}
+
+// Mirrors the SQLite store's FTS5 unicode61 tokenizer closely enough for
+// the shared contract (../test-support/entry-store-contract.ts) to assert
+// the same behaviour against both: split on anything that isn't a letter
+// or digit, case-fold the rest.
+function tokenize(text: string): string[] {
+  return text
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((token) => token.length > 0);
+}
+
+// Mirrors FTS5's quoted-phrase-with-trailing-`*` semantics (ADR 0014): the
+// query's tokens must appear in the body, contiguous and in order, with
+// only the last one matching as a prefix rather than exactly.
+function matchesPrefixPhrase(bodyTokens: string[], queryTokens: string[]): boolean {
+  const lastQueryToken = queryTokens.length - 1;
+  for (let start = 0; start <= bodyTokens.length - queryTokens.length; start++) {
+    const window = bodyTokens.slice(start, start + queryTokens.length);
+    const matchesHere = queryTokens.every((queryToken, offset) =>
+      offset === lastQueryToken
+        ? window[offset]?.startsWith(queryToken)
+        : window[offset] === queryToken,
+    );
+    if (matchesHere) {
+      return true;
+    }
+  }
+  return false;
 }
