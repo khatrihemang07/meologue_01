@@ -1,4 +1,5 @@
 import type { Entry } from "@meologue/core";
+import { formatAbsoluteTime, formatEntryTime } from "@/lib/entry-time";
 
 interface HistoryProps {
   entries: Entry[];
@@ -19,24 +20,38 @@ export function History({ entries, syncEnabled }: HistoryProps) {
 
   return (
     <div className="flex flex-col gap-2">
-      {entries.map((entry) => (
-        <div
-          key={entry.id}
-          className="flex items-start justify-between gap-2 rounded-lg bg-muted px-3 py-2 text-sm text-foreground"
-        >
-          <p className="whitespace-pre-wrap">{entry.body}</p>
-          {syncEnabled && entry.seq === null && (
-            <span
-              role="img"
-              aria-label="Not yet synced"
-              title="Not yet synced"
-              className="mt-1 shrink-0 text-muted-foreground"
-            >
-              ●
-            </span>
-          )}
-        </div>
-      ))}
+      {entries.map((entry) => {
+        const time = formatEntryTime(entry.createdAt);
+        return (
+          <div
+            key={entry.id}
+            className="flex items-start justify-between gap-2 rounded-lg bg-muted px-3 py-2 text-sm text-foreground"
+          >
+            <p className="whitespace-pre-wrap">{entry.body}</p>
+            <div className="flex shrink-0 items-start gap-2">
+              {time !== null && (
+                <time
+                  dateTime={entry.createdAt}
+                  title={formatAbsoluteTime(entry.createdAt) ?? undefined}
+                  className="shrink-0 text-xs text-muted-foreground"
+                >
+                  {time}
+                </time>
+              )}
+              {syncEnabled && entry.seq === null && (
+                <span
+                  role="img"
+                  aria-label="Not yet synced"
+                  title="Not yet synced"
+                  className="text-muted-foreground"
+                >
+                  ●
+                </span>
+              )}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
