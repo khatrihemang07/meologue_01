@@ -150,7 +150,16 @@ export function SettingsPage() {
         {status && (
           <p
             data-testid="server-status"
-            className={cn("text-sm", status.ok ? "text-muted-foreground" : "text-destructive")}
+            className={cn(
+              "text-sm",
+              // Not-configured is a valid, deliberate state (ADR 0011) — the
+              // user turned sync off, not a failure — so it reads the same
+              // muted tone as "ok", not the red "something's wrong" tone
+              // every other failure reason gets.
+              status.ok || (!status.ok && status.reason === "not-configured")
+                ? "text-muted-foreground"
+                : "text-destructive",
+            )}
           >
             {describeServerCheck(status)}
           </p>

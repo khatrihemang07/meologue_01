@@ -124,8 +124,13 @@ describe("SettingsPage", () => {
 
       renderPage();
 
-      expect(await screen.findByTestId("server-status")).toHaveTextContent(/no server/i);
+      const status = await screen.findByTestId("server-status");
+      expect(status).toHaveTextContent(/no server/i);
       expect(fetchMock).not.toHaveBeenCalled();
+      // Not configured is a deliberate, valid state (ADR 0011) — it reads
+      // with the same muted tone as "reachable", not the red tone every
+      // other failure reason gets.
+      expect(status).not.toHaveClass("text-destructive");
     });
 
     it("reports no server configured when Save is clicked with an empty field, without a request", async () => {
