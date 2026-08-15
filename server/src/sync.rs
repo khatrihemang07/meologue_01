@@ -65,14 +65,31 @@ pub async fn sync_handler(
     State(pool): State<PgPool>,
     Json(req): Json<SyncRequest>,
 ) -> Result<Json<SyncResponse>, StatusCode> {
+    tracing::Span::current().record("device_id", tracing::field::display(req.device_id));
+
     if req.protocol_version != PROTOCOL_VERSION {
+        tracing::warn!(
+            device_id = %req.device_id,
+            requested_version = req.protocol_version,
+            "rejecting sync: unsupported protocol version",
+        );
+        metrics::counter!("sync_protocol_mismatches_total").increment(1);
         return Err(StatusCode::UPGRADE_REQUIRED);
     }
 
-    run_sync(&pool, req).await.map(Json).map_err(|err| {
-        eprintln!("sync failed: {err:?}");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })
+    let pushed = req.entries.len() as u64;
+
+    run_sync(&pool, req)
+        .await
+        .map(|resp| {
+            metrics::counter!("sync_entries_pushed_total").increment(pushed);
+            metrics::counter!("sync_entries_pulled_total").increment(resp.entries.len() as u64);
+            Json(resp)
+        })
+        .map_err(|err| {
+            tracing::error!(error = ?err, "sync failed");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })
 }
 
 async fn run_sync(pool: &PgPool, req: SyncRequest) -> anyhow::Result<SyncResponse> {

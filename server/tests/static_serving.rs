@@ -79,3 +79,18 @@ async fn the_sync_route_takes_priority_over_static_serving(pool: PgPool) {
 
     fs::remove_dir_all(&dir).ok();
 }
+
+#[sqlx::test]
+async fn the_metrics_route_takes_priority_over_static_serving(pool: PgPool) {
+    let dir = make_static_dir();
+    let app = meologue_server::router(pool, &dir);
+
+    let (status, body) = get(app, "/v1/metrics").await;
+
+    // Falling through to the app shell would return the "<html>..." fixture
+    // from make_static_dir instead of Prometheus text.
+    assert_eq!(status, StatusCode::OK);
+    assert!(!body.contains("<html>"));
+
+    fs::remove_dir_all(&dir).ok();
+}
