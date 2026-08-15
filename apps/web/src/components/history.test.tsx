@@ -16,22 +16,22 @@ function entry(overrides: Partial<Entry>): Entry {
 }
 
 describe("History", () => {
-  it("shows an Entry's capture time as a clock time", () => {
+  it("shows an Entry's capture time as a date and clock time", () => {
     render(
       <History entries={[entry({ createdAt: "2026-08-15T17:27:00.000Z" })]} syncEnabled={false} />,
     );
 
-    expect(screen.getByText(/^\d{1,2}:\d{2}\s?(AM|PM)$/i)).toBeInTheDocument();
+    expect(screen.getByText(/2026.*\d{1,2}:\d{2}\s?(AM|PM)$/i)).toBeInTheDocument();
   });
 
-  it("puts the full absolute timestamp on hover", () => {
+  it("puts a more precise absolute timestamp on hover", () => {
     render(
       <History entries={[entry({ createdAt: "2026-08-15T17:27:00.000Z" })]} syncEnabled={false} />,
     );
 
-    const time = screen.getByText(/^\d{1,2}:\d{2}\s?(AM|PM)$/i);
+    const time = screen.getByText(/2026.*\d{1,2}:\d{2}\s?(AM|PM)$/i);
     expect(time.tagName).toBe("TIME");
-    expect(time).toHaveAttribute("title", expect.stringContaining("2026"));
+    expect(time).toHaveAttribute("title", expect.stringMatching(/2026.*:\d{2}:\d{2}\s?(AM|PM)$/i));
   });
 
   it("renders nothing for an Entry whose createdAt doesn't parse as a date", () => {
