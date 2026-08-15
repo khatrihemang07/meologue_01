@@ -3,7 +3,7 @@ import { Composer } from "@/components/composer";
 import { History } from "@/components/history";
 import { HistoryLink, SettingsLink } from "@/components/nav-links";
 import { Shell } from "@/components/shell";
-import { readServerUrl } from "@/lib/settings";
+import { isSyncEnabled } from "@/lib/settings";
 import { useEntryStore } from "@/pages/entry-store-layout";
 
 // `/` — the Composer plus the same, uncapped History rendered at `/history`
@@ -17,7 +17,7 @@ export function ComposerPage() {
   // sibling route, not a child), so the plain read already picks up a
   // change without a reload (ticket 32) with no extra state to keep in
   // sync.
-  const syncEnabled = readServerUrl() !== "";
+  const syncEnabled = isSyncEnabled();
 
   return (
     <Shell

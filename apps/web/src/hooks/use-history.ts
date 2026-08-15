@@ -2,7 +2,7 @@ import type { Entry, EntryStore } from "@meologue/core";
 import { mintId, SYNC_INTERVAL_MS, startContinuousSync, sync } from "@meologue/core";
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 import { normalizeEntryBody } from "@/lib/entry-text";
-import { readServerUrl } from "@/lib/settings";
+import { isSyncEnabled } from "@/lib/settings";
 import { syncTransport } from "@/lib/sync-transport";
 import { isTabVisible, subscribeToWakeEvents } from "@/platform/wake-signals";
 
@@ -42,11 +42,11 @@ async function refresh(store: EntryStore) {
 // single in-flight sync rather than racing two against the same store.
 //
 // Sync is opt-in (ADR 0011): with no Server URL configured, this is a no-op
-// — no store read, no request. `readServerUrl()` is read fresh on every
+// — no store read, no request. `isSyncEnabled()` is read fresh on every
 // call rather than once at startup, so saving or clearing the address in
 // Settings takes effect on the very next tick with no reload.
 function runSync(store: EntryStore, deviceId: string): Promise<void> {
-  if (readServerUrl() === "") {
+  if (!isSyncEnabled()) {
     return Promise.resolve();
   }
   syncInFlight ??= (async () => {

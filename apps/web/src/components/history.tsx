@@ -7,14 +7,12 @@ interface HistoryProps {
    * null` hasn't been assigned a server sequence — the Server has never
    * seen it — but with Sync off that's true of every Entry, so the marker
    * would say nothing except what the capture page's hint already says
-   * once. Defaults to `false` so call sites that don't pass it (there are
-   * none left in this app, but a future one could) stay silent rather than
-   * marking everything.
+   * once.
    */
-  syncEnabled?: boolean;
+  syncEnabled: boolean;
 }
 
-export function History({ entries, syncEnabled = false }: HistoryProps) {
+export function History({ entries, syncEnabled }: HistoryProps) {
   if (entries.length === 0) {
     return <p className="text-center text-sm text-muted-foreground">History will appear here.</p>;
   }

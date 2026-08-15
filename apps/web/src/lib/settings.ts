@@ -53,6 +53,11 @@ export function readServerUrl(): string {
   }
 }
 
+/** ADR 0011: an empty Server URL means Sync is off. Reads fresh, not cached, like `readServerUrl()`. */
+export function isSyncEnabled(): boolean {
+  return readServerUrl() !== "";
+}
+
 /**
  * Exported so the Settings page can show the user exactly what was stored
  * without reading it back — a read-back would return the *previous* value
