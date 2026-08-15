@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { writeTheme } from "./settings";
+import { useSettingsStore } from "./settings";
 import { applyTheme, watchSystemTheme } from "./theme";
 
 /** Stands in for `matchMedia("(prefers-color-scheme: dark)")` with a
@@ -35,6 +35,7 @@ function stubMatchMedia(initialMatches: boolean) {
 describe("theme", () => {
   beforeEach(() => {
     localStorage.clear();
+    useSettingsStore.setState({ theme: "system", serverUrl: "" });
     document.documentElement.classList.remove("dark");
   });
 
@@ -72,7 +73,7 @@ describe("theme", () => {
   describe("watchSystemTheme", () => {
     it("re-applies the OS preference when the stored theme is 'system'", () => {
       const media = stubMatchMedia(false);
-      writeTheme("system");
+      useSettingsStore.getState().setTheme("system");
       watchSystemTheme();
 
       media.fireChange(true);
@@ -82,7 +83,7 @@ describe("theme", () => {
 
     it("is a no-op when the stored theme is an explicit light/dark", () => {
       const media = stubMatchMedia(false);
-      writeTheme("light");
+      useSettingsStore.getState().setTheme("light");
       watchSystemTheme();
       document.documentElement.classList.remove("dark");
 

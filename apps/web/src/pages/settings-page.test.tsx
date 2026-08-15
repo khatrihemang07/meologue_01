@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { readServerUrl, readTheme } from "@/lib/settings";
+import { useSettingsStore } from "@/lib/settings";
 import { SettingsPage } from "./settings-page";
 
 function renderPage() {
@@ -29,6 +29,7 @@ function errorResponse(status: number) {
 describe("SettingsPage", () => {
   beforeEach(() => {
     localStorage.clear();
+    useSettingsStore.setState({ theme: "system", serverUrl: "" });
     document.documentElement.classList.remove("dark");
     // A quiet default so tests that don't care about the server check don't
     // make a real network call — Settings checks on every mount now.
@@ -65,11 +66,11 @@ describe("SettingsPage", () => {
 
     expect(screen.getByRole("button", { name: "Dark" })).toHaveAttribute("aria-pressed", "true");
     expect(document.documentElement.classList.contains("dark")).toBe(true);
-    expect(readTheme()).toBe("dark");
+    expect(useSettingsStore.getState().theme).toBe("dark");
   });
 
-  it("initialises the Server URL field from storage", () => {
-    localStorage.setItem("meologue.server-url", "https://phone.example:41207");
+  it("initialises the Server URL field from the store", () => {
+    useSettingsStore.setState({ serverUrl: "https://phone.example:41207" });
 
     renderPage();
 
@@ -83,11 +84,11 @@ describe("SettingsPage", () => {
       target: { value: "https://phone.example:41207" },
     });
 
-    expect(readServerUrl()).toBe("");
+    expect(useSettingsStore.getState().serverUrl).toBe("");
 
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
-    expect(readServerUrl()).toBe("https://phone.example:41207");
+    expect(useSettingsStore.getState().serverUrl).toBe("https://phone.example:41207");
   });
 
   it("shows the normalised value after saving", () => {
@@ -134,7 +135,7 @@ describe("SettingsPage", () => {
     });
 
     it("reports no server configured when Save is clicked with an empty field, without a request", async () => {
-      localStorage.setItem("meologue.server-url", "https://phone.example:41207");
+      useSettingsStore.setState({ serverUrl: "https://phone.example:41207" });
       const fetchMock = vi.fn(async () => healthResponse(PROTOCOL_VERSION));
       vi.stubGlobal("fetch", fetchMock);
       renderPage();
@@ -153,7 +154,7 @@ describe("SettingsPage", () => {
     });
 
     it("shows the saved server's status inline on open, with no toast", async () => {
-      localStorage.setItem("meologue.server-url", "https://phone.example:41207");
+      useSettingsStore.setState({ serverUrl: "https://phone.example:41207" });
       const fetchMock = vi.fn(async () => healthResponse(PROTOCOL_VERSION));
       vi.stubGlobal("fetch", fetchMock);
       const successToast = vi.spyOn(toast, "success");
@@ -205,7 +206,7 @@ describe("SettingsPage", () => {
     });
 
     it("clears the inline status when the field is edited, and returns it when reverted", async () => {
-      localStorage.setItem("meologue.server-url", "https://phone.example:41207");
+      useSettingsStore.setState({ serverUrl: "https://phone.example:41207" });
       const fetchMock = vi.fn(async () => healthResponse(PROTOCOL_VERSION));
       vi.stubGlobal("fetch", fetchMock);
 
@@ -226,7 +227,7 @@ describe("SettingsPage", () => {
     });
 
     it("reports a protocol mismatch distinctly from a reachable server", async () => {
-      localStorage.setItem("meologue.server-url", "https://phone.example:41207");
+      useSettingsStore.setState({ serverUrl: "https://phone.example:41207" });
       vi.stubGlobal(
         "fetch",
         vi.fn(async () => healthResponse(PROTOCOL_VERSION + 1)),

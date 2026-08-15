@@ -1,4 +1,4 @@
-import { readTheme, type Theme } from "@/lib/settings";
+import { type Theme, useSettingsStore } from "@/lib/settings";
 
 const DARK_MEDIA_QUERY = "(prefers-color-scheme: dark)";
 
@@ -32,7 +32,7 @@ export function applyTheme(theme: Theme): void {
  */
 export function watchSystemTheme(): void {
   window.matchMedia(DARK_MEDIA_QUERY).addEventListener("change", () => {
-    if (readTheme() === "system") {
+    if (useSettingsStore.getState().theme === "system") {
       applyTheme("system");
     }
   });

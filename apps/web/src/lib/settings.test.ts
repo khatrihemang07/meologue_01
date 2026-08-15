@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { readServerUrl, readTheme, writeServerUrl, writeTheme } from "./settings";
+import { isSyncEnabled, normaliseServerUrl, useSettingsStore } from "./settings";
 
-describe("settings", () => {
+describe("settings store", () => {
   beforeEach(() => {
     localStorage.clear();
+    useSettingsStore.setState({ theme: "system", serverUrl: "" });
   });
 
   afterEach(() => {
@@ -11,71 +12,136 @@ describe("settings", () => {
   });
 
   describe("theme", () => {
-    it("round-trips a written theme", () => {
-      writeTheme("dark");
-      expect(readTheme()).toBe("dark");
+    it("round-trips a written theme, in the store and in storage", () => {
+      useSettingsStore.getState().setTheme("dark");
+
+      expect(useSettingsStore.getState().theme).toBe("dark");
+      expect(localStorage.getItem("meologue.theme")).toBe("dark");
     });
 
-    it("defaults to system when nothing is stored", () => {
-      expect(readTheme()).toBe("system");
-    });
-
-    it("defaults to system for an unrecognised stored value", () => {
-      localStorage.setItem("meologue.theme", "solarized");
-      expect(readTheme()).toBe("system");
-    });
-
-    it("degrades to system when localStorage throws on read", () => {
-      vi.spyOn(localStorage, "getItem").mockImplementation(() => {
-        throw new Error("storage unavailable");
-      });
-
-      expect(readTheme()).toBe("system");
-    });
-
-    it("does not throw when localStorage refuses the write", () => {
+    it("does not throw when localStorage refuses the write, and still updates the store", () => {
       vi.spyOn(localStorage, "setItem").mockImplementation(() => {
         throw new Error("storage unavailable");
       });
 
-      expect(() => writeTheme("dark")).not.toThrow();
+      expect(() => useSettingsStore.getState().setTheme("dark")).not.toThrow();
+      expect(useSettingsStore.getState().theme).toBe("dark");
     });
   });
 
   describe("server URL", () => {
-    it("round-trips a written server URL", () => {
-      writeServerUrl("https://phone.example:41207");
-      expect(readServerUrl()).toBe("https://phone.example:41207");
+    it("round-trips a written server URL, in the store and in storage", () => {
+      useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+
+      expect(useSettingsStore.getState().serverUrl).toBe("https://phone.example:41207");
+      expect(localStorage.getItem("meologue.server-url")).toBe("https://phone.example:41207");
     });
 
-    it("defaults to empty when nothing is stored", () => {
-      expect(readServerUrl()).toBe("");
+    it("defaults to empty", () => {
+      expect(useSettingsStore.getState().serverUrl).toBe("");
     });
 
-    it("trims surrounding whitespace", () => {
-      writeServerUrl("  https://phone.example:41207  ");
-      expect(readServerUrl()).toBe("https://phone.example:41207");
+    it("normalises before storing: trims whitespace and strips exactly one trailing slash", () => {
+      useSettingsStore.getState().setServerUrl("  https://phone.example:41207///  ");
+
+      expect(useSettingsStore.getState().serverUrl).toBe("https://phone.example:41207//");
     });
 
-    it("strips exactly one trailing slash", () => {
-      writeServerUrl("https://phone.example:41207///");
-      expect(readServerUrl()).toBe("https://phone.example:41207//");
-    });
-
-    it("degrades to empty when localStorage throws on read", () => {
-      vi.spyOn(localStorage, "getItem").mockImplementation(() => {
-        throw new Error("storage unavailable");
-      });
-
-      expect(readServerUrl()).toBe("");
-    });
-
-    it("does not throw when localStorage refuses the write", () => {
+    it("does not throw when localStorage refuses the write, and still updates the store", () => {
       vi.spyOn(localStorage, "setItem").mockImplementation(() => {
         throw new Error("storage unavailable");
       });
 
-      expect(() => writeServerUrl("https://phone.example:41207")).not.toThrow();
+      expect(() =>
+        useSettingsStore.getState().setServerUrl("https://phone.example:41207"),
+      ).not.toThrow();
+      expect(useSettingsStore.getState().serverUrl).toBe("https://phone.example:41207");
     });
+  });
+
+  describe("normaliseServerUrl", () => {
+    it("trims surrounding whitespace", () => {
+      expect(normaliseServerUrl("  https://phone.example:41207  ")).toBe(
+        "https://phone.example:41207",
+      );
+    });
+
+    it("strips exactly one trailing slash", () => {
+      expect(normaliseServerUrl("https://phone.example:41207///")).toBe(
+        "https://phone.example:41207//",
+      );
+    });
+  });
+
+  describe("isSyncEnabled", () => {
+    it("is false with no Server URL set", () => {
+      expect(isSyncEnabled()).toBe(false);
+    });
+
+    it("is true once a Server URL is set", () => {
+      useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+
+      expect(isSyncEnabled()).toBe(true);
+    });
+  });
+});
+
+// Cold-start defaulting happens once, at module load, so it's exercised
+// against a fresh module instance rather than the shared singleton above —
+// by the time any test runs, that singleton already picked its initial
+// value.
+describe("settings store cold start", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.resetModules();
+  });
+
+  it("defaults theme to system when nothing is stored", async () => {
+    const { useSettingsStore: fresh } = await import("./settings");
+    expect(fresh.getState().theme).toBe("system");
+  });
+
+  it("defaults theme to system for an unrecognised stored value", async () => {
+    localStorage.setItem("meologue.theme", "solarized");
+    const { useSettingsStore: fresh } = await import("./settings");
+    expect(fresh.getState().theme).toBe("system");
+  });
+
+  it("defaults theme to system when localStorage throws on read", async () => {
+    vi.spyOn(localStorage, "getItem").mockImplementation(() => {
+      throw new Error("storage unavailable");
+    });
+    const { useSettingsStore: fresh } = await import("./settings");
+    expect(fresh.getState().theme).toBe("system");
+  });
+
+  it("picks up an already-stored theme", async () => {
+    localStorage.setItem("meologue.theme", "dark");
+    const { useSettingsStore: fresh } = await import("./settings");
+    expect(fresh.getState().theme).toBe("dark");
+  });
+
+  it("defaults the server URL to empty when nothing is stored", async () => {
+    const { useSettingsStore: fresh } = await import("./settings");
+    expect(fresh.getState().serverUrl).toBe("");
+  });
+
+  it("defaults the server URL to empty when localStorage throws on read", async () => {
+    vi.spyOn(localStorage, "getItem").mockImplementation(() => {
+      throw new Error("storage unavailable");
+    });
+    const { useSettingsStore: fresh } = await import("./settings");
+    expect(fresh.getState().serverUrl).toBe("");
+  });
+
+  it("picks up an already-stored server URL", async () => {
+    localStorage.setItem("meologue.server-url", "https://phone.example:41207");
+    const { useSettingsStore: fresh } = await import("./settings");
+    expect(fresh.getState().serverUrl).toBe("https://phone.example:41207");
   });
 });

@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter, Outlet, Route, Routes } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { writeServerUrl } from "@/lib/settings";
+import { useSettingsStore } from "@/lib/settings";
 import type { EntryStoreOutletContext } from "@/pages/entry-store-layout";
 import { HistoryPage } from "./history-page";
 
@@ -21,6 +21,7 @@ function renderHistoryPage(context: EntryStoreOutletContext) {
 describe("HistoryPage", () => {
   beforeEach(() => {
     localStorage.clear();
+    useSettingsStore.setState({ theme: "system", serverUrl: "" });
   });
 
   afterEach(() => {
@@ -59,7 +60,7 @@ describe("HistoryPage", () => {
   });
 
   it("marks an unsynced Entry when a Server URL is set", () => {
-    writeServerUrl("https://phone.example:41207");
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
 
     renderHistoryPage({
       entries: [

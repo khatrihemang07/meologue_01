@@ -6,14 +6,7 @@ import { Shell } from "@/components/shell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { checkServerUrl, type ServerCheckResult } from "@/lib/server-check";
-import {
-  normaliseServerUrl,
-  readServerUrl,
-  readTheme,
-  type Theme,
-  writeServerUrl,
-  writeTheme,
-} from "@/lib/settings";
+import { normaliseServerUrl, type Theme, useSettingsStore } from "@/lib/settings";
 import { applyTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
@@ -47,11 +40,19 @@ function describeServerCheck(result: ServerCheckResult): string {
 }
 
 export function SettingsPage() {
-  // Initialised from storage, not a fixed default, so the control shows
-  // what's actually in effect (main.tsx already applied it before this
-  // page ever rendered).
-  const [theme, setTheme] = useState<Theme>(() => readTheme());
-  const [serverUrl, setServerUrl] = useState(() => readServerUrl());
+  // From the store, not local state — main.tsx already applied this theme
+  // before this page ever rendered, and reading it through the store rather
+  // than copying it into local state means this control can never drift
+  // from what's actually in effect.
+  const theme = useSettingsStore((state) => state.theme);
+  const setStoredTheme = useSettingsStore((state) => state.setTheme);
+  const setStoredServerUrl = useSettingsStore((state) => state.setServerUrl);
+
+  // A local draft, seeded from the store's current value: the field must
+  // keep showing exactly what the user is typing, uncommitted, until Save —
+  // reading straight from the store here would overwrite that with the
+  // last-saved value on every store update.
+  const [serverUrl, setServerUrl] = useState(() => useSettingsStore.getState().serverUrl);
 
   // The most recent check's result, keyed to the exact URL string it was
   // measured against. The status below is only ever shown while `serverUrl`
@@ -68,7 +69,7 @@ export function SettingsPage() {
   // resolves must not set state on an unmounted component.
   useEffect(() => {
     let cancelled = false;
-    const stored = readServerUrl();
+    const stored = useSettingsStore.getState().serverUrl;
     checkServerUrl(stored).then((result) => {
       if (!cancelled) {
         setCheck({ url: stored, result });
@@ -80,13 +81,12 @@ export function SettingsPage() {
   }, []);
 
   function selectTheme(next: Theme) {
-    setTheme(next);
     applyTheme(next);
-    writeTheme(next);
+    setStoredTheme(next);
   }
 
   async function saveServerUrl() {
-    writeServerUrl(serverUrl);
+    setStoredServerUrl(serverUrl);
     // Show the normalised (trimmed, trailing-slash-stripped) value rather
     // than whatever the user typed. Computed, not read back from storage: a
     // refused write would make a read-back return the previous value and

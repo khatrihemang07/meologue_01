@@ -3,7 +3,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { writeServerUrl } from "@/lib/settings";
+import { useSettingsStore } from "@/lib/settings";
 import type {
   ensureContinuousSync as EnsureContinuousSync,
   useHistory as UseHistory,
@@ -108,7 +108,7 @@ describe("useHistory", () => {
   });
 
   it("refreshes entries again once a Sync triggered by Send completes", async () => {
-    writeServerUrl("https://phone.example:41207");
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
     const store = createFakeStore();
     const { result } = await renderUseHistory(store);
     await waitFor(() => expect(result.current.entries).toEqual([]));

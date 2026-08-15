@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter, Outlet, Route, Routes } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { writeServerUrl } from "@/lib/settings";
+import { useSettingsStore } from "@/lib/settings";
 import type { EntryStoreOutletContext } from "@/pages/entry-store-layout";
 import { ComposerPage } from "./composer-page";
 
@@ -30,6 +30,7 @@ const readyContext: EntryStoreOutletContext = {
 describe("ComposerPage", () => {
   beforeEach(() => {
     localStorage.clear();
+    useSettingsStore.setState({ theme: "system", serverUrl: "" });
   });
 
   afterEach(() => {
@@ -85,7 +86,7 @@ describe("ComposerPage", () => {
   });
 
   it("hides the hint once a Server URL is set", () => {
-    writeServerUrl("https://phone.example:41207");
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
 
     renderComposerPage(readyContext);
 

@@ -3,7 +3,7 @@ import { Composer } from "@/components/composer";
 import { History } from "@/components/history";
 import { HistoryLink, SettingsLink } from "@/components/nav-links";
 import { Shell } from "@/components/shell";
-import { isSyncEnabled } from "@/lib/settings";
+import { useSyncEnabled } from "@/lib/settings";
 import { useEntryStore } from "@/pages/entry-store-layout";
 
 // `/` — the Composer plus the same, uncapped History rendered at `/history`
@@ -12,12 +12,11 @@ import { useEntryStore } from "@/pages/entry-store-layout";
 // History component itself.
 export function ComposerPage() {
   const { entries, sendEntry, disabled, message } = useEntryStore();
-  // Read fresh on every render rather than cached in state: this component
-  // remounts on navigating back from Settings (ADR 0008 — Settings is a
-  // sibling route, not a child), so the plain read already picks up a
-  // change without a reload (ticket 32) with no extra state to keep in
-  // sync.
-  const syncEnabled = isSyncEnabled();
+  // Subscribed, not a one-off read: a change saved on Settings now updates
+  // this without a reload or a remount (ticket 36), on top of the render
+  // this component already gets when it remounts navigating back from
+  // Settings (ADR 0008 — Settings is a sibling route, not a child).
+  const syncEnabled = useSyncEnabled();
 
   return (
     <Shell

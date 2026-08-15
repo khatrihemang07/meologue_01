@@ -1,5 +1,6 @@
 import type { SyncTransport } from "@meologue/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useSettingsStore } from "@/lib/settings";
 import { syncTransport } from "./sync-transport";
 
 const request: Parameters<SyncTransport>[0] = {
@@ -12,12 +13,12 @@ const request: Parameters<SyncTransport>[0] = {
 describe("syncTransport", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
-    vi.resetModules();
     localStorage.clear();
+    useSettingsStore.setState({ serverUrl: "" });
   });
 
   it("posts the request to the stored Server URL's /v1/sync and returns the parsed response", async () => {
-    localStorage.setItem("meologue.server-url", "https://phone.example:41207");
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
     const responseBody = { entries: [], cursor: 3 };
     const fetchMock = vi.fn(async () => ({ ok: true, json: async () => responseBody }));
     vi.stubGlobal("fetch", fetchMock);
@@ -35,7 +36,7 @@ describe("syncTransport", () => {
   });
 
   it("throws when the server responds with a non-2xx status", async () => {
-    localStorage.setItem("meologue.server-url", "https://phone.example:41207");
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => ({ ok: false, status: 426, json: async () => ({}) })),
@@ -49,10 +50,10 @@ describe("syncTransport", () => {
     const fetchMock = vi.fn(async () => ({ ok: true, json: async () => responseBody }));
     vi.stubGlobal("fetch", fetchMock);
 
-    localStorage.setItem("meologue.server-url", "https://first.example");
+    useSettingsStore.getState().setServerUrl("https://first.example");
     await syncTransport(request);
 
-    localStorage.setItem("meologue.server-url", "https://second.example");
+    useSettingsStore.getState().setServerUrl("https://second.example");
     await syncTransport(request);
 
     expect(fetchMock).toHaveBeenNthCalledWith(

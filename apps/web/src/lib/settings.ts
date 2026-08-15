@@ -1,30 +1,38 @@
 /**
- * Device-local settings — theme and the Server URL (ADR 0008). Deliberately
- * two plain `localStorage` string keys rather than one JSON blob under a
- * schema: each setting is read and written independently, and there's no
- * shared shape between them worth coupling with a parse step that can fail
- * on both at once.
+ * Device-local settings — theme and the Server URL (ADR 0008) — held in a
+ * Zustand store so every reader, component or not, sees the same value and
+ * every write fans out to every subscriber immediately. Before this, Sync
+ * state was read straight off `localStorage` during render with no
+ * subscription, so the "not yet synced" marker and the "Sync is off" hint
+ * only refreshed when something else happened to re-render them (ticket 36).
  *
- * An empty Server URL means Sync is off (ADR 0011) — there is no
- * build-time or same-origin address behind it to fall back to. Callers
- * that need the address Sync would actually use read `readServerUrl()`
- * directly.
+ * Persisted as the same two plain `localStorage` string keys as before —
+ * `meologue.theme`, `meologue.server-url` — not a single JSON blob under
+ * Zustand's `persist` middleware, which writes the whole store under one
+ * key. Three things depend on the two-plain-keys format: the inline
+ * blocking script in `index.html` that applies the theme before first paint
+ * and must never throw, the Playwright suite (`apps/e2e/tests/helpers.ts`),
+ * which seeds the Server URL as a plain string, and every already-installed
+ * Android and macOS app, which would silently lose its Server URL — and
+ * therefore turn Sync off — on upgrade. So persistence here is hand-written
+ * inside the store's own actions instead of delegated to that middleware.
  *
- * Every access is wrapped in try/catch and degrades to the default rather
- * than throwing — `localStorage` throws on write in Safari private
+ * Every localStorage access is wrapped in try/catch and degrades to a
+ * default rather than throwing — it throws on write in Safari private
  * browsing (and can throw on read too, e.g. a security exception in some
  * embedding contexts), and this app already models that world for the
  * Entry store (`src/lib/entry-store-errors.ts`'s `StorageUnavailableError`).
  * Settings must keep working under the same conditions, since it's also
  * where a bad Server URL gets fixed.
  */
+import { create } from "zustand";
 
 const THEME_KEY = "meologue.theme";
 const SERVER_URL_KEY = "meologue.server-url";
 
 export type Theme = "light" | "dark" | "system";
 
-export function readTheme(): Theme {
+function readStoredTheme(): Theme {
   try {
     const stored = localStorage.getItem(THEME_KEY);
     if (stored === "light" || stored === "dark" || stored === "system") {
@@ -36,26 +44,21 @@ export function readTheme(): Theme {
   }
 }
 
-export function writeTheme(theme: Theme): void {
+function writeStoredTheme(theme: Theme): void {
   try {
     localStorage.setItem(THEME_KEY, theme);
   } catch {
-    // Storage refused the write (e.g. private browsing) — the in-memory
-    // effect (applyTheme) still ran, only persistence is lost.
+    // Storage refused the write (e.g. private browsing) — the store's
+    // in-memory state still updates below, only persistence is lost.
   }
 }
 
-export function readServerUrl(): string {
+function readStoredServerUrl(): string {
   try {
     return localStorage.getItem(SERVER_URL_KEY) ?? "";
   } catch {
     return "";
   }
-}
-
-/** ADR 0011: an empty Server URL means Sync is off. Reads fresh, not cached, like `readServerUrl()`. */
-export function isSyncEnabled(): boolean {
-  return readServerUrl() !== "";
 }
 
 /**
@@ -67,10 +70,55 @@ export function normaliseServerUrl(url: string): string {
   return url.trim().replace(/\/$/, "");
 }
 
-export function writeServerUrl(url: string): void {
+function writeStoredServerUrl(url: string): void {
   try {
-    localStorage.setItem(SERVER_URL_KEY, normaliseServerUrl(url));
+    localStorage.setItem(SERVER_URL_KEY, url);
   } catch {
-    // Refused write — sync keeps using whatever value it last read.
+    // Refused write — sync keeps using whatever value the store already
+    // holds in memory.
   }
+}
+
+interface SettingsState {
+  theme: Theme;
+  serverUrl: string;
+  setTheme: (theme: Theme) => void;
+  setServerUrl: (url: string) => void;
+}
+
+/**
+ * Initial state is read from storage once, at module load — the same
+ * degrade-to-default behaviour the old per-call helpers had, just run once
+ * instead of on every call. Every later read (in or outside a component)
+ * goes through this store rather than back to `localStorage`, and every
+ * write here — from Settings, the only writer in the app — both persists
+ * and updates this state synchronously, so `getState()` is never stale.
+ */
+export const useSettingsStore = create<SettingsState>()((set) => ({
+  theme: readStoredTheme(),
+  serverUrl: readStoredServerUrl(),
+  setTheme: (theme) => {
+    writeStoredTheme(theme);
+    set({ theme });
+  },
+  setServerUrl: (url) => {
+    const normalised = normaliseServerUrl(url);
+    writeStoredServerUrl(normalised);
+    set({ serverUrl: normalised });
+  },
+}));
+
+/**
+ * ADR 0011: an empty Server URL means Sync is off. Reads the store's
+ * current state directly rather than as a hook — for callers outside a
+ * component (the sync loop in `use-history.ts`, `sync-transport.ts`) that
+ * need the latest value without subscribing to it.
+ */
+export function isSyncEnabled(): boolean {
+  return useSettingsStore.getState().serverUrl !== "";
+}
+
+/** Reactive form of `isSyncEnabled` for components — re-renders when the Server URL changes. */
+export function useSyncEnabled(): boolean {
+  return useSettingsStore((state) => state.serverUrl !== "");
 }
