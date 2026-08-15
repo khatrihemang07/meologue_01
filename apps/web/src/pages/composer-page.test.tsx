@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter, Outlet, Route, Routes } from "react-router";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { writeServerUrl } from "@/lib/settings";
 import type { EntryStoreOutletContext } from "@/pages/entry-store-layout";
 import { ComposerPage } from "./composer-page";
 
@@ -27,6 +28,14 @@ const readyContext: EntryStoreOutletContext = {
 };
 
 describe("ComposerPage", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("renders links to History and Settings", () => {
     renderComposerPage(readyContext);
 
@@ -63,5 +72,23 @@ describe("ComposerPage", () => {
     });
 
     expect(screen.getByText("hello")).toBeInTheDocument();
+  });
+
+  it("shows a hint that Sync is off when no Server URL is set", () => {
+    renderComposerPage(readyContext);
+
+    expect(screen.getByText(/sync is off/i)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /add a server url/i })).toHaveAttribute(
+      "href",
+      "/settings",
+    );
+  });
+
+  it("hides the hint once a Server URL is set", () => {
+    writeServerUrl("https://phone.example:41207");
+
+    renderComposerPage(readyContext);
+
+    expect(screen.queryByText(/sync is off/i)).not.toBeInTheDocument();
   });
 });

@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter, Outlet, Route, Routes } from "react-router";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { writeServerUrl } from "@/lib/settings";
 import type { EntryStoreOutletContext } from "@/pages/entry-store-layout";
 import { HistoryPage } from "./history-page";
 
@@ -18,6 +19,14 @@ function renderHistoryPage(context: EntryStoreOutletContext) {
 }
 
 describe("HistoryPage", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("renders a way back to the Composer", () => {
     renderHistoryPage({ entries: [], sendEntry: vi.fn(), disabled: false });
 
@@ -47,5 +56,32 @@ describe("HistoryPage", () => {
     expect(
       screen.getByText("meologue couldn't open its storage. Reloading may help."),
     ).toBeInTheDocument();
+  });
+
+  it("marks an unsynced Entry when a Server URL is set", () => {
+    writeServerUrl("https://phone.example:41207");
+
+    renderHistoryPage({
+      entries: [
+        {
+          id: "1",
+          deviceId: "device-a",
+          body: "hello",
+          createdAt: "now",
+          seq: null,
+          syncedAt: null,
+        },
+      ],
+      sendEntry: vi.fn(),
+      disabled: false,
+    });
+
+    expect(screen.getByLabelText("Not yet synced")).toBeInTheDocument();
+  });
+
+  it("never shows the Sync-is-off hint, even with no Server URL set", () => {
+    renderHistoryPage({ entries: [], sendEntry: vi.fn(), disabled: false });
+
+    expect(screen.queryByText(/sync is off/i)).not.toBeInTheDocument();
   });
 });
