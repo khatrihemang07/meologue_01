@@ -12,12 +12,12 @@ const request: Parameters<SyncTransport>[0] = {
 describe("syncTransport", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
-    vi.unstubAllEnvs();
     vi.resetModules();
     localStorage.clear();
   });
 
-  it("posts the request to /v1/sync and returns the parsed response", async () => {
+  it("posts the request to the stored Server URL's /v1/sync and returns the parsed response", async () => {
+    localStorage.setItem("meologue.server-url", "https://phone.example:41207");
     const responseBody = { entries: [], cursor: 3 };
     const fetchMock = vi.fn(async () => ({ ok: true, json: async () => responseBody }));
     vi.stubGlobal("fetch", fetchMock);
@@ -25,7 +25,7 @@ describe("syncTransport", () => {
     const result = await syncTransport(request);
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/v1/sync",
+      "https://phone.example:41207/v1/sync",
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify(request),
@@ -35,61 +35,13 @@ describe("syncTransport", () => {
   });
 
   it("throws when the server responds with a non-2xx status", async () => {
+    localStorage.setItem("meologue.server-url", "https://phone.example:41207");
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => ({ ok: false, status: 426, json: async () => ({}) })),
     );
 
     await expect(syncTransport(request)).rejects.toThrow();
-  });
-
-  it("prefixes the request with VITE_SERVER_URL when set at build time", async () => {
-    vi.stubEnv("VITE_SERVER_URL", "https://phone.example:41207");
-    vi.resetModules();
-
-    const responseBody = { entries: [], cursor: 0 };
-    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => responseBody }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const { syncTransport: rebuiltSyncTransport } = await import("./sync-transport");
-    await rebuiltSyncTransport(request);
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://phone.example:41207/v1/sync",
-      expect.objectContaining({ method: "POST" }),
-    );
-  });
-
-  it("prefers a stored Server URL over VITE_SERVER_URL", async () => {
-    vi.stubEnv("VITE_SERVER_URL", "https://built-in.example");
-    localStorage.setItem("meologue.server-url", "https://stored.example");
-
-    const responseBody = { entries: [], cursor: 0 };
-    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => responseBody }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    await syncTransport(request);
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://stored.example/v1/sync",
-      expect.objectContaining({ method: "POST" }),
-    );
-  });
-
-  it("falls back to VITE_SERVER_URL when the stored value is empty", async () => {
-    vi.stubEnv("VITE_SERVER_URL", "https://built-in.example");
-    localStorage.setItem("meologue.server-url", "");
-
-    const responseBody = { entries: [], cursor: 0 };
-    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => responseBody }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    await syncTransport(request);
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://built-in.example/v1/sync",
-      expect.objectContaining({ method: "POST" }),
-    );
   });
 
   it("re-reads the stored URL on every call, without re-importing the module", async () => {

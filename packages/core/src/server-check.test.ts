@@ -29,14 +29,13 @@ describe("checkServer", () => {
     );
   });
 
-  it("checks a same-origin (empty) URL by requesting a relative path", async () => {
-    const fetchMock = vi.fn(async () =>
-      jsonResponse(200, { service: "meologue-server", protocol_version: PROTOCOL_VERSION }),
-    );
+  it("reports not-configured for an empty URL, without calling fetch", async () => {
+    const fetchMock = vi.fn();
 
-    await checkServer("", { fetch: fetchMock });
+    const result = await checkServer("", { fetch: fetchMock });
 
-    expect(fetchMock).toHaveBeenCalledWith("/v1/health", expect.anything());
+    expect(result).toEqual({ ok: false, reason: "not-configured" });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("reports invalid-url for text that isn't a URL, without calling fetch", async () => {

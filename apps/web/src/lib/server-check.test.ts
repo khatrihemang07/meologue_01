@@ -33,17 +33,14 @@ describe("checkServerUrl", () => {
     expect(result).toEqual({ ok: true, protocolVersion: PROTOCOL_VERSION });
   });
 
-  it("falls back to VITE_SERVER_URL when the given URL is empty", async () => {
-    vi.stubEnv("VITE_SERVER_URL", "https://built-in.example");
-    const fetchMock = stubHealthResponse(200, {
-      service: "meologue-server",
-      protocol_version: PROTOCOL_VERSION,
-    });
+  it("reports not-configured for an empty URL, without calling fetch", async () => {
+    const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
-    await checkServerUrl("");
+    const result = await checkServerUrl("");
 
-    expect(fetchMock).toHaveBeenCalledWith("https://built-in.example/v1/health", expect.anything());
+    expect(result).toEqual({ ok: false, reason: "not-configured" });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("reports a mismatch when the server speaks a different protocol version", async () => {

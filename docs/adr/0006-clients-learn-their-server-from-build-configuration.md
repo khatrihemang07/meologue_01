@@ -2,7 +2,9 @@
 
 ## Status
 
-Superseded by [0008](0008-device-settings-are-local-configuration-outside-the-entry-store.md)
+Superseded by [0008](0008-device-settings-are-local-configuration-outside-the-entry-store.md),
+which is in turn narrowed by [0011](0011-sync-is-opt-in-an-unset-server-url-means-sync-is-off.md) —
+the `VITE_SERVER_URL` build-time constant this ADR introduced is deleted, not just superseded.
 
 ## Context
 

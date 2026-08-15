@@ -1,15 +1,13 @@
 import type { SyncTransport } from "@meologue/core";
-import { readServerUrl, resolveServerUrl } from "@/lib/settings";
+import { readServerUrl } from "@/lib/settings";
 
-// The server's absolute address: a runtime Settings override if one is
-// stored, else the build-time `VITE_SERVER_URL` (see ADR 0008, which
-// supersedes ADR 0006). Empty by default either way, so this stays the
-// same relative request it always was — same-origin, no host the client
-// had to learn.
+// The server's absolute address, exactly as stored in Settings (ADR 0008).
+// Callers only invoke this once a Server URL is actually configured (ADR
+// 0011 — Sync is opt-in, and the gate lives at the sync loop, not here).
 export const syncTransport: SyncTransport = async (request) => {
   // Read per request, not hoisted to module scope, so a Server URL saved
   // between two sync ticks takes effect on the next one without a restart.
-  const url = resolveServerUrl(readServerUrl());
+  const url = readServerUrl();
   const response = await fetch(`${url}/v1/sync`, {
     method: "POST",
     headers: { "content-type": "application/json" },

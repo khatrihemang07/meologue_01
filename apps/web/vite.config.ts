@@ -4,11 +4,12 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
-// With VITE_SERVER_URL unset (its default — see ADR 0006), the client uses
-// relative URLs (e.g. `/v1/sync`) and never learns its own host; this proxy
-// is what makes that work in dev, standing in for same-origin production
-// serving (ticket 11). The server still needs CORS (ticket 13) because a
-// built app running inside Capacitor or Tauri has no such origin to share.
+// A Device only ever talks to the address typed into Settings (ADR 0011),
+// never an implicit one — including in dev. Pointing the Server URL at this
+// dev origin (e.g. http://localhost:5173) routes /v1/* through this proxy
+// to the real server on :41207. The server still needs CORS (ticket 13)
+// because a built app running inside Capacitor or Tauri has no origin to
+// share with the server at all.
 const SERVER_PROXY_TARGET = "http://localhost:41207";
 
 // The build-time platform seam (ticket 12): one Vite application whose

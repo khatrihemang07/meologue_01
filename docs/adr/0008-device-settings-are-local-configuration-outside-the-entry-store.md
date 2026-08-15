@@ -2,7 +2,10 @@
 
 ## Status
 
-Accepted
+Accepted. Its resolution-precedence clause (stored value, then the build-time `VITE_SERVER_URL`,
+then same-origin) is superseded by [0011](0011-sync-is-opt-in-an-unset-server-url-means-sync-is-off.md) —
+empty now means Sync is off, with no fallback behind it. Everything else here — settings as two
+plain `localStorage` keys outside the Entry store, read fresh per sync tick — stands.
 
 ## Context
 

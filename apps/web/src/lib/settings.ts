@@ -1,9 +1,14 @@
 /**
- * Device-local settings — theme and the runtime Server URL override (ADR
- * 0008). Deliberately two plain `localStorage` string keys rather than one
- * JSON blob under a schema: each setting is read and written independently,
- * and there's no shared shape between them worth coupling with a parse
- * step that can fail on both at once.
+ * Device-local settings — theme and the Server URL (ADR 0008). Deliberately
+ * two plain `localStorage` string keys rather than one JSON blob under a
+ * schema: each setting is read and written independently, and there's no
+ * shared shape between them worth coupling with a parse step that can fail
+ * on both at once.
+ *
+ * An empty Server URL means Sync is off (ADR 0011) — there is no
+ * build-time or same-origin address behind it to fall back to. Callers
+ * that need the address Sync would actually use read `readServerUrl()`
+ * directly.
  *
  * Every access is wrapped in try/catch and degrades to the default rather
  * than throwing — `localStorage` throws on write in Safari private
@@ -63,15 +68,4 @@ export function writeServerUrl(url: string): void {
   } catch {
     // Refused write — sync keeps using whatever value it last read.
   }
-}
-
-/**
- * The address a Server URL setting actually resolves to (ADR 0008): the
- * stored override if one is set, else the build-time `VITE_SERVER_URL`,
- * else empty — same-origin, asking nothing extra of the request. Shared by
- * `sync-transport.ts` and `server-check.ts` so a reachability check always
- * asks about the same address sync would actually use.
- */
-export function resolveServerUrl(url: string): string {
-  return url || import.meta.env.VITE_SERVER_URL || "";
 }

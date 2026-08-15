@@ -1,9 +1,28 @@
 import { randomUUID } from "node:crypto";
 import type { Browser, BrowserContext, Page } from "@playwright/test";
+import { SERVER_A_URL } from "../servers";
 
 /** A body unique to this test run, so leftover rows from a prior local run never collide. */
 export function uniqueEntryBody(label: string): string {
   return `${label} ${randomUUID()}`;
+}
+
+/**
+ * A Playwright `storageState` that seeds `meologue.server-url` for the app's
+ * own origin before any page script runs — sync is opt-in (ADR 0011), so
+ * without this every context would load with sync off and none of the
+ * suite's assertions about syncing would ever be exercised. Every context
+ * the suite opens (the config's default `page` fixture, and each device
+ * `openTwoDevices` creates) needs this seeded explicitly; there is no
+ * implicit fallback left to fall back on.
+ */
+export function serverUrlStorageState(serverUrl: string) {
+  return {
+    cookies: [],
+    origins: [
+      { origin: SERVER_A_URL, localStorage: [{ name: "meologue.server-url", value: serverUrl }] },
+    ],
+  };
 }
 
 export interface TwoDevices {
@@ -13,10 +32,26 @@ export interface TwoDevices {
   pageB: Page;
 }
 
-/** Two independent BrowserContexts, each already loaded — standing in for two Devices. */
-export async function openTwoDevices(browser: Browser): Promise<TwoDevices> {
-  const deviceA = await browser.newContext();
-  const deviceB = await browser.newContext();
+export interface TwoDevicesOptions {
+  /** The Server URL each Device's context is seeded with — defaults to the suite's one Server. */
+  serverUrlA?: string;
+  serverUrlB?: string;
+}
+
+/**
+ * Two independent BrowserContexts, each already loaded and each seeded with
+ * a Server URL — standing in for two Devices. Defaults to both pointing at
+ * the same Server; multi-server.spec.ts overrides `serverUrlA`/`serverUrlB`
+ * to prove a Device follows whichever Server URL it was given, not which
+ * origin served its page.
+ */
+export async function openTwoDevices(
+  browser: Browser,
+  options: TwoDevicesOptions = {},
+): Promise<TwoDevices> {
+  const { serverUrlA = SERVER_A_URL, serverUrlB = SERVER_A_URL } = options;
+  const deviceA = await browser.newContext({ storageState: serverUrlStorageState(serverUrlA) });
+  const deviceB = await browser.newContext({ storageState: serverUrlStorageState(serverUrlB) });
   const pageA = await deviceA.newPage();
   const pageB = await deviceB.newPage();
   await pageA.goto("/");

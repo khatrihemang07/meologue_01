@@ -3,6 +3,7 @@ import type { WireHealthResponse } from "./wire";
 
 export type ServerCheckResult =
   | { ok: true; protocolVersion: number }
+  | { ok: false; reason: "not-configured" }
   | { ok: false; reason: "invalid-url" }
   | { ok: false; reason: "unreachable" }
   | { ok: false; reason: "http-error"; status: number }
@@ -36,8 +37,9 @@ const DEFAULT_TIMEOUT_MS = 5000;
 /**
  * Checks whether `url` is a reachable meologue Server speaking this build's
  * protocol version, against `GET /v1/health` (ADR 0010). An empty `url`
- * means "same origin" (ADR 0008) and is requested as a relative path rather
- * than treated as invalid.
+ * means no Server is configured (ADR 0011 — sync is opt-in) and is reported
+ * as `"not-configured"` without ever calling `fetch`, rather than treated
+ * as same-origin or as an invalid address.
  *
  * A failed `fetch` in a browser is opaque — DNS failure, connection
  * refused, TLS failure, CORS rejection, and OS cleartext blocking are all
@@ -53,12 +55,14 @@ export async function checkServer(
 ): Promise<ServerCheckResult> {
   const { fetch: injectedFetch, timeoutMs = DEFAULT_TIMEOUT_MS } = options;
 
-  if (url !== "") {
-    try {
-      new URL(url);
-    } catch {
-      return { ok: false, reason: "invalid-url" };
-    }
+  if (url === "") {
+    return { ok: false, reason: "not-configured" };
+  }
+
+  try {
+    new URL(url);
+  } catch {
+    return { ok: false, reason: "invalid-url" };
   }
 
   const controller = new AbortController();

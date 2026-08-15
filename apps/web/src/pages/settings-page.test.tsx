@@ -118,6 +118,35 @@ describe("SettingsPage", () => {
   });
 
   describe("server reachability", () => {
+    it("reports no server configured on mount, and makes no request", async () => {
+      const fetchMock = vi.fn(async () => healthResponse(PROTOCOL_VERSION));
+      vi.stubGlobal("fetch", fetchMock);
+
+      renderPage();
+
+      expect(await screen.findByTestId("server-status")).toHaveTextContent(/no server/i);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("reports no server configured when Save is clicked with an empty field, without a request", async () => {
+      localStorage.setItem("meologue.server-url", "https://phone.example:41207");
+      const fetchMock = vi.fn(async () => healthResponse(PROTOCOL_VERSION));
+      vi.stubGlobal("fetch", fetchMock);
+      renderPage();
+      await screen.findByTestId("server-status");
+      fetchMock.mockClear();
+      const errorToast = vi.spyOn(toast, "error");
+
+      fireEvent.change(screen.getByLabelText(/server url/i), { target: { value: "" } });
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+      await waitFor(() =>
+        expect(screen.getByTestId("server-status")).toHaveTextContent(/no server/i),
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(errorToast).not.toHaveBeenCalled();
+    });
+
     it("shows the saved server's status inline on open, with no toast", async () => {
       localStorage.setItem("meologue.server-url", "https://phone.example:41207");
       const fetchMock = vi.fn(async () => healthResponse(PROTOCOL_VERSION));
@@ -192,6 +221,7 @@ describe("SettingsPage", () => {
     });
 
     it("reports a protocol mismatch distinctly from a reachable server", async () => {
+      localStorage.setItem("meologue.server-url", "https://phone.example:41207");
       vi.stubGlobal(
         "fetch",
         vi.fn(async () => healthResponse(PROTOCOL_VERSION + 1)),

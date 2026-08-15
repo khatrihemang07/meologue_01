@@ -33,6 +33,8 @@ function describeServerCheck(result: ServerCheckResult): string {
     return "Reachable — this server is up and speaking the protocol this app expects.";
   }
   switch (result.reason) {
+    case "not-configured":
+      return "No server configured — sync is off. Enter an address to turn it on.";
     case "invalid-url":
       return "That's not a valid URL. Enter a full address, like https://example.com.";
     case "unreachable":
@@ -97,6 +99,10 @@ export function SettingsPage() {
     const message = describeServerCheck(result);
     if (result.ok) {
       toast.success(message);
+    } else if (result.reason === "not-configured") {
+      // Not an error — the user just turned sync off, which is a valid
+      // outcome of Save, not a failure of it (ADR 0011).
+      toast(message);
     } else {
       toast.error(message);
     }
@@ -133,7 +139,7 @@ export function SettingsPage() {
           <Input
             id="server-url"
             type="text"
-            placeholder="Leave empty to use this app's default"
+            placeholder="Leave empty to turn sync off"
             value={serverUrl}
             onChange={(event) => setServerUrl(event.target.value)}
           />

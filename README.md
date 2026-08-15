@@ -69,7 +69,10 @@ pnpm --filter @meologue/web build
 cd server && cargo run                # app + API together on :41207
 ```
 
-The web build talks to its own origin, so it never needs to know the server's address.
+Sync is opt-in (ADR 0011): open the app, go to Settings, and type a Server URL — even for this
+same-origin production-style setup, since an unset Server URL means sync stays off on every
+target, with no implicit fallback. For the dev workflow above, point it at the dev origin
+(`http://localhost:5173`); for the production-style one, `http://localhost:41207`.
 
 > **Reaching it from another device's browser doesn't work yet.** The server binds `0.0.0.0`, so the
 > port is reachable across your LAN or tailnet — but the web app stores Entries in SQLite over OPFS,
@@ -84,23 +87,22 @@ No emulator and no Android Studio — a debug APK built from the command line an
 device over adb. Needs the Android SDK command-line tools and a JDK, with `ANDROID_HOME` and
 `JAVA_HOME` set.
 
-Unlike the web build, a packaged app has no same-origin server to talk to, so its address is baked
-in at build time (`VITE_SERVER_URL`, see ADR 0006 for why, and ADR 0008 for the runtime override
-that now sits in front of it). Point it at a tailnet address — that stays
-reachable when you change networks, which a LAN address does not. The in-app Settings page can
-override this address at runtime without a rebuild — useful for pointing an already-installed app
-at a different Server. Both native shells allow plain-HTTP cleartext to any host (ADR 0012), so a
-runtime override reaches whatever address you type without touching platform config.
+Unlike the web build, a packaged app has no same-origin server to talk to, and there's no
+build-time address to bake in either (ADR 0011 deleted the last one) — every Device learns its
+Server from Settings, typed in after install. Point it at a tailnet address there — that stays
+reachable when you change networks, which a LAN address does not. Both native shells allow
+plain-HTTP cleartext to any host (ADR 0012), so whatever address you type just works, with no
+platform config to touch.
 
 ```bash
-VITE_SERVER_URL=http://<your-tailnet-address>:41207 pnpm --filter @meologue/web build:android
+pnpm --filter @meologue/web build:android
 cd apps/web && npx cap sync android    # after changing web code or plugins
 cd ../android && ./gradlew assembleDebug
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
 Android blocks plain HTTP by default, but `network_security_config.xml` permits cleartext to any
-host (ADR 0012), so pointing `VITE_SERVER_URL` somewhere new needs no change there.
+host (ADR 0012), so whatever address you type into Settings needs no change there.
 
 ### macOS
 
@@ -108,13 +110,13 @@ A Tauri v2 shell. Command Line Tools are enough; full Xcode is not needed. Also 
 CLI (`cargo install tauri-cli --version "^2"`).
 
 ```bash
-VITE_SERVER_URL=http://<your-tailnet-address>:41207 pnpm --filter @meologue/web build:macos
+pnpm --filter @meologue/web build:macos
 cd apps/macos && cargo tauri build --debug
 open target/debug/bundle/macos/meologue.app
 ```
 
 App Transport Security requires an exception for plain-HTTP hosts; `apps/macos/Info.plist` grants
-one for any host (ADR 0012), so pointing `VITE_SERVER_URL` somewhere new needs no change there
+one for any host (ADR 0012), so whatever address you type into Settings needs no change there
 either.
 
 ## Layout
