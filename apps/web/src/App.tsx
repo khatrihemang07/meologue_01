@@ -1,4 +1,5 @@
 import { BrowserRouter, Route, Routes } from "react-router";
+import { Toaster } from "@/components/ui/sonner";
 import { ComposerPage } from "@/pages/composer-page";
 import { EntryStoreLayout } from "@/pages/entry-store-layout";
 import { HistoryPage } from "@/pages/history-page";
@@ -18,6 +19,7 @@ import { SettingsPage } from "@/pages/settings-page";
 function App() {
   return (
     <BrowserRouter>
+      <Toaster />
       <Routes>
         <Route element={<EntryStoreLayout />}>
           <Route path="/" element={<ComposerPage />} />

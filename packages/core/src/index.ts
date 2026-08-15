@@ -2,6 +2,8 @@ export type { ContinuousSyncHandle, ContinuousSyncOptions } from "./continuous-s
 export { startContinuousSync } from "./continuous-sync";
 export { mintId } from "./id";
 export { PROTOCOL_VERSION, SYNC_BATCH_SIZE, SYNC_INTERVAL_MS } from "./protocol";
+export type { CheckServerOptions, ServerCheckResult, ServerFetch } from "./server-check";
+export { checkServer } from "./server-check";
 export type { SqliteDriver, SqliteMethod, SqliteResult } from "./sqlite/driver";
 export type { OpenedSqliteStore } from "./sqlite/open";
 export { open } from "./sqlite/open";

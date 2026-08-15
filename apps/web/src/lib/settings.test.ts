@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { readServerUrl, readTheme, writeServerUrl, writeTheme } from "./settings";
+import { readServerUrl, readTheme, resolveServerUrl, writeServerUrl, writeTheme } from "./settings";
 
 describe("settings", () => {
   beforeEach(() => {
@@ -76,6 +76,26 @@ describe("settings", () => {
       });
 
       expect(() => writeServerUrl("https://phone.example:41207")).not.toThrow();
+    });
+  });
+
+  describe("resolveServerUrl", () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it("prefers the given (stored) value over VITE_SERVER_URL", () => {
+      vi.stubEnv("VITE_SERVER_URL", "https://built-in.example");
+      expect(resolveServerUrl("https://stored.example")).toBe("https://stored.example");
+    });
+
+    it("falls back to VITE_SERVER_URL when the given value is empty", () => {
+      vi.stubEnv("VITE_SERVER_URL", "https://built-in.example");
+      expect(resolveServerUrl("")).toBe("https://built-in.example");
+    });
+
+    it("falls back to empty (same-origin) when neither is set", () => {
+      expect(resolveServerUrl("")).toBe("");
     });
   });
 });

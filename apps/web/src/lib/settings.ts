@@ -64,3 +64,14 @@ export function writeServerUrl(url: string): void {
     // Refused write — sync keeps using whatever value it last read.
   }
 }
+
+/**
+ * The address a Server URL setting actually resolves to (ADR 0008): the
+ * stored override if one is set, else the build-time `VITE_SERVER_URL`,
+ * else empty — same-origin, asking nothing extra of the request. Shared by
+ * `sync-transport.ts` and `server-check.ts` so a reachability check always
+ * asks about the same address sync would actually use.
+ */
+export function resolveServerUrl(url: string): string {
+  return url || import.meta.env.VITE_SERVER_URL || "";
+}
