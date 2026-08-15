@@ -3,26 +3,18 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { useSettingsStore } from "@/lib/settings";
-import type {
-  ensureContinuousSync as EnsureContinuousSync,
-  useHistory as UseHistory,
-} from "./use-history";
+import type { useHistory as UseHistory } from "./use-history";
 
-const { syncMock, startContinuousSyncMock } = vi.hoisted(() => ({
-  syncMock: vi.fn(async () => {}),
-  startContinuousSyncMock: vi.fn(() => ({ stop: vi.fn() })),
+const { requestSyncMock } = vi.hoisted(() => ({
+  requestSyncMock: vi.fn(async () => {}),
 }));
 
-vi.mock("@meologue/core", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@meologue/core")>();
-  return { ...actual, sync: syncMock, startContinuousSync: startContinuousSyncMock };
-});
+vi.mock("@/lib/sync-runner", () => ({ requestSync: requestSyncMock }));
 
-// use-history.ts keeps its sync loop and in-flight coalescing at module
-// scope by design (ADR superseding 0009) — each test needs a fresh module
-// registry, and a fresh query-client singleton alongside it, or state from
-// one test (e.g. `continuousSyncStarted`) would leak into the next.
+// use-history.ts reaches for the `queryClient` singleton exported by
+// lib/query-client.ts directly (not React context), so each test needs a
+// fresh module registry, or a query cached by one test would leak into the
+// next.
 async function importFresh() {
   vi.resetModules();
   const [hook, client] = await Promise.all([import("./use-history"), import("@/lib/query-client")]);
@@ -46,8 +38,7 @@ function createFakeStore(): EntryStore {
 describe("useHistory", () => {
   beforeEach(() => {
     localStorage.clear();
-    syncMock.mockClear();
-    startContinuousSyncMock.mockClear();
+    requestSyncMock.mockClear();
   });
 
   async function renderUseHistory(store: EntryStore, deviceId = "device-a") {
@@ -97,53 +88,13 @@ describe("useHistory", () => {
     ]);
   });
 
-  it("triggers a sync after Sending only when a Server URL is configured", async () => {
+  it("nudges the sync loop to run right away after Sending, rather than waiting for its next tick", async () => {
     const store = createFakeStore();
     const { result } = await renderUseHistory(store);
     await waitFor(() => expect(result.current.entries).toEqual([]));
-
-    act(() => result.current.sendEntry("no sync yet"));
-    await waitFor(() => expect(store.upsert).toHaveBeenCalled());
-
-    expect(syncMock).not.toHaveBeenCalled();
-  });
-
-  it("refreshes entries again once a Sync triggered by Send completes", async () => {
-    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
-    const store = createFakeStore();
-    const { result } = await renderUseHistory(store);
-    await waitFor(() => expect(result.current.entries).toEqual([]));
-    const listCallsBeforeSend = (store.list as ReturnType<typeof vi.fn>).mock.calls.length;
 
     act(() => result.current.sendEntry("hello"));
 
-    await waitFor(() => expect(syncMock).toHaveBeenCalledTimes(1));
-    expect(syncMock).toHaveBeenCalledWith(expect.objectContaining({ store, deviceId: "device-a" }));
-    // One refetch for the local write, a second once sync's own
-    // invalidation lands — proves sync invalidates the cache rather than
-    // the mutation's own refetch being the only trigger.
-    await waitFor(() =>
-      expect((store.list as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThanOrEqual(
-        listCallsBeforeSend + 2,
-      ),
-    );
-  });
-});
-
-describe("ensureContinuousSync", () => {
-  beforeEach(() => {
-    localStorage.clear();
-    startContinuousSyncMock.mockClear();
-  });
-
-  it("starts the continuous sync loop at most once per module load", async () => {
-    const fresh = await importFresh();
-    const store = createFakeStore();
-    const ensure = fresh.ensureContinuousSync as typeof EnsureContinuousSync;
-
-    ensure(store, "device-a");
-    ensure(store, "device-a");
-
-    expect(startContinuousSyncMock).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(requestSyncMock).toHaveBeenCalledWith(store, "device-a"));
   });
 });

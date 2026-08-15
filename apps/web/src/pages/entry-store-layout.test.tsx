@@ -8,22 +8,13 @@ import type { useEntryStore as UseEntryStore } from "./entry-store-layout";
 const { createDriver } = vi.hoisted(() => ({ createDriver: vi.fn() }));
 vi.mock("@/platform/sqlite-driver", () => ({ createDriver }));
 
-// Stubs @meologue/core's real `open` (which needs a real SqliteDriver to
-// run migrations against) so the success-path test below can resolve
-// openEntryStore() with a plain in-memory fake, and stubs
-// ensureContinuousSync so that test can assert it fired exactly once
-// without a real polling loop and its timers/fetches spinning up.
-const { openMock, ensureContinuousSyncMock } = vi.hoisted(() => ({
-  openMock: vi.fn(),
-  ensureContinuousSyncMock: vi.fn(),
-}));
+// Stubs @meologue/core's real `open` (which needs a real SqliteDriver to run
+// migrations against) so the success-path test below can resolve
+// openEntryStore() with a plain in-memory fake.
+const { openMock } = vi.hoisted(() => ({ openMock: vi.fn() }));
 vi.mock("@meologue/core", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@meologue/core")>();
   return { ...actual, open: openMock };
-});
-vi.mock("@/hooks/use-history", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/hooks/use-history")>();
-  return { ...actual, ensureContinuousSync: ensureContinuousSyncMock };
 });
 
 function createFakeStore(): EntryStore {
@@ -91,7 +82,6 @@ describe("EntryStoreLayout", () => {
   beforeEach(() => {
     createDriver.mockReset();
     openMock.mockReset();
-    ensureContinuousSyncMock.mockReset();
   });
 
   it("puts a disabled, message-free context on the outlet while the store is opening", async () => {
@@ -132,7 +122,7 @@ describe("EntryStoreLayout", () => {
     );
   });
 
-  it("renders Ready and starts continuous sync exactly once the store opens", async () => {
+  it("renders Ready once the store opens", async () => {
     createDriver.mockResolvedValue({});
     const store = createFakeStore();
     openMock.mockResolvedValue({ store, deviceId: "device-a" });
@@ -142,8 +132,6 @@ describe("EntryStoreLayout", () => {
     await waitFor(() =>
       expect(screen.getByText("disabled:false message:none")).toBeInTheDocument(),
     );
-    expect(ensureContinuousSyncMock).toHaveBeenCalledTimes(1);
-    expect(ensureContinuousSyncMock).toHaveBeenCalledWith(store, "device-a");
   });
 
   // TanStack Query's `retry: false` only governs retries within one fetch
