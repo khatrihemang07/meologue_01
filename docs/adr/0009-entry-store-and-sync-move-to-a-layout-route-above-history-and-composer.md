@@ -2,7 +2,12 @@
 
 ## Status
 
-Accepted
+Superseded by [0013](0013-entry-store-reads-and-writes-move-through-tanstack-query.md), which
+replaces the module-scope `entryStorePromise` and the `useSyncExternalStore`-shaped `entries` this
+ADR describes with a TanStack Query cache. The layout-route structure this ADR establishes —
+`EntryStoreLayout` wrapping only `/` and `/history`, Settings as a sibling route outside it — and
+the continuous sync loop staying module-scope state rather than component state both stand
+unchanged.
 
 ## Context
 

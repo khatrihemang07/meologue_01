@@ -1,15 +1,11 @@
 import type { Entry, EntryStore } from "@meologue/core";
 import { open } from "@meologue/core";
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useMemo } from "react";
 import { Outlet, useOutletContext } from "react-router";
 import { ensureContinuousSync, useHistory } from "@/hooks/use-history";
 import { SecondTabError, StorageUnavailableError } from "@/lib/entry-store-errors";
 import { createDriver } from "@/platform/sqlite-driver";
-
-type EntryStoreState =
-  | { status: "loading" }
-  | { status: "ready"; store: EntryStore; deviceId: string }
-  | { status: "error"; message: string };
 
 export interface EntryStoreOutletContext {
   entries: Entry[];
@@ -18,24 +14,19 @@ export interface EntryStoreOutletContext {
   message?: string;
 }
 
+export const ENTRY_STORE_QUERY_KEY = ["entry-store"] as const;
+
 // This is the composition root for the sqlite-driver seam (ticket 24): each
 // platform file supplies only a driver, and the store is opened here, once,
 // rather than duplicated per platform.
 async function openEntryStore() {
   const driver = await createDriver();
-  return open(driver);
+  const opened = await open(driver);
+  // See ensureContinuousSync's own doc comment (use-history.ts) for why this
+  // call belongs here, inside the queryFn, rather than in a component effect.
+  ensureContinuousSync(opened.store, opened.deviceId);
+  return opened;
 }
-
-// A Device has exactly one store for the life of a page load, so this is
-// memoized at module scope rather than per-mount: React 19's StrictMode
-// mounts, cleans up, and remounts effects once in development, and without
-// this a second openEntryStore() call would spin up a second Worker
-// competing with the first for the same OPFS pool lock, producing a
-// self-inflicted SecondTabError before a real second tab ever opens one.
-// Module scope also survives routing away to Settings and back (ticket 25):
-// the effect below re-runs on remount, but it reuses this same promise
-// rather than reopening the store.
-let entryStorePromise: ReturnType<typeof openEntryStore> | null = null;
 
 function describeOpenError(error: unknown): string {
   if (error instanceof SecondTabError) {
@@ -51,7 +42,7 @@ function describeOpenError(error: unknown): string {
 function noop() {}
 
 /**
- * The composition root for ADR 0001 and ADR 0009: opens the Entry store and
+ * The composition root for ADR 0001 and ADR 0013: opens the Entry store and
  * runs `useHistory` exactly once, above the routes that read from it — `/`
  * and `/history` (ticket 27), which both render whatever this layout puts
  * on the outlet context rather than each owning their own store and sync
@@ -59,50 +50,47 @@ function noop() {}
  * (ADR 0008): it must stay usable even when the store below never reaches
  * "ready", and the only way to guarantee that structurally is to keep it
  * off this component's subtree entirely.
+ *
+ * Opening happens through a TanStack Query query rather than a hand-rolled
+ * module-scope promise: its cache gives the same single-open guarantee —
+ * `openEntryStore` runs at most once per page load for `ENTRY_STORE_QUERY_KEY`,
+ * including across React 19 StrictMode's double-mount and a round trip to
+ * Settings and back — without this layout having to memoize anything itself.
  */
 export function EntryStoreLayout() {
-  const [state, setState] = useState<EntryStoreState>({ status: "loading" });
+  const { data, error } = useQuery({
+    queryKey: ENTRY_STORE_QUERY_KEY,
+    queryFn: openEntryStore,
+    // A Device has exactly one store for the life of a page load (ADR
+    // 0001): never stale, never garbage-collected, never retried — a
+    // SecondTabError or StorageUnavailableError is not transient, and
+    // retrying would mean a second openEntryStore() call spinning up a
+    // second Worker competing with the first for the same OPFS pool lock.
+    staleTime: Number.POSITIVE_INFINITY,
+    gcTime: Number.POSITIVE_INFINITY,
+    retry: false,
+    // `retry: false` only governs retries within one fetch attempt — it does
+    // nothing about `retryOnMount` (default `true`), which re-runs queryFn
+    // for a *new* observer of an already-errored query. Without this, a
+    // Settings round trip after a failed open remounts EntryStoreLayout,
+    // which mounts a fresh observer, which re-fetches — reopening a second
+    // Worker against the same OPFS pool lock, exactly what the settings
+    // above exist to prevent. Only the error path is affected: a
+    // successfully-resolved query is never stale (staleTime: Infinity), so
+    // it's already skipped on remount regardless of this setting.
+    retryOnMount: false,
+  });
 
-  useEffect(() => {
-    let cancelled = false;
-    entryStorePromise ??= openEntryStore();
-    entryStorePromise.then(
-      (opened) => {
-        // Unconditional — not guarded by `cancelled`. A user who navigates
-        // to Settings before the store finishes opening unmounts this
-        // layout (and with it, the `Ready` component below that would
-        // otherwise start sync via useHistory) before this ever settles.
-        // Sync still has to start once the store exists, regardless of
-        // which page is on screen when it does (ADR 0009).
-        ensureContinuousSync(opened.store, opened.deviceId);
-        if (!cancelled) {
-          setState({ status: "ready", ...opened });
-        }
-      },
-      (error: unknown) => {
-        if (!cancelled) {
-          setState({ status: "error", message: describeOpenError(error) });
-        }
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const message = useMemo(() => (error ? describeOpenError(error) : undefined), [error]);
 
-  if (state.status === "ready") {
-    return <Ready store={state.store} deviceId={state.deviceId} />;
+  if (data) {
+    return <Ready store={data.store} deviceId={data.deviceId} />;
   }
 
   return (
     <Outlet
       context={
-        {
-          entries: [],
-          sendEntry: noop,
-          disabled: true,
-          message: state.status === "error" ? state.message : undefined,
-        } satisfies EntryStoreOutletContext
+        { entries: [], sendEntry: noop, disabled: true, message } satisfies EntryStoreOutletContext
       }
     />
   );
