@@ -5,8 +5,15 @@ import { SyncLoop } from "@/hooks/use-sync-loop";
 import { queryClient } from "@/lib/query-client";
 import { useSettingsStore } from "@/lib/settings";
 import { applyTheme, watchSystemTheme } from "@/lib/theme";
+import { registerServiceWorker } from "@/platform/register-service-worker";
 import "./index.css";
 import App from "./App.tsx";
+
+// Only the web target's implementation of this seam does anything (ticket
+// 45) — Android and macOS resolve to a no-op at build time (ADR 0005), so
+// this call is unconditional here rather than gated on a runtime platform
+// check.
+registerServiceWorker();
 
 const rootElement = document.getElementById("root");
 if (!rootElement) {

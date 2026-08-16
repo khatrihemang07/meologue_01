@@ -33,7 +33,10 @@ test("a second tab in the same origin shows an explicit error, not a blank page"
   const secondTab = await context.newPage();
   await secondTab.goto("/");
 
-  await expect(secondTab.getByText(/already open in another tab/i)).toBeVisible({
+  // Wording as of ticket 45: "tab" became "window" once installing the PWA
+  // made an installed window plus a browser tab the normal way to end up
+  // here, not just two tabs someone opened deliberately.
+  await expect(secondTab.getByText(/already open in another window/i)).toBeVisible({
     timeout: 10_000,
   });
   await expect(secondTab.getByPlaceholder("What's on your mind?")).toBeDisabled();
