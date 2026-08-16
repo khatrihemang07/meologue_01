@@ -27,6 +27,11 @@ The full, ordered collection of a user's Entries, as seen from a given Device. T
 show slightly different Histories at any given moment if one hasn't finished Syncing, but they
 converge once Syncing completes.
 
+### Search
+
+Narrowing History to the Entries whose text matches what you typed. Search reads Entry text, not
+Entry times, and it narrows History in place rather than producing a separate collection.
+
 ### Send
 
 The user's action of capturing a new Entry: writing text and committing it to their History.

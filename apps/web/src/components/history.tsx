@@ -1,5 +1,6 @@
 import type { Entry } from "@meologue/core";
 import { formatAbsoluteTime, formatEntryTime } from "@/lib/entry-time";
+import { highlightMatches } from "@/lib/highlight-match";
 
 interface HistoryProps {
   entries: Entry[];
@@ -11,11 +12,43 @@ interface HistoryProps {
    * once.
    */
   syncEnabled: boolean;
+  /**
+   * The active Search query (ticket 39), for highlighting matched terms in
+   * each Entry's body. Absent (or blank) outside History's own search box —
+   * the Composer footer renders this same component with no query, and
+   * shows every Entry's body plain.
+   */
+  query?: string;
 }
 
-export function History({ entries, syncEnabled }: HistoryProps) {
+function EntryBody({ body, query }: { body: string; query: string }) {
+  if (query.trim() === "") {
+    return <p className="whitespace-pre-wrap">{body}</p>;
+  }
+  return (
+    <p className="whitespace-pre-wrap">
+      {highlightMatches(body, query).map((segment, index) =>
+        segment.matched ? (
+          // biome-ignore lint/suspicious/noArrayIndexKey: segments are a stable, ordered split of one Entry's body for one render.
+          <mark key={index} className="rounded-sm bg-primary/30 text-inherit">
+            {segment.text}
+          </mark>
+        ) : (
+          // biome-ignore lint/suspicious/noArrayIndexKey: segments are a stable, ordered split of one Entry's body for one render.
+          <span key={index}>{segment.text}</span>
+        ),
+      )}
+    </p>
+  );
+}
+
+export function History({ entries, syncEnabled, query = "" }: HistoryProps) {
   if (entries.length === 0) {
-    return <p className="text-center text-sm text-muted-foreground">History will appear here.</p>;
+    return (
+      <p className="text-center text-sm text-muted-foreground">
+        {query.trim() === "" ? "History will appear here." : "No matching Entries."}
+      </p>
+    );
   }
 
   return (
@@ -27,7 +60,7 @@ export function History({ entries, syncEnabled }: HistoryProps) {
             key={entry.id}
             className="flex items-start justify-between gap-2 rounded-lg bg-muted px-3 py-2 text-sm text-foreground"
           >
-            <p className="whitespace-pre-wrap">{entry.body}</p>
+            <EntryBody body={entry.body} query={query} />
             <div className="flex shrink-0 items-start gap-2">
               {time !== null && (
                 <time

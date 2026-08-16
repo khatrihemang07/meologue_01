@@ -183,7 +183,7 @@ The generated output is committed, so a fresh checkout doesn't need a Rust toolc
 
 ## Not built yet
 
-Full-text search, offline PWA, editing, conflict copies, export, release signing, app icons beyond
+Offline PWA, editing, conflict copies, export, release signing, app icons beyond
 the template defaults, and browser access over plain HTTP from another device. Settings has no
 sync-status UI, so a bad runtime Server URL fails silently to the console rather than surfacing in
 the app — the obvious next step, not yet built.

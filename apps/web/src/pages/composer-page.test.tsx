@@ -24,6 +24,7 @@ function renderComposerPage(context: EntryStoreOutletContext) {
 const readyContext: EntryStoreOutletContext = {
   entries: [],
   sendEntry: vi.fn(),
+  search: vi.fn(async () => []),
   disabled: false,
 };
 
@@ -45,7 +46,12 @@ describe("ComposerPage", () => {
   });
 
   it("disables the Composer while the store isn't ready", () => {
-    renderComposerPage({ entries: [], sendEntry: vi.fn(), disabled: true });
+    renderComposerPage({
+      entries: [],
+      sendEntry: vi.fn(),
+      search: vi.fn(async () => []),
+      disabled: true,
+    });
 
     expect(screen.getByPlaceholderText("What's on your mind?")).toBeDisabled();
   });
@@ -54,6 +60,7 @@ describe("ComposerPage", () => {
     renderComposerPage({
       entries: [],
       sendEntry: vi.fn(),
+      search: vi.fn(async () => []),
       disabled: true,
       message: "meologue couldn't open its storage. Reloading may help.",
     });
@@ -69,6 +76,7 @@ describe("ComposerPage", () => {
         { id: "1", deviceId: "device-a", body: "hello", createdAt: "now", seq: 1, syncedAt: "now" },
       ],
       sendEntry: vi.fn(),
+      search: vi.fn(async () => []),
       disabled: false,
     });
 

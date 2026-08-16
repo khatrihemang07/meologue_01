@@ -11,6 +11,8 @@ import { createDriver } from "@/platform/sqlite-driver";
 export interface EntryStoreOutletContext {
   entries: Entry[];
   sendEntry: (raw: string) => void;
+  /** Search (ticket 39) — narrows History to Entries whose body matches `query`, per EntryStore.search. */
+  search: (query: string) => Promise<Entry[]>;
   disabled: boolean;
   message?: string;
 }
@@ -66,6 +68,10 @@ function describeOpenError(error: unknown): string {
 
 function noop() {}
 
+async function noopSearch(): Promise<Entry[]> {
+  return [];
+}
+
 /**
  * The composition root for ADR 0001 and ADR 0013: opens the Entry store and
  * runs `useHistory` exactly once, above the routes that read from it — `/`
@@ -98,7 +104,13 @@ export function EntryStoreLayout() {
   return (
     <Outlet
       context={
-        { entries: [], sendEntry: noop, disabled: true, message } satisfies EntryStoreOutletContext
+        {
+          entries: [],
+          sendEntry: noop,
+          search: noopSearch,
+          disabled: true,
+          message,
+        } satisfies EntryStoreOutletContext
       }
     />
   );
@@ -107,7 +119,16 @@ export function EntryStoreLayout() {
 function Ready({ store, deviceId }: { store: EntryStore; deviceId: string }) {
   const { entries, sendEntry } = useHistory(store, deviceId);
   return (
-    <Outlet context={{ entries, sendEntry, disabled: false } satisfies EntryStoreOutletContext} />
+    <Outlet
+      context={
+        {
+          entries,
+          sendEntry,
+          search: (query: string) => store.search(query),
+          disabled: false,
+        } satisfies EntryStoreOutletContext
+      }
+    />
   );
 }
 

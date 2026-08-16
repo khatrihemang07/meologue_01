@@ -59,4 +59,34 @@ describe("History", () => {
 
     expect(screen.queryByLabelText("Not yet synced")).not.toBeInTheDocument();
   });
+
+  it("renders Entry bodies plain when no query is given", () => {
+    render(<History entries={[entry({ body: "a recurring task" })]} syncEnabled={false} />);
+
+    expect(screen.queryByRole("mark")).not.toBeInTheDocument();
+    expect(screen.getByText("a recurring task")).toBeInTheDocument();
+  });
+
+  it("highlights the query's match inside an Entry's body", () => {
+    render(
+      <History entries={[entry({ body: "a recurring task" })]} syncEnabled={false} query="recur" />,
+    );
+
+    const mark = screen.getByText("recurring", { selector: "mark" });
+    expect(mark).toBeInTheDocument();
+    expect(mark.parentElement).toHaveTextContent("a recurring task");
+  });
+
+  it("shows a not-found message, distinct from the empty-History message, once a search matches nothing", () => {
+    render(<History entries={[]} syncEnabled={false} query="nothing matches this" />);
+
+    expect(screen.getByText("No matching Entries.")).toBeInTheDocument();
+    expect(screen.queryByText("History will appear here.")).not.toBeInTheDocument();
+  });
+
+  it("shows the usual empty-History message when there is no query", () => {
+    render(<History entries={[]} syncEnabled={false} />);
+
+    expect(screen.getByText("History will appear here.")).toBeInTheDocument();
+  });
 });
