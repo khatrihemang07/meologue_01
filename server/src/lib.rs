@@ -8,7 +8,8 @@ use std::time::Duration;
 
 use axum::{
     Router,
-    http::{Request, Response},
+    http::{HeaderValue, Request, Response, header},
+    middleware::Next,
     routing::{get, post},
 };
 use sqlx::PgPool;
@@ -17,10 +18,57 @@ use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use tracing::field;
 
+/// Sets `Cache-Control` on everything the static file service serves, chosen
+/// by path rather than a single blanket value (ticket 44):
+///
+/// - `/assets/**` is Vite's content-hashed build output — a file's name
+///   changes whenever its contents do, so it can be cached for a year and
+///   marked `immutable`.
+/// - Everything else — `index.html`, the SPA fallback that serves it for any
+///   unmatched path, and (from ticket 45) the service worker family
+///   (`sw.js`, `registerSW.js`, `manifest.webmanifest`) — gets `no-cache`:
+///   revalidate on every request rather than guess a freshness lifetime.
+///   `tower-http`'s fs services already set `last-modified`, so that
+///   revalidation is a cheap 304. Without this, browsers fall back to
+///   heuristic caching, which is how a Device gets pinned to a dead app
+///   shell or service worker with no recovery short of clearing site data.
+///
+/// `workbox-<hash>.js` (also emitted by ticket 45) is itself content-hashed
+/// like `/assets/**`, but it lives at the output root rather than under
+/// `/assets/`, so it's called out by name rather than caught by the prefix
+/// check. It's grouped with the immutable bucket, not the no-cache one: it's
+/// never fetched by URL directly, only `importScripts()`-ed by `sw.js`,
+/// which is itself always revalidated — so `sw.js` always names the
+/// workbox file that matches what it currently expects, and caching that
+/// file forever under its hashed name is exactly as safe as `/assets/**`.
+async fn set_static_cache_control(
+    request: axum::extract::Request,
+    next: Next,
+) -> Response<axum::body::Body> {
+    let path = request.uri().path().to_owned();
+    let mut response = next.run(request).await;
+
+    let is_immutable =
+        path.starts_with("/assets/") || (path.starts_with("/workbox-") && path.ends_with(".js"));
+    let value = if is_immutable {
+        "public, max-age=31536000, immutable"
+    } else {
+        "no-cache"
+    };
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static(value));
+
+    response
+}
+
 /// Serves `/v1/sync` plus the built web app out of `static_dir`, falling
 /// back to its `index.html` app shell for any other path — one process, one
 /// port, one URL, so a phone on the same network can just open an address
-/// (ticket 11).
+/// (ticket 11). Static responses (the app shell and its build output) carry
+/// the `Cache-Control` policy described on `set_static_cache_control`
+/// (ticket 44); `/v1/*` is untouched — that layer wraps only the static
+/// fallback, not the whole router.
 ///
 /// CORS is wide open rather than restricted to a known origin: ADR 0003
 /// already trusts any Device that can reach the server at all, so an origin
@@ -33,7 +81,12 @@ pub fn router(pool: PgPool, static_dir: impl AsRef<Path>) -> Router {
 
     let static_dir = static_dir.as_ref();
     let index_html = static_dir.join("index.html");
-    let app_shell = ServeDir::new(static_dir).fallback(ServeFile::new(index_html));
+    // A nested Router (rather than a bare `.fallback_service()`) so the
+    // Cache-Control layer below applies only to static-file responses —
+    // `.layer()` on the outer Router would wrap `/v1/*` too (ticket 44).
+    let app_shell = Router::new()
+        .fallback_service(ServeDir::new(static_dir).fallback(ServeFile::new(index_html)))
+        .layer(axum::middleware::from_fn(set_static_cache_control));
 
     // A span per request, closed (and so printed under `RUST_LOG=info`) with its
     // status and latency filled in. `/v1/sync` additionally records the
