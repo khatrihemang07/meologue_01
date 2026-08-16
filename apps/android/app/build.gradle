@@ -1,5 +1,18 @@
 apply plugin: 'com.android.application'
 
+// Release signing config, read from a gitignored properties file that
+// scripts/setup-signing.sh generates (docs/adr/0015-locally-generated-release-signing-identities.md).
+// Only assembleDebug and friends may run without it; anything that builds a
+// release variant must fail loudly instead of quietly emitting an unsigned
+// APK, so the check below runs against the actual task graph rather than
+// unconditionally at configuration time.
+def keystorePropertiesFile = rootProject.file('keystore.properties')
+def keystoreProperties = new Properties()
+def hasReleaseKeystore = keystorePropertiesFile.exists()
+if (hasReleaseKeystore) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+}
+
 android {
     namespace = "com.meologue.app"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -7,8 +20,13 @@ android {
         applicationId "com.meologue.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        // Kept manual, not derived from the workspace's semver string:
+        // versionCode must increase monotonically forever, which no parser
+        // of "0.2.0"-style versions can guarantee across every future bump
+        // (e.g. a patch release still needs a higher versionCode than the
+        // minor release before it). Bump both by hand together.
+        versionCode 2
+        versionName "0.2.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,11 +34,36 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        if (hasReleaseKeystore) {
+            release {
+                storeFile file(keystoreProperties['storeFile'])
+                storePassword keystoreProperties['storePassword']
+                keyAlias keystoreProperties['keyAlias']
+                keyPassword keystoreProperties['keyPassword']
+            }
+        }
+    }
     buildTypes {
         release {
+            // R8 stays off: it breaks Capacitor plugins silently without a
+            // proguard-rules.pro tuned for them, and none exists yet.
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (hasReleaseKeystore) {
+                signingConfig signingConfigs.release
+            }
         }
+    }
+}
+
+gradle.taskGraph.whenReady { taskGraph ->
+    def buildingRelease = taskGraph.allTasks.any { it.name.contains('Release') }
+    if (buildingRelease && !hasReleaseKeystore) {
+        throw new GradleException(
+            "No release signing keystore found (expected apps/android/keystore.properties). " +
+            "Run scripts/setup-signing.sh from the repo root to create one, then retry."
+        )
     }
 }
 
