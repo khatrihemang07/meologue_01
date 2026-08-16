@@ -27,6 +27,7 @@
     "vitest": "^4.1.10"
   },
   "dependencies": {
-    "drizzle-orm": "^0.45.2"
+    "drizzle-orm": "^0.45.2",
+    "fflate": "^0.8.3"
   }
 }

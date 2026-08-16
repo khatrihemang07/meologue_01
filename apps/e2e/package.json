@@ -9,6 +9,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.55.1",
-    "@types/node": "^24.13.3"
+    "@types/node": "^24.13.3",
+    "fflate": "^0.8.3"
   }
 }

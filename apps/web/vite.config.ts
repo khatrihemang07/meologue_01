@@ -46,6 +46,10 @@ export default defineConfig(({ mode }) => {
             `./src/platform/sqlite-driver.${target}.ts`,
           ),
         },
+        {
+          find: "@/platform/save-file",
+          replacement: path.resolve(import.meta.dirname, `./src/platform/save-file.${target}.ts`),
+        },
         { find: "@", replacement: path.resolve(import.meta.dirname, "./src") },
       ],
     },
