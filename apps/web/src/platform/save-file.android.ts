@@ -9,6 +9,14 @@ import { Share } from "@capacitor/share";
 // handleExport toasts on any thrown error).
 const SHARE_CANCELED_MESSAGE = "Share canceled";
 
+// See save-file.web.ts's SaveFileOutcome doc comment for why this type is
+// declared independently here rather than imported from a shared module:
+// vite.config.ts's build alias means only one save-file.<target>.ts is ever
+// compiled into a given target, and this keeps each target's file
+// self-contained rather than depending on a sibling that will never ship
+// alongside it.
+export type SaveFileOutcome = "saved" | "cancelled";
+
 /**
  * Android's save-file seam (ticket 48): write the zip into the app's cache
  * directory, then hand it to the system share sheet so the user can send it
@@ -28,8 +36,19 @@ const SHARE_CANCELED_MESSAGE = "Share canceled";
  * declares one (`${applicationId}.fileprovider`) with a `cache-path`
  * covering the whole cache directory (`res/xml/file_paths.xml`), so no
  * manifest or provider changes are needed here.
+ *
+ * The cache write below always happens, even when the share sheet is about
+ * to be cancelled — Share.share needs a real file to hand off, so there is
+ * no way to defer writing until after the user has picked a target. That
+ * cache copy is never the export from the user's point of view, though: it
+ * sits in app-private storage with no Files-app path to it, and this
+ * function only reports "saved" once the share sheet has actually handed
+ * the bytes to somewhere the user chose. A dismissed share sheet correctly
+ * reports "cancelled" even though the cache write underneath it succeeded
+ * (ticket 47's defect fix — see SaveFileOutcome's doc comment above and
+ * docs/adr/0016).
  */
-export async function saveFile(fileName: string, bytes: Uint8Array): Promise<void> {
+export async function saveFile(fileName: string, bytes: Uint8Array): Promise<SaveFileOutcome> {
   // Filesystem.writeFile only accepts string data. Binary bytes must go in
   // as base64 with no `encoding` option — passing Encoding.UTF8 (or any
   // text encoding) here would have the plugin treat the zip as text and
@@ -45,10 +64,11 @@ export async function saveFile(fileName: string, bytes: Uint8Array): Promise<voi
     await Share.share({ files: [uri], dialogTitle: "Export meologue" });
   } catch (error) {
     if (error instanceof Error && error.message === SHARE_CANCELED_MESSAGE) {
-      return;
+      return "cancelled";
     }
     throw error;
   }
+  return "saved";
 }
 
 // Spreading a large Uint8Array straight into String.fromCharCode risks the

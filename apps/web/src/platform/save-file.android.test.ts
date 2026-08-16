@@ -32,15 +32,16 @@ describe("save-file.android", () => {
     shareMock.mockClear();
   });
 
-  it("writes the zip to the cache directory as base64 and shares its file:// URI", async () => {
+  it('writes the zip to the cache directory as base64, shares its file:// URI, and reports "saved"', async () => {
     const { saveFile } = await import("./save-file.android");
     // Includes every byte value, including ones that read as UTF-8
     // continuation bytes if mishandled — the point being proven is that the
     // bytes survive base64 round-tripping unmodified, not just ASCII ones.
     const bytes = new Uint8Array([0, 1, 2, 255, 254, 253, 65, 66, 67]);
 
-    await saveFile("meologue-export-20260101-000000.zip", bytes);
+    const outcome = await saveFile("meologue-export-20260101-000000.zip", bytes);
 
+    expect(outcome).toBe("saved");
     expect(writeFileMock).toHaveBeenCalledWith({
       path: "meologue-export-20260101-000000.zip",
       data: base64Encode(bytes),
@@ -60,11 +61,32 @@ describe("save-file.android", () => {
     });
   });
 
-  it("resolves without throwing when the user dismisses the share sheet", async () => {
+  it('reports "cancelled", not "saved", when the user dismisses the share sheet', async () => {
     shareMock.mockRejectedValueOnce(new Error("Share canceled"));
     const { saveFile } = await import("./save-file.android");
 
-    await expect(saveFile("export.zip", new Uint8Array([1]))).resolves.toBeUndefined();
+    const outcome = await saveFile("export.zip", new Uint8Array([1]));
+
+    // This is the assertion ticket 47's defect fix exists for: resolving
+    // without throwing used to be the entire signal the caller
+    // (settings-page.tsx's handleExport) had, which is exactly what let a
+    // dismissed share sheet raise a false "Exported" toast.
+    expect(outcome).toBe("cancelled");
+  });
+
+  it("still writes the cache copy Share.share needs even when the user goes on to cancel", async () => {
+    // Share.share requires a real file to hand off, so the cache write
+    // below always happens before the user ever sees the share sheet — it
+    // is not itself "the export" (it sits in app-private storage no
+    // file-manager can reach) and cancelling afterwards is correctly
+    // reported as "cancelled" regardless.
+    shareMock.mockRejectedValueOnce(new Error("Share canceled"));
+    const { saveFile } = await import("./save-file.android");
+
+    await saveFile("export.zip", new Uint8Array([1]));
+
+    expect(writeFileMock).toHaveBeenCalledTimes(1);
+    expect(shareMock).toHaveBeenCalledTimes(1);
   });
 
   it("propagates a real share failure instead of swallowing it", async () => {
