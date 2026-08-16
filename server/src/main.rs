@@ -32,6 +32,7 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or(41207);
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await?;
     println!("meologue-server listening on :{port}");
+    println!("Server URL for Settings: http://localhost:{port}");
     axum::serve(listener, app).await?;
 
     Ok(())

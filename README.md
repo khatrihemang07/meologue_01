@@ -71,8 +71,10 @@ cd server && cargo run                # app + API together on :41207
 
 Sync is opt-in (ADR 0011): open the app, go to Settings, and type a Server URL — even for this
 same-origin production-style setup, since an unset Server URL means sync stays off on every
-target, with no implicit fallback. For the dev workflow above, point it at the dev origin
-(`http://localhost:5173`); for the production-style one, `http://localhost:41207`.
+target, with no implicit fallback. `cargo run` prints the Server URL to use
+(`http://localhost:41207` by default) — that's correct for the production-style workflow above.
+For the dev workflow, use the Vite origin instead (`http://localhost:5173`), since that's where
+the app is actually served from and the server has no way to know about that proxy.
 
 > **Reaching it from another device's browser doesn't work yet.** The server binds `0.0.0.0`, so the
 > port is reachable across your LAN or tailnet — but the web app stores Entries in SQLite over OPFS,
