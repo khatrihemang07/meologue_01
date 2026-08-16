@@ -4,6 +4,15 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      Matches vite.config.ts's VitePWA manifest theme_color (ticket 45) — the
+      browser chrome and the OS task switcher use this, and it's not
+      something the manifest link (auto-injected by the plugin, unlike this
+      meta tag) covers on its own. Only meaningful on the web build; Android
+      and macOS never register the plugin, so this tag exists unused there,
+      which costs nothing.
+    -->
+    <meta name="theme-color" content="#18181B" />
     <title>meologue</title>
     <!--
       Puts the theme class on <html> before the browser's first paint. This has

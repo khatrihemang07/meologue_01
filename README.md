@@ -102,6 +102,12 @@ status` prints the full `https://` URL to use.
 This is `serve`, not `funnel` — reachable only from devices on your tailnet, never the open
 internet. Don't run `tailscale funnel` here; see ADR 0017.
 
+**Installable and offline-capable**, on any HTTPS origin (`localhost` counts too): the browser's
+install prompt adds it as its own app, and a service worker keeps it usable — opening the SQLite
+store included — with no network at all. Deploying a new build raises an in-app prompt to reload
+rather than doing it silently, since a reload could otherwise discard whatever's mid-composition.
+Android and macOS never register a service worker; only the web build does.
+
 ### Android
 
 No emulator and no Android Studio — a debug APK built from the command line and installed on a
@@ -244,4 +250,4 @@ The generated output is committed, so a fresh checkout doesn't need a Rust toolc
 
 ## Not built yet
 
-Offline PWA, editing, and conflict copies.
+Editing and conflict copies.

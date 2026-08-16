@@ -5,12 +5,19 @@
       "@/platform/wake-signals": ["./src/platform/wake-signals.web.ts"],
       "@/platform/sqlite-driver": ["./src/platform/sqlite-driver.web.ts"],
       "@/platform/save-file": ["./src/platform/save-file.web.ts"],
+      "@/platform/register-service-worker": ["./src/platform/register-service-worker.web.ts"],
       "@/*": ["./src/*"]
     },
     "target": "es2023",
     "lib": ["ES2023", "DOM"],
     "module": "esnext",
-    "types": ["vite/client"],
+    // vite-plugin-pwa/client declares the `virtual:pwa-register` module
+    // (ticket 45) that register-service-worker.web.ts imports. Every
+    // target's platform file is type-checked by `tsc -b` regardless of
+    // which one the current build uses (ADR 0005), so this needs to be
+    // available even on an android/macos build where the plugin itself
+    // never runs.
+    "types": ["vite/client", "vite-plugin-pwa/client"],
     "allowArbitraryExtensions": true,
     "skipLibCheck": true,
     "strict": true,

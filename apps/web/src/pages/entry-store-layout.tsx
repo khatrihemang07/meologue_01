@@ -57,7 +57,15 @@ export const entryStoreQueryOptions = queryOptions({
 
 function describeOpenError(error: unknown): string {
   if (error instanceof SecondTabError) {
-    return "meologue is already open in another tab. Close it there, or continue in this one.";
+    // OPFS allows a single writer per origin (ticket 45). Before installing
+    // the PWA was possible, hitting this meant two browser tabs — an edge
+    // case a user could just close one of. An installed window plus a
+    // browser tab is now the normal steady state, and the second one to
+    // open lands here — "tab" would be actively wrong for the installed
+    // window, and the old wording ("can't store Entries") read like data
+    // loss rather than the ordinary, expected lockout this actually is.
+    // Detection is unchanged; only the words.
+    return "meologue is already open in another window. Only one window can hold the Entries at a time — close this one, or go back to the other.";
   }
   if (error instanceof StorageUnavailableError) {
     return "meologue can't store Entries here — try a non-private window over HTTPS or localhost.";
