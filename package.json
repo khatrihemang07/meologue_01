@@ -16,6 +16,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.7",
+    "sharp": "^0.35.3",
     "turbo": "2.10.9"
   }
 }

@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <title>meologue return-arrow mark</title>
+  <!--
+    meologue's mark: a return arrow (the Send gesture) — the whole app in one
+    glyph. This file is the single source of truth for every icon asset in the
+    repo; scripts/generate-icons.sh rasterizes it and composites the two
+    platform-specific renders (macOS tile, Android adaptive foreground) plus
+    the favicon and PWA icons. See docs/brand/icon.svg's sibling script for
+    the exact commands.
+
+    The glyph is drawn as a single heavy stroke with round caps/joins rather
+    than a filled outline — round caps make each segment read as solid, not
+    hollow, so the silhouette survives Android's circular adaptive mask (which
+    crops ~18% off every edge) and stays legible chunked down to 16px.
+
+    White on transparent: this file carries no background. Each render adds
+    its own — a near-black rounded tile for macOS, full transparency plus a
+    flat background colour for Android's adaptive icon, near-black for the
+    favicon and PWA icons.
+  -->
+  <path
+    d="M69 22 L69 60 L31 60 M49 42 L31 60 L49 78"
+    fill="none"
+    stroke="#FFFFFF"
+    stroke-width="16"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+</svg>
