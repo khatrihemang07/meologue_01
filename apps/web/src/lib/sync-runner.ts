@@ -2,27 +2,33 @@ import type { EntryStore } from "@meologue/core";
 import { sync } from "@meologue/core";
 import { queryClient } from "@/lib/query-client";
 import { ENTRIES_QUERY_KEY } from "@/lib/query-keys";
-import { isSyncEnabled } from "@/lib/settings";
+import { useSettingsStore } from "@/lib/settings";
+import { useSyncStatusStore } from "@/lib/sync-status";
 import { syncTransport } from "@/lib/sync-transport";
 
 let syncInFlight: Promise<void> | null = null;
 let rerunRequested = false;
 
-// Sync is opt-in (ADR 0011): `isSyncEnabled()` is read fresh on every call,
-// not hoisted, so saving or clearing the Server URL in Settings takes
-// effect on the very next call with no reload. Errors are swallowed (after
-// logging) rather than left to land in the caller's `error` state — a
-// failed sync attempt isn't surfaced to the UI, it just retries on the next
-// trigger.
+// Sync is opt-in (ADR 0011): the Server URL is read fresh on every call, not
+// hoisted, so saving or clearing it in Settings takes effect on the very
+// next call with no reload. A thrown error is still logged (ticket 40 adds
+// to, not replaces, the console) but no longer swallowed silently — it's
+// also recorded to `sync-status.ts` so the ambient indicator and Settings'
+// detail can both show it, and it keeps retrying on the next trigger either
+// way.
 async function runSyncOnce(store: EntryStore, deviceId: string): Promise<void> {
-  if (!isSyncEnabled()) {
+  const serverUrl = useSettingsStore.getState().serverUrl;
+  if (serverUrl === "") {
     return;
   }
   try {
     await sync({ store, transport: syncTransport, deviceId });
     await queryClient.invalidateQueries({ queryKey: ENTRIES_QUERY_KEY });
+    useSyncStatusStore.getState().recordSuccess(serverUrl);
   } catch (error) {
     console.error("meologue: sync failed", error);
+    const reason = error instanceof Error ? error.message : String(error);
+    useSyncStatusStore.getState().recordFailure(serverUrl, reason);
   }
 }
 

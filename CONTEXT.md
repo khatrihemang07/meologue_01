@@ -43,6 +43,12 @@ The ongoing process by which Devices exchange Entries with each other, so that a
 captured on one Device eventually appears in the History on every other Device belonging to the
 same user.
 
+### Sync status
+
+Whether this Device's Sync is off, working, or failing. Off is the default and reads as a
+neutral state, not an error — it just means Sync is opt-in and no Server URL is set. Working and
+failing describe an ongoing attempt against a configured Server.
+
 ### Cursor
 
 A Device's record of how far it has Synced. A Cursor only ever advances — it marks the point up

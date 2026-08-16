@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { SyncStatusIndicator } from "@/components/sync-status-indicator";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 interface ShellProps {
@@ -12,14 +13,19 @@ interface ShellProps {
 }
 
 // The centred, max-w-xl card layout every page shares (ticket 25 pulled this
-// out of App.tsx once a second page — Settings — needed it too).
+// out of App.tsx once a second page — Settings — needed it too). Every page
+// goes through here, which is what makes the Sync status indicator
+// (ticket 40) ambient and always-present without each page wiring it in.
 export function Shell({ title, action, message, children, footer }: ShellProps) {
   return (
     <div className="flex min-h-svh justify-center bg-background px-4 py-12">
       <div className="flex w-full max-w-xl flex-col gap-4">
         <Card>
           <CardHeader>
-            <CardTitle>{title}</CardTitle>
+            <CardTitle className="flex items-center gap-2">
+              {title}
+              <SyncStatusIndicator />
+            </CardTitle>
             {action && <CardAction>{action}</CardAction>}
           </CardHeader>
           <CardContent className="flex flex-col gap-3">

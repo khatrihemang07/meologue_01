@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { isSyncEnabled, normaliseServerUrl, useSettingsStore } from "./settings";
+import { normaliseServerUrl, useSettingsStore } from "./settings";
 
 describe("settings store", () => {
   beforeEach(() => {
@@ -70,18 +70,6 @@ describe("settings store", () => {
       expect(normaliseServerUrl("https://phone.example:41207///")).toBe(
         "https://phone.example:41207//",
       );
-    });
-  });
-
-  describe("isSyncEnabled", () => {
-    it("is false with no Server URL set", () => {
-      expect(isSyncEnabled()).toBe(false);
-    });
-
-    it("is true once a Server URL is set", () => {
-      useSettingsStore.getState().setServerUrl("https://phone.example:41207");
-
-      expect(isSyncEnabled()).toBe(true);
     });
   });
 });

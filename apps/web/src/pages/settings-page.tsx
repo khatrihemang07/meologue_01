@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { checkServerUrl, type ServerCheckResult } from "@/lib/server-check";
 import { normaliseServerUrl, type Theme, useSettingsStore } from "@/lib/settings";
+import { useSyncStatus } from "@/lib/sync-status";
 import { applyTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
@@ -45,8 +46,10 @@ export function SettingsPage() {
   // than copying it into local state means this control can never drift
   // from what's actually in effect.
   const theme = useSettingsStore((state) => state.theme);
+  const storedServerUrl = useSettingsStore((state) => state.serverUrl);
   const setStoredTheme = useSettingsStore((state) => state.setTheme);
   const setStoredServerUrl = useSettingsStore((state) => state.setServerUrl);
+  const syncStatus = useSyncStatus();
 
   // A local draft, seeded from the store's current value: the field must
   // keep showing exactly what the user is typing, uncommitted, until Save —
@@ -162,6 +165,18 @@ export function SettingsPage() {
             )}
           >
             {describeServerCheck(status)}
+          </p>
+        )}
+        {syncStatus.state === "failing" && serverUrl === storedServerUrl && (
+          // The reason Sync itself is actually failing (ticket 40) — distinct
+          // from `status` above, which is a one-off reachability probe. This
+          // reflects real, ongoing sync attempts, and clears on its own the
+          // next time one succeeds, no reload needed. Only shown once the
+          // field matches what's saved, same reasoning as `status`: mid-edit,
+          // the reason on screen would be about an address the user is in the
+          // middle of replacing.
+          <p data-testid="sync-failure-reason" className="text-sm text-destructive">
+            Sync is failing: {syncStatus.reason}
           </p>
         )}
       </div>

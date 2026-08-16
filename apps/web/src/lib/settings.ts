@@ -108,17 +108,7 @@ export const useSettingsStore = create<SettingsState>()((set) => ({
   },
 }));
 
-/**
- * ADR 0011: an empty Server URL means Sync is off. Reads the store's
- * current state directly rather than as a hook — for callers outside a
- * component (the sync loop in `use-history.ts`, `sync-transport.ts`) that
- * need the latest value without subscribing to it.
- */
-export function isSyncEnabled(): boolean {
-  return useSettingsStore.getState().serverUrl !== "";
-}
-
-/** Reactive form of `isSyncEnabled` for components — re-renders when the Server URL changes. */
+/** ADR 0011: an empty Server URL means Sync is off. Re-renders when the Server URL changes. */
 export function useSyncEnabled(): boolean {
   return useSettingsStore((state) => state.serverUrl !== "");
 }

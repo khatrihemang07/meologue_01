@@ -15,7 +15,14 @@ vi.mock("@meologue/core", async (importOriginal) => {
 // fresh module registry, or state from one test would leak into the next.
 async function importFresh() {
   vi.resetModules();
-  return import("./sync-runner");
+  // sync-status.ts is imported alongside sync-runner.ts (not just relied on
+  // via a stale top-level reference) for the same reason use-sync-loop.test.tsx
+  // imports lib/query-client fresh with use-sync-loop: resetModules() gives
+  // the freshly-imported sync-runner its own new Zustand store instance, and
+  // a test asserting against the old top-level import would be watching a
+  // different object that the code under test never touches.
+  const [runner, status] = await Promise.all([import("./sync-runner"), import("./sync-status")]);
+  return { ...runner, ...status };
 }
 
 function createFakeStore(): EntryStore {
@@ -120,5 +127,66 @@ describe("requestSync", () => {
 
     expect(maxConcurrent).toBe(1);
     expect(syncMock).toHaveBeenCalledTimes(2);
+  });
+
+  // Ticket 40: a failed sync attempt is no longer swallowed after only a
+  // console.error — it's recorded to sync-status.ts so the ambient indicator
+  // and Settings can show it, and clears again the moment a later attempt
+  // succeeds, with no reload.
+  describe("sync status", () => {
+    it("records a successful attempt", async () => {
+      const { requestSync, useSyncStatusStore } = await importFresh();
+      const store = createFakeStore();
+
+      await requestSync(store, "device-a");
+
+      expect(useSyncStatusStore.getState().lastAttempt).toEqual({
+        url: "https://server.example",
+        outcome: "working",
+      });
+    });
+
+    it("records a failed attempt with the error's reason, without throwing out of requestSync", async () => {
+      const { requestSync, useSyncStatusStore } = await importFresh();
+      const store = createFakeStore();
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+      syncMock.mockRejectedValueOnce(new Error("sync request failed with status 500"));
+
+      await expect(requestSync(store, "device-a")).resolves.toBeUndefined();
+
+      expect(useSyncStatusStore.getState().lastAttempt).toEqual({
+        url: "https://server.example",
+        outcome: "failing",
+        reason: "sync request failed with status 500",
+      });
+      expect(consoleError).toHaveBeenCalled();
+    });
+
+    it("clears a recorded failure once a later attempt succeeds", async () => {
+      const { requestSync, useSyncStatusStore } = await importFresh();
+      const store = createFakeStore();
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      syncMock.mockRejectedValueOnce(new Error("boom"));
+
+      await requestSync(store, "device-a");
+      expect(useSyncStatusStore.getState().lastAttempt?.outcome).toBe("failing");
+
+      await requestSync(store, "device-a");
+
+      expect(useSyncStatusStore.getState().lastAttempt).toEqual({
+        url: "https://server.example",
+        outcome: "working",
+      });
+    });
+
+    it("records nothing with no Server URL configured", async () => {
+      useSettingsStore.getState().setServerUrl("");
+      const { requestSync, useSyncStatusStore } = await importFresh();
+      const store = createFakeStore();
+
+      await requestSync(store, "device-a");
+
+      expect(useSyncStatusStore.getState().lastAttempt).toBeNull();
+    });
   });
 });

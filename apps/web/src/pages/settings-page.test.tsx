@@ -4,6 +4,7 @@ import { MemoryRouter } from "react-router";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useSettingsStore } from "@/lib/settings";
+import { useSyncStatusStore } from "@/lib/sync-status";
 import { SettingsPage } from "./settings-page";
 
 function renderPage() {
@@ -30,6 +31,7 @@ describe("SettingsPage", () => {
   beforeEach(() => {
     localStorage.clear();
     useSettingsStore.setState({ theme: "system", serverUrl: "" });
+    useSyncStatusStore.setState({ lastAttempt: null });
     document.documentElement.classList.remove("dark");
     // A quiet default so tests that don't care about the server check don't
     // make a real network call — Settings checks on every mount now.
@@ -237,6 +239,69 @@ describe("SettingsPage", () => {
       const status = await screen.findByTestId("server-status");
       expect(status).toHaveTextContent(new RegExp(`v${PROTOCOL_VERSION + 1}`));
       expect(status).not.toHaveTextContent(/^Reachable/);
+    });
+  });
+
+  // Ticket 40: distinct from the "server reachability" block above, which is
+  // a one-off health probe — this is the reason an actual, ongoing Sync
+  // attempt is failing, sourced from lib/sync-status.ts.
+  describe("sync failure reason", () => {
+    it("shows nothing when the last attempt against the saved Server URL succeeded", () => {
+      useSettingsStore.setState({ serverUrl: "https://phone.example:41207" });
+      useSyncStatusStore.getState().recordSuccess("https://phone.example:41207");
+
+      renderPage();
+
+      expect(screen.queryByTestId("sync-failure-reason")).not.toBeInTheDocument();
+    });
+
+    it("shows the recorded reason beside the Server URL when Sync is failing", () => {
+      useSettingsStore.setState({ serverUrl: "https://phone.example:41207" });
+      useSyncStatusStore
+        .getState()
+        .recordFailure("https://phone.example:41207", "sync request failed with status 500");
+
+      renderPage();
+
+      expect(screen.getByTestId("sync-failure-reason")).toHaveTextContent(
+        "sync request failed with status 500",
+      );
+    });
+
+    it("clears the failure reason the moment a later attempt succeeds, with no reload", async () => {
+      useSettingsStore.setState({ serverUrl: "https://phone.example:41207" });
+      useSyncStatusStore.getState().recordFailure("https://phone.example:41207", "boom");
+      renderPage();
+      expect(screen.getByTestId("sync-failure-reason")).toBeInTheDocument();
+
+      useSyncStatusStore.getState().recordSuccess("https://phone.example:41207");
+
+      await waitFor(() =>
+        expect(screen.queryByTestId("sync-failure-reason")).not.toBeInTheDocument(),
+      );
+    });
+
+    it("hides the failure reason while the field is mid-edit, away from the saved value", () => {
+      useSettingsStore.setState({ serverUrl: "https://phone.example:41207" });
+      useSyncStatusStore.getState().recordFailure("https://phone.example:41207", "boom");
+      renderPage();
+      expect(screen.getByTestId("sync-failure-reason")).toBeInTheDocument();
+
+      fireEvent.change(screen.getByLabelText(/server url/i), {
+        target: { value: "https://phone.example:41207/typing" },
+      });
+
+      expect(screen.queryByTestId("sync-failure-reason")).not.toBeInTheDocument();
+    });
+
+    it("fires no toast when a Sync attempt fails in the background", () => {
+      useSettingsStore.setState({ serverUrl: "https://phone.example:41207" });
+      const errorToast = vi.spyOn(toast, "error");
+
+      renderPage();
+      useSyncStatusStore.getState().recordFailure("https://phone.example:41207", "boom");
+
+      expect(errorToast).not.toHaveBeenCalled();
     });
   });
 });
