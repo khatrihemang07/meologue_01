@@ -244,4 +244,4 @@ The generated output is committed, so a fresh checkout doesn't need a Rust toolc
 
 ## Not built yet
 
-Offline PWA, editing, conflict copies, and export.
+Offline PWA, editing, and conflict copies.

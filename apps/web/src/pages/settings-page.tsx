@@ -136,7 +136,17 @@ export function SettingsPage() {
         now: new Date(),
         utcOffsetMinutes: -new Date().getTimezoneOffset(),
       });
-      await saveFile(fileName, bytes);
+      const outcome = await saveFile(fileName, bytes);
+      if (outcome === "cancelled") {
+        // The user backed out of the save panel / share sheet — nothing was
+        // written anywhere. Export is a backup, and a false "Exported"
+        // toast here would tell the user they have a copy of their History
+        // they don't; cancelling is the user changing their mind, and it
+        // needs no acknowledgement, success or error (ticket 47's defect
+        // fix — see save-file.web.ts's SaveFileOutcome doc comment and
+        // docs/adr/0016).
+        return;
+      }
       const count = entries.length === 1 ? "1 Entry" : `${entries.length} Entries`;
       toast.success(`Exported ${count} to ${fileName}.`);
     } catch (error) {

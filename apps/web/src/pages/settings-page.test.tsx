@@ -8,11 +8,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ENTRY_STORE_QUERY_KEY } from "@/lib/query-keys";
 import { useSettingsStore } from "@/lib/settings";
 import { useSyncStatusStore } from "@/lib/sync-status";
+import type { SaveFileOutcome } from "@/platform/save-file";
 import { SettingsPage } from "./settings-page";
 
 const { openEntryStoreMock, saveFileMock } = vi.hoisted(() => ({
   openEntryStoreMock: vi.fn(),
-  saveFileMock: vi.fn(async (_fileName: string, _bytes: Uint8Array) => {}),
+  // Resolves "saved" by default (ticket 47's defect fix — see
+  // save-file.web.ts's SaveFileOutcome doc comment and docs/adr/0016); the
+  // "Export" describe block below overrides this per test to also cover
+  // "cancelled".
+  saveFileMock: vi.fn(
+    async (_fileName: string, _bytes: Uint8Array): Promise<SaveFileOutcome> => "saved",
+  ),
 }));
 
 // A stand-in for entry-store-layout.tsx's real entryStoreQueryOptions (which
@@ -84,7 +91,7 @@ describe("SettingsPage", () => {
     openEntryStoreMock.mockReset();
     openEntryStoreMock.mockReturnValue(new Promise(() => {}));
     saveFileMock.mockReset();
-    saveFileMock.mockResolvedValue(undefined);
+    saveFileMock.mockResolvedValue("saved");
   });
 
   afterEach(() => {
@@ -400,6 +407,30 @@ describe("SettingsPage", () => {
       expect(fileName).toMatch(/^meologue-export-\d{8}-\d{6}\.zip$/);
       expect(bytes.byteLength).toBeGreaterThan(0);
       expect(successToast).toHaveBeenCalledWith(expect.stringContaining(fileName));
+    });
+
+    // This is the case that actually pins ticket 47's defect shut: before
+    // the fix, saveFile resolved without throwing on cancellation just like
+    // it does on success, and handleExport had no way to tell the two
+    // apart — so a cancelled save panel / share sheet raised the same
+    // "Exported N Entries" success toast a real save would, claiming a
+    // backup existed when nothing had been written anywhere.
+    it("raises no toast at all — neither success nor error — when the user cancels the save", async () => {
+      const store = createFakeStore([]);
+      openEntryStoreMock.mockResolvedValue({ store, deviceId: "device-a" });
+      saveFileMock.mockResolvedValue("cancelled");
+      const successToast = vi.spyOn(toast, "success");
+      const errorToast = vi.spyOn(toast, "error");
+
+      renderPage();
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Export as zip" })).toBeEnabled(),
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Export as zip" }));
+
+      await waitFor(() => expect(saveFileMock).toHaveBeenCalledTimes(1));
+      expect(successToast).not.toHaveBeenCalled();
+      expect(errorToast).not.toHaveBeenCalled();
     });
 
     it("shows an error toast carrying the real error when saving fails", async () => {
