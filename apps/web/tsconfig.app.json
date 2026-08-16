@@ -4,6 +4,7 @@
     "paths": {
       "@/platform/wake-signals": ["./src/platform/wake-signals.web.ts"],
       "@/platform/sqlite-driver": ["./src/platform/sqlite-driver.web.ts"],
+      "@/platform/save-file": ["./src/platform/save-file.web.ts"],
       "@/*": ["./src/*"]
     },
     "target": "es2023",

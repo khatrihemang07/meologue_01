@@ -49,6 +49,13 @@ Whether this Device's Sync is off, working, or failing. Off is the default and r
 neutral state, not an error — it just means Sync is opt-in and no Server URL is set. Working and
 failing describe an ongoing attempt against a configured Server.
 
+### Export
+
+A zip a Device produces on request, holding a plain-text file per day plus a lossless
+`manifest.json`, so a user can read, back up, or move their History outside the app. An Export
+always covers the whole History, never a Search — it is a backup, and a backup that quietly
+omits things is worse than none.
+
 ### Cursor
 
 A Device's record of how far it has Synced. A Cursor only ever advances — it marks the point up

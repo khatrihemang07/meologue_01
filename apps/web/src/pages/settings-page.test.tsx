@@ -1,17 +1,56 @@
+import type { Entry, EntryStore } from "@meologue/core";
 import { PROTOCOL_VERSION } from "@meologue/core";
+import { QueryClient, QueryClientProvider, queryOptions } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ENTRY_STORE_QUERY_KEY } from "@/lib/query-keys";
 import { useSettingsStore } from "@/lib/settings";
 import { useSyncStatusStore } from "@/lib/sync-status";
 import { SettingsPage } from "./settings-page";
 
+const { openEntryStoreMock, saveFileMock } = vi.hoisted(() => ({
+  openEntryStoreMock: vi.fn(),
+  saveFileMock: vi.fn(async (_fileName: string, _bytes: Uint8Array) => {}),
+}));
+
+// A stand-in for entry-store-layout.tsx's real entryStoreQueryOptions (which
+// needs a real SqliteDriver to run migrations against), same shape as
+// use-sync-loop.test.tsx's — Settings subscribes to the same query key
+// directly (ADR 0008/0009: it's a sibling route with no outlet context).
+vi.mock("@/pages/entry-store-layout", () => ({
+  entryStoreQueryOptions: queryOptions({
+    queryKey: ENTRY_STORE_QUERY_KEY,
+    queryFn: openEntryStoreMock,
+    staleTime: Number.POSITIVE_INFINITY,
+    gcTime: Number.POSITIVE_INFINITY,
+    retry: false,
+    retryOnMount: false,
+  }),
+}));
+
+vi.mock("@/platform/save-file", () => ({ saveFile: saveFileMock }));
+
+function createFakeStore(entries: Entry[] = []): EntryStore {
+  return {
+    list: vi.fn(async () => entries),
+    upsert: vi.fn(async () => {}),
+    pending: vi.fn(async () => []),
+    getCursor: vi.fn(async () => 0),
+    setCursor: vi.fn(async () => {}),
+    search: vi.fn(async () => []),
+  };
+}
+
 function renderPage() {
+  const queryClient = new QueryClient();
   render(
-    <MemoryRouter>
-      <SettingsPage />
-    </MemoryRouter>,
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter>
+        <SettingsPage />
+      </MemoryRouter>
+    </QueryClientProvider>,
   );
 }
 
@@ -39,6 +78,13 @@ describe("SettingsPage", () => {
       "fetch",
       vi.fn(async () => healthResponse(PROTOCOL_VERSION)),
     );
+    // Never resolves by default — tests unrelated to Export don't care
+    // whether the store is open, and this keeps the button reliably
+    // disabled rather than racing a real resolution.
+    openEntryStoreMock.mockReset();
+    openEntryStoreMock.mockReturnValue(new Promise(() => {}));
+    saveFileMock.mockReset();
+    saveFileMock.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -302,6 +348,75 @@ describe("SettingsPage", () => {
       useSyncStatusStore.getState().recordFailure("https://phone.example:41207", "boom");
 
       expect(errorToast).not.toHaveBeenCalled();
+    });
+  });
+
+  // Ticket 46: Settings has no outlet context (ADR 0008/0009), so it
+  // subscribes to entryStoreQueryOptions directly, the same way
+  // use-sync-loop.ts does.
+  describe("Export", () => {
+    it("is disabled while the store has not resolved", () => {
+      renderPage();
+
+      expect(screen.getByRole("button", { name: "Export as zip" })).toBeDisabled();
+    });
+
+    it("is enabled once the store resolves", async () => {
+      openEntryStoreMock.mockResolvedValue({ store: createFakeStore(), deviceId: "device-a" });
+
+      renderPage();
+
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Export as zip" })).toBeEnabled(),
+      );
+    });
+
+    it("reads every Entry, saves a zip, and shows a success toast", async () => {
+      const entries: Entry[] = [
+        {
+          id: "e1",
+          deviceId: "device-a",
+          body: "went for a walk",
+          createdAt: "2026-08-16T06:00:00.000Z",
+          seq: 1,
+          syncedAt: "2026-08-16T06:00:01.000Z",
+        },
+      ];
+      const store = createFakeStore(entries);
+      openEntryStoreMock.mockResolvedValue({ store, deviceId: "device-a" });
+      const successToast = vi.spyOn(toast, "success");
+
+      renderPage();
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Export as zip" })).toBeEnabled(),
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Export as zip" }));
+
+      await waitFor(() => expect(saveFileMock).toHaveBeenCalledTimes(1));
+      expect(store.list).toHaveBeenCalledTimes(1);
+      const call = saveFileMock.mock.calls[0];
+      expect(call).toBeDefined();
+      const [fileName, bytes] = call ?? ["", new Uint8Array()];
+      expect(fileName).toMatch(/^meologue-export-\d{8}-\d{6}\.zip$/);
+      expect(bytes.byteLength).toBeGreaterThan(0);
+      expect(successToast).toHaveBeenCalledWith(expect.stringContaining(fileName));
+    });
+
+    it("shows an error toast carrying the real error when saving fails", async () => {
+      const store = createFakeStore([]);
+      openEntryStoreMock.mockResolvedValue({ store, deviceId: "device-a" });
+      saveFileMock.mockRejectedValue(new Error("Export isn't supported on Android yet."));
+      const errorToast = vi.spyOn(toast, "error");
+
+      renderPage();
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Export as zip" })).toBeEnabled(),
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Export as zip" }));
+
+      await waitFor(() =>
+        expect(errorToast).toHaveBeenCalledWith("Export isn't supported on Android yet."),
+      );
     });
   });
 });

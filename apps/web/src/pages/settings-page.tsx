@@ -1,4 +1,5 @@
-import { PROTOCOL_VERSION } from "@meologue/core";
+import { exportEntriesToZip, PROTOCOL_VERSION } from "@meologue/core";
+import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { BackLink } from "@/components/nav-links";
@@ -10,6 +11,8 @@ import { normaliseServerUrl, type Theme, useSettingsStore } from "@/lib/settings
 import { useSyncStatus } from "@/lib/sync-status";
 import { applyTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
+import { entryStoreQueryOptions } from "@/pages/entry-store-layout";
+import { saveFile } from "@/platform/save-file";
 
 const THEME_OPTIONS: { value: Theme; label: string }[] = [
   { value: "light", label: "Light" },
@@ -50,6 +53,13 @@ export function SettingsPage() {
   const setStoredTheme = useSettingsStore((state) => state.setTheme);
   const setStoredServerUrl = useSettingsStore((state) => state.setServerUrl);
   const syncStatus = useSyncStatus();
+
+  // Settings is a sibling route outside EntryStoreLayout (ADR 0008/0009), so
+  // it has no store handle of its own — subscribing to the same
+  // entryStoreQueryOptions SyncLoop uses (use-sync-loop.ts) is how it learns
+  // whether the store is open, without duplicating how it's opened.
+  const storeQuery = useQuery(entryStoreQueryOptions);
+  const opened = storeQuery.data;
 
   // A local draft, seeded from the store's current value: the field must
   // keep showing exactly what the user is typing, uncommitted, until Save —
@@ -108,6 +118,30 @@ export function SettingsPage() {
       toast(message);
     } else {
       toast.error(message);
+    }
+  }
+
+  // Always every Entry (store.list()), never the current search — a backup
+  // that silently omits things is worse than none (ticket 46). No progress
+  // UI: at personal-log scale this is fast enough that success/failure
+  // toasts are the whole story.
+  async function handleExport() {
+    if (!opened) {
+      return;
+    }
+    try {
+      const entries = await opened.store.list();
+      const { fileName, bytes } = exportEntriesToZip(entries, {
+        deviceId: opened.deviceId,
+        now: new Date(),
+        utcOffsetMinutes: -new Date().getTimezoneOffset(),
+      });
+      await saveFile(fileName, bytes);
+      const count = entries.length === 1 ? "1 Entry" : `${entries.length} Entries`;
+      toast.success(`Exported ${count} to ${fileName}.`);
+    } catch (error) {
+      console.error("meologue: export failed", error);
+      toast.error(error instanceof Error ? error.message : "Export failed.");
     }
   }
 
@@ -179,6 +213,15 @@ export function SettingsPage() {
             Sync is failing: {syncStatus.reason}
           </p>
         )}
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <span className="text-sm font-medium">Export</span>
+        <div>
+          <Button type="button" onClick={handleExport} disabled={!opened}>
+            Export as zip
+          </Button>
+        </div>
       </div>
     </Shell>
   );
