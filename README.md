@@ -76,12 +76,31 @@ target, with no implicit fallback. `cargo run` prints the Server URL to use
 For the dev workflow, use the Vite origin instead (`http://localhost:5173`), since that's where
 the app is actually served from and the server has no way to know about that proxy.
 
-> **Reaching it from another device's browser doesn't work yet.** The server binds `0.0.0.0`, so the
-> port is reachable across your LAN or tailnet — but the web app stores Entries in SQLite over OPFS,
-> which browsers only allow in a [secure context](https://developer.mozilla.org/en-US/docs/Web/Security/Secure_Contexts).
-> Over plain HTTP to anything other than `localhost`, the app shows an explicit "can't store Entries
-> here" message instead of a blank page. Use the native apps below for other devices, or put the
-> server behind TLS.
+**Reaching it from another device's browser** needs HTTPS — the web app stores Entries in SQLite
+over OPFS, which browsers only allow in a [secure context](https://developer.mozilla.org/en-US/docs/Web/Security/Secure_Contexts).
+Over plain HTTP to anything other than `localhost`, the app shows an explicit "can't store Entries
+here" message instead of a blank page. [Tailscale Serve](https://tailscale.com/kb/1312/serve) gets
+you a real, auto-renewed certificate for your machine's tailnet name with nothing to install on the
+other device:
+
+```bash
+tailscale serve --bg http://127.0.0.1:41207
+```
+
+Run that once, against the production-style workflow's port — that's the one serving the app and
+the API together, which is what a phone or another laptop needs to reach. (The dev workflow's Vite
+origin isn't a useful target here: it's meant for hot reload on the machine running it, not for
+exposing to other devices.) `--bg` runs it detached — the config lives in `tailscaled`'s own state,
+not a process this repo starts or stops, so it's still there after a reboot with no wrapper script
+needed. Check what's configured, or remove it, with `tailscale serve status` / `tailscale serve
+reset`. Open `https://<your-tailnet-name>.<tailnet>.ts.net/` from any device on your tailnet.
+
+Use the tailnet name, not the tailnet IP: the certificate Tailscale issues is for the name, so an
+IP would fail TLS validation even though the traffic reaches the same machine. `tailscale serve
+status` prints the full `https://` URL to use.
+
+This is `serve`, not `funnel` — reachable only from devices on your tailnet, never the open
+internet. Don't run `tailscale funnel` here; see ADR 0017.
 
 ### Android
 
@@ -94,7 +113,10 @@ build-time address to bake in either (ADR 0011 deleted the last one) — every D
 Server from Settings, typed in after install. Point it at a tailnet address there — that stays
 reachable when you change networks, which a LAN address does not. Both native shells allow
 plain-HTTP cleartext to any host (ADR 0012), so whatever address you type just works, with no
-platform config to touch.
+platform config to touch. Once `tailscale serve` is set up (above), the Server URL can just as
+well be the `https://` tailnet name instead of a bare `http://` address — neither shell needs the
+plain-HTTP exception for that URL specifically, though ADR 0012's cleartext allowance stays in
+place regardless, since a LAN address is still a legitimate thing to type there.
 
 ```bash
 pnpm --filter @meologue/web build:android
@@ -222,5 +244,4 @@ The generated output is committed, so a fresh checkout doesn't need a Rust toolc
 
 ## Not built yet
 
-Offline PWA, editing, conflict copies, export, app icons beyond
-the template defaults, and browser access over plain HTTP from another device.
+Offline PWA, editing, conflict copies, and export.
