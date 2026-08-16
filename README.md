@@ -106,6 +106,26 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 Android blocks plain HTTP by default, but `network_security_config.xml` permits cleartext to any
 host (ADR 0012), so whatever address you type into Settings needs no change there.
 
+**Release build.** Needs a signing keystore, which doesn't exist on a fresh checkout — run
+`./scripts/setup-signing.sh` once per machine first (ADR 0015). It creates
+`~/.meologue/release.keystore` and a gitignored `apps/android/keystore.properties` pointing at
+it; re-running the script later is safe, since it refuses to touch a keystore that already
+exists. Without that file, `assembleRelease` fails immediately with a message naming the script,
+rather than producing an unsigned APK.
+
+```bash
+export ANDROID_HOME=/opt/homebrew/share/android-commandlinetools
+export JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home
+pnpm --filter @meologue/web build:android
+cd apps/web && npx cap sync android
+cd ../android && ./gradlew assembleRelease
+```
+
+The output is `app/build/outputs/apk/release/app-release.apk`. Debug and release builds are
+signed with different keys, and `adb install -r` refuses to install one over the other — you'll
+see `INSTALL_FAILED_UPDATE_INCOMPATIBLE`. `adb uninstall com.meologue.app` first if you're
+switching between them on the same device.
+
 ### macOS
 
 A Tauri v2 shell. Command Line Tools are enough; full Xcode is not needed. Also needs the Tauri
@@ -120,6 +140,23 @@ open target/debug/bundle/macos/meologue.app
 App Transport Security requires an exception for plain-HTTP hosts; `apps/macos/Info.plist` grants
 one for any host (ADR 0012), so whatever address you type into Settings needs no change there
 either.
+
+**Release build.** Also needs `./scripts/setup-signing.sh` (ADR 0015), which creates a dedicated
+keychain holding a self-signed `meologue Dev` certificate — that identity is already named in
+`apps/macos/tauri.conf.json`, so signing happens automatically during the build, including the
+DMG:
+
+```bash
+pnpm --filter @meologue/web build:macos
+cd apps/macos && cargo tauri build
+open target/release/bundle/macos/meologue.app
+```
+
+There's no Apple Developer account behind this cert and never will be (ADR 0015), so the build is
+signed but **not notarized**. Opening it on any machine other than the one that built it — or
+even the same machine after `setup-signing.sh` has regenerated the keychain — trips Gatekeeper's
+"unidentified developer" block. Right-click the app (or the mounted DMG's copy) and choose Open
+once; that exception then persists for that app on that machine.
 
 ## Layout
 
@@ -185,5 +222,5 @@ The generated output is committed, so a fresh checkout doesn't need a Rust toolc
 
 ## Not built yet
 
-Offline PWA, editing, conflict copies, export, release signing, app icons beyond
+Offline PWA, editing, conflict copies, export, app icons beyond
 the template defaults, and browser access over plain HTTP from another device.
