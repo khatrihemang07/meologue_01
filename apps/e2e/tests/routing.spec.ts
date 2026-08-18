@@ -7,9 +7,14 @@ import { sendEntry, uniqueEntryBody } from "./helpers";
 // genuinely uncertain about the change, so it gets its own spec that loads
 // /settings directly and hard-reloads on it, against the real Rust server.
 
-// Ticket 54 deleted the Back link — every page, Settings included, is now
-// reachable directly, and this same persistent nav is what proves the way
-// back to the Composer works too.
+// Every page, Settings included, is reachable directly (ticket 54), and this
+// same persistent nav is what proves the way back to the Composer works too.
+//
+// Settings also carries a Back control again (ADR 0019, partially superseding
+// 0018's rejection of one) — but deliberately not exercised here: on a direct
+// load like this one there is no history to pop, so Back takes its fallback
+// branch and lands on the Composer, which is exactly what the nav link below
+// already proves. settings-page.test.tsx covers both of Back's branches.
 test("/settings loads directly, survives a hard reload, and its persistent nav returns to a working composer", async ({
   page,
 }) => {
@@ -25,6 +30,35 @@ test("/settings loads directly, survives a hard reload, and its persistent nav r
   const body = uniqueEntryBody("routing");
   await sendEntry(page, body);
   await expect(page.getByText(body)).toBeVisible();
+});
+
+// ADR 0019's Back control, against a real browser history rather than the
+// memory history settings-page.test.tsx drives. Entering from /history is
+// the case the whole decision turns on: a fixed navigate("/") would land on
+// the Composer here and look almost right, so History is the only
+// destination that proves the pop actually happened.
+test("Back on Settings returns to History when Settings was entered from there", async ({
+  page,
+}) => {
+  await page.goto("/history");
+  await page.getByRole("link", { name: "Settings" }).click();
+  await expect(page).toHaveURL("/settings");
+
+  await page.getByRole("button", { name: "Back" }).click();
+
+  await expect(page).toHaveURL("/history");
+});
+
+// The other branch, in a real browser: loaded directly, Settings has nothing
+// behind it in this tab, so location.key is "default" and Back takes its
+// fallback to the Composer rather than popping the app off the stack
+// entirely (which is what a bare navigate(-1) would do here).
+test("Back on a directly-loaded Settings falls back to the Composer", async ({ page }) => {
+  await page.goto("/settings");
+
+  await page.getByRole("button", { name: "Back" }).click();
+
+  await expect(page).toHaveURL("/");
 });
 
 test("the gear link on the composer navigates to Settings", async ({ page }) => {

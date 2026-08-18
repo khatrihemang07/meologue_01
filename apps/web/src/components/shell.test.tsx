@@ -292,3 +292,33 @@ describe("Shell's search mode", () => {
     expect(screen.getByRole("searchbox", { name: "Search History" })).toBeInTheDocument();
   });
 });
+
+// The Back affordance's own leading slot: Shell only knows how to render
+// whatever ReactNode it's handed here, immediately before the title — the
+// slot's existence, not its contents (a real history.back()/navigate(-1)
+// decision), is what belongs to Shell. settings-page.tsx is the one page
+// that fills it in today; every other page leaves it undefined, same as
+// `search` does for Settings.
+describe("Shell's back slot", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useSettingsStore.setState({ serverUrl: "" });
+    useSyncStatusStore.setState({ lastAttempt: null });
+  });
+
+  it("renders the back slot's contents when passed", () => {
+    render(
+      <Shell title="Settings" back={<button type="button" aria-label="Back" />}>
+        content
+      </Shell>,
+    );
+
+    expect(screen.getByRole("button", { name: "Back" })).toBeInTheDocument();
+  });
+
+  it("renders no back control at all when the prop is omitted", () => {
+    render(<Shell title="Settings">content</Shell>);
+
+    expect(screen.queryByRole("button", { name: "Back" })).not.toBeInTheDocument();
+  });
+});

@@ -43,6 +43,20 @@ export interface ShellSearchConfig {
 
 interface ShellProps {
   title: ReactNode;
+  /**
+   * A leading app-bar slot, before the title — Settings' Back control today
+   * (settings-page.tsx), and the only page that passes it. A `ReactNode`
+   * slot, not a `backTo: string`: Shell must stay ignorant of routes, the
+   * same reason `action` and `nav` below are slots rather than
+   * configuration, and ADR 0008/0009 requires Settings to stay usable even
+   * when the Entry store never opens — Shell renders on every page,
+   * including Settings, so it can't lean on anything route- or store-shaped
+   * to decide what this renders. Rendered only in the non-searching branch
+   * of the header below: the searching branch already owns this visual
+   * position with its own "Close search" back arrow, and Settings never
+   * passes `search`, so the two never collide.
+   */
+  back?: ReactNode;
   /** Trailing app-bar action — e.g. the History/Settings links on the Composer page. */
   action?: ReactNode;
   message?: string;
@@ -105,6 +119,7 @@ interface ShellProps {
 // avoid.
 export function Shell({
   title,
+  back,
   action,
   message,
   children,
@@ -242,6 +257,7 @@ export function Shell({
             </>
           ) : (
             <>
+              {back}
               <span className="flex items-center gap-2 font-heading text-base font-medium">
                 {title}
                 <SyncStatusIndicator />
@@ -266,10 +282,10 @@ export function Shell({
         </header>
 
         {/* The scrollable content region between the app bar and whatever
-            sits below it. Full-bleed on a wide window (no cap here) — only
-            the reading column inside is capped, at the width the chosen
-            prototype used (#49 variant 08) rather than the old Card's,
-            so line length doesn't stretch full-window on a wide screen.
+            sits below it. Full-bleed on a wide window — the reading column
+            inside is what's sized, proportionally rather than to a fixed
+            cap (ADR 0019): 97% of a narrow window, 85% of the space beside
+            the rail on a wide one.
             Plain py-4 is enough here now that the docked Composer (#51)
             claims the bottom edge and handles env(safe-area-inset-bottom)
             itself — padding it again here would double it under a home
@@ -291,7 +307,14 @@ export function Shell({
               ordinary top-aligned flow. */}
           <div
             className={cn(
-              "mx-auto flex w-full max-w-2xl flex-col gap-4 px-4 py-4",
+              // ADR 0019's proportional reading column, flipping at the
+              // same `md` where the nav becomes a rail — one transition
+              // for the eye rather than two. 85% is narrower than 97% at
+              // every window size, so the column steps *down* here; that
+              // step is the rule's, not a bug in it. px-4 stays inside
+              // the percentage, so the text itself lands a few points
+              // narrower than the container.
+              "mx-auto flex w-[97%] flex-col gap-4 px-4 py-4 md:w-[85%]",
               pinnedThread && "min-h-full justify-end",
             )}
           >

@@ -1,6 +1,8 @@
 import { exportEntriesToZip, PROTOCOL_VERSION } from "@meologue/core";
 import { useQuery } from "@tanstack/react-query";
+import { ArrowLeft } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useLocation, useNavigate } from "react-router";
 import { toast } from "sonner";
 import { Nav } from "@/components/nav";
 import { Shell } from "@/components/shell";
@@ -53,6 +55,8 @@ export function SettingsPage() {
   const setStoredTheme = useSettingsStore((state) => state.setTheme);
   const setStoredServerUrl = useSettingsStore((state) => state.setServerUrl);
   const syncStatus = useSyncStatus();
+  const navigate = useNavigate();
+  const location = useLocation();
 
   // Settings is a sibling route outside EntryStoreLayout (ADR 0008/0009), so
   // it has no store handle of its own — subscribing to the same
@@ -96,6 +100,40 @@ export function SettingsPage() {
   function selectTheme(next: Theme) {
     applyTheme(next);
     setStoredTheme(next);
+  }
+
+  // Real history (navigate(-1)), not a fixed navigate("/") — Settings can be
+  // reached from either Composer or History (nav.tsx renders it as an
+  // app-bar action on both), and a fixed target would send the reader back
+  // to the wrong one whenever they arrived from History. But navigate(-1)
+  // alone isn't safe: with nothing behind Settings in this tab's history —
+  // a fresh load, a direct deep link, a hard reload with nothing behind it
+  // — it would pop the app itself off the stack and leave.
+  //
+  // react-router 8.3.0's own source is what settles which case that is,
+  // not a guess: every history implementation falls the current location's
+  // key back to the literal string "default" when the browser's history
+  // state carries no key of its own (createBrowserHistory and
+  // createHashHistory, history.js:144 and :171), and memory history does
+  // the same for its very first entry (history.js:49) — which is what
+  // makes this testable without a real browser. So `location.key ===
+  // "default"` is "there is nothing to pop back to," reliably.
+  //
+  // window.history.length was considered and rejected: it reads 1 both for
+  // a fresh tab on this app AND for a tab that navigated in from some other
+  // site first, so it can't tell "nothing behind us" from "something behind
+  // us that isn't ours" — exactly the distinction this needs.
+  //
+  // This has to be a <button>, not a <Link>: there's no destination URL to
+  // give it as an href until the click happens (it depends on `location.key`
+  // at click time), so middle-click / open-in-new-tab do nothing here. An
+  // accepted cost of choosing real history over a fixed target.
+  function goBack() {
+    if (location.key === "default") {
+      navigate("/");
+    } else {
+      navigate(-1);
+    }
   }
 
   async function saveServerUrl() {
@@ -164,7 +202,23 @@ export function SettingsPage() {
     // Nav is a pair of bare route links, not a reader of the Entry store,
     // so it's just as live here as it is on Composer/History regardless of
     // whether the store ever opens.
-    <Shell title="Settings" nav={<Nav />}>
+    <Shell
+      back={
+        <button
+          type="button"
+          aria-label="Back"
+          onClick={goBack}
+          // Matches SettingsLink's own className exactly (nav.tsx) — same
+          // size-11 (44px) tap-target reason, same muted-to-foreground hover
+          // treatment, for the same kind of app-bar icon control.
+          className="flex size-11 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        >
+          <ArrowLeft aria-hidden="true" className="size-4" />
+        </button>
+      }
+      title="Settings"
+      nav={<Nav />}
+    >
       <div className="flex flex-col gap-2">
         <span className="text-sm font-medium">Theme</span>
         <div className="inline-flex gap-1">
