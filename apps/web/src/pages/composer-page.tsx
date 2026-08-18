@@ -1,9 +1,10 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { Link } from "react-router";
 import { Composer } from "@/components/composer";
 import { History } from "@/components/history";
 import { Nav, SettingsLink } from "@/components/nav";
 import { Shell } from "@/components/shell";
+import { useHistorySearch } from "@/hooks/use-history-search";
 import { useSyncEnabled } from "@/lib/settings";
 import { useEntryStore } from "@/pages/entry-store-layout";
 
@@ -12,21 +13,21 @@ import { useEntryStore } from "@/pages/entry-store-layout";
 // future ticket might cap what shows here without touching the shared
 // History component itself.
 export function ComposerPage() {
-  const { entries, sendEntry, disabled, message } = useEntryStore();
+  const { entries, sendEntry, search, disabled, message } = useEntryStore();
   // Subscribed, not a one-off read: a change saved on Settings now updates
   // this without a reload or a remount (ticket 36), on top of the render
   // this component already gets when it remounts navigating back from
   // Settings (ADR 0008 — Settings is a sibling route, not a child).
   const syncEnabled = useSyncEnabled();
 
-  // `entries` arrives newest-first (`list()`'s own order — see
-  // history.tsx's groupByDay comment); ticket 53 reverses that to
-  // oldest-first reading order here, in the view. history-page.tsx applies
-  // the identical reversal to what it renders (including Search results,
-  // which ADR 0014 guarantees arrive in the same order as `list()`) — the
-  // store's own ordering is untouched either way, this is purely a
-  // React-layer concern local to what each page renders.
-  const orderedEntries = useMemo(() => entries.slice().reverse(), [entries]);
+  // Ticket 55: the magnifier now expands this page's app bar into a search
+  // field too, narrowing the same thread History does — see
+  // use-history-search.ts for the URL param, sessionStorage backup, and the
+  // oldest-to-newest reversal (identical rule to history-page.tsx: `shown`
+  // is `entries`, narrowed or not, in the store's own newest-first order;
+  // ADR 0014 guarantees a search result arrives in that same order, so
+  // reversing after narrowing never flips reading order either way).
+  const { query, setQuery, shown, orderedEntries } = useHistorySearch(entries, search);
 
   // Bumped on every Send, independent of `entries` itself changing (that
   // update lands async, once the store's write settles): the pinned
@@ -49,9 +50,13 @@ export function ComposerPage() {
       action={<SettingsLink />}
       nav={<Nav />}
       message={message}
-      footer={<History entries={orderedEntries} syncEnabled={syncEnabled} />}
+      search={{ query, onQueryChange: setQuery, onDismiss: () => setQuery("") }}
+      footer={<History entries={orderedEntries} syncEnabled={syncEnabled} query={query} />}
       composerSlot={<Composer onSend={handleSend} disabled={disabled} />}
-      pinnedThread={{ watch: entries, forceToNewest: sendSignal }}
+      // `shown`, not `entries`: while a search is narrowing this thread the
+      // pin should follow what's actually on screen, same reasoning as
+      // history-page.tsx's own pinnedThread.
+      pinnedThread={{ watch: shown, forceToNewest: sendSignal }}
     >
       {!syncEnabled && (
         <p className="text-center text-sm text-muted-foreground">

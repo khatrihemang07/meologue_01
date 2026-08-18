@@ -1,7 +1,8 @@
-import { ArrowDown } from "lucide-react";
-import type { ReactNode } from "react";
+import { ArrowDown, ArrowLeft, Search as SearchIcon } from "lucide-react";
+import { type ReactNode, useEffect, useState } from "react";
 import { SyncStatusIndicator } from "@/components/sync-status-indicator";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { usePinnedScroll } from "@/hooks/use-pinned-scroll";
 import { cn } from "@/lib/utils";
 
@@ -10,6 +11,34 @@ interface PinnedThreadConfig {
   watch: unknown;
   /** Bump on an action that must jump to the newest end unconditionally — e.g. a counter incremented on Send. See use-pinned-scroll.ts. */
   forceToNewest?: unknown;
+}
+
+/**
+ * Ticket 55: what Search's app-bar mode needs from whichever page turns it
+ * on. Deliberately just a string and two callbacks — no `Entry`, no store,
+ * no route — because ADR 0008/0009 requires Settings to stay usable even
+ * when the Entry store never opens, and Shell renders on every page
+ * including Settings. Making the app bar's search affordance depend on
+ * anything store-shaped would put that guarantee at risk for no reason:
+ * Settings simply never passes this prop (see settings-page.tsx), so it
+ * never grows a magnifier at all, without Shell needing to know why.
+ *
+ * The query itself is owned by the page (URL param on both `/` and
+ * `/history` — see use-history-search.ts), not by Shell: Shell only knows
+ * how to *show* the field and hand keystrokes back, the same separation
+ * `pinnedThread` above already uses for the scroll pin.
+ */
+export interface ShellSearchConfig {
+  query: string;
+  onQueryChange: (value: string) => void;
+  /**
+   * The field was dismissed (the close button, or Escape) — the page's cue
+   * to clear the query. Shell itself has no notion of "clear the narrowing"
+   * (a URL param today, a sessionStorage backup too — see
+   * use-history-search.ts): it just reports that the reader left search
+   * mode, same as it reports scroll and click events elsewhere.
+   */
+  onDismiss: () => void;
 }
 
 interface ShellProps {
@@ -47,6 +76,14 @@ interface ShellProps {
    * no notion of "Entry" itself here, deliberately: see use-pinned-scroll.ts.
    */
   pinnedThread?: PinnedThreadConfig;
+  /**
+   * Ticket 55: the magnifier that turns this app bar into a search field in
+   * place, on both destinations that have a thread. Undefined (Settings —
+   * see settings-page.tsx) renders the bar exactly as before, with no
+   * magnifier at all — "Settings has no thread and must not grow a search
+   * affordance" is true by construction, not by a Settings-side check.
+   */
+  search?: ShellSearchConfig;
 }
 
 // The app shell every page renders through (ticket 50, replacing the
@@ -75,12 +112,45 @@ export function Shell({
   nav,
   composerSlot,
   pinnedThread,
+  search,
 }: ShellProps) {
   const { scrollRef, handleScroll, awayFromNewest, jumpToNewest } = usePinnedScroll({
     enabled: pinnedThread !== undefined,
     watch: pinnedThread?.watch,
     forceToNewest: pinnedThread?.forceToNewest,
   });
+
+  // Ticket 55's mode switch: whether the app bar currently shows the search
+  // field instead of the title/actions row. Lazily seeded from whether a
+  // query is already active (a reload with `?q=`, or a link straight to a
+  // narrowed search) so that case renders open on the very first paint
+  // instead of flashing the plain bar first. The effect below keeps it in
+  // sync afterwards for the case the lazy initializer can't cover: the
+  // sessionStorage backup (use-history-search.ts) restores a query one
+  // render *after* mount, once its own effect has run.
+  //
+  // This is deliberately one-way once a query exists: only `dismissSearch`
+  // (the close button or Escape) ever sets this back to false. Clearing the
+  // field's text by typing must not collapse the bar out from under a
+  // reader mid-edit — the reference prototype (#49 variant 08) has the
+  // identical rule, only its explicit close control leaves search mode.
+  const [searchOpen, setSearchOpen] = useState(
+    () => search !== undefined && search.query.trim() !== "",
+  );
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only `search?.query` should re-trigger this — it exists purely to catch a query becoming active *after* mount (the sessionStorage restore in use-history-search.ts), not to react to `onQueryChange`/`onDismiss` identity churning every render.
+  useEffect(() => {
+    if (search !== undefined && search.query.trim() !== "" && !searchOpen) {
+      setSearchOpen(true);
+    }
+  }, [search?.query]);
+
+  const searching = search !== undefined && searchOpen;
+
+  function dismissSearch() {
+    setSearchOpen(false);
+    search?.onDismiss();
+  }
 
   return (
     <div className="flex h-svh w-full flex-col overflow-hidden bg-background [padding-left:env(safe-area-inset-left)] [padding-right:env(safe-area-inset-right)] md:flex-row">
@@ -122,11 +192,77 @@ export function Shell({
             padding-top can grow the bar under a notch/Dynamic Island
             instead of clipping the title against it. */}
         <header className="flex min-h-14 shrink-0 items-center gap-2 border-b border-border bg-background px-4 [padding-top:env(safe-area-inset-top)]">
-          <span className="flex items-center gap-2 font-heading text-base font-medium">
-            {title}
-            <SyncStatusIndicator />
-          </span>
-          {action && <div className="ml-auto flex items-center gap-3">{action}</div>}
+          {searching && search ? (
+            // Ticket 55: the field replaces the title/Sync-dot row and the
+            // magnifier entirely rather than appearing alongside them — "in
+            // place," not a second row pushing the thread down, which is
+            // what makes this agree with CONTEXT.md's "narrows History in
+            // place rather than producing a separate collection" for the
+            // *navigation* half of Search too, not just the filtering
+            // itself.
+            //
+            // `action` (Settings) stays, deliberately departing from the
+            // reference prototype (#49 variant 08), which hides its whole
+            // app bar including its Settings icon while searching. Settings
+            // is reachable *only* through this app-bar action — it isn't in
+            // the persistent Nav (nav.tsx) — so hiding it here would strand
+            // a reader who starts a search mid-visit with no way to reach
+            // Settings without first dismissing (which clears the query).
+            // "The session-storage backup that restores a query after
+            // leaving the page still works" is this ticket's own kept
+            // guarantee (#55, restating #39): that guarantee is only worth
+            // keeping if the round trip through Settings it describes is
+            // still reachable while a search is active, not just before one.
+            <>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label="Close search"
+                onClick={dismissSearch}
+                className="shrink-0 text-muted-foreground"
+              >
+                <ArrowLeft aria-hidden="true" className="size-4" />
+              </Button>
+              <Input
+                type="search"
+                aria-label="Search History"
+                placeholder="Search History"
+                autoFocus
+                value={search.query}
+                onChange={(event) => search.onQueryChange(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") {
+                    dismissSearch();
+                  }
+                }}
+                className="h-9 flex-1"
+              />
+              {action && <div className="ml-auto flex items-center gap-3">{action}</div>}
+            </>
+          ) : (
+            <>
+              <span className="flex items-center gap-2 font-heading text-base font-medium">
+                {title}
+                <SyncStatusIndicator />
+              </span>
+              {(search || action) && (
+                <div className="ml-auto flex items-center gap-3">
+                  {search && (
+                    <button
+                      type="button"
+                      aria-label="Search History"
+                      onClick={() => setSearchOpen(true)}
+                      className="flex size-11 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                    >
+                      <SearchIcon aria-hidden="true" className="size-4" />
+                    </button>
+                  )}
+                  {action}
+                </div>
+              )}
+            </>
+          )}
         </header>
 
         {/* The scrollable content region between the app bar and whatever

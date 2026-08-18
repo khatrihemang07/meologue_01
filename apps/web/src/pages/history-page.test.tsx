@@ -208,7 +208,10 @@ describe("HistoryPage", () => {
       disabled: false,
     });
 
-    fireEvent.change(screen.getByLabelText("Search History"), { target: { value: "search" } });
+    fireEvent.click(screen.getByRole("button", { name: "Search History" }));
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search History" }), {
+      target: { value: "search" },
+    });
 
     await screen.findByText("older", { exact: false });
     // The matched "search" prefix is highlighted (highlight-match.ts) into
@@ -260,7 +263,10 @@ describe("HistoryPage", () => {
       disabled: false,
     });
 
-    fireEvent.change(screen.getByLabelText("Search History"), { target: { value: "wor" } });
+    fireEvent.click(screen.getByRole("button", { name: "Search History" }));
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search History" }), {
+      target: { value: "wor" },
+    });
 
     expect(await screen.findByText("a match only search returns")).toBeInTheDocument();
     expect(screen.queryByText("hello")).not.toBeInTheDocument();
@@ -281,7 +287,8 @@ describe("HistoryPage", () => {
       disabled: false,
     });
 
-    const box = screen.getByLabelText("Search History");
+    fireEvent.click(screen.getByRole("button", { name: "Search History" }));
+    const box = screen.getByRole("searchbox", { name: "Search History" });
     fireEvent.change(box, { target: { value: "wor" } });
     await screen.findByText("No matching Entries.");
 
@@ -289,6 +296,10 @@ describe("HistoryPage", () => {
 
     expect(screen.getByText("hello")).toBeInTheDocument();
     expect(screen.getByText("world")).toBeInTheDocument();
+    // Clearing the text (rather than dismissing via the close button) keeps
+    // the field open — ticket 55's rule that leaving search mode is only
+    // ever an explicit act, not a side effect of the query becoming empty.
+    expect(screen.getByRole("searchbox", { name: "Search History" })).toBeInTheDocument();
   });
 
   it("seeds the search box from a query already in the URL, and searches with it", async () => {
@@ -315,7 +326,7 @@ describe("HistoryPage", () => {
       "/history?q=wor",
     );
 
-    expect(screen.getByLabelText("Search History")).toHaveValue("wor");
+    expect(screen.getByRole("searchbox", { name: "Search History" })).toHaveValue("wor");
     expect(await screen.findByText("world")).toBeInTheDocument();
   });
 
@@ -341,7 +352,11 @@ describe("HistoryPage", () => {
     });
 
     expect(await screen.findByText("world")).toBeInTheDocument();
-    expect(screen.getByLabelText("Search History")).toHaveValue("wor");
+    // The field opens on its own here — nothing was clicked — because a
+    // non-empty query (restored from sessionStorage, in this case) is
+    // reason enough to be in search mode (ticket 55: Shell's `searchOpen`
+    // is seeded from `search.query`, not only from the magnifier click).
+    expect(screen.getByRole("searchbox", { name: "Search History" })).toHaveValue("wor");
     expect(screen.getByTestId("url-query")).toHaveTextContent("q=wor");
   });
 
@@ -357,11 +372,17 @@ describe("HistoryPage", () => {
       disabled: false,
     });
 
-    fireEvent.change(screen.getByLabelText("Search History"), { target: { value: "" } });
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search History" }), {
+      target: { value: "" },
+    });
     expect(sessionStorage.getItem("meologue.history-search-query")).toBeNull();
 
     // A later visit (e.g. after another round trip through Settings) must
-    // not bring the cleared search back.
+    // not bring the cleared search back — no new search field opens,
+    // because nothing is left in sessionStorage or the URL to restore. The
+    // first instance's field is still open (clearing text doesn't dismiss
+    // it — see the "clearing the search box" test above), so exactly one
+    // searchbox exists across both instances, not two.
     renderHistoryPage({
       entries: [
         { id: "1", deviceId: "device-a", body: "hello", createdAt: "now", seq: 1, syncedAt: "now" },
@@ -371,7 +392,7 @@ describe("HistoryPage", () => {
       disabled: false,
     });
 
-    expect(screen.getAllByLabelText("Search History").at(-1)).toHaveValue("");
+    expect(screen.getAllByRole("searchbox", { name: "Search History" })).toHaveLength(1);
   });
 
   it("a query already in the URL wins over a stored one, rather than being second-guessed", () => {
@@ -382,7 +403,7 @@ describe("HistoryPage", () => {
       "/history?q=fresh",
     );
 
-    expect(screen.getByLabelText("Search History")).toHaveValue("fresh");
+    expect(screen.getByRole("searchbox", { name: "Search History" })).toHaveValue("fresh");
   });
 
   it("puts what the user types into the URL", () => {
@@ -393,7 +414,10 @@ describe("HistoryPage", () => {
       disabled: false,
     });
 
-    fireEvent.change(screen.getByLabelText("Search History"), { target: { value: "wor" } });
+    fireEvent.click(screen.getByRole("button", { name: "Search History" }));
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search History" }), {
+      target: { value: "wor" },
+    });
 
     expect(screen.getByTestId("url-query")).toHaveTextContent("q=wor");
   });

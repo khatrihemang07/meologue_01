@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useSettingsStore } from "@/lib/settings";
 import { useSyncStatusStore } from "@/lib/sync-status";
 import { Shell } from "./shell";
@@ -172,5 +172,123 @@ describe("Shell's pinned thread", () => {
     // Living outside the scroller is what keeps it covering nothing.
     const control = screen.getByRole("button", { name: "Jump to newest" });
     expect(scroller.contains(control)).toBe(false);
+  });
+});
+
+// Ticket 55: Shell's own wiring of the magnifier-expands-in-place mode —
+// composer-page.test.tsx and history-page.test.tsx cover the page-level
+// consequences (narrowing the thread, the URL param), these cover the pure
+// interaction Shell owns by itself: showing/hiding the affordance and
+// switching the header's contents.
+describe("Shell's search mode", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useSettingsStore.setState({ serverUrl: "" });
+    useSyncStatusStore.setState({ lastAttempt: null });
+  });
+
+  it("shows no magnifier without a search prop — Settings' case (ADR 0008/0009, #55: no search affordance without a thread)", () => {
+    render(<Shell title="Settings">content</Shell>);
+
+    expect(screen.queryByRole("button", { name: "Search History" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("searchbox", { name: "Search History" })).not.toBeInTheDocument();
+  });
+
+  it("shows the magnifier, not the field, while a search prop is given but empty", () => {
+    render(
+      <Shell title="History" search={{ query: "", onQueryChange: vi.fn(), onDismiss: vi.fn() }}>
+        content
+      </Shell>,
+    );
+
+    expect(screen.getByRole("button", { name: "Search History" })).toBeInTheDocument();
+    expect(screen.queryByRole("searchbox", { name: "Search History" })).not.toBeInTheDocument();
+  });
+
+  it("expands the app bar into a search field in place when the magnifier is tapped, hiding the title", () => {
+    render(
+      <Shell title="History" search={{ query: "", onQueryChange: vi.fn(), onDismiss: vi.fn() }}>
+        content
+      </Shell>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Search History" }));
+
+    expect(screen.getByRole("searchbox", { name: "Search History" })).toBeInTheDocument();
+    expect(screen.queryByText("History")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Search History" })).not.toBeInTheDocument();
+  });
+
+  it("reports keystrokes through onQueryChange rather than owning the query itself", () => {
+    const onQueryChange = vi.fn();
+    render(
+      <Shell title="History" search={{ query: "", onQueryChange, onDismiss: vi.fn() }}>
+        content
+      </Shell>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Search History" }));
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search History" }), {
+      target: { value: "wor" },
+    });
+
+    expect(onQueryChange).toHaveBeenCalledWith("wor");
+  });
+
+  it("opens already-expanded when a query is already active, without a click", () => {
+    render(
+      <Shell title="History" search={{ query: "wor", onQueryChange: vi.fn(), onDismiss: vi.fn() }}>
+        content
+      </Shell>,
+    );
+
+    expect(screen.getByRole("searchbox", { name: "Search History" })).toHaveValue("wor");
+  });
+
+  it("dismissing via the close button restores the bar and clears the narrowing", () => {
+    const onDismiss = vi.fn();
+    render(
+      <Shell title="History" search={{ query: "wor", onQueryChange: vi.fn(), onDismiss }}>
+        content
+      </Shell>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Close search" }));
+
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("History")).toBeInTheDocument();
+    expect(screen.queryByRole("searchbox", { name: "Search History" })).not.toBeInTheDocument();
+  });
+
+  it("dismissing via Escape has the same effect as the close button", () => {
+    const onDismiss = vi.fn();
+    render(
+      <Shell title="History" search={{ query: "wor", onQueryChange: vi.fn(), onDismiss }}>
+        content
+      </Shell>,
+    );
+
+    fireEvent.keyDown(screen.getByRole("searchbox", { name: "Search History" }), {
+      key: "Escape",
+    });
+
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("searchbox", { name: "Search History" })).not.toBeInTheDocument();
+  });
+
+  it("does not collapse the field just because the query became empty by typing", () => {
+    const onDismiss = vi.fn();
+    render(
+      <Shell title="History" search={{ query: "wor", onQueryChange: vi.fn(), onDismiss }}>
+        content
+      </Shell>,
+    );
+
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search History" }), {
+      target: { value: "" },
+    });
+
+    expect(onDismiss).not.toHaveBeenCalled();
+    expect(screen.getByRole("searchbox", { name: "Search History" })).toBeInTheDocument();
   });
 });
