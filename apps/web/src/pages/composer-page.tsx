@@ -1,3 +1,4 @@
+import { useMemo, useState } from "react";
 import { Link } from "react-router";
 import { Composer } from "@/components/composer";
 import { History } from "@/components/history";
@@ -18,6 +19,28 @@ export function ComposerPage() {
   // Settings (ADR 0008 — Settings is a sibling route, not a child).
   const syncEnabled = useSyncEnabled();
 
+  // `entries` arrives newest-first (`list()`'s own order — see
+  // history.tsx's groupByDay comment); ticket 53 reverses that to
+  // oldest-first reading order here, in the view, and only for this
+  // Composer-adjacent thread. The store's own ordering is untouched, and
+  // Search (history-page.tsx) still reads whatever order the store hands
+  // it (ADR 0014) — this reversal is local to what renders next to the
+  // Composer.
+  const orderedEntries = useMemo(() => entries.slice().reverse(), [entries]);
+
+  // Bumped on every Send, independent of `entries` itself changing (that
+  // update lands async, once the store's write settles): the pinned
+  // thread (Shell's `pinnedThread`) treats a bump here as "jump to the
+  // newest end unconditionally," ticket 53's rule for Send specifically,
+  // as opposed to an Entry merely appearing (which only follows if the
+  // reader was already pinned — see use-pinned-scroll.ts).
+  const [sendSignal, setSendSignal] = useState(0);
+
+  function handleSend(body: string) {
+    sendEntry(body);
+    setSendSignal((count) => count + 1);
+  }
+
   return (
     <Shell
       title="meologue"
@@ -26,8 +49,9 @@ export function ComposerPage() {
       action={<SettingsLink />}
       nav={<Nav />}
       message={message}
-      footer={<History entries={entries} syncEnabled={syncEnabled} />}
-      composerSlot={<Composer onSend={sendEntry} disabled={disabled} />}
+      footer={<History entries={orderedEntries} syncEnabled={syncEnabled} />}
+      composerSlot={<Composer onSend={handleSend} disabled={disabled} />}
+      pinnedThread={{ watch: entries, forceToNewest: sendSignal }}
     >
       {!syncEnabled && (
         <p className="text-center text-sm text-muted-foreground">

@@ -1,5 +1,15 @@
+import { ArrowDown } from "lucide-react";
 import type { ReactNode } from "react";
 import { SyncStatusIndicator } from "@/components/sync-status-indicator";
+import { Button } from "@/components/ui/button";
+import { usePinnedScroll } from "@/hooks/use-pinned-scroll";
+
+interface PinnedThreadConfig {
+  /** Changes exactly when new content that might need following has appeared — e.g. the page's Entries array. */
+  watch: unknown;
+  /** Bump on an action that must jump to the newest end unconditionally — e.g. a counter incremented on Send. See use-pinned-scroll.ts. */
+  forceToNewest?: unknown;
+}
 
 interface ShellProps {
   title: ReactNode;
@@ -26,6 +36,15 @@ interface ShellProps {
    * duplicate that here.
    */
   composerSlot?: ReactNode;
+  /**
+   * Ticket 53's conditional pin: opts the scroll region into following
+   * newly-appeared content only while the reader is already at the newest
+   * (bottom) end, and shows a jump-to-newest control while away from it.
+   * Undefined (the default) leaves the scroll region exactly as before —
+   * plain History on `/history` and Settings don't pin. Shell has no
+   * notion of "Entry" itself here, deliberately: see use-pinned-scroll.ts.
+   */
+  pinnedThread?: PinnedThreadConfig;
 }
 
 // The app shell every page renders through (ticket 50, replacing the
@@ -45,7 +64,22 @@ interface ShellProps {
 // overflow anywhere in this tree, is what keeps a narrow window free of
 // both page-level scrollbars the old centred-card layout never had to
 // avoid.
-export function Shell({ title, action, message, children, footer, nav, composerSlot }: ShellProps) {
+export function Shell({
+  title,
+  action,
+  message,
+  children,
+  footer,
+  nav,
+  composerSlot,
+  pinnedThread,
+}: ShellProps) {
+  const { scrollRef, handleScroll, awayFromNewest, jumpToNewest } = usePinnedScroll({
+    enabled: pinnedThread !== undefined,
+    watch: pinnedThread?.watch,
+    forceToNewest: pinnedThread?.forceToNewest,
+  });
+
   return (
     <div className="flex h-svh w-full flex-col overflow-hidden bg-background [padding-left:env(safe-area-inset-left)] [padding-right:env(safe-area-inset-right)] md:flex-row">
       {nav && (
@@ -102,13 +136,45 @@ export function Shell({ title, action, message, children, footer, nav, composerS
             claims the bottom edge and handles env(safe-area-inset-bottom)
             itself — padding it again here would double it under a home
             indicator. */}
-        <div className="flex-1 overflow-x-hidden overflow-y-auto">
+        <div
+          ref={scrollRef}
+          onScroll={pinnedThread ? handleScroll : undefined}
+          data-testid="shell-scroll-region"
+          className="flex-1 overflow-x-hidden overflow-y-auto"
+        >
           <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 px-4 py-4">
             {message && <p className="text-sm text-destructive">{message}</p>}
             {children}
             {footer}
           </div>
         </div>
+
+        {/* Ticket 53's jump-to-newest control, as a band between the thread
+            and the Composer rather than an overlay floating over the thread.
+            An overlay was the first shape tried and it was wrong: the control
+            hangs at the *viewport's* bottom edge, and it only ever shows while
+            the reader is scrolled away from the newest end — so whatever line
+            happened to be at the bottom of the screen sat underneath it, clipped,
+            and no amount of padding on the content could move it out of the way.
+            Out here it takes its own row and covers nothing. It shows only while
+            away from the newest end, so the height it claims is never taken from
+            a pinned thread; when it goes away the scroll region grows, and a
+            grown region keeps its bottom edge, leaving the reader still at the
+            newest Entry. */}
+        {pinnedThread && awayFromNewest && (
+          <div className="flex justify-center border-t bg-background py-2">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={jumpToNewest}
+              className="gap-1.5 rounded-full shadow-sm"
+            >
+              <ArrowDown aria-hidden="true" className="size-3.5" />
+              Jump to newest
+            </Button>
+          </div>
+        )}
 
         {composerSlot}
       </div>
