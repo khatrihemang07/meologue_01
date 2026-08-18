@@ -1,3 +1,4 @@
+import { ArrowUp } from "lucide-react";
 import { type KeyboardEvent, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -32,17 +33,43 @@ export function Composer({ onSend, disabled = false }: ComposerProps) {
   };
 
   return (
-    <div className="flex flex-col gap-3">
-      <Textarea
-        placeholder="What's on your mind?"
-        value={value}
-        onChange={(event) => setValue(event.target.value)}
-        onKeyDown={handleKeyDown}
-        disabled={disabled}
-      />
-      <Button className="self-end" onClick={send} disabled={disabled}>
-        Send
-      </Button>
+    // Docked to Shell's composerSlot (ticket 51, #49's Discord layout) rather
+    // than scrolling with the rest of the page: a full-bleed bar so its
+    // border/background reach the window edge, with the same max-w-xl
+    // reading column as Shell's content region nested inside so the field
+    // lines up with History above it. Its own safe-area padding is what the
+    // stand-in on Shell's scroll region existed to cover before this ticket
+    // gave the Composer a real bottom edge to own.
+    <div className="shrink-0 border-t border-border bg-background [padding-bottom:env(safe-area-inset-bottom)]">
+      <div className="mx-auto flex w-full max-w-xl items-end gap-2 px-4 py-2.5">
+        <Textarea
+          placeholder="What's on your mind?"
+          value={value}
+          onChange={(event) => setValue(event.target.value)}
+          onKeyDown={handleKeyDown}
+          disabled={disabled}
+          // ui/textarea.tsx already sizes to content via field-sizing:
+          // content; min-h/max-h here are what turn that unbounded growth
+          // into ticket 51's "one line, grows to about five, then scrolls."
+          // Sending clears `value`, and field-sizing shrinks the box back to
+          // min-h on its own — no row-count state to track.
+          className="min-h-11 max-h-36 resize-none overflow-y-auto rounded-3xl"
+        />
+        <Button
+          aria-label="Send"
+          size="icon-lg"
+          // Ticket 51 replaces the labelled rectangle with an icon button;
+          // aria-label keeps "Send" as the accessible name the e2e suite and
+          // composer.test.tsx already query by. size-11 (44px) meets the
+          // platform tap-target minimum the icon-lg token alone (36px)
+          // doesn't reach.
+          className="size-11 shrink-0 self-end rounded-full"
+          onClick={send}
+          disabled={disabled}
+        >
+          <ArrowUp aria-hidden="true" className="size-5" />
+        </Button>
+      </div>
     </div>
   );
 }

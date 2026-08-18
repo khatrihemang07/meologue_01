@@ -29,8 +29,8 @@ export function ComposerPage() {
       }
       message={message}
       footer={<History entries={entries} syncEnabled={syncEnabled} />}
+      composerSlot={<Composer onSend={sendEntry} disabled={disabled} />}
     >
-      <Composer onSend={sendEntry} disabled={disabled} />
       {!syncEnabled && (
         <p className="text-center text-sm text-muted-foreground">
           Sync is off —{" "}

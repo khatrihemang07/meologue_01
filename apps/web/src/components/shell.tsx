@@ -20,11 +20,11 @@ interface ShellProps {
    */
   nav?: ReactNode;
   /**
-   * Ticket 51's slot, unused until that ticket lands. The Composer keeps
-   * rendering as part of `children`/`footer` for now, scrolling with the
-   * rest of the page exactly as it does today — this only reserves where a
-   * bottom-docked Composer will sit, between the scrollable content and
-   * `nav`'s bottom-bar placement.
+   * The Composer (ticket 51), docked between the scrollable content and
+   * `nav`'s bottom-bar placement so it stays put while History scrolls
+   * behind it. The Composer owns its own safe-area-inset-bottom handling —
+   * see the scroll region's padding comment below for why Shell doesn't
+   * duplicate that here.
    */
   composerSlot?: ReactNode;
 }
@@ -78,13 +78,13 @@ export function Shell({ title, action, message, children, footer, nav, composerS
         {/* The scrollable content region between the app bar and whatever
             sits below it. Full-bleed on a wide window (no cap here) — only
             the reading column inside is capped, at the old Card's max-w-xl,
-            so line length doesn't stretch full-window on a wide screen. The
-            bottom padding is a stand-in for the docked Composer's own
-            safe-area handling (#51): nothing claims the bottom edge yet, so
-            this is where "don't sit under system chrome" has to be honoured
-            today. */}
+            so line length doesn't stretch full-window on a wide screen.
+            Plain py-4 is enough here now that the docked Composer (#51)
+            claims the bottom edge and handles env(safe-area-inset-bottom)
+            itself — padding it again here would double it under a home
+            indicator. */}
         <div className="flex-1 overflow-x-hidden overflow-y-auto">
-          <div className="mx-auto flex w-full max-w-xl flex-col gap-4 px-4 py-4 [padding-bottom:max(1rem,env(safe-area-inset-bottom))]">
+          <div className="mx-auto flex w-full max-w-xl flex-col gap-4 px-4 py-4">
             {message && <p className="text-sm text-destructive">{message}</p>}
             {children}
             {footer}
