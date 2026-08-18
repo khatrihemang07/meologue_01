@@ -95,14 +95,15 @@ export function Shell({ title, action, message, children, footer, nav, composerS
 
         {/* The scrollable content region between the app bar and whatever
             sits below it. Full-bleed on a wide window (no cap here) — only
-            the reading column inside is capped, at the old Card's max-w-xl,
+            the reading column inside is capped, at the width the chosen
+            prototype used (#49 variant 08) rather than the old Card's,
             so line length doesn't stretch full-window on a wide screen.
             Plain py-4 is enough here now that the docked Composer (#51)
             claims the bottom edge and handles env(safe-area-inset-bottom)
             itself — padding it again here would double it under a home
             indicator. */}
         <div className="flex-1 overflow-x-hidden overflow-y-auto">
-          <div className="mx-auto flex w-full max-w-xl flex-col gap-4 px-4 py-4">
+          <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 px-4 py-4">
             {message && <p className="text-sm text-destructive">{message}</p>}
             {children}
             {footer}
