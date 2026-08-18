@@ -19,7 +19,7 @@ function SearchParamProbe() {
 // TanStack Query query of its own, on top of the outlet context.
 function renderHistoryPage(context: EntryStoreOutletContext, initialPath = "/history") {
   const queryClient = new QueryClient();
-  render(
+  return render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={[initialPath]}>
         <SearchParamProbe />
@@ -131,6 +131,94 @@ describe("HistoryPage", () => {
     });
 
     expect(screen.queryByText(/sync is off/i)).not.toBeInTheDocument();
+  });
+
+  // Ticket 53: /history reads oldest-to-newest same as the Composer-adjacent
+  // thread (composer-page.test.tsx has the identical assertion for `/`) —
+  // the outlet context hands both pages the store's newest-first order
+  // (`list()`'s `ORDER BY created_at DESC`), and reversing it is this
+  // page's own job, not a shared one, since each page reverses its own
+  // `shown` view independently.
+  it("reverses the store's newest-first order to oldest-to-newest reading order", () => {
+    renderHistoryPage({
+      entries: [
+        {
+          id: "3",
+          deviceId: "device-a",
+          body: "third",
+          createdAt: "2026-08-18T12:00:00.000Z",
+          seq: 3,
+          syncedAt: "now",
+        },
+        {
+          id: "2",
+          deviceId: "device-a",
+          body: "second",
+          createdAt: "2026-08-18T11:00:00.000Z",
+          seq: 2,
+          syncedAt: "now",
+        },
+        {
+          id: "1",
+          deviceId: "device-a",
+          body: "first",
+          createdAt: "2026-08-18T10:00:00.000Z",
+          seq: 1,
+          syncedAt: "now",
+        },
+      ],
+      sendEntry: vi.fn(),
+      search: noSearchResults,
+      disabled: false,
+    });
+
+    const bodies = screen.getAllByText(/^(first|second|third)$/).map((el) => el.textContent);
+    expect(bodies).toEqual(["first", "second", "third"]);
+  });
+
+  // Ticket 53's hard constraint: `search()` is contractually the same
+  // order as `list()` (ADR 0014, newest-first) — a search result reverses
+  // to oldest-to-newest exactly like the unfiltered thread does, so
+  // narrowing to a search never flips the reading order the reader was
+  // already used to.
+  it("reverses a search result's order the same way it reverses the unfiltered thread", async () => {
+    const search = vi.fn(async () => [
+      {
+        id: "2",
+        deviceId: "device-a",
+        body: "search-newer",
+        createdAt: "2026-08-18T12:00:00.000Z",
+        seq: 2,
+        syncedAt: "now",
+      },
+      {
+        id: "1",
+        deviceId: "device-a",
+        body: "search-older",
+        createdAt: "2026-08-18T10:00:00.000Z",
+        seq: 1,
+        syncedAt: "now",
+      },
+    ]);
+
+    const { container } = renderHistoryPage({
+      entries: [],
+      sendEntry: vi.fn(),
+      search,
+      disabled: false,
+    });
+
+    fireEvent.change(screen.getByLabelText("Search History"), { target: { value: "search" } });
+
+    await screen.findByText("older", { exact: false });
+    // The matched "search" prefix is highlighted (highlight-match.ts) into
+    // its own <mark>, so each Entry's body is split across sibling nodes —
+    // querying the row (`<p>`) rather than `getByText` is what reads it back
+    // as one string, `mark` and plain text concatenated in DOM order.
+    const bodies = Array.from(container.querySelectorAll("p.whitespace-pre-wrap")).map(
+      (el) => el.textContent,
+    );
+    expect(bodies).toEqual(["search-older", "search-newer"]);
   });
 
   it("shows the full, unfiltered History when the search box is empty", () => {

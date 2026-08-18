@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { useSearchParams } from "react-router";
 import { History } from "@/components/history";
 import { Nav, SettingsLink } from "@/components/nav";
@@ -74,6 +74,16 @@ export function HistoryPage() {
   const searchResults = useEntrySearch(search, query, entries);
   const shown = searchResults ?? entries;
 
+  // `shown` arrives newest-first whether it's the unfiltered `entries` or a
+  // search result — `EntryStore.search()` is contractually the same order
+  // as `list()` (ADR 0014), so a narrowed thread reads exactly like the
+  // full one. Ticket 53 reverses that to oldest-first reading order here,
+  // in the view only, same as composer-page.tsx; the store's own ordering
+  // and the search contract are untouched. Reversing after search rather
+  // than before is what keeps the ordering right for both the unfiltered
+  // and the narrowed cases, since both flow through this one variable.
+  const orderedEntries = useMemo(() => shown.slice().reverse(), [shown]);
+
   function setQuery(next: string) {
     setSearchParams(
       (previous) => {
@@ -93,7 +103,20 @@ export function HistoryPage() {
   }
 
   return (
-    <Shell title="History" action={<SettingsLink />} nav={<Nav />} message={message}>
+    <Shell
+      title="History"
+      action={<SettingsLink />}
+      nav={<Nav />}
+      message={message}
+      // Ticket 53: /history gets the same conditional pin as the
+      // Composer-adjacent thread — it has no Composer to force a jump from
+      // (nothing here Sends), so only `watch` is wired, following newly
+      // appeared or newly narrowed content but only while already at the
+      // newest end. `shown` (not `entries`) is what's watched: it's what's
+      // actually on screen, so an Entry arriving from Sync while a search
+      // is narrowing the view is followed by the same rule.
+      pinnedThread={{ watch: shown }}
+    >
       <Input
         type="search"
         aria-label="Search History"
@@ -101,7 +124,7 @@ export function HistoryPage() {
         value={query}
         onChange={(event) => setQuery(event.target.value)}
       />
-      <History entries={shown} syncEnabled={syncEnabled} query={query} />
+      <History entries={orderedEntries} syncEnabled={syncEnabled} query={query} />
     </Shell>
   );
 }

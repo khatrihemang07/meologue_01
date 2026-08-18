@@ -21,11 +21,11 @@ export function ComposerPage() {
 
   // `entries` arrives newest-first (`list()`'s own order — see
   // history.tsx's groupByDay comment); ticket 53 reverses that to
-  // oldest-first reading order here, in the view, and only for this
-  // Composer-adjacent thread. The store's own ordering is untouched, and
-  // Search (history-page.tsx) still reads whatever order the store hands
-  // it (ADR 0014) — this reversal is local to what renders next to the
-  // Composer.
+  // oldest-first reading order here, in the view. history-page.tsx applies
+  // the identical reversal to what it renders (including Search results,
+  // which ADR 0014 guarantees arrive in the same order as `list()`) — the
+  // store's own ordering is untouched either way, this is purely a
+  // React-layer concern local to what each page renders.
   const orderedEntries = useMemo(() => entries.slice().reverse(), [entries]);
 
   // Bumped on every Send, independent of `entries` itself changing (that

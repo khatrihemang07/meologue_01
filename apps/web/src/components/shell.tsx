@@ -40,9 +40,10 @@ interface ShellProps {
    * Ticket 53's conditional pin: opts the scroll region into following
    * newly-appeared content only while the reader is already at the newest
    * (bottom) end, and shows a jump-to-newest control while away from it.
-   * Undefined (the default) leaves the scroll region exactly as before —
-   * plain History on `/history` and Settings don't pin. Shell has no
-   * notion of "Entry" itself here, deliberately: see use-pinned-scroll.ts.
+   * Wired on both `/` and `/history` (composer-page.tsx and
+   * history-page.tsx) — Settings is the one page that leaves this
+   * undefined, which leaves the scroll region exactly as before. Shell has
+   * no notion of "Entry" itself here, deliberately: see use-pinned-scroll.ts.
    */
   pinnedThread?: PinnedThreadConfig;
 }
