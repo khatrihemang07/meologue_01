@@ -11,13 +11,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 const NEWEST_THRESHOLD_PX = 24;
 
 export interface UsePinnedScrollOptions {
-  /** Off entirely for pages with no pinned thread — Settings, plain History. */
+  /** Off entirely for pages with no pinned thread — Settings is the only one. */
   enabled: boolean;
   /**
    * Whatever value changes exactly when new content that might need
    * following has appeared — the caller's Entries array, typically. This
    * hook has no notion of "Entry" itself, on purpose (ticket 53: the pin is
-   * a view-only concern, not a store one — see ADR 0014).
+   * a view-only concern, not a store one — see ADR 0018).
    */
   watch: unknown;
   /**
