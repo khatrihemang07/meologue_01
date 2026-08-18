@@ -1,6 +1,8 @@
 export type { ExportOptions, ExportResult } from "./export/export-zip";
 export { exportEntriesToZip, exportFileName } from "./export/export-zip";
 export type { ExportManifest, ExportManifestEntry } from "./export/manifest";
+export type { LocalParts } from "./export/offset";
+export { toLocalParts } from "./export/offset";
 export { mintId } from "./id";
 export { PROTOCOL_VERSION, SYNC_BATCH_SIZE, SYNC_INTERVAL_MS } from "./protocol";
 export type { CheckServerOptions, ServerCheckResult, ServerFetch } from "./server-check";

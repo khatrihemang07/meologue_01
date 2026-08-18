@@ -12,3 +12,6 @@ apps/e2e/.cache/
 
 # Editors / OS
 .DS_Store
+
+# Throwaway prototypes
+.scratch/
