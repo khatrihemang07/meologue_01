@@ -37,6 +37,12 @@ Entry times, and it narrows History in place rather than producing a separate co
 The user's action of capturing a new Entry: writing text and committing it to their History.
 Send is what the user does; the Entry is what results.
 
+### Composer
+
+The view where the user writes an Entry before Sending it. Composer names the view, not the
+action performed in it — that's Send. Composer holds none of the user's captured Entries itself;
+once Send commits what's written there, the result lives in History, not in Composer.
+
 ### Sync
 
 The ongoing process by which Devices exchange Entries with each other, so that an Entry

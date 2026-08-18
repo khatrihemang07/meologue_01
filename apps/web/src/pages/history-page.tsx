@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { useSearchParams } from "react-router";
 import { History } from "@/components/history";
-import { BackLink } from "@/components/nav-links";
+import { Nav, SettingsLink } from "@/components/nav";
 import { Shell } from "@/components/shell";
 import { Input } from "@/components/ui/input";
 import { useEntrySearch } from "@/hooks/use-entry-search";
@@ -14,13 +14,14 @@ import { useEntryStore } from "@/pages/entry-store-layout";
 const QUERY_PARAM = "q";
 
 // Backs up the last active query for this tab (ticket 39). The URL alone
-// isn't enough to survive a round trip through Settings: History's only
-// route back there is Back -> Composer -> Settings -> Back -> Composer ->
-// History, and every link on that path (nav-links.tsx) is a bare, stateless
-// `to="/..."` with no query to carry — so the `q` param is gone by the time
-// the user lands back on History. This is session-scoped, not a Device
-// setting (settings.ts), because it's a transient "where you left off," not
-// something the user configured.
+// isn't enough to survive a round trip through Settings: even with direct
+// nav links on every page now (ticket 54, replacing the old Back ->
+// Composer -> Settings -> Back -> Composer -> History round trip), the
+// Settings action and the persistent Nav (nav.tsx) are still bare,
+// stateless `to="/..."` links with no query to carry — so the `q` param is
+// gone by the time the user lands back on History. This is session-scoped,
+// not a Device setting (settings.ts), because it's a transient "where you
+// left off," not something the user configured.
 const SEARCH_STORAGE_KEY = "meologue.history-search-query";
 
 // `/history` — the full History on its own page, addressable and
@@ -92,8 +93,7 @@ export function HistoryPage() {
   }
 
   return (
-    <Shell title="History" message={message}>
-      <BackLink />
+    <Shell title="History" action={<SettingsLink />} nav={<Nav />} message={message}>
       <Input
         type="search"
         aria-label="Search History"

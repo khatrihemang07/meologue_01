@@ -33,7 +33,11 @@ test("History still renders after a reload with the network off", async ({ page,
   // would hit.
   await page.goto("/history");
 
-  await expect(page.getByText("History", { exact: true })).toBeVisible();
+  // Scoped to the app bar (a <header>, implicit role "banner"): ticket 54's
+  // persistent nav also renders a visible "History" text label (the link to
+  // this same page), so an unscoped getByText("History") would now match
+  // both that link and this page's title.
+  await expect(page.getByRole("banner").getByText("History", { exact: true })).toBeVisible();
   await expect(page.getByText(body)).toBeVisible();
 
   await context.setOffline(false);

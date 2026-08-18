@@ -7,7 +7,10 @@ import { sendEntry, uniqueEntryBody } from "./helpers";
 // genuinely uncertain about the change, so it gets its own spec that loads
 // /settings directly and hard-reloads on it, against the real Rust server.
 
-test("/settings loads directly, survives a hard reload, and a back link returns to a working composer", async ({
+// Ticket 54 deleted the Back link — every page, Settings included, is now
+// reachable directly, and this same persistent nav is what proves the way
+// back to the Composer works too.
+test("/settings loads directly, survives a hard reload, and its persistent nav returns to a working composer", async ({
   page,
 }) => {
   await page.goto("/settings");
@@ -16,7 +19,7 @@ test("/settings loads directly, survives a hard reload, and a back link returns 
   await page.reload();
   await expect(page.getByText("Settings")).toBeVisible();
 
-  await page.getByRole("link", { name: /back/i }).click();
+  await page.getByRole("link", { name: "Composer" }).click();
   await expect(page).toHaveURL("/");
 
   const body = uniqueEntryBody("routing");
@@ -34,16 +37,21 @@ test("the gear link on the composer navigates to Settings", async ({ page }) => 
 
 // ticket 27 — History becomes its own route, sharing the store and sync
 // loop that the composer at "/" opens, via a layout route above both.
-test("/history loads directly, survives a hard reload, and a back link returns to a working composer", async ({
+//
+// getByText("History") is scoped to the app bar (role "banner") rather
+// than left unscoped: ticket 54's persistent nav also renders a visible
+// "History" text label (the link to this same page), so an unscoped query
+// would now match both that link and this page's title.
+test("/history loads directly, survives a hard reload, and its persistent nav returns to a working composer", async ({
   page,
 }) => {
   await page.goto("/history");
-  await expect(page.getByText("History", { exact: true })).toBeVisible();
+  await expect(page.getByRole("banner").getByText("History", { exact: true })).toBeVisible();
 
   await page.reload();
-  await expect(page.getByText("History", { exact: true })).toBeVisible();
+  await expect(page.getByRole("banner").getByText("History", { exact: true })).toBeVisible();
 
-  await page.getByRole("link", { name: /back/i }).click();
+  await page.getByRole("link", { name: "Composer" }).click();
   await expect(page).toHaveURL("/");
 
   const body = uniqueEntryBody("history-route");
@@ -112,12 +120,12 @@ test("routing between /, /history and /settings does not reopen the store", asyn
   await expect(page).toHaveURL("/history");
   await expect(page.getByText(body)).toBeVisible();
 
-  await page.getByRole("link", { name: /back/i }).click();
+  await page.getByRole("link", { name: "Composer" }).click();
   await expect(page).toHaveURL("/");
 
   await page.getByRole("link", { name: "Settings" }).click();
   await expect(page).toHaveURL("/settings");
-  await page.getByRole("link", { name: /back/i }).click();
+  await page.getByRole("link", { name: "Composer" }).click();
   await expect(page).toHaveURL("/");
 
   await expect(page.getByText(body)).toBeVisible();

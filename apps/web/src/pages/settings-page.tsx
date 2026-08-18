@@ -2,7 +2,7 @@ import { exportEntriesToZip, PROTOCOL_VERSION } from "@meologue/core";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { BackLink } from "@/components/nav-links";
+import { Nav } from "@/components/nav";
 import { Shell } from "@/components/shell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -158,9 +158,13 @@ export function SettingsPage() {
   const status = check?.url === serverUrl ? check.result : null;
 
   return (
-    <Shell title="Settings">
-      <BackLink />
-
+    // Settings gets the same persistent Nav as every other page (ticket 54
+    // — "every page becomes reachable directly"), even though Settings
+    // itself is a sibling route outside EntryStoreLayout (ADR 0008/0009):
+    // Nav is a pair of bare route links, not a reader of the Entry store,
+    // so it's just as live here as it is on Composer/History regardless of
+    // whether the store ever opens.
+    <Shell title="Settings" nav={<Nav />}>
       <div className="flex flex-col gap-2">
         <span className="text-sm font-medium">Theme</span>
         <div className="inline-flex gap-1">

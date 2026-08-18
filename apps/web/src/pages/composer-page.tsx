@@ -1,7 +1,7 @@
 import { Link } from "react-router";
 import { Composer } from "@/components/composer";
 import { History } from "@/components/history";
-import { HistoryLink, SettingsLink } from "@/components/nav-links";
+import { Nav, SettingsLink } from "@/components/nav";
 import { Shell } from "@/components/shell";
 import { useSyncEnabled } from "@/lib/settings";
 import { useEntryStore } from "@/pages/entry-store-layout";
@@ -21,12 +21,10 @@ export function ComposerPage() {
   return (
     <Shell
       title="meologue"
-      action={
-        <div className="flex items-center gap-3">
-          <HistoryLink />
-          <SettingsLink />
-        </div>
-      }
+      // History moved into the persistent Nav (ticket 54) — Settings stays
+      // here because it's an app-bar action, not a nav destination (#49).
+      action={<SettingsLink />}
+      nav={<Nav />}
       message={message}
       footer={<History entries={entries} syncEnabled={syncEnabled} />}
       composerSlot={<Composer onSend={sendEntry} disabled={disabled} />}

@@ -46,7 +46,7 @@ describe("HistoryPage", () => {
     vi.restoreAllMocks();
   });
 
-  it("renders a way back to the Composer", () => {
+  it("renders persistent nav links to Composer and History, plus a Settings action", () => {
     renderHistoryPage({
       entries: [],
       sendEntry: vi.fn(),
@@ -54,7 +54,23 @@ describe("HistoryPage", () => {
       disabled: false,
     });
 
-    expect(screen.getByRole("link", { name: /back/i })).toHaveAttribute("href", "/");
+    expect(screen.getByRole("link", { name: "Composer" })).toHaveAttribute("href", "/");
+    expect(screen.getByRole("link", { name: "History" })).toHaveAttribute("href", "/history");
+    expect(screen.getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings");
+  });
+
+  // Ticket 54's acceptance criteria: the current destination is visibly
+  // indicated. History is "/history", the page under test.
+  it("marks History as the current destination in the persistent nav", () => {
+    renderHistoryPage({
+      entries: [],
+      sendEntry: vi.fn(),
+      search: noSearchResults,
+      disabled: false,
+    });
+
+    expect(screen.getByRole("link", { name: "History" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "Composer" })).not.toHaveAttribute("aria-current");
   });
 
   it("renders History from the outlet context", () => {
@@ -221,8 +237,10 @@ describe("HistoryPage", () => {
     ]);
 
     // Simulates the search having been active on an earlier visit this tab
-    // (BackLink/HistoryLink round-tripping through Composer and Settings
-    // both land on bare paths with no query, per nav-links.tsx).
+    // (the persistent Nav and Settings action, both bare `to="/..."` links
+    // with no query string — see nav.tsx — drop it on a round trip through
+    // Settings, ticket 54's search.spec.ts e2e test exercises the same
+    // round trip end to end).
     sessionStorage.setItem("meologue.history-search-query", "wor");
 
     renderHistoryPage({

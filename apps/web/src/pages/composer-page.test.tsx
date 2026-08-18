@@ -38,11 +38,22 @@ describe("ComposerPage", () => {
     vi.restoreAllMocks();
   });
 
-  it("renders links to History and Settings", () => {
+  it("renders persistent nav links to Composer and History, plus a Settings action", () => {
     renderComposerPage(readyContext);
 
+    expect(screen.getByRole("link", { name: "Composer" })).toHaveAttribute("href", "/");
     expect(screen.getByRole("link", { name: "History" })).toHaveAttribute("href", "/history");
     expect(screen.getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings");
+  });
+
+  // Ticket 54's acceptance criteria: the current destination is visibly
+  // indicated. Composer is "/", the page under test, so its nav link
+  // carries aria-current="page" and History's doesn't.
+  it("marks Composer as the current destination in the persistent nav", () => {
+    renderComposerPage(readyContext);
+
+    expect(screen.getByRole("link", { name: "Composer" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "History" })).not.toHaveAttribute("aria-current");
   });
 
   it("disables the Composer while the store isn't ready", () => {

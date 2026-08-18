@@ -100,11 +100,12 @@ describe("SettingsPage", () => {
     vi.unstubAllGlobals();
   });
 
-  it("renders its title and a back link to the history page", () => {
+  it("renders its title and persistent nav links to Composer and History", () => {
     renderPage();
 
     expect(screen.getByText("Settings")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /back/i })).toHaveAttribute("href", "/");
+    expect(screen.getByRole("link", { name: "Composer" })).toHaveAttribute("href", "/");
+    expect(screen.getByRole("link", { name: "History" })).toHaveAttribute("href", "/history");
   });
 
   it("marks System as the initially selected theme", () => {

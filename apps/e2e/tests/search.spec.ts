@@ -56,10 +56,11 @@ test("a reload with a query in the URL keeps the filter", async ({ page }) => {
   await expect(page.getByText(beta)).toHaveCount(0);
 });
 
-// History has no direct link to Settings — the only route is Back ->
-// Composer -> Settings -> Back -> Composer -> History, and every link on
-// that path is a bare "/..." with no query string, so the `q` param itself
-// doesn't survive the round trip. This proves the search still comes back.
+// Ticket 54 gave History a direct Settings action and gave Settings a
+// direct link back to History (its persistent nav) — no more forced
+// round trip through the Composer. Both of those are still bare "/..."
+// links with no query string, though, so the `q` param itself doesn't
+// survive the trip. This proves the search still comes back.
 test("a search survives a round trip through Settings", async ({ page }) => {
   const alpha = uniqueEntryBody("search-settings-alpha");
   const beta = uniqueEntryBody("search-settings-beta");
@@ -73,12 +74,8 @@ test("a search survives a round trip through Settings", async ({ page }) => {
   await expect(page.getByText(alpha)).toBeVisible();
   await expect(page.getByText(beta)).toHaveCount(0);
 
-  await page.getByRole("link", { name: /back/i }).click();
-  await expect(page).toHaveURL("/");
   await page.getByRole("link", { name: "Settings" }).click();
   await expect(page).toHaveURL("/settings");
-  await page.getByRole("link", { name: /back/i }).click();
-  await expect(page).toHaveURL("/");
   await page.getByRole("link", { name: "History" }).click();
 
   await expect(page).toHaveURL(/\/history\?q=search-settings-alpha/);
