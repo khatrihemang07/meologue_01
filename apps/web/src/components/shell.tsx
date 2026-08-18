@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { SyncStatusIndicator } from "@/components/sync-status-indicator";
 import { Button } from "@/components/ui/button";
 import { usePinnedScroll } from "@/hooks/use-pinned-scroll";
+import { cn } from "@/lib/utils";
 
 interface PinnedThreadConfig {
   /** Changes exactly when new content that might need following has appeared — e.g. the page's Entries array. */
@@ -143,7 +144,21 @@ export function Shell({
           data-testid="shell-scroll-region"
           className="flex-1 overflow-x-hidden overflow-y-auto"
         >
-          <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 px-4 py-4">
+          {/* A pinned thread hugs the bottom when it is shorter than the
+              viewport (ticket 53): the newest Entry belongs next to the
+              Composer, and top-aligning a two-Entry History leaves it
+              stranded at the top above a screen of empty space — the one
+              thing that reads as broken rather than merely empty. min-h-full
+              gives justify-end something to push against; without it the
+              column is only as tall as its content and there is nothing to
+              distribute. Settings passes no pinnedThread and keeps the
+              ordinary top-aligned flow. */}
+          <div
+            className={cn(
+              "mx-auto flex w-full max-w-2xl flex-col gap-4 px-4 py-4",
+              pinnedThread && "min-h-full justify-end",
+            )}
+          >
             {message && <p className="text-sm text-destructive">{message}</p>}
             {children}
             {footer}
