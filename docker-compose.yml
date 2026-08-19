@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:18-alpine
+    image: pgvector/pgvector:pg18
     container_name: meologue-postgres
     restart: unless-stopped
     environment:
@@ -28,7 +28,7 @@ services:
   # starts it when scripts/e2e-server-b.sh names it explicitly
   # (`docker compose up -d --wait postgres-e2e-b`), profile or not.
   postgres-e2e-b:
-    image: postgres:18-alpine
+    image: pgvector/pgvector:pg18
     container_name: meologue-postgres-e2e-b
     restart: unless-stopped
     profiles: ["e2e"]

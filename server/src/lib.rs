@@ -1,4 +1,6 @@
+pub mod embedding;
 pub mod health;
+pub mod llm;
 pub mod metrics;
 pub mod openapi;
 pub mod sync;
@@ -8,15 +10,41 @@ use std::time::Duration;
 
 use axum::{
     Router,
+    extract::FromRef,
     http::{HeaderValue, Request, Response, header},
     middleware::Next,
     routing::{get, post},
 };
 use sqlx::PgPool;
+use tokio::sync::mpsc::Sender;
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use tracing::field;
+use uuid::Uuid;
+
+/// The router's shared state. `PgPool` and `Option<Sender<Uuid>>` each get
+/// their own `FromRef` impl below, so every existing handler that extracts
+/// `State<PgPool>` keeps compiling unchanged — only `sync_handler` also
+/// extracts the sender, to hint the embedding worker about newly-inserted
+/// Entries (ticket 3 / ADR 0022).
+#[derive(Clone)]
+pub struct AppState {
+    pub pool: PgPool,
+    pub embed_tx: Option<Sender<Uuid>>,
+}
+
+impl FromRef<AppState> for PgPool {
+    fn from_ref(state: &AppState) -> Self {
+        state.pool.clone()
+    }
+}
+
+impl FromRef<AppState> for Option<Sender<Uuid>> {
+    fn from_ref(state: &AppState) -> Self {
+        state.embed_tx.clone()
+    }
+}
 
 /// Sets `Cache-Control` on everything the static file service serves, chosen
 /// by path rather than a single blanket value (ticket 44):
@@ -74,7 +102,26 @@ async fn set_static_cache_control(
 /// already trusts any Device that can reach the server at all, so an origin
 /// check would gate nothing a reachable attacker doesn't already have
 /// (ticket 13).
+///
+/// Delegates to `router_with_embedding` with no sender — every existing
+/// caller (several test files, plus any future one written against this
+/// signature) keeps working exactly as it does today, with the embedding
+/// worker simply not hinted about newly-inserted Entries. That's a
+/// degradation, not a break: the `embedding IS NULL` scan (ADR 0022) still
+/// picks those Entries up on its own within `SCAN_INTERVAL`.
 pub fn router(pool: PgPool, static_dir: impl AsRef<Path>) -> Router {
+    router_with_embedding(pool, static_dir, None)
+}
+
+/// Same as `router`, but also wires an optional channel the sync handler
+/// uses to hint the embedding worker about Entries it just inserted. This
+/// is what `main.rs` calls; `router` above is the no-worker convenience
+/// wrapper the existing test suite already depends on.
+pub fn router_with_embedding(
+    pool: PgPool,
+    static_dir: impl AsRef<Path>,
+    embed_tx: Option<Sender<Uuid>>,
+) -> Router {
     // Installs the global metrics recorder (if not already installed) before
     // any request can reach `track_metrics` — see src/metrics.rs.
     metrics::handle();
@@ -118,7 +165,7 @@ pub fn router(pool: PgPool, static_dir: impl AsRef<Path>) -> Router {
         .route("/v1/health", get(health::health_handler))
         .route("/v1/sync", post(sync::sync_handler))
         .route("/v1/metrics", get(metrics::metrics_handler))
-        .with_state(pool)
+        .with_state(AppState { pool, embed_tx })
         .fallback_service(app_shell)
         .layer(axum::middleware::from_fn(metrics::track_metrics))
         .layer(trace_layer)

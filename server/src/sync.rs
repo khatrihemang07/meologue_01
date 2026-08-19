@@ -2,6 +2,7 @@ use axum::{Json, extract::State, http::StatusCode};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgConnection, PgPool};
+use tokio::sync::mpsc::Sender;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
@@ -63,6 +64,7 @@ pub struct SyncResponse {
 )]
 pub async fn sync_handler(
     State(pool): State<PgPool>,
+    State(embed_tx): State<Option<Sender<Uuid>>>,
     Json(req): Json<SyncRequest>,
 ) -> Result<Json<SyncResponse>, StatusCode> {
     tracing::Span::current().record("device_id", tracing::field::display(req.device_id));
@@ -79,7 +81,7 @@ pub async fn sync_handler(
 
     let pushed = req.entries.len() as u64;
 
-    run_sync(&pool, req)
+    run_sync(&pool, &embed_tx, req)
         .await
         .map(|resp| {
             metrics::counter!("sync_entries_pushed_total").increment(pushed);
@@ -92,9 +94,24 @@ pub async fn sync_handler(
         })
 }
 
-async fn run_sync(pool: &PgPool, req: SyncRequest) -> anyhow::Result<SyncResponse> {
+async fn run_sync(
+    pool: &PgPool,
+    embed_tx: &Option<Sender<Uuid>>,
+    req: SyncRequest,
+) -> anyhow::Result<SyncResponse> {
     if !req.entries.is_empty() {
-        insert_entries(pool, &req.entries).await?;
+        let inserted_ids = insert_entries(pool, &req.entries).await?;
+        if let Some(tx) = embed_tx {
+            for id in inserted_ids {
+                // Never `.send().await`: a full or lagging embedding worker
+                // must not block `/v1/sync` — Capture is the product,
+                // Reflection is a feature on top of it. Dropping a hint
+                // here is safe *because* the `embedding IS NULL` scan
+                // (ADR 0022) is the durable source of truth for what needs
+                // embedding, not this channel.
+                let _ = tx.try_send(id);
+            }
+        }
     }
 
     let entries = fetch_entries_since(pool, req.since_seq).await?;
@@ -113,26 +130,36 @@ async fn acquire_insert_lock(conn: &mut PgConnection) -> sqlx::Result<()> {
     Ok(())
 }
 
-async fn insert_entries(pool: &PgPool, entries: &[EntryInput]) -> anyhow::Result<()> {
+/// Returns the ids that were actually inserted — a replayed Entry that hits
+/// `on conflict (id) do nothing` returns no row from `returning id`, so it's
+/// excluded automatically rather than needing a separate existence check.
+/// The caller uses this to hint the embedding worker only about Entries
+/// that are actually new (see `run_sync`).
+async fn insert_entries(pool: &PgPool, entries: &[EntryInput]) -> anyhow::Result<Vec<Uuid>> {
     let mut tx = pool.begin().await?;
     acquire_insert_lock(&mut tx).await?;
 
+    let mut inserted_ids = Vec::with_capacity(entries.len());
     for entry in entries {
-        sqlx::query(
+        let inserted_id: Option<Uuid> = sqlx::query_scalar(
             "insert into entries (id, device_id, body, created_at)
              values ($1, $2, $3, $4)
-             on conflict (id) do nothing",
+             on conflict (id) do nothing
+             returning id",
         )
         .bind(entry.id)
         .bind(entry.device_id)
         .bind(&entry.body)
         .bind(entry.created_at)
-        .execute(&mut *tx)
+        .fetch_optional(&mut *tx)
         .await?;
+        if let Some(id) = inserted_id {
+            inserted_ids.push(id);
+        }
     }
 
     tx.commit().await?;
-    Ok(())
+    Ok(inserted_ids)
 }
 
 async fn fetch_entries_since(pool: &PgPool, since_seq: i64) -> anyhow::Result<Vec<EntryOutput>> {

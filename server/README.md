@@ -18,6 +18,38 @@ override it if you're running the binary from somewhere else. One process serves
 and the built app on one port — open that port's address from any device on the same network
 (e.g. a phone) to get a working app; no separate web server or CORS configuration needed.
 
+## Reflection: chat and embedding configuration
+
+Both are off by default — see `docs/adr/0021-*` and `docs/adr/0022-*`. Nothing here is required
+to run the server; every variable below is optional, and an unset one means the corresponding
+feature stays off.
+
+| Var | Behaviour |
+|---|---|
+| `MEOLOGUE_CHAT_BASE_URL` | Base URL of an OpenAI-compatible `/chat/completions` endpoint. Unset → Reflection's chat step is off (unused before ticket 4). |
+| `MEOLOGUE_CHAT_MODEL` | Model name sent in the chat request body. Unset → Reflection's chat step is off. |
+| `MEOLOGUE_CHAT_API_KEY` | Optional bearer token, sent only when set. |
+| `MEOLOGUE_EMBED_BASE_URL` | Base URL of an OpenAI-compatible `/embeddings` endpoint. Falls back to `MEOLOGUE_CHAT_BASE_URL` when unset, so one local endpoint can serve both without being configured twice. |
+| `MEOLOGUE_EMBED_MODEL` | Model name sent in the embedding request body. Unset → the background embedding worker never starts. |
+| `MEOLOGUE_EMBED_API_KEY` | Optional bearer token, sent only when set. |
+
+When embedding config is present, the server spawns a background worker on startup that fills
+`entries.embedding` for every Entry, off the request path — `/v1/sync` never calls an LLM. See
+`docs/adr/0022-*` for the queue design, and `src/embedding.rs` for the implementation. A quick
+health check while the worker is running:
+
+```sh
+docker exec meologue-postgres psql -U meologue -d meologue -c \
+  "select count(*) from entries where embedding is null"
+```
+
+That count should trend to zero shortly after startup and stay there; a sustained non-zero count
+either means embedding config is off (expected) or some Entries have hit the worker's retry cap.
+
+Embeddings are expected to stay on a local, tailnet-only model (e.g. Ollama) — see ADR 0021 for
+why pointing `MEOLOGUE_CHAT_BASE_URL` at a hosted provider is the one config choice that sends
+Entry text outside the tailnet, and why that's deliberate rather than accidental.
+
 ## Endpoints
 
 - `GET /v1/health` — a service marker and protocol version, so a Device can tell this is a
