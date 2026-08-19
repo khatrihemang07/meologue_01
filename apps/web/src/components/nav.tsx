@@ -1,13 +1,19 @@
-import { History as HistoryIcon, Settings as SettingsIcon, SquarePen } from "lucide-react";
+import {
+  History as HistoryIcon,
+  Lightbulb,
+  Settings as SettingsIcon,
+  SquarePen,
+} from "lucide-react";
 import { Link, NavLink } from "react-router";
 import { cn } from "@/lib/utils";
 
-// Ticket 54, settling #49's chosen config: exactly two persistent nav
-// destinations, Composer then History — Settings is deliberately not one
-// of them (SettingsLink below). Both are bare route links, not readers of
-// the Entry store, so — like the old SettingsLink — they stay live
-// regardless of whether the store ever opens; every page renders this
-// same Nav through Shell's `nav` prop (composer-page.tsx, history-page.tsx,
+// Ticket 54, settling #49's chosen config, extended by ADR 0020: three
+// persistent nav destinations — Composer, History, then Reflect — Settings
+// is deliberately not one of them (SettingsLink below). All three are bare
+// route links, not readers of the Entry store, so — like the old
+// SettingsLink — they stay live regardless of whether the store ever opens;
+// every page renders this same Nav through Shell's `nav` prop
+// (composer-page.tsx, history-page.tsx, reflection-page.tsx,
 // settings-page.tsx), which is what makes "every page becomes reachable
 // directly" (issue #54) literally true even from Settings.
 //
@@ -19,6 +25,7 @@ import { cn } from "@/lib/utils";
 const DESTINATIONS = [
   { to: "/", label: "Composer", Icon: SquarePen, end: true },
   { to: "/history", label: "History", Icon: HistoryIcon, end: false },
+  { to: "/reflect", label: "Reflect", Icon: Lightbulb, end: false },
 ] as const;
 
 export function Nav() {
@@ -52,12 +59,13 @@ export function Nav() {
 }
 
 // Settings is an app-bar action, not a nav destination (#49's settled
-// config): Material 3 reserves a navigation bar for 3-5 destinations at
-// the same hierarchy level, and Settings is a utility, not a peer of
-// Composer/History — Telegram and Slack both demote settings the same
-// way. Present regardless of Entry store status, same reasoning as Nav
-// above and ADR 0008/0009: Settings must stay reachable and usable even
-// when the store never opens.
+// config, reaffirmed by ADR 0020 when Reflect joined the nav): Material 3
+// reserves a navigation bar for 3-5 destinations at the same hierarchy
+// level, and Settings is a utility, not a peer of Composer/History/Reflect
+// — Telegram and Slack both demote settings the same way. Present
+// regardless of Entry store status, same reasoning as Nav above and ADR
+// 0008/0009: Settings must stay reachable and usable even when the store
+// never opens.
 export function SettingsLink() {
   return (
     <Link

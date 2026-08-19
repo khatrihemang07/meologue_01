@@ -119,12 +119,13 @@ describe("SettingsPage", () => {
     vi.unstubAllGlobals();
   });
 
-  it("renders its title and persistent nav links to Composer and History", () => {
+  it("renders its title and persistent nav links to Composer, History and Reflect", () => {
     renderPage();
 
     expect(screen.getByText("Settings")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Composer" })).toHaveAttribute("href", "/");
     expect(screen.getByRole("link", { name: "History" })).toHaveAttribute("href", "/history");
+    expect(screen.getByRole("link", { name: "Reflect" })).toHaveAttribute("href", "/reflect");
   });
 
   it("marks System as the initially selected theme", () => {

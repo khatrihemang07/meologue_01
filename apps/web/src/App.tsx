@@ -3,6 +3,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { ComposerPage } from "@/pages/composer-page";
 import { EntryStoreLayout } from "@/pages/entry-store-layout";
 import { HistoryPage } from "@/pages/history-page";
+import { ReflectionPage } from "@/pages/reflection-page";
 import { SettingsPage } from "@/pages/settings-page";
 
 // Real paths, not hash routing (ticket 25) — verified safe on all three
@@ -12,10 +13,13 @@ import { SettingsPage } from "@/pages/settings-page";
 // below may ever contain a "." — Capacitor's fallback check treats a dot in
 // the last path segment as a request for a real file, not the app shell.
 //
-// EntryStoreLayout wraps only `/` and `/history` (ticket 27): both read the
-// Entry store and History through it, opened and synced exactly once.
-// Settings is a sibling, not a child of that layout — ADR 0008 requires it
-// to stay usable even when the store never reaches "ready".
+// EntryStoreLayout wraps `/`, `/history` and `/reflect` (ticket 27, extended
+// by ADR 0020): all three read the Entry store and History through it,
+// opened and synced exactly once. Reflect only ever reads Entries
+// (CONTEXT.md), same as History, which is why it belongs inside this layout
+// rather than beside it. Settings is a sibling, not a child of that layout —
+// ADR 0008 requires it to stay usable even when the store never reaches
+// "ready".
 function App() {
   return (
     <BrowserRouter>
@@ -24,6 +28,7 @@ function App() {
         <Route element={<EntryStoreLayout />}>
           <Route path="/" element={<ComposerPage />} />
           <Route path="/history" element={<HistoryPage />} />
+          <Route path="/reflect" element={<ReflectionPage />} />
         </Route>
         <Route path="/settings" element={<SettingsPage />} />
       </Routes>

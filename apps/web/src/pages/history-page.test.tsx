@@ -46,7 +46,7 @@ describe("HistoryPage", () => {
     vi.restoreAllMocks();
   });
 
-  it("renders persistent nav links to Composer and History, plus a Settings action", () => {
+  it("renders persistent nav links to Composer, History and Reflect, plus a Settings action", () => {
     renderHistoryPage({
       entries: [],
       sendEntry: vi.fn(),
@@ -56,11 +56,13 @@ describe("HistoryPage", () => {
 
     expect(screen.getByRole("link", { name: "Composer" })).toHaveAttribute("href", "/");
     expect(screen.getByRole("link", { name: "History" })).toHaveAttribute("href", "/history");
+    expect(screen.getByRole("link", { name: "Reflect" })).toHaveAttribute("href", "/reflect");
     expect(screen.getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings");
   });
 
   // Ticket 54's acceptance criteria: the current destination is visibly
-  // indicated. History is "/history", the page under test.
+  // indicated. History is "/history", the page under test, so Composer's
+  // and Reflect's links (ADR 0020's third destination) don't carry it.
   it("marks History as the current destination in the persistent nav", () => {
     renderHistoryPage({
       entries: [],
@@ -71,6 +73,7 @@ describe("HistoryPage", () => {
 
     expect(screen.getByRole("link", { name: "History" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("link", { name: "Composer" })).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("link", { name: "Reflect" })).not.toHaveAttribute("aria-current");
   });
 
   it("renders History from the outlet context", () => {

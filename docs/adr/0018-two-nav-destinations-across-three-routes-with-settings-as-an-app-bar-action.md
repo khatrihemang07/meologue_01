@@ -7,6 +7,14 @@ Accepted. Partially supersedes the navigation described in [0009](0009-entry-sto
 outside it) stands unchanged and is still load-bearing; only the affordances for moving between
 those routes are replaced.
 
+Partially superseded in turn by [0020](0020-reflection-is-a-third-navigation-destination.md): this
+ADR's exactly-two-destination count no longer holds — Reflection joined Composer and History as a
+third peer inside `EntryStoreLayout`, still within the three-to-five range this ADR itself cited
+from Material 3. Everything else here survives 0020 unchanged and is still load-bearing: Settings
+stays an app-bar action rather than a nav destination, the Composer stays docked to the bottom
+edge, the reading order and its view-only reversal are unchanged, and the day separators still
+group through the same local-day helper Export uses.
+
 ## Context
 
 The app grew its navigation one ticket at a time and never had a layout pass. Every page was a
