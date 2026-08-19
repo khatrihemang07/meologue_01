@@ -3,6 +3,7 @@ pub mod health;
 pub mod llm;
 pub mod metrics;
 pub mod openapi;
+pub mod reflect;
 pub mod sync;
 
 use std::path::Path;
@@ -11,9 +12,9 @@ use std::time::Duration;
 use axum::{
     Router,
     extract::FromRef,
-    http::{HeaderValue, Request, Response, header},
+    http::{HeaderValue, Request, Response, StatusCode, header},
     middleware::Next,
-    routing::{get, post},
+    routing::{any, get, post},
 };
 use sqlx::PgPool;
 use tokio::sync::mpsc::Sender;
@@ -23,15 +24,18 @@ use tower_http::trace::TraceLayer;
 use tracing::field;
 use uuid::Uuid;
 
-/// The router's shared state. `PgPool` and `Option<Sender<Uuid>>` each get
-/// their own `FromRef` impl below, so every existing handler that extracts
-/// `State<PgPool>` keeps compiling unchanged — only `sync_handler` also
-/// extracts the sender, to hint the embedding worker about newly-inserted
-/// Entries (ticket 3 / ADR 0022).
+use crate::reflect::ReflectState;
+
+/// The router's shared state. `PgPool`, `Option<Sender<Uuid>>` and
+/// `Option<ReflectState>` each get their own `FromRef` impl below, so every
+/// existing handler that extracts `State<PgPool>` keeps compiling unchanged
+/// — only `sync_handler` also extracts the sender (ADR 0022), and only
+/// `reflect::reflect_handler` also extracts the Reflection state (ticket 4).
 #[derive(Clone)]
 pub struct AppState {
     pub pool: PgPool,
     pub embed_tx: Option<Sender<Uuid>>,
+    pub reflect: Option<ReflectState>,
 }
 
 impl FromRef<AppState> for PgPool {
@@ -44,6 +48,34 @@ impl FromRef<AppState> for Option<Sender<Uuid>> {
     fn from_ref(state: &AppState) -> Self {
         state.embed_tx.clone()
     }
+}
+
+impl FromRef<AppState> for Option<ReflectState> {
+    fn from_ref(state: &AppState) -> Self {
+        state.reflect.clone()
+    }
+}
+
+/// Answers every otherwise-unmatched path under `/v1/` with a real 404,
+/// instead of letting it fall through to the SPA app shell below. Without
+/// this, an unregistered API path (any typo, or `/v1/reflect` on a server
+/// with no chat model configured) would resolve as "no route matched" and
+/// hit `.fallback_service(app_shell)`, which happily returns 200 with
+/// `index.html` — see `static_serving.rs`'s
+/// `an_unknown_path_falls_back_to_the_app_shell` for why that fallback
+/// exists at all (client-side routes have no file on disk). That's exactly
+/// right for a route like `/history/whatever`, and exactly wrong for an API
+/// path: ticket 4 needs an unconfigured server's `/v1/reflect` to 404 for
+/// real, which is what lets a client tell "this Server predates Reflection"
+/// apart from every other failure. Registered as `/v1/{*rest}` — matchit
+/// (axum's router) always prefers a more specific literal route
+/// (`/v1/health`, `/v1/sync`, `/v1/metrics`, and `/v1/reflect` when
+/// registered) over this wildcard, so a real endpoint's own routing and
+/// method-mismatch behaviour (`the_sync_route_takes_priority_over_static_serving`,
+/// a 405 not a fallthrough) is unaffected — this only ever catches a `/v1/`
+/// path nothing else claimed.
+async fn v1_not_found() -> StatusCode {
+    StatusCode::NOT_FOUND
 }
 
 /// Sets `Cache-Control` on everything the static file service serves, chosen
@@ -114,13 +146,34 @@ pub fn router(pool: PgPool, static_dir: impl AsRef<Path>) -> Router {
 }
 
 /// Same as `router`, but also wires an optional channel the sync handler
-/// uses to hint the embedding worker about Entries it just inserted. This
-/// is what `main.rs` calls; `router` above is the no-worker convenience
-/// wrapper the existing test suite already depends on.
+/// uses to hint the embedding worker about Entries it just inserted.
+/// Delegates to `router_with_reflection` with no Reflection state, so
+/// `/v1/reflect` doesn't exist — the existing test suite (written before
+/// ticket 4) keeps compiling and keeps getting a server with no Reflection
+/// route, exactly as before.
 pub fn router_with_embedding(
     pool: PgPool,
     static_dir: impl AsRef<Path>,
     embed_tx: Option<Sender<Uuid>>,
+) -> Router {
+    router_with_reflection(pool, static_dir, embed_tx, None)
+}
+
+/// Same as `router_with_embedding`, but also wires the Reflection state
+/// (`llm::LlmConfig::reflect_config`) that `reflect::reflect_handler`
+/// needs. This is what `main.rs` calls; the two functions above are
+/// convenience wrappers the existing test suite depends on.
+///
+/// `reflect`'s presence, not any request-time check, is what decides
+/// whether `/v1/reflect` is even registered on this `Router` — see ticket
+/// 4's requirement that an unconfigured server 404s exactly like an older
+/// server that never had the route, and `v1_not_found`'s doc comment for
+/// why that requires more than simply omitting the route.
+pub fn router_with_reflection(
+    pool: PgPool,
+    static_dir: impl AsRef<Path>,
+    embed_tx: Option<Sender<Uuid>>,
+    reflect: Option<ReflectState>,
 ) -> Router {
     // Installs the global metrics recorder (if not already installed) before
     // any request can reach `track_metrics` — see src/metrics.rs.
@@ -161,11 +214,22 @@ pub fn router_with_embedding(
         // rather than duplicating that as a second, contextless line.
         .on_failure(());
 
-    Router::new()
+    let mut api_router = Router::new()
         .route("/v1/health", get(health::health_handler))
         .route("/v1/sync", post(sync::sync_handler))
-        .route("/v1/metrics", get(metrics::metrics_handler))
-        .with_state(AppState { pool, embed_tx })
+        .route("/v1/metrics", get(metrics::metrics_handler));
+
+    if reflect.is_some() {
+        api_router = api_router.route("/v1/reflect", post(reflect::reflect_handler));
+    }
+    // Always registered, whether or not Reflection is configured: this is
+    // what makes an unmatched `/v1/*` path — including `/v1/reflect` when
+    // `reflect` above is `None` — a genuine 404 instead of the SPA
+    // fallback below. See `v1_not_found`'s own doc comment.
+    api_router = api_router.route("/v1/{*rest}", any(v1_not_found));
+
+    api_router
+        .with_state(AppState { pool, embed_tx, reflect })
         .fallback_service(app_shell)
         .layer(axum::middleware::from_fn(metrics::track_metrics))
         .layer(trace_layer)

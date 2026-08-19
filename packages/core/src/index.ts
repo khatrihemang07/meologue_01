@@ -15,3 +15,4 @@ export type { EntryStore } from "./store";
 export type { SyncEngineOptions, SyncTransport } from "./sync-engine";
 export { sync } from "./sync-engine";
 export type { Entry } from "./types";
+export type { WirePriorTurn, WireReflectRequest, WireReflectResponse } from "./wire";

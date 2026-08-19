@@ -23,11 +23,13 @@ async fn main() -> anyhow::Result<()> {
     let pool = PgPoolOptions::new().connect(&database_url).await?;
     sqlx::migrate!().run(&pool).await?;
 
+    let llm_config = llm::LlmConfig::from_env();
+
     // An unset embed model (with no base URL resolvable from either
     // MEOLOGUE_EMBED_BASE_URL or MEOLOGUE_CHAT_BASE_URL) means the
     // embedding worker never starts and the server runs exactly as it does
     // today — see ADR 0021 and `llm::LlmConfig`.
-    let embed_tx = match llm::LlmConfig::from_env().embed_worker_config() {
+    let embed_tx = match llm_config.embed_worker_config() {
         Some((client, model_name)) => {
             let (tx, rx) = tokio::sync::mpsc::channel(256);
             tokio::spawn(embedding::run(pool.clone(), client, model_name, rx, embedding::SCAN_INTERVAL));
@@ -36,8 +38,15 @@ async fn main() -> anyhow::Result<()> {
         None => None,
     };
 
+    // An unset chat base URL/model (or an unresolvable embed config —
+    // Reflection needs both, see `LlmConfig::reflect_config`) means
+    // `/v1/reflect` is never registered at all — ticket 4.
+    let reflect = llm_config
+        .reflect_config()
+        .map(|(chat_client, embed_client)| meologue_server::reflect::ReflectState { chat_client, embed_client });
+
     let static_dir = env::var("STATIC_DIR").unwrap_or_else(|_| DEFAULT_STATIC_DIR.to_string());
-    let app = meologue_server::router_with_embedding(pool, static_dir, embed_tx);
+    let app = meologue_server::router_with_reflection(pool, static_dir, embed_tx, reflect);
 
     let port: u16 = env::var("PORT")
         .ok()

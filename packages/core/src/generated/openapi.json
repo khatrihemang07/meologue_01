@@ -30,6 +30,39 @@
         }
       }
     },
+    "/v1/reflect": {
+      "post": {
+        "tags": [
+          "crate::reflect"
+        ],
+        "operationId": "reflect_handler",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReflectRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "An Answer grounded in the Entries nearest the Question",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReflectResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "protocol_version is not one this server understands"
+          }
+        }
+      }
+    },
     "/v1/sync": {
       "post": {
         "tags": [
@@ -136,6 +169,71 @@
           },
           "service": {
             "type": "string"
+          }
+        }
+      },
+      "PriorTurn": {
+        "type": "object",
+        "description": "One already-answered Question in the Conversation, as the client sends\nit back on every follow-up — see `ReflectRequest::prior_turns`.",
+        "required": [
+          "question",
+          "answer"
+        ],
+        "properties": {
+          "answer": {
+            "type": "string"
+          },
+          "question": {
+            "type": "string"
+          }
+        }
+      },
+      "ReflectRequest": {
+        "type": "object",
+        "required": [
+          "protocol_version",
+          "question",
+          "prior_turns"
+        ],
+        "properties": {
+          "prior_turns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PriorTurn"
+            },
+            "description": "Every prior Question and Answer in this Conversation, oldest first.\nEmpty on the first Question. The server holds no Conversation state\nof its own (see module docs), so this is the only way a follow-up\nQuestion is read \"in the light of the Conversation before it\"\n(CONTEXT.md's own phrase for what a Conversation is)."
+          },
+          "protocol_version": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "question": {
+            "type": "string"
+          }
+        }
+      },
+      "ReflectResponse": {
+        "type": "object",
+        "required": [
+          "answer",
+          "grounding_entry_ids",
+          "grounded"
+        ],
+        "properties": {
+          "answer": {
+            "type": "string"
+          },
+          "grounded": {
+            "type": "boolean",
+            "description": "Whether any Grounding was found at all. In this ticket that's\nexactly \"retrieval returned at least one Entry\" — with 85 embedded\nEntries in the seeded journal this is `true` in ordinary operation,\nand only `false` on a History with literally zero embedded Entries.\nThis is a coarser signal than \"the model believes it answered the\nQuestion\" on purpose: ticket 6 is what adds a real relevance\njudgment (the disclosed fallback), and inventing that distinction\nearly would be building ahead of the ticket that actually needs it."
+          },
+          "grounding_entry_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "The ids of the Entries retrieval found and handed to the chat call,\nin the order they were shown to it (chronological — see\n`chronological_order` below). Ticket 7 is what builds an expandable\ndisclosure UI on top of these ids; this ticket only returns them."
           }
         }
       },

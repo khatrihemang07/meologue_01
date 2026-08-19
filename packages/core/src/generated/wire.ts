@@ -27,6 +27,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/reflect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["reflect_handler"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/sync": {
         parameters: {
             query?: never;
@@ -72,6 +88,48 @@ export interface components {
             protocol_version: number;
             service: string;
         };
+        /**
+         * @description One already-answered Question in the Conversation, as the client sends
+         *     it back on every follow-up — see `ReflectRequest::prior_turns`.
+         */
+        PriorTurn: {
+            answer: string;
+            question: string;
+        };
+        ReflectRequest: {
+            /**
+             * @description Every prior Question and Answer in this Conversation, oldest first.
+             *     Empty on the first Question. The server holds no Conversation state
+             *     of its own (see module docs), so this is the only way a follow-up
+             *     Question is read "in the light of the Conversation before it"
+             *     (CONTEXT.md's own phrase for what a Conversation is).
+             */
+            prior_turns: components["schemas"]["PriorTurn"][];
+            /** Format: int32 */
+            protocol_version: number;
+            question: string;
+        };
+        ReflectResponse: {
+            answer: string;
+            /**
+             * @description Whether any Grounding was found at all. In this ticket that's
+             *     exactly "retrieval returned at least one Entry" — with 85 embedded
+             *     Entries in the seeded journal this is `true` in ordinary operation,
+             *     and only `false` on a History with literally zero embedded Entries.
+             *     This is a coarser signal than "the model believes it answered the
+             *     Question" on purpose: ticket 6 is what adds a real relevance
+             *     judgment (the disclosed fallback), and inventing that distinction
+             *     early would be building ahead of the ticket that actually needs it.
+             */
+            grounded: boolean;
+            /**
+             * @description The ids of the Entries retrieval found and handed to the chat call,
+             *     in the order they were shown to it (chronological — see
+             *     `chronological_order` below). Ticket 7 is what builds an expandable
+             *     disclosure UI on top of these ids; this ticket only returns them.
+             */
+            grounding_entry_ids: string[];
+        };
         SyncRequest: {
             /** Format: uuid */
             device_id: string;
@@ -112,6 +170,37 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HealthResponse"];
                 };
+            };
+        };
+    };
+    reflect_handler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReflectRequest"];
+            };
+        };
+        responses: {
+            /** @description An Answer grounded in the Entries nearest the Question */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReflectResponse"];
+                };
+            };
+            /** @description protocol_version is not one this server understands */
+            426: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

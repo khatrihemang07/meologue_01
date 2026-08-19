@@ -147,8 +147,10 @@ async fn store_embedding(pool: &PgPool, id: Uuid, vector: &[f32], model_name: &s
 /// pgvector's text input format (`[v1,v2,...]`), bound as a plain string and
 /// cast at the call site with `::vector`. Deliberately not the `pgvector`
 /// crate — see ADR 0022: this keeps sqlx 0.9 compatibility simple, and it's
-/// the same shape the `<=>` distance queries a future ticket adds will bind.
-fn vector_literal(vector: &[f32]) -> String {
+/// the same shape the `<=>` distance queries `reflect.rs` binds on the read
+/// side (ticket 4) — `pub(crate)` rather than private for exactly that
+/// reuse, so there is still exactly one place this format is written.
+pub(crate) fn vector_literal(vector: &[f32]) -> String {
     let mut out = String::with_capacity(vector.len() * 8 + 2);
     out.push('[');
     for (i, v) in vector.iter().enumerate() {

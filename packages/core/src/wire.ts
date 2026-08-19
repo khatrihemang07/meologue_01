@@ -5,3 +5,6 @@ export type WireSyncRequest = components["schemas"]["SyncRequest"];
 export type WireSyncResponse = components["schemas"]["SyncResponse"];
 export type WireEntryInput = components["schemas"]["EntryInput"];
 export type WireEntryOutput = components["schemas"]["EntryOutput"];
+export type WirePriorTurn = components["schemas"]["PriorTurn"];
+export type WireReflectRequest = components["schemas"]["ReflectRequest"];
+export type WireReflectResponse = components["schemas"]["ReflectResponse"];

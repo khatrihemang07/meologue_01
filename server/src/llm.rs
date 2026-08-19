@@ -173,7 +173,36 @@ impl LlmClient for OpenAiCompatibleClient {
     }
 
     async fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
-        self.embed(format!("Instruct: {QUERY_INSTRUCTION}\nQuery: {text}")).await
+        self.embed(format!(
+            "Instruct: {QUERY_INSTRUCTION}\nQuery: {}",
+            end_with_sentence_punctuation(text)
+        ))
+        .await
+    }
+}
+
+/// Ensures a Question ends in sentence-final punctuation before it is
+/// embedded.
+///
+/// Harrier pools the **last token** (ADR 0022), so the final character of
+/// the input has outsized influence on the whole vector. Every Entry is
+/// ordinary prose ending in `.`, `?` or `!`, so a Question that stops
+/// mid-phrase is out of distribution against the very things it is being
+/// compared to — and the damage is not subtle. Measured on this corpus:
+/// "What did I write about the wedding" retrieved unrelated running Entries
+/// at 0.357, while the identical text with a "?" retrieved all three real
+/// wedding Entries at 0.677. "Tell me about the wedding" moved 0.346 ->
+/// 0.638 the same way.
+///
+/// A Question mark is the right default rather than a full stop: CONTEXT.md
+/// defines a Question as what the user asks during Reflection, so appending
+/// "?" states what the text already is instead of changing it.
+fn end_with_sentence_punctuation(text: &str) -> String {
+    let trimmed = text.trim_end();
+    if trimmed.ends_with(['?', '.', '!']) {
+        trimmed.to_string()
+    } else {
+        format!("{trimmed}?")
     }
 }
 
@@ -219,5 +248,62 @@ impl LlmConfig {
         let model = self.embed_model.clone()?;
         let client = OpenAiCompatibleClient::new(base_url, model.clone(), self.embed_api_key.clone());
         Some((Arc::new(client), model))
+    }
+
+    /// Builds the two clients ticket 4's `/v1/reflect` route needs — a chat
+    /// client to turn Grounding plus a Question into an Answer, and an embed
+    /// client to turn the Question itself into a vector for retrieval — or
+    /// `None` if the route must not exist at all.
+    ///
+    /// This is deliberately stricter than "chat is configured": Reflection
+    /// cannot retrieve anything without an embed client either (there is no
+    /// way to call `embed_query` without one), so requiring both is what
+    /// makes "the route exists" and "the route can actually answer" the same
+    /// fact, rather than a route that exists but 500s on every call in a
+    /// chat-only-configured deployment. In the documented setup (this
+    /// project's README) both are always configured together, so this is a
+    /// belt-and-suspenders guard for a split configuration than the primary
+    /// on/off switch, which — per ADR 0021 — is `MEOLOGUE_CHAT_BASE_URL`/
+    /// `MEOLOGUE_CHAT_MODEL`.
+    pub fn reflect_config(&self) -> Option<(Arc<dyn LlmClient + Send + Sync>, Arc<dyn LlmClient + Send + Sync>)> {
+        let chat_base_url = self.chat_base_url.clone()?;
+        let chat_model = self.chat_model.clone()?;
+        let chat_client: Arc<dyn LlmClient + Send + Sync> = Arc::new(OpenAiCompatibleClient::new(
+            chat_base_url,
+            chat_model,
+            self.chat_api_key.clone(),
+        ));
+
+        let (embed_client, _model_name) = self.embed_worker_config()?;
+
+        Some((chat_client, embed_client))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::end_with_sentence_punctuation;
+
+    #[test]
+    fn a_question_without_punctuation_gains_a_question_mark() {
+        assert_eq!(
+            end_with_sentence_punctuation("What did I write about the wedding"),
+            "What did I write about the wedding?"
+        );
+    }
+
+    #[test]
+    fn existing_sentence_punctuation_is_left_alone() {
+        for already in ["Did it stop me running?", "Tell me about the move.", "Wow!"] {
+            assert_eq!(end_with_sentence_punctuation(already), already);
+        }
+    }
+
+    #[test]
+    fn trailing_whitespace_does_not_hide_existing_punctuation() {
+        // Without trimming first, "How did it go?  " would be seen as
+        // ending in a space and pick up a second, spurious "?".
+        assert_eq!(end_with_sentence_punctuation("How did it go?  "), "How did it go?");
+        assert_eq!(end_with_sentence_punctuation("How did it go  "), "How did it go?");
     }
 }
