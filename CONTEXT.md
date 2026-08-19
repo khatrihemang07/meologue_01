@@ -73,6 +73,36 @@ only needs to ask for what came after.
 The thing a Device Syncs through. Every Device exchanges Entries with the Server rather than with
 other Devices directly.
 
+### Reflection
+
+Asking a question of your own History and getting an answer drawn from it. Reflection names the
+view, the way Composer and History do — not the act of asking, which is a Question. Reflection
+only ever reads Entries; it never creates one.
+
+### Question
+
+One thing the user asks during Reflection. A Question is not an Entry: it is never added to
+History, never Synced, and it is not the user capturing a thought — it is the user interrogating
+the thoughts they already captured.
+
+### Answer
+
+What Reflection gives back in response to a Question, drawn from the Grounding it found. An
+Answer is not an Entry either — it is not the user's own words, and it never enters History.
+
+### Conversation
+
+The running sequence of Questions and Answers on one Device. Each Question is read in the light
+of the Conversation before it, so a follow-up can lean on what was already asked without
+repeating it. A Conversation belongs to the Device it happened on and does not Sync.
+
+### Grounding
+
+The Entries Reflection found relevant to a Question and used as the basis for its Answer.
+Grounding always comes from the user's own History. An Answer with no Grounding behind it says
+so plainly rather than filling the gap from somewhere else — a Reflection that invents a past
+the user did not live is worse than one that admits it found nothing.
+
 ## Terms we avoid
 
 ### "message"
@@ -80,6 +110,10 @@ other Devices directly.
 A message implies an addressee — someone or something it is sent *to*. An Entry has no
 recipient; it is captured for the user's own History, not sent to anyone. Don't use "message"
 for an Entry, even informally.
+
+This holds inside Reflection too, where the pull is strongest: a Conversation is made of
+Questions and Answers, never of messages. Every chat interface in the world calls them messages,
+which is exactly why it is worth refusing here — a Question has no addressee either.
 
 ### "note"
 
