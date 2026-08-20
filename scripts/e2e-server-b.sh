@@ -13,4 +13,9 @@ docker compose up -d --wait postgres-e2e-b
 
 cd server
 export DATABASE_URL="${DATABASE_URL:-postgres://meologue:meologue@localhost:5433/meologue}"
+# Deliberately no MEOLOGUE_CHAT_*/MEOLOGUE_EMBED_* here (unlike
+# scripts/e2e-server.sh, issue #67): reflection.spec.ts only ever asks
+# through server A, so server B keeps 404ing on /v1/reflect and
+# /v1/sessions exactly as it did before Reflection existed — giving it the
+# same routes as A would just be an unused second copy.
 exec cargo run

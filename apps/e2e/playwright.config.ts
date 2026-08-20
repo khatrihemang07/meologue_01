@@ -1,6 +1,13 @@
 import path from "node:path";
 import { defineConfig, devices } from "@playwright/test";
-import { SERVER_A_PORT, SERVER_A_URL, SERVER_B_PORT, SERVER_B_URL } from "./servers";
+import {
+  LLM_STUB_PORT,
+  LLM_STUB_URL,
+  SERVER_A_PORT,
+  SERVER_A_URL,
+  SERVER_B_PORT,
+  SERVER_B_URL,
+} from "./servers";
 import { serverUrlStorageState } from "./tests/helpers";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..");
@@ -28,6 +35,20 @@ export default defineConfig({
   // its page. Playwright starts both and waits for each to answer its own
   // readiness URL before running any test.
   webServer: [
+    {
+      // issue #67: a deterministic OpenAI-compatible double for Reflection's
+      // chat/embedding calls — see llm-stub.ts. Started before server A
+      // (order matters here: server A's own MEOLOGUE_CHAT_*/MEOLOGUE_EMBED_*
+      // point at this address) so `/v1/reflect` and `/v1/sessions` are
+      // already registered by the time server A answers its own readiness
+      // check below.
+      command: "node apps/e2e/llm-stub.ts",
+      cwd: repoRoot,
+      env: { PORT: String(LLM_STUB_PORT) },
+      url: `${LLM_STUB_URL}/health`,
+      timeout: 30_000,
+      reuseExistingServer: !process.env.CI,
+    },
     {
       command: "bash scripts/e2e-server.sh",
       cwd: repoRoot,
