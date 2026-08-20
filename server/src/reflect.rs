@@ -445,63 +445,59 @@ async fn run_reflect(
         }
     };
 
-    if grounded {
-        return Ok(ReflectResponse {
-            answer,
-            grounding_entry_ids,
-            grounded: true,
-            fallback_used: false,
-        });
-    }
-
-    // Reflection judged its own Grounding didn't answer the Question. The
-    // disclosed fallback (docs/adr/0024): show what the user actually wrote
-    // in the last FALLBACK_WINDOW_DAYS days instead of a wrong-but-confident
-    // Answer built on Entries that merely shared a mood or a phrase with the
-    // Question. This never merges into Grounding above and only ever runs
-    // after a "no" verdict — it is a disclosed fallback, not a fourth
-    // retrieval source.
-    let now = Utc::now();
-    let mut recent = retrieve_range(
-        pool,
-        now - Duration::days(FALLBACK_WINDOW_DAYS),
-        now,
-        RETRIEVAL_LIMIT,
-    )
-    .await
-    .context("fallback range retrieval failed")?;
-    recent.sort_by_key(|entry| entry.created_at);
-
-    if recent.is_empty() {
-        // Nothing to disclose either — keep the model's own "I found
-        // nothing" Answer from the first call rather than spending a third
-        // chat call on an empty result.
-        return Ok(ReflectResponse {
-            answer,
-            grounding_entry_ids: Vec::new(),
-            grounded: false,
-            fallback_used: false,
-        });
-    }
-
-    let fallback_ids: Vec<Uuid> = recent.iter().map(|entry| entry.id).collect();
-    let fallback_messages = build_messages(
-        FALLBACK_SYSTEM_INSTRUCTION,
-        &recent,
-        &req.prior_turns,
-        &req.question,
-    );
-    let fallback_answer = reflect
-        .chat_client
-        .chat(&fallback_messages)
+    // The four ways this function can end (this success match, its two
+    // nested arms below, plus the `?`-propagated error paths above) all
+    // funnel through the single `Ok(ReflectResponse { .. })` construction at
+    // the bottom of this function instead of each returning early with their
+    // own hand-assembled response — see `docs/adr/0024` and ticket 6.
+    let (answer, grounding_entry_ids, grounded, fallback_used) = if grounded {
+        (answer, grounding_entry_ids, true, false)
+    } else {
+        // Reflection judged its own Grounding didn't answer the Question. The
+        // disclosed fallback (docs/adr/0024): show what the user actually wrote
+        // in the last FALLBACK_WINDOW_DAYS days instead of a wrong-but-confident
+        // Answer built on Entries that merely shared a mood or a phrase with the
+        // Question. This never merges into Grounding above and only ever runs
+        // after a "no" verdict — it is a disclosed fallback, not a fourth
+        // retrieval source.
+        let now = Utc::now();
+        let mut recent = retrieve_range(
+            pool,
+            now - Duration::days(FALLBACK_WINDOW_DAYS),
+            now,
+            RETRIEVAL_LIMIT,
+        )
         .await
-        .context("fallback chat call failed")?;
+        .context("fallback range retrieval failed")?;
+        recent.sort_by_key(|entry| entry.created_at);
+
+        if recent.is_empty() {
+            // Nothing to disclose either — keep the model's own "I found
+            // nothing" Answer from the first call rather than spending a third
+            // chat call on an empty result.
+            (answer, Vec::new(), false, false)
+        } else {
+            let fallback_ids: Vec<Uuid> = recent.iter().map(|entry| entry.id).collect();
+            let fallback_messages = build_messages(
+                FALLBACK_SYSTEM_INSTRUCTION,
+                &recent,
+                &req.prior_turns,
+                &req.question,
+            );
+            let fallback_answer = reflect
+                .chat_client
+                .chat(&fallback_messages)
+                .await
+                .context("fallback chat call failed")?;
+            (fallback_answer, fallback_ids, false, true)
+        }
+    };
 
     Ok(ReflectResponse {
-        answer: fallback_answer,
-        grounding_entry_ids: fallback_ids,
-        grounded: false,
-        fallback_used: true,
+        answer,
+        grounding_entry_ids,
+        grounded,
+        fallback_used,
     })
 }
 
