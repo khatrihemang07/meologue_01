@@ -31,25 +31,46 @@ function GivenAnswer({ text }: { text: string }) {
   return <p className="mr-auto max-w-[85%] whitespace-pre-wrap text-sm text-foreground">{text}</p>;
 }
 
+// An explicit note per turn, independent of the Answer's own wording — the
+// point of ticket 6 (docs/adr/0024) is that the user can tell a real Answer
+// from a confident wrong one without trusting how the model phrased itself.
+// `grounded` (the server judged its Grounding actually answered the
+// Question) renders no note at all; the other two states render a short
+// caption in CONTEXT.md's own vocabulary (History, Question, Entries),
+// matching the muted-caption styling already used elsewhere on this page.
+function GroundingNote({ turn }: { turn: ConversationTurn }) {
+  if (turn.grounded) {
+    return null;
+  }
+  return (
+    <p className="mr-auto text-xs text-muted-foreground">
+      {turn.fallbackUsed
+        ? "Nothing in your History matched this Question — this is what you wrote in the last few days."
+        : "Nothing in your History matched this Question."}
+    </p>
+  );
+}
+
 function ConversationTurnRow({ turn }: { turn: ConversationTurn }) {
   return (
     <div className="flex flex-col gap-2">
       <AskedQuestion text={turn.question} />
       <GivenAnswer text={turn.answer} />
+      <GroundingNote turn={turn} />
     </div>
   );
 }
 
-// `/reflect` — the third peer view of History (ADR 0020). This ticket is
-// the first to give Reflection its asking-and-answering loop: a Question
-// typed here comes back as an Answer grounded in the Entries retrieval
-// found — the server fans a Question out across three retrievals (ticket
-// 5, ADR 0023), so this page's own job stays the same as ticket 4 left it:
-// post the Question, the Conversation so far, and this Device's UTC offset,
-// then render whatever comes back. A later ticket adds a disclosed
-// fallback on top of this. Reflect still gates on Sync being on, for the
-// same reason ticket 2 already established: retrieval and inference run on
-// the Server, over Entries Sync put there.
+// `/reflect` — the third peer view of History (ADR 0020). Ticket 4 gave
+// Reflection its asking-and-answering loop; ticket 5 widened retrieval into
+// a three-source fan-out (ADR 0023). Ticket 6 (ADR 0024) is what makes this
+// page render an explicit note — independent of the Answer's own wording —
+// when the server judged its Grounding didn't answer the Question, so this
+// page's own job stays the same as before: post the Question, the
+// Conversation so far, and this Device's UTC offset, then render whatever
+// comes back, plus a `GroundingNote` per turn. Reflect still gates on Sync
+// being on, for the same reason ticket 2 already established: retrieval and
+// inference run on the Server, over Entries Sync put there.
 export function ReflectionPage() {
   const syncEnabled = useSyncEnabled();
   const turns = useConversationStore((state) => state.turns);
@@ -105,6 +126,7 @@ export function ReflectionPage() {
         answer: result.response.answer,
         groundingEntryIds: result.response.grounding_entry_ids,
         grounded: result.response.grounded,
+        fallbackUsed: result.response.fallback_used,
       });
     } else {
       // A Question that failed goes back into the composer rather than

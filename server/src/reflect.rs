@@ -1,11 +1,13 @@
 //! `POST /v1/reflect` — ticket 4 made a Question become an Answer with a
-//! single vector search; ticket 5 (this one) widens retrieval into the
-//! fixed three-source fan-out `docs/adr/0023` settles: an extraction chat
-//! call finds a date range and/or a keyword hiding in the Question, three
+//! single vector search; ticket 5 widened retrieval into the fixed
+//! three-source fan-out `docs/adr/0023` settles: an extraction chat call
+//! finds a date range and/or a keyword hiding in the Question, three
 //! retrievals run concurrently, and the results are merged, deduped, capped
 //! and reordered before the second chat call turns them into an Answer.
-//! Ticket 6 adds a disclosed fallback when nothing is found — not built
-//! here.
+//! Ticket 6 (this one, `docs/adr/0024`) is what makes that second chat call
+//! *judge* whether the Grounding it was given actually answers the
+//! Question, and adds the disclosed fallback (the last few days of Entries,
+//! shown but not claimed as an Answer) for when it doesn't.
 //!
 //! Stateless on the server: the whole Conversation the client knows about
 //! round-trips as `prior_turns` on every request, matching ADR 0020's "a
@@ -68,6 +70,17 @@ pub const MIN_SIMILARITY: f64 = 0.60;
 const MIN_UTC_OFFSET_MINUTES: i32 = -840;
 const MAX_UTC_OFFSET_MINUTES: i32 = 840;
 
+/// How many days back the disclosed fallback (`run_reflect`) looks when
+/// Reflection judges its own Grounding as not answering the Question —
+/// `docs/adr/0024`. A rolling `Utc::now() - FALLBACK_WINDOW_DAYS .. Utc::now()`
+/// window, deliberately not the local-calendar-day machinery
+/// `local_date_range_to_utc` gives the *extracted* range above: this window
+/// answers "what have you written lately", not a date the user named, so
+/// there is no local day to align to — recency relative to right now is
+/// exactly what's wanted, and it is the same for every asking Device
+/// regardless of `utc_offset_minutes`.
+const FALLBACK_WINDOW_DAYS: i64 = 3;
+
 /// One already-answered Question in the Conversation, as the client sends
 /// it back on every follow-up — see `ReflectRequest::prior_turns`.
 #[derive(Debug, Deserialize, ToSchema)]
@@ -108,17 +121,45 @@ pub struct ReflectRequest {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ReflectResponse {
     pub answer: String,
-    /// The ids of the Entries retrieval found and handed to the chat call,
-    /// in the order they were shown to it (chronological — see
-    /// `chronological_order` below). Ticket 7 is what builds an expandable
-    /// disclosure UI on top of these ids; this ticket only returns them.
+    /// The ids of the Entries the Answer was actually built from, in the
+    /// order they were shown to the chat call (chronological — see
+    /// `run_reflect`'s `merged.sort_by_key`).
+    ///
+    /// In the normal case these are Grounding: the merged three-source
+    /// fan-out (`docs/adr/0023`), judged (`grounded`, below) to actually
+    /// answer the Question. In the disclosed-fallback case
+    /// (`fallback_used: true`) these are instead the last few days of
+    /// Entries (`docs/adr/0024`) — shown despite *not* answering the
+    /// Question, because CONTEXT.md's Grounding entry holds that admitting
+    /// nothing was found beats inventing an Answer from somewhere else.
+    /// `grounded: false` is what tells a reader — ticket 7's disclosure UI
+    /// included — that these ids are not relevant matches; this field alone
+    /// (non-empty or not) cannot tell the two cases apart.
     pub grounding_entry_ids: Vec<Uuid>,
-    /// Whether any Grounding was found at all — exactly "the merged set
-    /// (see `run_reflect`) is non-empty". Ticket 6 is what adds a real
-    /// relevance judgment (the disclosed fallback) and a `fallback_used`
-    /// field; inventing that distinction early would be building ahead of
-    /// the ticket that actually needs it, so it is deliberately not here.
+    /// Whether Reflection judged that the Grounding it found actually
+    /// answers the Question — read off the "GROUNDED: yes"/"GROUNDED: no"
+    /// marker the answering chat call is now instructed to begin its reply
+    /// with (`SYSTEM_INSTRUCTION`, `parse_and_strip_verdict`), not from
+    /// retrieval.
+    ///
+    /// Through ticket 5 this meant something else entirely: "the merged
+    /// fan-out retrieval set (see `run_reflect`) is non-empty." `docs/adr/
+    /// 0023` measured why that stopped being a meaningful signal on a
+    /// realistic History — on the live 572-Entry corpus, an absent topic
+    /// ("my cat", cosine 0.691) can outscore a present one ("the wedding",
+    /// 0.638), so the merged set is non-empty for essentially every
+    /// Question and the old `grounded` was true almost unconditionally.
+    /// `docs/adr/0024` is what moved the judgment onto the chat call
+    /// itself, which actually reads what it was given, instead of a cosine
+    /// floor that can't tell "relevant" from "large corpus."
     pub grounded: bool,
+    /// Whether the disclosed fallback (`docs/adr/0024`) ran: Reflection
+    /// judged its Grounding didn't answer the Question (`grounded: false`)
+    /// *and* Entries existed in the last few days to show instead. `false`
+    /// covers both "the Grounding answered the Question" (`grounded: true`)
+    /// and "it didn't, and there was nothing recent to show either" —
+    /// `grounded` is what tells those two `false` cases apart.
+    pub fallback_used: bool,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -154,13 +195,41 @@ pub struct ReflectState {
     pub embed_client: Arc<dyn LlmClient + Send + Sync>,
 }
 
+/// The answering call's system prompt (chat call 2). `docs/adr/0024`: this
+/// is also where the relevance verdict now comes from — the reply must
+/// *begin* with a "GROUNDED: yes"/"GROUNDED: no" marker line
+/// (`parse_and_strip_verdict` reads it back out, and strips it before the
+/// Answer ever reaches the client) — folded into this existing call rather
+/// than spent on a third one, because the endpoint this ticket talks to
+/// costs ~7s per call and Reflection is already two calls deep.
 const SYSTEM_INSTRUCTION: &str = "You are Reflection, part of meologue, a personal journal. \
 A user is asking a Question about their own journal Entries. Below, under \"Grounding\", are the \
 journal Entries retrieval found most relevant to the Question, each labelled with the date it was \
-written. Answer the Question using only what these Entries say. If the Entries don't contain \
+written. Your reply must begin with exactly one line, on its own: either \"GROUNDED: yes\" or \
+\"GROUNDED: no\". Answer \"GROUNDED: yes\" only if the Grounding actually contains enough to answer \
+the Question — an Entry that merely shares a mood or a turn of phrase with the Question is not an \
+answer to it. Answer \"GROUNDED: no\" if the Grounding does not answer the Question. After that \
+marker line, answer the Question using only what these Entries say. If the Entries don't contain \
 enough to answer the Question, say so plainly instead of guessing or inventing anything — a \
 Reflection that invents a past the user did not live is worse than one that admits it found \
 nothing. Speak directly to the user in the second person, in a few sentences of plain prose.";
+
+/// The disclosed-fallback answering call's system prompt (`docs/adr/0024`)
+/// — used only after the *first* answering call's own "GROUNDED: no"
+/// verdict, and only when Entries exist in the last `FALLBACK_WINDOW_DAYS`
+/// days to show. Unlike `SYSTEM_INSTRUCTION`, this call takes no verdict
+/// marker: its verdict is already known (`grounded: false`), so
+/// `run_reflect` never runs this response through `parse_and_strip_verdict`
+/// at all. "nothing matching the Question was found" is deliberately
+/// specific wording, distinct enough from `SYSTEM_INSTRUCTION`'s own prose
+/// that a test double can tell the two calls apart by content alone.
+const FALLBACK_SYSTEM_INSTRUCTION: &str = "You are Reflection, part of meologue, a personal \
+journal. Nothing in the user's journal answered their Question. Below, under \"Grounding\", are \
+the Entries the user wrote in the last few days — they were not judged relevant to the Question, \
+only recent. Begin your reply by saying plainly that nothing matching the Question was found in \
+their journal, then briefly describe what they have been writing about in the last few days, \
+using only these Entries. Do not imply these Entries answer the Question. Speak directly to the \
+user in the second person, in a few sentences of plain prose.";
 
 #[utoipa::path(
     post,
@@ -292,19 +361,88 @@ async fn run_reflect(
     merged.sort_by_key(|entry| entry.created_at);
 
     let grounding_entry_ids: Vec<Uuid> = merged.iter().map(|entry| entry.id).collect();
-    let grounded = !merged.is_empty();
 
-    let messages = build_messages(&merged, &req.prior_turns, &req.question);
-    let answer = reflect
+    let messages = build_messages(SYSTEM_INSTRUCTION, &merged, &req.prior_turns, &req.question);
+    let raw_answer = reflect
         .chat_client
         .chat(&messages)
         .await
         .context("chat call failed")?;
+    let (verdict, answer) = parse_and_strip_verdict(&raw_answer);
+    let grounded = match verdict {
+        Some(verdict) => verdict,
+        None => {
+            // A missing or unrecognised marker must never *narrow* what the
+            // Question gets — the opposite default would fire the fallback
+            // (and its extra chat call) on every response that merely
+            // forgot the marker. Defaulting to grounded degrades exactly to
+            // ticket 5's behaviour: an Answer straight from this call, no
+            // fallback, `grounded: true`.
+            tracing::warn!(
+                answer = %raw_answer,
+                "no GROUNDED marker found in the answering call's response; defaulting to grounded"
+            );
+            true
+        }
+    };
+
+    if grounded {
+        return Ok(ReflectResponse {
+            answer,
+            grounding_entry_ids,
+            grounded: true,
+            fallback_used: false,
+        });
+    }
+
+    // Reflection judged its own Grounding didn't answer the Question. The
+    // disclosed fallback (docs/adr/0024): show what the user actually wrote
+    // in the last FALLBACK_WINDOW_DAYS days instead of a wrong-but-confident
+    // Answer built on Entries that merely shared a mood or a phrase with the
+    // Question. This never merges into Grounding above and only ever runs
+    // after a "no" verdict — it is a disclosed fallback, not a fourth
+    // retrieval source.
+    let now = Utc::now();
+    let mut recent = retrieve_range(
+        pool,
+        now - Duration::days(FALLBACK_WINDOW_DAYS),
+        now,
+        RETRIEVAL_LIMIT,
+    )
+    .await
+    .context("fallback range retrieval failed")?;
+    recent.sort_by_key(|entry| entry.created_at);
+
+    if recent.is_empty() {
+        // Nothing to disclose either — keep the model's own "I found
+        // nothing" Answer from the first call rather than spending a third
+        // chat call on an empty result.
+        return Ok(ReflectResponse {
+            answer,
+            grounding_entry_ids: Vec::new(),
+            grounded: false,
+            fallback_used: false,
+        });
+    }
+
+    let fallback_ids: Vec<Uuid> = recent.iter().map(|entry| entry.id).collect();
+    let fallback_messages = build_messages(
+        FALLBACK_SYSTEM_INSTRUCTION,
+        &recent,
+        &req.prior_turns,
+        &req.question,
+    );
+    let fallback_answer = reflect
+        .chat_client
+        .chat(&fallback_messages)
+        .await
+        .context("fallback chat call failed")?;
 
     Ok(ReflectResponse {
-        answer,
-        grounding_entry_ids,
-        grounded,
+        answer: fallback_answer,
+        grounding_entry_ids: fallback_ids,
+        grounded: false,
+        fallback_used: true,
     })
 }
 
@@ -590,14 +728,80 @@ fn extract_json_object(text: &str) -> Option<&str> {
     Some(&text[start..=end])
 }
 
+/// The characters treated as markdown noise around the verdict marker line
+/// — asterisks/underscores for bold or italic, backticks for inline code,
+/// `#` for a heading. A model that wraps "GROUNDED: no" in any of these
+/// must still be recognised — see `parse_and_strip_verdict`.
+const MARKER_NOISE_CHARS: [char; 4] = ['*', '_', '`', '#'];
+
+/// Reads the "GROUNDED: yes"/"GROUNDED: no" verdict marker
+/// (`SYSTEM_INSTRUCTION`) off the front of the answering chat call's raw
+/// response, and returns the Answer with that marker line removed — the
+/// marker must never reach the client: the Answer the client stores becomes
+/// a `prior_turn` on the next Question (see `ReflectRequest::prior_turns`),
+/// so a leaked marker would poison the Conversation.
+///
+/// Matches the *first non-empty* line, case-insensitively, after stripping
+/// `MARKER_NOISE_CHARS` and surrounding whitespace — tolerant of a model
+/// that wraps the marker in markdown (`**GROUNDED: no**`,
+/// `` `GROUNDED: NO` ``, `# Grounded: Yes`) rather than sending the bare
+/// line the prompt asked for.
+///
+/// Returns `(None, raw unchanged)` when that first non-empty line isn't a
+/// recognised marker at all (missing entirely, or something else). This is
+/// the *only* failure mode — unlike `parse_extraction`, there is no
+/// "mostly parses, one field is bad" case here, since a verdict is a single
+/// yes/no rather than a structured JSON object. `run_reflect` is what
+/// decides what a `None` degrades to (grounded, by default) and why.
+fn parse_and_strip_verdict(raw: &str) -> (Option<bool>, String) {
+    let mut lines_consumed = 0usize;
+    let mut marker_line: Option<&str> = None;
+    for line in raw.lines() {
+        lines_consumed += 1;
+        if !line.trim().is_empty() {
+            marker_line = Some(line);
+            break;
+        }
+    }
+
+    let Some(line) = marker_line else {
+        return (None, raw.to_string());
+    };
+
+    let normalized: String = line
+        .chars()
+        .filter(|c| !MARKER_NOISE_CHARS.contains(c))
+        .collect::<String>()
+        .trim()
+        .to_lowercase();
+
+    let verdict = match normalized.as_str() {
+        "grounded: yes" => Some(true),
+        "grounded: no" => Some(false),
+        _ => None,
+    };
+
+    let Some(verdict) = verdict else {
+        return (None, raw.to_string());
+    };
+
+    let rest: String = raw
+        .lines()
+        .skip(lines_consumed)
+        .collect::<Vec<_>>()
+        .join("\n");
+    (Some(verdict), rest.trim_start().to_string())
+}
+
 fn build_messages(
+    system_instruction: &str,
     entries: &[GroundingEntry],
     prior_turns: &[PriorTurn],
     question: &str,
 ) -> Vec<ChatMessage> {
     let mut messages = vec![ChatMessage {
         role: "system".to_string(),
-        content: SYSTEM_INSTRUCTION.to_string(),
+        content: system_instruction.to_string(),
     }];
 
     let grounding_block = if entries.is_empty() {
@@ -638,8 +842,8 @@ mod tests {
     use chrono::NaiveDate;
 
     use super::{
-        extract_json_object, keyword_query, local_date_range_to_utc, local_today, parse_extraction,
-        strip_code_fences,
+        extract_json_object, keyword_query, local_date_range_to_utc, local_today,
+        parse_and_strip_verdict, parse_extraction, strip_code_fences,
     };
 
     #[test]
@@ -795,4 +999,61 @@ mod tests {
     }
 
     const MAX_OFFSET_MINUTES_FOR_TEST: i32 = 840;
+
+    // -------------------------------------------------------------------
+    // Ticket 6 — parse_and_strip_verdict (docs/adr/0024)
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn a_clean_grounded_yes_marker_is_parsed_and_stripped() {
+        let (verdict, answer) = parse_and_strip_verdict("GROUNDED: yes\nYour knee has improved.");
+        assert_eq!(verdict, Some(true));
+        assert_eq!(answer, "Your knee has improved.");
+    }
+
+    #[test]
+    fn a_clean_grounded_no_marker_is_parsed_and_stripped() {
+        let (verdict, answer) =
+            parse_and_strip_verdict("GROUNDED: no\nI found nothing about that.");
+        assert_eq!(verdict, Some(false));
+        assert_eq!(answer, "I found nothing about that.");
+    }
+
+    #[test]
+    fn markdown_bold_and_case_noise_around_the_marker_is_tolerated() {
+        let (verdict, answer) = parse_and_strip_verdict("  **grounded: NO**  \n\nNothing found.");
+        assert_eq!(verdict, Some(false));
+        assert_eq!(answer, "Nothing found.");
+    }
+
+    #[test]
+    fn a_backtick_and_heading_wrapped_marker_is_tolerated() {
+        let (verdict, answer) = parse_and_strip_verdict("# `GROUNDED: YES`\nHere you go.");
+        assert_eq!(verdict, Some(true));
+        assert_eq!(answer, "Here you go.");
+    }
+
+    #[test]
+    fn no_marker_at_all_leaves_the_answer_unchanged() {
+        let raw = "Your knee has improved since February.";
+        let (verdict, answer) = parse_and_strip_verdict(raw);
+        assert_eq!(verdict, None);
+        assert_eq!(answer, raw);
+    }
+
+    #[test]
+    fn an_unrecognised_first_line_is_not_treated_as_a_marker() {
+        let raw = "Sure, here's your answer:\nIt went well.";
+        let (verdict, answer) = parse_and_strip_verdict(raw);
+        assert_eq!(verdict, None);
+        assert_eq!(answer, raw);
+    }
+
+    #[test]
+    fn the_stripped_answer_never_contains_the_marker_string() {
+        let (_, yes_answer) = parse_and_strip_verdict("GROUNDED: yes\nAll good here.");
+        assert!(!yes_answer.contains("GROUNDED:"));
+        let (_, no_answer) = parse_and_strip_verdict("**grounded: no**\nNothing found.");
+        assert!(!no_answer.contains("GROUNDED:"));
+    }
 }

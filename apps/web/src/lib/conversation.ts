@@ -20,10 +20,25 @@ import { create } from "zustand";
 export interface ConversationTurn {
   question: string;
   answer: string;
-  /** The Entry ids Reflection's retrieval used to ground this Answer, in the order the server returned them. */
+  /**
+   * The Entry ids the Answer was actually built from, in the order the server returned them. When
+   * `fallbackUsed` is true these are the last few days of Entries (see `fallbackUsed`), not
+   * Grounding the server judged relevant.
+   */
   groundingEntryIds: string[];
-  /** Whether the server found any Grounding at all for this turn — see `WireReflectResponse.grounded`. */
+  /**
+   * Whether the server judged that the Grounding it found actually answers the Question — see
+   * `WireReflectResponse.grounded`. `false` covers both "nothing recent to show either" and
+   * "here's what you wrote lately instead" (`fallbackUsed` tells those two apart).
+   */
   grounded: boolean;
+  /**
+   * Whether the server's disclosed fallback ran for this turn: it judged its Grounding didn't
+   * answer the Question and showed the last few days of Entries instead, rather than an Answer
+   * built on Entries that only shared a mood or a phrase with the Question — see
+   * `WireReflectResponse.fallback_used` and CONTEXT.md's Grounding entry.
+   */
+  fallbackUsed: boolean;
 }
 
 interface ConversationState {

@@ -16,6 +16,7 @@ describe("useConversationStore", () => {
       answer: "It's been improving since February.",
       groundingEntryIds: ["entry-1", "entry-2"],
       grounded: true,
+      fallbackUsed: false,
     });
 
     expect(useConversationStore.getState().turns).toEqual([
@@ -24,6 +25,27 @@ describe("useConversationStore", () => {
         answer: "It's been improving since February.",
         groundingEntryIds: ["entry-1", "entry-2"],
         grounded: true,
+        fallbackUsed: false,
+      },
+    ]);
+  });
+
+  it("carries fallbackUsed for a turn where the server showed recent Entries instead of an Answer", () => {
+    useConversationStore.getState().addTurn({
+      question: "Anything about scuba diving?",
+      answer: "Nothing matched, but here's what you wrote lately.",
+      groundingEntryIds: ["entry-3"],
+      grounded: false,
+      fallbackUsed: true,
+    });
+
+    expect(useConversationStore.getState().turns).toEqual([
+      {
+        question: "Anything about scuba diving?",
+        answer: "Nothing matched, but here's what you wrote lately.",
+        groundingEntryIds: ["entry-3"],
+        grounded: false,
+        fallbackUsed: true,
       },
     ]);
   });
@@ -34,12 +56,14 @@ describe("useConversationStore", () => {
       answer: "first answer",
       groundingEntryIds: [],
       grounded: false,
+      fallbackUsed: false,
     });
     useConversationStore.getState().addTurn({
       question: "second question",
       answer: "second answer",
       groundingEntryIds: [],
       grounded: false,
+      fallbackUsed: false,
     });
 
     const { turns } = useConversationStore.getState();

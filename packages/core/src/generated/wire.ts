@@ -131,18 +131,48 @@ export interface components {
         ReflectResponse: {
             answer: string;
             /**
-             * @description Whether any Grounding was found at all — exactly "the merged set
-             *     (see `run_reflect`) is non-empty". Ticket 6 is what adds a real
-             *     relevance judgment (the disclosed fallback) and a `fallback_used`
-             *     field; inventing that distinction early would be building ahead of
-             *     the ticket that actually needs it, so it is deliberately not here.
+             * @description Whether the disclosed fallback (`docs/adr/0024`) ran: Reflection
+             *     judged its Grounding didn't answer the Question (`grounded: false`)
+             *     *and* Entries existed in the last few days to show instead. `false`
+             *     covers both "the Grounding answered the Question" (`grounded: true`)
+             *     and "it didn't, and there was nothing recent to show either" —
+             *     `grounded` is what tells those two `false` cases apart.
+             */
+            fallback_used: boolean;
+            /**
+             * @description Whether Reflection judged that the Grounding it found actually
+             *     answers the Question — read off the "GROUNDED: yes"/"GROUNDED: no"
+             *     marker the answering chat call is now instructed to begin its reply
+             *     with (`SYSTEM_INSTRUCTION`, `parse_and_strip_verdict`), not from
+             *     retrieval.
+             *
+             *     Through ticket 5 this meant something else entirely: "the merged
+             *     fan-out retrieval set (see `run_reflect`) is non-empty." `docs/adr/
+             *     0023` measured why that stopped being a meaningful signal on a
+             *     realistic History — on the live 572-Entry corpus, an absent topic
+             *     ("my cat", cosine 0.691) can outscore a present one ("the wedding",
+             *     0.638), so the merged set is non-empty for essentially every
+             *     Question and the old `grounded` was true almost unconditionally.
+             *     `docs/adr/0024` is what moved the judgment onto the chat call
+             *     itself, which actually reads what it was given, instead of a cosine
+             *     floor that can't tell "relevant" from "large corpus."
              */
             grounded: boolean;
             /**
-             * @description The ids of the Entries retrieval found and handed to the chat call,
-             *     in the order they were shown to it (chronological — see
-             *     `chronological_order` below). Ticket 7 is what builds an expandable
-             *     disclosure UI on top of these ids; this ticket only returns them.
+             * @description The ids of the Entries the Answer was actually built from, in the
+             *     order they were shown to the chat call (chronological — see
+             *     `run_reflect`'s `merged.sort_by_key`).
+             *
+             *     In the normal case these are Grounding: the merged three-source
+             *     fan-out (`docs/adr/0023`), judged (`grounded`, below) to actually
+             *     answer the Question. In the disclosed-fallback case
+             *     (`fallback_used: true`) these are instead the last few days of
+             *     Entries (`docs/adr/0024`) — shown despite *not* answering the
+             *     Question, because CONTEXT.md's Grounding entry holds that admitting
+             *     nothing was found beats inventing an Answer from somewhere else.
+             *     `grounded: false` is what tells a reader — ticket 7's disclosure UI
+             *     included — that these ids are not relevant matches; this field alone
+             *     (non-empty or not) cannot tell the two cases apart.
              */
             grounding_entry_ids: string[];
         };

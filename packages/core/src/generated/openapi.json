@@ -222,15 +222,20 @@
         "required": [
           "answer",
           "grounding_entry_ids",
-          "grounded"
+          "grounded",
+          "fallback_used"
         ],
         "properties": {
           "answer": {
             "type": "string"
           },
+          "fallback_used": {
+            "type": "boolean",
+            "description": "Whether the disclosed fallback (`docs/adr/0024`) ran: Reflection\njudged its Grounding didn't answer the Question (`grounded: false`)\n*and* Entries existed in the last few days to show instead. `false`\ncovers both \"the Grounding answered the Question\" (`grounded: true`)\nand \"it didn't, and there was nothing recent to show either\" —\n`grounded` is what tells those two `false` cases apart."
+          },
           "grounded": {
             "type": "boolean",
-            "description": "Whether any Grounding was found at all — exactly \"the merged set\n(see `run_reflect`) is non-empty\". Ticket 6 is what adds a real\nrelevance judgment (the disclosed fallback) and a `fallback_used`\nfield; inventing that distinction early would be building ahead of\nthe ticket that actually needs it, so it is deliberately not here."
+            "description": "Whether Reflection judged that the Grounding it found actually\nanswers the Question — read off the \"GROUNDED: yes\"/\"GROUNDED: no\"\nmarker the answering chat call is now instructed to begin its reply\nwith (`SYSTEM_INSTRUCTION`, `parse_and_strip_verdict`), not from\nretrieval.\n\nThrough ticket 5 this meant something else entirely: \"the merged\nfan-out retrieval set (see `run_reflect`) is non-empty.\" `docs/adr/\n0023` measured why that stopped being a meaningful signal on a\nrealistic History — on the live 572-Entry corpus, an absent topic\n(\"my cat\", cosine 0.691) can outscore a present one (\"the wedding\",\n0.638), so the merged set is non-empty for essentially every\nQuestion and the old `grounded` was true almost unconditionally.\n`docs/adr/0024` is what moved the judgment onto the chat call\nitself, which actually reads what it was given, instead of a cosine\nfloor that can't tell \"relevant\" from \"large corpus.\""
           },
           "grounding_entry_ids": {
             "type": "array",
@@ -238,7 +243,7 @@
               "type": "string",
               "format": "uuid"
             },
-            "description": "The ids of the Entries retrieval found and handed to the chat call,\nin the order they were shown to it (chronological — see\n`chronological_order` below). Ticket 7 is what builds an expandable\ndisclosure UI on top of these ids; this ticket only returns them."
+            "description": "The ids of the Entries the Answer was actually built from, in the\norder they were shown to the chat call (chronological — see\n`run_reflect`'s `merged.sort_by_key`).\n\nIn the normal case these are Grounding: the merged three-source\nfan-out (`docs/adr/0023`), judged (`grounded`, below) to actually\nanswer the Question. In the disclosed-fallback case\n(`fallback_used: true`) these are instead the last few days of\nEntries (`docs/adr/0024`) — shown despite *not* answering the\nQuestion, because CONTEXT.md's Grounding entry holds that admitting\nnothing was found beats inventing an Answer from somewhere else.\n`grounded: false` is what tells a reader — ticket 7's disclosure UI\nincluded — that these ids are not relevant matches; this field alone\n(non-empty or not) cannot tell the two cases apart."
           }
         }
       },

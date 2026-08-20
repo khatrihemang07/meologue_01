@@ -9,6 +9,12 @@ searches against, and the `vector_literal` binding shape ticket 4's `retrieve_ne
 established and this ticket's `retrieve_range` reuses). Nothing here supersedes either — both
 stand exactly as written; this ADR only records what got built on top of them.
 
+Extended by [0024](0024-the-answering-call-judges-its-own-grounding.md): this ADR's own "Why no
+floor was chosen instead" section below already anticipated that the relevance judgment would
+move off cosine "in ticket 6" — 0024 is that ticket. The specific line below reading "`grounded`
+is unchanged... that is the next ticket's job" is what 0024 changes; the fan-out, the merge rule,
+the extraction call, and everything else in this ADR stand exactly as written.
+
 ## Context
 
 Ticket 4 gave `/v1/reflect` one retrieval: embed the Question, run `retrieve_nearest` against
@@ -114,7 +120,9 @@ silently drop a true answer for a reason that has nothing to do with what was ac
 3-day fallback when nothing is found — that is the next ticket's job, deliberately not pulled
 forward here. Building it now would be answering a question ("what does Reflection say when it
 finds truly nothing?") this ticket was never scoped to answer, ahead of the ticket that actually
-needs it.
+needs it. (Superseded by [0024](0024-the-answering-call-judges-its-own-grounding.md): `grounded`
+now means something else, and the disclosed fallback described as "the next ticket's job" here is
+what that ADR builds.)
 
 ### The floor does not survive a realistic corpus
 

@@ -22,20 +22,29 @@ fn empty_static_dir() -> PathBuf {
     std::env::current_dir().unwrap()
 }
 
-/// A fake chat client serving both of `/v1/reflect`'s chat calls (ticket
-/// 5): the extraction call (chat call 1) and the final Answer call (chat
-/// call 2). It tells them apart by content rather than by call order —
-/// `extraction_system_prompt` always states "Today's date", which nothing
-/// in the final Answer's `SYSTEM_INSTRUCTION` does — and every call is
-/// still recorded, so a test can assert on exactly what each call sent.
+/// A fake chat client serving all three of `/v1/reflect`'s possible chat
+/// calls: the extraction call (chat call 1), the answering call (chat call
+/// 2, which now also carries the "GROUNDED: yes"/"GROUNDED: no" verdict —
+/// ticket 6, `docs/adr/0024`), and the disclosed-fallback answering call
+/// (chat call 3, only made after a "GROUNDED: no" verdict when recent
+/// Entries exist). It tells them apart by content rather than by call
+/// order — `extraction_system_prompt` always states "Today's date", which
+/// nothing else does, and `FALLBACK_SYSTEM_INSTRUCTION` always states
+/// "nothing matching the Question was found", which nothing else does
+/// either — and every call is still recorded, so a test can assert on
+/// exactly what each call sent.
 ///
 /// Defaults (`FakeChatClient::new`) answer the extraction call with `"{}"`
 /// — a clean, parseable "found nothing" response — so every test written
 /// before ticket 5 that never mentions extraction keeps behaving exactly
-/// as it did under ticket 4's single-retrieval flow.
+/// as it did under ticket 4's single-retrieval flow. The default
+/// `final_answer` carries no "GROUNDED:" marker, which (ticket 6) defaults
+/// to `grounded: true` — so every pre-ticket-6 test that never mentions a
+/// verdict also keeps behaving exactly as it did before.
 struct FakeChatClient {
     extraction_response: Mutex<Result<String, String>>,
     final_answer: String,
+    fallback_answer: String,
     calls: Mutex<Vec<Vec<ChatMessage>>>,
 }
 
@@ -44,6 +53,9 @@ impl FakeChatClient {
         Self {
             extraction_response: Mutex::new(Ok("{}".to_string())),
             final_answer: final_answer.into(),
+            fallback_answer: "Nothing matching the Question was found; here's what you've \
+                              written lately."
+                .to_string(),
             calls: Mutex::new(Vec::new()),
         }
     }
@@ -55,6 +67,9 @@ impl FakeChatClient {
         Self {
             extraction_response: Mutex::new(Ok(extraction_response.into())),
             final_answer: final_answer.into(),
+            fallback_answer: "Nothing matching the Question was found; here's what you've \
+                              written lately."
+                .to_string(),
             calls: Mutex::new(Vec::new()),
         }
     }
@@ -65,8 +80,20 @@ impl FakeChatClient {
                 Err("simulated 500 from the chat endpoint".to_string()),
             ),
             final_answer: final_answer.into(),
+            fallback_answer: "Nothing matching the Question was found; here's what you've \
+                              written lately."
+                .to_string(),
             calls: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Overrides the response the disclosed-fallback call (chat call 3)
+    /// gets, for tests that want to assert on its exact wording. Chainable
+    /// so it composes with any of the constructors above, e.g.
+    /// `FakeChatClient::new(first_answer).with_fallback_answer(third_answer)`.
+    fn with_fallback_answer(mut self, fallback_answer: impl Into<String>) -> Self {
+        self.fallback_answer = fallback_answer.into();
+        self
     }
 
     fn last_call(&self) -> Vec<ChatMessage> {
@@ -88,6 +115,18 @@ impl FakeChatClient {
             .expect("the extraction call was never made")
     }
 
+    /// The disclosed-fallback call (chat call 3) — only made after a
+    /// "GROUNDED: no" verdict with recent Entries to show.
+    fn fallback_call(&self) -> Vec<ChatMessage> {
+        self.calls
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|call| is_fallback_call(call))
+            .cloned()
+            .expect("the fallback call was never made")
+    }
+
     fn call_count(&self) -> usize {
         self.calls.lock().unwrap().len()
     }
@@ -96,6 +135,18 @@ impl FakeChatClient {
 fn is_extraction_call(call: &[ChatMessage]) -> bool {
     call.first()
         .is_some_and(|m| m.content.contains("Today's date"))
+}
+
+/// The disclosed-fallback answering call is told apart from the ordinary
+/// answering call by content, the same way `is_extraction_call` tells the
+/// extraction call apart from everything else —
+/// `FALLBACK_SYSTEM_INSTRUCTION` (`server/src/reflect.rs`) always states
+/// "nothing matching the Question was found", which nothing else does.
+fn is_fallback_call(call: &[ChatMessage]) -> bool {
+    call.first().is_some_and(|m| {
+        m.content
+            .contains("nothing matching the Question was found")
+    })
 }
 
 #[async_trait]
@@ -107,6 +158,8 @@ impl LlmClient for FakeChatClient {
                 Ok(response) => Ok(response.clone()),
                 Err(message) => bail!("{message}"),
             }
+        } else if is_fallback_call(messages) {
+            Ok(self.fallback_answer.clone())
         } else {
             Ok(self.final_answer.clone())
         }
@@ -339,9 +392,10 @@ async fn an_answer_comes_back_with_the_grounding_ids_retrieval_found(pool: PgPoo
 
 #[sqlx::test]
 async fn a_question_with_no_embedded_entries_is_reported_as_ungrounded(pool: PgPool) {
-    // No Entries seeded at all — retrieval finds nothing to ground on.
+    // No Entries seeded at all — retrieval finds nothing to ground on, and
+    // (ticket 6) the chat call's own verdict says as much.
     let chat = Arc::new(FakeChatClient::new(
-        "I don't have anything about that in your journal.",
+        "GROUNDED: no\nI don't have anything about that in your journal.",
     ));
     let reflect = reflect_state(chat.clone());
 
@@ -359,6 +413,9 @@ async fn a_question_with_no_embedded_entries_is_reported_as_ungrounded(pool: PgP
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["grounded"], false);
     assert_eq!(body["grounding_entry_ids"], json!([]));
+    // No Entries anywhere in the History — including nothing in the last 3
+    // days — so the disclosed fallback finds nothing either.
+    assert_eq!(body["fallback_used"], false);
 }
 
 #[sqlx::test]
@@ -478,7 +535,9 @@ async fn an_entry_below_the_similarity_floor_is_not_used_as_grounding(pool: PgPo
     )
     .await;
 
-    let chat = Arc::new(FakeChatClient::new("I couldn't find anything about that."));
+    let chat = Arc::new(FakeChatClient::new(
+        "GROUNDED: no\nI couldn't find anything about that.",
+    ));
 
     let (status, body) = post_reflect(
         &pool,
@@ -494,6 +553,10 @@ async fn an_entry_below_the_similarity_floor_is_not_used_as_grounding(pool: PgPo
         "an Entry at cosine 0.0 must not be handed to the model as Grounding"
     );
     assert_eq!(body["grounded"], json!(false));
+    // The seeded Entry is dated 2026-03-01 — well outside the 3-day
+    // fallback window from "now" — so the disclosed fallback finds nothing
+    // either.
+    assert_eq!(body["fallback_used"], json!(false));
 }
 
 // ---------------------------------------------------------------------
@@ -964,4 +1027,261 @@ async fn exactly_two_chat_calls_happen_per_request(pool: PgPool) {
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(chat.call_count(), 2);
+}
+
+// ---------------------------------------------------------------------
+// Ticket 6 — Reflection admits when it found nothing (docs/adr/0024)
+// ---------------------------------------------------------------------
+
+/// A "GROUNDED: yes" verdict reports `grounded: true`, never triggers the
+/// fallback, and the marker itself never reaches the client.
+#[sqlx::test]
+async fn a_grounded_yes_verdict_reports_grounded_true_with_the_marker_stripped(pool: PgPool) {
+    let device = Uuid::new_v4();
+    let entry = Uuid::new_v4();
+    insert_embedded_entry(
+        &pool,
+        entry,
+        device,
+        "the knee is better now",
+        "2026-06-01T00:00:00Z",
+    )
+    .await;
+
+    let chat = Arc::new(FakeChatClient::new(
+        "GROUNDED: yes\nYour knee has improved since February.",
+    ));
+
+    let (status, body) = post_reflect(
+        &pool,
+        Some(reflect_state(chat.clone())),
+        json!({ "protocol_version": 1, "question": "How's my knee?", "prior_turns": [] }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["grounded"], true);
+    assert_eq!(body["fallback_used"], false);
+    assert_eq!(body["answer"], "Your knee has improved since February.");
+    assert!(!body["answer"].as_str().unwrap().contains("GROUNDED:"));
+    assert_eq!(
+        chat.call_count(),
+        2,
+        "a grounded verdict must not spend the fallback's extra chat call"
+    );
+}
+
+/// A "GROUNDED: no" verdict with Entries in the last 3 days triggers the
+/// disclosed fallback: a third chat call, `fallback_used: true`,
+/// `grounded: false`, and `grounding_entry_ids` exactly the recent Entries
+/// — not the (empty, in this case) merged Grounding set.
+#[sqlx::test]
+async fn a_grounded_no_verdict_with_recent_entries_triggers_the_disclosed_fallback(pool: PgPool) {
+    let device = Uuid::new_v4();
+    let now = Utc::now();
+    let recent_a = Uuid::new_v4();
+    let recent_b = Uuid::new_v4();
+    insert_embedded_entry_with_vector(
+        &pool,
+        recent_a,
+        device,
+        "went for a run today",
+        &(now - Duration::hours(2)).to_rfc3339(),
+        &orthogonal_vector(),
+    )
+    .await;
+    insert_embedded_entry_with_vector(
+        &pool,
+        recent_b,
+        device,
+        "cooked dinner for friends",
+        &(now - Duration::days(1)).to_rfc3339(),
+        &orthogonal_vector(),
+    )
+    .await;
+    // Outside the 3-day window — must never appear in the fallback.
+    let stale = Uuid::new_v4();
+    insert_embedded_entry_with_vector(
+        &pool,
+        stale,
+        device,
+        "an old entry",
+        &(now - Duration::days(10)).to_rfc3339(),
+        &orthogonal_vector(),
+    )
+    .await;
+
+    let chat = Arc::new(
+        FakeChatClient::new("GROUNDED: no\nI couldn't find anything about scuba diving.")
+            .with_fallback_answer(
+                "Nothing matching the Question was found. In the last few days you wrote about \
+                 a run and cooking dinner for friends.",
+            ),
+    );
+
+    let (status, body) = post_reflect(
+        &pool,
+        Some(reflect_state(chat.clone())),
+        json!({
+            "protocol_version": 1,
+            "question": "Have I written anything about scuba diving in Portugal?",
+            "prior_turns": [],
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["grounded"], false);
+    assert_eq!(body["fallback_used"], true);
+    assert_eq!(
+        body["answer"],
+        "Nothing matching the Question was found. In the last few days you wrote about a run \
+         and cooking dinner for friends."
+    );
+
+    let ids = grounding_ids(&body);
+    assert_eq!(ids.len(), 2);
+    assert!(ids.contains(&recent_a));
+    assert!(ids.contains(&recent_b));
+    assert!(
+        !ids.contains(&stale),
+        "an Entry outside the 3-day window leaked into the fallback"
+    );
+
+    assert_eq!(chat.call_count(), 3);
+    let fallback_call = chat.fallback_call();
+    let grounding_message = fallback_call
+        .iter()
+        .find(|m| m.content.starts_with("Grounding:"))
+        .expect("the fallback call should carry a Grounding block");
+    assert!(grounding_message.content.contains("went for a run today"));
+    assert!(
+        grounding_message
+            .content
+            .contains("cooked dinner for friends")
+    );
+}
+
+/// A "GROUNDED: no" verdict with nothing in the last 3 days makes no third
+/// chat call at all, and keeps the first call's own "I found nothing"
+/// Answer rather than spending a call on an empty fallback.
+#[sqlx::test]
+async fn a_grounded_no_verdict_with_nothing_recent_skips_the_fallback_call(pool: PgPool) {
+    let device = Uuid::new_v4();
+    let now = Utc::now();
+    let stale = Uuid::new_v4();
+    insert_embedded_entry_with_vector(
+        &pool,
+        stale,
+        device,
+        "an old entry",
+        &(now - Duration::days(30)).to_rfc3339(),
+        &orthogonal_vector(),
+    )
+    .await;
+
+    let chat = Arc::new(FakeChatClient::new(
+        "GROUNDED: no\nI couldn't find anything about scuba diving.",
+    ));
+
+    let (status, body) = post_reflect(
+        &pool,
+        Some(reflect_state(chat.clone())),
+        json!({
+            "protocol_version": 1,
+            "question": "Have I written anything about scuba diving in Portugal?",
+            "prior_turns": [],
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["grounded"], false);
+    assert_eq!(body["fallback_used"], false);
+    assert_eq!(body["grounding_entry_ids"], json!([]));
+    assert_eq!(
+        body["answer"],
+        "I couldn't find anything about scuba diving."
+    );
+    assert_eq!(
+        chat.call_count(),
+        2,
+        "no recent Entries means no third chat call"
+    );
+}
+
+/// No marker at all — the graceful degrade `parse_and_strip_verdict`'s doc
+/// comment promises: `grounded: true`, no fallback, and the (unmarked)
+/// Answer returned exactly as the chat call gave it.
+#[sqlx::test]
+async fn no_verdict_marker_defaults_to_grounded_and_leaves_the_answer_unchanged(pool: PgPool) {
+    let device = Uuid::new_v4();
+    let entry = Uuid::new_v4();
+    insert_embedded_entry(
+        &pool,
+        entry,
+        device,
+        "the knee is better now",
+        "2026-06-01T00:00:00Z",
+    )
+    .await;
+
+    let chat = Arc::new(FakeChatClient::new(
+        "Your knee has improved since February.",
+    ));
+
+    let (status, body) = post_reflect(
+        &pool,
+        Some(reflect_state(chat.clone())),
+        json!({ "protocol_version": 1, "question": "How's my knee?", "prior_turns": [] }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["answer"], "Your knee has improved since February.");
+    assert_eq!(body["grounded"], true);
+    assert_eq!(body["fallback_used"], false);
+    assert_eq!(
+        chat.call_count(),
+        2,
+        "a missing marker must not trigger the fallback's extra chat call"
+    );
+}
+
+/// The verdict marker is recognised end to end even wrapped in markdown,
+/// mixed case, and stray whitespace — not just at the unit level
+/// (`parse_and_strip_verdict`'s own tests in `reflect.rs`).
+#[sqlx::test]
+async fn a_noisy_marker_is_still_recognised_end_to_end(pool: PgPool) {
+    let device = Uuid::new_v4();
+    let now = Utc::now();
+    let recent = Uuid::new_v4();
+    insert_embedded_entry_with_vector(
+        &pool,
+        recent,
+        device,
+        "went for a run today",
+        &(now - Duration::hours(1)).to_rfc3339(),
+        &orthogonal_vector(),
+    )
+    .await;
+
+    let chat = Arc::new(
+        FakeChatClient::new("  **grounded: NO**  \n\nI couldn't find anything about that.")
+            .with_fallback_answer(
+                "Nothing matching the Question was found; lately you wrote about a run.",
+            ),
+    );
+
+    let (status, body) = post_reflect(
+        &pool,
+        Some(reflect_state(chat.clone())),
+        json!({ "protocol_version": 1, "question": "Anything about scuba diving?", "prior_turns": [] }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["grounded"], false);
+    assert_eq!(body["fallback_used"], true);
+    assert_eq!(grounding_ids(&body), vec![recent]);
 }

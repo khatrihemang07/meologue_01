@@ -114,6 +114,7 @@ describe("ReflectionPage", () => {
         answer: "It's improved since February.",
         grounding_entry_ids: ["entry-1"],
         grounded: true,
+        fallback_used: false,
       }),
     });
 
@@ -125,6 +126,7 @@ describe("ReflectionPage", () => {
         answer: "It's improved since February.",
         groundingEntryIds: ["entry-1"],
         grounded: true,
+        fallbackUsed: false,
       },
     ]);
   });
@@ -138,6 +140,7 @@ describe("ReflectionPage", () => {
         answer: "Yes, in March.",
         grounding_entry_ids: [],
         grounded: true,
+        fallback_used: false,
       }),
     }));
     vi.stubGlobal("fetch", fetchMock);
@@ -164,7 +167,12 @@ describe("ReflectionPage", () => {
     const fetchMock = vi.fn(async (_url: string, _init: { body: string }) => ({
       ok: true,
       status: 200,
-      json: async () => ({ answer: "It went well.", grounding_entry_ids: [], grounded: true }),
+      json: async () => ({
+        answer: "It went well.",
+        grounding_entry_ids: [],
+        grounded: true,
+        fallback_used: false,
+      }),
     }));
     vi.stubGlobal("fetch", fetchMock);
 
@@ -255,7 +263,12 @@ describe("ReflectionPage", () => {
       vi.fn(async () => ({
         ok: true,
         status: 200,
-        json: async () => ({ answer: "It went well.", grounding_entry_ids: [], grounded: true }),
+        json: async () => ({
+          answer: "It went well.",
+          grounding_entry_ids: [],
+          grounded: true,
+          fallback_used: false,
+        }),
       })),
     );
 
@@ -264,5 +277,85 @@ describe("ReflectionPage", () => {
 
     expect(await screen.findByText("It went well.")).toBeInTheDocument();
     expect(askQuestionField()).toHaveValue("");
+  });
+
+  // Ticket 6 (ADR 0024): an explicit note per turn, independent of the
+  // Answer's own wording, so the user can tell a real Answer from a
+  // confident wrong one without trusting how the model phrased itself.
+  it("shows no note when the server judged its Grounding grounded", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          answer: "It's improved since February.",
+          grounding_entry_ids: ["entry-1"],
+          grounded: true,
+          fallback_used: false,
+        }),
+      })),
+    );
+
+    renderReflectionPage();
+    ask("How has my knee been?");
+
+    expect(await screen.findByText("It's improved since February.")).toBeInTheDocument();
+    expect(screen.queryByText(/nothing in your history matched/i)).not.toBeInTheDocument();
+  });
+
+  it("shows a fallback note when the server disclosed recent Entries instead of an Answer", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          answer: "Nothing matched, but here's what you wrote lately.",
+          grounding_entry_ids: ["entry-1"],
+          grounded: false,
+          fallback_used: true,
+        }),
+      })),
+    );
+
+    renderReflectionPage();
+    ask("Anything about scuba diving?");
+
+    expect(
+      await screen.findByText("Nothing matched, but here's what you wrote lately."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /nothing in your history matched this question — this is what you wrote in the last few days/i,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("shows an ungrounded note (no fallback) when nothing matched and nothing recent existed either", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          answer: "I couldn't find anything about that.",
+          grounding_entry_ids: [],
+          grounded: false,
+          fallback_used: false,
+        }),
+      })),
+    );
+
+    renderReflectionPage();
+    ask("Anything about scuba diving?");
+
+    expect(await screen.findByText("I couldn't find anything about that.")).toBeInTheDocument();
+    const note = screen.getByText(/nothing in your history matched this question/i);
+    expect(note).toBeInTheDocument();
+    expect(note.textContent).not.toMatch(/last few days/i);
   });
 });
