@@ -148,8 +148,15 @@ export function ReflectionPage() {
   const { entries } = useEntryStore();
 
   const sessionQuery = useQuery({
-    queryKey: sessionId === undefined ? sessionQueryKey("none") : sessionQueryKey(sessionId),
-    queryFn: () => fetchSession(sessionId as string),
+    // `sessionId ?? ""` rather than a "none" sentinel: `enabled` below already
+    // means this query never runs without one, so the key only has to be
+    // *distinct*, not meaningful — and an empty string can never collide with
+    // a real Session id the way a readable sentinel eventually could. The
+    // non-null assertion is safe for the same reason `enabled` makes the
+    // fetch safe: neither runs while `sessionId` is undefined.
+    queryKey: sessionQueryKey(sessionId ?? ""),
+    // biome-ignore lint/style/noNonNullAssertion: guarded by `enabled` below.
+    queryFn: () => fetchSession(sessionId!),
     // No sessionId → no query, empty Conversation (ADR 0025): a fresh
     // Session doesn't exist on the Server yet, so there is nothing to fetch
     // until the first ask creates one.

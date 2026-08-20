@@ -1,5 +1,5 @@
 import type { WireSessionResponse, WireSessionSummary } from "@meologue/core";
-import { useSettingsStore } from "@/lib/settings";
+import { serverRequest } from "@/lib/server-request";
 
 /**
  * Mirrors `reflect-transport.ts`'s shape exactly: a discriminated union
@@ -18,15 +18,8 @@ export type SessionResult =
   | { ok: false; reason: "unreachable" };
 
 export async function sessionsTransport(sessionId: string): Promise<SessionResult> {
-  // Read per request, not hoisted to a local — same reasoning as
-  // reflectTransport and syncTransport: a Server URL saved between two
-  // opens takes effect on the very next one, with no reload.
-  const url = useSettingsStore.getState().serverUrl;
-
-  let response: Response;
-  try {
-    response = await fetch(`${url}/v1/sessions/${sessionId}`);
-  } catch {
+  const response = await serverRequest(`/v1/sessions/${sessionId}`);
+  if (response === null) {
     return { ok: false, reason: "unreachable" };
   }
 
@@ -66,19 +59,14 @@ export type SessionsListResult =
   | { ok: false; reason: "unreachable" };
 
 export async function sessionsListTransport(query?: string): Promise<SessionsListResult> {
-  // Read per request, not hoisted — same reasoning as sessionsTransport: a
-  // Server URL saved between two opens takes effect on the very next one.
-  const url = useSettingsStore.getState().serverUrl;
   const trimmed = query?.trim();
-  const target =
+  const path =
     trimmed && trimmed !== ""
-      ? `${url}/v1/sessions?${new URLSearchParams({ q: trimmed })}`
-      : `${url}/v1/sessions`;
+      ? `/v1/sessions?${new URLSearchParams({ q: trimmed })}`
+      : "/v1/sessions";
 
-  let response: Response;
-  try {
-    response = await fetch(target);
-  } catch {
+  const response = await serverRequest(path);
+  if (response === null) {
     return { ok: false, reason: "unreachable" };
   }
 
@@ -105,14 +93,8 @@ export type SessionsDeleteResult =
   | { ok: false; reason: "unreachable" };
 
 export async function sessionsDeleteTransport(sessionId: string): Promise<SessionsDeleteResult> {
-  // Read per request, not hoisted — same reasoning as sessionsTransport and
-  // sessionsListTransport above.
-  const url = useSettingsStore.getState().serverUrl;
-
-  let response: Response;
-  try {
-    response = await fetch(`${url}/v1/sessions/${sessionId}`, { method: "DELETE" });
-  } catch {
+  const response = await serverRequest(`/v1/sessions/${sessionId}`, { method: "DELETE" });
+  if (response === null) {
     return { ok: false, reason: "unreachable" };
   }
 

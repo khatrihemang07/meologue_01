@@ -25,11 +25,11 @@ function LocationProbe() {
   return <p data-testid="location-path">{location.pathname}</p>;
 }
 
-function renderSessionsPage() {
+function renderSessionsPage(initialEntries: string[] = ["/reflect/list"]) {
   const queryClient = new QueryClient();
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={["/reflect/list"]}>
+      <MemoryRouter initialEntries={initialEntries}>
         <LocationProbe />
         <Routes>
           <Route element={<Outlet context={defaultEntryStoreContext} />}>
@@ -71,6 +71,12 @@ function stubSessionsFetchWithDelete(
         throw new Error("network down");
       }
       if (deleteOutcome === "not-found") {
+        // A 404 means the Server no longer has this Session — almost always
+        // because another Device deleted it (ADR 0025). So the row really is
+        // gone server-side, and the refetch must reflect that; returning it
+        // again would model a Server that 404s on a row it still lists.
+        const goneId = url.split("/").pop();
+        sessions = sessions.filter((session) => session.id !== goneId);
         return { ok: false, status: 404, json: async () => ({}) };
       }
       if (deleteOutcome === "server-error") {
@@ -235,14 +241,55 @@ describe("SessionsPage", () => {
     expect(screen.getByTestId("location-path")).toHaveTextContent("/reflect/session-1");
   });
 
-  it("has a Back control returning to /reflect", async () => {
+  it("treats a Session another Device already deleted as done, not as a Server failure", async () => {
+    // The defect this pins: `not-found` was collapsed into the same branch as
+    // a real failure, so deleting a row another Device had already removed
+    // blamed a Server that was working *and* skipped the invalidate, leaving
+    // the phantom row on screen — the one outcome that actually looks broken.
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    stubSessionsFetchWithDelete([oneSession], "not-found");
+
+    renderSessionsPage();
+    await screen.findByText("How has my knee been?");
+
+    fireEvent.click(screen.getByRole("button", { name: 'Delete "How has my knee been?"' }));
+    fireEvent.click(screen.getByRole("button", { name: /delete permanently/i }));
+
+    // The row goes, and no failure is reported anywhere on screen — the
+    // confirm box closes rather than staying open with an error in it.
+    await waitFor(() => {
+      expect(screen.queryByText("How has my knee been?")).not.toBeInTheDocument();
+    });
+    expect(screen.queryByText(/couldn't delete this session/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/is permanent/i)).not.toBeInTheDocument();
+  });
+
+  it("Back returns to the Conversation it was opened from, not a fresh Session", async () => {
+    // The defect this pins: a fixed `to=\"/reflect\"` dropped a reader who
+    // arrived here from an open Session into a *new, empty* one — losing the
+    // Conversation they were reading, which is precisely what Sessions exists
+    // to stop happening.
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    stubSessionsFetch([]);
+
+    renderSessionsPage(["/reflect/session-1", "/reflect/list"]);
+    await screen.findByText(/no sessions yet/i);
+
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+
+    expect(screen.getByTestId("location-path")).toHaveTextContent("/reflect/session-1");
+  });
+
+  it("Back falls to /reflect when there is nothing behind it", async () => {
     useSettingsStore.getState().setServerUrl("https://phone.example:41207");
     stubSessionsFetch([]);
 
     renderSessionsPage();
     await screen.findByText(/no sessions yet/i);
 
-    expect(screen.getByRole("link", { name: "Back" })).toHaveAttribute("href", "/reflect");
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+
+    expect(screen.getByTestId("location-path")).toHaveTextContent("/reflect");
   });
 
   it("requires a confirm step before a delete is ever sent — the first tap sends nothing", async () => {

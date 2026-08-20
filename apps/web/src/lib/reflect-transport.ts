@@ -1,5 +1,5 @@
 import type { WireReflectRequest, WireReflectResponse } from "@meologue/core";
-import { useSettingsStore } from "@/lib/settings";
+import { serverRequest } from "@/lib/server-request";
 
 /**
  * Mirrors `sync-transport.ts`'s shape, but Reflection has a failure mode
@@ -17,19 +17,12 @@ export type ReflectResult =
   | { ok: false; reason: "unreachable" };
 
 export async function reflectTransport(request: WireReflectRequest): Promise<ReflectResult> {
-  // Read per request, not hoisted to a local — same reasoning as
-  // syncTransport: a Server URL saved between two Questions takes effect on
-  // the very next one, with no reload.
-  const url = useSettingsStore.getState().serverUrl;
-
-  let response: Response;
-  try {
-    response = await fetch(`${url}/v1/reflect`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(request),
-    });
-  } catch {
+  const response = await serverRequest("/v1/reflect", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(request),
+  });
+  if (response === null) {
     return { ok: false, reason: "unreachable" };
   }
 

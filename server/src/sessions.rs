@@ -308,8 +308,9 @@ pub(crate) async fn load_turns(
 /// successful Answer already exists. Any failure here (a dropped
 /// connection, a constraint violation) rolls the whole transaction back, so
 /// a failed ask can never leave a half-written Session or an orphaned Turn
-/// behind — see CONTEXT.md's Session entry: "a Session can never exist
-/// holding an empty Conversation."
+/// behind — see `docs/adr/0025`, which is where "a Session holding an empty
+/// Conversation is unrepresentable" is decided. (CONTEXT.md defines what a
+/// Session *is*; it deliberately carries no implementation guarantees.)
 ///
 /// `title` is used only when minting a new Session — an existing Session's
 /// title is immutable once set (CONTEXT.md: "a title taken from its first

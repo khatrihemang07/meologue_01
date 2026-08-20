@@ -2,7 +2,7 @@ import type { WireSessionSummary } from "@meologue/core";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { Link } from "react-router";
+import { Link, useLocation, useNavigate } from "react-router";
 import { toast } from "sonner";
 import { Nav } from "@/components/nav";
 import { Shell } from "@/components/shell";
@@ -240,6 +240,8 @@ export function SessionsPage() {
   // a failed write is surfaced, not swallowed), so this stays set until the
   // reader either retries successfully or cancels.
   const [failedId, setFailedId] = useState<string | null>(null);
+  const navigate = useNavigate();
+  const location = useLocation();
 
   const deleteMutation = useMutation({
     mutationFn: (sessionId: string) => sessionsDeleteTransport(sessionId),
@@ -262,6 +264,18 @@ export function SessionsPage() {
         // this Device still has cached for a moment first.
         queryClient.invalidateQueries({ queryKey: SESSIONS_QUERY_KEY });
         queryClient.invalidateQueries({ queryKey: ["session", sessionId] });
+      } else if (deleteResult.reason === "not-found") {
+        setFailedId(null);
+        setConfirmingId(null);
+        // Already gone — almost certainly deleted on another Device, which
+        // is an ordinary thing to happen now that the Server holds Sessions
+        // and every Device reaches the same ones (ADR 0025). The user asked
+        // for this Session to not exist and it does not exist, so this is
+        // not a failure: reporting a Server error here would blame a Server
+        // that is working, and skipping the invalidate would leave the
+        // phantom row on screen — the one outcome that actually looks broken.
+        queryClient.invalidateQueries({ queryKey: SESSIONS_QUERY_KEY });
+        queryClient.invalidateQueries({ queryKey: ["session", sessionId] });
       } else {
         setFailedId(sessionId);
         toast.error("Couldn't delete this Session. Check your Server and try again.");
@@ -273,12 +287,29 @@ export function SessionsPage() {
     },
   });
 
+  // A real history pop, the same shape settings-page.tsx uses (ADR 0019) and
+  // for the same reason: Sessions is reached *from* somewhere — usually the
+  // open Conversation whose app bar you tapped — and a fixed `to="/reflect"`
+  // would drop a reader who arrived from `/reflect/<id>` into a fresh empty
+  // Session instead of the Conversation they left. `location.key ===
+  // "default"` means there is nothing behind us to pop (see settings-page's
+  // own comment for why that check and not `window.history.length`), and
+  // `/reflect` is the right floor for this page specifically.
+  function goBack() {
+    if (location.key === "default") {
+      navigate("/reflect");
+    } else {
+      navigate(-1);
+    }
+  }
+
   return (
     <Shell
       title="Sessions"
       back={
-        <Link
-          to="/reflect"
+        <button
+          type="button"
+          onClick={goBack}
           aria-label="Back"
           // Matches SettingsLink's/settings-page.tsx's back control exactly
           // — same size-11 (44px) tap-target and hover treatment for the
@@ -286,7 +317,7 @@ export function SessionsPage() {
           className="flex size-11 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
         >
           <ArrowLeft aria-hidden="true" className="size-4" />
-        </Link>
+        </button>
       }
       nav={<Nav />}
       // Issue #64: the same Shell search slot History and the Composer
