@@ -29,8 +29,9 @@ converge once Syncing completes.
 
 ### Search
 
-Narrowing History to the Entries whose text matches what you typed. Search reads Entry text, not
-Entry times, and it narrows History in place rather than producing a separate collection.
+Narrowing a collection to the items whose text matches what you typed — Entries in History, or
+Sessions whose Conversation matches. Search reads text, not time, and it narrows the collection
+in place rather than producing a separate one.
 
 ### Send
 
@@ -92,9 +93,17 @@ Answer is not an Entry either — it is not the user's own words, and it never e
 
 ### Conversation
 
-The running sequence of Questions and Answers on one Device. Each Question is read in the light
-of the Conversation before it, so a follow-up can lean on what was already asked without
-repeating it. A Conversation belongs to the Device it happened on and does not Sync.
+The running sequence of Questions and Answers inside one Session. Each Question is read in the
+light of the Conversation before it, so a follow-up can lean on what was already asked without
+repeating it. Because the Server holds the Session, a Conversation is reachable from every
+Device, not only the one it started on.
+
+### Session
+
+The durable container the Server holds for one Conversation: it has an id, a title taken from
+its first Question, and the time it started. A Session is what the user lists, opens, and
+deletes; the Conversation is the Questions and Answers inside it — one Session holds one
+Conversation. The Server holds Sessions, so every Device reaches the same ones.
 
 ### Grounding
 
