@@ -2,6 +2,7 @@ import { PROTOCOL_VERSION } from "@meologue/core";
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { toast } from "sonner";
+import { GroundingDisclosure } from "@/components/grounding-disclosure";
 import { Nav, SettingsLink } from "@/components/nav";
 import { QuestionComposer } from "@/components/question-composer";
 import { Shell } from "@/components/shell";
@@ -51,12 +52,29 @@ function GroundingNote({ turn }: { turn: ConversationTurn }) {
   );
 }
 
-function ConversationTurnRow({ turn }: { turn: ConversationTurn }) {
+// The disclosure (ticket 7) renders beneath GroundingNote, not instead of
+// it: the note explains *why* (in prose, independent of the Answer's own
+// wording), the disclosure shows *what* (the actual Entries, collapsed
+// behind a summary that also carries the grounded/fallback distinction) —
+// see grounding-disclosure.tsx.
+function ConversationTurnRow({
+  turn,
+  syncEnabled,
+}: {
+  turn: ConversationTurn;
+  syncEnabled: boolean;
+}) {
   return (
     <div className="flex flex-col gap-2">
       <AskedQuestion text={turn.question} />
       <GivenAnswer text={turn.answer} />
       <GroundingNote turn={turn} />
+      <GroundingDisclosure
+        groundingEntryIds={turn.groundingEntryIds}
+        grounded={turn.grounded}
+        fallbackUsed={turn.fallbackUsed}
+        syncEnabled={syncEnabled}
+      />
     </div>
   );
 }
@@ -68,8 +86,12 @@ function ConversationTurnRow({ turn }: { turn: ConversationTurn }) {
 // when the server judged its Grounding didn't answer the Question, so this
 // page's own job stays the same as before: post the Question, the
 // Conversation so far, and this Device's UTC offset, then render whatever
-// comes back, plus a `GroundingNote` per turn. Reflect still gates on Sync
-// being on, for the same reason ticket 2 already established: retrieval and
+// comes back, plus a `GroundingNote` per turn. Ticket 7 adds a
+// `GroundingDisclosure` per turn too — the note says why in prose, the
+// disclosure shows the actual Entries the Answer drew on (or the recent
+// ones the fallback showed instead), so a confident wrong Answer and a
+// right one stop reading identically. Reflect still gates on Sync being on,
+// for the same reason ticket 2 already established: retrieval and
 // inference run on the Server, over Entries Sync put there.
 export function ReflectionPage() {
   const syncEnabled = useSyncEnabled();
@@ -175,7 +197,7 @@ export function ReflectionPage() {
       {syncEnabled &&
         turns.map((turn, index) => (
           // biome-ignore lint/suspicious/noArrayIndexKey: turns never reorder or get removed — position is a stable identity for this Device's own in-memory Conversation.
-          <ConversationTurnRow key={index} turn={turn} />
+          <ConversationTurnRow key={index} turn={turn} syncEnabled={syncEnabled} />
         ))}
 
       {syncEnabled && pending !== null && (

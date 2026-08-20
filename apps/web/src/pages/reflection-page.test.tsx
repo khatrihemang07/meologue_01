@@ -1,22 +1,38 @@
+import type { Entry } from "@meologue/core";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router";
+import { MemoryRouter, Outlet, Route, Routes } from "react-router";
 import { toast } from "sonner";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useConversationStore } from "@/lib/conversation";
 import * as entryDayModule from "@/lib/entry-day";
 import { useSettingsStore } from "@/lib/settings";
+import type { EntryStoreOutletContext } from "@/pages/entry-store-layout";
 import { ReflectionPage } from "./reflection-page";
 
-// No EntryStoreLayout stand-in needed here (contrast composer-page.test.tsx
-// and history-page.test.tsx): ReflectionPage reads nothing from the Entry
-// store, only useSyncEnabled() and the in-memory Conversation store —
-// MemoryRouter alone is enough to satisfy Nav's NavLinks, SettingsLink, and
-// the Sync-off hint's Link to Settings.
-function renderReflectionPage(initialPath = "/reflect") {
+// Ticket 7's GroundingDisclosure is a descendant of every rendered turn and
+// reads the Entry store via useEntryStore() (useOutletContext), so this
+// page now needs the same EntryStoreLayout stand-in composer-page.test.tsx
+// and history-page.test.tsx already use — a bare Outlet supplying a context
+// of the test's choosing, in place of the real store-opening machinery.
+// Defaults to no local Entries; individual tests override this to exercise
+// GroundingDisclosure's lookup.
+const defaultEntryStoreContext: EntryStoreOutletContext = {
+  entries: [],
+  sendEntry: vi.fn(),
+  search: vi.fn(async () => []),
+  disabled: false,
+};
+
+function renderReflectionPage(
+  initialPath = "/reflect",
+  context: EntryStoreOutletContext = defaultEntryStoreContext,
+) {
   return render(
     <MemoryRouter initialEntries={[initialPath]}>
       <Routes>
-        <Route path="/reflect" element={<ReflectionPage />} />
+        <Route element={<Outlet context={context} />}>
+          <Route path="/reflect" element={<ReflectionPage />} />
+        </Route>
       </Routes>
     </MemoryRouter>,
   );
@@ -28,6 +44,18 @@ function askQuestionField() {
 
 function askButton() {
   return screen.getByRole("button", { name: "Ask" });
+}
+
+function entry(overrides: Partial<Entry>): Entry {
+  return {
+    id: "1",
+    deviceId: "device-a",
+    body: "hello",
+    createdAt: "now",
+    seq: 1,
+    syncedAt: "now",
+    ...overrides,
+  };
 }
 
 function ask(question: string) {
@@ -357,5 +385,63 @@ describe("ReflectionPage", () => {
     const note = screen.getByText(/nothing in your history matched this question/i);
     expect(note).toBeInTheDocument();
     expect(note.textContent).not.toMatch(/last few days/i);
+  });
+
+  // Ticket 7: the disclosure beneath each turn is the only way to tell a
+  // confident wrong Answer from a right one by eye — its label must carry
+  // ADR 0024's grounded/fallback distinction, not just render *something*.
+  it("shows a Grounding disclosure labelled 'Grounded' for a grounded turn", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          answer: "It's improved since February.",
+          grounding_entry_ids: ["entry-1"],
+          grounded: true,
+          fallback_used: false,
+        }),
+      })),
+    );
+
+    renderReflectionPage("/reflect", {
+      ...defaultEntryStoreContext,
+      entries: [entry({ id: "entry-1", body: "Knee felt better today" })],
+    });
+    ask("How has my knee been?");
+
+    expect(await screen.findByText("It's improved since February.")).toBeInTheDocument();
+    expect(screen.getByText("Grounded in 1 Entry")).toBeInTheDocument();
+  });
+
+  it("shows a Grounding disclosure labelled as recent Entries, not Grounding, for a fallback turn", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          answer: "Nothing matched, but here's what you wrote lately.",
+          grounding_entry_ids: ["entry-1"],
+          grounded: false,
+          fallback_used: true,
+        }),
+      })),
+    );
+
+    renderReflectionPage("/reflect", {
+      ...defaultEntryStoreContext,
+      entries: [entry({ id: "entry-1", body: "Just a regular Tuesday" })],
+    });
+    ask("Anything about scuba diving?");
+
+    expect(
+      await screen.findByText("Nothing matched, but here's what you wrote lately."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("1 recent Entry")).toBeInTheDocument();
+    expect(screen.queryByText(/^Grounded/)).not.toBeInTheDocument();
   });
 });

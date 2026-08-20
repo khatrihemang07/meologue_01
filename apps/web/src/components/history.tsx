@@ -1,12 +1,6 @@
 import type { Entry } from "@meologue/core";
-import {
-  deviceUtcOffsetMinutes,
-  entryDayKey,
-  formatClockTime,
-  formatDaySeparator,
-} from "@/lib/entry-day";
-import { formatAbsoluteTime } from "@/lib/entry-time";
-import { highlightMatches } from "@/lib/highlight-match";
+import { EntryRow } from "@/components/entry-row";
+import { deviceUtcOffsetMinutes, entryDayKey, formatDaySeparator } from "@/lib/entry-day";
 
 interface HistoryProps {
   entries: Entry[];
@@ -25,67 +19,6 @@ interface HistoryProps {
    * shows every Entry's body plain.
    */
   query?: string;
-}
-
-function EntryBody({ body, query }: { body: string; query: string }) {
-  if (query.trim() === "") {
-    return <p className="min-w-0 flex-1 whitespace-pre-wrap">{body}</p>;
-  }
-  return (
-    <p className="min-w-0 flex-1 whitespace-pre-wrap">
-      {highlightMatches(body, query).map((segment, index) =>
-        segment.matched ? (
-          // biome-ignore lint/suspicious/noArrayIndexKey: segments are a stable, ordered split of one Entry's body for one render.
-          <mark key={index} className="rounded-sm bg-primary/30 text-inherit">
-            {segment.text}
-          </mark>
-        ) : (
-          // biome-ignore lint/suspicious/noArrayIndexKey: segments are a stable, ordered split of one Entry's body for one render.
-          <span key={index}>{segment.text}</span>
-        ),
-      )}
-    </p>
-  );
-}
-
-interface EntryRowProps {
-  entry: Entry;
-  query: string;
-  syncEnabled: boolean;
-}
-
-// One full-width row (ticket 52, #49's "Discord" variant — no bubble, no
-// tails, no left/right split). Each Entry carries its own clock time
-// because timestamps are per-Entry rather than clustered (#49); the date
-// that time belongs to lives on the day separator above, not here.
-function EntryRow({ entry, query, syncEnabled }: EntryRowProps) {
-  const time = formatClockTime(entry.createdAt);
-  return (
-    <div className="flex items-baseline gap-3 py-1.5 text-sm text-foreground">
-      <EntryBody body={entry.body} query={query} />
-      <div className="flex shrink-0 items-center gap-2">
-        {time !== null && (
-          <time
-            dateTime={entry.createdAt}
-            title={formatAbsoluteTime(entry.createdAt) ?? undefined}
-            className="shrink-0 text-xs text-muted-foreground tabular-nums"
-          >
-            {time}
-          </time>
-        )}
-        {syncEnabled && entry.seq === null && (
-          <span
-            role="img"
-            aria-label="Not yet synced"
-            title="Not yet synced"
-            className="text-muted-foreground"
-          >
-            ●
-          </span>
-        )}
-      </div>
-    </div>
-  );
 }
 
 interface DayGroup {
