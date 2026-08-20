@@ -9,13 +9,14 @@ import { useSettingsStore } from "@/lib/settings";
 import type { EntryStoreOutletContext } from "@/pages/entry-store-layout";
 import { ReflectionPage } from "./reflection-page";
 
-// Ticket 7's GroundingDisclosure is a descendant of every rendered turn and
-// reads the Entry store via useEntryStore() (useOutletContext), so this
-// page now needs the same EntryStoreLayout stand-in composer-page.test.tsx
-// and history-page.test.tsx already use — a bare Outlet supplying a context
-// of the test's choosing, in place of the real store-opening machinery.
-// Defaults to no local Entries; individual tests override this to exercise
-// GroundingDisclosure's lookup.
+// ReflectionPage reads the Entry store via useEntryStore() (useOutletContext)
+// and passes it down to GroundingDisclosure for every rendered turn (the
+// page/component layering fix: pages own data access, components take
+// props), so this page needs the same EntryStoreLayout stand-in
+// composer-page.test.tsx and history-page.test.tsx already use — a bare
+// Outlet supplying a context of the test's choosing, in place of the real
+// store-opening machinery. Defaults to no local Entries; individual tests
+// override this to exercise GroundingDisclosure's lookup.
 const defaultEntryStoreContext: EntryStoreOutletContext = {
   entries: [],
   sendEntry: vi.fn(),

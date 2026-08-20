@@ -41,6 +41,45 @@ export interface ConversationTurn {
   fallbackUsed: boolean;
 }
 
+/**
+ * The three-way outcome a turn's `(grounded, fallbackUsed)` pair always
+ * resolves to — named in CONTEXT.md's own vocabulary (Grounding) and ADR
+ * 0024's ("real Grounding", "disclosed fallback", "nothing was found or
+ * shown either way"). `GroundingNote` (reflection-page.tsx) and
+ * `summaryLabel` (grounding-disclosure.tsx) both used to branch on the raw
+ * pair independently; two cascades over the same two booleans drift, and
+ * drifting here means the caption and the expander label disagree about
+ * what happened. Deriving the outcome once, here, is what keeps them
+ * agreeing by construction.
+ */
+export type GroundingOutcome =
+  /** The server judged its Grounding actually answers the Question. */
+  | "grounded"
+  /** The server judged its Grounding didn't answer the Question and disclosed the last few days of Entries instead — see `fallbackUsed`. */
+  | "disclosedFallback"
+  /** Nothing matched and there was nothing recent to show either — `groundingEntryIds` is empty. */
+  | "nothingFound";
+
+/**
+ * Derives a turn's outcome from `grounded` and `fallbackUsed`. `grounded:
+ * true` always wins regardless of `fallbackUsed` — ADR 0024's fallback only
+ * ever fires on a `GROUNDED: no` verdict, so the two are never both true in
+ * practice, but `grounded` is what the summary label keys off either way
+ * (see grounding-disclosure.tsx's original comment, preserved on this
+ * derivation now).
+ */
+export function groundingOutcome(
+  turn: Pick<ConversationTurn, "grounded" | "fallbackUsed">,
+): GroundingOutcome {
+  if (turn.grounded) {
+    return "grounded";
+  }
+  if (turn.fallbackUsed) {
+    return "disclosedFallback";
+  }
+  return "nothingFound";
+}
+
 interface ConversationState {
   turns: ConversationTurn[];
   /**

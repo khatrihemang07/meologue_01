@@ -1,8 +1,7 @@
 import type { Entry } from "@meologue/core";
 import { render, screen } from "@testing-library/react";
-import { MemoryRouter, Outlet, Route, Routes } from "react-router";
-import { describe, expect, it, vi } from "vitest";
-import type { EntryStoreOutletContext } from "@/pages/entry-store-layout";
+import { describe, expect, it } from "vitest";
+import type { ConversationTurn } from "@/lib/conversation";
 import { GroundingDisclosure } from "./grounding-disclosure";
 
 function entry(overrides: Partial<Entry>): Entry {
@@ -17,44 +16,28 @@ function entry(overrides: Partial<Entry>): Entry {
   };
 }
 
-const defaultContext: EntryStoreOutletContext = {
-  entries: [],
-  sendEntry: vi.fn(),
-  search: vi.fn(async () => []),
-  disabled: false,
-};
+function turn(overrides: Partial<ConversationTurn>): ConversationTurn {
+  return {
+    question: "How has my knee been?",
+    answer: "It's improved since February.",
+    groundingEntryIds: [],
+    grounded: true,
+    fallbackUsed: false,
+    ...overrides,
+  };
+}
 
-// GroundingDisclosure reads the Device's own Entry store via
-// useEntryStore() (useOutletContext) — this stand-in supplies that context
-// the way EntryStoreLayout would, mirroring composer-page.test.tsx and
-// history-page.test.tsx.
+// GroundingDisclosure is pure (the page/component layering fix): it takes
+// the turn and this Device's Entries as props rather than reading the Entry
+// store itself, so rendering it needs no router or store stand-in — a plain
+// render suffices.
 function renderDisclosure(
-  props: {
-    groundingEntryIds: string[];
-    grounded: boolean;
-    fallbackUsed: boolean;
-    syncEnabled?: boolean;
-  },
-  context: EntryStoreOutletContext = defaultContext,
+  props: { groundingEntryIds: string[]; grounded: boolean; fallbackUsed: boolean },
+  entries: Entry[] = [],
+  syncEnabled = false,
 ) {
   return render(
-    <MemoryRouter>
-      <Routes>
-        <Route element={<Outlet context={context} />}>
-          <Route
-            path="/"
-            element={
-              <GroundingDisclosure
-                groundingEntryIds={props.groundingEntryIds}
-                grounded={props.grounded}
-                fallbackUsed={props.fallbackUsed}
-                syncEnabled={props.syncEnabled ?? false}
-              />
-            }
-          />
-        </Route>
-      </Routes>
-    </MemoryRouter>,
+    <GroundingDisclosure turn={turn(props)} entries={entries} syncEnabled={syncEnabled} />,
   );
 }
 
@@ -70,10 +53,9 @@ describe("GroundingDisclosure", () => {
   });
 
   it("labels a single grounded Entry with singular wording", () => {
-    renderDisclosure(
-      { groundingEntryIds: ["entry-1"], grounded: true, fallbackUsed: false },
-      { ...defaultContext, entries: [entry({ id: "entry-1", body: "Knee felt better" })] },
-    );
+    renderDisclosure({ groundingEntryIds: ["entry-1"], grounded: true, fallbackUsed: false }, [
+      entry({ id: "entry-1", body: "Knee felt better" }),
+    ]);
 
     expect(screen.getByText("Grounded in 1 Entry")).toBeInTheDocument();
   });
@@ -85,23 +67,19 @@ describe("GroundingDisclosure", () => {
         grounded: true,
         fallbackUsed: false,
       },
-      {
-        ...defaultContext,
-        entries: [
-          entry({ id: "entry-1", body: "Knee felt better" }),
-          entry({ id: "entry-2", body: "Physio went well" }),
-        ],
-      },
+      [
+        entry({ id: "entry-1", body: "Knee felt better" }),
+        entry({ id: "entry-2", body: "Physio went well" }),
+      ],
     );
 
     expect(screen.getByText("Grounded in 2 Entries")).toBeInTheDocument();
   });
 
   it("labels a fallback turn as recent Entries, never as Grounding — ADR 0024", () => {
-    renderDisclosure(
-      { groundingEntryIds: ["entry-1"], grounded: false, fallbackUsed: true },
-      { ...defaultContext, entries: [entry({ id: "entry-1", body: "Just a Tuesday" })] },
-    );
+    renderDisclosure({ groundingEntryIds: ["entry-1"], grounded: false, fallbackUsed: true }, [
+      entry({ id: "entry-1", body: "Just a Tuesday" }),
+    ]);
 
     expect(screen.getByText("1 recent Entry")).toBeInTheDocument();
     expect(screen.queryByText(/^Grounded/)).not.toBeInTheDocument();
@@ -114,23 +92,19 @@ describe("GroundingDisclosure", () => {
         grounded: false,
         fallbackUsed: true,
       },
-      {
-        ...defaultContext,
-        entries: [
-          entry({ id: "entry-1", body: "Just a Tuesday" }),
-          entry({ id: "entry-2", body: "Just a Wednesday" }),
-        ],
-      },
+      [
+        entry({ id: "entry-1", body: "Just a Tuesday" }),
+        entry({ id: "entry-2", body: "Just a Wednesday" }),
+      ],
     );
 
     expect(screen.getByText("2 recent Entries")).toBeInTheDocument();
   });
 
   it("is collapsed by default and expands to show Entry bodies", () => {
-    renderDisclosure(
-      { groundingEntryIds: ["entry-1"], grounded: true, fallbackUsed: false },
-      { ...defaultContext, entries: [entry({ id: "entry-1", body: "Knee felt better" })] },
-    );
+    renderDisclosure({ groundingEntryIds: ["entry-1"], grounded: true, fallbackUsed: false }, [
+      entry({ id: "entry-1", body: "Knee felt better" }),
+    ]);
 
     const details = screen.getByText("Grounded in 1 Entry").closest("details");
     expect(details).not.toBeNull();
@@ -149,13 +123,10 @@ describe("GroundingDisclosure", () => {
         grounded: true,
         fallbackUsed: false,
       },
-      {
-        ...defaultContext,
-        entries: [
-          entry({ id: "entry-1", body: "First written" }),
-          entry({ id: "entry-2", body: "Second written" }),
-        ],
-      },
+      [
+        entry({ id: "entry-1", body: "First written" }),
+        entry({ id: "entry-2", body: "Second written" }),
+      ],
     );
 
     const bodies = screen.getAllByText(/written$/).map((element) => element.textContent);
@@ -169,7 +140,7 @@ describe("GroundingDisclosure", () => {
         grounded: true,
         fallbackUsed: false,
       },
-      { ...defaultContext, entries: [entry({ id: "entry-1", body: "Knee felt better" })] },
+      [entry({ id: "entry-1", body: "Knee felt better" })],
     );
 
     expect(screen.getByText("Knee felt better")).toBeInTheDocument();
@@ -183,7 +154,7 @@ describe("GroundingDisclosure", () => {
         grounded: true,
         fallbackUsed: false,
       },
-      { ...defaultContext, entries: [entry({ id: "entry-1", body: "Knee felt better" })] },
+      [entry({ id: "entry-1", body: "Knee felt better" })],
     );
 
     expect(screen.getByText("Grounded in 3 Entries")).toBeInTheDocument();

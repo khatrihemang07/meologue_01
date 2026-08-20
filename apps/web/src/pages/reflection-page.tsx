@@ -1,3 +1,4 @@
+import type { Entry } from "@meologue/core";
 import { PROTOCOL_VERSION } from "@meologue/core";
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
@@ -6,10 +7,11 @@ import { GroundingDisclosure } from "@/components/grounding-disclosure";
 import { Nav, SettingsLink } from "@/components/nav";
 import { QuestionComposer } from "@/components/question-composer";
 import { Shell } from "@/components/shell";
-import { type ConversationTurn, useConversationStore } from "@/lib/conversation";
+import { type ConversationTurn, groundingOutcome, useConversationStore } from "@/lib/conversation";
 import { deviceUtcOffsetMinutes } from "@/lib/entry-day";
 import { reflectTransport } from "@/lib/reflect-transport";
 import { useSyncEnabled } from "@/lib/settings";
+import { useEntryStore } from "@/pages/entry-store-layout";
 
 /**
  * How long the in-flight indicator shows "searching" copy before switching
@@ -35,17 +37,21 @@ function GivenAnswer({ text }: { text: string }) {
 // An explicit note per turn, independent of the Answer's own wording — the
 // point of ticket 6 (docs/adr/0024) is that the user can tell a real Answer
 // from a confident wrong one without trusting how the model phrased itself.
-// `grounded` (the server judged its Grounding actually answered the
-// Question) renders no note at all; the other two states render a short
+// "grounded" (the server judged its Grounding actually answered the
+// Question) renders no note at all; the other two outcomes render a short
 // caption in CONTEXT.md's own vocabulary (History, Question, Entries),
 // matching the muted-caption styling already used elsewhere on this page.
+// The outcome itself comes from `groundingOutcome` (lib/conversation.ts) —
+// shared with grounding-disclosure.tsx's `summaryLabel` so the caption here
+// and the expander label below it can never disagree about what happened.
 function GroundingNote({ turn }: { turn: ConversationTurn }) {
-  if (turn.grounded) {
+  const outcome = groundingOutcome(turn);
+  if (outcome === "grounded") {
     return null;
   }
   return (
     <p className="mr-auto text-xs text-muted-foreground">
-      {turn.fallbackUsed
+      {outcome === "disclosedFallback"
         ? "Nothing in your History matched this Question — this is what you wrote in the last few days."
         : "Nothing in your History matched this Question."}
     </p>
@@ -59,9 +65,11 @@ function GroundingNote({ turn }: { turn: ConversationTurn }) {
 // see grounding-disclosure.tsx.
 function ConversationTurnRow({
   turn,
+  entries,
   syncEnabled,
 }: {
   turn: ConversationTurn;
+  entries: Entry[];
   syncEnabled: boolean;
 }) {
   return (
@@ -69,12 +77,7 @@ function ConversationTurnRow({
       <AskedQuestion text={turn.question} />
       <GivenAnswer text={turn.answer} />
       <GroundingNote turn={turn} />
-      <GroundingDisclosure
-        groundingEntryIds={turn.groundingEntryIds}
-        grounded={turn.grounded}
-        fallbackUsed={turn.fallbackUsed}
-        syncEnabled={syncEnabled}
-      />
+      <GroundingDisclosure turn={turn} entries={entries} syncEnabled={syncEnabled} />
     </div>
   );
 }
@@ -97,6 +100,13 @@ export function ReflectionPage() {
   const syncEnabled = useSyncEnabled();
   const turns = useConversationStore((state) => state.turns);
   const addTurn = useConversationStore((state) => state.addTurn);
+  // The Device's own Entry store, not a fetch — Entry ids are minted on the
+  // creating Device and preserved through Sync, so this Device's local copy
+  // (if it has one yet) is the same Entry the server meant. Read once here,
+  // page-level (history-page.tsx's own convention: pages own data access,
+  // components take props — see grounding-disclosure.tsx), rather than once
+  // per rendered turn.
+  const { entries } = useEntryStore();
 
   // The Question currently in flight, or null when nothing is being asked.
   // Deliberately component-local rather than in the Conversation store: an
@@ -196,8 +206,13 @@ export function ReflectionPage() {
 
       {syncEnabled &&
         turns.map((turn, index) => (
-          // biome-ignore lint/suspicious/noArrayIndexKey: turns never reorder or get removed — position is a stable identity for this Device's own in-memory Conversation.
-          <ConversationTurnRow key={index} turn={turn} syncEnabled={syncEnabled} />
+          <ConversationTurnRow
+            // biome-ignore lint/suspicious/noArrayIndexKey: turns never reorder or get removed — position is a stable identity for this Device's own in-memory Conversation.
+            key={index}
+            turn={turn}
+            entries={entries}
+            syncEnabled={syncEnabled}
+          />
         ))}
 
       {syncEnabled && pending !== null && (

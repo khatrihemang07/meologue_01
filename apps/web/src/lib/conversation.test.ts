@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { useConversationStore } from "./conversation";
+import { groundingOutcome, useConversationStore } from "./conversation";
 
 describe("useConversationStore", () => {
   afterEach(() => {
@@ -68,5 +68,26 @@ describe("useConversationStore", () => {
 
     const { turns } = useConversationStore.getState();
     expect(turns.map((turn) => turn.question)).toEqual(["first question", "second question"]);
+  });
+});
+
+// ADR 0024's three-way outcome, derived once so GroundingNote
+// (reflection-page.tsx) and summaryLabel (grounding-disclosure.tsx) can't
+// drift apart on the same (grounded, fallbackUsed) pair.
+describe("groundingOutcome", () => {
+  it("is 'grounded' when the server judged its Grounding answers the Question", () => {
+    expect(groundingOutcome({ grounded: true, fallbackUsed: false })).toBe("grounded");
+  });
+
+  it("is 'disclosedFallback' when the server showed recent Entries instead of an Answer", () => {
+    expect(groundingOutcome({ grounded: false, fallbackUsed: true })).toBe("disclosedFallback");
+  });
+
+  it("is 'nothingFound' when nothing matched and nothing recent existed either", () => {
+    expect(groundingOutcome({ grounded: false, fallbackUsed: false })).toBe("nothingFound");
+  });
+
+  it("prefers 'grounded' even if fallbackUsed were somehow also true", () => {
+    expect(groundingOutcome({ grounded: true, fallbackUsed: true })).toBe("grounded");
   });
 });

@@ -58,14 +58,30 @@ line is then removed from the Answer entirely: the Answer the client stores beco
 on the next Question (`ReflectRequest::prior_turns`), so a leaked marker would round-trip back into
 a future prompt and poison the Conversation with a line that was never meant to be read as prose.
 
-**A missing or unrecognised marker defaults to `grounded: true`, logged at `warn`, and changes
-nothing else.** This is the same posture 0023 already took for extraction failure: a feature that
-exists to make an *honest* judgment must never be able to accidentally fail *closed*. The opposite
-default — treating "no marker found" as "not grounded" — would fire the fallback below, and its
-extra chat call, on every response that simply forgot the line, which is a real cost (another ~7s
-round trip) for a failure mode that has nothing to do with whether the Grounding was actually
-relevant. Defaulting to grounded degrades exactly to what 0023 left behind: an Answer straight from
-this call, no fallback, `grounded: true`.
+**A missing or unrecognised marker defaults to `grounded: !merged.is_empty()`, logged at `warn`,
+and otherwise changes nothing.** (A code-review fix on `f97d697..HEAD` corrected this from an
+unconditional `grounded: true`, which turned out to make `grounded: true` with an empty
+`grounding_entry_ids` reachable — see the next paragraph.) This is the same posture 0023 already
+took for extraction failure: a feature that exists to make an *honest* judgment must never be able
+to accidentally fail *closed*. The opposite default — treating "no marker found" as "not grounded"
+unconditionally — would fire the fallback below, and its extra chat call, on every response that
+simply forgot the line, which is a real cost (another ~7s round trip) for a failure mode that has
+nothing to do with whether the Grounding was actually relevant. Keying the default on whether the
+merged set is empty keeps that fail-open intent exactly where retrieval found something — a
+forgotten marker over real Grounding still degrades to what 0023 left behind: an Answer straight
+from this call, no fallback, `grounded: true` — while a forgotten marker over nothing now falls
+into the disclosed fallback below, which is the correct outcome when retrieval genuinely found
+nothing, not a wasted call.
+
+**`grounded: true` must never be reachable with an empty `grounding_entry_ids`.** Before the
+code-review fix above, a merged set that was empty *and* a missing/garbled marker combined to
+produce exactly that: `grounded: true, grounding_entry_ids: [], fallback_used: false`. Nothing but
+the model's own prose then said anything was missing — ticket 6's client (no note) and ticket 7's
+disclosure (`null` on empty ids) both stay silent in that state, which is the exact dependence on
+the model's own wording ticket 6 exists to remove, and a direct violation of CONTEXT.md's rule that
+an Answer with no Grounding behind it says so plainly. Defaulting the `None` case to
+`!merged.is_empty()` makes that combination unrepresentable: `grounded: true` now implies a
+non-empty merged set by construction, whether the verdict came from a marker or from this default.
 
 **A `GROUNDED: no` verdict triggers a disclosed fallback — never a fourth retrieval source, and
 never merged into Grounding.** It runs only after the verdict, is never part of the normal

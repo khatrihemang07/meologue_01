@@ -186,6 +186,11 @@ impl LlmClient for FakeChatClient {
 struct FakeEmbedClient {
     default_vector: Vec<f32>,
     overrides: HashMap<String, Vec<f32>>,
+    // Text that must fail `embed_query` outright, simulating a transient
+    // embedding-endpoint error against a specific query string — used to
+    // exercise the keyword/question retrieval failure paths in
+    // `run_reflect` without touching every call the fake serves.
+    failures: std::collections::HashSet<String>,
     // Every text `embed_query` was asked to embed, in call order — lets a
     // test assert on the *exact string* that reached the embed client, not
     // just on what vector came back. Needed for asserting the keyword
@@ -199,12 +204,21 @@ impl FakeEmbedClient {
         Self {
             default_vector: vec![0.1_f32; 640],
             overrides: HashMap::new(),
+            failures: std::collections::HashSet::new(),
             calls: Mutex::new(Vec::new()),
         }
     }
 
     fn with_override(mut self, text: impl Into<String>, vector: Vec<f32>) -> Self {
         self.overrides.insert(text.into(), vector);
+        self
+    }
+
+    /// Makes `embed_query` return an `Err` when asked to embed exactly
+    /// `text`, rather than a vector — for exercising a retrieval source's
+    /// own failure path.
+    fn with_failure(mut self, text: impl Into<String>) -> Self {
+        self.failures.insert(text.into());
         self
     }
 
@@ -225,6 +239,9 @@ impl LlmClient for FakeEmbedClient {
 
     async fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
         self.calls.lock().unwrap().push(text.to_string());
+        if self.failures.contains(text) {
+            bail!("simulated embed_query failure for {text:?}");
+        }
         Ok(self
             .overrides
             .get(text)
@@ -1284,4 +1301,133 @@ async fn a_noisy_marker_is_still_recognised_end_to_end(pool: PgPool) {
     assert_eq!(body["grounded"], false);
     assert_eq!(body["fallback_used"], true);
     assert_eq!(grounding_ids(&body), vec![recent]);
+}
+
+// ---------------------------------------------------------------------
+// Code review fixes on f97d697..HEAD — a widening retrieval must not be
+// able to narrow the Answer to zero (docs/adr/0023), and `grounded: true`
+// must not be reachable with no Grounding behind it (docs/adr/0024).
+// ---------------------------------------------------------------------
+
+/// A transient failure embedding the *keyword* — a source that exists only
+/// to widen recall beyond question-only retrieval (docs/adr/0023) — must
+/// not fail the Question: it degrades to an empty keyword-search result and
+/// the Question is still answered from question-only retrieval, exactly
+/// ticket 4's floor.
+#[sqlx::test]
+async fn a_keyword_embedding_failure_still_answers_from_question_only_retrieval(pool: PgPool) {
+    let device = Uuid::new_v4();
+    let entry = Uuid::new_v4();
+    insert_embedded_entry(
+        &pool,
+        entry,
+        device,
+        "the knee is better now",
+        "2026-06-01T00:00:00Z",
+    )
+    .await;
+
+    let chat = Arc::new(FakeChatClient::with_extraction(
+        "Your knee has improved.",
+        r#"{"date_range": null, "keyword": "wedding"}"#,
+    ));
+    // The wrapped form `keyword_query` embeds, not the bare "wedding" —
+    // matching how `a_keyword_extraction_grounds_an_entry_only_the_keyword_search_finds`
+    // above already keys its override.
+    let embed = Arc::new(FakeEmbedClient::new().with_failure("What did I write about wedding?"));
+    let reflect = reflect_state_with_embed(chat.clone(), embed);
+
+    let (status, body) = post_reflect(
+        &pool,
+        Some(reflect),
+        json!({ "protocol_version": 1, "question": "How's my knee?", "prior_turns": [] }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["answer"], "Your knee has improved.");
+    assert!(grounding_ids(&body).contains(&entry));
+    assert_eq!(
+        chat.call_count(),
+        2,
+        "a degraded keyword search must not spend the fallback's extra chat call"
+    );
+}
+
+/// Embedding the Question itself has no floor left to fall back to —
+/// ticket 4 already returned an error in exactly this case, so propagating
+/// it *is* "at least what ticket 4 already gave" (docs/adr/0023). Unlike
+/// the keyword/range widening sources, this must remain fatal.
+#[sqlx::test]
+async fn a_question_embedding_failure_still_fails_the_request(pool: PgPool) {
+    let chat = Arc::new(FakeChatClient::new("unused"));
+    let embed = Arc::new(FakeEmbedClient::new().with_failure("How's my knee?"));
+    let reflect = reflect_state_with_embed(chat, embed);
+
+    let (status, _) = post_reflect(
+        &pool,
+        Some(reflect),
+        json!({ "protocol_version": 1, "question": "How's my knee?", "prior_turns": [] }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+/// A missing verdict marker must not be able to make `grounded: true`
+/// reachable with nothing behind it (docs/adr/0024): with an empty merged
+/// set, "no marker" now defaults to `grounded: false`, and the disclosed
+/// fallback runs exactly as it would for an explicit "GROUNDED: no" when
+/// recent Entries exist to show.
+#[sqlx::test]
+async fn no_marker_with_an_empty_merged_set_defaults_to_ungrounded_and_runs_the_fallback(
+    pool: PgPool,
+) {
+    let device = Uuid::new_v4();
+    let now = Utc::now();
+    let recent = Uuid::new_v4();
+    insert_embedded_entry_with_vector(
+        &pool,
+        recent,
+        device,
+        "went for a run today",
+        &(now - Duration::hours(2)).to_rfc3339(),
+        &orthogonal_vector(),
+    )
+    .await;
+
+    // No "GROUNDED:" marker at all in the first answering call's response,
+    // and nothing in the History matches the Question's own search (the
+    // only seeded Entry is orthogonal to it), so the merged Grounding set
+    // is empty.
+    let chat = Arc::new(
+        FakeChatClient::new("I couldn't find anything about scuba diving.").with_fallback_answer(
+            "Nothing matching the Question was found; lately you wrote about a run.",
+        ),
+    );
+
+    let (status, body) = post_reflect(
+        &pool,
+        Some(reflect_state(chat.clone())),
+        json!({
+            "protocol_version": 1,
+            "question": "Have I written anything about scuba diving in Portugal?",
+            "prior_turns": [],
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["grounded"], false);
+    assert_eq!(body["fallback_used"], true);
+    assert_eq!(
+        body["answer"],
+        "Nothing matching the Question was found; lately you wrote about a run."
+    );
+    assert_eq!(grounding_ids(&body), vec![recent]);
+    assert_eq!(
+        chat.call_count(),
+        3,
+        "an empty merged set with no marker should still run the disclosed fallback's third call"
+    );
 }

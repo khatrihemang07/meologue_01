@@ -289,6 +289,14 @@ async fn run_reflect(
     // immediate empty `Ok`) when extraction found nothing to feed them, so
     // this always resolves to exactly the three futures below regardless of
     // what extraction returned.
+    //
+    // Question search is the one source with no floor left to fall back to
+    // if it fails: ticket 4 (question-only retrieval) *is* the floor
+    // everything else here has to preserve, so a failure here propagates —
+    // that "at least what ticket 4 already gave" (docs/adr/0023, on
+    // extraction failure) is exactly as true of the Question's own
+    // embedding call as it is of extraction, since ticket 4 already
+    // returned an error in precisely this case.
     let question_search = async {
         // The *query* embedding, not `embed_document` — Harrier's
         // instruction wrapper is what widens the relevant-vs-irrelevant
@@ -302,32 +310,71 @@ async fn run_reflect(
         retrieve_nearest(pool, &query_vector, RETRIEVAL_LIMIT).await
     };
 
+    // Keyword and range search exist purely to *widen* recall beyond
+    // question-only retrieval (docs/adr/0023's fan-out) — a source whose
+    // only job is widening must never be able to narrow the Answer to zero
+    // by failing. Each degrades its own `Err` (a transient embedding-call
+    // or database failure) to an empty `Vec` plus a `warn` naming which
+    // source failed and why — exactly the posture extraction failure
+    // already takes — rather than failing a Question that question-only
+    // retrieval alone would have answered.
     let keyword_search = async {
-        match &extraction.keyword {
-            Some(keyword) => {
-                let keyword_vector = reflect
-                    .embed_client
-                    .embed_query(&keyword_query(keyword))
-                    .await
-                    .context("embedding the extracted keyword failed")?;
-                retrieve_nearest(pool, &keyword_vector, RETRIEVAL_LIMIT).await
+        let result: anyhow::Result<Vec<GroundingEntry>> = async {
+            match &extraction.keyword {
+                Some(keyword) => {
+                    let keyword_vector = reflect
+                        .embed_client
+                        .embed_query(&keyword_query(keyword))
+                        .await
+                        .context("embedding the extracted keyword failed")?;
+                    retrieve_nearest(pool, &keyword_vector, RETRIEVAL_LIMIT).await
+                }
+                None => Ok(Vec::new()),
             }
-            None => Ok(Vec::new()),
         }
+        .await;
+
+        result.unwrap_or_else(|err| {
+            tracing::warn!(
+                error = ?err,
+                source = "keyword",
+                "widening retrieval failed; degrading to empty rather than narrowing the Answer \
+                 below what question-only retrieval already gives"
+            );
+            Vec::new()
+        })
     };
 
     let range_search = async {
-        match extraction.date_range {
-            Some((from, to)) => {
-                let (from_utc, to_utc) = local_date_range_to_utc(from, to, offset_minutes);
-                retrieve_range(pool, from_utc, to_utc, RETRIEVAL_LIMIT).await
+        let result: anyhow::Result<Vec<GroundingEntry>> = async {
+            match extraction.date_range {
+                Some((from, to)) => {
+                    let (from_utc, to_utc) = local_date_range_to_utc(from, to, offset_minutes);
+                    retrieve_range(pool, from_utc, to_utc, RETRIEVAL_LIMIT).await
+                }
+                None => Ok(Vec::new()),
             }
-            None => Ok(Vec::new()),
         }
+        .await;
+
+        result.unwrap_or_else(|err| {
+            tracing::warn!(
+                error = ?err,
+                source = "range",
+                "widening retrieval failed; degrading to empty rather than narrowing the Answer \
+                 below what question-only retrieval already gives"
+            );
+            Vec::new()
+        })
     };
 
-    let (question_entries, keyword_entries, range_entries) =
-        tokio::try_join!(question_search, keyword_search, range_search)?;
+    // `join!`, not `try_join!` — the two widening sources above have
+    // already turned their own failures into an empty `Vec`, so the only
+    // `Result` left to resolve here is the question search's, and it alone
+    // can still fail the Question (see its own comment above).
+    let (question_result, keyword_entries, range_entries) =
+        tokio::join!(question_search, keyword_search, range_search);
+    let question_entries = question_result?;
 
     // Merge rule (docs/adr/0023): concatenate in source *priority* order —
     // question-search (similarity desc, as `retrieve_nearest` already
@@ -372,17 +419,29 @@ async fn run_reflect(
     let grounded = match verdict {
         Some(verdict) => verdict,
         None => {
-            // A missing or unrecognised marker must never *narrow* what the
-            // Question gets — the opposite default would fire the fallback
-            // (and its extra chat call) on every response that merely
-            // forgot the marker. Defaulting to grounded degrades exactly to
-            // ticket 5's behaviour: an Answer straight from this call, no
-            // fallback, `grounded: true`.
+            // A missing or unrecognised marker must still fail open when
+            // there is real Grounding behind it — the opposite default
+            // (always ungrounded) would fire the fallback and its extra
+            // chat call on every response that merely forgot the marker,
+            // even when retrieval genuinely found something. But it must
+            // never let `grounded: true` reach the client paired with an
+            // empty `grounding_entry_ids`: that combination is exactly what
+            // CONTEXT.md's "an Answer with no Grounding behind it says so
+            // plainly" forbids, and nothing but the model's own wording
+            // would say anything was missing if it were allowed. Defaulting
+            // to `!merged.is_empty()` gets both: a forgotten marker over
+            // real Grounding still degrades to ticket 5's behaviour
+            // (grounded, no fallback, no third call); a forgotten marker
+            // over nothing falls into the disclosed fallback below, which
+            // is the correct outcome when retrieval genuinely found
+            // nothing, not a wasted call.
             tracing::warn!(
                 answer = %raw_answer,
-                "no GROUNDED marker found in the answering call's response; defaulting to grounded"
+                merged_is_empty = merged.is_empty(),
+                "no GROUNDED marker found in the answering call's response; defaulting grounded \
+                 to whether retrieval found anything"
             );
-            true
+            !merged.is_empty()
         }
     };
 
