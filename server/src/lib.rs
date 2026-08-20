@@ -221,15 +221,17 @@ pub fn router_with_reflection(
         .route("/v1/metrics", get(metrics::metrics_handler));
 
     if reflect.is_some() {
-        // `/v1/sessions/{id}` is gated on the same `reflect.is_some()` check
-        // as `/v1/reflect`, even though `sessions::get_session_handler`
-        // itself never touches `ReflectState` — a Server with no Session to
-        // fetch (Reflection unconfigured, so nothing ever created one) must
-        // 404 exactly like an older Server that never had the route, the
-        // same reasoning `v1_not_found`'s doc comment gives for
+        // `/v1/sessions/{id}` and `/v1/sessions` are gated on the same
+        // `reflect.is_some()` check as `/v1/reflect`, even though neither
+        // `sessions::get_session_handler` nor `sessions::list_sessions_handler`
+        // ever touches `ReflectState` — a Server with no Session to fetch
+        // or list (Reflection unconfigured, so nothing ever created one)
+        // must 404 exactly like an older Server that never had the route,
+        // the same reasoning `v1_not_found`'s doc comment gives for
         // `/v1/reflect` itself.
         api_router = api_router
             .route("/v1/reflect", post(reflect::reflect_handler))
+            .route("/v1/sessions", get(sessions::list_sessions_handler))
             .route("/v1/sessions/{id}", get(sessions::get_session_handler));
     }
     // Always registered, whether or not Reflection is configured: this is

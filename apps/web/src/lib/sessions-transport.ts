@@ -1,4 +1,4 @@
-import type { WireSessionResponse } from "@meologue/core";
+import type { WireSessionResponse, WireSessionSummary } from "@meologue/core";
 import { useSettingsStore } from "@/lib/settings";
 
 /**
@@ -39,4 +39,38 @@ export async function sessionsTransport(sessionId: string): Promise<SessionResul
 
   const body = (await response.json()) as WireSessionResponse;
   return { ok: true, session: body };
+}
+
+/**
+ * `GET /v1/sessions` — every Session the Server holds, newest first by when
+ * it was last used, no Turns. Mirrors `sessionsTransport` above, minus the
+ * `"not-found"` reason: there is no id to miss here, so a non-2xx (a 404
+ * meaning this Server predates the route, same as `reflectTransport`'s, or
+ * any other failure) collapses to the one honest `"unreachable"` catch-all
+ * — ADR 0025 requires the list to say plainly that it cannot be shown
+ * rather than render as an empty list a reader could mistake for "no
+ * Sessions exist yet."
+ */
+export type SessionsListResult =
+  | { ok: true; sessions: WireSessionSummary[] }
+  | { ok: false; reason: "unreachable" };
+
+export async function sessionsListTransport(): Promise<SessionsListResult> {
+  // Read per request, not hoisted — same reasoning as sessionsTransport: a
+  // Server URL saved between two opens takes effect on the very next one.
+  const url = useSettingsStore.getState().serverUrl;
+
+  let response: Response;
+  try {
+    response = await fetch(`${url}/v1/sessions`);
+  } catch {
+    return { ok: false, reason: "unreachable" };
+  }
+
+  if (!response.ok) {
+    return { ok: false, reason: "unreachable" };
+  }
+
+  const body = (await response.json()) as WireSessionSummary[];
+  return { ok: true, sessions: body };
 }

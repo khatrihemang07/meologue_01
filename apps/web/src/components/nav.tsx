@@ -1,6 +1,7 @@
 import {
   History as HistoryIcon,
   Lightbulb,
+  List as ListIcon,
   Settings as SettingsIcon,
   SquarePen,
 } from "lucide-react";
@@ -66,6 +67,28 @@ export function Nav() {
 // regardless of Entry store status, same reasoning as Nav above and ADR
 // 0008/0009: Settings must stay reachable and usable even when the store
 // never opens.
+// Ticket 62's Sessions affordance: an app-bar action beside SettingsLink,
+// not a fourth NavLink — ADR 0018/0020's three-to-five destination count
+// (Composer, History, Reflect) stays exactly what it was, the same shape
+// Settings already has one level down. It only ever renders on Reflection's
+// pages (reflection-page.tsx's `action` slot), since it opens a list of
+// Reflection's own Sessions (`/reflect/list`) rather than being a peer view
+// of History the way the three Nav destinations above are.
+export function SessionsLink() {
+  return (
+    <Link
+      to="/reflect/list"
+      aria-label="Sessions"
+      // Matches SettingsLink's own className exactly — same size-11 (44px)
+      // tap-target and muted-to-foreground hover treatment for the same
+      // kind of app-bar icon control.
+      className="flex size-11 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+    >
+      <ListIcon aria-hidden="true" className="size-4" />
+    </Link>
+  );
+}
+
 export function SettingsLink() {
   return (
     <Link

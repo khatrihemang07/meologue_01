@@ -43,6 +43,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_sessions_handler"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/sessions/{id}": {
         parameters: {
             query?: never;
@@ -219,6 +235,23 @@ export interface components {
             updated_at: string;
         };
         /**
+         * @description A Session's own row — everything about it except its Turns. `Serialize`
+         *     and `ToSchema` earn their keep here (rather than living on a
+         *     list-only-shaped twin) because this is *exactly* the wire shape
+         *     `list_sessions_handler` returns for each Session: id, title,
+         *     created_at, updated_at, nothing else — the same fields `SessionResponse`
+         *     embeds alongside `turns` for the single-Session fetch.
+         */
+        SessionRow: {
+            /** Format: date-time */
+            created_at: string;
+            /** Format: uuid */
+            id: string;
+            title: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        /**
          * @description One Question/Answer pair persisted inside a Session, as loaded from
          *     `session_turns` — oldest first (`load_turns` orders by `seq asc`). This
          *     is also what `reflect.rs`'s `build_messages` takes a slice of in place
@@ -313,6 +346,26 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    list_sessions_handler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every Session the Server holds, newest first by when it was last used */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionRow"][];
+                };
             };
         };
     };

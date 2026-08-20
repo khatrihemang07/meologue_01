@@ -4,6 +4,7 @@ import { ComposerPage } from "@/pages/composer-page";
 import { EntryStoreLayout } from "@/pages/entry-store-layout";
 import { HistoryPage } from "@/pages/history-page";
 import { ReflectionPage } from "@/pages/reflection-page";
+import { SessionsPage } from "@/pages/sessions-page";
 import { SettingsPage } from "@/pages/settings-page";
 
 // Real paths, not hash routing (ticket 25) — verified safe on all three
@@ -32,8 +33,13 @@ function App() {
               one (ADR 0025). Session ids are uuids, so they never contain a
               "." and stay safe under the constraint above — but flagging
               that here so nobody later routes something dotted into this
-              segment. */}
+              segment. `/reflect/list` (ticket 62) is the Sessions screen
+              reached from Reflection's app bar — a static segment, so
+              react-router ranks it above `:sessionId` regardless of
+              declaration order, and no Session id can ever collide with the
+              literal word "list". */}
           <Route path="/reflect" element={<ReflectionPage />} />
+          <Route path="/reflect/list" element={<SessionsPage />} />
           <Route path="/reflect/:sessionId" element={<ReflectionPage />} />
         </Route>
         <Route path="/settings" element={<SettingsPage />} />

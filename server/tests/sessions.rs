@@ -76,10 +76,55 @@ async fn get_session(
     (status, json)
 }
 
+async fn list_sessions(pool: &PgPool, reflect: Option<ReflectState>) -> (StatusCode, Value) {
+    let app =
+        meologue_server::router_with_reflection(pool.clone(), empty_static_dir(), None, reflect);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/sessions")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let json = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes).unwrap()
+    };
+    (status, json)
+}
+
 async fn insert_session(pool: &PgPool, id: Uuid, title: &str) {
     sqlx::query("insert into sessions (id, title) values ($1, $2)")
         .bind(id)
         .bind(title)
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+/// Seeds a Session with explicit `created_at`/`updated_at`, rather than
+/// letting both default to `now()` — the only way to pin `created_at` and
+/// `updated_at` into two different orders, which `list_sessions_orders_by_updated_at_not_created_at`
+/// below needs to actually prove the list orders by the right column.
+async fn insert_session_with_times(
+    pool: &PgPool,
+    id: Uuid,
+    title: &str,
+    created_at: chrono::DateTime<chrono::Utc>,
+    updated_at: chrono::DateTime<chrono::Utc>,
+) {
+    sqlx::query("insert into sessions (id, title, created_at, updated_at) values ($1, $2, $3, $4)")
+        .bind(id)
+        .bind(title)
+        .bind(created_at)
+        .bind(updated_at)
         .execute(pool)
         .await
         .unwrap();
@@ -187,4 +232,65 @@ async fn deleting_a_session_cascades_its_turns(pool: PgPool) {
             .await
             .unwrap();
     assert_eq!(turn_count_after, 0);
+}
+
+/// `GET /v1/sessions` orders newest-first by `updated_at` — the column
+/// `record_turn` bumps on every appended Turn — not by `created_at`. Seeded
+/// so the two orders actually disagree: the Session created first is the
+/// one updated most recently, so a list that (bug) ordered by `created_at`
+/// would come back in the wrong order and this test would catch it.
+#[sqlx::test]
+async fn list_sessions_orders_by_updated_at_not_created_at(pool: PgPool) {
+    use chrono::{Duration, Utc};
+
+    let now = Utc::now();
+    let older_id = Uuid::new_v4();
+    let newer_id = Uuid::new_v4();
+
+    // Created first, but touched most recently.
+    insert_session_with_times(
+        &pool,
+        older_id,
+        "Created first, used most recently",
+        now - Duration::hours(2),
+        now,
+    )
+    .await;
+    // Created second, but never touched again since.
+    insert_session_with_times(
+        &pool,
+        newer_id,
+        "Created second, not used since",
+        now - Duration::hours(1),
+        now - Duration::hours(1),
+    )
+    .await;
+
+    let (status, body) = list_sessions(&pool, Some(reflect_state())).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let sessions = body.as_array().unwrap();
+    assert_eq!(sessions.len(), 2);
+    assert_eq!(sessions[0]["id"], older_id.to_string());
+    assert_eq!(sessions[1]["id"], newer_id.to_string());
+}
+
+/// No Sessions exist yet is an ordinary, empty list — `200 []` — not a 404.
+#[sqlx::test]
+async fn an_empty_session_table_is_200_empty_list(pool: PgPool) {
+    let (status, body) = list_sessions(&pool, Some(reflect_state())).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body.as_array().unwrap().len(), 0);
+}
+
+/// `/v1/sessions` is gated on Reflection being configured, exactly like
+/// `/v1/sessions/{id}` (`lib.rs`'s `reflect.is_some()` block) — a Server
+/// with no chat model configured never created a Session in the first
+/// place, so it should 404 exactly like an older Server that never had the
+/// route, not fall through to the SPA app shell.
+#[sqlx::test]
+async fn the_list_route_is_absent_when_chat_is_unconfigured(pool: PgPool) {
+    let (status, _) = list_sessions(&pool, None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }

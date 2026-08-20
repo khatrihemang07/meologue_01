@@ -66,6 +66,29 @@
         }
       }
     },
+    "/v1/sessions": {
+      "get": {
+        "tags": [
+          "crate::sessions"
+        ],
+        "operationId": "list_sessions_handler",
+        "responses": {
+          "200": {
+            "description": "Every Session the Server holds, newest first by when it was last used",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SessionRow"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/sessions/{id}": {
       "get": {
         "tags": [
@@ -307,6 +330,33 @@
               "$ref": "#/components/schemas/SessionTurnRow"
             },
             "description": "Oldest first — the order a Conversation was actually lived in, and\nthe order `reflect.rs` replays Turns into a follow-up Question's\nprompt."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "SessionRow": {
+        "type": "object",
+        "description": "A Session's own row — everything about it except its Turns. `Serialize`\nand `ToSchema` earn their keep here (rather than living on a\nlist-only-shaped twin) because this is *exactly* the wire shape\n`list_sessions_handler` returns for each Session: id, title,\ncreated_at, updated_at, nothing else — the same fields `SessionResponse`\nembeds alongside `turns` for the single-Session fetch.",
+        "required": [
+          "id",
+          "title",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string"
           },
           "updated_at": {
             "type": "string",

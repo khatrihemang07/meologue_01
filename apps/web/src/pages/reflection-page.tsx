@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import { GroundingDisclosure } from "@/components/grounding-disclosure";
-import { Nav, SettingsLink } from "@/components/nav";
+import { Nav, SessionsLink, SettingsLink } from "@/components/nav";
 import { QuestionComposer } from "@/components/question-composer";
 import { Shell } from "@/components/shell";
 import {
@@ -241,7 +241,12 @@ export function ReflectionPage() {
   return (
     <Shell
       title="Reflect"
-      action={<SettingsLink />}
+      action={
+        <>
+          <SessionsLink />
+          <SettingsLink />
+        </>
+      }
       nav={<Nav />}
       pinnedThread={syncEnabled ? { watch: turns.length, forceToNewest: askSignal } : undefined}
       composerSlot={

@@ -3,14 +3,17 @@
 //! a background loop with a Cursor (`docs/adr/0025`): unlike `/v1/sync`,
 //! there is no incremental "what's new since" shape here.
 //!
+//! `GET /v1/sessions` (ticket 62) lists every Session's own row — no
+//! Turns, so it stays cheap regardless of how long any one Conversation
+//! has grown — newest first by `updated_at`, the column `record_turn` bumps
+//! on every appended Turn. There is no `?q=` search and no delete yet
+//! (issues #64 and #63); this endpoint only lists.
+//!
 //! This module also holds the row types and SQL `reflect.rs` uses to load a
 //! Session's prior Turns before asking, and to persist a new Turn (creating
 //! the Session first if it doesn't exist yet) once an Answer succeeds —
 //! kept here rather than duplicated in `reflect.rs` so there is exactly one
 //! place that knows the shape of `sessions`/`session_turns`.
-//!
-//! Only the one read endpoint exists yet. Listing, searching and deleting
-//! Sessions are separate, later tickets.
 
 use axum::{
     Json,
@@ -23,9 +26,14 @@ use sqlx::{FromRow, PgPool};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-/// A Session's own row — everything about it except its Turns.
-#[derive(Debug, Clone, FromRow)]
-pub(crate) struct SessionRow {
+/// A Session's own row — everything about it except its Turns. `Serialize`
+/// and `ToSchema` earn their keep here (rather than living on a
+/// list-only-shaped twin) because this is *exactly* the wire shape
+/// `list_sessions_handler` returns for each Session: id, title,
+/// created_at, updated_at, nothing else — the same fields `SessionResponse`
+/// embeds alongside `turns` for the single-Session fetch.
+#[derive(Debug, Clone, FromRow, Serialize, ToSchema)]
+pub struct SessionRow {
     pub id: Uuid,
     pub title: String,
     pub created_at: DateTime<Utc>,
@@ -92,6 +100,41 @@ pub async fn get_session_handler(
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/sessions",
+    responses(
+        (status = 200, description = "Every Session the Server holds, newest first by when it was last used", body = Vec<SessionRow>),
+    )
+)]
+pub async fn list_sessions_handler(
+    State(pool): State<PgPool>,
+) -> Result<Json<Vec<SessionRow>>, StatusCode> {
+    match list_sessions(&pool).await {
+        Ok(sessions) => Ok(Json(sessions)),
+        Err(err) => {
+            tracing::error!(error = ?err, "listing sessions failed");
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+/// Every Session's own row, newest first by `updated_at` — the column
+/// `record_turn` bumps on every appended Turn, so "newest" here means
+/// "most recently used," not "most recently created." No Turns are loaded;
+/// a list of every Session's whole Conversation would be unbounded in a
+/// way one Session's fetch (`load_turns`) never is. An empty table returns
+/// an empty `Vec`, not an error — there is no such thing as "no Sessions
+/// yet" as a failure.
+async fn list_sessions(pool: &PgPool) -> anyhow::Result<Vec<SessionRow>> {
+    let sessions = sqlx::query_as::<_, SessionRow>(
+        "select id, title, created_at, updated_at from sessions order by updated_at desc",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(sessions)
 }
 
 async fn run_get_session(pool: &PgPool, id: Uuid) -> anyhow::Result<Option<SessionResponse>> {

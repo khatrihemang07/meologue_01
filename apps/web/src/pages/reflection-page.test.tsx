@@ -151,6 +151,15 @@ describe("ReflectionPage", () => {
     expect(screen.getByRole("link", { name: "History" })).not.toHaveAttribute("aria-current");
   });
 
+  // Ticket 62: an app-bar action beside Settings, not a fourth NavLink —
+  // ADR 0018/0020's three-to-five destination count stays exactly Composer,
+  // History, Reflect.
+  it("shows a Sessions affordance in the app bar, linking to /reflect/list", () => {
+    renderReflectionPage();
+
+    expect(screen.getByRole("link", { name: "Sessions" })).toHaveAttribute("href", "/reflect/list");
+  });
+
   it("shows a hint that Reflection needs a Server URL when Sync is off, with no Question field", () => {
     renderReflectionPage();
 

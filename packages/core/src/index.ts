@@ -19,5 +19,6 @@ export type {
   WireReflectRequest,
   WireReflectResponse,
   WireSessionResponse,
+  WireSessionSummary,
   WireSessionTurn,
 } from "./wire";

@@ -7,5 +7,6 @@ export type WireEntryInput = components["schemas"]["EntryInput"];
 export type WireEntryOutput = components["schemas"]["EntryOutput"];
 export type WireSessionResponse = components["schemas"]["SessionResponse"];
 export type WireSessionTurn = components["schemas"]["SessionTurnRow"];
+export type WireSessionSummary = components["schemas"]["SessionRow"];
 export type WireReflectRequest = components["schemas"]["ReflectRequest"];
 export type WireReflectResponse = components["schemas"]["ReflectResponse"];
