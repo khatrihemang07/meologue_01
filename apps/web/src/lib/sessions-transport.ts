@@ -50,19 +50,34 @@ export async function sessionsTransport(sessionId: string): Promise<SessionResul
  * — ADR 0025 requires the list to say plainly that it cannot be shown
  * rather than render as an empty list a reader could mistake for "no
  * Sessions exist yet."
+ *
+ * `query` is issue #64's Search: an absent or blank string omits `?q=`
+ * entirely rather than sending an empty one, so a Server that predates this
+ * ticket still gets exactly the request it always did (and the existing
+ * "fetches .../v1/sessions" test above keeps working unmodified for the
+ * no-search case). `encodeURIComponent` via `URLSearchParams` is what
+ * carries a term with reserved characters (spaces, `&`, `%`, `?`, …)
+ * correctly onto the wire — the server's own `ILIKE` escaping (issue #64,
+ * `server/src/sessions.rs`) only starts once the raw text has actually
+ * arrived intact.
  */
 export type SessionsListResult =
   | { ok: true; sessions: WireSessionSummary[] }
   | { ok: false; reason: "unreachable" };
 
-export async function sessionsListTransport(): Promise<SessionsListResult> {
+export async function sessionsListTransport(query?: string): Promise<SessionsListResult> {
   // Read per request, not hoisted — same reasoning as sessionsTransport: a
   // Server URL saved between two opens takes effect on the very next one.
   const url = useSettingsStore.getState().serverUrl;
+  const trimmed = query?.trim();
+  const target =
+    trimmed && trimmed !== ""
+      ? `${url}/v1/sessions?${new URLSearchParams({ q: trimmed })}`
+      : `${url}/v1/sessions`;
 
   let response: Response;
   try {
-    response = await fetch(`${url}/v1/sessions`);
+    response = await fetch(target);
   } catch {
     return { ok: false, reason: "unreachable" };
   }

@@ -86,6 +86,33 @@ function stubSessionsFetchWithDelete(
   return fetchMock;
 }
 
+/**
+ * Issue #64: a fetch stub whose `GET /v1/sessions` response depends on the
+ * request's own `?q=` — keyed by the exact (decoded) query string, `""` for
+ * "no `q`, or blank". This is deliberately not a re-implementation of the
+ * Server's `ILIKE` matching (`server/tests/sessions.rs` already covers
+ * that); it exists to prove the page's own wiring: that typing changes what
+ * gets requested and rendered, and that the request is built and decoded
+ * correctly on a round trip.
+ */
+function stubSessionsFetchByQuery(
+  responses: Record<
+    string,
+    { id: string; title: string; created_at: string; updated_at: string }[]
+  >,
+) {
+  const fetchMock = vi.fn(async (url: string) => {
+    const q = new URL(url).searchParams.get("q") ?? "";
+    return { ok: true, status: 200, json: async () => responses[q] ?? [] };
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+function openSearch() {
+  fireEvent.click(screen.getByRole("button", { name: "Search Sessions" }));
+}
+
 const oneSession = {
   id: "session-1",
   title: "How has my knee been?",
@@ -305,5 +332,99 @@ describe("SessionsPage", () => {
     // — and says so inline too, rather than this failure being silent.
     expect(screen.getByText(/how has my knee been/i)).toBeInTheDocument();
     expect(screen.getByText(/couldn't delete this session/i)).toBeInTheDocument();
+  });
+
+  it("typing in Search narrows the list to what the Server returns for that query", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    const flatMoveSession = {
+      id: "session-2",
+      title: "What did I write about the flat move?",
+      created_at: "2026-07-01T00:00:00Z",
+      updated_at: "2026-07-01T00:00:00Z",
+    };
+    stubSessionsFetchByQuery({
+      "": [oneSession, flatMoveSession],
+      flat: [flatMoveSession],
+    });
+
+    renderSessionsPage();
+    await screen.findByText("How has my knee been?");
+    expect(screen.getByText("What did I write about the flat move?")).toBeInTheDocument();
+
+    openSearch();
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search Sessions" }), {
+      target: { value: "flat" },
+    });
+
+    await waitFor(() =>
+      expect(screen.queryByText("How has my knee been?")).not.toBeInTheDocument(),
+    );
+    expect(screen.getByText("What did I write about the flat move?")).toBeInTheDocument();
+  });
+
+  it("clearing the field restores the full list", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    const flatMoveSession = {
+      id: "session-2",
+      title: "What did I write about the flat move?",
+      created_at: "2026-07-01T00:00:00Z",
+      updated_at: "2026-07-01T00:00:00Z",
+    };
+    stubSessionsFetchByQuery({
+      "": [oneSession, flatMoveSession],
+      flat: [flatMoveSession],
+    });
+
+    renderSessionsPage();
+    await screen.findByText("How has my knee been?");
+
+    openSearch();
+    const box = screen.getByRole("searchbox", { name: "Search Sessions" });
+    fireEvent.change(box, { target: { value: "flat" } });
+    await waitFor(() =>
+      expect(screen.queryByText("How has my knee been?")).not.toBeInTheDocument(),
+    );
+
+    fireEvent.change(box, { target: { value: "" } });
+
+    await waitFor(() => expect(screen.getByText("How has my knee been?")).toBeInTheDocument());
+    expect(screen.getByText("What did I write about the flat move?")).toBeInTheDocument();
+  });
+
+  it("shows the 'nothing matched' state, not the 'no Sessions yet' state, when a search matches nothing", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    stubSessionsFetchByQuery({
+      "": [oneSession],
+      "no such thing": [],
+    });
+
+    renderSessionsPage();
+    await screen.findByText("How has my knee been?");
+
+    openSearch();
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search Sessions" }), {
+      target: { value: "no such thing" },
+    });
+
+    expect(await screen.findByText(/no sessions match/i)).toBeInTheDocument();
+    expect(screen.queryByText(/no sessions yet/i)).not.toBeInTheDocument();
+  });
+
+  it("sends the query to the transport correctly encoded, including special characters", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 200, json: async () => [] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderSessionsPage();
+    await screen.findByText(/no sessions yet/i);
+
+    openSearch();
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search Sessions" }), {
+      target: { value: "knee %" },
+    });
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith("https://phone.example:41207/v1/sessions?q=knee+%25"),
+    );
   });
 });

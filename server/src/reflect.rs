@@ -18,6 +18,12 @@
 //! (`sessions::record_turn`) only once an Answer has actually succeeded, so
 //! a failed ask leaves neither a Session nor a Turn behind.
 //!
+//! Issue #66: the extraction chat call now reads that same windowed
+//! Conversation too, not just the bare new Question — a follow-up like
+//! "and the week before that?" has no antecedent for "that" without it. See
+//! `extraction_system_prompt` for how the Conversation is folded in without
+//! risking the JSON-only contract that call depends on.
+//!
 //! See CONTEXT.md's Grounding entry for the rule this route exists to
 //! honour: an Answer with nothing behind it says so, rather than inventing
 //! a past the user didn't live.
@@ -87,8 +93,8 @@ const MAX_UTC_OFFSET_MINUTES: i32 = 840;
 const FALLBACK_WINDOW_DAYS: i64 = 3;
 
 /// How many of a Session's most recent Turns `run_reflect` replays into
-/// each chat call — the answering call and the disclosed-fallback call
-/// alike. `docs/adr/0025`'s Consequences section names exactly the problem
+/// each chat call — the extraction call, the answering call, and the
+/// disclosed-fallback call alike. `docs/adr/0025`'s Consequences section names exactly the problem
 /// this bounds: a Session is durable now and can be returned to over weeks,
 /// so replaying *every* prior Turn on every Question grows both latency and
 /// context without limit against a chat endpoint that costs roughly seven
@@ -372,8 +378,13 @@ async fn run_reflect(
     // Chat call 1 — never fails this Question. Any failure (a chat call
     // that errors or times out, a response that isn't JSON, a nonsensical
     // range) degrades to `Extraction::default()`, which makes the fan-out
-    // below behave exactly like ticket 4: question-only retrieval.
-    let extraction = extract_date_range_and_keyword(reflect, &req.question, offset_minutes).await;
+    // below behave exactly like ticket 4: question-only retrieval. Reads
+    // the same windowed `prior_turns` the answering call gets, so a
+    // follow-up ("and the week before that?") resolves against the
+    // Conversation it's actually a follow-up to, rather than being extracted
+    // from the bare Question text alone (issue #66).
+    let extraction =
+        extract_date_range_and_keyword(reflect, &req.question, offset_minutes, &prior_turns).await;
 
     // Three retrievals, run concurrently — they are independent and each
     // embedding call costs real latency. Source 2 and 3 are no-ops (an
@@ -742,32 +753,90 @@ fn local_today(offset_minutes: i32) -> NaiveDate {
     (Utc::now() + Duration::minutes(i64::from(offset_minutes))).date_naive()
 }
 
-fn extraction_system_prompt(today_local: NaiveDate) -> String {
-    format!(
+/// Builds the extraction call's system prompt — always starting with
+/// "Today's date" (`is_extraction_call` in `tests/reflect.rs` depends on
+/// that exact phrase appearing in this call's first message, so it must
+/// stay the leading sentence), and, when `prior_turns` is non-empty, folding
+/// in a compact rendering of the windowed recent Conversation
+/// (`render_conversation_for_extraction`) so a follow-up Question like "and
+/// the week before that?" can be resolved against what it actually follows
+/// (issue #66).
+///
+/// The Conversation is folded into *this* system message's content as
+/// plain `Q:`/`A:` prose, not appended to `try_extract`'s `messages` as real
+/// `user`/`assistant` turns. That choice is deliberate: this call's entire
+/// contract is a small JSON object (`parse_extraction`), and a real
+/// `assistant`-role Answer in the message list risks the model continuing
+/// in prose the way a genuine conversation would, rather than replying with
+/// bare JSON. A rendered block inside one system message carries the same
+/// information without ever looking, to the model, like a turn it should
+/// continue. The JSON-only instruction is repeated at the very end, after
+/// the Conversation block, so it is the last thing the model reads
+/// regardless of how much Conversation precedes it.
+fn extraction_system_prompt(today_local: NaiveDate, prior_turns: &[SessionTurnRow]) -> String {
+    let mut prompt = format!(
         "Today's date, in the user's own local timezone, is {today}. The user is about to ask a \
-         Question about their own personal journal. Read the Question and extract two things \
-         from it, if present:\n\
+         Question about their own personal journal.",
+        today = today_local.format("%Y-%m-%d")
+    );
+
+    if !prior_turns.is_empty() {
+        prompt.push_str(
+            "\n\nFor context only, here is the recent Conversation leading up to this new \
+             Question, oldest first. Use it only to work out what the new Question refers to \
+             (e.g. \"that\", \"the week before\", \"him\") — none of it is itself the Question \
+             to extract from, and nothing in it changes the JSON-only instruction below.\n\n",
+        );
+        prompt.push_str(&render_conversation_for_extraction(prior_turns));
+        prompt.push_str("\n\nEnd of recent Conversation.");
+    }
+
+    prompt.push_str(
+        "\n\nRead the new Question below — in light of the recent Conversation above, if any \
+         was given — and extract two things from it, if present:\n\
          1. A date range the Question refers to (e.g. \"last week\", \"yesterday\", \"this \
          summer\"), resolved against today's local date above — as local calendar dates, \
          inclusive of both ends. Null if the Question does not refer to any particular time.\n\
          2. A short topical keyword phrase suitable for a second, independent search of the \
          journal — e.g. Question \"how did the move go\" might extract \"moving flat\". Null if \
          the Question has no separable topic.\n\n\
-         Respond with a single JSON object and nothing else — no prose, no markdown code fence — \
-         in exactly this shape:\n\
-         {{\"date_range\": {{\"from\": \"YYYY-MM-DD\", \"to\": \"YYYY-MM-DD\"}} or null, \
-         \"keyword\": \"...\" or null}}",
-        today = today_local.format("%Y-%m-%d")
-    )
+         Respond with a single JSON object and nothing else — no prose, no markdown code fence, \
+         no matter what the Conversation above discussed — in exactly this shape:\n\
+         {\"date_range\": {\"from\": \"YYYY-MM-DD\", \"to\": \"YYYY-MM-DD\"} or null, \
+         \"keyword\": \"...\" or null}",
+    );
+
+    prompt
+}
+
+/// Renders the windowed recent Conversation (`CONVERSATION_WINDOW`, already
+/// applied by `run_reflect` before it reaches here) as plain `Q:`/`A:`
+/// prose, oldest first, separated by a blank line between pairs — the
+/// compact, non-role-bearing rendering `extraction_system_prompt` folds
+/// into its own system-message content. See that function's doc comment for
+/// why this is prose inside one message rather than real `user`/`assistant`
+/// `ChatMessage` turns.
+fn render_conversation_for_extraction(prior_turns: &[SessionTurnRow]) -> String {
+    prior_turns
+        .iter()
+        .map(|turn| format!("Q: {}\nA: {}", turn.question, turn.answer))
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 /// Chat call 1 — asks the chat client to pull a date range and/or a
 /// keyword out of the Question, for the fan-out in `run_reflect` to widen
-/// retrieval with. Never propagates an error: any failure at all (the chat
-/// call itself erroring or timing out, an unparseable or absent response)
-/// degrades to `Extraction::default()`, logged at `warn`, so the Question
-/// still gets an Answer from question-only retrieval — exactly ticket 4's
-/// behaviour.
+/// retrieval with. `prior_turns` is the same `CONVERSATION_WINDOW`-capped
+/// slice the answering call gets (`run_reflect` applies the cap once,
+/// before either call), so a follow-up Question is extracted in the light
+/// of what it follows rather than in isolation (issue #66) — see
+/// `extraction_system_prompt` for how it's folded in. Never propagates an
+/// error: any failure at all (the chat call itself erroring or timing out,
+/// an unparseable or absent response) degrades to `Extraction::default()`,
+/// logged at `warn`, so the Question still gets an Answer from
+/// question-only retrieval — exactly ticket 4's behaviour, and `docs/adr/
+/// 0023`'s floor: a step that exists to widen recall must never be able to
+/// narrow it to zero.
 ///
 /// The endpoint `ChatMessage`s are sent to accepts only `model`,
 /// `messages`, `stream` (see `llm.rs`) — no `response_format`, no tools —
@@ -776,8 +845,9 @@ async fn extract_date_range_and_keyword(
     reflect: &ReflectState,
     question: &str,
     offset_minutes: i32,
+    prior_turns: &[SessionTurnRow],
 ) -> Extraction {
-    match try_extract(reflect, question, offset_minutes).await {
+    match try_extract(reflect, question, offset_minutes, prior_turns).await {
         Ok(extraction) => extraction,
         Err(err) => {
             tracing::warn!(
@@ -793,11 +863,12 @@ async fn try_extract(
     reflect: &ReflectState,
     question: &str,
     offset_minutes: i32,
+    prior_turns: &[SessionTurnRow],
 ) -> anyhow::Result<Extraction> {
     let messages = vec![
         ChatMessage {
             role: "system".to_string(),
-            content: extraction_system_prompt(local_today(offset_minutes)),
+            content: extraction_system_prompt(local_today(offset_minutes), prior_turns),
         },
         ChatMessage {
             role: "user".to_string(),

@@ -1,7 +1,7 @@
 import type { WireSessionSummary } from "@meologue/core";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { toast } from "sonner";
 import { Nav } from "@/components/nav";
@@ -11,6 +11,37 @@ import { sessionsDeleteTransport, sessionsListTransport } from "@/lib/sessions-t
 import { useSyncEnabled } from "@/lib/settings";
 
 const SESSIONS_QUERY_KEY = ["sessions"] as const;
+
+/**
+ * Issue #64's Search debounce, in milliseconds. Unlike `use-entry-search.ts`
+ * (local, in-process search — cheap enough to run on every keystroke), this
+ * page's search is a round trip to the Server (`GET /v1/sessions?q=`), so an
+ * un-debounced query would fire one request per keystroke. Kept small
+ * (rather than the 300-500ms a typical "search-as-you-type" box might use)
+ * because a Session list is usually short and this Server call is already
+ * cheap — plain `ILIKE`, no embedding — so there's little to gain from a
+ * longer wait, only a less responsive field.
+ */
+const SEARCH_DEBOUNCE_MS = 150;
+
+/**
+ * Issue #64: debounces `query` by `SEARCH_DEBOUNCE_MS`, so `sessionsQuery`
+ * below only re-fetches once the reader pauses rather than on every
+ * keystroke. Kept local to this page rather than promoted to a shared hook
+ * — `use-history-search.ts` exists because History/Composer's search state
+ * (URL param, sessionStorage backup) is shared between two pages; Sessions
+ * has neither of those and only one page, so there is nothing yet to share.
+ */
+function useDebouncedValue(value: string, delayMs: number): string {
+  const [debounced, setDebounced] = useState(value);
+
+  useEffect(() => {
+    const timeout = setTimeout(() => setDebounced(value), delayMs);
+    return () => clearTimeout(timeout);
+  }, [value, delayMs]);
+
+  return debounced;
+}
 
 /**
  * A plain, local "last used" rendering ("just now", "12 minutes ago", "3
@@ -166,10 +197,32 @@ export function SessionsPage() {
   const syncEnabled = useSyncEnabled();
   const queryClient = useQueryClient();
 
+  // Issue #64's Search: plain local state, not a URL param or a
+  // sessionStorage backup like `use-history-search.ts`'s. That machinery
+  // exists to survive a round trip through Settings between two pages that
+  // share one thread (Composer and History). Sessions is a single page with
+  // no such round trip to survive, and nothing here makes a narrowed list
+  // worth linking to or restoring after a reload — so the simplest thing
+  // that could work is what's built: a query that resets to empty the next
+  // time this page is opened, exactly like `confirmingId` below.
+  const [query, setQuery] = useState("");
+  const debouncedQuery = useDebouncedValue(query, SEARCH_DEBOUNCE_MS);
+  const searching = debouncedQuery.trim() !== "";
+
   const sessionsQuery = useQuery({
-    queryKey: SESSIONS_QUERY_KEY,
-    queryFn: sessionsListTransport,
+    // Extends SESSIONS_QUERY_KEY rather than replacing it, so
+    // `deleteMutation`'s `invalidateQueries({ queryKey: SESSIONS_QUERY_KEY })`
+    // below (a prefix match, TanStack Query's default) still invalidates
+    // whichever search is active, the same way `use-entry-search.ts`
+    // extends `ENTRIES_QUERY_KEY` for the same reason.
+    queryKey: [...SESSIONS_QUERY_KEY, debouncedQuery],
+    queryFn: () => sessionsListTransport(debouncedQuery),
     enabled: syncEnabled,
+    // Keeps the previous result on screen while a new keystroke's fetch is
+    // in flight, rather than flashing the loading state on every edit —
+    // `use-entry-search.ts`'s `placeholderData` does the same for History's
+    // local search.
+    placeholderData: (previous) => previous,
   });
 
   const result = sessionsQuery.data;
@@ -236,6 +289,22 @@ export function SessionsPage() {
         </Link>
       }
       nav={<Nav />}
+      // Issue #64: the same Shell search slot History and the Composer
+      // already use, `label` set to "Sessions" — see ShellSearchConfig's own
+      // comment for why the label must not read "History" here. Sync being
+      // off (below) hides Sessions entirely, so this is only reachable once
+      // there's a Server to search against, the same gate the fetch itself
+      // is behind.
+      search={
+        syncEnabled
+          ? {
+              query,
+              onQueryChange: setQuery,
+              onDismiss: () => setQuery(""),
+              label: "Sessions",
+            }
+          : undefined
+      }
     >
       {!syncEnabled && (
         <p className="text-center text-sm text-muted-foreground">
@@ -259,9 +328,19 @@ export function SessionsPage() {
         </p>
       )}
 
-      {syncEnabled && !loading && !unreachable && sessions.length === 0 && (
+      {syncEnabled && !loading && !unreachable && sessions.length === 0 && !searching && (
         <p className="text-center text-sm text-muted-foreground">
           No Sessions yet — ask a Question in Reflect to start one.
+        </p>
+      )}
+
+      {/* Issue #64: a search that matches nothing must read as "nothing
+          matched", not as "you have no Sessions" — the empty state above
+          says the latter and would be actively misleading here, since
+          Sessions plainly do exist; this one just didn't find any. */}
+      {syncEnabled && !loading && !unreachable && sessions.length === 0 && searching && (
+        <p className="text-center text-sm text-muted-foreground">
+          No Sessions match "{debouncedQuery.trim()}".
         </p>
       )}
 

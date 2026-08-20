@@ -359,14 +359,16 @@ export interface operations {
     };
     list_sessions_handler: {
         parameters: {
-            query?: never;
+            query?: {
+                q?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Every Session the Server holds, newest first by when it was last used */
+            /** @description Every Session the Server holds whose Conversation matches `q` (or every Session, when `q` is absent or blank), newest first by when it was last used */
             200: {
                 headers: {
                     [name: string]: unknown;

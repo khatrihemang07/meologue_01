@@ -15,6 +15,15 @@ move off cosine "in ticket 6" — 0024 is that ticket. The specific line below r
 is unchanged... that is the next ticket's job" is what 0024 changes; the fan-out, the merge rule,
 the extraction call, and everything else in this ADR stand exactly as written.
 
+Also extended by [0026](0026-the-extraction-call-sees-the-conversation.md): this ADR built chat
+call 1 from the system prompt and the current Question alone, which lost nothing while a
+Conversation died on reload and almost every Question was a first Question. Once
+[0025](0025-sessions-are-held-by-the-server.md) made Sessions durable, a follow-up's referent
+("that", "the week before") lived in the Conversation the extraction call could not see. 0026 gives
+it the same bounded window the answering call gets. This ADR's floor — any extraction failure
+degrades to "no range, no keyword", never to a failed Question — is explicitly unchanged, and so is
+everything else here.
+
 ## Context
 
 Ticket 4 gave `/v1/reflect` one retrieval: embed the Question, run `retrieve_nearest` against
@@ -42,8 +51,11 @@ records and defends.
 ## Decision
 
 **Chat call 1 extracts a date range and/or a keyword from the Question; three retrievals run
-concurrently; chat call 2 turns the merged result into an Answer — nothing more.** No tool-call
-loop, no model deciding at runtime which retriever to invoke or how many times. The two retriever
+concurrently; chat call 2 turns the merged result into an Answer — nothing more.** *(Chat call 1
+reads the recent Conversation as well as the Question as of
+[0026](0026-the-extraction-call-sees-the-conversation.md); the shape below is otherwise
+unchanged.)* No tool-call loop, no model deciding at runtime which retriever to invoke or how many
+times. The two retriever
 functions (`retrieve_nearest`, `retrieve_range`) are deliberately narrow and few — the plan calls
 them "the future tool definitions" on purpose: if an agentic loop is ever justified, it is built
 *behind* these same two functions rather than requiring a redesign of what "search" or "range"

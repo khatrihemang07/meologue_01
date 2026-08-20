@@ -1053,6 +1053,188 @@ async fn an_extraction_call_error_still_answers_with_question_only_retrieval(poo
     assert!(grounding_ids(&body).contains(&entry));
 }
 
+// ---------------------------------------------------------------------
+// Issue #66 — the extraction call sees the recent Conversation too
+// ---------------------------------------------------------------------
+
+/// The whole point of this ticket: a follow-up like "and the week before
+/// that?" has no antecedent for "that" unless the extraction call reads
+/// the Conversation it follows, not just its own bare text. The earlier
+/// Question and Answer must both reach the extraction call's prompt.
+#[sqlx::test]
+async fn the_extraction_call_receives_the_prior_conversation(pool: PgPool) {
+    let session_id = Uuid::new_v4();
+    insert_session_with_turn(
+        &pool,
+        session_id,
+        "How has my knee been in June?",
+        "Your knee improved steadily through June.",
+    )
+    .await;
+
+    let chat = Arc::new(FakeChatClient::new("Here's the week before that."));
+
+    let (status, _) = post_reflect(
+        &pool,
+        Some(reflect_state(chat.clone())),
+        json!({
+            "protocol_version": 1,
+            "question": "and the week before that?",
+            "session_id": session_id,
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+
+    let extraction_call = chat.extraction_call();
+    let system_content = &extraction_call[0].content;
+    assert!(
+        system_content.contains("How has my knee been in June?"),
+        "extraction prompt should carry the earlier Question: {system_content}"
+    );
+    assert!(
+        system_content.contains("Your knee improved steadily through June."),
+        "extraction prompt should carry the earlier Answer: {system_content}"
+    );
+}
+
+/// A first Question in a fresh Session (no `session_id` at all, so no prior
+/// Turns exist) must produce an extraction call with no Conversation folded
+/// into it, and extraction must still work exactly as it did before this
+/// ticket — reaching all the way through to the keyword search.
+#[sqlx::test]
+async fn a_first_question_in_a_fresh_session_has_no_conversation_in_extraction(pool: PgPool) {
+    let chat = Arc::new(FakeChatClient::with_extraction(
+        "Found it.",
+        r#"{"date_range": null, "keyword": "wedding"}"#,
+    ));
+    let embed = Arc::new(FakeEmbedClient::new());
+    let reflect = reflect_state_with_embed(chat.clone(), embed.clone());
+
+    let (status, _) = post_reflect(
+        &pool,
+        Some(reflect),
+        json!({
+            "protocol_version": 1,
+            "question": "Tell me about the wedding",
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+
+    let extraction_call = chat.extraction_call();
+    let system_content = &extraction_call[0].content;
+    assert!(
+        !system_content.contains("For context only, here is the recent Conversation"),
+        "a fresh Session's extraction call should carry no Conversation section at all: \
+         {system_content}"
+    );
+    assert!(
+        !system_content.contains("End of recent Conversation."),
+        "a fresh Session's extraction call should carry no Conversation section at all: \
+         {system_content}"
+    );
+
+    let calls = embed.calls();
+    assert!(
+        calls.contains(&"What did I write about wedding?".to_string()),
+        "extraction should still reach the keyword search normally: {calls:?}"
+    );
+}
+
+/// The extraction call's Conversation is capped at `CONVERSATION_WINDOW`
+/// too — the same cap `run_reflect` already applies to `prior_turns` before
+/// the answering call ever sees them, reused here rather than left
+/// unbounded.
+#[sqlx::test]
+async fn the_extraction_call_conversation_is_capped_at_the_window_too(pool: PgPool) {
+    let session_id = Uuid::new_v4();
+    insert_session_with_turns(&pool, session_id, 15).await;
+
+    let chat = Arc::new(FakeChatClient::new("Here's what I found."));
+
+    let (status, _) = post_reflect(
+        &pool,
+        Some(reflect_state(chat.clone())),
+        json!({
+            "protocol_version": 1,
+            "question": "Anything new to add?",
+            "session_id": session_id,
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+
+    let extraction_call = chat.extraction_call();
+    let system_content = &extraction_call[0].content;
+
+    for n in 5..15 {
+        assert!(
+            system_content.contains(&format!("turn {n} question")),
+            "turn {n} question should be inside the extraction call's Conversation window: \
+             {system_content}"
+        );
+    }
+    for n in 0..5 {
+        assert!(
+            !system_content.contains(&format!("turn {n} question")),
+            "turn {n} question is outside CONVERSATION_WINDOW and should not have reached the \
+             extraction call: {system_content}"
+        );
+    }
+}
+
+/// Extraction failure must still degrade to question-only retrieval even
+/// when a Conversation is folded into the very prompt that failed —
+/// `docs/adr/0023`'s floor ("never a failed Question") does not get weaker
+/// just because this call now carries more content than the bare Question.
+#[sqlx::test]
+async fn an_extraction_error_with_a_prior_conversation_still_degrades_to_question_only(
+    pool: PgPool,
+) {
+    let device = Uuid::new_v4();
+    let entry = Uuid::new_v4();
+    insert_embedded_entry(
+        &pool,
+        entry,
+        device,
+        "the knee is better now",
+        "2026-06-01T00:00:00Z",
+    )
+    .await;
+
+    let session_id = Uuid::new_v4();
+    insert_session_with_turn(
+        &pool,
+        session_id,
+        "How has my knee been in June?",
+        "Your knee improved steadily through June.",
+    )
+    .await;
+
+    let chat = Arc::new(FakeChatClient::with_extraction_error(
+        "Your knee has improved.",
+    ));
+
+    let (status, body) = post_reflect(
+        &pool,
+        Some(reflect_state(chat)),
+        json!({
+            "protocol_version": 1,
+            "question": "and the week before that?",
+            "session_id": session_id,
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["answer"], "Your knee has improved.");
+    assert!(grounding_ids(&body).contains(&entry));
+}
+
 /// An Entry findable by more than one source (here: the Question's own
 /// search *and* the extracted date range) must appear exactly once in
 /// Grounding — the dedupe-by-id rule.

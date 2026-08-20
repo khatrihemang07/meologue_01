@@ -72,9 +72,19 @@
           "crate::sessions"
         ],
         "operationId": "list_sessions_handler",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": "Every Session the Server holds, newest first by when it was last used",
+            "description": "Every Session the Server holds whose Conversation matches `q` (or every Session, when `q` is absent or blank), newest first by when it was last used",
             "content": {
               "application/json": {
                 "schema": {

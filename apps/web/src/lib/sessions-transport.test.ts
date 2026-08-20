@@ -207,6 +207,52 @@ describe("sessionsListTransport", () => {
     expect(fetchMock).toHaveBeenNthCalledWith(1, "https://first.example/v1/sessions");
     expect(fetchMock).toHaveBeenNthCalledWith(2, "https://second.example/v1/sessions");
   });
+
+  // Issue #64: Search's `?q=`.
+  it("appends ?q=<term> when a non-blank query is given", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 200, json: async () => [] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await sessionsListTransport("knee");
+
+    expect(fetchMock).toHaveBeenCalledWith("https://phone.example:41207/v1/sessions?q=knee");
+  });
+
+  it("URL-encodes a term with special characters — spaces, %, and reserved query characters", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    const fetchMock = vi.fn(async (_url: string) => ({
+      ok: true,
+      status: 200,
+      json: async () => [],
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await sessionsListTransport("knee % & flat move?");
+
+    const url = fetchMock.mock.calls[0]?.[0] ?? "";
+    expect(url).toBe("https://phone.example:41207/v1/sessions?q=knee+%25+%26+flat+move%3F");
+    // And it decodes back to exactly the original term — the encoding round-trips.
+    expect(new URL(url).searchParams.get("q")).toBe("knee % & flat move?");
+  });
+
+  it("omits ?q= entirely when the query is undefined, empty, or whitespace-only — identical to no search", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    const fetchMock = vi.fn(async (_url: string) => ({
+      ok: true,
+      status: 200,
+      json: async () => [],
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await sessionsListTransport(undefined);
+    await sessionsListTransport("");
+    await sessionsListTransport("   ");
+
+    for (const call of fetchMock.mock.calls) {
+      expect(call[0]).toBe("https://phone.example:41207/v1/sessions");
+    }
+  });
 });
 
 describe("sessionsDeleteTransport", () => {

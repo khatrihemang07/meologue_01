@@ -39,6 +39,17 @@ export interface ShellSearchConfig {
    * mode, same as it reports scroll and click events elsewhere.
    */
   onDismiss: () => void;
+  /**
+   * What this page's Search narrows — folded into the magnifier's and the
+   * field's own `aria-label`/`placeholder` as `Search {label}`. Defaults to
+   * `"History"`, the only collection Search narrowed before issue #64, so
+   * the Composer and History pages (composer-page.tsx, history-page.tsx)
+   * don't have to pass it. Sessions (sessions-page.tsx, issue #64) passes
+   * `"Sessions"` explicitly — CONTEXT.md is explicit that a Session's
+   * Conversation is not History, so labelling its search "Search History"
+   * would misname what it actually narrows.
+   */
+  label?: string;
 }
 
 interface ShellProps {
@@ -162,6 +173,11 @@ export function Shell({
 
   const searching = search !== undefined && searchOpen;
 
+  // `search.label` (issue #64) is what makes this "Search History" on the
+  // Composer/History pages and "Search Sessions" on the Sessions page,
+  // without either caller having to know the other exists.
+  const searchLabel = `Search ${search?.label ?? "History"}`;
+
   function dismissSearch() {
     setSearchOpen(false);
     search?.onDismiss();
@@ -241,8 +257,8 @@ export function Shell({
               </Button>
               <Input
                 type="search"
-                aria-label="Search History"
-                placeholder="Search History"
+                aria-label={searchLabel}
+                placeholder={searchLabel}
                 autoFocus
                 value={search.query}
                 onChange={(event) => search.onQueryChange(event.target.value)}
@@ -267,7 +283,7 @@ export function Shell({
                   {search && (
                     <button
                       type="button"
-                      aria-label="Search History"
+                      aria-label={searchLabel}
                       onClick={() => setSearchOpen(true)}
                       className="flex size-11 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                     >
