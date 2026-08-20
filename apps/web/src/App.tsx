@@ -28,7 +28,13 @@ function App() {
         <Route element={<EntryStoreLayout />}>
           <Route path="/" element={<ComposerPage />} />
           <Route path="/history" element={<HistoryPage />} />
+          {/* `/reflect` is a fresh Session; `/reflect/:sessionId` is an open
+              one (ADR 0025). Session ids are uuids, so they never contain a
+              "." and stay safe under the constraint above — but flagging
+              that here so nobody later routes something dotted into this
+              segment. */}
           <Route path="/reflect" element={<ReflectionPage />} />
+          <Route path="/reflect/:sessionId" element={<ReflectionPage />} />
         </Route>
         <Route path="/settings" element={<SettingsPage />} />
       </Routes>

@@ -1,27 +1,33 @@
-import type { WireReflectRequest } from "@meologue/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useSettingsStore } from "@/lib/settings";
-import { reflectTransport } from "./reflect-transport";
+import { sessionsTransport } from "./sessions-transport";
 
-const request: WireReflectRequest = {
-  protocol_version: 1,
-  question: "How has my knee been this year?",
-  session_id: null,
-};
+const sessionId = "11111111-1111-1111-1111-111111111111";
 
-describe("reflectTransport", () => {
+describe("sessionsTransport", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     localStorage.clear();
     useSettingsStore.setState({ serverUrl: "" });
   });
 
-  it("posts the request to the stored Server URL's /v1/reflect and returns the parsed response", async () => {
+  it("fetches the stored Server URL's /v1/sessions/:id and returns the parsed Session", async () => {
     useSettingsStore.getState().setServerUrl("https://phone.example:41207");
     const responseBody = {
-      answer: "Your knee has improved since February.",
-      grounding_entry_ids: ["entry-1"],
-      grounded: true,
+      id: sessionId,
+      title: "How has my knee been?",
+      created_at: "2026-08-01T00:00:00Z",
+      updated_at: "2026-08-01T00:00:05Z",
+      turns: [
+        {
+          question: "How has my knee been?",
+          answer: "It's improved since February.",
+          grounding_entry_ids: ["entry-1"],
+          grounded: true,
+          fallback_used: false,
+          created_at: "2026-08-01T00:00:05Z",
+        },
+      ],
     };
     const fetchMock = vi.fn(async () => ({
       ok: true,
@@ -30,28 +36,22 @@ describe("reflectTransport", () => {
     }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await reflectTransport(request);
+    const result = await sessionsTransport(sessionId);
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://phone.example:41207/v1/reflect",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify(request),
-      }),
-    );
-    expect(result).toEqual({ ok: true, response: responseBody });
+    expect(fetchMock).toHaveBeenCalledWith(`https://phone.example:41207/v1/sessions/${sessionId}`);
+    expect(result).toEqual({ ok: true, session: responseBody });
   });
 
-  it("reports a 404 distinctly, as 'not-supported'", async () => {
+  it("reports a 404 distinctly, as 'not-found'", async () => {
     useSettingsStore.getState().setServerUrl("https://phone.example:41207");
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => ({ ok: false, status: 404, json: async () => ({}) })),
     );
 
-    const result = await reflectTransport(request);
+    const result = await sessionsTransport(sessionId);
 
-    expect(result).toEqual({ ok: false, reason: "not-supported" });
+    expect(result).toEqual({ ok: false, reason: "not-found" });
   });
 
   it("reports a non-404 failure status as 'unreachable', without throwing", async () => {
@@ -61,7 +61,7 @@ describe("reflectTransport", () => {
       vi.fn(async () => ({ ok: false, status: 500, json: async () => ({}) })),
     );
 
-    const result = await reflectTransport(request);
+    const result = await sessionsTransport(sessionId);
 
     expect(result).toEqual({ ok: false, reason: "unreachable" });
   });
@@ -75,13 +75,19 @@ describe("reflectTransport", () => {
       }),
     );
 
-    const result = await reflectTransport(request);
+    const result = await sessionsTransport(sessionId);
 
     expect(result).toEqual({ ok: false, reason: "unreachable" });
   });
 
   it("re-reads the stored URL on every call, without re-importing the module", async () => {
-    const responseBody = { answer: "", grounding_entry_ids: [], grounded: false };
+    const responseBody = {
+      id: sessionId,
+      title: "",
+      created_at: "2026-08-01T00:00:00Z",
+      updated_at: "2026-08-01T00:00:00Z",
+      turns: [],
+    };
     const fetchMock = vi.fn(async () => ({
       ok: true,
       status: 200,
@@ -90,20 +96,12 @@ describe("reflectTransport", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     useSettingsStore.getState().setServerUrl("https://first.example");
-    await reflectTransport(request);
+    await sessionsTransport(sessionId);
 
     useSettingsStore.getState().setServerUrl("https://second.example");
-    await reflectTransport(request);
+    await sessionsTransport(sessionId);
 
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      1,
-      "https://first.example/v1/reflect",
-      expect.objectContaining({ method: "POST" }),
-    );
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      2,
-      "https://second.example/v1/reflect",
-      expect.objectContaining({ method: "POST" }),
-    );
+    expect(fetchMock).toHaveBeenNthCalledWith(1, `https://first.example/v1/sessions/${sessionId}`);
+    expect(fetchMock).toHaveBeenNthCalledWith(2, `https://second.example/v1/sessions/${sessionId}`);
   });
 });

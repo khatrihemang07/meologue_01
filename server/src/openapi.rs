@@ -1,7 +1,8 @@
 use utoipa::OpenApi;
 
 use crate::health::HealthResponse;
-use crate::reflect::{PriorTurn, ReflectRequest, ReflectResponse};
+use crate::reflect::{ReflectRequest, ReflectResponse};
+use crate::sessions::{SessionResponse, SessionTurnRow};
 use crate::sync::{EntryInput, EntryOutput, SyncRequest, SyncResponse};
 
 #[derive(OpenApi)]
@@ -10,6 +11,7 @@ use crate::sync::{EntryInput, EntryOutput, SyncRequest, SyncResponse};
         crate::health::health_handler,
         crate::sync::sync_handler,
         crate::reflect::reflect_handler,
+        crate::sessions::get_session_handler,
     ),
     components(schemas(
         HealthResponse,
@@ -19,7 +21,8 @@ use crate::sync::{EntryInput, EntryOutput, SyncRequest, SyncResponse};
         EntryOutput,
         ReflectRequest,
         ReflectResponse,
-        PriorTurn,
+        SessionResponse,
+        SessionTurnRow,
     ))
 )]
 struct ApiDoc;

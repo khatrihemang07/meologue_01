@@ -1,9 +1,9 @@
 import type { Entry } from "@meologue/core";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter, Outlet, Route, Routes } from "react-router";
+import { MemoryRouter, Outlet, Route, Routes, useLocation } from "react-router";
 import { toast } from "sonner";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { useConversationStore } from "@/lib/conversation";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as entryDayModule from "@/lib/entry-day";
 import { useSettingsStore } from "@/lib/settings";
 import type { EntryStoreOutletContext } from "@/pages/entry-store-layout";
@@ -24,18 +24,36 @@ const defaultEntryStoreContext: EntryStoreOutletContext = {
   disabled: false,
 };
 
+// Surfaces the MemoryRouter's current path so a test can assert a Session
+// id landed in the URL (ADR 0025 — the URL is the only state) without
+// reaching into the router's own internals.
+function LocationProbe() {
+  const location = useLocation();
+  return <p data-testid="location-path">{location.pathname}</p>;
+}
+
+// Wrapped in a QueryClientProvider (fresh per render, same as
+// history-page.test.tsx) because the Conversation now comes from a
+// TanStack Query query of GET /v1/sessions/:id, not an in-memory store
+// (ADR 0025). Both routes are registered — `/reflect` for a fresh Session,
+// `/reflect/:sessionId` for an open one — mirroring App.tsx.
 function renderReflectionPage(
   initialPath = "/reflect",
   context: EntryStoreOutletContext = defaultEntryStoreContext,
 ) {
+  const queryClient = new QueryClient();
   return render(
-    <MemoryRouter initialEntries={[initialPath]}>
-      <Routes>
-        <Route element={<Outlet context={context} />}>
-          <Route path="/reflect" element={<ReflectionPage />} />
-        </Route>
-      </Routes>
-    </MemoryRouter>,
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={[initialPath]}>
+        <LocationProbe />
+        <Routes>
+          <Route element={<Outlet context={context} />}>
+            <Route path="/reflect" element={<ReflectionPage />} />
+            <Route path="/reflect/:sessionId" element={<ReflectionPage />} />
+          </Route>
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
   );
 }
 
@@ -64,13 +82,54 @@ function ask(question: string) {
   fireEvent.click(askButton());
 }
 
+/**
+ * A `fetch` stub that branches on the request URL, the same shape both
+ * `/v1/reflect` (POST, via reflectTransport) and `/v1/sessions/:id` (GET,
+ * via sessionsTransport) go through. A test that doesn't care what a
+ * background Session refetch returns can omit `session` entirely — the GET
+ * then hangs forever, which is exactly what proves a rendered turn came
+ * from the optimistic cache write and not from that refetch resolving.
+ */
+function stubFetch(options: {
+  reflect: (init: RequestInit | undefined) => unknown;
+  session?: (sessionId: string) => unknown;
+}) {
+  const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+    if (url.endsWith("/v1/reflect")) {
+      return { ok: true, status: 200, json: async () => options.reflect(init) };
+    }
+    const sessionId = url.match(/\/v1\/sessions\/(.+)$/)?.[1];
+    const { session } = options;
+    if (sessionId !== undefined && session) {
+      return { ok: true, status: 200, json: async () => session(sessionId) };
+    }
+    return new Promise(() => {});
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+function wireSession(overrides: Partial<Record<string, unknown>> = {}) {
+  return {
+    id: "session-1",
+    title: "A Conversation",
+    created_at: "2026-08-01T00:00:00Z",
+    updated_at: "2026-08-01T00:00:00Z",
+    turns: [],
+    ...overrides,
+  };
+}
+
 describe("ReflectionPage", () => {
   beforeEach(() => {
     localStorage.clear();
     useSettingsStore.setState({ theme: "system", serverUrl: "" });
-    useConversationStore.setState({ turns: [] });
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("renders persistent nav links to Composer, History and Reflect, plus a Settings action", () => {
@@ -118,13 +177,19 @@ describe("ReflectionPage", () => {
 
   it("shows a staged in-flight indicator while a Question is being answered, then renders the Answer", async () => {
     useSettingsStore.getState().setServerUrl("https://phone.example:41207");
-    let resolveFetch!: (value: unknown) => void;
-    const fetchPromise = new Promise((resolve) => {
-      resolveFetch = resolve;
+    let resolveReflectFetch!: (value: unknown) => void;
+    const reflectFetchPromise = new Promise((resolve) => {
+      resolveReflectFetch = resolve;
     });
     vi.stubGlobal(
       "fetch",
-      vi.fn(() => fetchPromise),
+      vi.fn((url: string) => {
+        if (url.endsWith("/v1/reflect")) {
+          return reflectFetchPromise;
+        }
+        // GET /v1/sessions/:id — hangs; irrelevant to this test.
+        return new Promise(() => {});
+      }),
     );
 
     renderReflectionPage();
@@ -132,11 +197,11 @@ describe("ReflectionPage", () => {
 
     expect(await screen.findByText("How has my knee been?")).toBeInTheDocument();
     expect(screen.getByText(/searching your entries/i)).toBeInTheDocument();
-    // No turn is added to the Conversation until the Answer actually comes
-    // back — an in-flight Question isn't a Conversation turn yet.
-    expect(useConversationStore.getState().turns).toEqual([]);
+    // No turn renders until the Answer actually comes back — an in-flight
+    // Question isn't a Conversation turn yet.
+    expect(screen.queryByText(/it's improved since february/i)).not.toBeInTheDocument();
 
-    resolveFetch({
+    resolveReflectFetch({
       ok: true,
       status: 200,
       json: async () => ({
@@ -144,35 +209,132 @@ describe("ReflectionPage", () => {
         grounding_entry_ids: ["entry-1"],
         grounded: true,
         fallback_used: false,
+        session_id: "session-new",
+        title: "How has my knee been?",
       }),
     });
 
     expect(await screen.findByText("It's improved since February.")).toBeInTheDocument();
     expect(screen.queryByText(/searching your entries/i)).not.toBeInTheDocument();
-    expect(useConversationStore.getState().turns).toEqual([
-      {
-        question: "How has my knee been?",
-        answer: "It's improved since February.",
-        groundingEntryIds: ["entry-1"],
-        grounded: true,
-        fallbackUsed: false,
-      },
-    ]);
   });
 
-  it("sends every prior turn on a follow-up Question", async () => {
+  it("navigates to the new Session's URL after asking with no Session, with replace so Back doesn't return to an empty /reflect", async () => {
     useSettingsStore.getState().setServerUrl("https://phone.example:41207");
-    const fetchMock = vi.fn(async (_url: string, _init: { body: string }) => ({
-      ok: true,
-      status: 200,
-      json: async () => ({
+    stubFetch({
+      reflect: () => ({
+        answer: "It's improved since February.",
+        grounding_entry_ids: [],
+        grounded: true,
+        fallback_used: false,
+        session_id: "session-abc",
+        title: "How has my knee been?",
+      }),
+    });
+
+    renderReflectionPage();
+    expect(screen.getByTestId("location-path")).toHaveTextContent("/reflect");
+
+    ask("How has my knee been?");
+
+    await screen.findByText("It's improved since February.");
+    expect(screen.getByTestId("location-path")).toHaveTextContent("/reflect/session-abc");
+  });
+
+  it("appends the newly-answered turn to the query cache immediately, without waiting for a refetch", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    // No `session` handler: the GET this navigation triggers hangs forever,
+    // so the Answer can only be on screen because it was written straight
+    // into the cache, not because a refetch resolved.
+    stubFetch({
+      reflect: () => ({
+        answer: "It's improved since February.",
+        grounding_entry_ids: [],
+        grounded: true,
+        fallback_used: false,
+        session_id: "session-abc",
+        title: "How has my knee been?",
+      }),
+    });
+
+    renderReflectionPage();
+    ask("How has my knee been?");
+
+    expect(await screen.findByText("It's improved since February.")).toBeInTheDocument();
+  });
+
+  it("restores a Conversation from the Server on mount when the URL carries a sessionId", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    const fetchMock = stubFetch({
+      reflect: () => {
+        throw new Error("this test never asks a Question");
+      },
+      session: (sessionId) =>
+        wireSession({
+          id: sessionId,
+          title: "How has my knee been?",
+          turns: [
+            {
+              question: "How has my knee been?",
+              answer: "It's improved since February.",
+              grounding_entry_ids: ["entry-1"],
+              grounded: true,
+              fallback_used: false,
+              created_at: "2026-08-01T00:00:05Z",
+            },
+          ],
+        }),
+    });
+
+    renderReflectionPage("/reflect/session-existing");
+
+    expect(await screen.findByText("How has my knee been?")).toBeInTheDocument();
+    expect(await screen.findByText("It's improved since February.")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://phone.example:41207/v1/sessions/session-existing",
+    );
+  });
+
+  it("renders a plain not-found message for an unknown sessionId, rather than a blank page or a crash", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false, status: 404, json: async () => ({}) })),
+    );
+
+    renderReflectionPage("/reflect/session-missing");
+
+    expect(await screen.findByText(/this conversation could not be found/i)).toBeInTheDocument();
+    expect(
+      screen.queryByPlaceholderText("Ask a Question about your History"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("sends the Session id on a follow-up Question, with no whole-Conversation field in the request body", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    const fetchMock = stubFetch({
+      reflect: () => ({
         answer: "Yes, in March.",
         grounding_entry_ids: [],
         grounded: true,
         fallback_used: false,
+        session_id: "session-knee",
+        title: "How has my knee been this year?",
       }),
-    }));
-    vi.stubGlobal("fetch", fetchMock);
+      session: (sessionId) =>
+        wireSession({
+          id: sessionId,
+          turns: [
+            {
+              question: "How has my knee been this year?",
+              answer: "Yes, in March.",
+              grounding_entry_ids: [],
+              grounded: true,
+              fallback_used: false,
+              created_at: "2026-08-01T00:00:00Z",
+            },
+          ],
+        }),
+    });
 
     renderReflectionPage();
 
@@ -180,41 +342,55 @@ describe("ReflectionPage", () => {
     await screen.findByText("Yes, in March.");
 
     ask("Did it start with physical therapy?");
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => {
+      const reflectCalls = fetchMock.mock.calls.filter(([url]) =>
+        (url as string).endsWith("/v1/reflect"),
+      );
+      expect(reflectCalls).toHaveLength(2);
+    });
 
-    const secondRequestInit = fetchMock.mock.calls[1]?.[1];
-    const secondRequestBody = JSON.parse(secondRequestInit?.body ?? "{}");
-    expect(secondRequestBody.prior_turns).toEqual([
-      { question: "How has my knee been this year?", answer: "Yes, in March." },
-    ]);
+    const reflectCalls = fetchMock.mock.calls.filter(([url]) =>
+      (url as string).endsWith("/v1/reflect"),
+    );
+    const firstRequestBody = JSON.parse((reflectCalls[0]?.[1] as RequestInit)?.body as string);
+    expect(firstRequestBody.session_id).toBeNull();
+    expect(firstRequestBody).not.toHaveProperty("prior_turns");
+
+    const secondRequestBody = JSON.parse((reflectCalls[1]?.[1] as RequestInit)?.body as string);
+    expect(secondRequestBody.session_id).toBe("session-knee");
     expect(secondRequestBody.question).toBe("Did it start with physical therapy?");
+    expect(secondRequestBody).not.toHaveProperty("prior_turns");
   });
 
   it("posts this Device's UTC offset alongside the Question, for the server's extraction call to resolve dates against (ADR 0023, ADR 0016's precedent)", async () => {
     useSettingsStore.getState().setServerUrl("https://phone.example:41207");
     vi.spyOn(entryDayModule, "deviceUtcOffsetMinutes").mockReturnValue(330); // IST
-    const fetchMock = vi.fn(async (_url: string, _init: { body: string }) => ({
-      ok: true,
-      status: 200,
-      json: async () => ({
+    const fetchMock = stubFetch({
+      reflect: () => ({
         answer: "It went well.",
         grounding_entry_ids: [],
         grounded: true,
         fallback_used: false,
+        session_id: "session-tz",
+        title: "What did I write yesterday?",
       }),
-    }));
-    vi.stubGlobal("fetch", fetchMock);
+    });
 
     renderReflectionPage();
     ask("What did I write yesterday?");
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    const requestInit = fetchMock.mock.calls[0]?.[1];
-    const requestBody = JSON.parse(requestInit?.body ?? "{}");
+    await waitFor(() => {
+      const reflectCalls = fetchMock.mock.calls.filter(([url]) =>
+        (url as string).endsWith("/v1/reflect"),
+      );
+      expect(reflectCalls).toHaveLength(1);
+    });
+    const requestInit = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    const requestBody = JSON.parse(requestInit?.body as string);
     expect(requestBody.utc_offset_minutes).toBe(330);
   });
 
-  it("shows a distinct hint when the Server 404s (doesn't support Reflection yet)", async () => {
+  it("shows a distinct hint when the Server 404s (doesn't support Reflection yet), starting no Session", async () => {
     useSettingsStore.getState().setServerUrl("https://phone.example:41207");
     vi.stubGlobal(
       "fetch",
@@ -225,10 +401,10 @@ describe("ReflectionPage", () => {
     ask("Anything?");
 
     expect(await screen.findByText(/doesn't support reflection yet/i)).toBeInTheDocument();
-    expect(useConversationStore.getState().turns).toEqual([]);
+    expect(screen.getByTestId("location-path")).toHaveTextContent("/reflect");
   });
 
-  it("shows an error toast on a network failure, adding no turn", async () => {
+  it("shows an error toast on a network failure, starting no Session", async () => {
     useSettingsStore.getState().setServerUrl("https://phone.example:41207");
     vi.stubGlobal(
       "fetch",
@@ -242,7 +418,7 @@ describe("ReflectionPage", () => {
     ask("Anything?");
 
     await waitFor(() => expect(errorToast).toHaveBeenCalled());
-    expect(useConversationStore.getState().turns).toEqual([]);
+    expect(screen.getByTestId("location-path")).toHaveTextContent("/reflect");
   });
 
   // A Question is the user's own words and, unlike an Entry, was never
@@ -287,19 +463,16 @@ describe("ReflectionPage", () => {
 
   it("does not restore anything after a Question succeeds", async () => {
     useSettingsStore.getState().setServerUrl("https://phone.example:41207");
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => ({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          answer: "It went well.",
-          grounding_entry_ids: [],
-          grounded: true,
-          fallback_used: false,
-        }),
-      })),
-    );
+    stubFetch({
+      reflect: () => ({
+        answer: "It went well.",
+        grounding_entry_ids: [],
+        grounded: true,
+        fallback_used: false,
+        session_id: "session-move",
+        title: "How did the flat move go?",
+      }),
+    });
 
     renderReflectionPage();
     ask("How did the flat move go?");
@@ -313,19 +486,16 @@ describe("ReflectionPage", () => {
   // confident wrong one without trusting how the model phrased itself.
   it("shows no note when the server judged its Grounding grounded", async () => {
     useSettingsStore.getState().setServerUrl("https://phone.example:41207");
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => ({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          answer: "It's improved since February.",
-          grounding_entry_ids: ["entry-1"],
-          grounded: true,
-          fallback_used: false,
-        }),
-      })),
-    );
+    stubFetch({
+      reflect: () => ({
+        answer: "It's improved since February.",
+        grounding_entry_ids: ["entry-1"],
+        grounded: true,
+        fallback_used: false,
+        session_id: "session-note-1",
+        title: "How has my knee been?",
+      }),
+    });
 
     renderReflectionPage();
     ask("How has my knee been?");
@@ -336,19 +506,16 @@ describe("ReflectionPage", () => {
 
   it("shows a fallback note when the server disclosed recent Entries instead of an Answer", async () => {
     useSettingsStore.getState().setServerUrl("https://phone.example:41207");
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => ({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          answer: "Nothing matched, but here's what you wrote lately.",
-          grounding_entry_ids: ["entry-1"],
-          grounded: false,
-          fallback_used: true,
-        }),
-      })),
-    );
+    stubFetch({
+      reflect: () => ({
+        answer: "Nothing matched, but here's what you wrote lately.",
+        grounding_entry_ids: ["entry-1"],
+        grounded: false,
+        fallback_used: true,
+        session_id: "session-note-2",
+        title: "Anything about scuba diving?",
+      }),
+    });
 
     renderReflectionPage();
     ask("Anything about scuba diving?");
@@ -365,19 +532,16 @@ describe("ReflectionPage", () => {
 
   it("shows an ungrounded note (no fallback) when nothing matched and nothing recent existed either", async () => {
     useSettingsStore.getState().setServerUrl("https://phone.example:41207");
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => ({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          answer: "I couldn't find anything about that.",
-          grounding_entry_ids: [],
-          grounded: false,
-          fallback_used: false,
-        }),
-      })),
-    );
+    stubFetch({
+      reflect: () => ({
+        answer: "I couldn't find anything about that.",
+        grounding_entry_ids: [],
+        grounded: false,
+        fallback_used: false,
+        session_id: "session-note-3",
+        title: "Anything about scuba diving?",
+      }),
+    });
 
     renderReflectionPage();
     ask("Anything about scuba diving?");
@@ -391,21 +555,22 @@ describe("ReflectionPage", () => {
   // Ticket 7: the disclosure beneath each turn is the only way to tell a
   // confident wrong Answer from a right one by eye — its label must carry
   // ADR 0024's grounded/fallback distinction, not just render *something*.
+  // ADR 0025's acceptance criteria requires this to keep working on a
+  // restored turn too, including the "hasn't reached this Device yet"
+  // placeholder — this Entry is present locally, so the ordinary label path
+  // is what's under test here.
   it("shows a Grounding disclosure labelled 'Grounded' for a grounded turn", async () => {
     useSettingsStore.getState().setServerUrl("https://phone.example:41207");
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => ({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          answer: "It's improved since February.",
-          grounding_entry_ids: ["entry-1"],
-          grounded: true,
-          fallback_used: false,
-        }),
-      })),
-    );
+    stubFetch({
+      reflect: () => ({
+        answer: "It's improved since February.",
+        grounding_entry_ids: ["entry-1"],
+        grounded: true,
+        fallback_used: false,
+        session_id: "session-disclosure-1",
+        title: "How has my knee been?",
+      }),
+    });
 
     renderReflectionPage("/reflect", {
       ...defaultEntryStoreContext,
@@ -419,19 +584,16 @@ describe("ReflectionPage", () => {
 
   it("shows a Grounding disclosure labelled as recent Entries, not Grounding, for a fallback turn", async () => {
     useSettingsStore.getState().setServerUrl("https://phone.example:41207");
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => ({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          answer: "Nothing matched, but here's what you wrote lately.",
-          grounding_entry_ids: ["entry-1"],
-          grounded: false,
-          fallback_used: true,
-        }),
-      })),
-    );
+    stubFetch({
+      reflect: () => ({
+        answer: "Nothing matched, but here's what you wrote lately.",
+        grounding_entry_ids: ["entry-1"],
+        grounded: false,
+        fallback_used: true,
+        session_id: "session-disclosure-2",
+        title: "Anything about scuba diving?",
+      }),
+    });
 
     renderReflectionPage("/reflect", {
       ...defaultEntryStoreContext,

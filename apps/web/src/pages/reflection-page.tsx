@@ -1,15 +1,21 @@
 import type { Entry } from "@meologue/core";
 import { PROTOCOL_VERSION } from "@meologue/core";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { Link } from "react-router";
+import { Link, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import { GroundingDisclosure } from "@/components/grounding-disclosure";
 import { Nav, SettingsLink } from "@/components/nav";
 import { QuestionComposer } from "@/components/question-composer";
 import { Shell } from "@/components/shell";
-import { type ConversationTurn, groundingOutcome, useConversationStore } from "@/lib/conversation";
+import {
+  type ConversationTurn,
+  conversationTurnFromWire,
+  groundingOutcome,
+} from "@/lib/conversation";
 import { deviceUtcOffsetMinutes } from "@/lib/entry-day";
 import { reflectTransport } from "@/lib/reflect-transport";
+import { type SessionResult, sessionsTransport } from "@/lib/sessions-transport";
 import { useSyncEnabled } from "@/lib/settings";
 import { useEntryStore } from "@/pages/entry-store-layout";
 
@@ -21,6 +27,37 @@ import { useEntryStore } from "@/pages/entry-store-layout";
  * the reader something is still moving without promising a specific time.
  */
 const THINKING_AFTER_MS = 3000;
+
+/**
+ * What this page keeps of a fetched Session, once mapped off the wire — the
+ * `SessionResult` union re-shaped so a successful fetch carries exactly
+ * what this page renders (`title` is fetched but not currently shown; kept
+ * for a future page title without a second round trip) rather than the raw
+ * `WireSessionResponse`. Living here, not in `lib/sessions-transport.ts`,
+ * because "what the query cache holds" is this page's own concern — the
+ * transport's job ends at handing back the wire shape.
+ */
+type SessionQueryData =
+  | { ok: true; snapshot: { title: string; turns: ConversationTurn[] } }
+  | { ok: false; reason: "not-found" | "unreachable" };
+
+function sessionQueryKey(sessionId: string) {
+  return ["session", sessionId] as const;
+}
+
+async function fetchSession(sessionId: string): Promise<SessionQueryData> {
+  const result: SessionResult = await sessionsTransport(sessionId);
+  if (!result.ok) {
+    return result;
+  }
+  return {
+    ok: true,
+    snapshot: {
+      title: result.session.title,
+      turns: result.session.turns.map(conversationTurnFromWire),
+    },
+  };
+}
 
 function AskedQuestion({ text }: { text: string }) {
   return (
@@ -82,24 +119,26 @@ function ConversationTurnRow({
   );
 }
 
-// `/reflect` — the third peer view of History (ADR 0020). Ticket 4 gave
-// Reflection its asking-and-answering loop; ticket 5 widened retrieval into
-// a three-source fan-out (ADR 0023). Ticket 6 (ADR 0024) is what makes this
-// page render an explicit note — independent of the Answer's own wording —
-// when the server judged its Grounding didn't answer the Question, so this
-// page's own job stays the same as before: post the Question, the
-// Conversation so far, and this Device's UTC offset, then render whatever
-// comes back, plus a `GroundingNote` per turn. Ticket 7 adds a
-// `GroundingDisclosure` per turn too — the note says why in prose, the
-// disclosure shows the actual Entries the Answer drew on (or the recent
-// ones the fallback showed instead), so a confident wrong Answer and a
-// right one stop reading identically. Reflect still gates on Sync being on,
+// `/reflect` — the third peer view of History (ADR 0020) — and
+// `/reflect/:sessionId`, added by ADR 0025: a Session (and the Conversation
+// inside it) is now held by the Server, not this page. With no `sessionId`
+// this is a fresh Session (an empty Conversation, nothing fetched); with
+// one, the Conversation comes from a TanStack Query fetch of `GET
+// /v1/sessions/:id` (ADR 0013 — every store read goes through TanStack
+// Query, and a Session read is no different). Asking with no `sessionId` is
+// what creates a Session (ADR 0025's "a null id on an ask *is* the
+// create") — on success this page navigates to the new Session's URL with
+// `replace: true`, so Back doesn't bounce the user through an empty
+// `/reflect`. The just-answered turn is appended straight into the query
+// cache (`queryClient.setQueryData`) rather than waiting for a refetch, so
+// it renders immediately either way. Reflect still gates on Sync being on,
 // for the same reason ticket 2 already established: retrieval and
 // inference run on the Server, over Entries Sync put there.
 export function ReflectionPage() {
   const syncEnabled = useSyncEnabled();
-  const turns = useConversationStore((state) => state.turns);
-  const addTurn = useConversationStore((state) => state.addTurn);
+  const { sessionId } = useParams<{ sessionId?: string }>();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
   // The Device's own Entry store, not a fetch — Entry ids are minted on the
   // creating Device and preserved through Sync, so this Device's local copy
   // (if it has one yet) is the same Entry the server meant. Read once here,
@@ -108,8 +147,25 @@ export function ReflectionPage() {
   // per rendered turn.
   const { entries } = useEntryStore();
 
+  const sessionQuery = useQuery({
+    queryKey: sessionId === undefined ? sessionQueryKey("none") : sessionQueryKey(sessionId),
+    queryFn: () => fetchSession(sessionId as string),
+    // No sessionId → no query, empty Conversation (ADR 0025): a fresh
+    // Session doesn't exist on the Server yet, so there is nothing to fetch
+    // until the first ask creates one.
+    enabled: sessionId !== undefined,
+  });
+
+  const sessionData = sessionId === undefined ? undefined : sessionQuery.data;
+  const turns = sessionData?.ok ? sessionData.snapshot.turns : [];
+  const notFound =
+    sessionData !== undefined && !sessionData.ok && sessionData.reason === "not-found";
+  const unreachable =
+    sessionData !== undefined && !sessionData.ok && sessionData.reason === "unreachable";
+  const loadingSession = sessionId !== undefined && sessionQuery.isPending;
+
   // The Question currently in flight, or null when nothing is being asked.
-  // Deliberately component-local rather than in the Conversation store: an
+  // Deliberately component-local rather than in the query cache: an
   // in-flight Question isn't a Conversation turn yet (CONTEXT.md: a
   // Conversation is Questions *and Answers*), and navigating away mid-ask
   // is Reflection's page-level concern, not the Conversation's own data.
@@ -136,14 +192,10 @@ export function ReflectionPage() {
     setPending(question);
     setAskSignal((count) => count + 1);
 
-    const priorTurns = useConversationStore
-      .getState()
-      .turns.map((turn) => ({ question: turn.question, answer: turn.answer }));
-
     const result = await reflectTransport({
       protocol_version: PROTOCOL_VERSION,
       question,
-      prior_turns: priorTurns,
+      session_id: sessionId ?? null,
       // Ticket 5's extraction call resolves phrases like "last week"
       // against this Device's own local day, never the server's clock —
       // see ADR 0016's precedent (Export's per-day grouping) and ADR 0023.
@@ -153,13 +205,25 @@ export function ReflectionPage() {
     setPending(null);
 
     if (result.ok) {
-      addTurn({
-        question,
-        answer: result.response.answer,
-        groundingEntryIds: result.response.grounding_entry_ids,
-        grounded: result.response.grounded,
-        fallbackUsed: result.response.fallback_used,
-      });
+      const turn = conversationTurnFromWire({ question, ...result.response });
+      const key = sessionQueryKey(result.response.session_id);
+      // Append straight into the cache rather than waiting for a refetch —
+      // the turn the user just got an Answer to must render on this render,
+      // not after a second round trip to `GET /v1/sessions/:id`.
+      queryClient.setQueryData<SessionQueryData>(key, (previous) => ({
+        ok: true,
+        snapshot: {
+          title: result.response.title,
+          turns: [...(previous?.ok ? previous.snapshot.turns : []), turn],
+        },
+      }));
+
+      if (sessionId === undefined) {
+        // A null session_id on the request is what created this Session
+        // (ADR 0025) — `replace` so Back doesn't bounce through the empty
+        // `/reflect` this Conversation started from.
+        navigate(`/reflect/${result.response.session_id}`, { replace: true });
+      }
     } else {
       // A Question that failed goes back into the composer rather than
       // vanishing. Losing what someone wrote is the wrong failure mode
@@ -181,7 +245,7 @@ export function ReflectionPage() {
       nav={<Nav />}
       pinnedThread={syncEnabled ? { watch: turns.length, forceToNewest: askSignal } : undefined}
       composerSlot={
-        syncEnabled ? (
+        syncEnabled && !notFound ? (
           <QuestionComposer onAsk={handleAsk} disabled={pending !== null} restore={restore} />
         ) : undefined
       }
@@ -196,18 +260,40 @@ export function ReflectionPage() {
         </p>
       )}
 
-      {syncEnabled && turns.length === 0 && pending === null && (
-        // No Conversation has started yet — nothing to render but an
-        // invitation.
+      {syncEnabled && notFound && (
+        // A plain, honest message rather than a blank page or a crash (ADR
+        // 0025) — this Session was deleted, or the Server URL now points
+        // somewhere that never held it.
         <p className="text-center text-sm text-muted-foreground">
-          Ask a Question about your History to start a Conversation.
+          This Conversation could not be found.
+        </p>
+      )}
+
+      {syncEnabled && unreachable && (
+        <p className="text-center text-sm text-muted-foreground">
+          Couldn't load this Conversation. Check your Server and try again.
         </p>
       )}
 
       {syncEnabled &&
+        !notFound &&
+        !unreachable &&
+        !loadingSession &&
+        turns.length === 0 &&
+        pending === null && (
+          // No Conversation has started yet — nothing to render but an
+          // invitation.
+          <p className="text-center text-sm text-muted-foreground">
+            Ask a Question about your History to start a Conversation.
+          </p>
+        )}
+
+      {syncEnabled &&
+        !notFound &&
+        !unreachable &&
         turns.map((turn, index) => (
           <ConversationTurnRow
-            // biome-ignore lint/suspicious/noArrayIndexKey: turns never reorder or get removed — position is a stable identity for this Device's own in-memory Conversation.
+            // biome-ignore lint/suspicious/noArrayIndexKey: turns never reorder or get removed — position is a stable identity for one render of this Conversation.
             key={index}
             turn={turn}
             entries={entries}

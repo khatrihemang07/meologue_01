@@ -1,73 +1,71 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { groundingOutcome, useConversationStore } from "./conversation";
+import { describe, expect, it } from "vitest";
+import { conversationTurnFromWire, groundingOutcome } from "./conversation";
 
-describe("useConversationStore", () => {
-  afterEach(() => {
-    useConversationStore.setState({ turns: [] });
-  });
-
-  it("starts with an empty Conversation", () => {
-    expect(useConversationStore.getState().turns).toEqual([]);
-  });
-
-  it("appends a completed turn via addTurn", () => {
-    useConversationStore.getState().addTurn({
+// ADR 0025 deleted `useConversationStore` — the Conversation now comes from
+// the Server, not an in-memory Zustand store — so these tests, which used
+// to exercise `addTurn`/`getState().turns`, are rewritten to exercise what
+// replaced it: the wire-to-camelCase mapper both `reflection-page.tsx`'s
+// restore path (a fetched `WireSessionTurn`) and its just-answered path (a
+// `WireReflectResponse` plus the Question that produced it) now share.
+describe("conversationTurnFromWire", () => {
+  it("maps a wire turn's snake_case fields to a camelCase ConversationTurn", () => {
+    expect(
+      conversationTurnFromWire({
+        question: "How has my knee been?",
+        answer: "It's been improving since February.",
+        grounding_entry_ids: ["entry-1", "entry-2"],
+        grounded: true,
+        fallback_used: false,
+      }),
+    ).toEqual({
       question: "How has my knee been?",
       answer: "It's been improving since February.",
       groundingEntryIds: ["entry-1", "entry-2"],
       grounded: true,
       fallbackUsed: false,
     });
-
-    expect(useConversationStore.getState().turns).toEqual([
-      {
-        question: "How has my knee been?",
-        answer: "It's been improving since February.",
-        groundingEntryIds: ["entry-1", "entry-2"],
-        grounded: true,
-        fallbackUsed: false,
-      },
-    ]);
   });
 
   it("carries fallbackUsed for a turn where the server showed recent Entries instead of an Answer", () => {
-    useConversationStore.getState().addTurn({
+    expect(
+      conversationTurnFromWire({
+        question: "Anything about scuba diving?",
+        answer: "Nothing matched, but here's what you wrote lately.",
+        grounding_entry_ids: ["entry-3"],
+        grounded: false,
+        fallback_used: true,
+      }),
+    ).toEqual({
       question: "Anything about scuba diving?",
       answer: "Nothing matched, but here's what you wrote lately.",
       groundingEntryIds: ["entry-3"],
       grounded: false,
       fallbackUsed: true,
     });
-
-    expect(useConversationStore.getState().turns).toEqual([
-      {
-        question: "Anything about scuba diving?",
-        answer: "Nothing matched, but here's what you wrote lately.",
-        groundingEntryIds: ["entry-3"],
-        grounded: false,
-        fallbackUsed: true,
-      },
-    ]);
   });
 
-  it("keeps turns in the order they were added, for follow-up Questions to build on", () => {
-    useConversationStore.getState().addTurn({
-      question: "first question",
-      answer: "first answer",
-      groundingEntryIds: [],
-      grounded: false,
-      fallbackUsed: false,
-    });
-    useConversationStore.getState().addTurn({
-      question: "second question",
-      answer: "second answer",
-      groundingEntryIds: [],
-      grounded: false,
-      fallbackUsed: false,
-    });
+  it("ignores extra fields on the wire object, e.g. a WireReflectResponse's session_id and title", () => {
+    // reflection-page.tsx builds this call as `{ question, ...response }` —
+    // `response` (WireReflectResponse) carries session_id and title too,
+    // which this mapper must simply not copy onto a ConversationTurn.
+    const response = {
+      answer: "You wrote about the move.",
+      grounding_entry_ids: [] as string[],
+      grounded: true,
+      fallback_used: false,
+      session_id: "11111111-1111-1111-1111-111111111111",
+      title: "What did I write yesterday?",
+    };
 
-    const { turns } = useConversationStore.getState();
-    expect(turns.map((turn) => turn.question)).toEqual(["first question", "second question"]);
+    expect(
+      conversationTurnFromWire({ question: "What did I write yesterday?", ...response }),
+    ).toEqual({
+      question: "What did I write yesterday?",
+      answer: "You wrote about the move.",
+      groundingEntryIds: [],
+      grounded: true,
+      fallbackUsed: false,
+    });
   });
 });
 

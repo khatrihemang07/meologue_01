@@ -43,6 +43,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/sessions/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_session_handler"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/sync": {
         parameters: {
             query?: never;
@@ -88,26 +104,23 @@ export interface components {
             protocol_version: number;
             service: string;
         };
-        /**
-         * @description One already-answered Question in the Conversation, as the client sends
-         *     it back on every follow-up — see `ReflectRequest::prior_turns`.
-         */
-        PriorTurn: {
-            answer: string;
-            question: string;
-        };
         ReflectRequest: {
-            /**
-             * @description Every prior Question and Answer in this Conversation, oldest first.
-             *     Empty on the first Question. The server holds no Conversation state
-             *     of its own (see module docs), so this is the only way a follow-up
-             *     Question is read "in the light of the Conversation before it"
-             *     (CONTEXT.md's own phrase for what a Conversation is).
-             */
-            prior_turns: components["schemas"]["PriorTurn"][];
             /** Format: int32 */
             protocol_version: number;
             question: string;
+            /**
+             * Format: uuid
+             * @description The Session this Question belongs to, or `None` to start a new one
+             *     — a null id on an ask *is* the create (`docs/adr/0025`); there is no
+             *     separate create endpoint. `run_reflect` loads that Session's prior
+             *     Turns (`sessions::load_turns`) to read this Question "in the light
+             *     of the Conversation before it" (CONTEXT.md's own phrase for what a
+             *     Conversation is) — the server holds that Conversation now, so this
+             *     replaces what used to round-trip on every request as `prior_turns`.
+             *     A `Some` naming a Session that doesn't exist is a 404, not a
+             *     silently-ignored value.
+             */
+            session_id?: string | null;
             /**
              * Format: int32
              * @description Minutes east of UTC for the asking Device, right now — the same sign
@@ -175,6 +188,52 @@ export interface components {
              *     (non-empty or not) cannot tell the two cases apart.
              */
             grounding_entry_ids: string[];
+            /**
+             * Format: uuid
+             * @description The Session this Turn was recorded into — freshly minted when the
+             *     request's own `session_id` was `None`, unchanged otherwise. A client
+             *     that started a new Session learns its id only from this field.
+             */
+            session_id: string;
+            /**
+             * @description The Session's title: the existing title for a Session the request
+             *     already named, or the newly-derived one (`derive_title`) for a
+             *     freshly minted Session. Always present so a client never has to ask
+             *     again just to know what to show for a Session it just started.
+             */
+            title: string;
+        };
+        SessionResponse: {
+            /** Format: date-time */
+            created_at: string;
+            /** Format: uuid */
+            id: string;
+            title: string;
+            /**
+             * @description Oldest first — the order a Conversation was actually lived in, and
+             *     the order `reflect.rs` replays Turns into a follow-up Question's
+             *     prompt.
+             */
+            turns: components["schemas"]["SessionTurnRow"][];
+            /** Format: date-time */
+            updated_at: string;
+        };
+        /**
+         * @description One Question/Answer pair persisted inside a Session, as loaded from
+         *     `session_turns` — oldest first (`load_turns` orders by `seq asc`). This
+         *     is also what `reflect.rs`'s `build_messages` takes a slice of in place
+         *     of the wire's old `PriorTurn`, and it doubles as the wire shape for one
+         *     entry of `SessionResponse::turns` below — the same fields both a
+         *     follow-up Question's prompt and a client restoring a Conversation need.
+         */
+        SessionTurnRow: {
+            answer: string;
+            /** Format: date-time */
+            created_at: string;
+            fallback_used: boolean;
+            grounded: boolean;
+            grounding_entry_ids: string[];
+            question: string;
         };
         SyncRequest: {
             /** Format: uuid */
@@ -241,8 +300,45 @@ export interface operations {
                     "application/json": components["schemas"]["ReflectResponse"];
                 };
             };
+            /** @description session_id names a Session that does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description protocol_version is not one this server understands */
             426: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_session_handler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The Session's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The Session and its whole Conversation, oldest Turn first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionResponse"];
+                };
+            };
+            /** @description No Session with this id exists */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -6,7 +6,7 @@ use anyhow::{Result, bail};
 use async_trait::async_trait;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use http_body_util::BodyExt;
 use meologue_server::llm::{ChatMessage, LlmClient};
 use meologue_server::reflect::ReflectState;
@@ -359,6 +359,49 @@ fn grounding_ids(body: &Value) -> Vec<Uuid> {
     serde_json::from_value(body["grounding_entry_ids"].clone()).unwrap()
 }
 
+fn session_id(body: &Value) -> Uuid {
+    serde_json::from_value(body["session_id"].clone()).unwrap()
+}
+
+/// Seeds a Session with exactly one already-answered Turn, directly via SQL
+/// — standing in for what `sessions::record_turn` would already have done
+/// on an earlier ask, the same way `insert_embedded_entry` stands in for
+/// the embedding worker.
+async fn insert_session_with_turn(pool: &PgPool, session_id: Uuid, question: &str, answer: &str) {
+    sqlx::query("insert into sessions (id, title) values ($1, $2)")
+        .bind(session_id)
+        .bind(question)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "insert into session_turns
+            (id, session_id, question, answer, grounding_entry_ids, grounded, fallback_used)
+         values ($1, $2, $3, $4, '{}', true, false)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(session_id)
+    .bind(question)
+    .bind(answer)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn session_count(pool: &PgPool) -> i64 {
+    sqlx::query_scalar("select count(*) from sessions")
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+async fn turn_count(pool: &PgPool) -> i64 {
+    sqlx::query_scalar("select count(*) from session_turns")
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
 #[sqlx::test]
 async fn an_answer_comes_back_with_the_grounding_ids_retrieval_found(pool: PgPool) {
     let device = Uuid::new_v4();
@@ -392,7 +435,6 @@ async fn an_answer_comes_back_with_the_grounding_ids_retrieval_found(pool: PgPoo
         json!({
             "protocol_version": 1,
             "question": "How has my knee been this year?",
-            "prior_turns": [],
         }),
     )
     .await;
@@ -422,7 +464,6 @@ async fn a_question_with_no_embedded_entries_is_reported_as_ungrounded(pool: PgP
         json!({
             "protocol_version": 1,
             "question": "How has my knee been?",
-            "prior_turns": [],
         }),
     )
     .await;
@@ -435,8 +476,13 @@ async fn a_question_with_no_embedded_entries_is_reported_as_ungrounded(pool: PgP
     assert_eq!(body["fallback_used"], false);
 }
 
+/// The Conversation this Question follows lives entirely in `session_turns`
+/// now: the client sends only a `session_id`, and the Server loads what was
+/// already asked. Seeding a Session with a Turn directly, the way
+/// `insert_embedded_entry` seeds an Entry, stands in for an earlier
+/// successful ask on that same Session.
 #[sqlx::test]
-async fn prior_turns_reach_the_chat_call(pool: PgPool) {
+async fn a_sessions_conversation_reaches_the_chat_call(pool: PgPool) {
     let device = Uuid::new_v4();
     insert_embedded_entry(
         &pool,
@@ -444,6 +490,15 @@ async fn prior_turns_reach_the_chat_call(pool: PgPool) {
         device,
         "started physical therapy today",
         "2026-03-01T00:00:00Z",
+    )
+    .await;
+
+    let session_id = Uuid::new_v4();
+    insert_session_with_turn(
+        &pool,
+        session_id,
+        "How has my knee been this year?",
+        "It's been a recurring issue since February.",
     )
     .await;
 
@@ -456,9 +511,7 @@ async fn prior_turns_reach_the_chat_call(pool: PgPool) {
         json!({
             "protocol_version": 1,
             "question": "Did it start with physical therapy?",
-            "prior_turns": [
-                { "question": "How has my knee been this year?", "answer": "It's been a recurring issue since February." },
-            ],
+            "session_id": session_id,
         }),
     )
     .await;
@@ -503,7 +556,6 @@ async fn the_route_is_absent_when_chat_is_unconfigured(pool: PgPool) {
         json!({
             "protocol_version": 1,
             "question": "Anything?",
-            "prior_turns": [],
         }),
     )
     .await;
@@ -525,7 +577,6 @@ async fn an_unrecognised_protocol_version_is_rejected(pool: PgPool) {
         json!({
             "protocol_version": 99,
             "question": "Anything?",
-            "prior_turns": [],
         }),
     )
     .await;
@@ -559,7 +610,7 @@ async fn an_entry_below_the_similarity_floor_is_not_used_as_grounding(pool: PgPo
     let (status, body) = post_reflect(
         &pool,
         Some(reflect_state(chat)),
-        json!({ "protocol_version": 1, "question": "anything", "prior_turns": [] }),
+        json!({ "protocol_version": 1, "question": "anything" }),
     )
     .await;
 
@@ -609,7 +660,6 @@ async fn a_date_range_extraction_grounds_entries_orthogonal_to_the_question(pool
         json!({
             "protocol_version": 1,
             "question": "What happened with the move?",
-            "prior_turns": [],
             "utc_offset_minutes": 0,
         }),
     )
@@ -657,7 +707,6 @@ async fn a_keyword_extraction_grounds_an_entry_only_the_keyword_search_finds(poo
         json!({
             "protocol_version": 1,
             "question": "how did the move go",
-            "prior_turns": [],
         }),
     )
     .await;
@@ -701,7 +750,7 @@ async fn junk_extraction_output_still_answers_with_question_only_retrieval(pool:
     let (status, body) = post_reflect(
         &pool,
         Some(reflect_state(chat)),
-        json!({ "protocol_version": 1, "question": "How's my knee?", "prior_turns": [] }),
+        json!({ "protocol_version": 1, "question": "How's my knee?" }),
     )
     .await;
 
@@ -733,7 +782,7 @@ async fn an_extraction_call_error_still_answers_with_question_only_retrieval(poo
     let (status, body) = post_reflect(
         &pool,
         Some(reflect_state(chat)),
-        json!({ "protocol_version": 1, "question": "How's my knee?", "prior_turns": [] }),
+        json!({ "protocol_version": 1, "question": "How's my knee?" }),
     )
     .await;
 
@@ -769,7 +818,7 @@ async fn an_entry_found_by_two_sources_appears_exactly_once(pool: PgPool) {
     let (status, body) = post_reflect(
         &pool,
         Some(reflect_state(chat)),
-        json!({ "protocol_version": 1, "question": "How's my knee?", "prior_turns": [], "utc_offset_minutes": 0 }),
+        json!({ "protocol_version": 1, "question": "How's my knee?", "utc_offset_minutes": 0 }),
     )
     .await;
 
@@ -831,7 +880,7 @@ async fn more_than_the_cap_is_truncated_with_question_search_surviving(pool: PgP
     let (status, body) = post_reflect(
         &pool,
         Some(reflect_state(chat)),
-        json!({ "protocol_version": 1, "question": "anything", "prior_turns": [], "utc_offset_minutes": 0 }),
+        json!({ "protocol_version": 1, "question": "anything", "utc_offset_minutes": 0 }),
     )
     .await;
 
@@ -887,7 +936,7 @@ async fn grounding_entry_ids_are_chronological(pool: PgPool) {
     let (status, body) = post_reflect(
         &pool,
         Some(reflect_state(chat)),
-        json!({ "protocol_version": 1, "question": "anything", "prior_turns": [], "utc_offset_minutes": 0 }),
+        json!({ "protocol_version": 1, "question": "anything", "utc_offset_minutes": 0 }),
     )
     .await;
 
@@ -928,7 +977,6 @@ async fn utc_offset_minutes_shifts_the_extracted_day_boundary(pool: PgPool) {
         json!({
             "protocol_version": 1,
             "question": "what did I write that day",
-            "prior_turns": [],
             "utc_offset_minutes": 330,
         }),
     )
@@ -949,7 +997,6 @@ async fn utc_offset_minutes_shifts_the_extracted_day_boundary(pool: PgPool) {
         json!({
             "protocol_version": 1,
             "question": "what did I write that day",
-            "prior_turns": [],
             "utc_offset_minutes": 0,
         }),
     )
@@ -983,7 +1030,7 @@ async fn an_absent_utc_offset_defaults_to_zero_and_still_answers(pool: PgPool) {
         &pool,
         Some(reflect_state(chat)),
         // No "utc_offset_minutes" key at all.
-        json!({ "protocol_version": 1, "question": "How's my knee?", "prior_turns": [] }),
+        json!({ "protocol_version": 1, "question": "How's my knee?" }),
     )
     .await;
 
@@ -1011,7 +1058,6 @@ async fn the_extraction_prompt_states_the_correct_local_date_for_the_offset(pool
         json!({
             "protocol_version": 1,
             "question": "what did I write yesterday",
-            "prior_turns": [],
             "utc_offset_minutes": offset_minutes,
         }),
     )
@@ -1038,7 +1084,7 @@ async fn exactly_two_chat_calls_happen_per_request(pool: PgPool) {
     let (status, _) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 1, "question": "anything", "prior_turns": [] }),
+        json!({ "protocol_version": 1, "question": "anything" }),
     )
     .await;
 
@@ -1072,7 +1118,7 @@ async fn a_grounded_yes_verdict_reports_grounded_true_with_the_marker_stripped(p
     let (status, body) = post_reflect(
         &pool,
         Some(reflect_state(chat.clone())),
-        json!({ "protocol_version": 1, "question": "How's my knee?", "prior_turns": [] }),
+        json!({ "protocol_version": 1, "question": "How's my knee?" }),
     )
     .await;
 
@@ -1142,7 +1188,6 @@ async fn a_grounded_no_verdict_with_recent_entries_triggers_the_disclosed_fallba
         json!({
             "protocol_version": 1,
             "question": "Have I written anything about scuba diving in Portugal?",
-            "prior_turns": [],
         }),
     )
     .await;
@@ -1207,7 +1252,6 @@ async fn a_grounded_no_verdict_with_nothing_recent_skips_the_fallback_call(pool:
         json!({
             "protocol_version": 1,
             "question": "Have I written anything about scuba diving in Portugal?",
-            "prior_turns": [],
         }),
     )
     .await;
@@ -1227,9 +1271,16 @@ async fn a_grounded_no_verdict_with_nothing_recent_skips_the_fallback_call(pool:
     );
 }
 
-/// No marker at all — the graceful degrade `parse_and_strip_verdict`'s doc
-/// comment promises: `grounded: true`, no fallback, and the (unmarked)
-/// Answer returned exactly as the chat call gave it.
+/// No marker at all, with real Grounding behind it (the seeded Entry
+/// clears the merged fan-out) — the "fail open" default `run_reflect`
+/// itself applies when the verdict can't be read (see its own doc comment
+/// on that `match`, not `parse_and_strip_verdict`'s, which only reports
+/// `None` and leaves the choice to its caller): `grounded: true`, no
+/// fallback, and the (unmarked) Answer returned exactly as the chat call
+/// gave it.
+/// `no_marker_with_an_empty_merged_set_defaults_to_ungrounded_and_runs_the_fallback`
+/// below covers the opposite case, where the same missing marker defaults
+/// the other way because there was no Grounding to fail open onto.
 #[sqlx::test]
 async fn no_verdict_marker_defaults_to_grounded_and_leaves_the_answer_unchanged(pool: PgPool) {
     let device = Uuid::new_v4();
@@ -1250,7 +1301,7 @@ async fn no_verdict_marker_defaults_to_grounded_and_leaves_the_answer_unchanged(
     let (status, body) = post_reflect(
         &pool,
         Some(reflect_state(chat.clone())),
-        json!({ "protocol_version": 1, "question": "How's my knee?", "prior_turns": [] }),
+        json!({ "protocol_version": 1, "question": "How's my knee?" }),
     )
     .await;
 
@@ -1293,7 +1344,7 @@ async fn a_noisy_marker_is_still_recognised_end_to_end(pool: PgPool) {
     let (status, body) = post_reflect(
         &pool,
         Some(reflect_state(chat.clone())),
-        json!({ "protocol_version": 1, "question": "Anything about scuba diving?", "prior_turns": [] }),
+        json!({ "protocol_version": 1, "question": "Anything about scuba diving?" }),
     )
     .await;
 
@@ -1340,7 +1391,7 @@ async fn a_keyword_embedding_failure_still_answers_from_question_only_retrieval(
     let (status, body) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 1, "question": "How's my knee?", "prior_turns": [] }),
+        json!({ "protocol_version": 1, "question": "How's my knee?" }),
     )
     .await;
 
@@ -1367,7 +1418,7 @@ async fn a_question_embedding_failure_still_fails_the_request(pool: PgPool) {
     let (status, _) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 1, "question": "How's my knee?", "prior_turns": [] }),
+        json!({ "protocol_version": 1, "question": "How's my knee?" }),
     )
     .await;
 
@@ -1412,7 +1463,6 @@ async fn no_marker_with_an_empty_merged_set_defaults_to_ungrounded_and_runs_the_
         json!({
             "protocol_version": 1,
             "question": "Have I written anything about scuba diving in Portugal?",
-            "prior_turns": [],
         }),
     )
     .await;
@@ -1429,5 +1479,188 @@ async fn no_marker_with_an_empty_merged_set_defaults_to_ungrounded_and_runs_the_
         chat.call_count(),
         3,
         "an empty merged set with no marker should still run the disclosed fallback's third call"
+    );
+}
+
+// ---------------------------------------------------------------------
+// Ticket 8 — Sessions are held by the Server (docs/adr/0025)
+// ---------------------------------------------------------------------
+
+/// A `session_id` of `null` mints a new Session and reports both its id and
+/// a title derived from the first Question — the only way a client learns
+/// either, since there is no separate create endpoint.
+#[sqlx::test]
+async fn a_null_session_id_mints_a_new_session(pool: PgPool) {
+    let chat = Arc::new(FakeChatClient::new("An answer."));
+    let reflect = reflect_state(chat);
+
+    let (status, body) = post_reflect(
+        &pool,
+        Some(reflect),
+        json!({
+            "protocol_version": 1,
+            "question": "How has my knee been this year?",
+            "session_id": null,
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let id = session_id(&body);
+    assert_ne!(id, Uuid::nil());
+    assert_eq!(body["title"], "How has my knee been this year?");
+}
+
+/// Once an Answer succeeds, its Turn — and, for a new Session, the Session
+/// row itself — actually lands in Postgres, not just in the response.
+#[sqlx::test]
+async fn a_successful_answer_persists_its_turn(pool: PgPool) {
+    let device = Uuid::new_v4();
+    insert_embedded_entry(
+        &pool,
+        Uuid::new_v4(),
+        device,
+        "the knee is better now",
+        "2026-06-01T00:00:00Z",
+    )
+    .await;
+
+    let chat = Arc::new(FakeChatClient::new(
+        "Your knee has improved since February.",
+    ));
+    let reflect = reflect_state(chat);
+
+    let (status, body) = post_reflect(
+        &pool,
+        Some(reflect),
+        json!({ "protocol_version": 1, "question": "How's my knee?" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let id = session_id(&body);
+    assert_eq!(session_count(&pool).await, 1);
+
+    let (question, answer, grounded, fallback_used): (String, String, bool, bool) = sqlx::query_as(
+        "select question, answer, grounded, fallback_used from session_turns \
+             where session_id = $1",
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(question, "How's my knee?");
+    assert_eq!(answer, "Your knee has improved since February.");
+    assert!(grounded);
+    assert!(!fallback_used);
+}
+
+/// The Question's own embedding call has no floor left to fall back to
+/// (see `a_question_embedding_failure_still_fails_the_request` above), so
+/// its failure must fail the whole ask — and CONTEXT.md's "a Session can
+/// never exist holding an empty Conversation" means that failure must leave
+/// no trace: no Session, no Turn.
+#[sqlx::test]
+async fn a_failed_ask_persists_no_session_and_no_turn(pool: PgPool) {
+    let chat = Arc::new(FakeChatClient::new("unused"));
+    let embed = Arc::new(FakeEmbedClient::new().with_failure("How's my knee?"));
+    let reflect = reflect_state_with_embed(chat, embed);
+
+    let (status, _) = post_reflect(
+        &pool,
+        Some(reflect),
+        json!({ "protocol_version": 1, "question": "How's my knee?" }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(session_count(&pool).await, 0);
+    assert_eq!(turn_count(&pool).await, 0);
+}
+
+/// A `session_id` naming no Session is a clean 404, not a 500 — and no
+/// extraction, retrieval or chat call should have happened trying to answer
+/// a Question that can never be persisted.
+#[sqlx::test]
+async fn an_unknown_session_id_is_a_404(pool: PgPool) {
+    let chat = Arc::new(FakeChatClient::new("unused"));
+    let reflect = reflect_state(chat.clone());
+
+    let (status, _) = post_reflect(
+        &pool,
+        Some(reflect),
+        json!({
+            "protocol_version": 1,
+            "question": "Anything?",
+            "session_id": Uuid::new_v4(),
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(
+        chat.call_count(),
+        0,
+        "a 404 must short-circuit before any chat call"
+    );
+}
+
+/// A second ask on the same Session appends a second Turn rather than
+/// replacing the first, and bumps the Session's `updated_at` — the signal
+/// a later listing ticket will sort on.
+#[sqlx::test]
+async fn a_second_ask_on_the_same_session_appends_and_bumps_updated_at(pool: PgPool) {
+    let chat = Arc::new(FakeChatClient::new("First answer."));
+    let reflect = reflect_state(chat);
+
+    let (status, body) = post_reflect(
+        &pool,
+        Some(reflect),
+        json!({ "protocol_version": 1, "question": "First question?" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let id = session_id(&body);
+
+    let updated_at_before: DateTime<Utc> =
+        sqlx::query_scalar("select updated_at from sessions where id = $1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+    // Real Postgres timestamps have microsecond resolution, but two writes
+    // in the same test can otherwise land in the same tick — sleeping a
+    // little is what actually exercises "updated_at moved" rather than
+    // "updated_at happened to already be later."
+    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+    let chat2 = Arc::new(FakeChatClient::new("Second answer."));
+    let reflect2 = reflect_state(chat2);
+    let (status2, body2) = post_reflect(
+        &pool,
+        Some(reflect2),
+        json!({
+            "protocol_version": 1,
+            "question": "Second question?",
+            "session_id": id,
+        }),
+    )
+    .await;
+    assert_eq!(status2, StatusCode::OK);
+    assert_eq!(session_id(&body2), id, "the same Session, not a new one");
+
+    assert_eq!(turn_count(&pool).await, 2);
+
+    let updated_at_after: DateTime<Utc> =
+        sqlx::query_scalar("select updated_at from sessions where id = $1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(
+        updated_at_after > updated_at_before,
+        "updated_at should move on a second Turn: before={updated_at_before}, after={updated_at_after}"
     );
 }

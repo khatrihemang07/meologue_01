@@ -4,6 +4,7 @@ pub mod llm;
 pub mod metrics;
 pub mod openapi;
 pub mod reflect;
+pub mod sessions;
 pub mod sync;
 
 use std::path::Path;
@@ -220,12 +221,22 @@ pub fn router_with_reflection(
         .route("/v1/metrics", get(metrics::metrics_handler));
 
     if reflect.is_some() {
-        api_router = api_router.route("/v1/reflect", post(reflect::reflect_handler));
+        // `/v1/sessions/{id}` is gated on the same `reflect.is_some()` check
+        // as `/v1/reflect`, even though `sessions::get_session_handler`
+        // itself never touches `ReflectState` — a Server with no Session to
+        // fetch (Reflection unconfigured, so nothing ever created one) must
+        // 404 exactly like an older Server that never had the route, the
+        // same reasoning `v1_not_found`'s doc comment gives for
+        // `/v1/reflect` itself.
+        api_router = api_router
+            .route("/v1/reflect", post(reflect::reflect_handler))
+            .route("/v1/sessions/{id}", get(sessions::get_session_handler));
     }
     // Always registered, whether or not Reflection is configured: this is
-    // what makes an unmatched `/v1/*` path — including `/v1/reflect` when
-    // `reflect` above is `None` — a genuine 404 instead of the SPA
-    // fallback below. See `v1_not_found`'s own doc comment.
+    // what makes an unmatched `/v1/*` path — including `/v1/reflect` and
+    // `/v1/sessions/*` when `reflect` above is `None` — a genuine 404
+    // instead of the SPA fallback below. See `v1_not_found`'s own doc
+    // comment.
     api_router = api_router.route("/v1/{*rest}", any(v1_not_found));
 
     api_router

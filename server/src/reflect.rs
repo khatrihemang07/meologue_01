@@ -4,15 +4,19 @@
 //! finds a date range and/or a keyword hiding in the Question, three
 //! retrievals run concurrently, and the results are merged, deduped, capped
 //! and reordered before the second chat call turns them into an Answer.
-//! Ticket 6 (this one, `docs/adr/0024`) is what makes that second chat call
-//! *judge* whether the Grounding it was given actually answers the
-//! Question, and adds the disclosed fallback (the last few days of Entries,
-//! shown but not claimed as an Answer) for when it doesn't.
+//! Ticket 6 (`docs/adr/0024`) made that second chat call *judge* whether
+//! the Grounding it was given actually answers the Question, and added the
+//! disclosed fallback (the last few days of Entries, shown but not claimed
+//! as an Answer) for when it doesn't.
 //!
-//! Stateless on the server: the whole Conversation the client knows about
-//! round-trips as `prior_turns` on every request, matching ADR 0020's "a
-//! Conversation ... belongs to the Device it happened on and does not
-//! Sync" — there is nothing here to persist between calls.
+//! The Server holds the Conversation now (`docs/adr/0025`), superseding ADR
+//! 0020's "a Conversation ... belongs to the Device it happened on and does
+//! not Sync." A request names the Session it belongs to with `session_id`
+//! — `None` starts a new one — instead of round-tripping every prior
+//! Question and Answer on every call. `run_reflect` loads that Session's
+//! Turns (`sessions::load_turns`) before asking, and persists the new one
+//! (`sessions::record_turn`) only once an Answer has actually succeeded, so
+//! a failed ask leaves neither a Session nor a Turn behind.
 //!
 //! See CONTEXT.md's Grounding entry for the rule this route exists to
 //! honour: an Answer with nothing behind it says so, rather than inventing
@@ -32,6 +36,7 @@ use uuid::Uuid;
 
 use crate::embedding::vector_literal;
 use crate::llm::{ChatMessage, LlmClient};
+use crate::sessions::{self, NewTurn, SessionTurnRow};
 use crate::sync::PROTOCOL_VERSION;
 
 /// How many nearest Entries retrieval pulls before handing them to the chat
@@ -81,24 +86,26 @@ const MAX_UTC_OFFSET_MINUTES: i32 = 840;
 /// regardless of `utc_offset_minutes`.
 const FALLBACK_WINDOW_DAYS: i64 = 3;
 
-/// One already-answered Question in the Conversation, as the client sends
-/// it back on every follow-up — see `ReflectRequest::prior_turns`.
-#[derive(Debug, Deserialize, ToSchema)]
-pub struct PriorTurn {
-    pub question: String,
-    pub answer: String,
-}
+/// The longest a derived Session title can be before `derive_title`
+/// truncates it — see that function's doc comment for why 60 and for the
+/// word-boundary rule.
+const TITLE_MAX_CHARS: usize = 60;
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct ReflectRequest {
     pub protocol_version: i32,
     pub question: String,
-    /// Every prior Question and Answer in this Conversation, oldest first.
-    /// Empty on the first Question. The server holds no Conversation state
-    /// of its own (see module docs), so this is the only way a follow-up
-    /// Question is read "in the light of the Conversation before it"
-    /// (CONTEXT.md's own phrase for what a Conversation is).
-    pub prior_turns: Vec<PriorTurn>,
+    /// The Session this Question belongs to, or `None` to start a new one
+    /// — a null id on an ask *is* the create (`docs/adr/0025`); there is no
+    /// separate create endpoint. `run_reflect` loads that Session's prior
+    /// Turns (`sessions::load_turns`) to read this Question "in the light
+    /// of the Conversation before it" (CONTEXT.md's own phrase for what a
+    /// Conversation is) — the server holds that Conversation now, so this
+    /// replaces what used to round-trip on every request as `prior_turns`.
+    /// A `Some` naming a Session that doesn't exist is a 404, not a
+    /// silently-ignored value.
+    #[serde(default)]
+    pub session_id: Option<Uuid>,
     /// Minutes east of UTC for the asking Device, right now — the same sign
     /// convention `apps/web/src/lib/entry-day.ts::deviceUtcOffsetMinutes`
     /// and ADR 0016's `toLocalParts` already use for Export's day grouping.
@@ -120,6 +127,15 @@ pub struct ReflectRequest {
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ReflectResponse {
+    /// The Session this Turn was recorded into — freshly minted when the
+    /// request's own `session_id` was `None`, unchanged otherwise. A client
+    /// that started a new Session learns its id only from this field.
+    pub session_id: Uuid,
+    /// The Session's title: the existing title for a Session the request
+    /// already named, or the newly-derived one (`derive_title`) for a
+    /// freshly minted Session. Always present so a client never has to ask
+    /// again just to know what to show for a Session it just started.
+    pub title: String,
     pub answer: String,
     /// The ids of the Entries the Answer was actually built from, in the
     /// order they were shown to the chat call (chronological — see
@@ -231,12 +247,30 @@ their journal, then briefly describe what they have been writing about in the la
 using only these Entries. Do not imply these Entries answer the Question. Speak directly to the \
 user in the second person, in a few sentences of plain prose.";
 
+/// The two ways `run_reflect` can end other than success. `SessionNotFound`
+/// is the one case that must reach the client as a clean 404 rather than
+/// the catch-all 500 every other failure gets — see `ReflectRequest::session_id`.
+/// `From<anyhow::Error>` is what lets every existing `?` on an
+/// `anyhow::Result` inside `run_reflect` keep working unchanged: it's the
+/// conversion Rust's `?` reaches for automatically.
+enum ReflectError {
+    SessionNotFound,
+    Internal(anyhow::Error),
+}
+
+impl From<anyhow::Error> for ReflectError {
+    fn from(err: anyhow::Error) -> Self {
+        ReflectError::Internal(err)
+    }
+}
+
 #[utoipa::path(
     post,
     path = "/v1/reflect",
     request_body = ReflectRequest,
     responses(
         (status = 200, description = "An Answer grounded in the Entries retrieval found", body = ReflectResponse),
+        (status = 404, description = "session_id names a Session that does not exist"),
         (status = 426, description = "protocol_version is not one this server understands"),
     )
 )]
@@ -260,23 +294,41 @@ pub async fn reflect_handler(
         return Err(StatusCode::NOT_FOUND);
     };
 
-    run_reflect(&pool, &reflect, req)
-        .await
-        .map(Json)
-        .map_err(|err| {
+    match run_reflect(&pool, &reflect, req).await {
+        Ok(response) => Ok(Json(response)),
+        Err(ReflectError::SessionNotFound) => Err(StatusCode::NOT_FOUND),
+        Err(ReflectError::Internal(err)) => {
             tracing::error!(error = ?err, "reflect failed");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
 }
 
 async fn run_reflect(
     pool: &PgPool,
     reflect: &ReflectState,
     req: ReflectRequest,
-) -> anyhow::Result<ReflectResponse> {
+) -> Result<ReflectResponse, ReflectError> {
     let offset_minutes = req
         .utc_offset_minutes
         .clamp(MIN_UTC_OFFSET_MINUTES, MAX_UTC_OFFSET_MINUTES);
+
+    // Resolved before any retrieval or chat call runs, so a `session_id`
+    // naming no Session fails fast — as a clean 404 — instead of spending
+    // an extraction call, three retrievals and an answering call on a
+    // Question that can never be persisted. `None` starts a new Session:
+    // no prior Turns, and a title derived from this Question rather than an
+    // existing one's.
+    let (prior_turns, title): (Vec<SessionTurnRow>, String) = match req.session_id {
+        Some(id) => {
+            let session = sessions::find_session(pool, id)
+                .await?
+                .ok_or(ReflectError::SessionNotFound)?;
+            let turns = sessions::load_turns(pool, id).await?;
+            (turns, session.title)
+        }
+        None => (Vec::new(), derive_title(&req.question)),
+    };
 
     // Chat call 1 — never fails this Question. Any failure (a chat call
     // that errors or times out, a response that isn't JSON, a nonsensical
@@ -409,7 +461,7 @@ async fn run_reflect(
 
     let grounding_entry_ids: Vec<Uuid> = merged.iter().map(|entry| entry.id).collect();
 
-    let messages = build_messages(SYSTEM_INSTRUCTION, &merged, &req.prior_turns, &req.question);
+    let messages = build_messages(SYSTEM_INSTRUCTION, &merged, &prior_turns, &req.question);
     let raw_answer = reflect
         .chat_client
         .chat(&messages)
@@ -481,7 +533,7 @@ async fn run_reflect(
             let fallback_messages = build_messages(
                 FALLBACK_SYSTEM_INSTRUCTION,
                 &recent,
-                &req.prior_turns,
+                &prior_turns,
                 &req.question,
             );
             let fallback_answer = reflect
@@ -493,7 +545,30 @@ async fn run_reflect(
         }
     };
 
+    // Persisted only now that a successful Answer exists — the one
+    // insertion point every path above funnels through (this is the same
+    // single `Ok(ReflectResponse { .. })` construction the comment above
+    // describes). `sessions::record_turn` does the Session-creation-plus-
+    // Turn-insert as a single transaction, so a failure anywhere above this
+    // point (every `?` in this function) never reaches here at all, and a
+    // failure inside `record_turn` itself leaves nothing behind either.
+    let session_id = sessions::record_turn(
+        pool,
+        req.session_id,
+        &title,
+        NewTurn {
+            question: req.question.clone(),
+            answer: answer.clone(),
+            grounding_entry_ids: grounding_entry_ids.clone(),
+            grounded,
+            fallback_used,
+        },
+    )
+    .await?;
+
     Ok(ReflectResponse {
+        session_id,
+        title,
         answer,
         grounding_entry_ids,
         grounded,
@@ -792,9 +867,10 @@ const MARKER_NOISE_CHARS: [char; 4] = ['*', '_', '`', '#'];
 /// Reads the "GROUNDED: yes"/"GROUNDED: no" verdict marker
 /// (`SYSTEM_INSTRUCTION`) off the front of the answering chat call's raw
 /// response, and returns the Answer with that marker line removed — the
-/// marker must never reach the client: the Answer the client stores becomes
-/// a `prior_turn` on the next Question (see `ReflectRequest::prior_turns`),
-/// so a leaked marker would poison the Conversation.
+/// marker must never reach the client: the Answer is persisted verbatim
+/// (`sessions::record_turn`) and replayed into a follow-up Question's
+/// prompt (`build_messages`'s `prior_turns`), so a leaked marker would
+/// poison every later Turn in the Session.
 ///
 /// Matches the *first non-empty* line, case-insensitively, after stripping
 /// `MARKER_NOISE_CHARS` and surrounding whitespace — tolerant of a model
@@ -851,7 +927,7 @@ fn parse_and_strip_verdict(raw: &str) -> (Option<bool>, String) {
 fn build_messages(
     system_instruction: &str,
     entries: &[GroundingEntry],
-    prior_turns: &[PriorTurn],
+    prior_turns: &[SessionTurnRow],
     question: &str,
 ) -> Vec<ChatMessage> {
     let mut messages = vec![ChatMessage {
@@ -892,13 +968,45 @@ fn build_messages(
     messages
 }
 
+/// Derives a new Session's title from its first Question (CONTEXT.md: "a
+/// title taken from its first Question"): the trimmed Question verbatim
+/// when it's short enough, otherwise the longest word-boundary-respecting
+/// prefix of at most `TITLE_MAX_CHARS` characters with a trailing "…" —
+/// never a title that ends mid-word, and never one silently longer than the
+/// limit without saying it was cut.
+///
+/// A Question with no word boundary at all inside the first
+/// `TITLE_MAX_CHARS` characters (a single very long "word") falls back to a
+/// hard cut at the limit — there is no boundary left to honour, and a title
+/// that never truncates in that case would defeat the point of having a
+/// limit. An empty or all-whitespace Question — not a real Question, but
+/// not this function's job to reject — degrades to a fixed placeholder
+/// rather than an empty title, since CONTEXT.md's Session entry has no
+/// concept of a title-less Session to list.
+fn derive_title(question: &str) -> String {
+    let trimmed = question.trim();
+    if trimmed.is_empty() {
+        return "Untitled Session".to_string();
+    }
+    if trimmed.chars().count() <= TITLE_MAX_CHARS {
+        return trimmed.to_string();
+    }
+
+    let prefix: String = trimmed.chars().take(TITLE_MAX_CHARS).collect();
+    let cut = match prefix.rfind(' ') {
+        Some(space_index) => prefix[..space_index].trim_end(),
+        None => prefix.as_str(),
+    };
+    format!("{cut}…")
+}
+
 #[cfg(test)]
 mod tests {
     use chrono::NaiveDate;
 
     use super::{
-        extract_json_object, keyword_query, local_date_range_to_utc, local_today,
-        parse_and_strip_verdict, parse_extraction, strip_code_fences,
+        TITLE_MAX_CHARS, derive_title, extract_json_object, keyword_query, local_date_range_to_utc,
+        local_today, parse_and_strip_verdict, parse_extraction, strip_code_fences,
     };
 
     #[test]
@@ -1110,5 +1218,40 @@ mod tests {
         assert!(!yes_answer.contains("GROUNDED:"));
         let (_, no_answer) = parse_and_strip_verdict("**grounded: no**\nNothing found.");
         assert!(!no_answer.contains("GROUNDED:"));
+    }
+
+    // -------------------------------------------------------------------
+    // Ticket 8 — derive_title (docs/adr/0025)
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn a_short_question_is_used_as_the_title_unchanged() {
+        assert_eq!(
+            derive_title("How has my knee been?"),
+            "How has my knee been?"
+        );
+    }
+
+    #[test]
+    fn a_long_question_is_truncated_on_a_word_boundary_with_an_ellipsis() {
+        let question = "The quick brown fox jumps over the lazy dog while thinking about many other \
+              things today";
+        assert_eq!(
+            derive_title(question),
+            "The quick brown fox jumps over the lazy dog while thinking…"
+        );
+    }
+
+    #[test]
+    fn a_single_word_longer_than_the_limit_is_hard_cut() {
+        let question = "a".repeat(100);
+        let expected = format!("{}…", "a".repeat(TITLE_MAX_CHARS));
+        assert_eq!(derive_title(&question), expected);
+    }
+
+    #[test]
+    fn empty_or_whitespace_input_degrades_to_a_placeholder_title() {
+        assert_eq!(derive_title(""), "Untitled Session");
+        assert_eq!(derive_title("   \n\t  "), "Untitled Session");
     }
 }

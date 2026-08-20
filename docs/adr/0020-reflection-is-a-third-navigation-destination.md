@@ -8,6 +8,14 @@ Settings out of the nav, its bottom-docked Composer, its reading order, its shar
 grouping, and its one-`<nav>`-element-repositioned-by-CSS technique all stand unchanged and are
 still load-bearing. 0018 is amended in place to record this.
 
+Partially superseded by [0025](0025-sessions-are-held-by-the-server.md) — that ADR replaces this
+one's "a Conversation lives only in memory on the Device, in no new local table" clause, and
+replaces it in the direction this ADR did not anticipate: the question deferred below was
+*which local table*, and the answer turned out to be none, with the Server holding a Session
+instead. Everything else here — the third nav destination, the `/reflect` route inside
+`EntryStoreLayout`, the Sync-off gate, and the reasoning for keeping Settings an app-bar
+action — stands unchanged and is still load-bearing.
+
 ## Context
 
 CONTEXT.md just gained five terms — Reflection, Question, Answer, Conversation, Grounding —
@@ -46,7 +54,8 @@ segment contains no `.` character, preserving the constraint recorded in `App.ts
 fallback check treats a dot in the last path segment as a request for a real file, not the app
 shell.
 
-**A Conversation lives only in memory on the Device, in no new local table.** CONTEXT.md is
+**A Conversation lives only in memory on the Device, in no new local table.** *(Superseded by
+[0025](0025-sessions-are-held-by-the-server.md) — see this ADR's Status.)* CONTEXT.md is
 explicit that a Conversation "belongs to the Device it happened on and does not Sync," and that
 neither a Question nor an Answer is an Entry. Every persisted record this codebase has today is an
 Entry, and ADR 0001's whole local-first design leans on Entry immutability — a Cursor advancing
@@ -87,7 +96,8 @@ that actually builds the asking-and-answering loop needs otherwise.
   asks a Question, so nothing needs to survive a reload yet, and a schema decision made without a
   real read/write pattern in front of it is a guess. Building it when the asking-and-answering
   ticket actually needs persistence — if it ever does — means designing it against a real shape
-  instead of one imagined now.
+  instead of one imagined now. *(That ticket arrived; the answer was no local table at all —
+  see [0025](0025-sessions-are-held-by-the-server.md).)*
 
 ## Consequences
 

@@ -57,8 +57,46 @@
               }
             }
           },
+          "404": {
+            "description": "session_id names a Session that does not exist"
+          },
           "426": {
             "description": "protocol_version is not one this server understands"
+          }
+        }
+      }
+    },
+    "/v1/sessions/{id}": {
+      "get": {
+        "tags": [
+          "crate::sessions"
+        ],
+        "operationId": "get_session_handler",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The Session's id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The Session and its whole Conversation, oldest Turn first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No Session with this id exists"
           }
         }
       }
@@ -172,43 +210,27 @@
           }
         }
       },
-      "PriorTurn": {
-        "type": "object",
-        "description": "One already-answered Question in the Conversation, as the client sends\nit back on every follow-up — see `ReflectRequest::prior_turns`.",
-        "required": [
-          "question",
-          "answer"
-        ],
-        "properties": {
-          "answer": {
-            "type": "string"
-          },
-          "question": {
-            "type": "string"
-          }
-        }
-      },
       "ReflectRequest": {
         "type": "object",
         "required": [
           "protocol_version",
-          "question",
-          "prior_turns"
+          "question"
         ],
         "properties": {
-          "prior_turns": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/PriorTurn"
-            },
-            "description": "Every prior Question and Answer in this Conversation, oldest first.\nEmpty on the first Question. The server holds no Conversation state\nof its own (see module docs), so this is the only way a follow-up\nQuestion is read \"in the light of the Conversation before it\"\n(CONTEXT.md's own phrase for what a Conversation is)."
-          },
           "protocol_version": {
             "type": "integer",
             "format": "int32"
           },
           "question": {
             "type": "string"
+          },
+          "session_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The Session this Question belongs to, or `None` to start a new one\n— a null id on an ask *is* the create (`docs/adr/0025`); there is no\nseparate create endpoint. `run_reflect` loads that Session's prior\nTurns (`sessions::load_turns`) to read this Question \"in the light\nof the Conversation before it\" (CONTEXT.md's own phrase for what a\nConversation is) — the server holds that Conversation now, so this\nreplaces what used to round-trip on every request as `prior_turns`.\nA `Some` naming a Session that doesn't exist is a 404, not a\nsilently-ignored value."
           },
           "utc_offset_minutes": {
             "type": "integer",
@@ -220,6 +242,8 @@
       "ReflectResponse": {
         "type": "object",
         "required": [
+          "session_id",
+          "title",
           "answer",
           "grounding_entry_ids",
           "grounded",
@@ -244,6 +268,86 @@
               "format": "uuid"
             },
             "description": "The ids of the Entries the Answer was actually built from, in the\norder they were shown to the chat call (chronological — see\n`run_reflect`'s `merged.sort_by_key`).\n\nIn the normal case these are Grounding: the merged three-source\nfan-out (`docs/adr/0023`), judged (`grounded`, below) to actually\nanswer the Question. In the disclosed-fallback case\n(`fallback_used: true`) these are instead the last few days of\nEntries (`docs/adr/0024`) — shown despite *not* answering the\nQuestion, because CONTEXT.md's Grounding entry holds that admitting\nnothing was found beats inventing an Answer from somewhere else.\n`grounded: false` is what tells a reader — ticket 7's disclosure UI\nincluded — that these ids are not relevant matches; this field alone\n(non-empty or not) cannot tell the two cases apart."
+          },
+          "session_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The Session this Turn was recorded into — freshly minted when the\nrequest's own `session_id` was `None`, unchanged otherwise. A client\nthat started a new Session learns its id only from this field."
+          },
+          "title": {
+            "type": "string",
+            "description": "The Session's title: the existing title for a Session the request\nalready named, or the newly-derived one (`derive_title`) for a\nfreshly minted Session. Always present so a client never has to ask\nagain just to know what to show for a Session it just started."
+          }
+        }
+      },
+      "SessionResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "created_at",
+          "updated_at",
+          "turns"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string"
+          },
+          "turns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionTurnRow"
+            },
+            "description": "Oldest first — the order a Conversation was actually lived in, and\nthe order `reflect.rs` replays Turns into a follow-up Question's\nprompt."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "SessionTurnRow": {
+        "type": "object",
+        "description": "One Question/Answer pair persisted inside a Session, as loaded from\n`session_turns` — oldest first (`load_turns` orders by `seq asc`). This\nis also what `reflect.rs`'s `build_messages` takes a slice of in place\nof the wire's old `PriorTurn`, and it doubles as the wire shape for one\nentry of `SessionResponse::turns` below — the same fields both a\nfollow-up Question's prompt and a client restoring a Conversation need.",
+        "required": [
+          "question",
+          "answer",
+          "grounding_entry_ids",
+          "grounded",
+          "fallback_used",
+          "created_at"
+        ],
+        "properties": {
+          "answer": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "fallback_used": {
+            "type": "boolean"
+          },
+          "grounded": {
+            "type": "boolean"
+          },
+          "grounding_entry_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "question": {
+            "type": "string"
           }
         }
       },

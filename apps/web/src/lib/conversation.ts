@@ -1,20 +1,21 @@
 /**
- * The running Conversation on this Device — CONTEXT.md's own definition:
- * "The running sequence of Questions and Answers on one Device... A
- * Conversation belongs to the Device it happened on and does not Sync."
+ * The Conversation types shared by Reflection's page and its components —
+ * CONTEXT.md's own definition: "The running sequence of Questions and
+ * Answers inside one Session... Because the Server holds the Session, a
+ * Conversation is reachable from every Device, not only the one it started
+ * on."
  *
- * Copies the *shape* of `lib/settings.ts` (a Zustand store every reader
- * subscribes to, one writer owning every mutation) but deliberately does
- * NOT persist to `localStorage` — ADR 0020 already decided a Conversation
- * lives only in memory, with no local table and no reload survival, as the
- * cheapest thing that could be true until a later ticket needs otherwise.
- * "In memory" is exactly what a module-scoped Zustand store already is: it
- * survives navigating Reflect → History → Reflect (the store isn't torn
- * down when `ReflectionPage` unmounts), and is lost on a reload (the whole
- * JS process, store included, is gone) — no extra code needed to get either
- * half of that right.
+ * There used to be an in-memory `useConversationStore` here (a Zustand
+ * store shaped like `lib/settings.ts`), built when ADR 0020 deliberately
+ * deferred persistence: "Building it when the asking-and-answering ticket
+ * actually needs persistence — if it ever does — means designing it
+ * against a real shape instead of one imagined now." ADR 0025 is that
+ * ticket. A Conversation now lives on the Server as part of its Session,
+ * fetched through TanStack Query (`pages/reflection-page.tsx`) rather than
+ * held in a client-side store — so there is no store left to define here,
+ * only the shape both the page and `grounding-disclosure.tsx` render.
  */
-import { create } from "zustand";
+import type { WireSessionTurn } from "@meologue/core";
 
 /** One completed Question-and-Answer pair, plus the Grounding it drew on. */
 export interface ConversationTurn {
@@ -39,6 +40,37 @@ export interface ConversationTurn {
    * `WireReflectResponse.fallback_used` and CONTEXT.md's Grounding entry.
    */
   fallbackUsed: boolean;
+}
+
+/**
+ * The wire shape both `WireSessionTurn` (a turn loaded from a Session) and
+ * `WireReflectResponse` (a turn just answered) share — everything a
+ * `ConversationTurn` needs, in snake_case. `WireReflectResponse` doesn't
+ * echo `question` back (the client already has it, from what it asked), so
+ * a caller mapping a fresh Answer builds this object as `{ question,
+ * ...response }` rather than this function reading `question` off the
+ * response itself.
+ */
+type WireConversationTurn = Pick<
+  WireSessionTurn,
+  "question" | "answer" | "grounding_entry_ids" | "grounded" | "fallback_used"
+>;
+
+/**
+ * Maps the wire's snake_case turn to the camelCase `ConversationTurn` the
+ * components already take. This is the one place that knows both shapes —
+ * `pages/reflection-page.tsx` calls it both for turns restored from a
+ * fetched Session and for the turn a just-answered ask produces, so the two
+ * paths can't drift into disagreeing about the mapping.
+ */
+export function conversationTurnFromWire(wire: WireConversationTurn): ConversationTurn {
+  return {
+    question: wire.question,
+    answer: wire.answer,
+    groundingEntryIds: wire.grounding_entry_ids,
+    grounded: wire.grounded,
+    fallbackUsed: wire.fallback_used,
+  };
 }
 
 /**
@@ -79,20 +111,3 @@ export function groundingOutcome(
   }
   return "nothingFound";
 }
-
-interface ConversationState {
-  turns: ConversationTurn[];
-  /**
-   * Appends a completed turn. There is deliberately no way to add a
-   * half-finished one (a Question with no Answer yet) — the in-flight state
-   * while waiting on the server is the Reflection page's own concern (a
-   * staged indicator), not part of the Conversation itself, which CONTEXT.md
-   * defines as a sequence of Questions *and Answers*, not bare Questions.
-   */
-  addTurn: (turn: ConversationTurn) => void;
-}
-
-export const useConversationStore = create<ConversationState>()((set) => ({
-  turns: [],
-  addTurn: (turn) => set((state) => ({ turns: [...state.turns, turn] })),
-}));
