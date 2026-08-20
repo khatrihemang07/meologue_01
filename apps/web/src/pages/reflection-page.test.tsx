@@ -3,6 +3,7 @@ import { MemoryRouter, Route, Routes } from "react-router";
 import { toast } from "sonner";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useConversationStore } from "@/lib/conversation";
+import * as entryDayModule from "@/lib/entry-day";
 import { useSettingsStore } from "@/lib/settings";
 import { ReflectionPage } from "./reflection-page";
 
@@ -40,6 +41,7 @@ describe("ReflectionPage", () => {
     useSettingsStore.setState({ theme: "system", serverUrl: "" });
     useConversationStore.setState({ turns: [] });
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it("renders persistent nav links to Composer, History and Reflect, plus a Settings action", () => {
@@ -154,6 +156,25 @@ describe("ReflectionPage", () => {
       { question: "How has my knee been this year?", answer: "Yes, in March." },
     ]);
     expect(secondRequestBody.question).toBe("Did it start with physical therapy?");
+  });
+
+  it("posts this Device's UTC offset alongside the Question, for the server's extraction call to resolve dates against (ADR 0023, ADR 0016's precedent)", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    vi.spyOn(entryDayModule, "deviceUtcOffsetMinutes").mockReturnValue(330); // IST
+    const fetchMock = vi.fn(async (_url: string, _init: { body: string }) => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ answer: "It went well.", grounding_entry_ids: [], grounded: true }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderReflectionPage();
+    ask("What did I write yesterday?");
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const requestInit = fetchMock.mock.calls[0]?.[1];
+    const requestBody = JSON.parse(requestInit?.body ?? "{}");
+    expect(requestBody.utc_offset_minutes).toBe(330);
   });
 
   it("shows a distinct hint when the Server 404s (doesn't support Reflection yet)", async () => {

@@ -6,6 +6,7 @@ import { Nav, SettingsLink } from "@/components/nav";
 import { QuestionComposer } from "@/components/question-composer";
 import { Shell } from "@/components/shell";
 import { type ConversationTurn, useConversationStore } from "@/lib/conversation";
+import { deviceUtcOffsetMinutes } from "@/lib/entry-day";
 import { reflectTransport } from "@/lib/reflect-transport";
 import { useSyncEnabled } from "@/lib/settings";
 
@@ -42,11 +43,13 @@ function ConversationTurnRow({ turn }: { turn: ConversationTurn }) {
 // `/reflect` — the third peer view of History (ADR 0020). This ticket is
 // the first to give Reflection its asking-and-answering loop: a Question
 // typed here comes back as an Answer grounded in the Entries retrieval
-// found (ticket 4 — vector search on the Question alone; later tickets add
-// a date-range retriever and a disclosed fallback on top of this). Reflect
-// still gates on Sync being on, for the same reason ticket 2 already
-// established: retrieval and inference run on the Server, over Entries
-// Sync put there.
+// found — the server fans a Question out across three retrievals (ticket
+// 5, ADR 0023), so this page's own job stays the same as ticket 4 left it:
+// post the Question, the Conversation so far, and this Device's UTC offset,
+// then render whatever comes back. A later ticket adds a disclosed
+// fallback on top of this. Reflect still gates on Sync being on, for the
+// same reason ticket 2 already established: retrieval and inference run on
+// the Server, over Entries Sync put there.
 export function ReflectionPage() {
   const syncEnabled = useSyncEnabled();
   const turns = useConversationStore((state) => state.turns);
@@ -88,6 +91,10 @@ export function ReflectionPage() {
       protocol_version: PROTOCOL_VERSION,
       question,
       prior_turns: priorTurns,
+      // Ticket 5's extraction call resolves phrases like "last week"
+      // against this Device's own local day, never the server's clock —
+      // see ADR 0016's precedent (Export's per-day grouping) and ADR 0023.
+      utc_offset_minutes: deviceUtcOffsetMinutes(),
     });
 
     setPending(null);

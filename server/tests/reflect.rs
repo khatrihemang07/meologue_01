@@ -1,10 +1,12 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use async_trait::async_trait;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use chrono::{Duration, Utc};
 use http_body_util::BodyExt;
 use meologue_server::llm::{ChatMessage, LlmClient};
 use meologue_server::reflect::ReflectState;
@@ -20,33 +22,94 @@ fn empty_static_dir() -> PathBuf {
     std::env::current_dir().unwrap()
 }
 
-/// A fake chat client that hands back a fixed Answer and records every
-/// `chat()` call's messages, so a test can assert on what the route sent —
-/// in particular, that prior turns actually reached the call (this ticket's
-/// central requirement for follow-up Questions).
+/// A fake chat client serving both of `/v1/reflect`'s chat calls (ticket
+/// 5): the extraction call (chat call 1) and the final Answer call (chat
+/// call 2). It tells them apart by content rather than by call order —
+/// `extraction_system_prompt` always states "Today's date", which nothing
+/// in the final Answer's `SYSTEM_INSTRUCTION` does — and every call is
+/// still recorded, so a test can assert on exactly what each call sent.
+///
+/// Defaults (`FakeChatClient::new`) answer the extraction call with `"{}"`
+/// — a clean, parseable "found nothing" response — so every test written
+/// before ticket 5 that never mentions extraction keeps behaving exactly
+/// as it did under ticket 4's single-retrieval flow.
 struct FakeChatClient {
-    answer: String,
+    extraction_response: Mutex<Result<String, String>>,
+    final_answer: String,
     calls: Mutex<Vec<Vec<ChatMessage>>>,
 }
 
 impl FakeChatClient {
-    fn new(answer: impl Into<String>) -> Self {
+    fn new(final_answer: impl Into<String>) -> Self {
         Self {
-            answer: answer.into(),
+            extraction_response: Mutex::new(Ok("{}".to_string())),
+            final_answer: final_answer.into(),
+            calls: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn with_extraction(
+        final_answer: impl Into<String>,
+        extraction_response: impl Into<String>,
+    ) -> Self {
+        Self {
+            extraction_response: Mutex::new(Ok(extraction_response.into())),
+            final_answer: final_answer.into(),
+            calls: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn with_extraction_error(final_answer: impl Into<String>) -> Self {
+        Self {
+            extraction_response: Mutex::new(
+                Err("simulated 500 from the chat endpoint".to_string()),
+            ),
+            final_answer: final_answer.into(),
             calls: Mutex::new(Vec::new()),
         }
     }
 
     fn last_call(&self) -> Vec<ChatMessage> {
-        self.calls.lock().unwrap().last().cloned().expect("chat() was never called")
+        self.calls
+            .lock()
+            .unwrap()
+            .last()
+            .cloned()
+            .expect("chat() was never called")
     }
+
+    fn extraction_call(&self) -> Vec<ChatMessage> {
+        self.calls
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|call| is_extraction_call(call))
+            .cloned()
+            .expect("the extraction call was never made")
+    }
+
+    fn call_count(&self) -> usize {
+        self.calls.lock().unwrap().len()
+    }
+}
+
+fn is_extraction_call(call: &[ChatMessage]) -> bool {
+    call.first()
+        .is_some_and(|m| m.content.contains("Today's date"))
 }
 
 #[async_trait]
 impl LlmClient for FakeChatClient {
     async fn chat(&self, messages: &[ChatMessage]) -> Result<String> {
         self.calls.lock().unwrap().push(messages.to_vec());
-        Ok(self.answer.clone())
+        if is_extraction_call(messages) {
+            match &*self.extraction_response.lock().unwrap() {
+                Ok(response) => Ok(response.clone()),
+                Err(message) => bail!("{message}"),
+            }
+        } else {
+            Ok(self.final_answer.clone())
+        }
     }
 
     async fn embed_document(&self, _text: &str) -> Result<Vec<f32>> {
@@ -58,12 +121,44 @@ impl LlmClient for FakeChatClient {
     }
 }
 
-/// A fake embed client good for exactly one thing — turning a Question into
-/// *some* deterministic vector, so `<=>` has something to sort by. The
-/// vector's actual content doesn't matter to these tests: every seeded
-/// Entry below gets the same embedding, so retrieval order is arbitrary but
-/// retrieval *count* (up to the limit) is exactly what's asserted.
-struct FakeEmbedClient;
+/// A fake embed client good for turning a query string into a deterministic
+/// vector, so `<=>` has something to sort by. Every input gets
+/// `default_vector` unless it exactly matches a registered override — that
+/// default-everything-alike behaviour is what earlier tests (written before
+/// keyword search existed) rely on: every seeded Entry sits at the same
+/// vector as every Question, so retrieval order is arbitrary but retrieval
+/// *count* is exactly what those tests assert on. Tests that need to tell
+/// question-search and keyword-search apart register an override for the
+/// exact keyword string the extraction response names.
+struct FakeEmbedClient {
+    default_vector: Vec<f32>,
+    overrides: HashMap<String, Vec<f32>>,
+    // Every text `embed_query` was asked to embed, in call order — lets a
+    // test assert on the *exact string* that reached the embed client, not
+    // just on what vector came back. Needed for asserting the keyword
+    // search embeds the keyword wrapped as a question (`keyword_query` in
+    // `reflect.rs`) rather than the bare extracted word.
+    calls: Mutex<Vec<String>>,
+}
+
+impl FakeEmbedClient {
+    fn new() -> Self {
+        Self {
+            default_vector: vec![0.1_f32; 640],
+            overrides: HashMap::new(),
+            calls: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn with_override(mut self, text: impl Into<String>, vector: Vec<f32>) -> Self {
+        self.overrides.insert(text.into(), vector);
+        self
+    }
+
+    fn calls(&self) -> Vec<String> {
+        self.calls.lock().unwrap().clone()
+    }
+}
 
 #[async_trait]
 impl LlmClient for FakeEmbedClient {
@@ -75,8 +170,13 @@ impl LlmClient for FakeEmbedClient {
         unimplemented!("this fake only ever plays the embed role in reflect.rs's tests")
     }
 
-    async fn embed_query(&self, _text: &str) -> Result<Vec<f32>> {
-        Ok(vec![0.1_f32; 640])
+    async fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
+        self.calls.lock().unwrap().push(text.to_string());
+        Ok(self
+            .overrides
+            .get(text)
+            .cloned()
+            .unwrap_or_else(|| self.default_vector.clone()))
     }
 }
 
@@ -86,15 +186,25 @@ impl LlmClient for FakeEmbedClient {
 /// into Postgres is standing in for what the embedding worker would
 /// normally have already done.
 fn test_vector_literal(vector: &[f32]) -> String {
-    let joined = vector.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(",");
+    let joined = vector
+        .iter()
+        .map(|v| v.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
     format!("[{joined}]")
 }
 
-async fn insert_embedded_entry(pool: &PgPool, id: Uuid, device_id: Uuid, body: &str, created_at: &str) {
-    // The same vector `FakeEmbedClient::embed_query` returns, so these
-    // Entries sit at cosine similarity 1.0 to every Question and clear
-    // `MIN_SIMILARITY` comfortably — these tests are about retrieval count
-    // and prompt shape, not about the relevance floor.
+async fn insert_embedded_entry(
+    pool: &PgPool,
+    id: Uuid,
+    device_id: Uuid,
+    body: &str,
+    created_at: &str,
+) {
+    // The same vector `FakeEmbedClient`'s default returns, so these Entries
+    // sit at cosine similarity 1.0 to a Question embedded with the default
+    // and clear `MIN_SIMILARITY` comfortably — these tests are about
+    // retrieval count and prompt shape, not about the relevance floor.
     insert_embedded_entry_with_vector(pool, id, device_id, body, created_at, &[0.1_f32; 640]).await;
 }
 
@@ -120,15 +230,22 @@ async fn insert_embedded_entry_with_vector(
     .unwrap();
 }
 
-/// A vector orthogonal to `FakeEmbedClient`'s query vector: half the
-/// dimensions positive, half negative, so the dot product is exactly zero
-/// and cosine similarity is 0.0 — far below `MIN_SIMILARITY`.
+/// A vector orthogonal to `FakeEmbedClient`'s default query vector: half
+/// the dimensions positive, half negative, so the dot product is exactly
+/// zero and cosine similarity is 0.0 — far below `MIN_SIMILARITY`. Used for
+/// Entries that must be invisible to question-search and reachable only
+/// through `retrieve_range` or a keyword override.
 fn orthogonal_vector() -> Vec<f32> {
     (0..640).map(|i| if i < 320 { 0.1 } else { -0.1 }).collect()
 }
 
-async fn post_reflect(pool: &PgPool, reflect: Option<ReflectState>, body: Value) -> (StatusCode, Value) {
-    let app = meologue_server::router_with_reflection(pool.clone(), empty_static_dir(), None, reflect);
+async fn post_reflect(
+    pool: &PgPool,
+    reflect: Option<ReflectState>,
+    body: Value,
+) -> (StatusCode, Value) {
+    let app =
+        meologue_server::router_with_reflection(pool.clone(), empty_static_dir(), None, reflect);
     let response = app
         .oneshot(
             Request::builder()
@@ -154,8 +271,22 @@ async fn post_reflect(pool: &PgPool, reflect: Option<ReflectState>, body: Value)
 fn reflect_state(chat: Arc<FakeChatClient>) -> ReflectState {
     ReflectState {
         chat_client: chat,
-        embed_client: Arc::new(FakeEmbedClient),
+        embed_client: Arc::new(FakeEmbedClient::new()),
     }
+}
+
+fn reflect_state_with_embed(
+    chat: Arc<FakeChatClient>,
+    embed: Arc<FakeEmbedClient>,
+) -> ReflectState {
+    ReflectState {
+        chat_client: chat,
+        embed_client: embed,
+    }
+}
+
+fn grounding_ids(body: &Value) -> Vec<Uuid> {
+    serde_json::from_value(body["grounding_entry_ids"].clone()).unwrap()
 }
 
 #[sqlx::test]
@@ -163,12 +294,26 @@ async fn an_answer_comes_back_with_the_grounding_ids_retrieval_found(pool: PgPoo
     let device = Uuid::new_v4();
     let entry_a = Uuid::new_v4();
     let entry_b = Uuid::new_v4();
-    insert_embedded_entry(&pool, entry_a, device, "my knee has been hurting since February", "2026-02-10T00:00:00Z")
-        .await;
-    insert_embedded_entry(&pool, entry_b, device, "the knee is finally feeling better", "2026-08-01T00:00:00Z")
-        .await;
+    insert_embedded_entry(
+        &pool,
+        entry_a,
+        device,
+        "my knee has been hurting since February",
+        "2026-02-10T00:00:00Z",
+    )
+    .await;
+    insert_embedded_entry(
+        &pool,
+        entry_b,
+        device,
+        "the knee is finally feeling better",
+        "2026-08-01T00:00:00Z",
+    )
+    .await;
 
-    let chat = Arc::new(FakeChatClient::new("Your knee has improved since February."));
+    let chat = Arc::new(FakeChatClient::new(
+        "Your knee has improved since February.",
+    ));
     let reflect = reflect_state(chat.clone());
 
     let (status, body) = post_reflect(
@@ -186,8 +331,7 @@ async fn an_answer_comes_back_with_the_grounding_ids_retrieval_found(pool: PgPoo
     assert_eq!(body["answer"], "Your knee has improved since February.");
     assert_eq!(body["grounded"], true);
 
-    let grounding_ids: Vec<Uuid> =
-        serde_json::from_value(body["grounding_entry_ids"].clone()).unwrap();
+    let grounding_ids = grounding_ids(&body);
     assert_eq!(grounding_ids.len(), 2);
     assert!(grounding_ids.contains(&entry_a));
     assert!(grounding_ids.contains(&entry_b));
@@ -196,7 +340,9 @@ async fn an_answer_comes_back_with_the_grounding_ids_retrieval_found(pool: PgPoo
 #[sqlx::test]
 async fn a_question_with_no_embedded_entries_is_reported_as_ungrounded(pool: PgPool) {
     // No Entries seeded at all — retrieval finds nothing to ground on.
-    let chat = Arc::new(FakeChatClient::new("I don't have anything about that in your journal."));
+    let chat = Arc::new(FakeChatClient::new(
+        "I don't have anything about that in your journal.",
+    ));
     let reflect = reflect_state(chat.clone());
 
     let (status, body) = post_reflect(
@@ -348,4 +494,474 @@ async fn an_entry_below_the_similarity_floor_is_not_used_as_grounding(pool: PgPo
         "an Entry at cosine 0.0 must not be handed to the model as Grounding"
     );
     assert_eq!(body["grounded"], json!(false));
+}
+
+// ---------------------------------------------------------------------
+// Ticket 5 — the three-source fan-out (docs/adr/0023)
+// ---------------------------------------------------------------------
+
+/// Extraction finding a date range widens Grounding to Entries the
+/// Question's own vector search would never have found — the whole point
+/// of `retrieve_range`. The seeded Entry's vector is orthogonal to the
+/// Question's, so it can only have arrived via the date-range retriever.
+#[sqlx::test]
+async fn a_date_range_extraction_grounds_entries_orthogonal_to_the_question(pool: PgPool) {
+    let device = Uuid::new_v4();
+    let in_range = Uuid::new_v4();
+    insert_embedded_entry_with_vector(
+        &pool,
+        in_range,
+        device,
+        "packed the last box for the move",
+        "2026-08-05T12:00:00Z",
+        &orthogonal_vector(),
+    )
+    .await;
+
+    let chat = Arc::new(FakeChatClient::with_extraction(
+        "You packed the last box on August 5th.",
+        r#"{"date_range": {"from": "2026-08-01", "to": "2026-08-10"}, "keyword": null}"#,
+    ));
+
+    let (status, body) = post_reflect(
+        &pool,
+        Some(reflect_state(chat)),
+        json!({
+            "protocol_version": 1,
+            "question": "What happened with the move?",
+            "prior_turns": [],
+            "utc_offset_minutes": 0,
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["grounded"], true);
+    assert!(grounding_ids(&body).contains(&in_range));
+}
+
+/// Extraction finding a keyword runs a *second* vector search — an Entry
+/// only that keyword's embedding is close to (and not the Question's own)
+/// must still show up in Grounding.
+#[sqlx::test]
+async fn a_keyword_extraction_grounds_an_entry_only_the_keyword_search_finds(pool: PgPool) {
+    let device = Uuid::new_v4();
+    let keyword_only = Uuid::new_v4();
+    insert_embedded_entry_with_vector(
+        &pool,
+        keyword_only,
+        device,
+        "the flat move is finally done",
+        "2026-05-01T00:00:00Z",
+        &orthogonal_vector(),
+    )
+    .await;
+
+    let chat = Arc::new(FakeChatClient::with_extraction(
+        "The move went well.",
+        r#"{"date_range": null, "keyword": "moving flat"}"#,
+    ));
+    // The override key is the *wrapped* form — `keyword_query`'s doc
+    // comment on the production side — not the bare extracted keyword, so
+    // this test also exercises that the keyword search actually embeds the
+    // wrapped question rather than "moving flat" on its own.
+    let embed = Arc::new(
+        FakeEmbedClient::new()
+            .with_override("What did I write about moving flat?", orthogonal_vector()),
+    );
+    let reflect = reflect_state_with_embed(chat, embed.clone());
+
+    let (status, body) = post_reflect(
+        &pool,
+        Some(reflect),
+        json!({
+            "protocol_version": 1,
+            "question": "how did the move go",
+            "prior_turns": [],
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["grounded"], true);
+    assert!(grounding_ids(&body).contains(&keyword_only));
+
+    let calls = embed.calls();
+    assert!(
+        calls.contains(&"What did I write about moving flat?".to_string()),
+        "keyword search should embed the keyword wrapped as a question: {calls:?}"
+    );
+    assert!(
+        !calls.contains(&"moving flat".to_string()),
+        "keyword search must not embed the bare keyword: {calls:?}"
+    );
+}
+
+/// Junk, non-JSON, or an outright error from the extraction call must never
+/// fail the Question — it degrades to question-only retrieval, exactly
+/// ticket 4's behaviour.
+#[sqlx::test]
+async fn junk_extraction_output_still_answers_with_question_only_retrieval(pool: PgPool) {
+    let device = Uuid::new_v4();
+    let entry = Uuid::new_v4();
+    insert_embedded_entry(
+        &pool,
+        entry,
+        device,
+        "the knee is better now",
+        "2026-06-01T00:00:00Z",
+    )
+    .await;
+
+    let chat = Arc::new(FakeChatClient::with_extraction(
+        "Your knee has improved.",
+        "Sorry, I don't understand the request.",
+    ));
+
+    let (status, body) = post_reflect(
+        &pool,
+        Some(reflect_state(chat)),
+        json!({ "protocol_version": 1, "question": "How's my knee?", "prior_turns": [] }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["answer"], "Your knee has improved.");
+    assert!(grounding_ids(&body).contains(&entry));
+}
+
+/// Same, but the extraction call itself errors outright (the endpoint the
+/// chat client talks to returned, say, a 500) — the Question still gets an
+/// Answer, from question-only retrieval.
+#[sqlx::test]
+async fn an_extraction_call_error_still_answers_with_question_only_retrieval(pool: PgPool) {
+    let device = Uuid::new_v4();
+    let entry = Uuid::new_v4();
+    insert_embedded_entry(
+        &pool,
+        entry,
+        device,
+        "the knee is better now",
+        "2026-06-01T00:00:00Z",
+    )
+    .await;
+
+    let chat = Arc::new(FakeChatClient::with_extraction_error(
+        "Your knee has improved.",
+    ));
+
+    let (status, body) = post_reflect(
+        &pool,
+        Some(reflect_state(chat)),
+        json!({ "protocol_version": 1, "question": "How's my knee?", "prior_turns": [] }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["answer"], "Your knee has improved.");
+    assert!(grounding_ids(&body).contains(&entry));
+}
+
+/// An Entry findable by more than one source (here: the Question's own
+/// search *and* the extracted date range) must appear exactly once in
+/// Grounding — the dedupe-by-id rule.
+#[sqlx::test]
+async fn an_entry_found_by_two_sources_appears_exactly_once(pool: PgPool) {
+    let device = Uuid::new_v4();
+    let entry = Uuid::new_v4();
+    // Matches the Question's own vector (default) *and* sits inside the
+    // extracted date range — reachable via both `retrieve_nearest` and
+    // `retrieve_range`.
+    insert_embedded_entry(
+        &pool,
+        entry,
+        device,
+        "the knee is better now",
+        "2026-08-05T00:00:00Z",
+    )
+    .await;
+
+    let chat = Arc::new(FakeChatClient::with_extraction(
+        "Your knee has improved.",
+        r#"{"date_range": {"from": "2026-08-01", "to": "2026-08-10"}, "keyword": null}"#,
+    ));
+
+    let (status, body) = post_reflect(
+        &pool,
+        Some(reflect_state(chat)),
+        json!({ "protocol_version": 1, "question": "How's my knee?", "prior_turns": [], "utc_offset_minutes": 0 }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let ids = grounding_ids(&body);
+    assert_eq!(
+        ids.iter().filter(|id| **id == entry).count(),
+        1,
+        "duplicate Grounding id: {ids:?}"
+    );
+}
+
+/// More than `RETRIEVAL_LIMIT` (40) total candidates must be capped to
+/// exactly 40 — and priority order (question-search first) decides which
+/// 40 survive: the question-search results, not the range-only ones.
+#[sqlx::test]
+async fn more_than_the_cap_is_truncated_with_question_search_surviving(pool: PgPool) {
+    let device = Uuid::new_v4();
+
+    // 45 Entries the Question's own search finds (default vector), dated
+    // well outside the extracted range so they can't also arrive via
+    // `retrieve_range`.
+    let mut question_ids = Vec::new();
+    for i in 0..45 {
+        let id = Uuid::new_v4();
+        question_ids.push(id);
+        insert_embedded_entry(
+            &pool,
+            id,
+            device,
+            &format!("entry {i}"),
+            "2020-01-01T00:00:00Z",
+        )
+        .await;
+    }
+
+    // 10 more Entries findable *only* through the extracted date range —
+    // orthogonal to the Question's vector, dated inside the range.
+    let mut range_only_ids = Vec::new();
+    for i in 0..10 {
+        let id = Uuid::new_v4();
+        range_only_ids.push(id);
+        insert_embedded_entry_with_vector(
+            &pool,
+            id,
+            device,
+            &format!("range-only entry {i}"),
+            "2026-08-05T00:00:00Z",
+            &orthogonal_vector(),
+        )
+        .await;
+    }
+
+    let chat = Arc::new(FakeChatClient::with_extraction(
+        "Here's what I found.",
+        r#"{"date_range": {"from": "2026-08-01", "to": "2026-08-10"}, "keyword": null}"#,
+    ));
+
+    let (status, body) = post_reflect(
+        &pool,
+        Some(reflect_state(chat)),
+        json!({ "protocol_version": 1, "question": "anything", "prior_turns": [], "utc_offset_minutes": 0 }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let ids = grounding_ids(&body);
+    assert_eq!(
+        ids.len(),
+        40,
+        "the merged set must be capped at RETRIEVAL_LIMIT"
+    );
+    for id in &range_only_ids {
+        assert!(
+            !ids.contains(id),
+            "a range-only Entry survived the cap ahead of question-search results: {id}"
+        );
+    }
+    let surviving_question_entries = ids.iter().filter(|id| question_ids.contains(id)).count();
+    assert_eq!(
+        surviving_question_entries, 40,
+        "all 40 surviving Entries should be question-search results"
+    );
+}
+
+/// `grounding_entry_ids` is chronological, regardless of which source
+/// found each Entry or the order sources are merged in.
+#[sqlx::test]
+async fn grounding_entry_ids_are_chronological(pool: PgPool) {
+    let device = Uuid::new_v4();
+    let earliest = Uuid::new_v4();
+    let middle = Uuid::new_v4();
+    let latest = Uuid::new_v4();
+
+    // Inserted out of chronological order, and found via different sources
+    // (question-search vs. date-range), so ordering can't be an accident of
+    // insertion or retrieval order.
+    insert_embedded_entry(&pool, latest, device, "third", "2026-08-09T00:00:00Z").await;
+    insert_embedded_entry_with_vector(
+        &pool,
+        earliest,
+        device,
+        "first",
+        "2026-08-01T00:00:00Z",
+        &orthogonal_vector(),
+    )
+    .await;
+    insert_embedded_entry(&pool, middle, device, "second", "2026-08-05T00:00:00Z").await;
+
+    let chat = Arc::new(FakeChatClient::with_extraction(
+        "Ordered.",
+        r#"{"date_range": {"from": "2026-08-01", "to": "2026-08-10"}, "keyword": null}"#,
+    ));
+
+    let (status, body) = post_reflect(
+        &pool,
+        Some(reflect_state(chat)),
+        json!({ "protocol_version": 1, "question": "anything", "prior_turns": [], "utc_offset_minutes": 0 }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(grounding_ids(&body), vec![earliest, middle, latest]);
+}
+
+/// `utc_offset_minutes` shifts the local-day boundary the extracted range
+/// resolves against. An Entry whose UTC timestamp is late on the previous
+/// UTC day falls inside the extracted local day at a large positive
+/// (IST-like) offset, and does not at offset 0.
+#[sqlx::test]
+async fn utc_offset_minutes_shifts_the_extracted_day_boundary(pool: PgPool) {
+    let device = Uuid::new_v4();
+    let entry = Uuid::new_v4();
+    // 2026-08-14T20:00:00Z is 2026-08-15 01:30 IST (+330) — inside the
+    // local day 2026-08-15 at that offset, but outside it at offset 0.
+    insert_embedded_entry_with_vector(
+        &pool,
+        entry,
+        device,
+        "wrote this just after midnight, IST",
+        "2026-08-14T20:00:00Z",
+        &orthogonal_vector(),
+    )
+    .await;
+
+    let extraction_json =
+        r#"{"date_range": {"from": "2026-08-15", "to": "2026-08-15"}, "keyword": null}"#;
+
+    let ist_chat = Arc::new(FakeChatClient::with_extraction(
+        "Found it.",
+        extraction_json,
+    ));
+    let (status, body) = post_reflect(
+        &pool,
+        Some(reflect_state(ist_chat)),
+        json!({
+            "protocol_version": 1,
+            "question": "what did I write that day",
+            "prior_turns": [],
+            "utc_offset_minutes": 330,
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        grounding_ids(&body).contains(&entry),
+        "at offset 330 the Entry should fall inside the extracted local day"
+    );
+
+    let utc_chat = Arc::new(FakeChatClient::with_extraction(
+        "Found nothing.",
+        extraction_json,
+    ));
+    let (status, body) = post_reflect(
+        &pool,
+        Some(reflect_state(utc_chat)),
+        json!({
+            "protocol_version": 1,
+            "question": "what did I write that day",
+            "prior_turns": [],
+            "utc_offset_minutes": 0,
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !grounding_ids(&body).contains(&entry),
+        "at offset 0 the Entry should fall outside the extracted local day"
+    );
+}
+
+/// A Device that predates this ticket posts with no `utc_offset_minutes`
+/// field at all — `#[serde(default)]` must still answer the Question
+/// (defaulting the offset to 0), not reject the request.
+#[sqlx::test]
+async fn an_absent_utc_offset_defaults_to_zero_and_still_answers(pool: PgPool) {
+    let device = Uuid::new_v4();
+    let entry = Uuid::new_v4();
+    insert_embedded_entry(
+        &pool,
+        entry,
+        device,
+        "the knee is better now",
+        "2026-06-01T00:00:00Z",
+    )
+    .await;
+
+    let chat = Arc::new(FakeChatClient::new("Your knee has improved."));
+
+    let (status, body) = post_reflect(
+        &pool,
+        Some(reflect_state(chat)),
+        // No "utc_offset_minutes" key at all.
+        json!({ "protocol_version": 1, "question": "How's my knee?", "prior_turns": [] }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["answer"], "Your knee has improved.");
+    assert!(grounding_ids(&body).contains(&entry));
+}
+
+/// The extraction prompt must state the correct local date for the given
+/// offset — the server must never guess the timezone from its own clock.
+#[sqlx::test]
+async fn the_extraction_prompt_states_the_correct_local_date_for_the_offset(pool: PgPool) {
+    let offset_minutes = 330; // IST
+    let expected_local_date = (Utc::now() + Duration::minutes(offset_minutes))
+        .date_naive()
+        .format("%Y-%m-%d")
+        .to_string();
+
+    let chat = Arc::new(FakeChatClient::new("unused"));
+    let reflect = reflect_state(chat.clone());
+
+    let (status, _) = post_reflect(
+        &pool,
+        Some(reflect),
+        json!({
+            "protocol_version": 1,
+            "question": "what did I write yesterday",
+            "prior_turns": [],
+            "utc_offset_minutes": offset_minutes,
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let extraction_call = chat.extraction_call();
+    let system_content = &extraction_call[0].content;
+    assert!(
+        system_content.contains(&expected_local_date),
+        "extraction prompt should contain today's local date {expected_local_date}: {system_content}"
+    );
+}
+
+/// Sanity check on the fake itself: exactly two chat calls happen per
+/// request — extraction, then the final Answer — so tests relying on
+/// `last_call()`/`extraction_call()` aren't accidentally passing on a
+/// single merged call.
+#[sqlx::test]
+async fn exactly_two_chat_calls_happen_per_request(pool: PgPool) {
+    let chat = Arc::new(FakeChatClient::new("An answer."));
+    let reflect = reflect_state(chat.clone());
+
+    let (status, _) = post_reflect(
+        &pool,
+        Some(reflect),
+        json!({ "protocol_version": 1, "question": "anything", "prior_turns": [] }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(chat.call_count(), 2);
 }

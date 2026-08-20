@@ -48,7 +48,7 @@
         },
         "responses": {
           "200": {
-            "description": "An Answer grounded in the Entries nearest the Question",
+            "description": "An Answer grounded in the Entries retrieval found",
             "content": {
               "application/json": {
                 "schema": {
@@ -209,6 +209,11 @@
           },
           "question": {
             "type": "string"
+          },
+          "utc_offset_minutes": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Minutes east of UTC for the asking Device, right now — the same sign\nconvention `apps/web/src/lib/entry-day.ts::deviceUtcOffsetMinutes`\nand ADR 0016's `toLocalParts` already use for Export's day grouping.\nThe extraction call (`extract_date_range_and_keyword`) uses this to\nresolve phrases like \"last week\" against the user's own local day,\nnever the server's clock.\n\n`#[serde(default)]` rather than required: `PROTOCOL_VERSION` stays 1\nfor this ticket (the sync contract's shape is unchanged, and bumping\nit would make every existing Device report the Server unreachable\nover an unrelated feature), so a Device that predates this ticket\nand posts with no `utc_offset_minutes` field must still get an\nAnswer — it just gets date phrases resolved against UTC instead of\nits own local day, which is a graceful degrade (defaults to `0`),\nnot a rejected Question."
           }
         }
       },
@@ -225,7 +230,7 @@
           },
           "grounded": {
             "type": "boolean",
-            "description": "Whether any Grounding was found at all. In this ticket that's\nexactly \"retrieval returned at least one Entry\" — with 85 embedded\nEntries in the seeded journal this is `true` in ordinary operation,\nand only `false` on a History with literally zero embedded Entries.\nThis is a coarser signal than \"the model believes it answered the\nQuestion\" on purpose: ticket 6 is what adds a real relevance\njudgment (the disclosed fallback), and inventing that distinction\nearly would be building ahead of the ticket that actually needs it."
+            "description": "Whether any Grounding was found at all — exactly \"the merged set\n(see `run_reflect`) is non-empty\". Ticket 6 is what adds a real\nrelevance judgment (the disclosed fallback) and a `fallback_used`\nfield; inventing that distinction early would be building ahead of\nthe ticket that actually needs it, so it is deliberately not here."
           },
           "grounding_entry_ids": {
             "type": "array",

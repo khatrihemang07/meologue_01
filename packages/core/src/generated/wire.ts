@@ -108,18 +108,34 @@ export interface components {
             /** Format: int32 */
             protocol_version: number;
             question: string;
+            /**
+             * Format: int32
+             * @description Minutes east of UTC for the asking Device, right now — the same sign
+             *     convention `apps/web/src/lib/entry-day.ts::deviceUtcOffsetMinutes`
+             *     and ADR 0016's `toLocalParts` already use for Export's day grouping.
+             *     The extraction call (`extract_date_range_and_keyword`) uses this to
+             *     resolve phrases like "last week" against the user's own local day,
+             *     never the server's clock.
+             *
+             *     `#[serde(default)]` rather than required: `PROTOCOL_VERSION` stays 1
+             *     for this ticket (the sync contract's shape is unchanged, and bumping
+             *     it would make every existing Device report the Server unreachable
+             *     over an unrelated feature), so a Device that predates this ticket
+             *     and posts with no `utc_offset_minutes` field must still get an
+             *     Answer — it just gets date phrases resolved against UTC instead of
+             *     its own local day, which is a graceful degrade (defaults to `0`),
+             *     not a rejected Question.
+             */
+            utc_offset_minutes?: number;
         };
         ReflectResponse: {
             answer: string;
             /**
-             * @description Whether any Grounding was found at all. In this ticket that's
-             *     exactly "retrieval returned at least one Entry" — with 85 embedded
-             *     Entries in the seeded journal this is `true` in ordinary operation,
-             *     and only `false` on a History with literally zero embedded Entries.
-             *     This is a coarser signal than "the model believes it answered the
-             *     Question" on purpose: ticket 6 is what adds a real relevance
-             *     judgment (the disclosed fallback), and inventing that distinction
-             *     early would be building ahead of the ticket that actually needs it.
+             * @description Whether any Grounding was found at all — exactly "the merged set
+             *     (see `run_reflect`) is non-empty". Ticket 6 is what adds a real
+             *     relevance judgment (the disclosed fallback) and a `fallback_used`
+             *     field; inventing that distinction early would be building ahead of
+             *     the ticket that actually needs it, so it is deliberately not here.
              */
             grounded: boolean;
             /**
@@ -186,7 +202,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description An Answer grounded in the Entries nearest the Question */
+            /** @description An Answer grounded in the Entries retrieval found */
             200: {
                 headers: {
                     [name: string]: unknown;
