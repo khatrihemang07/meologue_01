@@ -223,16 +223,24 @@ pub fn router_with_reflection(
     if reflect.is_some() {
         // `/v1/sessions/{id}` and `/v1/sessions` are gated on the same
         // `reflect.is_some()` check as `/v1/reflect`, even though neither
-        // `sessions::get_session_handler` nor `sessions::list_sessions_handler`
-        // ever touches `ReflectState` — a Server with no Session to fetch
-        // or list (Reflection unconfigured, so nothing ever created one)
-        // must 404 exactly like an older Server that never had the route,
-        // the same reasoning `v1_not_found`'s doc comment gives for
-        // `/v1/reflect` itself.
+        // `sessions::get_session_handler`, `sessions::list_sessions_handler`
+        // nor `sessions::delete_session_handler` ever touches `ReflectState`
+        // — a Server with no Session to fetch, list or delete (Reflection
+        // unconfigured, so nothing ever created one) must 404 exactly like
+        // an older Server that never had the route, the same reasoning
+        // `v1_not_found`'s doc comment gives for `/v1/reflect` itself.
+        // `DELETE` is chained onto the same `/v1/sessions/{id}` route as
+        // `GET` (issue #63) rather than a second `.route()` call — axum
+        // dispatches by method on one matched path either way, and this
+        // keeps the two verbs that share a path next to each other instead
+        // of duplicating the path string.
         api_router = api_router
             .route("/v1/reflect", post(reflect::reflect_handler))
             .route("/v1/sessions", get(sessions::list_sessions_handler))
-            .route("/v1/sessions/{id}", get(sessions::get_session_handler));
+            .route(
+                "/v1/sessions/{id}",
+                get(sessions::get_session_handler).delete(sessions::delete_session_handler),
+            );
     }
     // Always registered, whether or not Reflection is configured: this is
     // what makes an unmatched `/v1/*` path — including `/v1/reflect` and

@@ -13,6 +13,7 @@ use crate::sync::{EntryInput, EntryOutput, SyncRequest, SyncResponse};
         crate::reflect::reflect_handler,
         crate::sessions::get_session_handler,
         crate::sessions::list_sessions_handler,
+        crate::sessions::delete_session_handler,
     ),
     components(schemas(
         HealthResponse,

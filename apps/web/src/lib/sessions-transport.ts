@@ -74,3 +74,39 @@ export async function sessionsListTransport(): Promise<SessionsListResult> {
   const body = (await response.json()) as WireSessionSummary[];
   return { ok: true, sessions: body };
 }
+
+/**
+ * `DELETE /v1/sessions/{id}` (issue #63) — permanently removes a Session
+ * and, via the Server's own foreign-key cascade, every Turn inside it.
+ * Mirrors `sessionsTransport`'s shape exactly, including its `"not-found"`
+ * reason: deleting an id that's already gone (this Device raced another
+ * one, or the row never existed) is the same ordinary case a fetch already
+ * has to report, not a new kind of failure. A 204 carries no body, so the
+ * success case is just `{ ok: true }` — nothing to parse.
+ */
+export type SessionsDeleteResult =
+  | { ok: true }
+  | { ok: false; reason: "not-found" }
+  | { ok: false; reason: "unreachable" };
+
+export async function sessionsDeleteTransport(sessionId: string): Promise<SessionsDeleteResult> {
+  // Read per request, not hoisted — same reasoning as sessionsTransport and
+  // sessionsListTransport above.
+  const url = useSettingsStore.getState().serverUrl;
+
+  let response: Response;
+  try {
+    response = await fetch(`${url}/v1/sessions/${sessionId}`, { method: "DELETE" });
+  } catch {
+    return { ok: false, reason: "unreachable" };
+  }
+
+  if (response.status === 404) {
+    return { ok: false, reason: "not-found" };
+  }
+  if (!response.ok) {
+    return { ok: false, reason: "unreachable" };
+  }
+
+  return { ok: true };
+}

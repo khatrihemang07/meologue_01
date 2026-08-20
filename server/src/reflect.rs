@@ -86,6 +86,29 @@ const MAX_UTC_OFFSET_MINUTES: i32 = 840;
 /// regardless of `utc_offset_minutes`.
 const FALLBACK_WINDOW_DAYS: i64 = 3;
 
+/// How many of a Session's most recent Turns `run_reflect` replays into
+/// each chat call — the answering call and the disclosed-fallback call
+/// alike. `docs/adr/0025`'s Consequences section names exactly the problem
+/// this bounds: a Session is durable now and can be returned to over weeks,
+/// so replaying *every* prior Turn on every Question grows both latency and
+/// context without limit against a chat endpoint that costs roughly seven
+/// seconds a call and (`llm.rs`) has no timeout configured. This is the
+/// same kind of bound `RETRIEVAL_LIMIT` already puts on the other side of
+/// the same call — cap what the model is asked to read, rather than trust
+/// an unbounded input to stay small. 10 is generous for what a Conversation
+/// actually needs — a follow-up Question rarely reaches back further than
+/// its last few exchanges — while keeping the call's latency and context
+/// bounded regardless of how old or how long-lived the Session is.
+///
+/// This windows what's *replayed into the chat call*, not what a Session
+/// holds or what `GET /v1/sessions/{id}` returns — `sessions::load_turns`
+/// is shared by both, and the read endpoint must keep returning every Turn
+/// a Session has. The cap is applied here, in `run_reflect`, to whatever
+/// `load_turns` returns, deliberately not pushed into the SQL: it's a
+/// property of what the model is asked to read, not of what the Session
+/// contains.
+const CONVERSATION_WINDOW: usize = 10;
+
 /// The longest a derived Session title can be before `derive_title`
 /// truncates it — see that function's doc comment for why 60 and for the
 /// word-boundary rule.
@@ -328,6 +351,22 @@ async fn run_reflect(
             (turns, session.title)
         }
         None => (Vec::new(), derive_title(&req.question)),
+    };
+
+    // `load_turns` returns every Turn the Session has, oldest first — that
+    // full history is exactly right for `GET /v1/sessions/{id}`, which
+    // reuses the same function to render a whole Conversation. What's
+    // replayed into a chat call is a narrower thing (`CONVERSATION_WINDOW`'s
+    // own doc comment): keep only the most recent `CONVERSATION_WINDOW`
+    // Turns, dropping older ones, while leaving the survivors in the same
+    // oldest-first order `build_messages` expects — `split_off` on a
+    // saturating start index does exactly that without reversing anything,
+    // and is a no-op slice when there are `CONVERSATION_WINDOW` Turns or
+    // fewer.
+    let prior_turns = {
+        let mut turns = prior_turns;
+        let start = turns.len().saturating_sub(CONVERSATION_WINDOW);
+        turns.split_off(start)
     };
 
     // Chat call 1 — never fails this Question. Any failure (a chat call

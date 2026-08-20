@@ -69,7 +69,15 @@ export interface paths {
         get: operations["get_session_handler"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Deletes a Session outright — the id itself, not its Turns, which
+         *     `session_turns_session_id_fkey`'s `on delete cascade` (migration `0003`)
+         *     removes as a consequence of this one statement. `204 No Content` on
+         *     success, `404` when `id` names no Session — never a distinct "already
+         *     deleted" status, since from the Server's point of view those are the
+         *     same fact: there's nothing at `id` to delete.
+         */
+        delete: operations["delete_session_handler"];
         options?: never;
         head?: never;
         patch?: never;
@@ -389,6 +397,34 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["SessionResponse"];
                 };
+            };
+            /** @description No Session with this id exists */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    delete_session_handler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The Session's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The Session, and every Turn inside it, is gone */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description No Session with this id exists */
             404: {

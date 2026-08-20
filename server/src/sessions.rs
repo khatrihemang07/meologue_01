@@ -6,8 +6,17 @@
 //! `GET /v1/sessions` (ticket 62) lists every Session's own row — no
 //! Turns, so it stays cheap regardless of how long any one Conversation
 //! has grown — newest first by `updated_at`, the column `record_turn` bumps
-//! on every appended Turn. There is no `?q=` search and no delete yet
-//! (issues #64 and #63); this endpoint only lists.
+//! on every appended Turn. There is no `?q=` search yet (issue #64); this
+//! endpoint only lists.
+//!
+//! `DELETE /v1/sessions/{id}` (issue #63) removes a Session outright.
+//! `session_turns.session_id references sessions(id) on delete cascade`
+//! (migration `0003`) does the rest — deleting the Session row is enough to
+//! take every Turn inside it with it, so this handler issues exactly one
+//! `delete from sessions` and nothing against `session_turns` directly.
+//! Deleting an id that doesn't exist is a 404, the same as `GET
+//! /v1/sessions/{id}` — so a client can tell "already gone" (someone else
+//! deleted it, or it never existed) from "I just deleted it."
 //!
 //! This module also holds the row types and SQL `reflect.rs` uses to load a
 //! Session's prior Turns before asking, and to persist a new Turn (creating
@@ -100,6 +109,47 @@ pub async fn get_session_handler(
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
+}
+
+/// Deletes a Session outright — the id itself, not its Turns, which
+/// `session_turns_session_id_fkey`'s `on delete cascade` (migration `0003`)
+/// removes as a consequence of this one statement. `204 No Content` on
+/// success, `404` when `id` names no Session — never a distinct "already
+/// deleted" status, since from the Server's point of view those are the
+/// same fact: there's nothing at `id` to delete.
+#[utoipa::path(
+    delete,
+    path = "/v1/sessions/{id}",
+    params(("id" = Uuid, Path, description = "The Session's id")),
+    responses(
+        (status = 204, description = "The Session, and every Turn inside it, is gone"),
+        (status = 404, description = "No Session with this id exists"),
+    )
+)]
+pub async fn delete_session_handler(
+    State(pool): State<PgPool>,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, StatusCode> {
+    match run_delete_session(&pool, id).await {
+        Ok(true) => Ok(StatusCode::NO_CONTENT),
+        Ok(false) => Err(StatusCode::NOT_FOUND),
+        Err(err) => {
+            tracing::error!(error = ?err, session_id = %id, "deleting session failed");
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+/// Returns whether a row actually existed to delete — `rows_affected() ==
+/// 0` is exactly "no Session with this id," the same distinction
+/// `find_session`'s `Option` draws for the read side, just shaped for a
+/// statement that has no row to return.
+async fn run_delete_session(pool: &PgPool, id: Uuid) -> anyhow::Result<bool> {
+    let result = sqlx::query("delete from sessions where id = $1")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected() > 0)
 }
 
 #[utoipa::path(

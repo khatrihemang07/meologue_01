@@ -122,6 +122,33 @@
             "description": "No Session with this id exists"
           }
         }
+      },
+      "delete": {
+        "tags": [
+          "crate::sessions"
+        ],
+        "summary": "Deletes a Session outright — the id itself, not its Turns, which\n`session_turns_session_id_fkey`'s `on delete cascade` (migration `0003`)\nremoves as a consequence of this one statement. `204 No Content` on\nsuccess, `404` when `id` names no Session — never a distinct \"already\ndeleted\" status, since from the Server's point of view those are the\nsame fact: there's nothing at `id` to delete.",
+        "operationId": "delete_session_handler",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The Session's id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The Session, and every Turn inside it, is gone"
+          },
+          "404": {
+            "description": "No Session with this id exists"
+          }
+        }
       }
     },
     "/v1/sync": {

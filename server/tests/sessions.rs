@@ -100,6 +100,23 @@ async fn list_sessions(pool: &PgPool, reflect: Option<ReflectState>) -> (StatusC
     (status, json)
 }
 
+async fn delete_session(pool: &PgPool, reflect: Option<ReflectState>, id: Uuid) -> StatusCode {
+    let app =
+        meologue_server::router_with_reflection(pool.clone(), empty_static_dir(), None, reflect);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/v1/sessions/{id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    response.status()
+}
+
 async fn insert_session(pool: &PgPool, id: Uuid, title: &str) {
     sqlx::query("insert into sessions (id, title) values ($1, $2)")
         .bind(id)
@@ -202,9 +219,11 @@ async fn the_route_is_absent_when_chat_is_unconfigured(pool: PgPool) {
 }
 
 /// `session_turns.session_id references sessions(id) on delete cascade` —
-/// exercised directly against Postgres rather than through any endpoint,
-/// since no delete endpoint exists yet (a later ticket's job); this only
-/// proves the foreign key itself is wired the way the migration claims.
+/// exercised directly against Postgres rather than through
+/// `DELETE /v1/sessions/{id}`, so this proves the foreign key itself is
+/// wired the way the migration claims, independent of the handler built on
+/// top of it. `the_delete_endpoint_removes_the_session_and_cascades_its_turns`
+/// below exercises the same cascade through the real endpoint.
 #[sqlx::test]
 async fn deleting_a_session_cascades_its_turns(pool: PgPool) {
     let session_id = Uuid::new_v4();
@@ -292,5 +311,57 @@ async fn an_empty_session_table_is_200_empty_list(pool: PgPool) {
 #[sqlx::test]
 async fn the_list_route_is_absent_when_chat_is_unconfigured(pool: PgPool) {
     let (status, _) = list_sessions(&pool, None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// `DELETE /v1/sessions/{id}` (issue #63): `204`, the Session is gone from
+/// `GET /v1/sessions`, and — proving the cascade through the real endpoint
+/// rather than assuming it from the foreign key alone — its Turns are gone
+/// from `session_turns` too, queried directly.
+#[sqlx::test]
+async fn the_delete_endpoint_removes_the_session_and_cascades_its_turns(pool: PgPool) {
+    let session_id = Uuid::new_v4();
+    insert_session(&pool, session_id, "Anything?").await;
+    insert_turn(&pool, session_id, "Anything?", "Not much.").await;
+
+    let status = delete_session(&pool, Some(reflect_state()), session_id).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (list_status, list_body) = list_sessions(&pool, Some(reflect_state())).await;
+    assert_eq!(list_status, StatusCode::OK);
+    assert!(
+        list_body
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|session| session["id"] != session_id.to_string()),
+        "the deleted Session must not still be in the list"
+    );
+
+    let turn_count: i64 =
+        sqlx::query_scalar("select count(*) from session_turns where session_id = $1")
+            .bind(session_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(turn_count, 0);
+}
+
+/// Deleting an id that names no Session is a 404, not a 204 — so a client
+/// can tell "I just deleted it" from "it was already gone."
+#[sqlx::test]
+async fn deleting_an_unknown_session_id_is_a_404(pool: PgPool) {
+    let status = delete_session(&pool, Some(reflect_state()), Uuid::new_v4()).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// `DELETE /v1/sessions/{id}` is gated on Reflection being configured,
+/// exactly like the `GET` routes above (`lib.rs`'s `reflect.is_some()`
+/// block) — a Server with no chat model configured never created a Session
+/// in the first place, so it should 404 exactly like an older Server that
+/// never had the route.
+#[sqlx::test]
+async fn the_delete_route_is_absent_when_chat_is_unconfigured(pool: PgPool) {
+    let status = delete_session(&pool, None, Uuid::new_v4()).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }

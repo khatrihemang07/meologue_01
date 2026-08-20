@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Outlet, Route, Routes, useLocation } from "react-router";
+import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useSettingsStore } from "@/lib/settings";
 import type { EntryStoreOutletContext } from "@/pages/entry-store-layout";
@@ -46,6 +47,58 @@ function stubSessionsFetch(sessions: unknown[]) {
     "fetch",
     vi.fn(async () => ({ ok: true, status: 200, json: async () => sessions })),
   );
+}
+
+type DeleteOutcome = "ok" | "not-found" | "server-error" | "network-error";
+
+/**
+ * A stateful fetch stub good for both `GET /v1/sessions` and
+ * `DELETE /v1/sessions/:id`: a successful delete actually removes the
+ * Session from the list this same mock serves next, so
+ * "the row disappears" can be asserted the same way the real app shows it
+ * — through the list query re-fetching after the mutation's own
+ * `invalidateQueries` — rather than by asserting on the mutation call
+ * alone.
+ */
+function stubSessionsFetchWithDelete(
+  initialSessions: { id: string; title: string; created_at: string; updated_at: string }[],
+  deleteOutcome: DeleteOutcome = "ok",
+) {
+  let sessions = [...initialSessions];
+  const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+    if (init?.method === "DELETE") {
+      if (deleteOutcome === "network-error") {
+        throw new Error("network down");
+      }
+      if (deleteOutcome === "not-found") {
+        return { ok: false, status: 404, json: async () => ({}) };
+      }
+      if (deleteOutcome === "server-error") {
+        return { ok: false, status: 500, json: async () => ({}) };
+      }
+      const id = url.split("/").pop();
+      sessions = sessions.filter((session) => session.id !== id);
+      return { ok: true, status: 204, json: async () => ({}) };
+    }
+    return { ok: true, status: 200, json: async () => sessions };
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+const oneSession = {
+  id: "session-1",
+  title: "How has my knee been?",
+  created_at: "2026-08-01T00:00:00Z",
+  updated_at: "2026-08-20T00:00:00Z",
+};
+
+function openConfirm() {
+  fireEvent.click(screen.getByRole("button", { name: /delete "how has my knee been\?"/i }));
+}
+
+function confirmDelete() {
+  fireEvent.click(screen.getByRole("button", { name: /delete permanently/i }));
 }
 
 describe("SessionsPage", () => {
@@ -163,5 +216,94 @@ describe("SessionsPage", () => {
     await screen.findByText(/no sessions yet/i);
 
     expect(screen.getByRole("link", { name: "Back" })).toHaveAttribute("href", "/reflect");
+  });
+
+  it("requires a confirm step before a delete is ever sent — the first tap sends nothing", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    const fetchMock = stubSessionsFetchWithDelete([oneSession]);
+
+    renderSessionsPage();
+    await screen.findByText("How has my knee been?");
+
+    openConfirm();
+
+    // The confirm step itself is up, and it says this plainly rather than
+    // reading like an ordinary "are you sure?" — permanent, every Device.
+    expect(
+      screen.getByText(/is permanent, and removes the Conversation from every Device/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/every device/i)).toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.some(
+        ([, init]) => (init as RequestInit | undefined)?.method === "DELETE",
+      ),
+    ).toBe(false);
+    // The Session itself is untouched — still named on screen, in the
+    // confirm step's own warning.
+    expect(screen.getByText(/how has my knee been/i)).toBeInTheDocument();
+  });
+
+  it("cancelling the confirm step sends nothing and returns to the plain row", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    const fetchMock = stubSessionsFetchWithDelete([oneSession]);
+
+    renderSessionsPage();
+    await screen.findByText("How has my knee been?");
+
+    openConfirm();
+    fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
+
+    expect(
+      screen.queryByText(/is permanent, and removes the Conversation from every Device/i),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /how has my knee been/i })).toHaveAttribute(
+      "href",
+      "/reflect/session-1",
+    );
+    expect(
+      fetchMock.mock.calls.some(
+        ([, init]) => (init as RequestInit | undefined)?.method === "DELETE",
+      ),
+    ).toBe(false);
+  });
+
+  it("confirming sends the DELETE and the row disappears", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    const fetchMock = stubSessionsFetchWithDelete([oneSession]);
+
+    renderSessionsPage();
+    await screen.findByText("How has my knee been?");
+
+    openConfirm();
+    confirmDelete();
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith("https://phone.example:41207/v1/sessions/session-1", {
+        method: "DELETE",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(screen.queryByText("How has my knee been?")).not.toBeInTheDocument(),
+    );
+    expect(await screen.findByText(/no sessions yet/i)).toBeInTheDocument();
+  });
+
+  it("keeps the row and reports the failure honestly, rather than silently removing it", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    stubSessionsFetchWithDelete([oneSession], "server-error");
+    const errorToast = vi.spyOn(toast, "error");
+
+    renderSessionsPage();
+    await screen.findByText("How has my knee been?");
+
+    openConfirm();
+    confirmDelete();
+
+    await waitFor(() => expect(errorToast).toHaveBeenCalled());
+    // The row is still there — still confirming, still naming the Session
+    // — and says so inline too, rather than this failure being silent.
+    expect(screen.getByText(/how has my knee been/i)).toBeInTheDocument();
+    expect(screen.getByText(/couldn't delete this session/i)).toBeInTheDocument();
   });
 });

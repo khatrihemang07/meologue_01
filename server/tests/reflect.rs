@@ -363,17 +363,23 @@ fn session_id(body: &Value) -> Uuid {
     serde_json::from_value(body["session_id"].clone()).unwrap()
 }
 
-/// Seeds a Session with exactly one already-answered Turn, directly via SQL
-/// — standing in for what `sessions::record_turn` would already have done
-/// on an earlier ask, the same way `insert_embedded_entry` stands in for
-/// the embedding worker.
-async fn insert_session_with_turn(pool: &PgPool, session_id: Uuid, question: &str, answer: &str) {
+async fn insert_session(pool: &PgPool, session_id: Uuid, title: &str) {
     sqlx::query("insert into sessions (id, title) values ($1, $2)")
         .bind(session_id)
-        .bind(question)
+        .bind(title)
         .execute(pool)
         .await
         .unwrap();
+}
+
+/// Appends one already-answered Turn to a Session that already exists
+/// (`insert_session`), directly via SQL — standing in for what
+/// `sessions::record_turn` would already have done on an earlier ask, the
+/// same way `insert_embedded_entry` stands in for the embedding worker.
+/// `seq` is `bigserial` (`migrations/0003_create_sessions.sql`), so calls
+/// made in order get increasing `seq` values, which is all `load_turns`'s
+/// `order by seq asc` needs.
+async fn insert_turn(pool: &PgPool, session_id: Uuid, question: &str, answer: &str) {
     sqlx::query(
         "insert into session_turns
             (id, session_id, question, answer, grounding_entry_ids, grounded, fallback_used)
@@ -386,6 +392,30 @@ async fn insert_session_with_turn(pool: &PgPool, session_id: Uuid, question: &st
     .execute(pool)
     .await
     .unwrap();
+}
+
+/// Seeds a Session with exactly one already-answered Turn.
+async fn insert_session_with_turn(pool: &PgPool, session_id: Uuid, question: &str, answer: &str) {
+    insert_session(pool, session_id, question).await;
+    insert_turn(pool, session_id, question, answer).await;
+}
+
+/// Seeds a Session with `count` already-answered Turns, each distinctly
+/// worded ("turn 0 question"/"turn 0 answer", "turn 1 question"/... in
+/// insertion — and so `seq` — order) so a test can assert on exactly which
+/// ones reached a chat call after `CONVERSATION_WINDOW` truncation, the
+/// same way `insert_session_with_turn` stands in for a single earlier ask.
+async fn insert_session_with_turns(pool: &PgPool, session_id: Uuid, count: usize) {
+    insert_session(pool, session_id, "many turns").await;
+    for n in 0..count {
+        insert_turn(
+            pool,
+            session_id,
+            &format!("turn {n} question"),
+            &format!("turn {n} answer"),
+        )
+        .await;
+    }
 }
 
 async fn session_count(pool: &PgPool) -> i64 {
@@ -544,6 +574,238 @@ async fn a_sessions_conversation_reaches_the_chat_call(pool: PgPool) {
         .position(|c| *c == "Did it start with physical therapy?")
         .unwrap();
     assert!(prior_question_index < new_question_index);
+}
+
+/// `CONVERSATION_WINDOW` (`server/src/reflect.rs`) caps what's replayed
+/// into the answering chat call at the 10 most recent Turns — a Session
+/// that has grown past that must not hand the whole Conversation to the
+/// call, only the tail of it.
+#[sqlx::test]
+async fn a_session_with_more_than_ten_turns_replays_only_the_ten_most_recent(pool: PgPool) {
+    let session_id = Uuid::new_v4();
+    insert_session_with_turns(&pool, session_id, 15).await;
+
+    let chat = Arc::new(FakeChatClient::new("Here's what I found."));
+
+    let (status, _) = post_reflect(
+        &pool,
+        Some(reflect_state(chat.clone())),
+        json!({
+            "protocol_version": 1,
+            "question": "Anything new to add?",
+            "session_id": session_id,
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+
+    let sent = chat.last_call();
+    let contents: Vec<&str> = sent.iter().map(|m| m.content.as_str()).collect();
+
+    // Turns 5 through 14 are the 10 most recent of the 15 seeded (0..14) —
+    // these must all have reached the call.
+    for n in 5..15 {
+        assert!(
+            contents.contains(&format!("turn {n} question").as_str()),
+            "turn {n} question should have reached the chat call: {contents:?}"
+        );
+        assert!(
+            contents.contains(&format!("turn {n} answer").as_str()),
+            "turn {n} answer should have reached the chat call: {contents:?}"
+        );
+    }
+
+    // Turns 0 through 4 are older than the 10-Turn window — they must have
+    // been dropped, not just crowded out of `last_call`.
+    for n in 0..5 {
+        assert!(
+            !contents.contains(&format!("turn {n} question").as_str()),
+            "turn {n} question is outside CONVERSATION_WINDOW and should not have reached the \
+             chat call: {contents:?}"
+        );
+        assert!(
+            !contents.contains(&format!("turn {n} answer").as_str()),
+            "turn {n} answer is outside CONVERSATION_WINDOW and should not have reached the \
+             chat call: {contents:?}"
+        );
+    }
+}
+
+/// The 10 Turns that survive the `CONVERSATION_WINDOW` cap must still reach
+/// the chat call oldest-first — the cap drops the oldest Turns, it does not
+/// reorder the ones that remain.
+#[sqlx::test]
+async fn replayed_turns_stay_oldest_first_after_the_window_is_applied(pool: PgPool) {
+    let session_id = Uuid::new_v4();
+    insert_session_with_turns(&pool, session_id, 15).await;
+
+    let chat = Arc::new(FakeChatClient::new("Here's what I found."));
+
+    let (status, _) = post_reflect(
+        &pool,
+        Some(reflect_state(chat.clone())),
+        json!({
+            "protocol_version": 1,
+            "question": "Anything new to add?",
+            "session_id": session_id,
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+
+    let sent = chat.last_call();
+    let contents: Vec<&str> = sent.iter().map(|m| m.content.as_str()).collect();
+
+    let earlier_index = contents
+        .iter()
+        .position(|c| *c == "turn 5 question")
+        .expect("turn 5 question should be inside the window");
+    let later_index = contents
+        .iter()
+        .position(|c| *c == "turn 14 question")
+        .expect("turn 14 question should be inside the window");
+    assert!(
+        earlier_index < later_index,
+        "turn 5 was asked before turn 14 and must still precede it after windowing: {contents:?}"
+    );
+}
+
+/// A Session at or under the cap must replay every Turn it has, exactly as
+/// it did before `CONVERSATION_WINDOW` existed.
+#[sqlx::test]
+async fn a_session_with_ten_or_fewer_turns_replays_all_of_them(pool: PgPool) {
+    let session_id = Uuid::new_v4();
+    insert_session_with_turns(&pool, session_id, 4).await;
+
+    let chat = Arc::new(FakeChatClient::new("Here's what I found."));
+
+    let (status, _) = post_reflect(
+        &pool,
+        Some(reflect_state(chat.clone())),
+        json!({
+            "protocol_version": 1,
+            "question": "Anything new to add?",
+            "session_id": session_id,
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+
+    let sent = chat.last_call();
+    let contents: Vec<&str> = sent.iter().map(|m| m.content.as_str()).collect();
+    for n in 0..4 {
+        assert!(
+            contents.contains(&format!("turn {n} question").as_str()),
+            "turn {n} question should have reached the chat call: {contents:?}"
+        );
+        assert!(
+            contents.contains(&format!("turn {n} answer").as_str()),
+            "turn {n} answer should have reached the chat call: {contents:?}"
+        );
+    }
+}
+
+/// The disclosed-fallback call (`docs/adr/0024`) is a *different* chat call
+/// from the main answering call, built by the same `build_messages` off the
+/// same `prior_turns` — it must be capped by the same `CONVERSATION_WINDOW`,
+/// not the whole Conversation.
+#[sqlx::test]
+async fn the_disclosed_fallback_call_gets_the_same_conversation_window(pool: PgPool) {
+    let device = Uuid::new_v4();
+    let now = Utc::now();
+    insert_embedded_entry_with_vector(
+        &pool,
+        Uuid::new_v4(),
+        device,
+        "went for a run today",
+        &(now - Duration::hours(2)).to_rfc3339(),
+        &orthogonal_vector(),
+    )
+    .await;
+
+    let session_id = Uuid::new_v4();
+    insert_session_with_turns(&pool, session_id, 15).await;
+
+    let chat = Arc::new(
+        FakeChatClient::new("GROUNDED: no\nI couldn't find anything about scuba diving.")
+            .with_fallback_answer("Nothing matching the Question was found; you went for a run."),
+    );
+
+    let (status, body) = post_reflect(
+        &pool,
+        Some(reflect_state(chat.clone())),
+        json!({
+            "protocol_version": 1,
+            "question": "Have I written anything about scuba diving in Portugal?",
+            "session_id": session_id,
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["fallback_used"], true);
+
+    let fallback_call = chat.fallback_call();
+    let contents: Vec<&str> = fallback_call.iter().map(|m| m.content.as_str()).collect();
+
+    for n in 5..15 {
+        assert!(
+            contents.contains(&format!("turn {n} question").as_str()),
+            "turn {n} question should have reached the fallback call: {contents:?}"
+        );
+    }
+    for n in 0..5 {
+        assert!(
+            !contents.contains(&format!("turn {n} question").as_str()),
+            "turn {n} question is outside CONVERSATION_WINDOW and should not have reached the \
+             fallback call: {contents:?}"
+        );
+    }
+}
+
+/// `sessions::load_turns` is shared between `run_reflect`'s replay (capped
+/// at `CONVERSATION_WINDOW`) and `GET /v1/sessions/{id}` (which must render
+/// a whole Conversation regardless of length) — the regression guard for
+/// the shared-function hazard `CONVERSATION_WINDOW`'s own doc comment
+/// names. A user reopening an over-cap Session must still see every Turn.
+#[sqlx::test]
+async fn get_session_still_returns_every_turn_of_an_over_cap_session(pool: PgPool) {
+    let session_id = Uuid::new_v4();
+    insert_session_with_turns(&pool, session_id, 15).await;
+
+    let chat = Arc::new(FakeChatClient::new("unused"));
+    let app = meologue_server::router_with_reflection(
+        pool.clone(),
+        empty_static_dir(),
+        None,
+        Some(reflect_state(chat)),
+    );
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/v1/sessions/{session_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    let turns = body["turns"]
+        .as_array()
+        .expect("SessionResponse::turns should be a JSON array");
+    assert_eq!(
+        turns.len(),
+        15,
+        "GET /v1/sessions/{{id}} must return every Turn, not just the CONVERSATION_WINDOW replay \
+         cap: {turns:?}"
+    );
 }
 
 #[sqlx::test]
