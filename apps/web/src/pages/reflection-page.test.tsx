@@ -186,4 +186,62 @@ describe("ReflectionPage", () => {
     await waitFor(() => expect(errorToast).toHaveBeenCalled());
     expect(useConversationStore.getState().turns).toEqual([]);
   });
+
+  // A Question is the user's own words and, unlike an Entry, was never
+  // written down anywhere else — so a failure must not swallow it. Found on
+  // a real device: the chat backend was down, the Question disappeared, and
+  // all that was left was a toast that faded.
+  it("puts a Question back in the composer when it fails, rather than losing it", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("network down");
+      }),
+    );
+    vi.spyOn(toast, "error");
+
+    renderReflectionPage();
+    ask("How did the flat move go?");
+
+    await waitFor(() => expect(askQuestionField()).toHaveValue("How did the flat move go?"));
+  });
+
+  it("restores a Question that fails twice in a row", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("network down");
+      }),
+    );
+    vi.spyOn(toast, "error");
+
+    renderReflectionPage();
+    ask("Anything?");
+    await waitFor(() => expect(askQuestionField()).toHaveValue("Anything?"));
+
+    // Re-asking the identical text must restore it again — which is why the
+    // restore is keyed on a changing signal and not on the text.
+    fireEvent.click(askButton());
+    await waitFor(() => expect(askQuestionField()).toHaveValue("Anything?"));
+  });
+
+  it("does not restore anything after a Question succeeds", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ answer: "It went well.", grounding_entry_ids: [], grounded: true }),
+      })),
+    );
+
+    renderReflectionPage();
+    ask("How did the flat move go?");
+
+    expect(await screen.findByText("It went well.")).toBeInTheDocument();
+    expect(askQuestionField()).toHaveValue("");
+  });
 });

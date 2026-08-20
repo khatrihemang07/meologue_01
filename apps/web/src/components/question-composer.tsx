@@ -1,5 +1,5 @@
 import { ArrowUp } from "lucide-react";
-import { type KeyboardEvent, useState } from "react";
+import { type KeyboardEvent, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 
@@ -7,6 +7,13 @@ interface QuestionComposerProps {
   onAsk: (question: string) => void;
   /** While a Question is in flight — a new one can't be asked until the Answer (or a failure) comes back. */
   disabled?: boolean;
+  /**
+   * A Question that never reached an Answer, handed back so the user doesn't
+   * lose what they wrote. `signal` is what triggers the restore rather than
+   * the text itself, so asking the same Question twice and failing twice
+   * still puts it back the second time.
+   */
+  restore?: { question: string; signal: number };
 }
 
 /**
@@ -19,8 +26,18 @@ interface QuestionComposerProps {
  * specifically. Sharing a name across both would blur exactly the
  * distinction CONTEXT.md draws.
  */
-export function QuestionComposer({ onAsk, disabled = false }: QuestionComposerProps) {
+export function QuestionComposer({ onAsk, disabled = false, restore }: QuestionComposerProps) {
   const [value, setValue] = useState("");
+
+  // Only ever fires on a *new* failure (a changed signal), so it can't fight
+  // the user for control of the field while they're typing a replacement.
+  const restoreSignal = restore?.signal ?? 0;
+  const restoreQuestion = restore?.question ?? "";
+  useEffect(() => {
+    if (restoreSignal > 0) {
+      setValue(restoreQuestion);
+    }
+  }, [restoreSignal, restoreQuestion]);
 
   const ask = () => {
     const question = value.trim();

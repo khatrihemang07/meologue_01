@@ -60,6 +60,7 @@ export function ReflectionPage() {
   const [pending, setPending] = useState<string | null>(null);
   const [thinking, setThinking] = useState(false);
   const [notSupported, setNotSupported] = useState(false);
+  const [restore, setRestore] = useState({ question: "", signal: 0 });
   // Bumped on every ask, mirroring composer-page.tsx's sendSignal: the
   // pinned thread jumps to the newest end unconditionally on Ask, the same
   // rule Send already gets there.
@@ -98,10 +99,17 @@ export function ReflectionPage() {
         groundingEntryIds: result.response.grounding_entry_ids,
         grounded: result.response.grounded,
       });
-    } else if (result.reason === "not-supported") {
-      setNotSupported(true);
     } else {
-      toast.error("Couldn't reach Reflection. Check your Server and try again.");
+      // A Question that failed goes back into the composer rather than
+      // vanishing. Losing what someone wrote is the wrong failure mode
+      // anywhere, and especially here: the Question is the user's own words,
+      // and unlike an Entry it was never written down anywhere else.
+      setRestore((previous) => ({ question, signal: previous.signal + 1 }));
+      if (result.reason === "not-supported") {
+        setNotSupported(true);
+      } else {
+        toast.error("Couldn't reach Reflection. Check your Server and try again.");
+      }
     }
   }
 
@@ -112,7 +120,9 @@ export function ReflectionPage() {
       nav={<Nav />}
       pinnedThread={syncEnabled ? { watch: turns.length, forceToNewest: askSignal } : undefined}
       composerSlot={
-        syncEnabled ? <QuestionComposer onAsk={handleAsk} disabled={pending !== null} /> : undefined
+        syncEnabled ? (
+          <QuestionComposer onAsk={handleAsk} disabled={pending !== null} restore={restore} />
+        ) : undefined
       }
     >
       {!syncEnabled && (
