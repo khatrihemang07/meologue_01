@@ -4,6 +4,45 @@
  */
 
 export interface paths {
+    "/v1/digests/{period}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["latest_digest_handler"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/digests/{period}/{date}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Mirrors `latest_digest_handler`, but for one specific `period_start`
+         *     rather than "whichever is newest." `date` is parsed as `YYYY-MM-DD`
+         *     (the same format `reflect.rs::parse_date_range` and `digest.rs`'s own
+         *     `build_messages` already render dates in) — a value that doesn't parse
+         *     is a 400, same reasoning as an unrecognised `period`.
+         */
+        get: operations["digest_at_handler"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/health": {
         parameters: {
             query?: never;
@@ -103,6 +142,71 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * @description The wire shape of one Digest — everything a client needs to render it
+         *     (its Period, its inclusive local date range, its prose, the Entries it
+         *     grounds in) plus the two neighbour dates described on `DigestResponse`.
+         *     `period` is the plain string (`Period::as_str`) rather than the `Period`
+         *     enum itself — `Period` carries no `Serialize`/`ToSchema` impl of its own
+         *     (nothing before this ticket ever put it on the wire), and adding one
+         *     just for this single field would be more machinery than reusing the
+         *     string every other layer already keys on.
+         */
+        Digest: {
+            body: string;
+            grounding_entry_ids: string[];
+            /**
+             * Format: date
+             * @description The `period_start` of the next Digest of this same Period that
+             *     actually exists — `None` means this is the newest.
+             */
+            next_date?: string | null;
+            period: string;
+            /**
+             * Format: date
+             * @description The inclusive last local date this Digest covers
+             *     (`period::period_end`) — handed over pre-computed so a client can
+             *     render "10-16 Aug" without reimplementing this module's calendar
+             *     maths (ADR 0027's "one implementation, used everywhere" rule
+             *     extends to the client side of the wire too).
+             */
+            period_end: string;
+            /** Format: date */
+            period_start: string;
+            /**
+             * Format: date
+             * @description The `period_start` of the previous Digest of this same Period that
+             *     actually exists, skipping any completed-but-undigested gap — `None`
+             *     means this is the oldest Digest of this Period the Server holds.
+             */
+            prev_date?: string | null;
+        };
+        /**
+         * @description The body both Digest routes return. **Always 200** — a missing Digest
+         *     (`digest: null`) is carried in the payload, never signalled with 404.
+         *     This is the one load-bearing decision in issue #70: a client must be
+         *     able to tell four situations apart — Sync is off, the Server is
+         *     unreachable, the Server predates these routes entirely, and the Server
+         *     is fine but hasn't written a Digest yet. The third of those is already
+         *     how `apps/web/src/lib/reflect-transport.ts` detects a Server that
+         *     predates Reflection: a 404 on `/v1/reflect` (the route was never
+         *     registered, see `lib.rs`'s `reflect.is_some()` gate, extended here by
+         *     `digests_enabled`) means "this Server doesn't know about Reflection."
+         *     If an empty Digest also 404'd, a brand-new install — chat configured,
+         *     worker running, nothing written yet because no Period has completed —
+         *     would be told its Server is *too old*, which is simply false. So a 404
+         *     here is reserved for "this Server has no Digest routes at all," and
+         *     every request that reaches a registered route answers 200, with `digest`
+         *     carrying either the row or `null`.
+         *
+         *     An unparseable `{period}` or `{date}`, on the other hand, is a 400 (see
+         *     the handlers below) — that's a malformed request, a different failure
+         *     from "the Digest doesn't exist," and conflating the two would make a
+         *     typo in the URL look identical to an ordinary empty archive.
+         */
+        DigestResponse: {
+            digest?: null | components["schemas"]["Digest"];
+        };
         EntryInput: {
             body: string;
             /** Format: date-time */
@@ -299,6 +403,68 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    latest_digest_handler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description "day", "week", or "month" */
+                period: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The most recent Digest of this Period, or `{"digest": null}` if none has been written yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DigestResponse"];
+                };
+            };
+            /** @description `period` is not "day", "week", or "month" */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    digest_at_handler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description "day", "week", or "month" */
+                period: string;
+                /** @description The Digest's `period_start`, as YYYY-MM-DD */
+                date: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The Digest at this exact date, or `{"digest": null}` if none exists there */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DigestResponse"];
+                };
+            };
+            /** @description `period` is unrecognised, or `date` is not a valid YYYY-MM-DD date */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     health_handler: {
         parameters: {
             query?: never;

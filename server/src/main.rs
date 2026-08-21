@@ -44,7 +44,15 @@ async fn main() -> anyhow::Result<()> {
     // Reflection below, this needs no embed client at all (a Digest
     // retrieves by date range, not by vector search), so it's gated on its
     // own, looser check — see `LlmConfig::digest_worker_config`.
-    if let Some(chat_client) = llm_config.digest_worker_config() {
+    //
+    // Bound to a variable (rather than matched inline) so `digests_enabled`
+    // survives past the `Some(chat_client)` move below — issue #70's
+    // `/v1/digests/*` routes are gated on the same config as the worker
+    // itself, via `router_with_digests`, since there is nothing for those
+    // routes to serve on a Server whose worker never runs.
+    let digest_worker_config = llm_config.digest_worker_config();
+    let digests_enabled = digest_worker_config.is_some();
+    if let Some(chat_client) = digest_worker_config {
         tokio::spawn(digest::run(
             pool.clone(),
             chat_client,
@@ -61,7 +69,8 @@ async fn main() -> anyhow::Result<()> {
         .map(|(chat_client, embed_client)| meologue_server::reflect::ReflectState { chat_client, embed_client });
 
     let static_dir = env::var("STATIC_DIR").unwrap_or_else(|_| DEFAULT_STATIC_DIR.to_string());
-    let app = meologue_server::router_with_reflection(pool, static_dir, embed_tx, reflect);
+    let app =
+        meologue_server::router_with_digests(pool, static_dir, embed_tx, reflect, digests_enabled);
 
     let port: u16 = env::var("PORT")
         .ok()

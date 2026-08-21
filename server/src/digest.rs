@@ -10,15 +10,30 @@
 //! nothing asks for a Digest, ever (CONTEXT.md's Digest entry: "nobody
 //! asked; the Server simply wrote") — so `run` is a plain periodic loop,
 //! with no channel alongside the interval.
+//!
+//! Issue #70 adds the read side, in this same module rather than a
+//! sibling one: `latest_digest_handler` and `digest_at_handler` below share
+//! the SQL shape (and the `DigestRecord` row) that `write_digest_for` above
+//! writes, so keeping reader and writer together means there is exactly one
+//! place that knows what a `digests` row looks like, the same reasoning
+//! `sessions.rs` gives for holding both `reflect.rs`'s persistence helpers
+//! and its own handlers.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use axum::{
+    Json,
+    extract::{Path, State},
+    http::StatusCode,
+};
 use chrono::{DateTime, NaiveDate, Utc};
 use chrono_tz::Tz;
+use serde::Serialize;
 use sqlx::PgPool;
 use tokio::time::MissedTickBehavior;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::llm::{ChatMessage, LlmClient};
@@ -405,4 +420,243 @@ fn build_messages(period: Period, start: NaiveDate, entries: &[DigestEntry]) -> 
             content: format!("Here is everything the user wrote from {range}:\n\n{entries_block}"),
         },
     ]
+}
+
+// ---------------------------------------------------------------------
+// HTTP: GET /v1/digests/{period} and GET /v1/digests/{period}/{date}
+// (issue #70)
+// ---------------------------------------------------------------------
+
+/// One `digests` row, as loaded for a response — deliberately not the same
+/// struct as this module's worker-side `DigestEntry` (that's an *Entry*
+/// read out of a Period's window; this is the *Digest* row itself).
+/// `period` and `period_end` are left out here and computed by the handler
+/// instead — `period` because the caller already knows which `Period` it
+/// queried, and `period_end` because it is always a pure function of
+/// `period_start` (`period::period_end`), never a second, parallel value
+/// worth persisting or selecting.
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct DigestRecord {
+    period_start: NaiveDate,
+    body: String,
+    grounding_entry_ids: Vec<Uuid>,
+}
+
+/// The wire shape of one Digest — everything a client needs to render it
+/// (its Period, its inclusive local date range, its prose, the Entries it
+/// grounds in) plus the two neighbour dates described on `DigestResponse`.
+/// `period` is the plain string (`Period::as_str`) rather than the `Period`
+/// enum itself — `Period` carries no `Serialize`/`ToSchema` impl of its own
+/// (nothing before this ticket ever put it on the wire), and adding one
+/// just for this single field would be more machinery than reusing the
+/// string every other layer already keys on.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct Digest {
+    pub period: String,
+    pub period_start: NaiveDate,
+    /// The inclusive last local date this Digest covers
+    /// (`period::period_end`) — handed over pre-computed so a client can
+    /// render "10-16 Aug" without reimplementing this module's calendar
+    /// maths (ADR 0027's "one implementation, used everywhere" rule
+    /// extends to the client side of the wire too).
+    pub period_end: NaiveDate,
+    pub body: String,
+    pub grounding_entry_ids: Vec<Uuid>,
+    /// The `period_start` of the previous Digest of this same Period that
+    /// actually exists, skipping any completed-but-undigested gap — `None`
+    /// means this is the oldest Digest of this Period the Server holds.
+    pub prev_date: Option<NaiveDate>,
+    /// The `period_start` of the next Digest of this same Period that
+    /// actually exists — `None` means this is the newest.
+    pub next_date: Option<NaiveDate>,
+}
+
+/// The body both Digest routes return. **Always 200** — a missing Digest
+/// (`digest: null`) is carried in the payload, never signalled with 404.
+/// This is the one load-bearing decision in issue #70: a client must be
+/// able to tell four situations apart — Sync is off, the Server is
+/// unreachable, the Server predates these routes entirely, and the Server
+/// is fine but hasn't written a Digest yet. The third of those is already
+/// how `apps/web/src/lib/reflect-transport.ts` detects a Server that
+/// predates Reflection: a 404 on `/v1/reflect` (the route was never
+/// registered, see `lib.rs`'s `reflect.is_some()` gate, extended here by
+/// `digests_enabled`) means "this Server doesn't know about Reflection."
+/// If an empty Digest also 404'd, a brand-new install — chat configured,
+/// worker running, nothing written yet because no Period has completed —
+/// would be told its Server is *too old*, which is simply false. So a 404
+/// here is reserved for "this Server has no Digest routes at all," and
+/// every request that reaches a registered route answers 200, with `digest`
+/// carrying either the row or `null`.
+///
+/// An unparseable `{period}` or `{date}`, on the other hand, is a 400 (see
+/// the handlers below) — that's a malformed request, a different failure
+/// from "the Digest doesn't exist," and conflating the two would make a
+/// typo in the URL look identical to an ordinary empty archive.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct DigestResponse {
+    pub digest: Option<Digest>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/digests/{period}",
+    params(("period" = String, Path, description = "\"day\", \"week\", or \"month\"")),
+    responses(
+        (status = 200, description = "The most recent Digest of this Period, or `{\"digest\": null}` if none has been written yet", body = DigestResponse),
+        (status = 400, description = "`period` is not \"day\", \"week\", or \"month\""),
+    )
+)]
+pub async fn latest_digest_handler(
+    State(pool): State<PgPool>,
+    Path(period): Path<String>,
+) -> Result<Json<DigestResponse>, StatusCode> {
+    let period = Period::parse(&period).ok_or(StatusCode::BAD_REQUEST)?;
+    match run_latest_digest(&pool, period).await {
+        Ok(response) => Ok(Json(response)),
+        Err(err) => {
+            tracing::error!(error = ?err, period = period.as_str(), "loading the latest digest failed");
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+/// Mirrors `latest_digest_handler`, but for one specific `period_start`
+/// rather than "whichever is newest." `date` is parsed as `YYYY-MM-DD`
+/// (the same format `reflect.rs::parse_date_range` and `digest.rs`'s own
+/// `build_messages` already render dates in) — a value that doesn't parse
+/// is a 400, same reasoning as an unrecognised `period`.
+#[utoipa::path(
+    get,
+    path = "/v1/digests/{period}/{date}",
+    params(
+        ("period" = String, Path, description = "\"day\", \"week\", or \"month\""),
+        ("date" = String, Path, description = "The Digest's `period_start`, as YYYY-MM-DD"),
+    ),
+    responses(
+        (status = 200, description = "The Digest at this exact date, or `{\"digest\": null}` if none exists there", body = DigestResponse),
+        (status = 400, description = "`period` is unrecognised, or `date` is not a valid YYYY-MM-DD date"),
+    )
+)]
+pub async fn digest_at_handler(
+    State(pool): State<PgPool>,
+    Path((period, date)): Path<(String, String)>,
+) -> Result<Json<DigestResponse>, StatusCode> {
+    let period = Period::parse(&period).ok_or(StatusCode::BAD_REQUEST)?;
+    let date = NaiveDate::parse_from_str(&date, "%Y-%m-%d").map_err(|_| StatusCode::BAD_REQUEST)?;
+    match run_digest_at(&pool, period, date).await {
+        Ok(response) => Ok(Json(response)),
+        Err(err) => {
+            tracing::error!(error = ?err, period = period.as_str(), %date, "loading a digest by date failed");
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+async fn run_latest_digest(pool: &PgPool, period: Period) -> anyhow::Result<DigestResponse> {
+    let record = select_latest_digest(pool, period).await?;
+    build_digest_response(pool, period, record).await
+}
+
+async fn run_digest_at(
+    pool: &PgPool,
+    period: Period,
+    date: NaiveDate,
+) -> anyhow::Result<DigestResponse> {
+    let record = select_digest_at(pool, period, date).await?;
+    build_digest_response(pool, period, record).await
+}
+
+/// Turns a possibly-absent row into the wire response, filling in
+/// `period_end` and both neighbour dates when a row was actually found.
+/// `None` short-circuits before either neighbour query runs — an absent
+/// Digest has no `period_start` to look for neighbours around, and the
+/// response is simply `{"digest": null}` (see `DigestResponse`'s doc
+/// comment for why that's a 200, never a 404).
+async fn build_digest_response(
+    pool: &PgPool,
+    period: Period,
+    record: Option<DigestRecord>,
+) -> anyhow::Result<DigestResponse> {
+    let Some(record) = record else {
+        return Ok(DigestResponse { digest: None });
+    };
+
+    // Neighbours are the previous/next Digest that actually *exists* for
+    // this Period — not the previous/next calendar Period, which might
+    // have no Digest at all (a gap the resume rule in `fill_period` hasn't
+    // filled, or simply never will because that Period held no Entries).
+    // Two `min`/`max` queries, scoped to this Period and relative to this
+    // row's own `period_start`, are what let a client walk the archive one
+    // Digest at a time and skip any gap without knowing where it is or
+    // computing a date itself — see ADR 0027 and this ticket: it is also
+    // exactly what removes the need for a list endpoint or pagination.
+    let prev_date = select_prev_digest_date(pool, period, record.period_start).await?;
+    let next_date = select_next_digest_date(pool, period, record.period_start).await?;
+
+    Ok(DigestResponse {
+        digest: Some(Digest {
+            period: period.as_str().to_string(),
+            period_end: period::period_end(period, record.period_start),
+            period_start: record.period_start,
+            body: record.body,
+            grounding_entry_ids: record.grounding_entry_ids,
+            prev_date,
+            next_date,
+        }),
+    })
+}
+
+async fn select_latest_digest(pool: &PgPool, period: Period) -> sqlx::Result<Option<DigestRecord>> {
+    sqlx::query_as::<_, DigestRecord>(
+        "select period_start, body, grounding_entry_ids from digests
+         where period = $1
+         order by period_start desc
+         limit 1",
+    )
+    .bind(period.as_str())
+    .fetch_optional(pool)
+    .await
+}
+
+async fn select_digest_at(
+    pool: &PgPool,
+    period: Period,
+    date: NaiveDate,
+) -> sqlx::Result<Option<DigestRecord>> {
+    sqlx::query_as::<_, DigestRecord>(
+        "select period_start, body, grounding_entry_ids from digests
+         where period = $1 and period_start = $2",
+    )
+    .bind(period.as_str())
+    .bind(date)
+    .fetch_optional(pool)
+    .await
+}
+
+async fn select_prev_digest_date(
+    pool: &PgPool,
+    period: Period,
+    before: NaiveDate,
+) -> sqlx::Result<Option<NaiveDate>> {
+    sqlx::query_scalar::<_, Option<NaiveDate>>(
+        "select max(period_start) from digests where period = $1 and period_start < $2",
+    )
+    .bind(period.as_str())
+    .bind(before)
+    .fetch_one(pool)
+    .await
+}
+
+async fn select_next_digest_date(
+    pool: &PgPool,
+    period: Period,
+    after: NaiveDate,
+) -> sqlx::Result<Option<NaiveDate>> {
+    sqlx::query_scalar::<_, Option<NaiveDate>>(
+        "select min(period_start) from digests where period = $1 and period_start > $2",
+    )
+    .bind(period.as_str())
+    .bind(after)
+    .fetch_one(pool)
+    .await
 }

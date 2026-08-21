@@ -9,6 +9,84 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/v1/digests/{period}": {
+      "get": {
+        "tags": [
+          "crate::digest"
+        ],
+        "operationId": "latest_digest_handler",
+        "parameters": [
+          {
+            "name": "period",
+            "in": "path",
+            "description": "\"day\", \"week\", or \"month\"",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The most recent Digest of this Period, or `{\"digest\": null}` if none has been written yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DigestResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`period` is not \"day\", \"week\", or \"month\""
+          }
+        }
+      }
+    },
+    "/v1/digests/{period}/{date}": {
+      "get": {
+        "tags": [
+          "crate::digest"
+        ],
+        "summary": "Mirrors `latest_digest_handler`, but for one specific `period_start`\nrather than \"whichever is newest.\" `date` is parsed as `YYYY-MM-DD`\n(the same format `reflect.rs::parse_date_range` and `digest.rs`'s own\n`build_messages` already render dates in) — a value that doesn't parse\nis a 400, same reasoning as an unrecognised `period`.",
+        "operationId": "digest_at_handler",
+        "parameters": [
+          {
+            "name": "period",
+            "in": "path",
+            "description": "\"day\", \"week\", or \"month\"",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "date",
+            "in": "path",
+            "description": "The Digest's `period_start`, as YYYY-MM-DD",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The Digest at this exact date, or `{\"digest\": null}` if none exists there",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DigestResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`period` is unrecognised, or `date` is not a valid YYYY-MM-DD date"
+          }
+        }
+      }
+    },
     "/v1/health": {
       "get": {
         "tags": [
@@ -197,6 +275,73 @@
   },
   "components": {
     "schemas": {
+      "Digest": {
+        "type": "object",
+        "description": "The wire shape of one Digest — everything a client needs to render it\n(its Period, its inclusive local date range, its prose, the Entries it\ngrounds in) plus the two neighbour dates described on `DigestResponse`.\n`period` is the plain string (`Period::as_str`) rather than the `Period`\nenum itself — `Period` carries no `Serialize`/`ToSchema` impl of its own\n(nothing before this ticket ever put it on the wire), and adding one\njust for this single field would be more machinery than reusing the\nstring every other layer already keys on.",
+        "required": [
+          "period",
+          "period_start",
+          "period_end",
+          "body",
+          "grounding_entry_ids"
+        ],
+        "properties": {
+          "body": {
+            "type": "string"
+          },
+          "grounding_entry_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "next_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "The `period_start` of the next Digest of this same Period that\nactually exists — `None` means this is the newest."
+          },
+          "period": {
+            "type": "string"
+          },
+          "period_end": {
+            "type": "string",
+            "format": "date",
+            "description": "The inclusive last local date this Digest covers\n(`period::period_end`) — handed over pre-computed so a client can\nrender \"10-16 Aug\" without reimplementing this module's calendar\nmaths (ADR 0027's \"one implementation, used everywhere\" rule\nextends to the client side of the wire too)."
+          },
+          "period_start": {
+            "type": "string",
+            "format": "date"
+          },
+          "prev_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "The `period_start` of the previous Digest of this same Period that\nactually exists, skipping any completed-but-undigested gap — `None`\nmeans this is the oldest Digest of this Period the Server holds."
+          }
+        }
+      },
+      "DigestResponse": {
+        "type": "object",
+        "description": "The body both Digest routes return. **Always 200** — a missing Digest\n(`digest: null`) is carried in the payload, never signalled with 404.\nThis is the one load-bearing decision in issue #70: a client must be\nable to tell four situations apart — Sync is off, the Server is\nunreachable, the Server predates these routes entirely, and the Server\nis fine but hasn't written a Digest yet. The third of those is already\nhow `apps/web/src/lib/reflect-transport.ts` detects a Server that\npredates Reflection: a 404 on `/v1/reflect` (the route was never\nregistered, see `lib.rs`'s `reflect.is_some()` gate, extended here by\n`digests_enabled`) means \"this Server doesn't know about Reflection.\"\nIf an empty Digest also 404'd, a brand-new install — chat configured,\nworker running, nothing written yet because no Period has completed —\nwould be told its Server is *too old*, which is simply false. So a 404\nhere is reserved for \"this Server has no Digest routes at all,\" and\nevery request that reaches a registered route answers 200, with `digest`\ncarrying either the row or `null`.\n\nAn unparseable `{period}` or `{date}`, on the other hand, is a 400 (see\nthe handlers below) — that's a malformed request, a different failure\nfrom \"the Digest doesn't exist,\" and conflating the two would make a\ntypo in the URL look identical to an ordinary empty archive.",
+        "properties": {
+          "digest": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Digest"
+              }
+            ]
+          }
+        }
+      },
       "EntryInput": {
         "type": "object",
         "required": [

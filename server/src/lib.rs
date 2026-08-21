@@ -164,8 +164,10 @@ pub fn router_with_embedding(
 
 /// Same as `router_with_embedding`, but also wires the Reflection state
 /// (`llm::LlmConfig::reflect_config`) that `reflect::reflect_handler`
-/// needs. This is what `main.rs` calls; the two functions above are
-/// convenience wrappers the existing test suite depends on.
+/// needs. Delegates to `router_with_digests` with `digests_enabled: false`,
+/// so `/v1/digests/*` doesn't exist — every caller written against this
+/// signature before issue #70 (several test files) keeps compiling and
+/// keeps getting a server with no Digest routes, exactly as before.
 ///
 /// `reflect`'s presence, not any request-time check, is what decides
 /// whether `/v1/reflect` is even registered on this `Router` — see ticket
@@ -177,6 +179,26 @@ pub fn router_with_reflection(
     static_dir: impl AsRef<Path>,
     embed_tx: Option<Sender<Uuid>>,
     reflect: Option<ReflectState>,
+) -> Router {
+    router_with_digests(pool, static_dir, embed_tx, reflect, false)
+}
+
+/// The widest router constructor — everything `router_with_reflection`
+/// wires, plus the two Digest routes (issue #70) gated on `digests_enabled`
+/// rather than on `reflect.is_some()`: Digests need only a chat client
+/// (`llm::LlmConfig::digest_worker_config`), not the embed client
+/// Reflection additionally requires, so reusing the `reflect` gate would
+/// wrongly hide `/v1/digests/*` on a chat-only-configured Server that has
+/// no Reflection at all. `main.rs` calls this directly, passing whether
+/// `digest_worker_config()` resolved; `router_with_reflection` is the
+/// narrower, `digests_enabled: false` convenience the rest of the test
+/// suite is written against.
+pub fn router_with_digests(
+    pool: PgPool,
+    static_dir: impl AsRef<Path>,
+    embed_tx: Option<Sender<Uuid>>,
+    reflect: Option<ReflectState>,
+    digests_enabled: bool,
 ) -> Router {
     // Installs the global metrics recorder (if not already installed) before
     // any request can reach `track_metrics` — see src/metrics.rs.
@@ -242,6 +264,23 @@ pub fn router_with_reflection(
             .route(
                 "/v1/sessions/{id}",
                 get(sessions::get_session_handler).delete(sessions::delete_session_handler),
+            );
+    }
+    if digests_enabled {
+        // Gated separately from the `reflect.is_some()` block above —
+        // Digests need only a chat client (`LlmConfig::digest_worker_config`),
+        // not the embed client Reflection additionally requires (see
+        // `router_with_digests`'s doc comment). A Server with Digests
+        // disabled never had its worker running, so nothing has ever been
+        // written for `digest::latest_digest_handler` or
+        // `digest::digest_at_handler` to find — these routes must 404
+        // exactly like an older Server that never had them, the same
+        // reasoning `v1_not_found`'s doc comment gives for `/v1/reflect`.
+        api_router = api_router
+            .route("/v1/digests/{period}", get(digest::latest_digest_handler))
+            .route(
+                "/v1/digests/{period}/{date}",
+                get(digest::digest_at_handler),
             );
     }
     // Always registered, whether or not Reflection is configured: this is

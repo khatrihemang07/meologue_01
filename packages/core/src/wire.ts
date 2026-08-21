@@ -10,3 +10,5 @@ export type WireSessionTurn = components["schemas"]["SessionTurnRow"];
 export type WireSessionSummary = components["schemas"]["SessionRow"];
 export type WireReflectRequest = components["schemas"]["ReflectRequest"];
 export type WireReflectResponse = components["schemas"]["ReflectResponse"];
+export type WireDigestResponse = components["schemas"]["DigestResponse"];
+export type WireDigest = components["schemas"]["Digest"];
