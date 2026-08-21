@@ -49,9 +49,10 @@ import { expect, test } from "@playwright/test";
 // This spec must be run against a scratch database, never the 572-Entry
 // corpus (issue #67's warning, restated for Digest by issue #73): the
 // rows this test inserts below are real writes to whatever database
-// `meologue-postgres` currently answers to as `meologue`. See this
-// ticket's own verification notes for the rename procedure used to keep
-// this suite off the corpus database entirely.
+// `meologue-postgres` currently answers to as `meologue`. Run the suite
+// through `scripts/e2e.sh`, which parks the corpus under another name,
+// gives the suite a fresh `meologue` to fill, and restores it afterwards
+// whatever happens. Running `test:e2e` directly writes into the corpus.
 
 const CONTAINER = "meologue-postgres";
 

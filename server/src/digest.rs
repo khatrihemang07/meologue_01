@@ -48,14 +48,23 @@ use crate::period::{self, Period};
 /// on a restart.
 pub const SCAN_INTERVAL: Duration = Duration::from_secs(300);
 
-/// Caps how many Digests one tick writes, across all three Periods
-/// combined — counting Digests actually **written**, not Periods merely
-/// considered, so a run of empty Periods never eats into the budget a
-/// Period that actually needs an LLM call would use. This bounds a single
-/// tick's LLM calls even when the resume rule (see `run`) finds a long
-/// backlog to fill — e.g. right after seeding an anchor row far in the
-/// past (`docs/adr/0027`'s backfill mechanism) or after the worker was
-/// down for a while. The cold-start guarantee itself never needs this cap
+/// Caps how many Digests one tick writes **per Period type**, not across
+/// the three combined — see `run` for why a long daily backlog must not be
+/// allowed to starve the weekly and monthly Periods of the same tick. A
+/// tick can therefore write up to three times this many Digests in total.
+/// It counts Digests actually **written**, not Periods merely considered,
+/// so a run of empty Periods never eats into the budget a Period that
+/// actually needs an LLM call would use. This paces a long backlog — the
+/// resume rule (see `run`) can find many Periods to fill at once, right
+/// after seeding an anchor row far in the past (`docs/adr/0027`'s backfill
+/// mechanism) or after the worker was down for a while — so it trickles
+/// over several ticks rather than firing every call in one burst.
+///
+/// It is a write budget, not a call budget: a Period whose chat call fails
+/// writes nothing and so does not spend it, and will be retried on the next
+/// tick until `MAX_ATTEMPTS`. So a failing LLM against a large backlog
+/// still issues one call per candidate Period per tick. That is bounded
+/// overall by `MAX_ATTEMPTS`, not by this constant. The cold-start guarantee itself never needs this cap
 /// — with no prior Digest, each Period type has exactly one candidate
 /// (`most_recently_completed`) — but the resumed case has no such limit,
 /// which is what this constant is actually for.
@@ -364,11 +373,13 @@ async fn insert_digest(
 /// The system prompt for the one chat call this worker ever makes.
 ///
 /// Must begin with the exact phrase "You are the Digest writer" — this is
-/// a **test contract, not a stylistic choice**: `server/tests/digest.rs`'s
-/// fake chat client sniffs this exact leading phrase to identify a digest
-/// call, exactly as `reflect.rs`'s `extraction_system_prompt` documents
-/// "Today's date" as a leading phrase `tests/reflect.rs::is_extraction_call`
-/// depends on. Changing this opening without updating that test's matcher
+/// a **test contract, not a stylistic choice**: two separate test doubles
+/// sniff this exact leading phrase to identify a Digest call —
+/// `server/tests/digest.rs`'s fake chat client, and `apps/e2e/llm-stub.ts`'s
+/// `isDigestCall` (issue #73). Both live outside this crate, so nothing
+/// mechanical will catch a rewording; changing the opening means changing
+/// both. This mirrors `reflect.rs`'s `extraction_system_prompt`, which
+/// documents "Today's date" as the same kind of leading-phrase contract. Changing this opening without updating that test's matcher
 /// would silently break the test, not the feature.
 ///
 /// Deliberately carries no per-Period length target — CONTEXT.md and ADR

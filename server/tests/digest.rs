@@ -456,6 +456,68 @@ async fn an_empty_period_produces_no_digest_and_does_not_stall_the_window(pool: 
     worker.abort();
 }
 
+/// Issue #69's acceptance criterion "A Period with no Entries produces no
+/// Digest, and the window steps past it rather than stalling" has a second
+/// case the sibling test above never reaches: an empty run *between* two
+/// written Periods proves the window steps over a gap, but says nothing
+/// about a *trailing* run — an anchor far in the past with every completed
+/// Period after it empty, all the way out to the horizon. There, `fill_period`
+/// (server/src/digest.rs) widens its scan window on every tick and finds
+/// nothing to write, tick after tick. That has to be a benign hold, not a
+/// stall: proven in two parts below, matching the ticket's own phrasing.
+#[sqlx::test]
+async fn a_trailing_run_of_empty_periods_does_not_wedge_the_worker(pool: PgPool) {
+    let now = Utc::now();
+    let device = Uuid::new_v4();
+    let horizon = period::most_recently_completed(Period::Day, Tz::UTC, now);
+
+    // An anchor well over a year before the horizon, with no Entry
+    // anywhere in the database yet — not even outside its window. Week and
+    // Month have no anchor of their own either, so the cold-start rule
+    // (ADR 0027) only ever considers their single most-recently-completed
+    // Period, which is equally empty here — nothing is eligible for any of
+    // the three Period types.
+    let anchor = horizon - chrono::Duration::days(400);
+    seed_digest_row(&pool, Period::Day, anchor).await;
+
+    let client = Arc::new(FakeChatClient::new(FakeBehavior::AlwaysSucceed));
+    let worker = spawn_worker(pool.clone(), client.clone(), Tz::UTC);
+
+    // Part 1: several ticks over the whole (empty) trailing run write
+    // nothing new. This alone doesn't distinguish "holding correctly" from
+    // "wedged" — both look like silence — which is exactly why Part 2
+    // below is the half that actually proves the window moved.
+    tokio::time::sleep(TEST_SCAN_INTERVAL * 20).await;
+    assert_eq!(
+        digest_count(&pool).await,
+        1,
+        "only the seeded anchor should exist while every Period after it is empty"
+    );
+
+    // Part 2: an Entry lands inside a completed Period well after the
+    // anchor (`anchor + 50 days`, still far short of the horizon). If the
+    // worker had stalled — stuck re-deriving the same empty window instead
+    // of re-scanning it fresh on every tick — this Entry would never earn
+    // a Digest and `wait_for_digest` would time out. It doesn't: the
+    // worker had nothing to write before, not nowhere left to look.
+    let target = anchor + chrono::Duration::days(50);
+    let (from, _) = period::period_bounds(Period::Day, Tz::UTC, target);
+    let entry_id = Uuid::new_v4();
+    insert_entry_at(
+        &pool,
+        entry_id,
+        device,
+        "finally, something written",
+        from + chrono::Duration::hours(1),
+    )
+    .await;
+
+    let digest = wait_for_digest(&pool, Period::Day, target).await;
+    assert_eq!(digest.grounding_entry_ids, vec![entry_id]);
+
+    worker.abort();
+}
+
 /// Once every eligible Period has a Digest, further ticks write nothing
 /// new — the resume rule converges, and the schema's unique constraint
 /// backs that up structurally.
@@ -484,6 +546,64 @@ async fn running_further_ticks_after_catching_up_writes_nothing_new(pool: PgPool
     assert_eq!(digest_count(&pool).await, count_after_first);
 
     worker.abort();
+}
+
+/// Issue #69's acceptance criterion "Running the worker again writes
+/// nothing new, and the schema makes a duplicate impossible" has two
+/// clauses; the sibling test above only exercises the first. This test
+/// exercises the second directly, without the worker at all.
+///
+/// `insert_digest` (server/src/digest.rs) always issues its insert with
+/// `on conflict (period, period_start) do nothing`, so calling it twice
+/// would only prove that the worker's own SQL is polite about a duplicate
+/// it might cause itself — not that the database refuses one from some
+/// other writer that never says "on conflict do nothing". Deliberately
+/// testing the stronger claim instead: this bypasses `insert_digest` and
+/// issues a second **plain** insert (no `on conflict` clause) at the same
+/// `(period, period_start)`, asserting the raw `unique` constraint from
+/// migration `0004_create_digests.sql` rejects it outright as a genuine
+/// constraint-violation error. That is what makes CONTEXT.md's "a Digest
+/// is immutable once written" structural rather than a convention every
+/// writer has to remember to honour.
+#[sqlx::test]
+async fn the_schema_makes_a_duplicate_digest_impossible(pool: PgPool) {
+    let period = Period::Day;
+    let period_start = period::most_recently_completed(Period::Day, Tz::UTC, Utc::now());
+
+    // The first row, written the same plain way `seed_digest_row` always
+    // has — no `on conflict` clause, so this is exactly the kind of write
+    // the constraint has to survive a second copy of.
+    seed_digest_row(&pool, period, period_start).await;
+
+    let duplicate = sqlx::query(
+        "insert into digests (id, period, period_start, body, grounding_entry_ids) values ($1, $2, $3, $4, $5)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(period.as_str())
+    .bind(period_start)
+    .bind("a second Digest for the same Period, which must never land")
+    .bind(Vec::<Uuid>::new())
+    .execute(&pool)
+    .await;
+
+    assert!(
+        duplicate.is_err(),
+        "a second plain insert at the same (period, period_start) must violate the unique constraint, not silently succeed"
+    );
+
+    let matching = all_digests(&pool)
+        .await
+        .into_iter()
+        .filter(|d| d.period == period.as_str() && d.period_start == period_start)
+        .count();
+    assert_eq!(
+        matching, 1,
+        "exactly the first row must exist for this (period, period_start) — the rejected insert must not have landed a second one"
+    );
+
+    // No `worker.abort()` here, unlike every other test in this file — the
+    // constraint being proved is a property of the schema itself, not of
+    // `digest::run`'s loop, so no worker was ever spawned to abort.
 }
 
 /// A Digest records the ids of the Entries in its own Period — and only

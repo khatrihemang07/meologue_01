@@ -223,7 +223,7 @@ reliably flip `document.visibilityState`, so it listens to Capacitor's app-lifec
 ```bash
 pnpm test                                   # unit tests (core + web)
 pnpm lint
-pnpm --filter @meologue/e2e test:e2e        # boots the real stack, drives a browser
+./scripts/e2e.sh                            # boots the real stack, drives a browser
 
 export DATABASE_URL=postgres://meologue:meologue@localhost:5432/meologue
 cargo test --manifest-path server/Cargo.toml
@@ -231,6 +231,11 @@ cargo test --manifest-path server/Cargo.toml
 
 The server tests provision a database per test, but `sqlx` still needs `DATABASE_URL` set to find
 the instance.
+
+Run the e2e suite through `scripts/e2e.sh` rather than `test:e2e` directly. Both e2e servers read
+`DATABASE_URL`, so they have to share one database — which on a dev machine is the same one holding
+the test journal, and every spec writes to it. The script parks that database under another name,
+gives the suite an empty one, and restores it on the way out however the run ends.
 
 The TypeScript wire types are generated from the Rust server, which owns the contract:
 

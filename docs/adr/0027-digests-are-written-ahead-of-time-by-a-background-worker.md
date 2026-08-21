@@ -62,7 +62,7 @@ Consequences.
 Digest rather than to a separately tracked cursor.** Insert a single `digests` row with whatever
 `period_start` an operator wants Digests to begin from, for whichever Period type, and the very next
 tick's resume rule reads it as `anchor` and walks forward from there — filling in every completed
-Period after it, at `MAX_DIGESTS_PER_TICK` per tick, with no code path dedicated to backfilling and no
+Period after it, at `MAX_DIGESTS_PER_TICK` per Period type per tick, with no code path dedicated to backfilling and no
 separate state to keep in sync with `digests` itself. This is also how this ticket is verified against
 the real 572-Entry corpus: seed one old row, watch the worker fill forward.
 
