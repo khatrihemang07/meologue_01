@@ -37,6 +37,20 @@ const STUB_ANSWER = "GROUNDED: yes\nYour journal has an Entry from testing meolo
 // the constant embedding above already makes that one search deterministic.
 const STUB_EXTRACTION = '{"date_range": null, "keyword": null}';
 
+// The fixed reply for the Digest worker's one chat call
+// (`server/src/digest.rs::write_digest_for`), keyed on the same
+// leading-phrase trick as `isExtractionCall` below. digest.spec.ts
+// (issue #73) doesn't actually assert on this text — that spec seeds its
+// own `digests` rows with SQL rather than waiting on the worker, since a
+// cold e2e database never has a completed Period with Entries in it for
+// the worker to find (see that spec's own header comment). This constant
+// exists so a call the worker *does* happen to make during a run — its
+// `SCAN_INTERVAL` ticks every 5 minutes, so a long-running suite could see
+// one — gets recognised for what it is rather than silently falling
+// through to `STUB_ANSWER` and writing Reflection's "GROUNDED: yes..."
+// text into the `digests` table as if it were Digest prose.
+const STUB_DIGEST = "This is the Digest writer's fixed reply for meologue's e2e suite.";
+
 /**
  * Tells the extraction call apart from the answering call by content,
  * exactly as `is_extraction_call` does in server/tests/reflect.rs: the
@@ -47,6 +61,23 @@ const STUB_EXTRACTION = '{"date_range": null, "keyword": null}';
 function isExtractionCall(body: { messages?: Array<{ content?: string }> }): boolean {
   const first = body.messages?.[0]?.content ?? "";
   return first.includes("Today's date");
+}
+
+/**
+ * Tells the Digest worker's call apart from Reflection's two calls by
+ * content, the same way `isExtractionCall` does. `digest_system_prompt`
+ * (server/src/digest.rs) already documents this exact leading phrase —
+ * "You are the Digest writer" — as a **test contract, not a stylistic
+ * choice**, on its own side: today it names `server/tests/digest.rs`'s
+ * Rust-side fake chat client as the thing that would silently break if
+ * the phrase changed. This function is that same contract's e2e-side
+ * counterpart, sniffing the identical phrase for the identical reason —
+ * so a future edit to that opening line needs to satisfy both matchers,
+ * this one included, not just the Rust one that doc comment names today.
+ */
+function isDigestCall(body: { messages?: Array<{ content?: string }> }): boolean {
+  const first = body.messages?.[0]?.content ?? "";
+  return first.includes("You are the Digest writer");
 }
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
@@ -74,7 +105,11 @@ const server = createServer((req, res) => {
 
     if (req.method === "POST" && req.url === "/v1/chat/completions") {
       const body = (await readJsonBody(req)) as { messages?: Array<{ content?: string }> };
-      const content = isExtractionCall(body) ? STUB_EXTRACTION : STUB_ANSWER;
+      const content = isExtractionCall(body)
+        ? STUB_EXTRACTION
+        : isDigestCall(body)
+          ? STUB_DIGEST
+          : STUB_ANSWER;
       sendJson(res, { choices: [{ message: { content } }] });
       return;
     }

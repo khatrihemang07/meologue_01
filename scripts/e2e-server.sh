@@ -27,4 +27,13 @@ export MEOLOGUE_CHAT_BASE_URL="${MEOLOGUE_CHAT_BASE_URL:-http://localhost:41237/
 export MEOLOGUE_CHAT_MODEL="${MEOLOGUE_CHAT_MODEL:-llm-stub-chat}"
 export MEOLOGUE_EMBED_BASE_URL="${MEOLOGUE_EMBED_BASE_URL:-http://localhost:41237/v1}"
 export MEOLOGUE_EMBED_MODEL="${MEOLOGUE_EMBED_MODEL:-llm-stub-embed}"
+# issue #73: `server/src/period.rs::parse_timezone` already falls back to
+# UTC when `MEOLOGUE_TZ` is unset, so this isn't strictly load-bearing —
+# but Digest's Period boundaries (day/week/month) are calendar maths keyed
+# on this timezone, and digest.spec.ts seeds `digests` rows at fixed plain
+# calendar dates. Pinning UTC here explicitly, rather than relying on the
+# default staying UTC forever, means those boundaries can't shift under
+# the suite depending on which machine or CI runner's own default zone
+# happens to run it.
+export MEOLOGUE_TZ="${MEOLOGUE_TZ:-UTC}"
 exec cargo run
