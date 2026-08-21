@@ -382,7 +382,9 @@ fn digest_system_prompt() -> &'static str {
      time, speaking directly to the user in the second person. Use only what the Entries say — \
      invent nothing: a Digest that invents a past the user did not live is worse than one that \
      says little. Do not pad. If there is little here, write little. Do not include a title, a \
-     preamble, headings or bullet points — just the prose itself, with no length target to hit."
+     preamble, headings or bullet points — just the prose itself, with no length target to hit. \
+     Write plain prose with no Markdown: no asterisks, no underscores, no backticks. The Digest \
+     is rendered as plain text, so any Markdown you emit reaches the reader as literal punctuation."
 }
 
 /// The user message naming the Period and its inclusive local date range,

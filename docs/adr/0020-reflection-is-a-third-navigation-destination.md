@@ -16,6 +16,21 @@ instead. Everything else here — the third nav destination, the `/reflect` rout
 `EntryStoreLayout`, the Sync-off gate, and the reasoning for keeping Settings an app-bar
 action — stands unchanged and is still load-bearing.
 
+Partially superseded/extended by issue #71's Digest page, built on
+[0027](0027-digests-are-written-ahead-of-time-by-a-background-worker.md) — **the destination
+count this ADR fixed at three moves to four: Composer, History, Reflect, Digest.** Digest still
+sits inside the same Material 3 three-to-five bound this ADR itself cited below — four is no
+closer to that ceiling than three was to its floor — so nothing in the reasoning that justified
+raising two to three needed to change to justify raising three to four; the count was never
+independent of what it was counting (see this ADR's own words below), and the count of peer views
+onto a user's History simply grew again. Digest reads CONTEXT.md's own definition — prose the
+Server writes about a stretch of time, read rather than asked for — which is what makes it a peer
+of Reflect and History rather than a utility like Settings: it is a way of reading a user's
+History, not configuring the Device. Everything else this ADR decided — the `/reflect` route, the
+Sync-off gate's reasoning, Settings staying an app-bar action, the one-`<nav>`-repositioned-by-CSS
+technique — stands unchanged; see `apps/web/src/components/nav.tsx`'s `DESTINATIONS` for where the
+fourth entry actually lives.
+
 ## Context
 
 CONTEXT.md just gained five terms — Reflection, Question, Answer, Conversation, Grounding —

@@ -1,6 +1,8 @@
 import { BrowserRouter, Route, Routes } from "react-router";
 import { Toaster } from "@/components/ui/sonner";
 import { ComposerPage } from "@/pages/composer-page";
+import { DigestPage } from "@/pages/digest-page";
+import { DigestReaderPage } from "@/pages/digest-reader-page";
 import { EntryStoreLayout } from "@/pages/entry-store-layout";
 import { HistoryPage } from "@/pages/history-page";
 import { ReflectionPage } from "@/pages/reflection-page";
@@ -14,12 +16,16 @@ import { SettingsPage } from "@/pages/settings-page";
 // below may ever contain a "." — Capacitor's fallback check treats a dot in
 // the last path segment as a request for a real file, not the app shell.
 //
-// EntryStoreLayout wraps `/`, `/history` and `/reflect` (ticket 27, extended
-// by ADR 0020): all three read the Entry store and History through it,
-// opened and synced exactly once. Reflect only ever reads Entries
-// (CONTEXT.md), same as History, which is why it belongs inside this layout
-// rather than beside it. Settings is a sibling, not a child of that layout —
-// ADR 0008 requires it to stay usable even when the store never reaches
+// EntryStoreLayout wraps `/`, `/history`, `/reflect` and `/digest` (ticket
+// 27, extended by ADR 0020 and issue #71): all four read the Entry store
+// and History through it, opened and synced exactly once. Digest is the odd
+// one out among the four — CONTEXT.md's Digest entry is explicit that it
+// lives only on the Server, so this page reads no Entry directly the way
+// Composer/History/Reflect do — but it still belongs inside this layout
+// rather than beside it, because the layout is what drives Sync: a reader
+// parked on `/digest` must not stop syncing just because that page itself
+// never touches an Entry. Settings is a sibling, not a child of that layout
+// — ADR 0008 requires it to stay usable even when the store never reaches
 // "ready".
 function App() {
   return (
@@ -41,6 +47,16 @@ function App() {
           <Route path="/reflect" element={<ReflectionPage />} />
           <Route path="/reflect/list" element={<SessionsPage />} />
           <Route path="/reflect/:sessionId" element={<ReflectionPage />} />
+          {/* `/digest` is the fourth nav destination's cards (issue #71);
+              `/digest/:period/:date` opens one of them. `period` is always
+              "day"/"week"/"month" and `date` is a `YYYY-MM-DD`
+              `period_start` (server/src/digest.rs) — like a Session id,
+              neither ever contains a "." and stays safe under the
+              constraint above, but flagging that here for the same reason
+              ADR 0020 flagged it for Session ids: so nobody later routes
+              something dotted into either segment. */}
+          <Route path="/digest" element={<DigestPage />} />
+          <Route path="/digest/:period/:date" element={<DigestReaderPage />} />
         </Route>
         <Route path="/settings" element={<SettingsPage />} />
       </Routes>

@@ -16,6 +16,8 @@ export type { SyncEngineOptions, SyncTransport } from "./sync-engine";
 export { sync } from "./sync-engine";
 export type { Entry } from "./types";
 export type {
+  WireDigest,
+  WireDigestResponse,
   WireReflectRequest,
   WireReflectResponse,
   WireSessionResponse,

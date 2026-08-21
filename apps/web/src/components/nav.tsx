@@ -1,4 +1,5 @@
 import {
+  CalendarDays,
   History as HistoryIcon,
   Lightbulb,
   List as ListIcon,
@@ -8,15 +9,18 @@ import {
 import { Link, NavLink } from "react-router";
 import { cn } from "@/lib/utils";
 
-// Ticket 54, settling #49's chosen config, extended by ADR 0020: three
-// persistent nav destinations — Composer, History, then Reflect — Settings
-// is deliberately not one of them (SettingsLink below). All three are bare
-// route links, not readers of the Entry store, so — like the old
-// SettingsLink — they stay live regardless of whether the store ever opens;
-// every page renders this same Nav through Shell's `nav` prop
-// (composer-page.tsx, history-page.tsx, reflection-page.tsx,
-// settings-page.tsx), which is what makes "every page becomes reachable
-// directly" (issue #54) literally true even from Settings.
+// Ticket 54, settling #49's chosen config, extended by ADR 0020 (Reflect,
+// three destinations) and issue #71 (Digest, four — see docs/adr/0020's own
+// amendment note): four persistent nav destinations — Composer, History,
+// Reflect, then Digest — Settings is deliberately not one of them
+// (SettingsLink below). All four are bare route links, not readers of the
+// Entry store, so — like the old SettingsLink — they stay live regardless
+// of whether the store ever opens; every page renders this same Nav
+// through Shell's `nav` prop (composer-page.tsx, history-page.tsx,
+// reflection-page.tsx, sessions-page.tsx, digest-page.tsx,
+// digest-reader-page.tsx, settings-page.tsx), which is what makes "every
+// page becomes reachable directly" (issue #54) literally true even from
+// Settings.
 //
 // This renders only the *contents* of Shell's single `<nav>` landmark
 // (ticket 50's element, ticket 54's fix for it being duplicated — see
@@ -27,6 +31,7 @@ const DESTINATIONS = [
   { to: "/", label: "Composer", Icon: SquarePen, end: true },
   { to: "/history", label: "History", Icon: HistoryIcon, end: false },
   { to: "/reflect", label: "Reflect", Icon: Lightbulb, end: false },
+  { to: "/digest", label: "Digest", Icon: CalendarDays, end: false },
 ] as const;
 
 export function Nav() {
@@ -42,8 +47,12 @@ export function Nav() {
           // current destination is visibly indicated" (#54's acceptance
           // criteria). The visible half is the isActive-driven classes
           // below. min-h-11 (44px) meets the platform minimum tap size on
-          // both layouts this renders into: a row of two in the bottom
-          // bar, a column of two in the rail.
+          // both layouts this renders into: a row of four in the bottom
+          // bar, a column of four in the rail — already stale at three
+          // destinations (it was written for two) and staler now at four,
+          // which is why this comment names the count rather than a shape
+          // ("two", "a pair") that has to be rewritten again the next time
+          // Nav grows.
           className={({ isActive }) =>
             cn(
               "flex min-h-11 flex-1 flex-col items-center justify-center gap-1 rounded-lg px-2 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:flex-none md:py-2.5",
@@ -60,20 +69,22 @@ export function Nav() {
 }
 
 // Settings is an app-bar action, not a nav destination (#49's settled
-// config, reaffirmed by ADR 0020 when Reflect joined the nav): Material 3
-// reserves a navigation bar for 3-5 destinations at the same hierarchy
-// level, and Settings is a utility, not a peer of Composer/History/Reflect
-// — Telegram and Slack both demote settings the same way. Present
-// regardless of Entry store status, same reasoning as Nav above and ADR
-// 0008/0009: Settings must stay reachable and usable even when the store
-// never opens.
+// config, reaffirmed by ADR 0020 when Reflect joined the nav and again by
+// issue #71 when Digest did): Material 3 reserves a navigation bar for 3-5
+// destinations at the same hierarchy level, and Settings is a utility, not
+// a peer of Composer/History/Reflect/Digest — Telegram and Slack both
+// demote settings the same way. Present regardless of Entry store status,
+// same reasoning as Nav above and ADR 0008/0009: Settings must stay
+// reachable and usable even when the store never opens.
 // Ticket 62's Sessions affordance: an app-bar action beside SettingsLink,
-// not a fourth NavLink — ADR 0018/0020's three-to-five destination count
-// (Composer, History, Reflect) stays exactly what it was, the same shape
-// Settings already has one level down. It only ever renders on Reflection's
-// pages (reflection-page.tsx's `action` slot), since it opens a list of
-// Reflection's own Sessions (`/reflect/list`) rather than being a peer view
-// of History the way the three Nav destinations above are.
+// not a NavLink — Sessions is still correctly one level down, unchanged by
+// issue #71 raising Nav's own destination count to four (Composer,
+// History, Reflect, Digest; see ADR 0020's amendment note and
+// DESTINATIONS above) — the same shape Settings already has. It only ever
+// renders on Reflection's pages (reflection-page.tsx's `action` slot),
+// since it opens a list of Reflection's own Sessions (`/reflect/list`)
+// rather than being a peer view of History the way the four Nav
+// destinations above are.
 export function SessionsLink() {
   return (
     <Link
