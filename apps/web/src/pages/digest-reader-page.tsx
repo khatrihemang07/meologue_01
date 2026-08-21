@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, ChevronLeft, ChevronRight } from "lucide-react";
 import { Link, useLocation, useNavigate, useParams } from "react-router";
 import { Nav } from "@/components/nav";
 import { Shell } from "@/components/shell";
@@ -22,14 +22,87 @@ function periodTitle(period: string): string {
   return `${LABELS[period] ?? period} Digest`;
 }
 
+/**
+ * One back or forward control (issue #72). `date` is whichever of the
+ * Digest's own `prev_date`/`next_date` this control steps to — the Server
+ * already resolved it to the neighbouring Digest of this Period that
+ * actually exists, skipping any Period that has no Digest
+ * (`server/src/digest.rs::build_digest_response`'s `select_prev_digest_date`
+ * / `select_next_digest_date`). This component therefore never computes a
+ * date, adds or subtracts a day, or checks whether a Period is empty — it
+ * only ever follows the date it is handed, so it is structurally impossible
+ * for a step to land on a gap: the Server has already removed every gap
+ * from the sequence before this ever renders.
+ *
+ * `date: null` (or the `undefined` the generated wire type also allows for
+ * an optional field) means there is no neighbour in that direction — the
+ * oldest Digest of this Period has no `prev_date`, the newest has no
+ * `next_date` — and the control renders disabled rather than vanishing: a
+ * control that disappears at the edge of the archive reads as a bug, a
+ * disabled one reads as "you've reached the end." It's a real `<button
+ * disabled>`, not a `<Link>` merely styled to look grey, so it is inert for
+ * keyboard, screen reader and click alike, not just visually muted.
+ *
+ * Otherwise this is a `<Link>`, the same navigation primitive
+ * `digest-page.tsx`'s cards already use to open a Digest, not
+ * `navigate(..., { replace: true })` — for two reasons. First, it's the
+ * accessible default: a real anchor gets middle-click/open-in-new-tab and a
+ * visible href for free, neither of which a click handler calling
+ * `navigate` would have. Second, and load-bearing for this ticket's own
+ * acceptance criteria ("browser back walks the steps"): `<Link>` pushes a
+ * new history entry per step, where `replace: true` would overwrite the
+ * entry behind it — so back would jump straight out of the Digest archive
+ * instead of walking back through the Digests just visited.
+ *
+ * Stepping is navigation by URL — ADR 0025 made exactly this call for
+ * Sessions ("the Session id lives in the URL, and the URL is the only
+ * state"): reloading an open Digest must land on the same one, and browser
+ * back from an open Digest must return to the cards. A step that only
+ * updated in-page state (instead of visiting `/digest/{period}/{date}`)
+ * would break both of those the moment the reader reloaded mid-archive.
+ */
+function DigestStepControl({
+  period,
+  date,
+  label,
+  Icon,
+}: {
+  period: string;
+  date: string | null | undefined;
+  label: "Previous Digest" | "Next Digest";
+  Icon: typeof ChevronLeft;
+}) {
+  // Shared with `Nav`'s/`SettingsLink`'s own icon-control idiom
+  // (`components/nav.tsx`): `size-11` (44px) is this codebase's tap-target
+  // minimum, applied here to a stepping control for the same reason it's
+  // applied to a nav destination — a thumb has to hit it reliably.
+  const className =
+    "flex size-11 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground";
+
+  if (date == null) {
+    return (
+      <button
+        type="button"
+        disabled
+        aria-label={label}
+        className={`${className} disabled:pointer-events-none disabled:opacity-40`}
+      >
+        <Icon aria-hidden="true" className="size-4" />
+      </button>
+    );
+  }
+
+  return (
+    <Link to={`/digest/${period}/${date}`} aria-label={label} className={className}>
+      <Icon aria-hidden="true" className="size-4" />
+    </Link>
+  );
+}
+
 // `/digest/:period/:date` — opens one specific Digest (issue #71's "tapping
-// a card opens that Digest"). Deliberately minimal: the Period and its
-// date range as the title, and the full prose beneath it. **No back/forward
-// stepping between neighbouring Digests here** — `Digest.prev_date`/
-// `next_date` (server/src/digest.rs) exist on the wire already, but wiring
-// them into stepping controls is issue #72, the next ticket; this page
-// fetches them anyway (they ride along on `WireDigest`) and simply doesn't
-// render anything from them yet.
+// a card opens that Digest"), extended by issue #72 with the back/forward
+// controls (`DigestStepControl` below) that walk to the neighbouring
+// Digests of the same Period, one route change at a time.
 //
 // Lives inside `EntryStoreLayout` alongside `/digest` (see App.tsx's
 // comment on that route) for the same reason `digest-page.tsx` does: it
@@ -127,12 +200,35 @@ export function DigestReaderPage() {
 
       {syncEnabled && digest && (
         <>
-          <p className="text-sm text-muted-foreground">
-            {formatDigestRange(digest.period, digest.period_start, digest.period_end)}
-          </p>
+          <div className="flex items-center justify-between">
+            <DigestStepControl
+              period={digest.period}
+              date={digest.prev_date}
+              label="Previous Digest"
+              Icon={ChevronLeft}
+            />
+            <p className="text-sm text-muted-foreground">
+              {formatDigestRange(digest.period, digest.period_start, digest.period_end)}
+            </p>
+            <DigestStepControl
+              period={digest.period}
+              date={digest.next_date}
+              label="Next Digest"
+              Icon={ChevronRight}
+            />
+          </div>
           <p className="whitespace-pre-wrap text-sm text-foreground">{digest.body}</p>
         </>
       )}
+
+      {/* `digest === null` (the branch above) has no `prev_date`/`next_date`
+          to step with — there is no Digest at this date at all, let alone a
+          neighbour of it, so no stepping row renders there. That already
+          reads as "nothing here yet," not as a missing control: the
+          "No Digest was written for this date" copy above already says why
+          there's nothing to step through, and a copy of these two disabled
+          buttons under it would just repeat that without adding anything
+          they aren't already following one row up. */}
     </Shell>
   );
 }
