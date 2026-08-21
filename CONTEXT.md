@@ -112,6 +112,23 @@ Grounding always comes from the user's own History. An Answer with no Grounding 
 so plainly rather than filling the gap from somewhere else — a Reflection that invents a past
 the user did not live is worse than one that admits it found nothing.
 
+### Digest
+
+Prose the Server writes about a stretch of time, without being asked. It is not an Answer,
+because there is no Question behind it — nobody asked; the Server simply wrote. It is not an
+Entry either: not the user's own words, never added to History, never Synced. A Digest is
+immutable once written, so an Entry that Syncs in late for a Period already Digested is simply
+not in it — the Digest is not rewritten to catch up. "Last day" and "last week" mean the most
+recent Digest that exists, not the Period immediately before now: if there is a daily Digest for
+Monday and none for Tuesday, then on Wednesday the last daily Digest is still Monday's. A Digest
+is Grounded in the Entries it read, in the same sense an Answer is.
+
+### Period
+
+The stretch of time a Digest covers: a day, a week, or a month. Period is what makes the Digest
+one concept at three settings rather than three separate concepts — a daily, a weekly, and a
+monthly Digest all work the same way, differing only in the Period each one covers.
+
 ## Terms we avoid
 
 ### "message"
