@@ -2,7 +2,7 @@
 
 A personal log. Type a thought, press Send, and it shows up on your other devices.
 
-![The meologue web app: a text box reading "What's on your mind?" above a list of recent entries](docs/screenshot-web.png)
+![The meologue web app: a composer above a list of recent entries, with Composer, History, Reflect and Digest in the navigation rail](docs/screenshot-web.png)
 
 Local-first: writes land on the device first and sync in the background, so the app keeps working
 when the server doesn't. Self-hosted — a single Rust binary and a Postgres container.
@@ -15,6 +15,10 @@ when the server doesn't. Self-hosted — a single Rust binary and a Postgres con
 - **Sync** — an entry written on one device shows up on the others within a few seconds.
 - **Offline** — writes land on the device first, so you can capture with the server unreachable and
   it catches up on its own.
+- **Reflect** — ask a question about your History in plain language and get an Answer grounded in
+  the Entries that actually back it up.
+- **Digest** — prose the Server writes on its own about the last day, week, and month, without
+  being asked.
 
 Entries are **append-only and immutable** — no edit, no delete. An entry is closer to a thought you
 had at a moment than to a document you maintain. That constraint is why there is no conflict
@@ -27,7 +31,44 @@ a native macOS window and an installed Android app — not a browser pointed at 
 
 | macOS | Android |
 | --- | --- |
-| <img src="docs/screenshot-macos.png" alt="meologue running as a native macOS window, with the composer above a list of entries" width="440"> | <img src="docs/screenshot-android.png" alt="meologue running as an Android app, showing the same composer and entry list" width="200"> |
+| <img src="docs/screenshot-macos.png" alt="meologue running as a native macOS window, with the composer above a list of entries" width="440"> | <img src="docs/screenshot-android.png" alt="meologue running as an Android app, showing the same composer and entry list with a bottom navigation bar" width="150"> |
+
+## Reflect and Digest
+
+Two more ways to read your History, both answered by the Server rather than stored on it.
+
+| Reflect | Digest |
+| --- | --- |
+| <img src="docs/screenshot-reflect.png" alt="A Reflect Session: the Question 'What did I write about the marathon?' and an Answer grounded in 12 Entries" width="420"> | <img src="docs/screenshot-digest.png" alt="The Digest screen, showing Last day, Last week and Last month cards, each a short paragraph about that stretch of time" width="420"> |
+
+**Reflect** asks a question in plain language and gets an Answer grounded in the Entries that
+actually back it up — expand "Grounded in N Entries" to see them. An Answer with no matching
+Entries says so plainly rather than inventing one. Conversations are held as Sessions on the
+Server (`/reflect/list`), so a Session started on one Device is reachable from any other.
+
+**Digest** is prose the Server writes about a stretch of time without being asked. A background
+worker writes one for the most recently completed day, week, and month as each ends; a Digest is
+immutable, so an Entry that syncs in late for an already-Digested Period is simply not in it — the
+Digest isn't rewritten to catch up.
+
+Both are opt-in, off by default, the same way Sync itself is (ADR 0011): with nothing configured,
+`/reflect` and `/digest` still appear in the nav but say the Server doesn't support them yet.
+Turning them on needs an OpenAI-compatible endpoint:
+
+```bash
+export MEOLOGUE_CHAT_BASE_URL=...   # chat endpoint, needed for both Reflect and Digest
+export MEOLOGUE_CHAT_MODEL=...
+export MEOLOGUE_CHAT_API_KEY=...    # optional, depends on the endpoint
+export MEOLOGUE_EMBED_BASE_URL=...  # embedding endpoint, needed for Reflect only
+export MEOLOGUE_EMBED_MODEL=...
+export MEOLOGUE_EMBED_API_KEY=...
+```
+
+`MEOLOGUE_TZ` (default `UTC`) decides which local day, week, and month an Entry falls into for
+Digest purposes — set it to your own timezone (e.g. `Europe/London`), or Digests bucket by UTC days.
+
+See ADR 0021 (the LLM call itself), 0023 (Reflection's fixed three-source fan-out), and 0027 (why
+Digests are written ahead of time, forward-only, and never backfilled).
 
 ## Run it
 
@@ -248,10 +289,10 @@ The generated output is committed, so a fresh checkout doesn't need a Rust toolc
 ## Reading further
 
 - `CONTEXT.md` — the glossary. Use these words; the code does.
-- `docs/adr/` — why things are the way they are, including the three most likely to surprise you:
-  there is no authentication (trust is network-level), the sync insert takes an advisory lock on
-  purpose, and a client's server address is a build-time default that Settings can override at
-  runtime, never synced.
+- `docs/adr/` — why things are the way they are, including a few most likely to surprise you: there
+  is no authentication (trust is network-level), the sync insert takes an advisory lock on purpose,
+  a client's Server URL lives only in Settings — no build-time default, never synced — and Reflect
+  and Digest are both off until an LLM endpoint is configured (above).
 
 ## Not built yet
 
