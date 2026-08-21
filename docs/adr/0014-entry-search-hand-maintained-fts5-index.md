@@ -138,3 +138,17 @@ requires a wire-contract and server migration regardless), `indexForSearch` in
 TypeScript rather than sharing logic with the real store, since the two have no code in common to
 share; the shared contract suite (`test-support/entry-store-contract.ts`) is what keeps their
 behavior in step, the same as every other `EntryStore` guarantee.
+
+## Amendment (ADR 0028)
+
+The premise this whole ADR's `UPDATE`/`DELETE` reasoning rested on — "Entries are immutable and
+never deleted... so the index only ever needs to gain rows, never update or drop one" — is false as
+of ADR 0028. An edit changes an Entry's body without changing its `id`, so `entries_fts` now needs
+an `UPDATE` of the existing indexed row alongside the `INSERT ... WHERE NOT EXISTS` this ADR
+describes; a delete needs the corresponding row removed from `entries_fts` outright, since a
+tombstone's blanked body (ADR 0028) has nothing worth matching a Search against and a stale
+indexed body would otherwise keep surfacing a deleted Entry in results. The rejected external-
+content-table alternative above dismissed trigger-maintained `UPDATE`/`DELETE` partly on the
+grounds that they "would exist only to do nothing" — that clause no longer applies, though the
+`rowid`-instability problem that was the alternative's real disqualifier is unchanged and still
+rules it out on its own.

@@ -15,6 +15,21 @@ export const syncTransport: SyncTransport = async (request) => {
   });
 
   if (!response.ok) {
+    // A 426 specifically means `PROTOCOL_VERSION` (packages/core/src/
+    // protocol.ts) is behind the Server's — ADR 0028's own bump from 1 to
+    // 2, and ADR 0004's mechanism before it. That's not an ordinary
+    // request failure: it's every future sync failing the same way until
+    // this Device is updated, so it gets a sentence a reader can act on
+    // instead of a bare status code. `server-check.ts`'s health check gates
+    // `/v1/reflect` on the identical `PROTOCOL_VERSION` comparison, so an
+    // out-of-date Device silently loses Reflection too — this message says
+    // "meologue," not "Sync," so it doesn't imply Sync is the only thing
+    // affected.
+    if (response.status === 426) {
+      throw new Error(
+        "This Device's meologue is out of date and can no longer sync. Update or reinstall the app to continue.",
+      );
+    }
     throw new Error(`sync request failed with status ${response.status}`);
   }
 

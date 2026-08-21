@@ -358,6 +358,14 @@
             "type": "string",
             "format": "date-time"
           },
+          "deleted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "`Some` marks this push as a delete of an existing Entry (a tombstone\n— see migration 0005). `None` is an append or an edit. There is no\nseparate \"is this an edit\" flag: `insert_entries`'s upsert treats a\npush with the same `id` as an existing row as an edit regardless of\n`deleted_at`, and a delete is just an edit whose `deleted_at` happens\nto be set."
+          },
           "device_id": {
             "type": "string",
             "format": "uuid"
@@ -384,6 +392,14 @@
           "created_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "deleted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "`Some` means this Entry is a tombstone — see migration 0005 and\n`fetch_entries_since`'s doc comment for why tombstones travel\nthrough sync exactly like any other change rather than being\nfiltered out here."
           },
           "device_id": {
             "type": "string",

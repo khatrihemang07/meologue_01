@@ -315,8 +315,12 @@ async fn select_entry_timestamps(
     from_utc: DateTime<Utc>,
     to_utc: DateTime<Utc>,
 ) -> sqlx::Result<Vec<DateTime<Utc>>> {
+    // `deleted_at is null` (ticket 2): a deleted Entry's timestamp must not
+    // count toward "does this Period have anything to write about" — a
+    // Period whose only Entries were later deleted should read as empty,
+    // not trigger a Digest over a tombstone.
     sqlx::query_scalar::<_, DateTime<Utc>>(
-        "select created_at from entries where created_at >= $1 and created_at < $2",
+        "select created_at from entries where created_at >= $1 and created_at < $2 and deleted_at is null",
     )
     .bind(from_utc)
     .bind(to_utc)
@@ -333,8 +337,13 @@ async fn select_entries(
     from_utc: DateTime<Utc>,
     to_utc: DateTime<Utc>,
 ) -> sqlx::Result<Vec<DigestEntry>> {
+    // `deleted_at is null` (ticket 2), for the same reason as
+    // `select_entry_timestamps` above: a tombstone's blank body must never
+    // be fed to the Digest-writing chat call as Grounding.
     sqlx::query_as::<_, DigestEntry>(
-        "select id, body, created_at from entries where created_at >= $1 and created_at < $2 order by created_at asc",
+        "select id, body, created_at from entries \
+         where created_at >= $1 and created_at < $2 and deleted_at is null \
+         order by created_at asc",
     )
     .bind(from_utc)
     .bind(to_utc)

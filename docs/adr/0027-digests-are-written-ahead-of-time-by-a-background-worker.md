@@ -168,3 +168,19 @@ mid-month won't show a monthly Digest until the following month begins. This is 
 cost of choosing forward-only over backfilling: a Digest only ever exists for time the worker was
 actually running to see complete, and "nothing shows up for a while after install" is the visible
 version of that trade, most likely to be the first thing a new operator notices.
+
+## Amendment (ADR 0028)
+
+ADR 0028 gives an Entry a way to be edited or removed from History, and deliberately does not
+redact a Digest that already read that Entry before the change. This is an accepted limitation,
+not an oversight: this ADR already established that a Digest is immutable once written — an
+Entry Syncing in late for an already-Digested Period is "simply not in it," per the Decision
+section above — and a deleted or edited Entry is the same shape of problem arriving from the other
+direction. Reopening a Digest to remove or rewrite what it said about an Entry that was later
+deleted would mean tracking, per Digest, which Entries it drew on and reacting when any of them
+changes — exactly the invalidation-tracking machinery this ADR's immutability decision was chosen
+to avoid needing anywhere in this codebase (see "Regenerating a Digest when an Entry Syncs in late
+for its Period," rejected above, for the same reasoning applied to the original case). A month's
+worth of prose does not get unwound because one Entry it was grounded in was later deleted; the
+Digest stands as written, and the deletion is reflected everywhere else (History, Search, Export)
+but not there.

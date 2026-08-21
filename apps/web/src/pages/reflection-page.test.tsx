@@ -20,6 +20,8 @@ import { ReflectionPage } from "./reflection-page";
 const defaultEntryStoreContext: EntryStoreOutletContext = {
   entries: [],
   sendEntry: vi.fn(),
+  editEntry: vi.fn(),
+  removeEntry: vi.fn(),
   search: vi.fn(async () => []),
   disabled: false,
 };
@@ -73,6 +75,7 @@ function entry(overrides: Partial<Entry>): Entry {
     createdAt: "now",
     seq: 1,
     syncedAt: "now",
+    deletedAt: null,
     ...overrides,
   };
 }

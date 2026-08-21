@@ -1,5 +1,6 @@
-import { useState } from "react";
-import { Link } from "react-router";
+import type { Entry } from "@meologue/core";
+import { useEffect, useState } from "react";
+import { Link, useLocation, useNavigate } from "react-router";
 import { Composer } from "@/components/composer";
 import { History } from "@/components/history";
 import { Nav, SettingsLink } from "@/components/nav";
@@ -13,7 +14,7 @@ import { useEntryStore } from "@/pages/entry-store-layout";
 // future ticket might cap what shows here without touching the shared
 // History component itself.
 export function ComposerPage() {
-  const { entries, sendEntry, search, disabled, message } = useEntryStore();
+  const { entries, sendEntry, search, editEntry, removeEntry, disabled, message } = useEntryStore();
   // Subscribed, not a one-off read: a change saved on Settings now updates
   // this without a reload or a remount (ticket 36), on top of the render
   // this component already gets when it remounts navigating back from
@@ -42,6 +43,43 @@ export function ComposerPage() {
     setSendSignal((count) => count + 1);
   }
 
+  // ADR 0028: which Entry (if any) the Composer is editing, rather than
+  // composing a new one. Owned here, not by Composer itself — see
+  // composer.tsx's own `editingEntry` doc comment for why.
+  const [editingEntry, setEditingEntry] = useState<Entry | null>(null);
+
+  function handleCommitEdit(id: string, body: string) {
+    editEntry(id, body);
+    setEditingEntry(null);
+  }
+
+  function handleCancelEdit() {
+    setEditingEntry(null);
+  }
+
+  // history-page.tsx's Edit action has no Composer of its own to edit in
+  // (see that page's own comment), so it navigates here instead, carrying
+  // only the Entry's id in router state — this page already has the live
+  // Entries (the same outlet context history-page.tsx read them from), so
+  // it looks the current body up itself rather than trusting a copy that
+  // could be stale by the time this effect runs. Read once, on mount, and
+  // immediately replaced out of history state so a later Back/Forward
+  // through this exact location doesn't silently re-enter edit mode.
+  const location = useLocation();
+  const navigate = useNavigate();
+  // biome-ignore lint/correctness/useExhaustiveDependencies: deliberately mount-only — see the comment above. Re-running on `entries` or `navigate` identity churn would fight the "consumed once" guarantee this effect exists for.
+  useEffect(() => {
+    const editEntryId = (location.state as { editEntryId?: string } | null)?.editEntryId;
+    if (editEntryId === undefined) {
+      return;
+    }
+    const target = entries.find((entry) => entry.id === editEntryId);
+    if (target) {
+      setEditingEntry(target);
+    }
+    navigate(".", { replace: true, state: null });
+  }, []);
+
   return (
     <Shell
       title="meologue"
@@ -51,8 +89,24 @@ export function ComposerPage() {
       nav={<Nav />}
       message={message}
       search={{ query, onQueryChange: setQuery, onDismiss: () => setQuery("") }}
-      footer={<History entries={orderedEntries} syncEnabled={syncEnabled} query={query} />}
-      composerSlot={<Composer onSend={handleSend} disabled={disabled} />}
+      footer={
+        <History
+          entries={orderedEntries}
+          syncEnabled={syncEnabled}
+          query={query}
+          onEdit={setEditingEntry}
+          onDelete={removeEntry}
+        />
+      }
+      composerSlot={
+        <Composer
+          onSend={handleSend}
+          disabled={disabled}
+          editingEntry={editingEntry}
+          onCommitEdit={handleCommitEdit}
+          onCancelEdit={handleCancelEdit}
+        />
+      }
       // `shown`, not `entries`: while a search is narrowing this thread the
       // pin should follow what's actually on screen, same reasoning as
       // history-page.tsx's own pinnedThread.

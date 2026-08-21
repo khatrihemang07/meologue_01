@@ -33,7 +33,7 @@ describe("migrate", () => {
     await migrate(driver);
 
     const result = await driver.execute("SELECT version FROM meologue_migrations", [], "all");
-    expect(result.rows).toEqual([[1], [2]]);
+    expect(result.rows).toEqual([[1], [2], [3]]);
   });
 
   it("backfills Entries that existed before the search index migration shipped", async () => {
@@ -70,7 +70,7 @@ describe("migrate", () => {
     const driver = new NodeSqliteDriver();
     await migrate(driver);
     await driver.execute(
-      "INSERT INTO entries VALUES ('a', 'device-1', 'a recurring task', '2026-01-01T00:00:00.000Z', null, null)",
+      "INSERT INTO entries VALUES ('a', 'device-1', 'a recurring task', '2026-01-01T00:00:00.000Z', null, null, null)",
       [],
       "run",
     );
@@ -100,5 +100,41 @@ describe("migrate", () => {
       "all",
     );
     expect(count.rows).toEqual([[1]]);
+  });
+
+  // The scenario ../migrator.ts's DUPLICATE_COLUMN_NAME guard exists for
+  // (ADR 0007's amendment, ADR 0028): a process that dies after migration
+  // 3's `ALTER TABLE ADD COLUMN` lands but before its ledger row is
+  // written. Simulate that by applying the migration's own DDL directly —
+  // bypassing migrate() — without recording it in the ledger, then run
+  // migrate() for real and assert it completes rather than throwing
+  // `duplicate column name`, and that the store it leaves behind is
+  // usable. Without the guard this test fails with exactly that error,
+  // and a real device in this state would never open again.
+  it("re-running migrate() after an interrupted ALTER TABLE does not throw and leaves the store usable", async () => {
+    const driver = new NodeSqliteDriver();
+    // A full, uninterrupted migrate() already runs migration 3's `ALTER
+    // TABLE ADD deleted_at` — the DDL landing is what "interrupted"
+    // actually means here, so this call stands in for that. Deleting only
+    // its ledger row below (mirroring the earlier search-index test) is
+    // what turns this into the interrupted scenario: the column exists,
+    // but the ledger doesn't yet know it.
+    await migrate(driver);
+    await driver.execute("DELETE FROM meologue_migrations WHERE version = 3", [], "run");
+
+    await expect(migrate(driver)).resolves.toBeUndefined();
+
+    const ledger = await driver.execute("SELECT version FROM meologue_migrations", [], "all");
+    expect(ledger.rows).toEqual([[1], [2], [3]]);
+
+    // The store isn't just "didn't throw" — it's actually usable: a write
+    // that touches the new column succeeds.
+    await driver.execute(
+      "INSERT INTO entries VALUES ('a', 'device-1', 'hello', '2026-01-01T00:00:00.000Z', null, null, null)",
+      [],
+      "run",
+    );
+    const row = await driver.execute("SELECT deleted_at FROM entries WHERE id = 'a'", [], "all");
+    expect(row.rows).toEqual([[null]]);
   });
 });

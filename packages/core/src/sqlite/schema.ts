@@ -1,9 +1,14 @@
 import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 /**
- * Mirrors the `Entry` type (../types.ts) exactly — six columns, nothing
- * dormant. See ADR 0007: editing needs a server migration regardless, so
- * columns for it buy nothing until that's designed.
+ * Mirrors the `Entry` type (../types.ts) exactly. ADR 0007 originally
+ * rejected adding columns ahead of an editing design ("dormant columns
+ * would commit us to semantics nobody has designed yet") — that reasoning
+ * held, but the design that eventually landed (ADR 0028) needs exactly one
+ * of the columns it was guarding against: `deleted_at`, added by migration
+ * 3 (`migrations/0001_entry_deleted_at.sql`). `rev` and `updated_at`, the
+ * other two ADR 0007 named, were rejected on their own merits by ADR 0028
+ * and never got a column here.
  */
 export const entries = sqliteTable(
   "entries",
@@ -14,6 +19,11 @@ export const entries = sqliteTable(
     createdAt: text("created_at").notNull(),
     seq: integer("seq"),
     syncedAt: text("synced_at"),
+    // Set when this Entry is a tombstone (ADR 0028): `A -> nothing` still
+    // has to be a row with a `seq` so the deletion can travel to another
+    // Device, so "removed" is represented as this timestamp being set and
+    // `body` blanked, never as the row's absence.
+    deletedAt: text("deleted_at"),
   },
   (table) => [
     // Supports the contract's list() ordering (createdAt desc, id desc).

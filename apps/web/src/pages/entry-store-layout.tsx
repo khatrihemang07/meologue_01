@@ -13,6 +13,9 @@ export interface EntryStoreOutletContext {
   sendEntry: (raw: string) => void;
   /** Search (ticket 39) — narrows History to Entries whose body matches `query`, per EntryStore.search. */
   search: (query: string) => Promise<Entry[]>;
+  /** ADR 0028 — see use-history.ts's own doc comment for what these do and why removeEntry takes the whole Entry. */
+  editEntry: (id: string, body: string) => void;
+  removeEntry: (entry: Entry) => void;
   disabled: boolean;
   message?: string;
 }
@@ -80,6 +83,17 @@ async function noopSearch(): Promise<Entry[]> {
   return [];
 }
 
+// ADR 0028's edit/delete affordances need the store to exist just as much
+// as sendEntry does — the not-ready outlet context below stands in with
+// these too, for the identical reason: the History rendered while
+// `disabled` is true has no Entries to act on anyway (`entries: []`), but
+// the context's shape must still satisfy `EntryStoreOutletContext` so a
+// page never has to null-check which branch of EntryStoreLayout it's
+// under.
+function noopEdit(_id: string, _body: string) {}
+
+function noopRemove(_entry: Entry) {}
+
 /**
  * The composition root for ADR 0001 and ADR 0013: opens the Entry store and
  * runs `useHistory` exactly once, above the routes that read from it — `/`
@@ -116,6 +130,8 @@ export function EntryStoreLayout() {
           entries: [],
           sendEntry: noop,
           search: noopSearch,
+          editEntry: noopEdit,
+          removeEntry: noopRemove,
           disabled: true,
           message,
         } satisfies EntryStoreOutletContext
@@ -125,7 +141,7 @@ export function EntryStoreLayout() {
 }
 
 function Ready({ store, deviceId }: { store: EntryStore; deviceId: string }) {
-  const { entries, sendEntry } = useHistory(store, deviceId);
+  const { entries, sendEntry, editEntry, removeEntry } = useHistory(store, deviceId);
   return (
     <Outlet
       context={
@@ -133,6 +149,8 @@ function Ready({ store, deviceId }: { store: EntryStore; deviceId: string }) {
           entries,
           sendEntry,
           search: (query: string) => store.search(query),
+          editEntry,
+          removeEntry,
           disabled: false,
         } satisfies EntryStoreOutletContext
       }

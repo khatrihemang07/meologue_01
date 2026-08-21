@@ -115,4 +115,110 @@ export function entryStoreContract(createStore: () => EntryStore | Promise<Entry
 
     expect((await store.search("recur")).map((e) => e.id)).toEqual(["a"]);
   });
+
+  // ADR 0028: editing goes through edit(), not "build a mutated Entry and
+  // upsert() it" — see EntryStore.edit's doc comment for why. These cases
+  // are the contract that method owes every implementation.
+
+  it("edit() changes an Entry's body and clears seq, making it pending again", async () => {
+    const synced = entry({
+      id: "a",
+      body: "original",
+      seq: 5,
+      syncedAt: "2026-01-01T00:00:00.000Z",
+    });
+    await store.upsert([synced]);
+
+    await store.edit("a", "changed");
+
+    const [found] = await store.list();
+    expect(found).toMatchObject({ id: "a", body: "changed", seq: null });
+    expect((await store.pending()).map((e) => e.id)).toEqual(["a"]);
+  });
+
+  // CONTEXT.md's domain guarantee: editing an Entry does not move it in
+  // History. createdAt is what list() orders by, so this is really two
+  // assertions in one — the field itself is untouched, and so is the
+  // Entry's position relative to its neighbours.
+  it("editing an Entry does not change its createdAt or its position in list() order", async () => {
+    const older = entry({ id: "older", createdAt: "2026-01-01T00:00:00.000Z", body: "old" });
+    const newer = entry({ id: "newer", createdAt: "2026-01-02T00:00:00.000Z", body: "new" });
+    await store.upsert([older, newer]);
+
+    await store.edit("older", "old, but edited");
+
+    const list = await store.list();
+    expect(list.map((e) => e.id)).toEqual(["newer", "older"]);
+    expect(list.find((e) => e.id === "older")?.createdAt).toBe("2026-01-01T00:00:00.000Z");
+  });
+
+  it("remove() makes an Entry disappear from list() and from search()", async () => {
+    await store.upsert([entry({ id: "a", body: "a recurring task", seq: 1 })]);
+
+    await store.remove("a");
+
+    expect(await store.list()).toEqual([]);
+    expect(await store.search("recur")).toEqual([]);
+  });
+
+  // The resurrection trap ADR 0028 names explicitly: `seq IS NULL` means
+  // "no acknowledgement yet," which also covers "pushed, but the response
+  // was lost" — a store that hard-deletes here instead of leaving a
+  // tombstone would let the next sync bring the Entry back permanently.
+  // This is the most important new case in this ticket.
+  it("removing an Entry whose seq is already null still leaves a tombstone pending(), not nothing", async () => {
+    await store.upsert([entry({ id: "a", body: "not yet synced", seq: null })]);
+
+    await store.remove("a");
+
+    const pending = await store.pending();
+    expect(pending.map((e) => e.id)).toEqual(["a"]);
+    expect(pending[0]?.deletedAt).not.toBeNull();
+  });
+
+  it("removing an Entry blanks its body", async () => {
+    await store.upsert([entry({ id: "a", body: "something", seq: 1 })]);
+
+    await store.remove("a");
+
+    const [tombstone] = await store.pending();
+    expect(tombstone).toMatchObject({ id: "a", body: "" });
+  });
+
+  it("editing an already-removed Entry does nothing — no resurrection", async () => {
+    await store.upsert([entry({ id: "a", body: "something", seq: 1 })]);
+    await store.remove("a");
+
+    await store.edit("a", "trying to bring it back");
+
+    expect(await store.list()).toEqual([]);
+    const [tombstone] = await store.pending();
+    expect(tombstone).toMatchObject({ id: "a", body: "" });
+    expect(tombstone?.deletedAt).not.toBeNull();
+  });
+
+  it("search finds an Entry by its new body after an edit, and not by its old body", async () => {
+    await store.upsert([entry({ id: "a", body: "a recurring task", seq: 1 })]);
+
+    await store.edit("a", "a completed chore");
+
+    expect((await store.search("chore")).map((e) => e.id)).toEqual(["a"]);
+    expect(await store.search("recur")).toEqual([]);
+  });
+
+  it("upserting a tombstone arriving from sync removes the Entry from list() and search()", async () => {
+    await store.upsert([entry({ id: "a", body: "a recurring task", seq: 1 })]);
+    expect((await store.list()).map((e) => e.id)).toEqual(["a"]);
+
+    const tombstone = entry({
+      id: "a",
+      body: "",
+      seq: 2,
+      deletedAt: "2026-01-03T00:00:00.000Z",
+    });
+    await store.upsert([tombstone]);
+
+    expect(await store.list()).toEqual([]);
+    expect(await store.search("recur")).toEqual([]);
+  });
 }

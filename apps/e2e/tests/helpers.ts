@@ -83,3 +83,40 @@ export async function setTabHidden(page: Page, hidden: boolean): Promise<void> {
     document.dispatchEvent(new Event("visibilitychange"));
   }, hidden);
 }
+
+/**
+ * Opens the Radix ContextMenu (ADR 0028) wired onto a History row —
+ * entry-row.tsx's `actions` prop — by right-clicking the row identified by
+ * its exact body text, the pointer-device trigger for the same menu a
+ * long-press opens on touch. `body` must be exact and unique in the DOM
+ * (uniqueEntryBody's randomUUID suffix guarantees that), since this
+ * targets the row via its own rendered text.
+ */
+export async function openEntryMenu(page: Page, body: string): Promise<void> {
+  await page.getByText(body, { exact: true }).click({ button: "right" });
+}
+
+/**
+ * Edit -> Composer flow (ADR 0028): opens the row's menu, chooses Edit
+ * (which seeds the docked Composer with the Entry's current body — see
+ * composer.tsx's `editingEntry`), replaces the field's contents with
+ * `newBody`, and commits via the same Send control `sendEntry` above uses
+ * (Composer routes Send to `onCommitEdit` while `editingEntry` is set,
+ * rather than `onSend` — see composer.tsx's own `send()`).
+ */
+export async function editEntryViaMenu(
+  page: Page,
+  currentBody: string,
+  newBody: string,
+): Promise<void> {
+  await openEntryMenu(page, currentBody);
+  await page.getByRole("menuitem", { name: "Edit" }).click();
+  await page.getByPlaceholder("What's on your mind?").fill(newBody);
+  await page.getByRole("button", { name: "Send" }).click();
+}
+
+/** Delete via the row's menu (ADR 0028) — fires immediately, no confirm step; use-history.ts offers Undo via a toast instead. */
+export async function deleteEntryViaMenu(page: Page, body: string): Promise<void> {
+  await openEntryMenu(page, body);
+  await page.getByRole("menuitem", { name: "Delete" }).click();
+}

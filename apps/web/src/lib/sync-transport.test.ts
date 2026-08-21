@@ -39,10 +39,24 @@ describe("syncTransport", () => {
     useSettingsStore.getState().setServerUrl("https://phone.example:41207");
     vi.stubGlobal(
       "fetch",
+      vi.fn(async () => ({ ok: false, status: 500, json: async () => ({}) })),
+    );
+
+    await expect(syncTransport(request)).rejects.toThrow("sync request failed with status 500");
+  });
+
+  // ADR 0028: PROTOCOL_VERSION moved from 1 to 2, and a 426 specifically
+  // means this Device is behind the Server's — a message worth a reader's
+  // attention (Settings surfaces `error.message` verbatim as the
+  // sync-failure reason), not a bare status code.
+  it("maps a 426 to a human sentence naming the Device as out of date", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    vi.stubGlobal(
+      "fetch",
       vi.fn(async () => ({ ok: false, status: 426, json: async () => ({}) })),
     );
 
-    await expect(syncTransport(request)).rejects.toThrow();
+    await expect(syncTransport(request)).rejects.toThrow(/out of date/i);
   });
 
   it("re-reads the stored URL on every call, without re-importing the module", async () => {

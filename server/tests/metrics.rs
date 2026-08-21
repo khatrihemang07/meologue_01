@@ -105,7 +105,7 @@ async fn a_sync_counts_entries_pushed_and_pulled(pool: PgPool) {
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
-                        "protocol_version": 1,
+                        "protocol_version": 2,
                         "device_id": device,
                         "since_seq": 0,
                         "entries": [{

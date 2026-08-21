@@ -4,6 +4,7 @@ import { MemoryRouter, Outlet, Route, Routes, useSearchParams } from "react-rout
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useSettingsStore } from "@/lib/settings";
 import type { EntryStoreOutletContext } from "@/pages/entry-store-layout";
+import { ComposerPage } from "./composer-page";
 import { HistoryPage } from "./history-page";
 
 // MemoryRouter keeps its own in-memory history, not window.location — this
@@ -33,6 +34,28 @@ function renderHistoryPage(context: EntryStoreOutletContext, initialPath = "/his
   );
 }
 
+// ADR 0028: `/history` has no Composer of its own, so its Edit action
+// navigates to `/` instead (see history-page.tsx's own comment for why).
+// Proving that needs both routes mounted for real, sharing one context the
+// way EntryStoreLayout actually does — renderHistoryPage above only ever
+// mounts `/history` in isolation, which can't observe a navigation away
+// from it.
+function renderHistoryAndComposerPages(context: EntryStoreOutletContext, initialPath = "/history") {
+  const queryClient = new QueryClient();
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={[initialPath]}>
+        <Routes>
+          <Route element={<Outlet context={context} />}>
+            <Route path="/" element={<ComposerPage />} />
+            <Route path="/history" element={<HistoryPage />} />
+          </Route>
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
 const noSearchResults = vi.fn(async () => []);
 
 describe("HistoryPage", () => {
@@ -50,6 +73,8 @@ describe("HistoryPage", () => {
     renderHistoryPage({
       entries: [],
       sendEntry: vi.fn(),
+      editEntry: vi.fn(),
+      removeEntry: vi.fn(),
       search: noSearchResults,
       disabled: false,
     });
@@ -67,6 +92,8 @@ describe("HistoryPage", () => {
     renderHistoryPage({
       entries: [],
       sendEntry: vi.fn(),
+      editEntry: vi.fn(),
+      removeEntry: vi.fn(),
       search: noSearchResults,
       disabled: false,
     });
@@ -79,9 +106,19 @@ describe("HistoryPage", () => {
   it("renders History from the outlet context", () => {
     renderHistoryPage({
       entries: [
-        { id: "1", deviceId: "device-a", body: "hello", createdAt: "now", seq: 1, syncedAt: "now" },
+        {
+          id: "1",
+          deviceId: "device-a",
+          body: "hello",
+          createdAt: "now",
+          seq: 1,
+          syncedAt: "now",
+          deletedAt: null,
+        },
       ],
       sendEntry: vi.fn(),
+      editEntry: vi.fn(),
+      removeEntry: vi.fn(),
       search: noSearchResults,
       disabled: false,
     });
@@ -93,6 +130,8 @@ describe("HistoryPage", () => {
     renderHistoryPage({
       entries: [],
       sendEntry: vi.fn(),
+      editEntry: vi.fn(),
+      removeEntry: vi.fn(),
       search: noSearchResults,
       disabled: true,
       message: "meologue couldn't open its storage. Reloading may help.",
@@ -115,9 +154,12 @@ describe("HistoryPage", () => {
           createdAt: "now",
           seq: null,
           syncedAt: null,
+          deletedAt: null,
         },
       ],
       sendEntry: vi.fn(),
+      editEntry: vi.fn(),
+      removeEntry: vi.fn(),
       search: noSearchResults,
       disabled: false,
     });
@@ -129,6 +171,8 @@ describe("HistoryPage", () => {
     renderHistoryPage({
       entries: [],
       sendEntry: vi.fn(),
+      editEntry: vi.fn(),
+      removeEntry: vi.fn(),
       search: noSearchResults,
       disabled: false,
     });
@@ -152,6 +196,7 @@ describe("HistoryPage", () => {
           createdAt: "2026-08-18T12:00:00.000Z",
           seq: 3,
           syncedAt: "now",
+          deletedAt: null,
         },
         {
           id: "2",
@@ -160,6 +205,7 @@ describe("HistoryPage", () => {
           createdAt: "2026-08-18T11:00:00.000Z",
           seq: 2,
           syncedAt: "now",
+          deletedAt: null,
         },
         {
           id: "1",
@@ -168,9 +214,12 @@ describe("HistoryPage", () => {
           createdAt: "2026-08-18T10:00:00.000Z",
           seq: 1,
           syncedAt: "now",
+          deletedAt: null,
         },
       ],
       sendEntry: vi.fn(),
+      editEntry: vi.fn(),
+      removeEntry: vi.fn(),
       search: noSearchResults,
       disabled: false,
     });
@@ -193,6 +242,7 @@ describe("HistoryPage", () => {
         createdAt: "2026-08-18T12:00:00.000Z",
         seq: 2,
         syncedAt: "now",
+        deletedAt: null,
       },
       {
         id: "1",
@@ -201,12 +251,15 @@ describe("HistoryPage", () => {
         createdAt: "2026-08-18T10:00:00.000Z",
         seq: 1,
         syncedAt: "now",
+        deletedAt: null,
       },
     ]);
 
     const { container } = renderHistoryPage({
       entries: [],
       sendEntry: vi.fn(),
+      editEntry: vi.fn(),
+      removeEntry: vi.fn(),
       search,
       disabled: false,
     });
@@ -230,10 +283,28 @@ describe("HistoryPage", () => {
   it("shows the full, unfiltered History when the search box is empty", () => {
     renderHistoryPage({
       entries: [
-        { id: "1", deviceId: "device-a", body: "hello", createdAt: "now", seq: 1, syncedAt: "now" },
-        { id: "2", deviceId: "device-a", body: "world", createdAt: "now", seq: 1, syncedAt: "now" },
+        {
+          id: "1",
+          deviceId: "device-a",
+          body: "hello",
+          createdAt: "now",
+          seq: 1,
+          syncedAt: "now",
+          deletedAt: null,
+        },
+        {
+          id: "2",
+          deviceId: "device-a",
+          body: "world",
+          createdAt: "now",
+          seq: 1,
+          syncedAt: "now",
+          deletedAt: null,
+        },
       ],
       sendEntry: vi.fn(),
+      editEntry: vi.fn(),
+      removeEntry: vi.fn(),
       search: noSearchResults,
       disabled: false,
     });
@@ -253,15 +324,34 @@ describe("HistoryPage", () => {
       createdAt: "now",
       seq: 1,
       syncedAt: "now",
+      deletedAt: null,
     };
     const search = vi.fn(async (query: string) => (query === "wor" ? [searchOnlyMatch] : []));
 
     renderHistoryPage({
       entries: [
-        { id: "1", deviceId: "device-a", body: "hello", createdAt: "now", seq: 1, syncedAt: "now" },
-        { id: "2", deviceId: "device-a", body: "world", createdAt: "now", seq: 1, syncedAt: "now" },
+        {
+          id: "1",
+          deviceId: "device-a",
+          body: "hello",
+          createdAt: "now",
+          seq: 1,
+          syncedAt: "now",
+          deletedAt: null,
+        },
+        {
+          id: "2",
+          deviceId: "device-a",
+          body: "world",
+          createdAt: "now",
+          seq: 1,
+          syncedAt: "now",
+          deletedAt: null,
+        },
       ],
       sendEntry: vi.fn(),
+      editEntry: vi.fn(),
+      removeEntry: vi.fn(),
       search,
       disabled: false,
     });
@@ -282,10 +372,28 @@ describe("HistoryPage", () => {
 
     renderHistoryPage({
       entries: [
-        { id: "1", deviceId: "device-a", body: "hello", createdAt: "now", seq: 1, syncedAt: "now" },
-        { id: "2", deviceId: "device-a", body: "world", createdAt: "now", seq: 1, syncedAt: "now" },
+        {
+          id: "1",
+          deviceId: "device-a",
+          body: "hello",
+          createdAt: "now",
+          seq: 1,
+          syncedAt: "now",
+          deletedAt: null,
+        },
+        {
+          id: "2",
+          deviceId: "device-a",
+          body: "world",
+          createdAt: "now",
+          seq: 1,
+          syncedAt: "now",
+          deletedAt: null,
+        },
       ],
       sendEntry: vi.fn(),
+      editEntry: vi.fn(),
+      removeEntry: vi.fn(),
       search,
       disabled: false,
     });
@@ -307,7 +415,15 @@ describe("HistoryPage", () => {
 
   it("seeds the search box from a query already in the URL, and searches with it", async () => {
     const search = vi.fn(async () => [
-      { id: "2", deviceId: "device-a", body: "world", createdAt: "now", seq: 1, syncedAt: "now" },
+      {
+        id: "2",
+        deviceId: "device-a",
+        body: "world",
+        createdAt: "now",
+        seq: 1,
+        syncedAt: "now",
+        deletedAt: null,
+      },
     ]);
 
     renderHistoryPage(
@@ -320,9 +436,12 @@ describe("HistoryPage", () => {
             createdAt: "now",
             seq: 1,
             syncedAt: "now",
+            deletedAt: null,
           },
         ],
         sendEntry: vi.fn(),
+        editEntry: vi.fn(),
+        removeEntry: vi.fn(),
         search,
         disabled: false,
       },
@@ -335,7 +454,15 @@ describe("HistoryPage", () => {
 
   it("restores a search a round trip through Settings dropped from the URL", async () => {
     const search = vi.fn(async () => [
-      { id: "2", deviceId: "device-a", body: "world", createdAt: "now", seq: 1, syncedAt: "now" },
+      {
+        id: "2",
+        deviceId: "device-a",
+        body: "world",
+        createdAt: "now",
+        seq: 1,
+        syncedAt: "now",
+        deletedAt: null,
+      },
     ]);
 
     // Simulates the search having been active on an earlier visit this tab
@@ -347,9 +474,19 @@ describe("HistoryPage", () => {
 
     renderHistoryPage({
       entries: [
-        { id: "1", deviceId: "device-a", body: "hello", createdAt: "now", seq: 1, syncedAt: "now" },
+        {
+          id: "1",
+          deviceId: "device-a",
+          body: "hello",
+          createdAt: "now",
+          seq: 1,
+          syncedAt: "now",
+          deletedAt: null,
+        },
       ],
       sendEntry: vi.fn(),
+      editEntry: vi.fn(),
+      removeEntry: vi.fn(),
       search,
       disabled: false,
     });
@@ -368,9 +505,19 @@ describe("HistoryPage", () => {
 
     renderHistoryPage({
       entries: [
-        { id: "1", deviceId: "device-a", body: "hello", createdAt: "now", seq: 1, syncedAt: "now" },
+        {
+          id: "1",
+          deviceId: "device-a",
+          body: "hello",
+          createdAt: "now",
+          seq: 1,
+          syncedAt: "now",
+          deletedAt: null,
+        },
       ],
       sendEntry: vi.fn(),
+      editEntry: vi.fn(),
+      removeEntry: vi.fn(),
       search: noSearchResults,
       disabled: false,
     });
@@ -388,9 +535,19 @@ describe("HistoryPage", () => {
     // searchbox exists across both instances, not two.
     renderHistoryPage({
       entries: [
-        { id: "1", deviceId: "device-a", body: "hello", createdAt: "now", seq: 1, syncedAt: "now" },
+        {
+          id: "1",
+          deviceId: "device-a",
+          body: "hello",
+          createdAt: "now",
+          seq: 1,
+          syncedAt: "now",
+          deletedAt: null,
+        },
       ],
       sendEntry: vi.fn(),
+      editEntry: vi.fn(),
+      removeEntry: vi.fn(),
       search: noSearchResults,
       disabled: false,
     });
@@ -402,7 +559,14 @@ describe("HistoryPage", () => {
     sessionStorage.setItem("meologue.history-search-query", "stale");
 
     renderHistoryPage(
-      { entries: [], sendEntry: vi.fn(), search: noSearchResults, disabled: false },
+      {
+        entries: [],
+        sendEntry: vi.fn(),
+        editEntry: vi.fn(),
+        removeEntry: vi.fn(),
+        search: noSearchResults,
+        disabled: false,
+      },
       "/history?q=fresh",
     );
 
@@ -413,6 +577,8 @@ describe("HistoryPage", () => {
     renderHistoryPage({
       entries: [],
       sendEntry: vi.fn(),
+      editEntry: vi.fn(),
+      removeEntry: vi.fn(),
       search: noSearchResults,
       disabled: false,
     });
@@ -423,5 +589,57 @@ describe("HistoryPage", () => {
     });
 
     expect(screen.getByTestId("url-query")).toHaveTextContent("q=wor");
+  });
+
+  describe("Edit and Delete from a row's context menu (ADR 0028)", () => {
+    const oneEntry: EntryStoreOutletContext["entries"] = [
+      {
+        id: "1",
+        deviceId: "device-a",
+        body: "hello",
+        createdAt: "now",
+        seq: 1,
+        syncedAt: "now",
+        deletedAt: null,
+      },
+    ];
+
+    it("choosing Delete calls removeEntry from the outlet context with the whole Entry", async () => {
+      const removeEntry = vi.fn();
+      renderHistoryPage({
+        entries: oneEntry,
+        sendEntry: vi.fn(),
+        editEntry: vi.fn(),
+        removeEntry,
+        search: noSearchResults,
+        disabled: false,
+      });
+
+      fireEvent.contextMenu(screen.getByText("hello"));
+      fireEvent.click(await screen.findByText("Delete"));
+
+      expect(removeEntry).toHaveBeenCalledWith(oneEntry[0]);
+    });
+
+    // `/history` has no Composer to edit in (see history-page.tsx's own
+    // comment) — Edit navigates to `/` instead, carrying only the Entry's
+    // id, and composer-page.tsx looks the current body up from the same
+    // outlet context on arrival.
+    it("choosing Edit navigates to / with the Entry loaded for editing", async () => {
+      renderHistoryAndComposerPages({
+        entries: oneEntry,
+        sendEntry: vi.fn(),
+        editEntry: vi.fn(),
+        removeEntry: vi.fn(),
+        search: noSearchResults,
+        disabled: false,
+      });
+
+      fireEvent.contextMenu(screen.getByText("hello"));
+      fireEvent.click(await screen.findByText("Edit"));
+
+      expect(await screen.findByText("Editing Entry")).toBeInTheDocument();
+      expect(screen.getByPlaceholderText("What's on your mind?")).toHaveValue("hello");
+    });
   });
 });

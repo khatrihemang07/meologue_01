@@ -19,6 +19,17 @@ interface HistoryProps {
    * shows every Entry's body plain.
    */
   query?: string;
+  /**
+   * Wires the Edit/Delete context menu (ADR 0028) onto every row this
+   * renders. Both undefined and both present, never one or the other —
+   * see EntryRow's own `actions` prop, which this simply assembles and
+   * forwards. Every caller of History (composer-page.tsx's footer,
+   * history-page.tsx) passes both; nothing here defaults them to a no-op,
+   * because a silently-broken menu item is worse than a type error at the
+   * call site that forgot one.
+   */
+  onEdit?: (entry: Entry) => void;
+  onDelete?: (entry: Entry) => void;
 }
 
 interface DayGroup {
@@ -71,7 +82,14 @@ function formatDaySeparatorTitle(dayKey: string): string | undefined {
   return new Date(parsed).toLocaleDateString(undefined, { dateStyle: "full", timeZone: "UTC" });
 }
 
-export function History({ entries, syncEnabled, query = "" }: HistoryProps) {
+export function History({ entries, syncEnabled, query = "", onEdit, onDelete }: HistoryProps) {
+  // Both-or-neither (see the props' own comment): assembled once here
+  // rather than re-checked per row, and `undefined` when either is missing
+  // so EntryRow's own default ("no actions prop" -> "no menu") is what
+  // actually governs the no-menu case, instead of this component
+  // duplicating that decision.
+  const actions = onEdit && onDelete ? { onEdit, onDelete } : undefined;
+
   if (entries.length === 0) {
     return (
       <p className="text-center text-sm text-muted-foreground">
@@ -108,7 +126,13 @@ export function History({ entries, syncEnabled, query = "" }: HistoryProps) {
           )}
           <div className="divide-y divide-border">
             {group.entries.map((entry) => (
-              <EntryRow key={entry.id} entry={entry} query={query} syncEnabled={syncEnabled} />
+              <EntryRow
+                key={entry.id}
+                entry={entry}
+                query={query}
+                syncEnabled={syncEnabled}
+                actions={actions}
+              />
             ))}
           </div>
         </div>

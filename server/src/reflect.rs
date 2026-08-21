@@ -668,9 +668,17 @@ async fn retrieve_nearest(
     // `embedding is not null` is the same "skip what the background worker
     // hasn't gotten to yet" guard `embedding.rs`'s scan uses on the write
     // side (ADR 0022) — a row with no vector can't be compared with `<=>`.
+    // `deleted_at is null` is a second, independent guard (ticket 2): a
+    // tombstone has a blank body and must never surface as Grounding for a
+    // Question — and in practice it would never pass the guard above
+    // anyway, since `insert_entries` nulls `embedding` on every delete, but
+    // this is the guard that's actually load-bearing rather than
+    // incidental, and every other reader (`retrieve_range` below,
+    // `digest.rs`, `embedding.rs`'s queue) carries the same one.
     let rows = sqlx::query_as::<_, GroundingEntry>(
         "select id, body, created_at from entries
          where embedding is not null
+           and deleted_at is null
            and 1 - (embedding <=> $1::vector) >= $3
          order by embedding <=> $1::vector
          limit $2",
@@ -695,6 +703,12 @@ async fn retrieve_nearest(
 /// worker hasn't reached yet is still a perfectly good answer to "what did
 /// I write yesterday" — excluding it here would silently drop a true
 /// answer for a reason that has nothing to do with what was actually asked.
+///
+/// `deleted_at is null` **is** added here (ticket 2), unlike the
+/// `embedding is not null` guard above — a deleted Entry's `created_at`
+/// still falls in-range (that column never changes on a delete, see
+/// `sync.rs::insert_entries`), but its body is a tombstone's, not content,
+/// and must not surface as Grounding just because the date matches.
 async fn retrieve_range(
     pool: &PgPool,
     from: DateTime<Utc>,
@@ -704,6 +718,7 @@ async fn retrieve_range(
     let rows = sqlx::query_as::<_, GroundingEntry>(
         "select id, body, created_at from entries
          where created_at >= $1 and created_at < $2
+           and deleted_at is null
          order by created_at desc
          limit $3",
     )

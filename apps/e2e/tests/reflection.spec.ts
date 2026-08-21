@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { expect, test } from "@playwright/test";
-import { sendEntry, uniqueEntryBody } from "./helpers";
+import { deleteEntryViaMenu, sendEntry, uniqueEntryBody } from "./helpers";
 
 // Reflection covered end to end (issue #67): ask a Question, see the
 // Answer come back, reload and prove the Conversation survives — the one
@@ -86,4 +86,52 @@ test("ask a Question, reload, find it in Sessions, search for it, delete it", as
   // the list.
   await expect(page.getByRole("link", { name: question })).toHaveCount(0);
   await expect(page.getByText(`No Sessions match "reflect-${marker}"`)).toBeVisible();
+});
+
+// server/src/reflect.rs's `retrieve_nearest` carries a `deleted_at is
+// null` guard alongside its existing `embedding is not null` one (ADR
+// 0028's Ticket 2), so a deleted Entry can't come back through
+// Reflection's own door even though CONTEXT.md's Grounding disclosure is
+// otherwise the one place History gets re-displayed outside `/history` and
+// `/`. Every Entry
+// here gets the same fixed embedding (llm-stub.ts's constant vector), so
+// which of the two survives retrieval is entirely down to that guard, not
+// wording or similarity.
+test("a deleted Entry does not come back through Reflection's Grounding", async ({ page }) => {
+  const marker = randomUUID().slice(0, 8);
+  const keptBody = uniqueEntryBody(`grounding-kept-${marker}`);
+  const deletedBody = uniqueEntryBody(`grounding-deleted-${marker}`);
+
+  await page.goto("/");
+  await sendEntry(page, keptBody);
+  await sendEntry(page, deletedBody);
+  await expect(page.getByText(keptBody)).toBeVisible();
+  await expect(page.getByText(deletedBody)).toBeVisible();
+
+  // Delete one of the two, and give its tombstone real time to reach the
+  // Server — this only proves anything once `deleted_at` is actually set
+  // there, not just locally. The wait also gives the kept Entry's
+  // embedding (computed off a sync hint, embedding.rs) plenty of room to
+  // be ready before the Question below is asked.
+  await deleteEntryViaMenu(page, deletedBody);
+  await expect(page.getByText(deletedBody)).toHaveCount(0);
+  await page.waitForTimeout(8_000);
+
+  const question = `What did I write about grounding-${marker}?`;
+  await page.getByRole("link", { name: "Reflect" }).click();
+  await page.getByPlaceholder("Ask a Question about your History").fill(question);
+  await page.getByRole("button", { name: "Ask" }).click();
+
+  await expect(page).toHaveURL(/\/reflect\/[0-9a-f-]{36}$/, { timeout: 15_000 });
+  await expect(page.getByText(STUB_ANSWER)).toBeVisible();
+
+  // Expand the Grounding disclosure (a collapsed <details>/<summary> —
+  // grounding-disclosure.tsx) and check its contents directly, rather than
+  // trusting the summary's count alone.
+  const summary = page.getByText(/Grounded in \d+ Entr|\d+ recent Entr/);
+  await expect(summary).toBeVisible({ timeout: 15_000 });
+  await summary.click();
+
+  await expect(page.getByText(keptBody)).toBeVisible();
+  await expect(page.getByText(deletedBody)).toHaveCount(0);
 });

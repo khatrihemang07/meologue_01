@@ -11,9 +11,12 @@ concepts, use the term below rather than a synonym.
 
 ### Entry
 
-A single piece of plain text captured by the user. An Entry is immutable once created — it can
-never be edited or retitled after the fact. It is identified by an id minted on the Device that
-created it, so an Entry's identity does not depend on ever reaching another Device or a server.
+A single piece of plain text captured by the user. It is identified by an id minted on the
+Device that created it, so an Entry's identity does not depend on ever reaching another Device or
+a server. Its body can change after the fact, and an Entry can be removed from History
+altogether. What never changes is its identity and when it was captured: editing an Entry does
+not move it in History, no matter how long ago it was captured or how recently it was last
+edited.
 
 ### Device
 
@@ -47,8 +50,8 @@ once Send commits what's written there, the result lives in History, not in Comp
 ### Sync
 
 The ongoing process by which Devices exchange Entries with each other, so that an Entry
-captured on one Device eventually appears in the History on every other Device belonging to the
-same user.
+captured, changed, or removed on one Device is eventually reflected in the History on every
+other Device belonging to the same user.
 
 ### Sync status
 
@@ -143,9 +146,9 @@ which is exactly why it is worth refusing here — a Question has no addressee e
 
 ### "note"
 
-A note implies something that can be edited, retitled, or organized into a document. An Entry
-is immutable, untitled plain text — closer to a single fleeting thought than a document. Don't
-use "note" for an Entry.
+A note implies something that can be retitled or organized into a document. An Entry stays
+untitled and unorganized, and it is fixed at the moment it was captured even when its body later
+changes — closer to a single fleeting thought than a document. Don't use "note" for an Entry.
 
 Unlike these two, Send and History are safe: they name the *action* and the *view*, not the
 Entry itself, so they don't smuggle in the wrong properties.

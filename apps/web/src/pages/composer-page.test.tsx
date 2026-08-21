@@ -39,6 +39,8 @@ function renderComposerPage(context: EntryStoreOutletContext, initialPath = "/")
 const readyContext: EntryStoreOutletContext = {
   entries: [],
   sendEntry: vi.fn(),
+  editEntry: vi.fn(),
+  removeEntry: vi.fn(),
   search: vi.fn(async () => []),
   disabled: false,
 };
@@ -79,6 +81,8 @@ describe("ComposerPage", () => {
     renderComposerPage({
       entries: [],
       sendEntry: vi.fn(),
+      editEntry: vi.fn(),
+      removeEntry: vi.fn(),
       search: vi.fn(async () => []),
       disabled: true,
     });
@@ -90,6 +94,8 @@ describe("ComposerPage", () => {
     renderComposerPage({
       entries: [],
       sendEntry: vi.fn(),
+      editEntry: vi.fn(),
+      removeEntry: vi.fn(),
       search: vi.fn(async () => []),
       disabled: true,
       message: "meologue couldn't open its storage. Reloading may help.",
@@ -103,9 +109,19 @@ describe("ComposerPage", () => {
   it("renders History from the outlet context", () => {
     renderComposerPage({
       entries: [
-        { id: "1", deviceId: "device-a", body: "hello", createdAt: "now", seq: 1, syncedAt: "now" },
+        {
+          id: "1",
+          deviceId: "device-a",
+          body: "hello",
+          createdAt: "now",
+          seq: 1,
+          syncedAt: "now",
+          deletedAt: null,
+        },
       ],
       sendEntry: vi.fn(),
+      editEntry: vi.fn(),
+      removeEntry: vi.fn(),
       search: vi.fn(async () => []),
       disabled: false,
     });
@@ -127,6 +143,7 @@ describe("ComposerPage", () => {
           createdAt: "2026-08-18T12:00:00.000Z",
           seq: 3,
           syncedAt: "now",
+          deletedAt: null,
         },
         {
           id: "2",
@@ -135,6 +152,7 @@ describe("ComposerPage", () => {
           createdAt: "2026-08-18T11:00:00.000Z",
           seq: 2,
           syncedAt: "now",
+          deletedAt: null,
         },
         {
           id: "1",
@@ -143,9 +161,12 @@ describe("ComposerPage", () => {
           createdAt: "2026-08-18T10:00:00.000Z",
           seq: 1,
           syncedAt: "now",
+          deletedAt: null,
         },
       ],
       sendEntry: vi.fn(),
+      editEntry: vi.fn(),
+      removeEntry: vi.fn(),
       search: vi.fn(async () => []),
       disabled: false,
     });
@@ -209,6 +230,7 @@ describe("ComposerPage", () => {
         createdAt: "now",
         seq: 3,
         syncedAt: "now",
+        deletedAt: null,
       };
       const search = vi.fn(async (query: string) => (query === "wor" ? [searchOnlyMatch] : []));
 
@@ -221,6 +243,7 @@ describe("ComposerPage", () => {
             createdAt: "now",
             seq: 1,
             syncedAt: "now",
+            deletedAt: null,
           },
           {
             id: "2",
@@ -229,9 +252,12 @@ describe("ComposerPage", () => {
             createdAt: "now",
             seq: 2,
             syncedAt: "now",
+            deletedAt: null,
           },
         ],
         sendEntry: vi.fn(),
+        editEntry: vi.fn(),
+        removeEntry: vi.fn(),
         search,
         disabled: false,
       });
@@ -262,6 +288,7 @@ describe("ComposerPage", () => {
           createdAt: "2026-08-18T12:00:00.000Z",
           seq: 2,
           syncedAt: "now",
+          deletedAt: null,
         },
         {
           id: "1",
@@ -270,12 +297,15 @@ describe("ComposerPage", () => {
           createdAt: "2026-08-18T10:00:00.000Z",
           seq: 1,
           syncedAt: "now",
+          deletedAt: null,
         },
       ]);
 
       const { container } = renderComposerPage({
         entries: [],
         sendEntry: vi.fn(),
+        editEntry: vi.fn(),
+        removeEntry: vi.fn(),
         search,
         disabled: false,
       });
@@ -320,9 +350,12 @@ describe("ComposerPage", () => {
             createdAt: "now",
             seq: 1,
             syncedAt: "now",
+            deletedAt: null,
           },
         ],
         sendEntry: vi.fn(),
+        editEntry: vi.fn(),
+        removeEntry: vi.fn(),
         search: vi.fn(async () => []),
         disabled: false,
       });
@@ -342,7 +375,15 @@ describe("ComposerPage", () => {
 
     it("seeds the search field open from a query already in the URL", async () => {
       const search = vi.fn(async () => [
-        { id: "2", deviceId: "device-a", body: "world", createdAt: "now", seq: 1, syncedAt: "now" },
+        {
+          id: "2",
+          deviceId: "device-a",
+          body: "world",
+          createdAt: "now",
+          seq: 1,
+          syncedAt: "now",
+          deletedAt: null,
+        },
       ]);
 
       renderComposerPage(
@@ -355,9 +396,12 @@ describe("ComposerPage", () => {
               createdAt: "now",
               seq: 1,
               syncedAt: "now",
+              deletedAt: null,
             },
           ],
           sendEntry: vi.fn(),
+          editEntry: vi.fn(),
+          removeEntry: vi.fn(),
           search,
           disabled: false,
         },
@@ -366,6 +410,45 @@ describe("ComposerPage", () => {
 
       expect(screen.getByRole("searchbox", { name: "Search History" })).toHaveValue("wor");
       expect(await screen.findByText("world")).toBeInTheDocument();
+    });
+  });
+
+  // ADR 0028: this is the real wiring — EntryRow's context menu, through
+  // History, into ComposerPage's own editingEntry state and the docked
+  // Composer. Each layer already has its own focused test (entry-row.test.tsx,
+  // composer.test.tsx, use-history.test.tsx); this is the one place that
+  // proves they're actually connected.
+  describe("Edit and Delete from a row's context menu", () => {
+    const oneEntry: EntryStoreOutletContext["entries"] = [
+      {
+        id: "1",
+        deviceId: "device-a",
+        body: "hello",
+        createdAt: "now",
+        seq: 1,
+        syncedAt: "now",
+        deletedAt: null,
+      },
+    ];
+
+    it("choosing Edit puts the Composer into editing mode, seeded with the Entry's body", async () => {
+      renderComposerPage({ ...readyContext, entries: oneEntry });
+
+      fireEvent.contextMenu(screen.getByText("hello"));
+      fireEvent.click(await screen.findByText("Edit"));
+
+      expect(screen.getByText("Editing Entry")).toBeInTheDocument();
+      expect(screen.getByPlaceholderText("What's on your mind?")).toHaveValue("hello");
+    });
+
+    it("choosing Delete calls removeEntry from the outlet context with the whole Entry", async () => {
+      const removeEntry = vi.fn();
+      renderComposerPage({ ...readyContext, entries: oneEntry, removeEntry });
+
+      fireEvent.contextMenu(screen.getByText("hello"));
+      fireEvent.click(await screen.findByText("Delete"));
+
+      expect(removeEntry).toHaveBeenCalledWith(oneEntry[0]);
     });
   });
 });

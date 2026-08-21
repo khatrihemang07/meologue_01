@@ -16,6 +16,8 @@ import { SessionsPage } from "./sessions-page";
 const defaultEntryStoreContext: EntryStoreOutletContext = {
   entries: [],
   sendEntry: vi.fn(),
+  editEntry: vi.fn(),
+  removeEntry: vi.fn(),
   search: vi.fn(async () => []),
   disabled: false,
 };

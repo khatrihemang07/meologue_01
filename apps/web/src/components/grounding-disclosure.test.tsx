@@ -1,5 +1,5 @@
 import type { Entry } from "@meologue/core";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { ConversationTurn } from "@/lib/conversation";
 import { GroundingDisclosure } from "./grounding-disclosure";
@@ -12,6 +12,7 @@ function entry(overrides: Partial<Entry>): Entry {
     createdAt: "now",
     seq: 1,
     syncedAt: "now",
+    deletedAt: null,
     ...overrides,
   };
 }
@@ -145,6 +146,26 @@ describe("GroundingDisclosure", () => {
 
     expect(screen.getByText("Knee felt better")).toBeInTheDocument();
     expect(screen.getByText(/hasn't reached this device yet/i)).toBeInTheDocument();
+  });
+
+  // ADR 0028: Grounding is a read-only view of what an Answer was based
+  // on, so it must never offer to edit or delete an Entry — GroundingDisclosure
+  // never passes EntryRow an `actions` prop, so EntryRow's own default
+  // ("no actions" -> "no menu") is what enforces this here.
+  it("never offers an Edit/Delete menu on a Grounding row, even on long-press/right-click", async () => {
+    renderDisclosure({ groundingEntryIds: ["entry-1"], grounded: true, fallbackUsed: false }, [
+      entry({ id: "entry-1", body: "Knee felt better" }),
+    ]);
+
+    const details = screen.getByText("Grounded in 1 Entry").closest("details");
+    expect(details).not.toBeNull();
+    // biome-ignore lint/style/noNonNullAssertion: asserted not-null above.
+    details!.setAttribute("open", "");
+
+    fireEvent.contextMenu(screen.getByText("Knee felt better"));
+
+    expect(screen.queryByText("Edit")).not.toBeInTheDocument();
+    expect(screen.queryByText("Delete")).not.toBeInTheDocument();
   });
 
   it("counts the server's ids in the summary, not just the Entries found locally", () => {

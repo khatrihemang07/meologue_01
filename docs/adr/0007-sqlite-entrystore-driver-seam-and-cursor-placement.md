@@ -132,3 +132,43 @@ needs an `ALTER TABLE` or a backfill, the no-transaction reasoning above no long
 `migrator.ts` needs a transaction around each migration's statements. `apps/web` does not import
 any of this yet — it still constructs `LocalEntryStore` directly — so `SqliteEntryStore` is
 exercised only by the contract suite until the ticket that wires it into the app.
+
+## Amendment (ADR 0028)
+
+The rejected alternative above — "add `updated_at`, `rev`, and `deleted_at` columns now, dormant,
+so a future editing feature needs no migration" — is partly overturned by ADR 0028, and it's worth
+recording exactly which part. ADR 0028 gives Entries a `deleted_at` column after all. But the
+reasoning this ADR gave for rejecting it held up completely: it predicted that "editing requires a
+server migration and a wire contract change regardless of what the SQLite schema already has," and
+that is exactly what ADR 0028 needed — a reassigned `seq`, a bumped `PROTOCOL_VERSION`, a
+`deleted_at is null` guard on the server's upsert. Adding the column early would not have skipped
+any of that. It was right to reject dormant columns; it was wrong (or rather, not yet knowable) to
+guess *which* columns the eventual design would need. The design that landed needs only
+`deleted_at` — ADR 0028 rejects `rev` as a second sync ordinal in its own right, and rejects
+`updated_at` because ordering stays server-arrival, not client-clock, exactly as ADR 0002 already
+established. So the schema ends up with one of the three speculative columns, not zero and not
+three.
+
+The no-transaction reasoning in this ADR's Decision section also expires here, on its own stated
+terms — but the remedy it named turns out not to be available, and that is the part worth
+recording. That reasoning names its own trigger: "this stops holding the moment any of those three
+changes: a migration with an `ALTER TABLE`... Whoever changes one of those adds a transaction."
+The client migration that adds `deleted_at` is exactly that trigger.
+
+The remedy, though, assumed a transaction is something every driver can offer — and the driver
+seam this same ADR established is precisely what makes that untrue. `TauriSqliteDriver`
+(`apps/web/src/platform/tauri-sqlite-driver.ts`) runs statements through
+`@tauri-apps/plugin-sql`'s connection pool, which exposes no transaction API, so `BEGIN` and the
+statement after it may not reach the same connection. A transaction issued there would appear to
+work while protecting nothing, and would pass every test run against the single-connection node
+driver. The seam that made the store portable is the same seam that took the transaction away.
+
+What the original reasoning actually needs is not a transaction but the property a transaction
+would have bought: that re-running an interrupted migration is harmless. `ALTER TABLE ADD COLUMN`
+can have that property directly — by treating SQLite's `duplicate column name` error as success,
+since that error means the column is already present, which is the whole point of the statement.
+`migrator.ts` does exactly that, narrowly: only that error, only for that reason, with a test
+covering the interrupted-migration case it exists for. Whoever later adds a migration whose
+statements are *not* individually re-runnable this way — an unguarded backfill, a multi-statement
+table rewrite — cannot fall back on a transaction on every platform either, and has to solve it at
+the statement level the way this one does.

@@ -1,5 +1,5 @@
 import type { Entry } from "@meologue/core";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as entryDayModule from "@/lib/entry-day";
 import { History } from "./history";
@@ -12,6 +12,7 @@ function entry(overrides: Partial<Entry>): Entry {
     createdAt: "now",
     seq: 1,
     syncedAt: "now",
+    deletedAt: null,
     ...overrides,
   };
 }
@@ -139,5 +140,44 @@ describe("History", () => {
     );
 
     expect(screen.getByText("Today")).toHaveAttribute("title", expect.stringMatching(/2026/));
+  });
+
+  // ADR 0028: History assembles EntryRow's `actions` from its own onEdit
+  // and onDelete props — both or neither, never one alone (see the props'
+  // own comment). Both-present is exercised end to end by
+  // composer-page.test.tsx/history-page.test.tsx; this pins down the
+  // gating itself, including the intentionally-unhandled "only one given"
+  // case, at this component's own level.
+  describe("the Edit/Delete context menu", () => {
+    it("wires no menu when neither onEdit nor onDelete is given", () => {
+      render(<History entries={[entry({ body: "hello" })]} syncEnabled={false} />);
+
+      fireEvent.contextMenu(screen.getByText("hello"));
+
+      expect(screen.queryByText("Edit")).not.toBeInTheDocument();
+      expect(screen.queryByText("Delete")).not.toBeInTheDocument();
+    });
+
+    it("wires no menu when only one of onEdit/onDelete is given", () => {
+      render(<History entries={[entry({ body: "hello" })]} syncEnabled={false} onEdit={vi.fn()} />);
+
+      fireEvent.contextMenu(screen.getByText("hello"));
+
+      expect(screen.queryByText("Edit")).not.toBeInTheDocument();
+    });
+
+    it("wires a working menu onto every row when both are given", async () => {
+      const onEdit = vi.fn();
+      const onDelete = vi.fn();
+      const target = entry({ body: "hello" });
+      render(
+        <History entries={[target]} syncEnabled={false} onEdit={onEdit} onDelete={onDelete} />,
+      );
+
+      fireEvent.contextMenu(screen.getByText("hello"));
+      fireEvent.click(await screen.findByText("Edit"));
+
+      expect(onEdit).toHaveBeenCalledWith(target);
+    });
   });
 });

@@ -1,3 +1,5 @@
+import type { Entry } from "@meologue/core";
+import { useNavigate } from "react-router";
 import { History } from "@/components/history";
 import { Nav, SettingsLink } from "@/components/nav";
 import { Shell } from "@/components/shell";
@@ -9,9 +11,25 @@ import { useEntryStore } from "@/pages/entry-store-layout";
 // hard-reloadable, sharing store state with `/` via EntryStoreLayout
 // (ticket 27).
 export function HistoryPage() {
-  const { entries, message, search } = useEntryStore();
+  const { entries, message, search, removeEntry } = useEntryStore();
   // See composer-page.tsx — same subscribed-read rationale.
   const syncEnabled = useSyncEnabled();
+
+  // ADR 0028: this page has no Composer (nothing here Sends — see the
+  // pinnedThread comment below), and editing happens in the Composer, not
+  // inline (composer.tsx's own comment says why). So Edit here navigates to
+  // `/` carrying only the chosen Entry's id in router state; composer-page.tsx
+  // reads it once on mount and looks the current Entry up from its own
+  // outlet context. The alternative — an inline editor on this page — was
+  // rejected precisely because it would have to relearn everything the
+  // docked Composer already handles (growth, the Android keyboard, safe
+  // areas) for a second input surface. Delete needs no such redirect: it's
+  // a single action with an Undo toast (use-history.ts), so it works here
+  // exactly as it does on `/`.
+  const navigate = useNavigate();
+  function handleEditRequest(entry: Entry) {
+    navigate("/", { state: { editEntryId: entry.id } });
+  }
 
   // Ticket 55: the URL param, sessionStorage backup, and display-order
   // reversal all now live in one hook shared with composer-page.tsx — see
@@ -39,7 +57,13 @@ export function HistoryPage() {
       // is narrowing the view is followed by the same rule.
       pinnedThread={{ watch: shown }}
     >
-      <History entries={orderedEntries} syncEnabled={syncEnabled} query={query} />
+      <History
+        entries={orderedEntries}
+        syncEnabled={syncEnabled}
+        query={query}
+        onEdit={handleEditRequest}
+        onDelete={removeEntry}
+      />
     </Shell>
   );
 }

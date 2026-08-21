@@ -47,6 +47,8 @@ function createFakeStore(entries: Entry[] = []): EntryStore {
     getCursor: vi.fn(async () => 0),
     setCursor: vi.fn(async () => {}),
     search: vi.fn(async () => []),
+    edit: vi.fn(async () => {}),
+    remove: vi.fn(async () => {}),
   };
 }
 
@@ -408,6 +410,7 @@ describe("SettingsPage", () => {
           createdAt: "2026-08-16T06:00:00.000Z",
           seq: 1,
           syncedAt: "2026-08-16T06:00:01.000Z",
+          deletedAt: null,
         },
       ];
       const store = createFakeStore(entries);

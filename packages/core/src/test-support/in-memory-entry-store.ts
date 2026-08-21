@@ -11,12 +11,18 @@ export class InMemoryEntryStore implements EntryStore {
   private cursor = 0;
 
   async list(): Promise<Entry[]> {
-    return [...this.entries.values()].sort((a, b) => {
-      if (a.createdAt !== b.createdAt) {
-        return a.createdAt < b.createdAt ? 1 : -1;
-      }
-      return a.id > b.id ? -1 : a.id < b.id ? 1 : 0;
-    });
+    // Excludes tombstones (ADR 0028) — mirrors SqliteEntryStore.list()'s
+    // `deleted_at IS NULL` filter, since the shared contract suite
+    // (../test-support/entry-store-contract.ts) has to see the same
+    // behaviour from both implementations.
+    return [...this.entries.values()]
+      .filter((entry) => entry.deletedAt === null)
+      .sort((a, b) => {
+        if (a.createdAt !== b.createdAt) {
+          return a.createdAt < b.createdAt ? 1 : -1;
+        }
+        return a.id > b.id ? -1 : a.id < b.id ? 1 : 0;
+      });
   }
 
   async upsert(entries: Entry[]): Promise<void> {
@@ -26,6 +32,9 @@ export class InMemoryEntryStore implements EntryStore {
   }
 
   async pending(): Promise<Entry[]> {
+    // Tombstones awaiting push have `seq === null` exactly like a newly
+    // captured Entry (ADR 0028), so they're picked up here with no
+    // special-casing — mirrors SqliteEntryStore.pending()'s comment.
     return [...this.entries.values()].filter((entry) => entry.seq === null);
   }
 
@@ -44,6 +53,42 @@ export class InMemoryEntryStore implements EntryStore {
     }
     const all = await this.list();
     return all.filter((entry) => matchesPrefixPhrase(tokenize(entry.body), queryTokens));
+  }
+
+  /**
+   * Mirrors SqliteEntryStore.edit() — see EntryStore.edit's doc comment
+   * for the invariants both implementations owe callers, and the real
+   * store for why clearing `seq` is what pushes the edit rather than a
+   * side effect of something else.
+   */
+  async edit(id: string, body: string): Promise<void> {
+    const existing = this.entries.get(id);
+    if (existing === undefined || existing.deletedAt !== null) {
+      // Unknown id, or already a tombstone — mirrors the real store's
+      // `WHERE deleted_at IS NULL` guard (ADR 0028) so a stale local edit
+      // can never resurrect an Entry deleted elsewhere.
+      return;
+    }
+    this.entries.set(id, { ...existing, body, seq: null, syncedAt: null });
+  }
+
+  /**
+   * Mirrors SqliteEntryStore.remove() — see EntryStore.remove's doc
+   * comment for the invariants both implementations owe callers,
+   * including the resurrection trap a hard delete here would reopen.
+   */
+  async remove(id: string): Promise<void> {
+    const existing = this.entries.get(id);
+    if (existing === undefined) {
+      return;
+    }
+    this.entries.set(id, {
+      ...existing,
+      deletedAt: new Date().toISOString(),
+      body: "",
+      seq: null,
+      syncedAt: null,
+    });
   }
 }
 

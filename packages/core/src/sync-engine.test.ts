@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { SYNC_BATCH_SIZE } from "./protocol";
+import { PROTOCOL_VERSION, SYNC_BATCH_SIZE } from "./protocol";
 import { sync } from "./sync-engine";
 import { entry } from "./test-support/entry-fixture";
 import { InMemoryEntryStore } from "./test-support/in-memory-entry-store";
@@ -25,7 +25,10 @@ describe("sync engine", () => {
 
     const transport = vi.fn(async (request) => {
       expect(request).toEqual({
-        protocol_version: 1,
+        // Asserted via the constant, not a hardcoded 1, so this test
+        // doesn't have to be hand-updated the next time PROTOCOL_VERSION
+        // moves (ADR 0028 already moved it once, 1 -> 2).
+        protocol_version: PROTOCOL_VERSION,
         device_id: DEVICE_ID,
         since_seq: 0,
         entries: [
@@ -34,6 +37,7 @@ describe("sync engine", () => {
             device_id: DEVICE_ID,
             body: "hello meologue",
             created_at: "2026-01-01T00:00:00.000Z",
+            deleted_at: null,
           },
         ],
       });

@@ -163,7 +163,7 @@ async fn an_entry_synced_in_ends_up_with_an_embedding_and_a_model_name(pool: PgP
         &pool,
         Some(tx),
         json!({
-            "protocol_version": 1,
+            "protocol_version": 2,
             "device_id": device,
             "since_seq": 0,
             "entries": [entry(entry_id, device, "an entry that gets embedded")],
@@ -196,7 +196,7 @@ async fn sync_succeeds_even_when_the_embedding_client_always_errors(pool: PgPool
         &pool,
         Some(tx),
         json!({
-            "protocol_version": 1,
+            "protocol_version": 2,
             "device_id": device,
             "since_seq": 0,
             "entries": [entry(entry_id, device, "an entry the embedding client will refuse")],

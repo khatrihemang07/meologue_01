@@ -73,8 +73,17 @@ pub async fn run(
 }
 
 async fn select_unembedded(pool: &PgPool, limit: i64) -> sqlx::Result<Vec<Uuid>> {
+    // `deleted_at is null` (ticket 2): `insert_entries` nulls `embedding` on
+    // every change, including a delete, so a tombstone lands in this queue
+    // exactly like any freshly-edited Entry unless it's excluded here.
+    // Nothing downstream would be corrupted by embedding a tombstone's
+    // blank body — `retrieve_nearest`'s own `deleted_at is null` guard
+    // would still keep it out of Grounding — but there's no reason to
+    // spend an embedding call on content nothing will ever read, and doing
+    // so would be actively misleading if that guard were ever the only
+    // thing standing between a tombstone and Reflection.
     sqlx::query_scalar::<_, Uuid>(
-        "select id from entries where embedding is null order by seq asc limit $1",
+        "select id from entries where embedding is null and deleted_at is null order by seq asc limit $1",
     )
     .bind(limit)
     .fetch_all(pool)
@@ -95,9 +104,13 @@ async fn embed_one(
     // Guarded on `embedding is null` even though the caller usually already
     // knows that: it's what makes a duplicate hint (the same id arriving
     // from both the channel and a scan pass) a harmless no-op rather than a
-    // wasted embedding call.
+    // wasted embedding call. `deleted_at is null` (ticket 2) closes the gap
+    // between the scan above and this fetch: the id came from the channel
+    // hint (`run_sync`'s `try_send`), not necessarily the scan, so it can
+    // name an Entry that's been deleted since the hint was sent — this
+    // guard is what stops that race from ever embedding a tombstone.
     let body = match sqlx::query_scalar::<_, String>(
-        "select body from entries where id = $1 and embedding is null",
+        "select body from entries where id = $1 and embedding is null and deleted_at is null",
     )
     .bind(id)
     .fetch_optional(pool)

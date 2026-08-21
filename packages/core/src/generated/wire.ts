@@ -211,6 +211,16 @@ export interface components {
             body: string;
             /** Format: date-time */
             created_at: string;
+            /**
+             * Format: date-time
+             * @description `Some` marks this push as a delete of an existing Entry (a tombstone
+             *     — see migration 0005). `None` is an append or an edit. There is no
+             *     separate "is this an edit" flag: `insert_entries`'s upsert treats a
+             *     push with the same `id` as an existing row as an edit regardless of
+             *     `deleted_at`, and a delete is just an edit whose `deleted_at` happens
+             *     to be set.
+             */
+            deleted_at?: string | null;
             /** Format: uuid */
             device_id: string;
             /** Format: uuid */
@@ -220,6 +230,14 @@ export interface components {
             body: string;
             /** Format: date-time */
             created_at: string;
+            /**
+             * Format: date-time
+             * @description `Some` means this Entry is a tombstone — see migration 0005 and
+             *     `fetch_entries_since`'s doc comment for why tombstones travel
+             *     through sync exactly like any other change rather than being
+             *     filtered out here.
+             */
+            deleted_at?: string | null;
             /** Format: uuid */
             device_id: string;
             /** Format: uuid */

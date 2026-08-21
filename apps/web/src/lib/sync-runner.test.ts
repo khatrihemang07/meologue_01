@@ -33,6 +33,8 @@ function createFakeStore(): EntryStore {
     getCursor: vi.fn(async () => 0),
     setCursor: vi.fn(async () => {}),
     search: vi.fn(async () => []),
+    edit: vi.fn(async () => {}),
+    remove: vi.fn(async () => {}),
   };
 }
 

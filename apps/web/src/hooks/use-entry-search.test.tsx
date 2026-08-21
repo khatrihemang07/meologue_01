@@ -13,6 +13,7 @@ function entry(overrides: Partial<Entry>): Entry {
     createdAt: "now",
     seq: 1,
     syncedAt: "now",
+    deletedAt: null,
     ...overrides,
   };
 }

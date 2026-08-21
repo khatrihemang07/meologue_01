@@ -1,5 +1,5 @@
 import type { Entry } from "@meologue/core";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { EntryRow } from "./entry-row";
 
@@ -11,6 +11,7 @@ function entry(overrides: Partial<Entry>): Entry {
     createdAt: "now",
     seq: 1,
     syncedAt: "now",
+    deletedAt: null,
     ...overrides,
   };
 }
@@ -87,5 +88,62 @@ describe("EntryRow", () => {
     render(<EntryRow entry={entry({ body: "a recurring task" })} syncEnabled={false} />);
 
     expect(screen.queryByRole("mark")).not.toBeInTheDocument();
+  });
+
+  // ADR 0028: the context menu is opt-in via `actions`, defaulting to none
+  // — see EntryRow's own doc comment on why (grounding-disclosure.test.tsx
+  // covers the specific caller this default protects).
+  describe("the Edit/Delete context menu", () => {
+    it("offers no menu when actions is omitted, even on a long-press/right-click", () => {
+      render(<EntryRow entry={entry({ body: "hello" })} syncEnabled={false} />);
+
+      fireEvent.contextMenu(screen.getByText("hello"));
+
+      expect(screen.queryByText("Edit")).not.toBeInTheDocument();
+      expect(screen.queryByText("Delete")).not.toBeInTheDocument();
+    });
+
+    it("opens Edit and Delete on right-click when actions is given", async () => {
+      const onEdit = vi.fn();
+      const onDelete = vi.fn();
+      render(
+        <EntryRow
+          entry={entry({ body: "hello" })}
+          syncEnabled={false}
+          actions={{ onEdit, onDelete }}
+        />,
+      );
+
+      fireEvent.contextMenu(screen.getByText("hello"));
+
+      expect(await screen.findByText("Edit")).toBeInTheDocument();
+      expect(screen.getByText("Delete")).toBeInTheDocument();
+    });
+
+    it("calls onEdit with the whole Entry when Edit is chosen", async () => {
+      const onEdit = vi.fn();
+      const onDelete = vi.fn();
+      const target = entry({ body: "hello" });
+      render(<EntryRow entry={target} syncEnabled={false} actions={{ onEdit, onDelete }} />);
+
+      fireEvent.contextMenu(screen.getByText("hello"));
+      fireEvent.click(await screen.findByText("Edit"));
+
+      expect(onEdit).toHaveBeenCalledWith(target);
+      expect(onDelete).not.toHaveBeenCalled();
+    });
+
+    it("calls onDelete with the whole Entry when Delete is chosen", async () => {
+      const onEdit = vi.fn();
+      const onDelete = vi.fn();
+      const target = entry({ body: "hello" });
+      render(<EntryRow entry={target} syncEnabled={false} actions={{ onEdit, onDelete }} />);
+
+      fireEvent.contextMenu(screen.getByText("hello"));
+      fireEvent.click(await screen.findByText("Delete"));
+
+      expect(onDelete).toHaveBeenCalledWith(target);
+      expect(onEdit).not.toHaveBeenCalled();
+    });
   });
 });

@@ -1,0 +1,27 @@
+-- Ticket 2: Edit and delete propagate across every Device the same way an
+-- append always has — as a change to the compacted log described in
+-- server/src/sync.rs's module comment, not as a special case bolted on
+-- beside it. A delete is one of the three shapes that log carries
+-- (nothing -> A, A -> B, A -> nothing), and `deleted_at` is how "A ->
+-- nothing" is represented: a tombstone, not a removed row.
+--
+-- The row has to survive the delete, not disappear, because `entries.seq`
+-- (migration 0001) is what makes an Entry reachable at all — a Device only
+-- ever pulls `where seq > $since_seq`. Absence-of-row cannot carry a `seq`,
+-- so it cannot travel through sync: a Device that already pulled the
+-- original Entry has no way to be told "and now it's gone" unless the
+-- delete is itself a change with a `seq` of its own, reassigned above every
+-- Cursor exactly like an edit (see `insert_entries` in sync.rs). Deleting
+-- the row outright would make the delete unreachable by the very mechanism
+-- that's supposed to deliver it.
+--
+-- `deleted_at` (rather than a bare boolean `deleted`) records *when*, which
+-- readers don't currently use but costs nothing to keep — and, more
+-- importantly, its being non-null is also what every reader (reflect.rs,
+-- digest.rs, embedding.rs) filters on to keep a tombstone out of
+-- Reflection, Digests and the embedding queue. The row's `body` column
+-- still exists and is still written on a delete (the client sends a blank
+-- body alongside `deleted_at`, see sync.rs's `EntryInput`), but a tombstone
+-- must never again be read as content — that's enforced at every reader,
+-- not by this column being empty.
+alter table entries add column deleted_at timestamptz;

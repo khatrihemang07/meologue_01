@@ -8,6 +8,7 @@ export function entry(overrides: Partial<Entry> = {}): Entry {
     createdAt: "2026-01-01T00:00:00.000Z",
     seq: null,
     syncedAt: null,
+    deletedAt: null,
     ...overrides,
   };
 }
