@@ -40,15 +40,12 @@ export interface UseHistoryResult {
 /**
  * Owns this Device's History: a TanStack Query query for `store.list()` and
  * mutations for Sending, editing and removing an Entry (ADR 0013, extended
- * by ADR 0028 for the latter two — same shape as sendEntry throughout:
- * `mutationFn` calls the store, `onSuccess` invalidates then nudges Sync).
- * An Entry renders from the local write immediately — the mutation's
- * `onSuccess` awaits the entries query's invalidation before nudging the
- * sync loop (`requestSync`,
- * `lib/sync-runner.ts`, ticket 38) to run right away rather than waiting
- * for its next scheduled tick. `requestSync` coalesces this against any
- * sync already in flight (the periodic tick, a wake signal) rather than
- * racing a second `sync()` call against the store.
+ * by ADR 0028 for the latter two). Every mutation has the same shape —
+ * `mutationFn` calls the store, `onSuccess` is `afterLocalWrite` below,
+ * which is where the invalidate-then-nudge-Sync reasoning lives.
+ *
+ * An Entry renders from the local write immediately; nothing here waits on
+ * the network.
  */
 export function useHistory(store: EntryStore, deviceId: string): UseHistoryResult {
   const entriesQuery = useQuery({
@@ -56,12 +53,24 @@ export function useHistory(store: EntryStore, deviceId: string): UseHistoryResul
     queryFn: () => store.list(),
   });
 
+  // Every local write ends the same two ways (ADR 0013, ticket 38): make the
+  // new state visible, then nudge Sync so the change leaves this Device now
+  // rather than at the next scheduled tick. `requestSync` coalesces that
+  // against any sync already in flight, so calling it per write never races
+  // a second sync() against the store.
+  //
+  // Shared rather than repeated once per mutation because the failure mode of
+  // getting it wrong is invisible: a mutation that invalidates but forgets
+  // requestSync looks completely correct on screen and simply takes up to
+  // SYNC_INTERVAL_MS longer to reach the other Devices.
+  const afterLocalWrite = async () => {
+    await queryClient.invalidateQueries({ queryKey: ENTRIES_QUERY_KEY });
+    void requestSync(store, deviceId);
+  };
+
   const sendEntryMutation = useMutation({
     mutationFn: (entry: Entry) => store.upsert([entry]),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ENTRIES_QUERY_KEY });
-      void requestSync(store, deviceId);
-    },
+    onSuccess: afterLocalWrite,
   });
 
   function sendEntry(raw: string) {
@@ -82,10 +91,7 @@ export function useHistory(store: EntryStore, deviceId: string): UseHistoryResul
 
   const editEntryMutation = useMutation({
     mutationFn: ({ id, body }: { id: string; body: string }) => store.edit(id, body),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ENTRIES_QUERY_KEY });
-      void requestSync(store, deviceId);
-    },
+    onSuccess: afterLocalWrite,
   });
 
   function editEntry(id: string, raw: string) {
@@ -98,10 +104,7 @@ export function useHistory(store: EntryStore, deviceId: string): UseHistoryResul
 
   const removeEntryMutation = useMutation({
     mutationFn: (id: string) => store.remove(id),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ENTRIES_QUERY_KEY });
-      void requestSync(store, deviceId);
-    },
+    onSuccess: afterLocalWrite,
   });
 
   // Undo's other half, and the reason it re-creates rather than resurrects.
@@ -133,10 +136,7 @@ export function useHistory(store: EntryStore, deviceId: string): UseHistoryResul
   const restoreEntryMutation = useMutation({
     mutationFn: (entry: Entry) =>
       store.upsert([{ ...entry, id: mintId(), seq: null, syncedAt: null, deletedAt: null }]),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ENTRIES_QUERY_KEY });
-      void requestSync(store, deviceId);
-    },
+    onSuccess: afterLocalWrite,
   });
 
   function removeEntry(entry: Entry) {
