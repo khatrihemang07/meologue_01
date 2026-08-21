@@ -8,6 +8,7 @@ anyhow = "1.0.104"
 async-trait = "0.1.89"
 axum = "0.8.9"
 chrono = { version = "0.4.45", features = ["serde"] }
+chrono-tz = "0.10.4"
 metrics = "0.24.6"
 metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
 reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls"] }

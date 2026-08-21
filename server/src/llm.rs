@@ -278,6 +278,30 @@ impl LlmConfig {
 
         Some((chat_client, embed_client))
     }
+
+    /// Builds the chat client the Digest worker (`digest::run`, ADR 0027)
+    /// needs, or `None` if the worker must not start. Gated on
+    /// `MEOLOGUE_CHAT_BASE_URL`/`MEOLOGUE_CHAT_MODEL` alone — per ADR 0021,
+    /// unset chat config means the feature is off, mirroring
+    /// `embed_worker_config` and `reflect_config` above.
+    ///
+    /// Deliberately looser than `reflect_config`, which also requires an
+    /// embed client: Reflection retrieves Grounding by vector similarity,
+    /// so it cannot function without something to turn a Question into a
+    /// vector. A Digest retrieves its Entries by date range
+    /// (`period::period_bounds`) instead, so it has no embedding
+    /// dependency at all — requiring one here would gate the worker on a
+    /// config knob it never reads.
+    pub fn digest_worker_config(&self) -> Option<Arc<dyn LlmClient + Send + Sync>> {
+        let chat_base_url = self.chat_base_url.clone()?;
+        let chat_model = self.chat_model.clone()?;
+        let client: Arc<dyn LlmClient + Send + Sync> = Arc::new(OpenAiCompatibleClient::new(
+            chat_base_url,
+            chat_model,
+            self.chat_api_key.clone(),
+        ));
+        Some(client)
+    }
 }
 
 #[cfg(test)]

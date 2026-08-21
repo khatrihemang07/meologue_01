@@ -32,6 +32,7 @@ feature stays off.
 | `MEOLOGUE_EMBED_BASE_URL` | Base URL of an OpenAI-compatible `/embeddings` endpoint. Falls back to `MEOLOGUE_CHAT_BASE_URL` when unset, so one local endpoint can serve both without being configured twice. |
 | `MEOLOGUE_EMBED_MODEL` | Model name sent in the embedding request body. Unset → the background embedding worker never starts. |
 | `MEOLOGUE_EMBED_API_KEY` | Optional bearer token, sent only when set. |
+| `MEOLOGUE_TZ` | An IANA zone name (e.g. `Asia/Kolkata`). Defaults to UTC when unset, empty, or unparseable (an unparseable value logs a warning rather than refusing to start). Decides which local day, ISO week (Monday start) or calendar month an Entry belongs to when the background Digest worker buckets it — see `docs/adr/0027-*` and `src/period.rs`. |
 
 When embedding config is present, the server spawns a background worker on startup that fills
 `entries.embedding` for every Entry, off the request path — `/v1/sync` never calls an LLM. See
