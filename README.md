@@ -100,23 +100,17 @@ cd server && cargo run                # app + API on :41207
 the only command needed from cold. Seed *after* it: the Server owns the schema, so a Sandbox on a
 brand-new volume has no tables to fill yet.
 
-Run both at once. They share no port, no database, no bundle and no app identifier:
+Run both at once — they share no port, no database and no app identifier:
 
 | | Yours | Sandbox |
 |---|---|---|
 | Postgres | `meologue-postgres` `:5432` | `meologue-postgres-sandbox` `:5442` |
 | Server | `:41207` | `:41307` |
-| Web bundle | `dist/web` | `dist/sandbox` |
-| Android | `com.meologue.app` | `com.meologue.app.sandbox` |
-| macOS | `meologue.app` | `meologue-sandbox.app` |
 
 The web split costs no client code at all: two Server ports are two browser origins, and both the
-Server URL setting and the SQLite store are keyed to the origin. The native shells install
-alongside yours instead of over them, so `adb install -r` and a Tauri build can't replace an app
-you're using — `./gradlew assembleSandbox`, and `cargo tauri build --config tauri.sandbox.conf.json`.
-
-**Everything below describes your instance.** The Sandbox is the same app on a different address:
-put `http://localhost:41307` into Settings instead.
+Server URL setting and the SQLite store are keyed to the origin. On the native shells the Sandbox
+is a separate package that installs alongside yours instead of over it — the per-platform sections
+below give the exact command for each.
 
 ### Stopping Postgres
 
@@ -141,32 +135,49 @@ one of the two servers above first.
 
 ### Web
 
-Two workflows. Both bind `:41207`, so don't run them at the same time.
+Two workflows, each of which exists for both instances.
 
-**Dev (hot reload)** — two long-running processes, each in its own terminal tab:
+**Dev (hot reload).** Vite serves the app on `:5173` and proxies `/v1` to a server. Two
+long-running processes, each in its own terminal tab.
+
+Yours:
 
 ```bash
-cd server && cargo run                # terminal A: API on :41207
-pnpm --filter @meologue/web dev       # terminal B: app on :5173, proxying /v1
+cd server && cargo run                                     # terminal A: API on :41207
+pnpm --filter @meologue/web dev                            # terminal B: app on :5173
 ```
 
-To hot-reload against the Sandbox instead, point the proxy at it —
-`MEOLOGUE_PROXY_TARGET=http://localhost:41307 pnpm --filter @meologue/web dev` — and leave your own
-server alone.
+The Sandbox — same dev server, proxy pointed elsewhere:
 
-**Production-style** — build the app, then let the server serve both it and the API on one port:
+```bash
+./scripts/sandbox-server.sh                                # terminal A: API on :41307
+MEOLOGUE_PROXY_TARGET=http://localhost:41307 \
+  pnpm --filter @meologue/web dev                          # terminal B: app on :5173
+```
+
+Only one of these at a time — both bind `:5173`. Either way, the Server URL to type into Settings
+is `http://localhost:5173`, the Vite origin, not the API port: that's where the app is actually
+served from, and the server has no way to know about the proxy.
+
+**Production-style.** The server serves the built app and the API on one port. Both instances can
+run at once — different ports, different bundles.
+
+Yours:
 
 ```bash
 pnpm --filter @meologue/web build
-cd server && cargo run                # app + API together on :41207
+cd server && cargo run                                     # app + API on :41207
 ```
 
-Sync is opt-in (ADR 0011): open the app, go to Settings, and type a Server URL — even for this
-same-origin production-style setup, since an unset Server URL means sync stays off on every
-target, with no implicit fallback. `cargo run` prints the Server URL to use
-(`http://localhost:41207` by default) — that's correct for the production-style workflow above.
-For the dev workflow, use the Vite origin instead (`http://localhost:5173`), since that's where
-the app is actually served from and the server has no way to know about that proxy.
+The Sandbox — one script, because it also starts its own Postgres and builds `dist/sandbox`:
+
+```bash
+./scripts/sandbox-server.sh                                # app + API on :41307
+```
+
+Settings takes `http://localhost:41207` or `http://localhost:41307` respectively. Sync is opt-in
+(ADR 0011), so it stays off until you type one in — even for this same-origin setup, since an
+unset Server URL means no implicit fallback on any target. `cargo run` prints the address to use.
 
 **Reaching it from another device's browser** needs HTTPS — the web app stores Entries in SQLite
 over OPFS, which browsers only allow in a [secure context](https://developer.mozilla.org/en-US/docs/Web/Security/Secure_Contexts).
@@ -216,61 +227,95 @@ well be the `https://` tailnet name instead of a bare `http://` address — neit
 plain-HTTP exception for that URL specifically, though ADR 0012's cleartext allowance stays in
 place regardless, since a LAN address is still a legitimate thing to type there.
 
-```bash
-pnpm --filter @meologue/web build:android
-cd apps/web && npx cap sync android    # after changing web code or plugins
-cd ../android && ./gradlew assembleDebug
-adb install -r app/build/outputs/apk/debug/app-debug.apk
-```
-
-Android blocks plain HTTP by default, but `network_security_config.xml` permits cleartext to any
-host (ADR 0012), so whatever address you type into Settings needs no change there.
-
-**Release build.** Needs a signing keystore, which doesn't exist on a fresh checkout — run
-`./scripts/setup-signing.sh` once per machine first (ADR 0015). It creates
-`~/.meologue/release.keystore` and a gitignored `apps/android/keystore.properties` pointing at
-it; re-running the script later is safe, since it refuses to touch a keystore that already
-exists. Without that file, `assembleRelease` fails immediately with a message naming the script,
-rather than producing an unsigned APK.
+Every variant starts the same way — one bundle, `dist/android`, for all three. The Sandbox APK
+deliberately carries that same bundle and **not** `dist/sandbox`: `dist/sandbox` is the *web*
+target, whose SQLite driver is the browser's, and the `.sandbox` applicationId is what does the
+isolating here.
 
 ```bash
 export ANDROID_HOME=/opt/homebrew/share/android-commandlinetools
 export JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home
 pnpm --filter @meologue/web build:android
-cd apps/web && npx cap sync android
-cd ../android && ./gradlew assembleRelease
+cd apps/web && npx cap sync android    # after changing web code or plugins
+cd ../android
 ```
 
-The output is `app/build/outputs/apk/release/app-release.apk`. Debug and release builds are
-signed with different keys, and `adb install -r` refuses to install one over the other — you'll
-see `INSTALL_FAILED_UPDATE_INCOMPATIBLE`. `adb uninstall com.meologue.app` first if you're
-switching between them on the same device.
+Then pick a variant:
+
+| Command | applicationId | APK |
+|---|---|---|
+| `./gradlew assembleDebug` | `com.meologue.app` | `app/build/outputs/apk/debug/app-debug.apk` |
+| `./gradlew assembleRelease` | `com.meologue.app` | `app/build/outputs/apk/release/app-release.apk` |
+| `./gradlew assembleSandbox` | `com.meologue.app.sandbox` | `app/build/outputs/apk/sandbox/app-sandbox.apk` |
+
+`adb install -r <apk>` installs any of them. Sandbox has no release variant on purpose — it's
+`initWith debug`, so it shares debug signing and installs alongside either of the other two rather
+than over them.
+
+To reach a server from the device over USB, with no Wi-Fi involved:
+
+```bash
+adb reverse tcp:41207 tcp:41207        # yours
+adb reverse tcp:41307 tcp:41307        # the Sandbox
+```
+
+Then type `http://127.0.0.1:41207` (or `:41307`) into Settings. **Not `localhost`** — Capacitor's
+own local webserver intercepts that hostname whatever the port and answers with `index.html`, so
+sync fails with a JSON parse error rather than a connection error. `127.0.0.1` passes straight
+through the tunnel. A tailnet address works too, and survives a network change; a LAN address does
+not.
+
+Android blocks plain HTTP by default, but `network_security_config.xml` permits cleartext to any
+host (ADR 0012), so whatever address you type into Settings needs no change there.
+
+**Release signing.** `assembleRelease` needs a keystore, which doesn't exist on a fresh checkout —
+run `./scripts/setup-signing.sh` once per machine first (ADR 0015). It creates
+`~/.meologue/release.keystore` and a gitignored `apps/android/keystore.properties` pointing at
+it; re-running the script later is safe, since it refuses to touch a keystore that already
+exists. Without that file, `assembleRelease` fails immediately with a message naming the script,
+rather than producing an unsigned APK.
+
+Debug and release are signed with different keys, and `adb install -r` refuses to install one over
+the other — `INSTALL_FAILED_UPDATE_INCOMPATIBLE`. `adb uninstall com.meologue.app` first if you're
+switching between those two on one device. The Sandbox is never in that fight; it's a different
+package.
 
 ### macOS
 
 A Tauri v2 shell. Command Line Tools are enough; full Xcode is not needed. Also needs the Tauri
 CLI (`cargo install tauri-cli --version "^2"`).
 
+As on Android, one bundle covers every variant — `dist/macos`, never `dist/sandbox`, for the same
+reason: `dist/sandbox` is the web target and its SQLite driver is the browser's, so a `.app` built
+from it would never touch `TauriSqliteDriver`. The `--config` patch changes the identifier, the
+product name and the window title, and that's all the isolation needed.
+
 ```bash
 pnpm --filter @meologue/web build:macos
-cd apps/macos && cargo tauri build --debug
-open target/debug/bundle/macos/meologue.app
+cd apps/macos
 ```
+
+Then pick a variant. All four coexist — two identifiers × two profiles, each in its own directory:
+
+| Command | Bundle | Output under `target/` |
+|---|---|---|
+| `cargo tauri build --debug` | `meologue.app` | `debug/bundle/macos/` |
+| `cargo tauri build` | `meologue.app` | `release/bundle/macos/` + `release/bundle/dmg/` |
+| `cargo tauri build --debug --config tauri.sandbox.conf.json` | `meologue-sandbox.app` | `debug/bundle/macos/` |
+| `cargo tauri build --config tauri.sandbox.conf.json` | `meologue-sandbox.app` | `release/bundle/macos/` + `release/bundle/dmg/` |
+
+`open target/debug/bundle/macos/meologue-sandbox.app` (or whichever) launches one. The two
+identifiers get separate `~/Library/Application Support` directories, so an installed Sandbox and
+your own app hold entirely separate Entries.
 
 App Transport Security requires an exception for plain-HTTP hosts; `apps/macos/Info.plist` grants
 one for any host (ADR 0012), so whatever address you type into Settings needs no change there
 either.
 
-**Release build.** Also needs `./scripts/setup-signing.sh` (ADR 0015), which creates a dedicated
-keychain holding a self-signed `meologue Dev` certificate — that identity is already named in
-`apps/macos/tauri.conf.json`, so signing happens automatically during the build, including the
-DMG:
-
-```bash
-pnpm --filter @meologue/web build:macos
-cd apps/macos && cargo tauri build
-open target/release/bundle/macos/meologue.app
-```
+**Release signing.** The two release rows need `./scripts/setup-signing.sh` (ADR 0015), which
+creates a dedicated keychain holding a self-signed `meologue Dev` certificate — that identity is
+named in `apps/macos/tauri.conf.json` and inherited by the Sandbox patch, so signing happens
+automatically during the build, including the DMG.
 
 There's no Apple Developer account behind this cert and never will be (ADR 0015), so the build is
 signed but **not notarized**. Opening it on any machine other than the one that built it — or
