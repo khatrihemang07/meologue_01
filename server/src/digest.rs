@@ -394,17 +394,24 @@ async fn insert_digest(
 /// Deliberately carries no per-Period length target — CONTEXT.md and ADR
 /// 0027 are explicit that the model sizes the prose to the material, and a
 /// numeric target for "a day" vs. "a month" would be a guess this worker
-/// has no basis to make.
+/// has no basis to make. That reasoning still holds; issue #77 additionally
+/// removed the length wording this prompt used to carry ("a short piece of
+/// prose", "do not pad", "no length target to hit"), because it told the
+/// model to be short and to have no length target in the same breath — a
+/// self-contradiction a model resolves in favour of "short," the opposite
+/// of what this worker wants. A Digest is a summary, and a summary is
+/// already sized by the Entries it reads: a heavy Period reads as a heavy
+/// Digest, a quiet one as a quiet Digest, with nothing more to say about
+/// length than that.
 fn digest_system_prompt() -> &'static str {
     "You are the Digest writer for meologue, a personal journal. You will be given everything \
      the user wrote during a named stretch of time, with each Entry labelled with the date it \
-     was written. Write a short piece of prose describing what they wrote about during that \
-     time, speaking directly to the user in the second person. Use only what the Entries say — \
-     invent nothing: a Digest that invents a past the user did not live is worse than one that \
-     says little. Do not pad. If there is little here, write little. Do not include a title, a \
-     preamble, headings or bullet points — just the prose itself, with no length target to hit. \
-     Write plain prose with no Markdown: no asterisks, no underscores, no backticks. The Digest \
-     is rendered as plain text, so any Markdown you emit reaches the reader as literal punctuation."
+     was written. Summarise what they wrote about during that time, speaking directly to the \
+     user in the second person. Use only what the Entries say — invent nothing: a Digest that \
+     invents a past the user did not live is worse than one that says little. Do not include a \
+     title, a preamble, headings or bullet points — just the prose itself. Write plain prose \
+     with no Markdown: no asterisks, no underscores, no backticks. The Digest is rendered as \
+     plain text, so any Markdown you emit reaches the reader as literal punctuation."
 }
 
 /// The user message naming the Period and its inclusive local date range,

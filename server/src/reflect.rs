@@ -257,7 +257,7 @@ answer to it. Answer \"GROUNDED: no\" if the Grounding does not answer the Quest
 marker line, answer the Question using only what these Entries say. If the Entries don't contain \
 enough to answer the Question, say so plainly instead of guessing or inventing anything — a \
 Reflection that invents a past the user did not live is worse than one that admits it found \
-nothing. Speak directly to the user in the second person, in a few sentences of plain prose.";
+nothing. Speak directly to the user in the second person, in plain prose.";
 
 /// The disclosed-fallback answering call's system prompt (`docs/adr/0024`)
 /// — used only after the *first* answering call's own "GROUNDED: no"
@@ -268,13 +268,20 @@ nothing. Speak directly to the user in the second person, in a few sentences of 
 /// at all. "nothing matching the Question was found" is deliberately
 /// specific wording, distinct enough from `SYSTEM_INSTRUCTION`'s own prose
 /// that a test double can tell the two calls apart by content alone.
+///
+/// Neither this prompt nor `SYSTEM_INSTRUCTION` names a sentence count or
+/// length target (issue #77): an Answer should follow the Grounding it is
+/// drawn from, and the two prompts describing the same Answer must not
+/// disagree with each other about how long it should be — this one used to
+/// say "briefly describe" while `SYSTEM_INSTRUCTION` said "a few sentences,"
+/// two different length instructions for the same kind of reply.
 const FALLBACK_SYSTEM_INSTRUCTION: &str = "You are Reflection, part of meologue, a personal \
 journal. Nothing in the user's journal answered their Question. Below, under \"Grounding\", are \
 the Entries the user wrote in the last few days — they were not judged relevant to the Question, \
 only recent. Begin your reply by saying plainly that nothing matching the Question was found in \
-their journal, then briefly describe what they have been writing about in the last few days, \
-using only these Entries. Do not imply these Entries answer the Question. Speak directly to the \
-user in the second person, in a few sentences of plain prose.";
+their journal, then describe what they have been writing about in the last few days, using \
+only these Entries. Do not imply these Entries answer the Question. Speak directly to the user \
+in the second person, in plain prose.";
 
 /// The two ways `run_reflect` can end other than success. `SessionNotFound`
 /// is the one case that must reach the client as a clean 404 rather than
