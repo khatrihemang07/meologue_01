@@ -10,8 +10,10 @@ import { VitePWA } from "vite-plugin-pwa";
 // dev origin (e.g. http://localhost:5173) routes /v1/* through this proxy
 // to the real server on :41207. The server still needs CORS (ticket 13)
 // because a built app running inside Capacitor or Tauri has no origin to
-// share with the server at all.
-const SERVER_PROXY_TARGET = "http://localhost:41207";
+// share with the server at all. MEOLOGUE_PROXY_TARGET overrides this for a
+// hot-reload session aimed at the sandbox target's server on a different
+// port instead, without editing this file.
+const SERVER_PROXY_TARGET = process.env.MEOLOGUE_PROXY_TARGET ?? "http://localhost:41207";
 
 // The build-time platform seam (ticket 12): one Vite application whose
 // per-target files (e.g. `src/platform/wake-signals.<target>.ts`) are
@@ -19,8 +21,11 @@ const SERVER_PROXY_TARGET = "http://localhost:41207";
 // so a target's build never bundles another target's platform code. Any
 // mode outside this set (e.g. vitest's "test", or an unqualified
 // `vite build`'s "production") falls back to "web", so existing scripts and
-// the web build stay unchanged in behaviour.
-const BUILD_TARGETS = ["web", "android", "macos"];
+// the web build stay unchanged in behaviour. "sandbox" is a fourth,
+// browser-based target for an isolated testing instance, served by its own
+// server on its own port so a build for it can never overwrite the bundle
+// the user's own server serves.
+const BUILD_TARGETS = ["web", "android", "macos", "sandbox"];
 
 export default defineConfig(({ mode }) => {
   const target = BUILD_TARGETS.includes(mode) ? mode : "web";
@@ -35,9 +40,11 @@ export default defineConfig(({ mode }) => {
       // an install prompt or an update for — ADR 0005's build-time seam is
       // what makes "web" a value this file can just check, rather than a
       // runtime guess. `target === "web"` is deliberately not
-      // `target !== "android" && target !== "macos"`: a fourth target
-      // added later defaults to "web" (BUILD_TARGETS above) and should not
-      // silently inherit a service worker without that being decided here.
+      // `target !== "android" && target !== "macos"`: sandbox is that
+      // fourth target, and correctly gets no service worker here without
+      // this having to be revisited; any further target not yet added to
+      // BUILD_TARGETS above defaults to "web" and should not silently
+      // inherit one either, without that being decided here.
       target === "web" &&
         VitePWA({
           // "sw.js" and "manifest.webmanifest" are this plugin's own

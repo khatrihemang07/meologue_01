@@ -34,7 +34,7 @@ import { expect, test } from "@playwright/test";
 // Entries in a completed Period plus an anchor row and letting the worker
 // fill forward — hit the identical gap: neither can run from Node without
 // *some* way to reach Postgres. `docker exec`ing straight into the same
-// `meologue-postgres` container `scripts/e2e-server.sh` already assumes
+// Sandbox Postgres container `scripts/e2e-server.sh` already assumes
 // exists (its own `docker compose up`) closes that gap with zero new
 // dependencies — `child_process.execFileSync` and `psql`, both already
 // present, the same "no new dependency" call `llm-stub.ts`'s own doc
@@ -46,15 +46,18 @@ import { expect, test } from "@playwright/test";
 // already has its own real, non-e2e coverage in `server/tests/digest.rs`.
 // ---------------------------------------------------------------------
 //
-// This spec must be run against a scratch database, never the 572-Entry
-// corpus (issue #67's warning, restated for Digest by issue #73): the
-// rows this test inserts below are real writes to whatever database
-// `meologue-postgres` currently answers to as `meologue`. Run the suite
-// through `scripts/e2e.sh`, which parks the corpus under another name,
-// gives the suite a fresh `meologue` to fill, and restores it afterwards
-// whatever happens. Running `test:e2e` directly writes into the corpus.
+// The rows this test inserts below are real writes, so the database it
+// names has to be one nobody minds it writing to. Before issue #74 that
+// took care: this named the developer's own container and database, and
+// only `scripts/e2e.sh` renaming their corpus aside kept the two apart.
+// Both names below now point into the Sandbox Postgres instead, at the
+// database `scripts/e2e.sh` drops and recreates empty before every run —
+// so there is no corpus in reach to damage, and no restore step to skip.
+// They must stay in step with `scripts/e2e-server.sh`'s DATABASE_URL:
+// this spec seeds rows that server A is then asked to serve.
 
-const CONTAINER = "meologue-postgres";
+const CONTAINER = "meologue-postgres-sandbox";
+const DATABASE = "meologue_e2e_a";
 
 // Three "day" Digests, oldest first, with a deliberate multi-day gap
 // between the middle and newest dates — chosen specifically so that
@@ -115,7 +118,7 @@ function seedDayDigest(periodStart: string, body: string): void {
     "-U",
     "meologue",
     "-d",
-    "meologue",
+    DATABASE,
     "-v",
     "ON_ERROR_STOP=1",
     "-c",

@@ -12,3 +12,5 @@ pnpm dev
 The dev server proxies `/v1/*` to the Rust server at `http://localhost:41207`, so the client
 only ever uses relative URLs and never needs to know its own host. Run the server separately
 (`cargo run` in `server/`, with Postgres up via `docker-compose up -d`) for requests to resolve.
+Set `MEOLOGUE_PROXY_TARGET` to override that address, e.g. to point a dev session at a sandbox
+server instead.

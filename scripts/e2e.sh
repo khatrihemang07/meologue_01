@@ -1,55 +1,46 @@
 #!/usr/bin/env bash
-# Runs the e2e suite against a scratch database, then puts the real one back.
+# Runs the e2e suite against the Sandbox Postgres, on two databases of its
+# own that are recreated empty first.
 #
-# Why this exists (issues #67 and #73): the suite's servers read DATABASE_URL,
-# and on a developer machine that points at the same database holding the
-# 572-Entry test journal. Every spec writes Entries into it, and digest.spec.ts
-# now writes `digests` rows too, so a naive `pnpm --filter @meologue/e2e
-# test:e2e` quietly pollutes the corpus. That has happened, and had to be
-# cleaned up by hand.
+# This used to be a much larger script (issues #67 and #73). Both e2e servers
+# read DATABASE_URL, which on a developer machine pointed at the same database
+# holding their Entries, so the suite quietly wrote into it — "that has
+# happened, and had to be cleaned up by hand". The workaround was to rename
+# that database aside, hand the suite an empty one, and restore it on every
+# exit path with a trap.
 #
-# Overriding DATABASE_URL is NOT the fix: scripts/e2e-server-b.sh reads the
-# same variable, so both servers would land on one database and
-# multi-server.spec.ts fails by construction. Renaming the corpus aside and
-# giving the suite a fresh `meologue` to fill is what keeps both servers
-# isolated *and* the corpus untouched.
+# Issue #74 removed the reason for all of that. Testing has its own Postgres
+# now (docker-compose.yml, `postgres-sandbox`), so there is nothing here worth
+# protecting and nothing to put back — the suite just gets two empty databases
+# inside it. Server A and server B still need one each, because
+# multi-server.spec.ts proves an Entry follows its Device's Server URL rather
+# than the origin that served the page, which a shared database would defeat.
+#
+# A consequence worth naming: this no longer cares whether the personal server
+# is running. It used to refuse to start if anything held a connection to the
+# database it wanted to rename.
+#
+# One caveat that replaces it, and it is about the machine rather than the
+# data: the Sandbox server (scripts/sandbox-server.sh) runs an embedding
+# worker and a Digest worker that drive local LLM endpoints, and leaving it up
+# during a run is enough load to push the slowest multi-Device specs past
+# their timeouts. Measured on this repo: 46/46 with only the personal server
+# up, 44/46 with the Sandbox server up too, the failures being timeouts in
+# edit-delete and reflection rather than anything about isolation. Stop the
+# Sandbox server before a full run if the suite starts flaking.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-CONTAINER="${MEOLOGUE_PG_CONTAINER:-meologue-postgres}"
-LIVE=meologue
-PARKED=meologue_corpus_backup
+CONTAINER=meologue-postgres-sandbox
 
-psql_postgres() { docker exec "$CONTAINER" psql -U meologue -d postgres -v ON_ERROR_STOP=1 "$@"; }
+docker compose up -d --wait postgres-sandbox
 
-# A rename needs every other connection gone. Fail loudly rather than killing
-# somebody's session: a running dev server is the usual cause, and terminating
-# it from here would be a surprising thing for a test script to do.
-connections=$(psql_postgres -tAc "select count(*) from pg_stat_activity where datname = '$LIVE'")
-if [ "$connections" != "0" ]; then
-  echo "error: $connections connection(s) still open to '$LIVE'." >&2
-  echo "Stop anything using it (usually a dev server: pkill -f meologue-server) and re-run." >&2
-  exit 1
-fi
-
-if psql_postgres -tAc "select 1 from pg_database where datname = '$PARKED'" | grep -q 1; then
-  echo "error: '$PARKED' already exists — a previous run did not finish restoring." >&2
-  echo "Inspect both databases by hand before continuing; do not let this script guess." >&2
-  exit 1
-fi
-
-restore() {
-  local status=$?
-  echo "--- restoring the corpus database ---"
-  psql_postgres -c "DROP DATABASE IF EXISTS $LIVE;" >/dev/null
-  psql_postgres -c "ALTER DATABASE $PARKED RENAME TO $LIVE;" >/dev/null
-  echo "corpus restored: $(docker exec "$CONTAINER" psql -U meologue -d "$LIVE" -tAc 'select count(*) from entries') entries"
-  exit $status
-}
-
-psql_postgres -c "ALTER DATABASE $LIVE RENAME TO $PARKED;" >/dev/null
-psql_postgres -c "CREATE DATABASE $LIVE OWNER meologue;" >/dev/null
-# From here on the corpus is parked, so every exit path must put it back.
-trap restore EXIT
+for db in meologue_e2e_a meologue_e2e_b; do
+  docker exec "$CONTAINER" psql -U meologue -d postgres -v ON_ERROR_STOP=1 \
+    -c "DROP DATABASE IF EXISTS $db WITH (FORCE);" >/dev/null
+  docker exec "$CONTAINER" psql -U meologue -d postgres -v ON_ERROR_STOP=1 \
+    -c "CREATE DATABASE $db OWNER meologue;" >/dev/null
+done
+echo "--- e2e databases recreated empty: meologue_e2e_a, meologue_e2e_b ---"
 
 pnpm --filter @meologue/e2e test:e2e "$@"

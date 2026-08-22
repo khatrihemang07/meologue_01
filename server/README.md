@@ -18,6 +18,19 @@ override it if you're running the binary from somewhere else. One process serves
 and the built app on one port — open that port's address from any device on the same network
 (e.g. a phone) to get a working app; no separate web server or CORS configuration needed.
 
+Those defaults describe the **personal** instance. Testing runs the same binary against the
+Sandbox instead (ADR 0029) — a separate Postgres on `:5442`, `dist/sandbox`, port `41307` — which
+`scripts/sandbox-server.sh` sets up. Nothing below distinguishes the two: it is the same server,
+and every command here works against either once `DATABASE_URL` says which. Run that script before
+`scripts/seed-sandbox.sh` on a fresh Sandbox — this server applies the migrations the seed needs.
+
+Android and macOS Sandbox shells install alongside the personal ones as `com.meologue.app.sandbox`:
+`./gradlew assembleSandbox`, and `cargo tauri build --config tauri.sandbox.conf.json`.
+
+`server/.env` is read at startup, and does not override variables already in the environment
+(`src/main.rs`). That is what lets the Sandbox and e2e scripts pin `DATABASE_URL`, `STATIC_DIR`
+and `PORT` while still inheriting whatever LLM configuration you keep in `.env`.
+
 ## Reflection: chat and embedding configuration
 
 Both are off by default — see `docs/adr/0021-*` and `docs/adr/0022-*`. Nothing here is required
@@ -47,6 +60,10 @@ health check while the worker is running:
 docker exec meologue-postgres psql -U meologue -d meologue -c \
   "select count(*) from entries where embedding is null"
 ```
+
+That names the personal instance's container; for the Sandbox it is
+`meologue-postgres-sandbox`. Both answer to the database name `meologue`, so the container name is
+the only thing that distinguishes them — worth reading twice before running anything destructive.
 
 That count should trend to zero shortly after startup and stay there; a sustained non-zero count
 either means embedding config is off (expected) or some Entries have hit the worker's retry cap.
@@ -91,9 +108,12 @@ connection.
 ## Testing
 
 ```sh
-docker compose up -d
-export DATABASE_URL=postgres://meologue:meologue@localhost:5432/meologue
+docker compose up -d --wait postgres-sandbox
+export DATABASE_URL=postgres://meologue:meologue@localhost:5442/meologue
 cargo test
 ```
 
-`#[sqlx::test]` provisions an isolated database per test and applies `migrations/` to it.
+`#[sqlx::test]` provisions an isolated database per test and applies `migrations/` to it — inside
+whichever instance `DATABASE_URL` names. Point it at the Sandbox on `:5442`, not at your own
+Postgres: an interrupted run leaves its `_sqlx_test_*` databases behind, and that is exactly how
+one came to be sitting next to a developer's Entries (ADR 0029).

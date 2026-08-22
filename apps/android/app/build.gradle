@@ -54,6 +54,11 @@ android {
                 signingConfig signingConfigs.release
             }
         }
+        sandbox {
+            initWith debug
+            applicationIdSuffix ".sandbox"
+            matchingFallbacks = ['debug']
+        }
     }
 }
 

@@ -1,26 +1,40 @@
 #!/usr/bin/env bash
-# Boots the real stack for the ticket-11 e2e suite: Postgres, the built web
-# app, and the Rust server serving both the app and /v1/sync on one port —
-# the same production serving path the e2e test is meant to exercise.
+# Boots the real stack for the ticket-11 e2e suite: the Sandbox Postgres, the
+# built web app, and the Rust server serving both it and /v1/sync on one port
+# — the same production serving path the e2e test is meant to exercise.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-docker compose up -d --wait
+docker compose up -d --wait postgres-sandbox
 
-pnpm --filter @meologue/web build
+# The `web` target, not `sandbox` — pwa.spec.ts cuts the network and asserts
+# History still renders, which only holds if the bundle carries a service
+# worker, and vite.config.ts gates VitePWA on `target === "web"` alone. The
+# suite is meant to exercise the real shipping target, so this has to stay
+# the web one.
+#
+# But it goes to its own directory (issue #74). `dist/web` is what a
+# developer's own server on :41207 serves, and a suite run that rebuilt it
+# from a half-finished working tree would swap their app out from under them
+# — the same class of accident this issue removed from the database side.
+# The outDir flag overrides vite.config.ts's `dist/${target}` for this build
+# only; the target, and therefore the service worker, is unchanged.
+pnpm --filter @meologue/web exec vite build --mode web --outDir dist/e2e
 
 cd server
-export DATABASE_URL="${DATABASE_URL:-postgres://meologue:meologue@localhost:5432/meologue}"
-export STATIC_DIR="../apps/web/dist/web"
-# issue #67: without these, MEOLOGUE_CHAT_*/MEOLOGUE_EMBED_* are unset, and
-# `/v1/reflect`/`/v1/sessions` never get registered at all (server/src/lib.rs
-# gates both on LlmConfig::reflect_config() resolving) — so reflection.spec.ts
-# can't run. Pointed at apps/e2e/llm-stub.ts's deterministic double (its
-# LLM_STUB_PORT, apps/e2e/servers.ts) rather than a real model: a real chat
-# call costs ~7s, returns different prose every time, and lives in a process
-# this repo doesn't manage — all three are wrong for a test suite. Only this
-# script sets these — a developer's own `cargo run` (server/src/main.rs reads
-# the environment directly, nothing loads a .env) is unaffected. Server B
+export DATABASE_URL="postgres://meologue:meologue@localhost:5442/meologue_e2e_a"
+export STATIC_DIR="../apps/web/dist/e2e"
+# issue #67: without these, MEOLOGUE_CHAT_*/MEOLOGUE_EMBED_* would be
+# whatever the developer's own server/.env happens to hold, and an unset pair
+# means `/v1/reflect`/`/v1/sessions` never get registered at all
+# (server/src/lib.rs gates both on LlmConfig::reflect_config() resolving) — so
+# reflection.spec.ts couldn't run. Pointed at apps/e2e/llm-stub.ts's
+# deterministic double (its LLM_STUB_PORT, apps/e2e/servers.ts) rather than a
+# real model: a real chat call costs ~7s, returns different prose every time,
+# and lives in a process this repo doesn't manage — all three are wrong for a
+# test suite. Setting them here also pins them against server/.env, which
+# server/src/main.rs now loads (commit 5eacf99) — dotenvy does not override a
+# variable already in the environment, so these exports still win. Server B
 # (scripts/e2e-server-b.sh) deliberately does not set these — see that
 # script's own comment.
 export MEOLOGUE_CHAT_BASE_URL="${MEOLOGUE_CHAT_BASE_URL:-http://localhost:41237/v1}"
@@ -34,6 +48,7 @@ export MEOLOGUE_EMBED_MODEL="${MEOLOGUE_EMBED_MODEL:-llm-stub-embed}"
 # calendar dates. Pinning UTC here explicitly, rather than relying on the
 # default staying UTC forever, means those boundaries can't shift under
 # the suite depending on which machine or CI runner's own default zone
-# happens to run it.
+# happens to run it. This matters more now that server/.env is loaded: the
+# developer's own is MEOLOGUE_TZ=Asia/Kolkata.
 export MEOLOGUE_TZ="${MEOLOGUE_TZ:-UTC}"
 exec cargo run

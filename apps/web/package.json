@@ -9,6 +9,7 @@
     "build:web": "tsc -b && vite build --mode web",
     "build:android": "tsc -b && vite build --mode android",
     "build:macos": "tsc -b && vite build --mode macos",
+    "build:sandbox": "tsc -b && vite build --mode sandbox",
     "preview": "vite preview",
     "lint": "biome check .",
     "format": "biome format --write .",

@@ -266,17 +266,35 @@ pnpm test                                   # unit tests (core + web)
 pnpm lint
 ./scripts/e2e.sh                            # boots the real stack, drives a browser
 
-export DATABASE_URL=postgres://meologue:meologue@localhost:5432/meologue
+export DATABASE_URL=postgres://meologue:meologue@localhost:5442/meologue
 cargo test --manifest-path server/Cargo.toml
 ```
 
 The server tests provision a database per test, but `sqlx` still needs `DATABASE_URL` set to find
-the instance.
+the instance. Point it at `:5442` — the Sandbox, below — rather than your own Postgres: an
+interrupted run leaves its throwaway `_sqlx_test_*` databases behind, and they are better left
+somewhere you don't keep Entries.
 
-Run the e2e suite through `scripts/e2e.sh` rather than `test:e2e` directly. Both e2e servers read
-`DATABASE_URL`, so they have to share one database — which on a dev machine is the same one holding
-the test journal, and every spec writes to it. The script parks that database under another name,
-gives the suite an empty one, and restores it on the way out however the run ends.
+Run the e2e suite through `scripts/e2e.sh` rather than `test:e2e` directly; it recreates the two
+databases the suite's two servers need before handing over. Your own server can stay up during a
+run — but stop the Sandbox one, whose embedding and Digest workers load the machine enough to
+time out the slowest specs.
+
+### The Sandbox
+
+All of the above runs against a second instance that shares this working tree and nothing else
+(ADR 0029) — its own Postgres, its own port, its own bundle, its own app identifiers:
+
+```bash
+./scripts/sandbox-server.sh     # app + API on :41307, and applies migrations
+./scripts/seed-sandbox.sh       # ~120 Entries across the last two months
+```
+
+Server first: it owns the schema, so a Sandbox whose volume was just created has no tables for
+the seed to fill. Your own instance on `:41207` can keep running throughout — two ports means two
+browser origins, and both the Server URL setting and the SQLite store are keyed to the origin, so
+the two apps share no local state either. `server/README.md` has the rest, including the native
+shells, which install alongside yours rather than over them as `com.meologue.app.sandbox`.
 
 The TypeScript wire types are generated from the Rust server, which owns the contract:
 
