@@ -4,6 +4,7 @@ dist/
 
 # Rust
 server/target/
+.env
 
 # Playwright
 apps/e2e/test-results/

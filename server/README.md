@@ -24,6 +24,10 @@ Both are off by default — see `docs/adr/0021-*` and `docs/adr/0022-*`. Nothing
 to run the server; every variable below is optional, and an unset one means the corresponding
 feature stays off.
 
+These can also be set via a `.env` file in this directory — copy `.env.example` to `.env` and
+fill it in. It's loaded automatically on startup; an explicit environment variable always takes
+precedence over `.env`.
+
 | Var | Behaviour |
 |---|---|
 | `MEOLOGUE_CHAT_BASE_URL` | Base URL of an OpenAI-compatible `/chat/completions` endpoint. Unset → Reflection's chat step is off (unused before ticket 4). |

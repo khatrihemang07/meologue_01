@@ -9,6 +9,8 @@ const DEFAULT_STATIC_DIR: &str = "../apps/web/dist/web";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let _ = dotenvy::dotenv();
+
     if env::args().nth(1).as_deref() == Some("openapi") {
         println!("{}", openapi::spec().to_pretty_json()?);
         return Ok(());

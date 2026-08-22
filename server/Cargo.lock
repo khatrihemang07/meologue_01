@@ -1039,6 +1039,7 @@ dependencies = [
  "axum",
  "chrono",
  "chrono-tz",
+ "dotenvy",
  "http-body-util",
  "metrics",
  "metrics-exporter-prometheus",
