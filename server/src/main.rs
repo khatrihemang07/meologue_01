@@ -1,11 +1,69 @@
-use std::env;
+use std::{env, net::Ipv4Addr, process::Command};
 
 use meologue_server::{digest, embedding, llm, openapi, period};
+use serde_json::Value;
 use sqlx::postgres::PgPoolOptions;
 
 const DEFAULT_DATABASE_URL: &str = "postgres://meologue:meologue@localhost:5432/meologue";
 // Relative to the server crate's own directory (cwd when run via `cargo run` from `server/`).
 const DEFAULT_STATIC_DIR: &str = "../apps/web/dist/web";
+
+struct TailscaleIdentity {
+    dns_name: String,
+    ipv4: Ipv4Addr,
+}
+
+fn tailscale_json(args: &[&str]) -> Option<Value> {
+    let output = Command::new("tailscale").args(args).output().ok()?;
+    output
+        .status
+        .success()
+        .then(|| serde_json::from_slice(&output.stdout).ok())?
+}
+
+fn tailscale_identity(status: &Value) -> Option<TailscaleIdentity> {
+    (status.get("BackendState")?.as_str()? == "Running").then_some(())?;
+
+    let dns_name = status
+        .pointer("/Self/DNSName")?
+        .as_str()?
+        .trim_end_matches('.')
+        .to_owned();
+    let ipv4 = status
+        .pointer("/Self/TailscaleIPs")?
+        .as_array()?
+        .iter()
+        .find_map(|ip| ip.as_str()?.parse().ok())?;
+
+    Some(TailscaleIdentity { dns_name, ipv4 })
+}
+
+fn tailscale_serve_url(status: &Value, dns_name: &str, server_port: u16) -> Option<String> {
+    let expected_proxy = format!("http://127.0.0.1:{server_port}");
+
+    status
+        .get("Web")?
+        .as_object()?
+        .iter()
+        .find_map(|(host_port, config)| {
+            let (host, port) = host_port.rsplit_once(':')?;
+            let port: u16 = port.parse().ok()?;
+            let proxy = config.get("Handlers")?.get("/")?.get("Proxy")?.as_str()?;
+            let is_https = status
+                .get("TCP")?
+                .get(port.to_string())?
+                .get("HTTPS")?
+                .as_bool()?;
+
+            (host == dns_name && proxy == expected_proxy && is_https).then(|| {
+                if port == 443 {
+                    format!("https://{host}")
+                } else {
+                    format!("https://{host}:{port}")
+                }
+            })
+        })
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -81,7 +139,69 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await?;
     println!("meologue-server listening on :{port}");
     println!("Server URL for Settings: http://localhost:{port}");
+    if let Some(identity) =
+        tailscale_json(&["status", "--json"]).and_then(|status| tailscale_identity(&status))
+    {
+        println!(
+            "Tailscale MagicDNS URL for Settings: http://{}:{port}",
+            identity.dns_name
+        );
+        println!(
+            "Tailscale IP URL for Settings: http://{}:{port}",
+            identity.ipv4
+        );
+
+        if let Some(url) = tailscale_json(&["serve", "status", "--json"])
+            .and_then(|status| tailscale_serve_url(&status, &identity.dns_name, port))
+        {
+            println!("Tailscale Serve URL for Settings: {url}");
+        }
+    }
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{tailscale_identity, tailscale_serve_url};
+
+    #[test]
+    fn reads_magic_dns_and_ipv4_from_running_tailscale() {
+        let status = json!({
+            "BackendState": "Running",
+            "Self": {
+                "DNSName": "laptop.example.ts.net.",
+                "TailscaleIPs": ["100.64.0.1", "fd7a:115c:a1e0::1"]
+            }
+        });
+
+        let identity = tailscale_identity(&status).unwrap();
+
+        assert_eq!(identity.dns_name, "laptop.example.ts.net");
+        assert_eq!(identity.ipv4.to_string(), "100.64.0.1");
+    }
+
+    #[test]
+    fn reads_https_url_only_when_serve_targets_the_server_port() {
+        let status = json!({
+            "TCP": { "443": { "HTTPS": true } },
+            "Web": {
+                "laptop.example.ts.net:443": {
+                    "Handlers": { "/": { "Proxy": "http://127.0.0.1:41207" } }
+                }
+            }
+        });
+
+        assert_eq!(
+            tailscale_serve_url(&status, "laptop.example.ts.net", 41207).as_deref(),
+            Some("https://laptop.example.ts.net")
+        );
+        assert_eq!(
+            tailscale_serve_url(&status, "laptop.example.ts.net", 41307),
+            None
+        );
+    }
 }
