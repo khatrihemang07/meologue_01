@@ -72,25 +72,72 @@ Digests are written ahead of time, forward-only, and never backfilled).
 
 ## Run it
 
-Needs Node 22+, pnpm, Rust, and Docker.
+Needs Node 22+, pnpm, Rust, and Docker. Then `pnpm install`.
+
+### Two instances, and which one you're starting
+
+meologue runs as **two instances that share this working tree and nothing else** (ADR 0029). One
+holds your Entries. The other — the Sandbox — is where testing goes: seeded, driven, wiped and
+reseeded freely. It cannot reach your database, your bundle or your installed apps, so your app
+keeps working normally while any of that is happening.
+
+**Your app** — Postgres, then build, then serve:
 
 ```bash
-pnpm install
-docker compose up -d          # Postgres on :5432
+docker compose up -d                  # Postgres on :5432
+pnpm --filter @meologue/web build
+cd server && cargo run                # app + API on :41207
 ```
 
-To stop Postgres again:
+**The testing app** — one script does all three, then seed it:
 
 ```bash
-docker compose stop           # container and data both stay
-docker compose down           # also removes the container and network
+./scripts/sandbox-server.sh           # Postgres on :5442, app + API on :41307
+./scripts/seed-sandbox.sh             # ~120 Entries across the last two months
+```
+
+`sandbox-server.sh` starts its own Postgres, builds `dist/sandbox` and applies migrations, so it's
+the only command needed from cold. Seed *after* it: the Server owns the schema, so a Sandbox on a
+brand-new volume has no tables to fill yet.
+
+Run both at once. They share no port, no database, no bundle and no app identifier:
+
+| | Yours | Sandbox |
+|---|---|---|
+| Postgres | `meologue-postgres` `:5432` | `meologue-postgres-sandbox` `:5442` |
+| Server | `:41207` | `:41307` |
+| Web bundle | `dist/web` | `dist/sandbox` |
+| Android | `com.meologue.app` | `com.meologue.app.sandbox` |
+| macOS | `meologue.app` | `meologue-sandbox.app` |
+
+The web split costs no client code at all: two Server ports are two browser origins, and both the
+Server URL setting and the SQLite store are keyed to the origin. The native shells install
+alongside yours instead of over them, so `adb install -r` and a Tauri build can't replace an app
+you're using — `./gradlew assembleSandbox`, and `cargo tauri build --config tauri.sandbox.conf.json`.
+
+**Everything below describes your instance.** The Sandbox is the same app on a different address:
+put `http://localhost:41307` into Settings instead.
+
+### Stopping Postgres
+
+```bash
+docker compose stop                   # container and data both stay
+docker compose down                   # also removes the container and network
+docker compose down -v postgres-sandbox   # wipe the Sandbox, keep yours
 ```
 
 `stop` is the one you want day to day — `docker compose start` brings it back. Postgres is
 `restart: unless-stopped`, so it returns after a reboot until you stop it explicitly. Neither
-command touches your Entries; only `down -v` does, and it discards all of them on this machine.
+`stop` nor `down` touches your Entries; only `down -v` does. The first two act on your instance
+alone: the Sandbox sits behind a `sandbox` profile, so it's only ever touched by a command that
+names it.
 
-Then pick a platform. All three talk to the same server, so start it first.
+Which is what the third line does — name the service. **Do not** reach for
+`docker compose --profile sandbox down -v` instead: a profile *widens* the set of services a
+command applies to rather than narrowing it, so that form deletes your instance's volume too.
+
+Then pick a platform. All three shells sync to whichever Server URL you put in Settings, so start
+one of the two servers above first.
 
 ### Web
 
@@ -102,6 +149,10 @@ Two workflows. Both bind `:41207`, so don't run them at the same time.
 cd server && cargo run                # terminal A: API on :41207
 pnpm --filter @meologue/web dev       # terminal B: app on :5173, proxying /v1
 ```
+
+To hot-reload against the Sandbox instead, point the proxy at it —
+`MEOLOGUE_PROXY_TARGET=http://localhost:41307 pnpm --filter @meologue/web dev` — and leave your own
+server alone.
 
 **Production-style** — build the app, then let the server serve both it and the API on one port:
 
@@ -280,21 +331,7 @@ databases the suite's two servers need before handing over. Your own server can 
 run — but stop the Sandbox one, whose embedding and Digest workers load the machine enough to
 time out the slowest specs.
 
-### The Sandbox
-
-All of the above runs against a second instance that shares this working tree and nothing else
-(ADR 0029) — its own Postgres, its own port, its own bundle, its own app identifiers:
-
-```bash
-./scripts/sandbox-server.sh     # app + API on :41307, and applies migrations
-./scripts/seed-sandbox.sh       # ~120 Entries across the last two months
-```
-
-Server first: it owns the schema, so a Sandbox whose volume was just created has no tables for
-the seed to fill. Your own instance on `:41207` can keep running throughout — two ports means two
-browser origins, and both the Server URL setting and the SQLite store are keyed to the origin, so
-the two apps share no local state either. `server/README.md` has the rest, including the native
-shells, which install alongside yours rather than over them as `com.meologue.app.sandbox`.
+All of it runs against the Sandbox, never your instance — see "Two instances" above.
 
 The TypeScript wire types are generated from the Rust server, which owns the contract:
 
