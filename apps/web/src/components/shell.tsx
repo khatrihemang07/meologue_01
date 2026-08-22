@@ -23,10 +23,10 @@ interface PinnedThreadConfig {
  * Settings simply never passes this prop (see settings-page.tsx), so it
  * never grows a magnifier at all, without Shell needing to know why.
  *
- * The query itself is owned by the page (URL param on both `/` and
- * `/history` — see use-history-search.ts), not by Shell: Shell only knows
- * how to *show* the field and hand keystrokes back, the same separation
- * `pinnedThread` above already uses for the scroll pin.
+ * The query itself is owned by the page (a URL param — see
+ * use-history-search.ts), not by Shell: Shell only knows how to *show* the
+ * field and hand keystrokes back, the same separation `pinnedThread` above
+ * already uses for the scroll pin.
  */
 export interface ShellSearchConfig {
   query: string;
@@ -43,11 +43,12 @@ export interface ShellSearchConfig {
    * What this page's Search narrows — folded into the magnifier's and the
    * field's own `aria-label`/`placeholder` as `Search {label}`. Defaults to
    * `"History"`, the only collection Search narrowed before issue #64, so
-   * the Composer and History pages (composer-page.tsx, history-page.tsx)
-   * don't have to pass it. Sessions (sessions-page.tsx, issue #64) passes
-   * `"Sessions"` explicitly — CONTEXT.md is explicit that a Session's
-   * Conversation is not History, so labelling its search "Search History"
-   * would misname what it actually narrows.
+   * the Composer (composer-page.tsx, History's one remaining consumer since
+   * issue #75 deleted `/history`'s own page) doesn't have to pass it.
+   * Sessions (sessions-page.tsx, issue #64) passes `"Sessions"` explicitly —
+   * CONTEXT.md is explicit that a Session's Conversation is not History, so
+   * labelling its search "Search History" would misname what it actually
+   * narrows.
    */
   label?: string;
 }
@@ -55,17 +56,20 @@ export interface ShellSearchConfig {
 interface ShellProps {
   title: ReactNode;
   /**
-   * A leading app-bar slot, before the title — Settings' Back control today
-   * (settings-page.tsx), and the only page that passes it. A `ReactNode`
-   * slot, not a `backTo: string`: Shell must stay ignorant of routes, the
-   * same reason `action` and `nav` below are slots rather than
-   * configuration, and ADR 0008/0009 requires Settings to stay usable even
-   * when the Entry store never opens — Shell renders on every page,
-   * including Settings, so it can't lean on anything route- or store-shaped
-   * to decide what this renders. Rendered only in the non-searching branch
-   * of the header below: the searching branch already owns this visual
-   * position with its own "Close search" back arrow, and Settings never
-   * passes `search`, so the two never collide.
+   * A leading app-bar slot, before the title. No page passes this today —
+   * settings-page.tsx was the one caller, and issue #75 removed its Back
+   * button once Settings became a Nav destination in its own right (ADR
+   * 0018's "an always-reachable destination doesn't need Back" then applied
+   * to Settings the same way it always did to Composer/Reflect/Digest). The
+   * slot itself stays: a `ReactNode` slot, not a `backTo: string`, because
+   * Shell must stay ignorant of routes, the same reason `action` and `nav`
+   * below are slots rather than configuration, and ADR 0008/0009 requires
+   * Settings to stay usable even when the Entry store never opens — Shell
+   * renders on every page, including Settings, so it can't lean on anything
+   * route- or store-shaped to decide what this renders. Rendered only in
+   * the non-searching branch of the header below: the searching branch
+   * already owns this visual position with its own "Close search" back
+   * arrow.
    */
   back?: ReactNode;
   /** Trailing app-bar action — e.g. the History/Settings links on the Composer page. */
@@ -95,10 +99,11 @@ interface ShellProps {
    * Ticket 53's conditional pin: opts the scroll region into following
    * newly-appeared content only while the reader is already at the newest
    * (bottom) end, and shows a jump-to-newest control while away from it.
-   * Wired on both `/` and `/history` (composer-page.tsx and
-   * history-page.tsx) — Settings is the one page that leaves this
-   * undefined, which leaves the scroll region exactly as before. Shell has
-   * no notion of "Entry" itself here, deliberately: see use-pinned-scroll.ts.
+   * Wired by composer-page.tsx and reflection-page.tsx, whose threads grow
+   * over time (`/history`, before issue #75 deleted it, also wired this) —
+   * Settings and Digest are two pages that leave this undefined, which
+   * leaves the scroll region exactly as before. Shell has no notion of
+   * "Entry" itself here, deliberately: see use-pinned-scroll.ts.
    */
   pinnedThread?: PinnedThreadConfig;
   /**

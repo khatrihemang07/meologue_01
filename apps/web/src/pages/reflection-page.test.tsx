@@ -13,10 +13,10 @@ import { ReflectionPage } from "./reflection-page";
 // and passes it down to GroundingDisclosure for every rendered turn (the
 // page/component layering fix: pages own data access, components take
 // props), so this page needs the same EntryStoreLayout stand-in
-// composer-page.test.tsx and history-page.test.tsx already use — a bare
-// Outlet supplying a context of the test's choosing, in place of the real
-// store-opening machinery. Defaults to no local Entries; individual tests
-// override this to exercise GroundingDisclosure's lookup.
+// composer-page.test.tsx already uses — a bare Outlet supplying a context
+// of the test's choosing, in place of the real store-opening machinery.
+// Defaults to no local Entries; individual tests override this to exercise
+// GroundingDisclosure's lookup.
 const defaultEntryStoreContext: EntryStoreOutletContext = {
   entries: [],
   sendEntry: vi.fn(),
@@ -34,10 +34,10 @@ function LocationProbe() {
   return <p data-testid="location-path">{location.pathname}</p>;
 }
 
-// Wrapped in a QueryClientProvider (fresh per render, same as
-// history-page.test.tsx) because the Conversation now comes from a
-// TanStack Query query of GET /v1/sessions/:id, not an in-memory store
-// (ADR 0025). Both routes are registered — `/reflect` for a fresh Session,
+// Wrapped in a QueryClientProvider (fresh per render) because the
+// Conversation now comes from a TanStack Query query of GET
+// /v1/sessions/:id, not an in-memory store (ADR 0025). Both routes are
+// registered — `/reflect` for a fresh Session,
 // `/reflect/:sessionId` for an open one — mirroring App.tsx.
 function renderReflectionPage(
   initialPath = "/reflect",
@@ -135,12 +135,14 @@ describe("ReflectionPage", () => {
     vi.unstubAllGlobals();
   });
 
-  it("renders persistent nav links to Composer, History and Reflect, plus a Settings action", () => {
+  // Issue #75: History is gone and Settings is now a fourth Nav
+  // destination rather than a separate app-bar action.
+  it("renders persistent nav links to Composer, Reflect, Digest and Settings", () => {
     renderReflectionPage();
 
     expect(screen.getByRole("link", { name: "Composer" })).toHaveAttribute("href", "/");
-    expect(screen.getByRole("link", { name: "History" })).toHaveAttribute("href", "/history");
     expect(screen.getByRole("link", { name: "Reflect" })).toHaveAttribute("href", "/reflect");
+    expect(screen.getByRole("link", { name: "Digest" })).toHaveAttribute("href", "/digest");
     expect(screen.getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings");
   });
 
@@ -151,12 +153,15 @@ describe("ReflectionPage", () => {
 
     expect(screen.getByRole("link", { name: "Reflect" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("link", { name: "Composer" })).not.toHaveAttribute("aria-current");
-    expect(screen.getByRole("link", { name: "History" })).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("link", { name: "Digest" })).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("link", { name: "Settings" })).not.toHaveAttribute("aria-current");
   });
 
-  // Ticket 62: an app-bar action beside Settings, not a fourth NavLink —
-  // ADR 0018/0020's three-to-five destination count stays exactly Composer,
-  // History, Reflect.
+  // Ticket 62: Sessions is an app-bar action, not a fifth NavLink — it's
+  // one level below the four Nav destinations (Composer, Reflect, Digest,
+  // Settings), unchanged by issue #75 moving Settings from an app-bar
+  // action into one of those four itself (see nav.tsx's own comment on
+  // SessionsLink).
   it("shows a Sessions affordance in the app bar, linking to /reflect/list", () => {
     renderReflectionPage();
 

@@ -3,16 +3,17 @@ import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import { Composer } from "@/components/composer";
 import { History } from "@/components/history";
-import { Nav, SettingsLink } from "@/components/nav";
+import { Nav } from "@/components/nav";
 import { Shell } from "@/components/shell";
 import { useHistorySearch } from "@/hooks/use-history-search";
 import { useSyncEnabled } from "@/lib/settings";
 import { useEntryStore } from "@/pages/entry-store-layout";
 
-// `/` — the Composer plus the same, uncapped History rendered at `/history`
-// (ticket 27): identical component, identical props, on the theory that a
-// future ticket might cap what shows here without touching the shared
-// History component itself.
+// `/` — the Composer plus the same, uncapped History that had its own
+// route at `/history` before issue #75 deleted it (a second door onto the
+// identical component with the identical props, once judged redundant).
+// Uncapped on the theory that a future ticket might cap what shows here
+// without touching the shared History component itself.
 export function ComposerPage() {
   const { entries, sendEntry, search, editEntry, removeEntry, disabled, message } = useEntryStore();
   // Subscribed, not a one-off read: a change saved on Settings now updates
@@ -24,10 +25,10 @@ export function ComposerPage() {
   // Ticket 55: the magnifier now expands this page's app bar into a search
   // field too, narrowing the same thread History does — see
   // use-history-search.ts for the URL param, sessionStorage backup, and the
-  // oldest-to-newest reversal (identical rule to history-page.tsx: `shown`
-  // is `entries`, narrowed or not, in the store's own newest-first order;
-  // ADR 0014 guarantees a search result arrives in that same order, so
-  // reversing after narrowing never flips reading order either way).
+  // oldest-to-newest reversal: `shown` is `entries`, narrowed or not, in
+  // the store's own newest-first order; ADR 0014 guarantees a search
+  // result arrives in that same order, so reversing after narrowing never
+  // flips reading order either way.
   const { query, setQuery, shown, orderedEntries } = useHistorySearch(entries, search);
 
   // Bumped on every Send, independent of `entries` itself changing (that
@@ -57,14 +58,23 @@ export function ComposerPage() {
     setEditingEntry(null);
   }
 
-  // history-page.tsx's Edit action has no Composer of its own to edit in
-  // (see that page's own comment), so it navigates here instead, carrying
-  // only the Entry's id in router state — this page already has the live
-  // Entries (the same outlet context history-page.tsx read them from), so
-  // it looks the current body up itself rather than trusting a copy that
-  // could be stale by the time this effect runs. Read once, on mount, and
-  // immediately replaced out of history state so a later Back/Forward
-  // through this exact location doesn't silently re-enter edit mode.
+  // Reads an `editEntryId` a caller with no Composer of its own to edit in
+  // navigates here with, in router state, rather than trusting a copy of
+  // the Entry that could be stale by the time this effect runs — this page
+  // already has the live Entries, so it looks the current body up itself
+  // from `entries` instead. Read once, on mount, and immediately replaced
+  // out of history state so a later Back/Forward through this exact
+  // location doesn't silently re-enter edit mode.
+  //
+  // Vestigial since issue #75: `/history`'s own page was this mechanism's
+  // only caller (its Edit action navigated to `/` this way, since it had
+  // no Composer of its own), and issue #75 deleted that page outright
+  // rather than redirecting it — nothing in the app sets `editEntryId`
+  // today. Left in place rather than removed: it's inert, not broken (no
+  // caller means this effect's `editEntryId === undefined` branch always
+  // returns early), and it's exactly the kind of pre-existing behaviour a
+  // route-deletion ticket shouldn't also be second-guessing. Worth a
+  // dedicated follow-up if `/history` truly has no successor arriving.
   const location = useLocation();
   const navigate = useNavigate();
   // biome-ignore lint/correctness/useExhaustiveDependencies: deliberately mount-only — see the comment above. Re-running on `entries` or `navigate` identity churn would fight the "consumed once" guarantee this effect exists for.
@@ -83,9 +93,11 @@ export function ComposerPage() {
   return (
     <Shell
       title="meologue"
-      // History moved into the persistent Nav (ticket 54) — Settings stays
-      // here because it's an app-bar action, not a nav destination (#49).
-      action={<SettingsLink />}
+      // No `action` slot here any more (issue #75): History and Settings
+      // both moved into the persistent Nav — History by being deleted
+      // outright (this page already renders the same Entries through the
+      // same History component; see history.tsx's own comment), Settings
+      // by becoming Nav's fourth destination instead of an app-bar gear.
       nav={<Nav />}
       message={message}
       search={{ query, onQueryChange: setQuery, onDismiss: () => setQuery("") }}
@@ -108,8 +120,7 @@ export function ComposerPage() {
         />
       }
       // `shown`, not `entries`: while a search is narrowing this thread the
-      // pin should follow what's actually on screen, same reasoning as
-      // history-page.tsx's own pinnedThread.
+      // pin should follow what's actually on screen.
       pinnedThread={{ watch: shown, forceToNewest: sendSignal }}
     >
       {!syncEnabled && (

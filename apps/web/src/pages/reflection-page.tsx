@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import { GroundingDisclosure } from "@/components/grounding-disclosure";
-import { Nav, SessionsLink, SettingsLink } from "@/components/nav";
+import { Nav, SessionsLink } from "@/components/nav";
 import { QuestionComposer } from "@/components/question-composer";
 import { Shell } from "@/components/shell";
 import {
@@ -142,9 +142,9 @@ export function ReflectionPage() {
   // The Device's own Entry store, not a fetch — Entry ids are minted on the
   // creating Device and preserved through Sync, so this Device's local copy
   // (if it has one yet) is the same Entry the server meant. Read once here,
-  // page-level (history-page.tsx's own convention: pages own data access,
-  // components take props — see grounding-disclosure.tsx), rather than once
-  // per rendered turn.
+  // page-level (this codebase's convention: pages own data access,
+  // components take props — see composer-page.tsx and
+  // grounding-disclosure.tsx), rather than once per rendered turn.
   const { entries } = useEntryStore();
 
   const sessionQuery = useQuery({
@@ -248,12 +248,10 @@ export function ReflectionPage() {
   return (
     <Shell
       title="Reflect"
-      action={
-        <>
-          <SessionsLink />
-          <SettingsLink />
-        </>
-      }
+      // Only SessionsLink now (issue #75): Settings moved into the
+      // persistent Nav's fourth destination, so it's no longer a second
+      // app-bar action alongside Sessions here.
+      action={<SessionsLink />}
       nav={<Nav />}
       pinnedThread={syncEnabled ? { watch: turns.length, forceToNewest: askSignal } : undefined}
       composerSlot={

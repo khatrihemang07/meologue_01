@@ -24,7 +24,7 @@ function setScrollGeometry(
 // Ticket 40: the Sync status indicator is ambient — mounted once in Shell,
 // which every page renders through — rather than wired into each page, so
 // this exercises Shell directly instead of duplicating the same assertions
-// across composer-page, history-page, and settings-page tests.
+// across composer-page and settings-page tests.
 describe("Shell's Sync status indicator", () => {
   beforeEach(() => {
     localStorage.clear();
@@ -176,10 +176,10 @@ describe("Shell's pinned thread", () => {
 });
 
 // Ticket 55: Shell's own wiring of the magnifier-expands-in-place mode —
-// composer-page.test.tsx and history-page.test.tsx cover the page-level
-// consequences (narrowing the thread, the URL param), these cover the pure
-// interaction Shell owns by itself: showing/hiding the affordance and
-// switching the header's contents.
+// composer-page.test.tsx covers the page-level consequences (narrowing the
+// thread, the URL param), these cover the pure interaction Shell owns by
+// itself: showing/hiding the affordance and switching the header's
+// contents.
 describe("Shell's search mode", () => {
   beforeEach(() => {
     localStorage.clear();
@@ -296,9 +296,12 @@ describe("Shell's search mode", () => {
 // The Back affordance's own leading slot: Shell only knows how to render
 // whatever ReactNode it's handed here, immediately before the title — the
 // slot's existence, not its contents (a real history.back()/navigate(-1)
-// decision), is what belongs to Shell. settings-page.tsx is the one page
-// that fills it in today; every other page leaves it undefined, same as
-// `search` does for Settings.
+// decision), is what belongs to Shell. No page fills it in today (issue #75
+// removed settings-page.tsx's Back button, the slot's only caller — see
+// that ticket's reasoning: with Settings itself now a Nav destination, ADR
+// 0018's "an always-reachable destination doesn't need Back" applies to it
+// too); the slot itself stays in Shell as a general capability, exercised
+// here directly rather than through any current page.
 describe("Shell's back slot", () => {
   beforeEach(() => {
     localStorage.clear();

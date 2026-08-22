@@ -96,13 +96,16 @@ function noopRemove(_entry: Entry) {}
 
 /**
  * The composition root for ADR 0001 and ADR 0013: opens the Entry store and
- * runs `useHistory` exactly once, above the routes that read from it — `/`
- * and `/history` (ticket 27), which both render whatever this layout puts
- * on the outlet context rather than each owning their own store. Settings is
- * a sibling route outside this layout, not a child of it (ADR 0008): it must
- * stay usable even when the store below never reaches "ready", and the only
- * way to guarantee that structurally is to keep it off this component's
- * subtree entirely.
+ * runs `useHistory` exactly once, above the routes that read from it — `/`,
+ * `/reflect` and `/digest` (ticket 27, extended by ADR 0020 and issue #71;
+ * issue #75 deleted `/history`, once a fourth), which all render whatever
+ * this layout puts on the outlet context rather than each owning their own
+ * store. Settings is a sibling route outside this layout, not a child of it
+ * (ADR 0008): it must stay usable even when the store below never reaches
+ * "ready", and the only way to guarantee that structurally is to keep it
+ * off this component's subtree entirely — unchanged by issue #75 moving
+ * Settings into the persistent Nav, since that only changed how a reader
+ * reaches `/settings`, not where the route sits in this tree.
  *
  * Opening happens through a TanStack Query query rather than a hand-rolled
  * module-scope promise: its cache gives the same single-open guarantee —
@@ -158,7 +161,7 @@ function Ready({ store, deviceId }: { store: EntryStore; deviceId: string }) {
   );
 }
 
-/** Read by `/` and `/history` — anything rendered outside EntryStoreLayout's Outlet must not call this. */
+/** Read by `/` and `/reflect` (`/digest` reads nothing from the store — see this file's own comment above) — anything rendered outside EntryStoreLayout's Outlet must not call this. */
 export function useEntryStore(): EntryStoreOutletContext {
   return useOutletContext<EntryStoreOutletContext>();
 }

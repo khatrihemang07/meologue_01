@@ -72,7 +72,7 @@ function DigestStepControl({
   label: "Previous Digest" | "Next Digest";
   Icon: typeof ChevronLeft;
 }) {
-  // Shared with `Nav`'s/`SettingsLink`'s own icon-control idiom
+  // Shared with `Nav`'s/`SessionsLink`'s own icon-control idiom
   // (`components/nav.tsx`): `size-11` (44px) is this codebase's tap-target
   // minimum, applied here to a stepping control for the same reason it's
   // applied to a nav destination — a thumb has to hit it reliably.

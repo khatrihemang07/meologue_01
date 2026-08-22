@@ -23,10 +23,10 @@ interface HistoryProps {
    * Wires the Edit/Delete context menu (ADR 0028) onto every row this
    * renders. Both undefined and both present, never one or the other —
    * see EntryRow's own `actions` prop, which this simply assembles and
-   * forwards. Every caller of History (composer-page.tsx's footer,
-   * history-page.tsx) passes both; nothing here defaults them to a no-op,
-   * because a silently-broken menu item is worse than a type error at the
-   * call site that forgot one.
+   * forwards. composer-page.tsx's footer, History's one remaining caller
+   * since issue #75 deleted `/history`'s own page, passes both; nothing
+   * here defaults them to a no-op, because a silently-broken menu item is
+   * worse than a type error at the call site that forgot one.
    */
   onEdit?: (entry: Entry) => void;
   onDelete?: (entry: Entry) => void;

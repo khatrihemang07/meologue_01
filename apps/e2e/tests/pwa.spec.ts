@@ -30,14 +30,17 @@ test("History still renders after a reload with the network off", async ({ page,
   // A fresh navigation to a client-side route, not just a reload of "/" —
   // this is what exercises navigateFallback (vite.config.ts's workbox
   // config) rather than only the precached exact URL a plain reload of "/"
-  // would hit.
-  await page.goto("/history");
+  // would hit. `/settings` stands in for that route since issue #75 deleted
+  // `/history`, the route this test used to reach the same way; `/settings`
+  // still proves navigateFallback resolves an offline, non-precached path
+  // to the app shell, same as `/history` did.
+  await page.goto("/settings");
+  await expect(page.getByText("Settings")).toBeVisible();
 
-  // Scoped to the app bar (a <header>, implicit role "banner"): ticket 54's
-  // persistent nav also renders a visible "History" text label (the link to
-  // this same page), so an unscoped getByText("History") would now match
-  // both that link and this page's title.
-  await expect(page.getByRole("banner").getByText("History", { exact: true })).toBeVisible();
+  // Back to the Composer via client-side routing (no further network hit)
+  // to prove the Entry survives the round trip and the store keeps reading
+  // offline, the part of this test `/settings` alone can't show.
+  await page.getByRole("link", { name: "Composer" }).click();
   await expect(page.getByText(body)).toBeVisible();
 
   await context.setOffline(false);

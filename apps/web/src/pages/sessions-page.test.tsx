@@ -10,9 +10,9 @@ import { SessionsPage } from "./sessions-page";
 // SessionsPage lives inside EntryStoreLayout in App.tsx alongside the other
 // `/reflect*` routes, even though it reads nothing from the Entry store
 // itself — mirroring the real route tree, the same
-// hand-built-Outlet-context stand-in composer-page.test.tsx,
-// history-page.test.tsx and reflection-page.test.tsx already use in place
-// of the real store-opening machinery.
+// hand-built-Outlet-context stand-in composer-page.test.tsx and
+// reflection-page.test.tsx already use in place of the real
+// store-opening machinery.
 const defaultEntryStoreContext: EntryStoreOutletContext = {
   entries: [],
   sendEntry: vi.fn(),

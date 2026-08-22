@@ -70,9 +70,10 @@ export interface EntryRowProps {
    * which CONTEXT.md requires to stay a read-only view of what an Answer
    * was based on (offering to edit or delete an Entry from inside that
    * disclosure would let editing a past Answer relied on look possible, and
-   * it must not be). Only history.tsx — which both `/history` and the
-   * Composer page's own footer History render through — ever passes this,
-   * on rows it knows are real History, never Grounding.
+   * it must not be). Only history.tsx — which the Composer page's own
+   * footer History renders through (issue #75 removed `/history`'s own
+   * page, once the only other caller) — ever passes this, on rows it knows
+   * are real History, never Grounding.
    */
   actions?: EntryRowActions;
 }

@@ -145,9 +145,9 @@ describe("History", () => {
   // ADR 0028: History assembles EntryRow's `actions` from its own onEdit
   // and onDelete props — both or neither, never one alone (see the props'
   // own comment). Both-present is exercised end to end by
-  // composer-page.test.tsx/history-page.test.tsx; this pins down the
-  // gating itself, including the intentionally-unhandled "only one given"
-  // case, at this component's own level.
+  // composer-page.test.tsx; this pins down the gating itself, including
+  // the intentionally-unhandled "only one given" case, at this component's
+  // own level.
   describe("the Edit/Delete context menu", () => {
     it("wires no menu when neither onEdit nor onDelete is given", () => {
       render(<History entries={[entry({ body: "hello" })]} syncEnabled={false} />);

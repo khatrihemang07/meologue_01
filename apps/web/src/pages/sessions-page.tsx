@@ -311,9 +311,9 @@ export function SessionsPage() {
           type="button"
           onClick={goBack}
           aria-label="Back"
-          // Matches SettingsLink's/settings-page.tsx's back control exactly
-          // — same size-11 (44px) tap-target and hover treatment for the
-          // same kind of app-bar icon control.
+          // size-11 (44px) tap-target and hover treatment, same as every
+          // other app-bar icon control in this app (see nav.tsx's
+          // SessionsLink).
           className="flex size-11 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
         >
           <ArrowLeft aria-hidden="true" className="size-4" />

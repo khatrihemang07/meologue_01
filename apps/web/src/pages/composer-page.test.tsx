@@ -6,8 +6,8 @@ import { useSettingsStore } from "@/lib/settings";
 import type { EntryStoreOutletContext } from "@/pages/entry-store-layout";
 import { ComposerPage } from "./composer-page";
 
-// See history-page.test.tsx — same stand-in for surfacing the current
-// "?q=..." from MemoryRouter's own in-memory history.
+// Stand-in for surfacing the current "?q=..." from MemoryRouter's own
+// in-memory history.
 function SearchParamProbe() {
   const [searchParams] = useSearchParams();
   return <p data-testid="url-query">{searchParams.toString()}</p>;
@@ -18,8 +18,7 @@ function SearchParamProbe() {
 // exercise ComposerPage in isolation with a context of their choosing,
 // without touching the real store-opening machinery. Wrapped in a
 // QueryClientProvider because Search (ticket 39, extended to this page by
-// ticket 55) reads through a TanStack Query query of its own, same
-// requirement history-page.test.tsx already has.
+// ticket 55) reads through a TanStack Query query of its own.
 function renderComposerPage(context: EntryStoreOutletContext, initialPath = "/") {
   const queryClient = new QueryClient();
   return render(
@@ -56,25 +55,28 @@ describe("ComposerPage", () => {
     vi.restoreAllMocks();
   });
 
-  it("renders persistent nav links to Composer, History and Reflect, plus a Settings action", () => {
+  // Issue #75: History is gone and Settings is now the fourth Nav
+  // destination rather than a separate app-bar action — see nav.test.tsx
+  // for the dedicated "exactly four" assertion.
+  it("renders persistent nav links to Composer, Reflect, Digest and Settings", () => {
     renderComposerPage(readyContext);
 
     expect(screen.getByRole("link", { name: "Composer" })).toHaveAttribute("href", "/");
-    expect(screen.getByRole("link", { name: "History" })).toHaveAttribute("href", "/history");
     expect(screen.getByRole("link", { name: "Reflect" })).toHaveAttribute("href", "/reflect");
+    expect(screen.getByRole("link", { name: "Digest" })).toHaveAttribute("href", "/digest");
     expect(screen.getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings");
   });
 
   // Ticket 54's acceptance criteria: the current destination is visibly
   // indicated. Composer is "/", the page under test, so its nav link
-  // carries aria-current="page" and History's and Reflect's don't (ADR
-  // 0020 added Reflect as the third destination).
+  // carries aria-current="page" and the other three don't.
   it("marks Composer as the current destination in the persistent nav", () => {
     renderComposerPage(readyContext);
 
     expect(screen.getByRole("link", { name: "Composer" })).toHaveAttribute("aria-current", "page");
-    expect(screen.getByRole("link", { name: "History" })).not.toHaveAttribute("aria-current");
     expect(screen.getByRole("link", { name: "Reflect" })).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("link", { name: "Digest" })).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("link", { name: "Settings" })).not.toHaveAttribute("aria-current");
   });
 
   it("disables the Composer while the store isn't ready", () => {
@@ -194,11 +196,11 @@ describe("ComposerPage", () => {
   });
 
   // Ticket 55: Search moves into the app bar as a mode rather than a
-  // destination, and this page is one of the two it now works on (the
-  // other is history-page.test.tsx, which has the identical set of
-  // assertions plus the sessionStorage-backup cases already covered there
-  // — this file only needs to prove the wiring works here too, not
-  // re-prove every edge use-history-search.ts already owns).
+  // destination. Issue #75 deleted History's own page, so the Composer is
+  // now the only page in EntryStoreLayout Search narrows this way (Sessions'
+  // own search, sessions-page.tsx, is a separate collection with its own
+  // tests) — this file proves the wiring works here, not every edge
+  // use-history-search.ts already owns.
   describe("Search", () => {
     it("shows no search field until the magnifier is tapped", () => {
       renderComposerPage(readyContext);
@@ -221,8 +223,7 @@ describe("ComposerPage", () => {
     it("narrows the Composer's thread to what the store's search returns", async () => {
       // A match not already in the unfiltered fallback list, so finding it
       // proves the real (async) search result landed, not the fallback
-      // useEntrySearch shows while that search is still in flight — same
-      // technique history-page.test.tsx uses for the identical race.
+      // useEntrySearch shows while that search is still in flight.
       const searchOnlyMatch = {
         id: "3",
         deviceId: "device-a",
@@ -276,9 +277,7 @@ describe("ComposerPage", () => {
     // Ticket 53's hard constraint, extended to this page by ticket 55:
     // `search()` is contractually the same order as `list()` (ADR 0014,
     // newest-first) — narrowing to a search result must reverse to
-    // oldest-to-newest exactly like the unfiltered thread does, on the
-    // Composer-adjacent thread as much as on history-page.test.tsx's own
-    // identical assertion.
+    // oldest-to-newest exactly like the unfiltered thread does.
     it("reverses a search result's order the same way it reverses the unfiltered thread", async () => {
       const search = vi.fn(async () => [
         {
@@ -317,8 +316,8 @@ describe("ComposerPage", () => {
 
       // The matched "search" prefix is highlighted (highlight-match.ts) into
       // its own <mark>, so each Entry's body is split across sibling text
-      // nodes — waiting for "older" with exact:false, same as
-      // history-page.test.tsx's identical assertion, is what tolerates that.
+      // nodes — waiting for "older" with exact:false is what tolerates
+      // that.
       await screen.findByText("older", { exact: false });
       const bodies = Array.from(container.querySelectorAll("p.whitespace-pre-wrap")).map(
         (el) => el.textContent,
@@ -337,9 +336,9 @@ describe("ComposerPage", () => {
       expect(screen.getByTestId("url-query")).toHaveTextContent("q=wor");
     });
 
-    // Ticket 55's dismiss half of the acceptance criteria, exercised on
-    // this page too — history-page.test.tsx (via Shell) covers this same
-    // rule; this proves ComposerPage wires Shell's onDismiss the same way.
+    // Ticket 55's dismiss half of the acceptance criteria — shell.test.tsx
+    // covers the rule itself; this proves ComposerPage wires Shell's
+    // onDismiss the same way.
     it("dismissing search restores the app bar and clears the narrowing", () => {
       renderComposerPage({
         entries: [

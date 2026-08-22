@@ -5,22 +5,22 @@ import { useEntrySearch } from "@/hooks/use-entry-search";
 
 // The URL param Search's query lives in (ticket 39) — in the URL, not
 // component state, so it survives a reload and is what makes a search
-// linkable. Shared by both destinations Search now works on (ticket 55:
-// moving the field into the app bar is what finally makes the UI agree
-// with CONTEXT.md's "narrows History in place rather than producing a
-// separate collection" on the Composer, not only on `/history`).
+// linkable. Ticket 55 moved the field into the app bar, which is what
+// finally makes the UI agree with CONTEXT.md's "narrows History in place
+// rather than producing a separate collection" — on the Composer, this
+// hook's one caller since issue #75 deleted `/history`'s own page (the
+// other of ticket 55's original two).
 const QUERY_PARAM = "q";
 
 // Backs up the last active query for this tab (ticket 39, extended to the
 // Composer by ticket 55). The URL alone isn't enough to survive a round
-// trip through Settings, or a trip between Composer and History: the
-// persistent Nav (nav.tsx) and the Settings action are bare, stateless
+// trip through Settings: the persistent Nav (nav.tsx) is bare, stateless
 // `to="/..."` links with no query to carry, so the `q` param is gone by the
-// time the reader lands back on either page. This is session-scoped, not a
+// time the reader lands back on the Composer. This is session-scoped, not a
 // Device setting (settings.ts), because it's a transient "where you left
-// off," not something the user configured. One key for both destinations,
-// deliberately: they narrow the same thread, so a search started on one and
-// continued on the other should read as the same search, not two.
+// off," not something the user configured. Named for History rather than
+// for the Composer specifically because it backs up what the Composer's
+// own thread is narrowed to, which is History.
 const SEARCH_STORAGE_KEY = "meologue.history-search-query";
 
 export interface UseHistorySearchResult {
@@ -31,30 +31,29 @@ export interface UseHistorySearchResult {
   /**
    * Narrowed (or, with no query, unfiltered) Entries in the store's own
    * order — newest-first, ADR 0014. Exposed pre-reversal for callers that
-   * need a stable identity to watch (Shell's `pinnedThread.watch`), same as
-   * history-page.tsx's `shown` before this ticket.
+   * need a stable identity to watch (Shell's `pinnedThread.watch`).
    */
   shown: Entry[];
   /**
    * `shown` reversed to oldest-to-newest reading order (ticket 53) — what
-   * both pages actually render. Reversing after search rather than before
-   * is what keeps the ordering right for both the unfiltered and the
-   * narrowed cases, since both flow through `shown`; `search()` is
+   * the Composer actually renders. Reversing after search rather than
+   * before is what keeps the ordering right for both the unfiltered and
+   * the narrowed cases, since both flow through `shown`; `search()` is
    * contractually the same order as `list()` (ADR 0014), so a narrowed
-   * thread reads exactly like the full one, on the Composer as much as on
-   * History.
+   * thread reads exactly like the full one.
    */
   orderedEntries: Entry[];
 }
 
 /**
  * Search's page-level wiring (ticket 39, generalised by ticket 55 to back
- * both `/` and `/history` identically): the URL param, the sessionStorage
- * backup, the search query itself, and the display-order reversal. Both
- * pages call this the same way and hand the result to Shell's `search`
- * prop — this is what makes "search narrows the thread on both the
- * Composer and History" true by sharing one implementation rather than two
- * copies that could drift.
+ * `/` and, until issue #75 deleted it, `/history` identically): the URL
+ * param, the sessionStorage backup, the search query itself, and the
+ * display-order reversal. Kept as its own hook rather than folded into
+ * composer-page.tsx now that it has one caller — the shape this codebase
+ * already uses for page-level wiring that's plausibly reusable (see
+ * use-pinned-scroll.ts), and cheap to keep separate against a future page
+ * that narrows the same thread again.
  */
 export function useHistorySearch(
   entries: Entry[],
