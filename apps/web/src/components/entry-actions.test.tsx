@@ -57,7 +57,13 @@ describe("EntryHoverActions", () => {
     expect(onDelete).not.toHaveBeenCalled();
   });
 
-  it("calls onDelete with the whole Entry when Delete is pressed", () => {
+  // Issue #82: Delete no longer deletes on the spot — this component only
+  // REPORTS the choice through `onDelete`, exactly like Edit reports
+  // through `onEdit` above. Turning that report into a confirmation is
+  // history.tsx's job now (the one component above every row, so one
+  // dialog serves all of them), covered by history.test.tsx — this file
+  // only owns "did the button report the right Entry".
+  it("calls onDelete with the whole Entry, to report the choice, when Delete is pressed", () => {
     const onEdit = vi.fn();
     const onDelete = vi.fn();
     const target = entry({});
@@ -66,7 +72,6 @@ describe("EntryHoverActions", () => {
     fireEvent.click(screen.getByLabelText("Delete"));
 
     expect(onDelete).toHaveBeenCalledWith(target);
-    expect(onEdit).not.toHaveBeenCalled();
   });
 
   it("stops a button press from also bubbling to an ancestor's row-tap handler", () => {
@@ -131,7 +136,15 @@ describe("EntryActionsSheet", () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
-  it("calls onDelete with the open Entry and closes when Delete is pressed", () => {
+  // Issue #82: choosing Delete in the sheet closes the sheet (as before)
+  // and reports the choice through `onDelete`, same as EntryHoverActions'
+  // own Delete button — it does not delete. Turning that report into a
+  // confirmation, and the confirm dialog's own behaviour (confirm/Cancel/
+  // Escape/outside-click/focus), is covered by history.test.tsx now: that
+  // dialog is mounted by history.tsx, not by this sheet, since it's
+  // history.tsx that owns the "which Entry is pending" state one level
+  // above every row.
+  it("calls onDelete with the whole Entry and closes the sheet when Delete is pressed", () => {
     const onDelete = vi.fn();
     const onOpenChange = vi.fn();
     const target = entry({});

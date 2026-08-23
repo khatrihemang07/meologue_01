@@ -320,9 +320,10 @@ describe("SessionsPage", () => {
         ([, init]) => (init as RequestInit | undefined)?.method === "DELETE",
       ),
     ).toBe(false);
-    // The Session itself is untouched — still named on screen, in the
-    // confirm step's own warning.
-    expect(screen.getByText(/how has my knee been/i)).toBeInTheDocument();
+    // The Session itself is untouched — still named on screen both in its
+    // own row (still rendered behind the dialog, unlike the old in-row
+    // two-step this replaced) and in the confirm step's own warning.
+    expect(screen.getAllByText(/how has my knee been/i).length).toBeGreaterThanOrEqual(2);
   });
 
   it("cancelling the confirm step sends nothing and returns to the plain row", async () => {

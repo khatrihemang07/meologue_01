@@ -1,7 +1,8 @@
 import type { Entry } from "@meologue/core";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { EntryActionsSheet } from "@/components/entry-actions";
 import { EntryRow } from "@/components/entry-row";
+import { ConfirmDialog } from "@/components/ui/alert-dialog";
 import { deviceUtcOffsetMinutes, entryDayKey, formatDaySeparator } from "@/lib/entry-day";
 
 interface HistoryProps {
@@ -77,12 +78,29 @@ function groupByDay(entries: Entry[], offsetMinutes: number): DayGroup[] {
 // none. `dayKey` is parsed as UTC midnight, matching `formatDaySeparator`'s
 // own parse in entry-day.ts, so the two never disagree about which day a
 // key names.
+// Same fast-path trap as entry-day.ts/entry-time.ts's own formatters
+// (issue #81): `toLocaleDateString` with an options bag builds a fresh
+// `Intl.DateTimeFormat` per call. This one's options are entirely fixed —
+// `timeZone` is always the literal "UTC" here, never a per-call argument —
+// so, unlike `formatDaySeparator` next door in entry-day.ts, a single
+// lazily-built instance covers every call; no keyed cache needed.
+let daySeparatorTitleFormatter: Intl.DateTimeFormat | undefined;
+function getDaySeparatorTitleFormatter(): Intl.DateTimeFormat {
+  if (daySeparatorTitleFormatter === undefined) {
+    daySeparatorTitleFormatter = new Intl.DateTimeFormat(undefined, {
+      dateStyle: "full",
+      timeZone: "UTC",
+    });
+  }
+  return daySeparatorTitleFormatter;
+}
+
 function formatDaySeparatorTitle(dayKey: string): string | undefined {
   const parsed = Date.parse(`${dayKey}T00:00:00.000Z`);
   if (Number.isNaN(parsed)) {
     return undefined;
   }
-  return new Date(parsed).toLocaleDateString(undefined, { dateStyle: "full", timeZone: "UTC" });
+  return getDaySeparatorTitleFormatter().format(parsed);
 }
 
 export function History({ entries, syncEnabled, query = "", onEdit, onDelete }: HistoryProps) {
@@ -93,6 +111,14 @@ export function History({ entries, syncEnabled, query = "", onEdit, onDelete }: 
   // right-click (pointer device, optional) sets it via onOpenSheet below.
   const [sheetEntry, setSheetEntry] = useState<Entry | null>(null);
 
+  // The Entry awaiting a delete confirmation, or null when no dialog is
+  // open (issue #82). It lives here for the same reason `sheetEntry` does:
+  // this is the one component above every row, so one dialog serves all of
+  // them. Choosing Delete — from a hover button or from the sheet — sets
+  // this rather than deleting, and only the dialog's own confirm calls the
+  // real `onDelete` below.
+  const [confirmEntry, setConfirmEntry] = useState<Entry | null>(null);
+
   // Both-or-neither (see the props' own comment): assembled once here
   // rather than re-checked per row, and `undefined` when either is missing
   // so EntryRow's own default ("no actions prop" -> "no actions") is what
@@ -101,7 +127,36 @@ export function History({ entries, syncEnabled, query = "", onEdit, onDelete }: 
   // being a third prop composer-page.tsx has to pass — it's this
   // component's own state setter, not something an outside caller has any
   // business supplying.
-  const actions = onEdit && onDelete ? { onEdit, onDelete, onOpenSheet: setSheetEntry } : undefined;
+  //
+  // Memoised (issue #81) so this is the same object across renders whenever
+  // `onEdit`/`onDelete` themselves are: every row below receives `actions`
+  // as a prop, and `React.memo` on EntryRow (entry-row.tsx) only skips a
+  // row's re-render if every one of its props is `===` the last render's —
+  // rebuilding this object inline, as before, would hand every row a fresh
+  // `actions` reference each time and defeat that memoisation entirely,
+  // even though nothing it points to actually changed.
+  const actions = useMemo(
+    () =>
+      onEdit && onDelete
+        ? { onEdit, onDelete: setConfirmEntry, onOpenSheet: setSheetEntry }
+        : undefined,
+    [onEdit, onDelete],
+  );
+
+  // `groupByDay` is the one genuinely O(entries.length) piece of render-body
+  // work here (issue #81) — memoised so a render this component takes for
+  // an unrelated reason (e.g. `query` changing, which doesn't affect
+  // grouping) doesn't re-walk the whole Entry list. `deviceUtcOffsetMinutes`
+  // and `entryDayKey` just below stay un-memoised on purpose: both are O(1)
+  // (one `Date` read, one UTC-parts split), so recomputing them every
+  // render costs nothing, and it's what keeps `todayKey` correct across a
+  // midnight boundary within one session — folding them into the same memo
+  // as `groups` (keyed on `entries`) would freeze "Today" as whatever day
+  // it was when `entries` last changed, which could be wrong for however
+  // long the reader sits on this page with nothing new arriving.
+  const offsetMinutes = deviceUtcOffsetMinutes();
+  const todayKey = entryDayKey(new Date().toISOString(), offsetMinutes) ?? "";
+  const groups = useMemo(() => groupByDay(entries, offsetMinutes), [entries, offsetMinutes]);
 
   if (entries.length === 0) {
     return (
@@ -110,10 +165,6 @@ export function History({ entries, syncEnabled, query = "", onEdit, onDelete }: 
       </p>
     );
   }
-
-  const offsetMinutes = deviceUtcOffsetMinutes();
-  const todayKey = entryDayKey(new Date().toISOString(), offsetMinutes) ?? "";
-  const groups = groupByDay(entries, offsetMinutes);
 
   return (
     <div className="flex flex-col">
@@ -165,6 +216,31 @@ export function History({ entries, syncEnabled, query = "", onEdit, onDelete }: 
           }}
           onEdit={actions.onEdit}
           onDelete={actions.onDelete}
+        />
+      )}
+      {onDelete && (
+        // The one confirm dialog for however many rows are above (issue
+        // #82). Guarded on the real `onDelete` rather than on `actions`,
+        // because `actions` already hands rows a *requester* — this is the
+        // only place the actual delete is reachable from.
+        <ConfirmDialog
+          open={confirmEntry !== null}
+          onOpenChange={(open) => {
+            // Escape, an outside click and Cancel all arrive here with
+            // `open === false`, and none of them may delete anything.
+            if (!open) {
+              setConfirmEntry(null);
+            }
+          }}
+          title="Delete this Entry?"
+          description="This can't be undone."
+          confirmLabel="Delete"
+          onConfirm={() => {
+            if (confirmEntry) {
+              onDelete(confirmEntry);
+            }
+            setConfirmEntry(null);
+          }}
         />
       )}
     </div>

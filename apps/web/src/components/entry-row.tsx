@@ -7,7 +7,7 @@
  * Reflection both import from here rather than each keeping their own copy.
  */
 import type { Entry } from "@meologue/core";
-import type * as React from "react";
+import { type MouseEvent, memo, useState } from "react";
 import { EntryHoverActions, hoverCapable } from "@/components/entry-actions";
 import { formatClockTime } from "@/lib/entry-day";
 import { formatAbsoluteTime } from "@/lib/entry-time";
@@ -117,7 +117,7 @@ function handleRowTap(actions: EntryRowActions | undefined, entry: Entry) {
  * event, not just for the removed long-press timer.
  */
 function handleRowContextMenu(
-  event: React.MouseEvent,
+  event: MouseEvent,
   actions: EntryRowActions | undefined,
   entry: Entry,
 ) {
@@ -139,8 +139,48 @@ function handleRowContextMenu(
 // only added when `actions` is present: EntryHoverActions' `group-hover`
 // styling needs an ancestor to watch, and a bare row (grounding-
 // disclosure.tsx's caller) has nothing depending on it.
-export function EntryRow({ entry, query = "", syncEnabled, actions }: EntryRowProps) {
+//
+// Wrapped in `React.memo` (issue #81): History can render hundreds of
+// these, and most re-renders of History itself (a Search keystroke
+// narrowing the list, an unrelated Entry's Edit/Delete) leave any given
+// row's own props untouched. That only pays off because every prop below
+// is now referentially stable across such a render — `entry` and `query`
+// come straight through from History's own memoised `groups`/`query`,
+// `syncEnabled` is a primitive, and `actions` is history.tsx's own
+// `useMemo` (see its comment) rather than an object literal rebuilt per
+// render; memoising this component alone, without that, would compare a
+// fresh `actions` object against the last one on every single render and
+// never actually skip anything.
+export const EntryRow = memo(function EntryRow({
+  entry,
+  query = "",
+  syncEnabled,
+  actions,
+}: EntryRowProps) {
   const time = formatClockTime(entry.createdAt);
+
+  // The hover tooltip's absolute timestamp (ticket 52) is computed lazily,
+  // on first hover, rather than for every row on every render (issue #81)
+  // — almost no row's tooltip is ever actually shown, so doing this eagerly
+  // meant paying for hundreds of `formatAbsoluteTime` calls (a `Date.parse`
+  // plus an `Intl.DateTimeFormat#format`, post-fix-1 above) per History
+  // render for a value nearly all of them throw away unread. `undefined`
+  // means "not computed yet"; once hovered it holds `formatAbsoluteTime`'s
+  // real result (including `null`, for the — here unreachable, since `time`
+  // above already gates on the same parse succeeding — case of an
+  // unparseable `createdAt`), so a second hover doesn't recompute it.
+  //
+  // This only costs the mouse-hover path anything to compute, which is
+  // exactly who reads a `title` tooltip: no keyboard-only or
+  // screen-reader-only path relied on this attribute before this change
+  // either, since a bare `title` was never announced or focusable to begin
+  // with — nothing accessible is lost by deferring the *value* behind it.
+  const [absoluteTime, setAbsoluteTime] = useState<string | null | undefined>(undefined);
+  const revealAbsoluteTime = () => {
+    if (absoluteTime === undefined) {
+      setAbsoluteTime(formatAbsoluteTime(entry.createdAt));
+    }
+  };
 
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: onClick here is a touch-only progressive enhancement (handleRowTap no-ops on a hover-capable device — see its own comment) layered on a row that must stay plain, selectable text, not a control; giving it an interactive role would contradict that and would duplicate the two real <button>s below.
@@ -156,7 +196,8 @@ export function EntryRow({ entry, query = "", syncEnabled, actions }: EntryRowPr
         {time !== null && (
           <time
             dateTime={entry.createdAt}
-            title={formatAbsoluteTime(entry.createdAt) ?? undefined}
+            title={absoluteTime ?? undefined}
+            onMouseEnter={revealAbsoluteTime}
             className="shrink-0 text-xs text-muted-foreground tabular-nums"
           >
             {time}
@@ -178,4 +219,4 @@ export function EntryRow({ entry, query = "", syncEnabled, actions }: EntryRowPr
       )}
     </div>
   );
-}
+});

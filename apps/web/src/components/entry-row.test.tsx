@@ -1,6 +1,8 @@
 import type { Entry } from "@meologue/core";
 import { fireEvent, render, screen } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as entryDayModule from "@/lib/entry-day";
 import { EntryRow } from "./entry-row";
 
 function entry(overrides: Partial<Entry>): Entry {
@@ -62,12 +64,21 @@ describe("EntryRow", () => {
     expect(time).not.toHaveTextContent(/2026/);
   });
 
-  it("puts a more precise absolute timestamp on hover", () => {
+  // Issue #81, fix 3: the absolute timestamp behind this attribute is
+  // computed lazily, on hover, rather than for every row on every render —
+  // almost no row's tooltip is ever actually shown. No `title` at all
+  // before the hover is the observable half of "lazy"; the value appearing
+  // after it is the observable half of "still discoverable."
+  it("puts a more precise absolute timestamp on hover, computed lazily rather than up front", () => {
     render(
       <EntryRow entry={entry({ createdAt: "2026-08-15T17:27:00.000Z" })} syncEnabled={false} />,
     );
 
     const time = screen.getByText(/^\d{1,2}:\d{2}\s?(AM|PM)?$/i);
+    expect(time).not.toHaveAttribute("title");
+
+    fireEvent.mouseEnter(time);
+
     expect(time).toHaveAttribute("title", expect.stringMatching(/2026.*:\d{2}:\d{2}\s?(AM|PM)$/i));
   });
 
@@ -175,7 +186,16 @@ describe("EntryRow", () => {
       expect(onDelete).not.toHaveBeenCalled();
     });
 
-    it("calls onDelete with the whole Entry when the Delete button is pressed", () => {
+    // Issue #82: Delete no longer deletes on the spot — it merely reports
+    // the choice through `onDelete`, exactly like Edit reports through
+    // `onEdit` above. Turning that report into a confirmation is the
+    // ConfirmDialog history.tsx renders, one level above every row, not
+    // anything this component or entry-actions.tsx knows about. EntryRow
+    // renders EntryHoverActions but not that dialog, so this only has
+    // EntryHoverActions' own contract to prove here; the dialog itself,
+    // and onDelete actually firing once it's accepted, are covered by
+    // history.test.tsx.
+    it("calls onDelete with the whole Entry, to report the choice, when the Delete button is pressed", () => {
       const onEdit = vi.fn();
       const onDelete = vi.fn();
       const target = entry({ body: "hello" });
@@ -282,6 +302,80 @@ describe("EntryRow", () => {
 
       expect(onOpenSheet).not.toHaveBeenCalled();
       expect(notPrevented).toBe(true);
+    });
+  });
+
+  // Issue #81, fix 2: History can render hundreds of these, and most of
+  // its own re-renders (a sibling row's state changing, a keystroke that
+  // doesn't touch this row's Entry) leave a given row's own props
+  // untouched — `React.memo` is what lets such a re-render skip this
+  // component's own render function (and its call to `formatClockTime`)
+  // entirely, rather than re-running it and reconciling unchanged output.
+  //
+  // `formatClockTime` (imported from entry-day.ts) is what this proves
+  // against, rather than a `<Profiler>` wrapping the row: `Profiler`'s
+  // `onRender` fires once per *commit that reaches its boundary*, which
+  // still happens even when a `React.memo`'d child bails out and never
+  // calls its own render function — it isn't actually a signal of whether
+  // the row's body ran. A function the row's own body unconditionally
+  // calls is.
+  describe("memoisation", () => {
+    it("does not re-render when a sibling's state changes and this row's own props stay the same", () => {
+      const clockSpy = vi.spyOn(entryDayModule, "formatClockTime");
+      const target = entry({ body: "hello", createdAt: "2026-08-15T17:27:00.000Z" });
+
+      // Every prop EntryRow gets here is referentially stable across the
+      // Harness's own re-renders — `target` is created once, outside the
+      // component body — mirroring what history.tsx now guarantees for
+      // real rows (memoised `actions`, stable `entry` references from
+      // unchanged `groups`).
+      function Harness() {
+        const [unrelated, setUnrelated] = useState(0);
+        return (
+          <div>
+            <button type="button" onClick={() => setUnrelated((count) => count + 1)}>
+              Bump unrelated state
+            </button>
+            <p data-testid="unrelated">{unrelated}</p>
+            <EntryRow entry={target} syncEnabled={false} />
+          </div>
+        );
+      }
+
+      render(<Harness />);
+      expect(clockSpy).toHaveBeenCalledTimes(1);
+
+      fireEvent.click(screen.getByRole("button", { name: "Bump unrelated state" }));
+
+      expect(screen.getByTestId("unrelated")).toHaveTextContent("1");
+      expect(clockSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("does re-render when its own entry prop actually changes", () => {
+      const clockSpy = vi.spyOn(entryDayModule, "formatClockTime");
+
+      function Harness() {
+        const [body, setBody] = useState("hello");
+        return (
+          <div>
+            <button type="button" onClick={() => setBody("goodbye")}>
+              Change body
+            </button>
+            <EntryRow
+              entry={entry({ body, createdAt: "2026-08-15T17:27:00.000Z" })}
+              syncEnabled={false}
+            />
+          </div>
+        );
+      }
+
+      render(<Harness />);
+      expect(clockSpy).toHaveBeenCalledTimes(1);
+
+      fireEvent.click(screen.getByRole("button", { name: "Change body" }));
+
+      expect(screen.getByText("goodbye")).toBeInTheDocument();
+      expect(clockSpy).toHaveBeenCalledTimes(2);
     });
   });
 });

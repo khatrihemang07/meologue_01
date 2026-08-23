@@ -85,38 +85,51 @@ export async function setTabHidden(page: Page, hidden: boolean): Promise<void> {
 }
 
 /**
- * Opens the Radix ContextMenu (ADR 0028) wired onto a History row —
- * entry-row.tsx's `actions` prop — by right-clicking the row identified by
- * its exact body text, the pointer-device trigger for the same menu a
- * long-press opens on touch. `body` must be exact and unique in the DOM
- * (uniqueEntryBody's randomUUID suffix guarantees that), since this
- * targets the row via its own rendered text.
+ * Hovers the History row identified by its exact body text, revealing the
+ * row's Edit/Delete buttons (issue #78). They are plain `<button>`s behind
+ * `@media (hover: hover)` and `opacity-0` until the row is hovered — a
+ * headless Chromium reports as hover-capable, so they are in the DOM; the
+ * hover is what makes them a target a real user could hit, and asserting
+ * against them without it would pass for the wrong reason.
+ *
+ * `body` must be exact and unique in the DOM (uniqueEntryBody's randomUUID
+ * suffix guarantees that), since this targets the row via its rendered text.
  */
-export async function openEntryMenu(page: Page, body: string): Promise<void> {
-  await page.getByText(body, { exact: true }).click({ button: "right" });
+export async function hoverEntryRow(page: Page, body: string): Promise<void> {
+  await page.getByText(body, { exact: true }).hover();
 }
 
 /**
- * Edit -> Composer flow (ADR 0028): opens the row's menu, chooses Edit
- * (which seeds the docked Composer with the Entry's current body — see
+ * Edit -> Composer flow: reveals the row's actions, chooses Edit (which
+ * seeds the docked Composer with the Entry's current body — see
  * composer.tsx's `editingEntry`), replaces the field's contents with
- * `newBody`, and commits via the same Send control `sendEntry` above uses
- * (Composer routes Send to `onCommitEdit` while `editingEntry` is set,
- * rather than `onSend` — see composer.tsx's own `send()`).
+ * `newBody`, and commits via the Send control, since Composer routes Send
+ * to `onCommitEdit` while `editingEntry` is set rather than to `onSend`.
+ *
+ * Send is a click, not the keyboard: issue #76 made plain Enter insert a
+ * newline, and the chord that does send differs by build target, so a
+ * click is the one gesture that means "send" on every platform this suite
+ * might run against.
  */
 export async function editEntryViaMenu(
   page: Page,
   currentBody: string,
   newBody: string,
 ): Promise<void> {
-  await openEntryMenu(page, currentBody);
-  await page.getByRole("menuitem", { name: "Edit" }).click();
+  await hoverEntryRow(page, currentBody);
+  await page.getByRole("button", { name: "Edit" }).click();
   await page.getByPlaceholder("What's on your mind?").fill(newBody);
   await page.getByRole("button", { name: "Send" }).click();
 }
 
-/** Delete via the row's menu (ADR 0028) — fires immediately, no confirm step; use-history.ts offers Undo via a toast instead. */
+/**
+ * Delete via the row's actions, then through the confirmation issue #82
+ * put in front of it. Delete no longer fires on the spot and there is no
+ * Undo toast any more — confirmation replaced it rather than joining it,
+ * so a test that stops at the first click deletes nothing at all.
+ */
 export async function deleteEntryViaMenu(page: Page, body: string): Promise<void> {
-  await openEntryMenu(page, body);
-  await page.getByRole("menuitem", { name: "Delete" }).click();
+  await hoverEntryRow(page, body);
+  await page.getByRole("button", { name: "Delete" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Delete", exact: true }).click();
 }

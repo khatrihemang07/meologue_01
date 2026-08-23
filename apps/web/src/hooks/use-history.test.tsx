@@ -11,16 +11,6 @@ const { requestSyncMock } = vi.hoisted(() => ({
 
 vi.mock("@/lib/sync-runner", () => ({ requestSync: requestSyncMock }));
 
-// Undo (ADR 0028) is wired through sonner's `toast`, which needs no mounted
-// `<Toaster />` to be called — but a real `<Toaster />` would only ever
-// render the toast's contents into a portal, never expose its `action`
-// callback in a form `fireEvent` can drive. Mocking the module and
-// capturing the call's arguments directly is what lets a test invoke
-// Undo's `onClick` itself, the same way `sync-runner` is mocked above.
-const { toastMock } = vi.hoisted(() => ({ toastMock: vi.fn() }));
-
-vi.mock("sonner", () => ({ toast: toastMock }));
-
 // use-history.ts reaches for the `queryClient` singleton exported by
 // lib/query-client.ts directly (not React context), so each test needs a
 // fresh module registry, or a query cached by one test would leak into the
@@ -64,7 +54,6 @@ describe("useHistory", () => {
   beforeEach(() => {
     localStorage.clear();
     requestSyncMock.mockClear();
-    toastMock.mockClear();
   });
 
   async function renderUseHistory(store: EntryStore, deviceId = "device-a") {
@@ -178,58 +167,25 @@ describe("useHistory", () => {
       await waitFor(() => expect(requestSyncMock).toHaveBeenCalledWith(store, "device-a"));
     });
 
-    it("offers Undo on a toast", async () => {
+    // Issue #82 removed the Undo toast and its restore mutation: with a
+    // confirm dialog now in front of Delete (entry-actions.tsx's
+    // ConfirmDialog), removeEntry itself is trusted to delete
+    // unconditionally the moment it's called, and offers no way back —
+    // see use-history.ts's own comment on removeEntry for the full
+    // reasoning, and its comment just above this mutation for why a
+    // restore path can never safely reuse the deleted id even if one were
+    // added back.
+    it("does not offer an Undo — deletes unconditionally, with no restore path", async () => {
       const store = createFakeStore();
       const { result } = await renderUseHistory(store);
       await waitFor(() => expect(result.current.entries).toEqual([]));
 
       act(() => result.current.removeEntry(entry({ id: "7" })));
 
-      expect(toastMock).toHaveBeenCalledWith(
-        "Entry deleted",
-        expect.objectContaining({ action: expect.objectContaining({ label: "Undo" }) }),
-      );
-    });
-
-    it("Undo restores the Entry under a NEW id, keeping its body and createdAt", async () => {
-      // The id must change. The Server's own guard — `on conflict (id) do
-      // update ... where entries.deleted_at is null` — makes a delete
-      // terminal for that id forever, so a restore reusing it would be
-      // rejected on every push while looking fine locally: the Entry would
-      // never be assigned a seq, so it would sit in pending() and re-push
-      // every tick forever, diverging silently from every other Device.
-      // Minting a new id turns Undo into `nothing -> A'`, which the Server
-      // accepts. See use-history.ts's own comment on restoreEntryMutation.
-      const store = createFakeStore();
-      const { result } = await renderUseHistory(store);
-      await waitFor(() => expect(result.current.entries).toEqual([]));
-
-      const removed = entry({ id: "7", body: "don't lose me", seq: 5, syncedAt: "2026-01-01" });
-      act(() => result.current.removeEntry(removed));
       await waitFor(() => expect(store.remove).toHaveBeenCalledWith("7"));
-
-      const [, options] = toastMock.mock.calls[0] as [string, { action: { onClick: () => void } }];
-      act(() => options.action.onClick());
-
-      await waitFor(() =>
-        expect(store.upsert).toHaveBeenCalledWith([
-          expect.objectContaining({
-            body: "don't lose me",
-            createdAt: removed.createdAt,
-            deletedAt: null,
-            seq: null,
-            syncedAt: null,
-          }),
-        ]),
-      );
-      const restoredId = vi.mocked(store.upsert).mock.calls.at(-1)?.[0]?.[0]?.id;
-      expect(restoredId).toBeDefined();
-      expect(restoredId).not.toBe("7");
-      // store.edit() carries the same `WHERE deleted_at IS NULL` guard and
-      // would no-op against the tombstone remove() just wrote, so it must
-      // not be the path Undo takes either.
-      expect(store.edit).not.toHaveBeenCalled();
-      await waitFor(() => expect(requestSyncMock).toHaveBeenCalledWith(store, "device-a"));
+      // No restore call of any kind — store.upsert() is only ever used by
+      // sendEntry, never by removeEntry.
+      expect(store.upsert).not.toHaveBeenCalled();
     });
   });
 });

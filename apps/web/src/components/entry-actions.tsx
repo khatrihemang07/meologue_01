@@ -16,6 +16,11 @@
  *   regardless of how many rows exist, driven by "which Entry is open"
  *   state that lives in `history.tsx`, not here and not per-row.
  *
+ * Neither of them deletes. Both report the choice through `onDelete` and
+ * let `history.tsx` decide what it means — which is where the confirm
+ * dialog issue #82 put in front of Delete actually lives, so one dialog
+ * serves every row instead of one per row.
+ *
  * `hoverCapable()` is what lets both `entry-row.tsx` (deciding whether a
  * tap should open the sheet) and this file split on "can this device
  * hover a pointer", rather than on which build (web/android/macos) is
@@ -117,6 +122,10 @@ export function EntryHoverActions({ entry, onEdit, onDelete }: EntryHoverActions
         variant="ghost"
         size="icon-sm"
         aria-label="Delete"
+        // Reports that Delete was chosen; it does not delete. What
+        // `history.tsx` passes down as `onDelete` is a requester that opens
+        // the one confirm dialog (issue #82) — the real delete is reachable
+        // only from that dialog's own confirm.
         onClick={(event) => {
           event.stopPropagation();
           onDelete(entry);
@@ -148,6 +157,13 @@ export interface EntryActionsSheetProps {
  * warns (and screen readers need) an accessible name, but the visual
  * design here is Edit/Delete as the only two rows, with no heading of
  * its own.
+ *
+ * Choosing Delete here reports the choice through `onDelete` and closes
+ * the sheet; it does not delete. `history.tsx` is what turns that choice
+ * into a confirmation (issue #82), for the same reason it owns the sheet's
+ * own open state — it is the one component above every row, so one dialog
+ * serves all of them, and neither this file nor a row has to know a
+ * confirmation step exists.
  */
 export function EntryActionsSheet({
   entry,

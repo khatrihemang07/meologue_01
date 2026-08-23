@@ -1,5 +1,5 @@
 import type { Entry } from "@meologue/core";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as entryDayModule from "@/lib/entry-day";
 import { History } from "./history";
@@ -33,6 +33,22 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+/**
+ * See entry-day.test.ts's own copy of this helper for why a bare
+ * `vi.spyOn(Intl, "DateTimeFormat")` isn't enough: it swaps in a mock whose
+ * `new` produces an object missing the native class's internal formatting
+ * slots, so `.format()` on it throws. Forwarding to the real constructor
+ * via `Reflect.construct` keeps formatters genuinely functional while
+ * still counting how many actually got built.
+ */
+function spyOnDateTimeFormatConstructor() {
+  const OriginalDateTimeFormat = Intl.DateTimeFormat;
+  // biome-ignore lint/complexity/useArrowFunction: must stay a real `function` — vitest's mock only treats a `function`/`class`-shaped implementation as constructable, and `new Intl.DateTimeFormat(...)` in the code under test needs that.
+  return vi.spyOn(Intl, "DateTimeFormat").mockImplementation(function (...args: unknown[]) {
+    return Reflect.construct(OriginalDateTimeFormat, args);
+  } as unknown as typeof Intl.DateTimeFormat);
+}
+
 describe("History", () => {
   it("shows an Entry's capture time as a clock time, not a date", () => {
     render(
@@ -44,12 +60,20 @@ describe("History", () => {
     expect(time).not.toHaveTextContent(/2026/);
   });
 
+  // Issue #81: the absolute timestamp behind this attribute is now computed
+  // lazily, on hover, rather than for every row on every render (see
+  // entry-row.tsx's own comment) — so this asserts it only after the same
+  // hover a real reader would need before ever seeing the tooltip.
   it("puts a more precise absolute timestamp on hover", () => {
     render(
       <History entries={[entry({ createdAt: "2026-08-15T17:27:00.000Z" })]} syncEnabled={false} />,
     );
 
     const time = screen.getByText(/^\d{1,2}:\d{2}\s?(AM|PM)?$/i);
+    expect(time).not.toHaveAttribute("title");
+
+    fireEvent.mouseEnter(time);
+
     expect(time).toHaveAttribute("title", expect.stringMatching(/2026.*:\d{2}:\d{2}\s?(AM|PM)$/i));
   });
 
@@ -222,7 +246,13 @@ describe("History", () => {
       expect(onEdit).toHaveBeenCalledWith(target);
     });
 
-    it("calls onDelete with the whole Entry through the sheet", () => {
+    // Issue #82: choosing Delete in the sheet no longer fires onDelete on
+    // the spot — it closes the sheet and opens the confirm dialog History
+    // owns (see history.tsx's own `confirmEntry` comment); onDelete only
+    // fires once that's accepted. The dialog's own behaviour (confirm,
+    // Cancel, Escape, outside click, focus) is covered by the "delete
+    // confirmation" describe block below.
+    it("calls onDelete with the whole Entry once the delete confirmation is accepted", async () => {
       stubHoverCapable(false);
       const onDelete = vi.fn();
       const target = entry({ body: "hello" });
@@ -232,6 +262,10 @@ describe("History", () => {
 
       fireEvent.click(screen.getByText("hello"));
       fireEvent.click(screen.getByText("Delete"));
+
+      expect(onDelete).not.toHaveBeenCalled();
+
+      fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
 
       expect(onDelete).toHaveBeenCalledWith(target);
     });
@@ -260,5 +294,225 @@ describe("History", () => {
       fireEvent.click(screen.getByText("third"));
       expect(screen.getAllByRole("dialog")).toHaveLength(1);
     });
+  });
+
+  // Issue #82: the confirm dialog moved here from entry-actions.tsx — it
+  // used to be a module-scoped Zustand store (`useDeleteConfirm`) that
+  // `EntryActionsSheet` mounted itself, a workaround for a file-ownership
+  // restriction rather than a design choice. `history.tsx` already owned
+  // exactly the right shared state (`sheetEntry`, just above) for this:
+  // one component above every row, so `confirmEntry` lives beside it and
+  // the single `ConfirmDialog` below serves every row the same way the
+  // single `EntryActionsSheet` above does. These tests used to drive the
+  // dialog directly through that store; now they drive it the same way a
+  // real reader would, through a rendered `<History>`.
+  describe("delete confirmation (issue #82)", () => {
+    // Opens the dialog through a row's hover Delete button — simpler than
+    // going through the touch sheet (which itself closes the instant
+    // Delete is pressed, per the test above) and exercises the same
+    // `onDelete` -> `setConfirmEntry` wiring either entry point shares.
+    function openConfirmDialog(onDelete = vi.fn()) {
+      const target = entry({ id: "7", body: "hello" });
+      render(
+        <History entries={[target]} syncEnabled={false} onEdit={vi.fn()} onDelete={onDelete} />,
+      );
+      fireEvent.click(screen.getByLabelText("Delete"));
+      return { onDelete, target };
+    }
+
+    it("shows a confirm dialog, not an immediate delete, once Delete is chosen", async () => {
+      const { onDelete } = openConfirmDialog();
+
+      const dialog = await screen.findByRole("alertdialog");
+
+      expect(dialog).toBeInTheDocument();
+      expect(onDelete).not.toHaveBeenCalled();
+    });
+
+    it("confirming calls onDelete with the Entry and closes the dialog", async () => {
+      const { onDelete, target } = openConfirmDialog();
+      await screen.findByRole("alertdialog");
+
+      fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+      expect(onDelete).toHaveBeenCalledWith(target);
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    });
+
+    it("Cancel closes the dialog without calling onDelete, leaving the Entry alone", async () => {
+      const { onDelete } = openConfirmDialog();
+      await screen.findByRole("alertdialog");
+
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+      expect(onDelete).not.toHaveBeenCalled();
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    });
+
+    it("Escape closes the dialog without calling onDelete, leaving the Entry alone", async () => {
+      const { onDelete } = openConfirmDialog();
+      await screen.findByRole("alertdialog");
+
+      fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
+
+      expect(onDelete).not.toHaveBeenCalled();
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    });
+
+    it("dismissing by clicking outside closes the dialog without calling onDelete", async () => {
+      const { onDelete } = openConfirmDialog();
+      await screen.findByRole("alertdialog");
+
+      // Radix's overlay sits behind the dialog content and covers the rest
+      // of the page — a pointerdown (then click) on it is what an "outside
+      // click" actually is, not a click on `document.body` itself (which
+      // has no overlay listener of its own to catch it). Radix's
+      // dismissable layer captures the pointerdown to know an outside
+      // interaction started, but only actually dismisses on the `click`
+      // that follows it — a real pointer/mouse interaction always fires
+      // both; a bare `pointerDown` alone (jsdom doesn't synthesize the
+      // follow-up click the way a real browser would) is not enough to
+      // trigger it here.
+      const overlay = document.querySelector('[data-slot="alert-dialog-overlay"]');
+      expect(overlay).not.toBeNull();
+      if (overlay) {
+        fireEvent.pointerDown(overlay);
+        fireEvent.click(overlay);
+      }
+
+      expect(onDelete).not.toHaveBeenCalled();
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    });
+
+    it("is keyboard-navigable and focus-trapped: opening it moves focus inside, and both actions are reachable", async () => {
+      openConfirmDialog();
+
+      const dialog = await screen.findByRole("alertdialog");
+
+      // Radix's FocusScope moves focus into the Content the moment it
+      // mounts (part of what makes this "keyboard-navigable" rather than
+      // requiring a mouse to reach) — this is what a focus trap depends on
+      // to keep working at all: nothing outside `dialog` to tab back out
+      // to.
+      await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
+
+      const cancelButton = screen.getByRole("button", { name: "Cancel" });
+      const confirmButton = screen.getByRole("button", { name: "Delete" });
+      expect(dialog).toContainElement(cancelButton);
+      expect(dialog).toContainElement(confirmButton);
+    });
+
+    it("marks the confirm action as the destructive one, distinct from Cancel", async () => {
+      openConfirmDialog();
+      await screen.findByRole("alertdialog");
+
+      const confirmButton = screen.getByRole("button", { name: "Delete" });
+      const cancelButton = screen.getByRole("button", { name: "Cancel" });
+      expect(confirmButton).toHaveAttribute("data-variant", "destructive");
+      expect(cancelButton).not.toHaveAttribute("data-variant", "destructive");
+    });
+
+    // The same property the sheet's own test above establishes, for the
+    // dialog: no matter how many rows are rendered, there is exactly one
+    // ConfirmDialog in the DOM — never one per row.
+    it("keeps exactly one confirm dialog instance no matter which row's Delete is chosen", () => {
+      const e1 = entry({ id: "1", body: "first" });
+      const e2 = entry({ id: "2", body: "second" });
+      const e3 = entry({ id: "3", body: "third" });
+      render(
+        <History entries={[e1, e2, e3]} syncEnabled={false} onEdit={vi.fn()} onDelete={vi.fn()} />,
+      );
+
+      expect(screen.queryAllByRole("alertdialog")).toHaveLength(0);
+
+      const deleteButtons = screen.getAllByLabelText("Delete");
+      expect(deleteButtons).toHaveLength(3);
+      const [firstDelete, secondDelete, thirdDelete] = deleteButtons as [
+        HTMLElement,
+        HTMLElement,
+        HTMLElement,
+      ];
+
+      fireEvent.click(firstDelete);
+      expect(screen.getAllByRole("alertdialog")).toHaveLength(1);
+
+      fireEvent.click(secondDelete);
+      expect(screen.getAllByRole("alertdialog")).toHaveLength(1);
+
+      fireEvent.click(thirdDelete);
+      expect(screen.getAllByRole("alertdialog")).toHaveLength(1);
+    });
+  });
+
+  // Issue #81, fix 4: `groupByDay` is the one genuinely O(entries.length)
+  // piece of History's render-body work, so it's memoised on `entries`
+  // (see history.tsx's own comment on why `deviceUtcOffsetMinutes`/
+  // `entryDayKey`'s *other* render-body call, for `todayKey`, stays
+  // un-memoised deliberately). `entryDayKey` is called once per Entry
+  // inside `groupByDay`, plus once more directly for `todayKey` — so a
+  // render that changes something grouping doesn't depend on (`query`)
+  // should add exactly one more call, not `entries.length + 1` again.
+  it("memoises day grouping so a render triggered by an unrelated prop doesn't re-walk the Entries", () => {
+    pinClock("2026-08-18T12:00:00.000Z");
+    const spy = vi.spyOn(entryDayModule, "entryDayKey");
+    const entries = [
+      entry({ id: "1", body: "first", createdAt: "2026-08-18T15:00:00.000Z" }),
+      entry({ id: "2", body: "second", createdAt: "2026-08-18T09:00:00.000Z" }),
+      entry({ id: "3", body: "third", createdAt: "2026-08-17T20:00:00.000Z" }),
+    ];
+
+    const { rerender } = render(<History entries={entries} syncEnabled={false} />);
+    // Once for todayKey, once per Entry inside groupByDay.
+    expect(spy).toHaveBeenCalledTimes(1 + entries.length);
+
+    // Same `entries` reference, only `query` (grouping-irrelevant) changes.
+    rerender(<History entries={entries} syncEnabled={false} query="fir" />);
+
+    expect(spy).toHaveBeenCalledTimes(1 + entries.length + 1);
+  });
+
+  // Issue #81, fix 1: formatDaySeparatorTitle's own `Intl.DateTimeFormat`
+  // (its options are fixed — always `{ dateStyle: "full", timeZone: "UTC"
+  // }` — so a single cached instance covers every day separator, unlike
+  // entry-day.ts's formatDaySeparator next to it) must not be rebuilt per
+  // separator. A dynamic re-import gives this test a module instance whose
+  // formatter cache hasn't already been warmed by an earlier test in this
+  // file, so a regression can't hide behind test order.
+  //
+  // The assertion compares *before* vs *after* adding two more separators
+  // (and two more rows' clock times), rather than asserting a single fixed
+  // total call count: a render here also builds entry-day.ts's own clock
+  // and day-separator formatters (already covered by entry-day.test.ts),
+  // and coupling this test to their exact count too would make it fail for
+  // reasons that have nothing to do with formatDaySeparatorTitle. What
+  // this test owns is specifically "more separators must not mean more
+  // Intl.DateTimeFormat construction" — true only if every formatter
+  // involved, this one included, is actually cached.
+  it("reuses one day-separator-title formatter across many separators, not one per separator", async () => {
+    vi.resetModules();
+    const { History: FreshHistory } = await import("./history");
+    const spy = spyOnDateTimeFormatConstructor();
+
+    const { rerender } = render(
+      <FreshHistory
+        entries={[entry({ id: "1", body: "first", createdAt: "2020-01-01T12:00:00.000Z" })]}
+        syncEnabled={false}
+      />,
+    );
+    const callsForOneSeparator = spy.mock.calls.length;
+
+    rerender(
+      <FreshHistory
+        entries={[
+          entry({ id: "1", body: "first", createdAt: "2020-01-01T12:00:00.000Z" }),
+          entry({ id: "2", body: "second", createdAt: "2021-06-15T12:00:00.000Z" }),
+          entry({ id: "3", body: "third", createdAt: "2022-11-30T12:00:00.000Z" }),
+        ]}
+        syncEnabled={false}
+      />,
+    );
+
+    expect(screen.getAllByText(/^(first|second|third)$/)).toHaveLength(3);
+    expect(spy.mock.calls.length).toBe(callsForOneSeparator);
   });
 });

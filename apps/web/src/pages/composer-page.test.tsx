@@ -444,12 +444,20 @@ describe("ComposerPage", () => {
       expect(screen.getByPlaceholderText("What's on your mind?")).toHaveValue("hello");
     });
 
-    it("choosing Delete calls removeEntry from the outlet context with the whole Entry", async () => {
+    // Issue #82: choosing Delete opens a confirm dialog rather than
+    // calling removeEntry on the spot (the ConfirmDialog history.tsx
+    // renders, one level above every row); removeEntry only fires once
+    // that confirmation is accepted.
+    it("choosing Delete, then confirming, calls removeEntry from the outlet context with the whole Entry", async () => {
       const removeEntry = vi.fn();
       renderComposerPage({ ...readyContext, entries: oneEntry, removeEntry });
 
       fireEvent.click(screen.getByText("hello"));
       fireEvent.click(await screen.findByText("Delete"));
+
+      expect(removeEntry).not.toHaveBeenCalled();
+
+      fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
 
       expect(removeEntry).toHaveBeenCalledWith(oneEntry[0]);
     });
