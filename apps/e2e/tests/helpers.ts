@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { Browser, BrowserContext, Page } from "@playwright/test";
+import type { Browser, BrowserContext, Locator, Page } from "@playwright/test";
 import { SERVER_A_URL } from "../servers";
 
 /** A body unique to this test run, so leftover rows from a prior local run never collide. */
@@ -85,51 +85,62 @@ export async function setTabHidden(page: Page, hidden: boolean): Promise<void> {
 }
 
 /**
- * Hovers the History row identified by its exact body text, revealing the
- * row's Edit/Delete buttons (issue #78). They are plain `<button>`s behind
- * `@media (hover: hover)` and `opacity-0` until the row is hovered — a
- * headless Chromium reports as hover-capable, so they are in the DOM; the
- * hover is what makes them a target a real user could hit, and asserting
- * against them without it would pass for the wrong reason.
+ * The one History row whose body is exactly `body`. Every row now carries its
+ * own Edit/Delete buttons (issue #78) instead of sharing a single context
+ * menu, so a bare `getByRole("button", { name: "Edit" })` matches every
+ * rendered row at once. Scoping through the row is what makes "this Entry's
+ * Edit" expressible at all.
  *
  * `body` must be exact and unique in the DOM (uniqueEntryBody's randomUUID
- * suffix guarantees that), since this targets the row via its rendered text.
+ * suffix guarantees that), since the row is found via its rendered text.
  */
-export async function hoverEntryRow(page: Page, body: string): Promise<void> {
-  await page.getByText(body, { exact: true }).hover();
+export function entryRow(page: Page, body: string): Locator {
+  return page.locator('[data-slot="entry-row"]').filter({ hasText: body });
 }
 
 /**
- * Edit -> Composer flow: reveals the row's actions, chooses Edit (which
- * seeds the docked Composer with the Entry's current body — see
- * composer.tsx's `editingEntry`), replaces the field's contents with
- * `newBody`, and commits via the Send control, since Composer routes Send
- * to `onCommitEdit` while `editingEntry` is set rather than to `onSend`.
+ * Hovers a History row, revealing its Edit/Delete buttons. They sit behind
+ * `@media (hover: hover)` and are `opacity-0` until the row is hovered — a
+ * headless Chromium reports as hover-capable, so they are in the DOM, and the
+ * hover is what makes them a target a real user could hit. Asserting on them
+ * without it would pass for the wrong reason.
+ */
+export async function hoverEntryRow(page: Page, body: string): Promise<void> {
+  await entryRow(page, body).hover();
+}
+
+/**
+ * Edit -> Composer flow: reveals the row's actions, chooses Edit (which seeds
+ * the docked Composer with the Entry's current body — see composer.tsx's
+ * `editingEntry`), replaces the field's contents with `newBody`, and commits
+ * via the Send control, since Composer routes Send to `onCommitEdit` while
+ * `editingEntry` is set rather than to `onSend`.
  *
  * Send is a click, not the keyboard: issue #76 made plain Enter insert a
- * newline, and the chord that does send differs by build target, so a
- * click is the one gesture that means "send" on every platform this suite
- * might run against.
+ * newline, and the chord that does send differs by build target, so a click
+ * is the one gesture meaning "send" on every platform this might run against.
  */
 export async function editEntryViaMenu(
   page: Page,
   currentBody: string,
   newBody: string,
 ): Promise<void> {
-  await hoverEntryRow(page, currentBody);
-  await page.getByRole("button", { name: "Edit" }).click();
+  const row = entryRow(page, currentBody);
+  await row.hover();
+  await row.getByRole("button", { name: "Edit" }).click();
   await page.getByPlaceholder("What's on your mind?").fill(newBody);
   await page.getByRole("button", { name: "Send" }).click();
 }
 
 /**
- * Delete via the row's actions, then through the confirmation issue #82
- * put in front of it. Delete no longer fires on the spot and there is no
- * Undo toast any more — confirmation replaced it rather than joining it,
- * so a test that stops at the first click deletes nothing at all.
+ * Delete via the row's actions, then through the confirmation issue #82 put
+ * in front of it. Delete no longer fires on the spot and there is no Undo
+ * toast any more — confirmation replaced it rather than joining it, so a test
+ * that stops at the first click deletes nothing at all.
  */
 export async function deleteEntryViaMenu(page: Page, body: string): Promise<void> {
-  await hoverEntryRow(page, body);
-  await page.getByRole("button", { name: "Delete" }).click();
+  const row = entryRow(page, body);
+  await row.hover();
+  await row.getByRole("button", { name: "Delete" }).click();
   await page.getByRole("alertdialog").getByRole("button", { name: "Delete", exact: true }).click();
 }

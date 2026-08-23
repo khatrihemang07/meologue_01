@@ -4,6 +4,7 @@ import {
   closeDevices,
   deleteEntryViaMenu,
   editEntryViaMenu,
+  entryRow,
   hoverEntryRow,
   openTwoDevices,
   sendEntry,
@@ -255,8 +256,9 @@ test("hovering a History row reveals Edit and Delete", async ({ page }) => {
   await page.goto("/");
   await sendEntry(page, body);
 
-  await hoverEntryRow(page, body);
+  const row = entryRow(page, body);
+  await row.hover();
 
-  await expect(page.getByRole("button", { name: "Edit" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Delete" })).toBeVisible();
+  await expect(row.getByRole("button", { name: "Edit" })).toBeVisible();
+  await expect(row.getByRole("button", { name: "Delete" })).toBeVisible();
 });

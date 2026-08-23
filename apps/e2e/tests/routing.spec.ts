@@ -18,10 +18,10 @@ test("/settings loads directly, survives a hard reload, and its persistent nav r
   page,
 }) => {
   await page.goto("/settings");
-  await expect(page.getByText("Settings")).toBeVisible();
+  await expect(page.getByRole("banner").getByText("Settings")).toBeVisible();
 
   await page.reload();
-  await expect(page.getByText("Settings")).toBeVisible();
+  await expect(page.getByRole("banner").getByText("Settings")).toBeVisible();
 
   await page.getByRole("link", { name: "Composer" }).click();
   await expect(page).toHaveURL("/");
@@ -41,7 +41,7 @@ test("the Settings destination in the persistent nav navigates there from the co
   await page.getByRole("link", { name: "Settings" }).click();
 
   await expect(page).toHaveURL("/settings");
-  await expect(page.getByText("Settings")).toBeVisible();
+  await expect(page.getByRole("banner").getByText("Settings")).toBeVisible();
 });
 
 // Unit tests already cover applyTheme/watchSystemTheme in isolation; what
