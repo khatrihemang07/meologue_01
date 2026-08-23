@@ -30,6 +30,7 @@ function pinClock(nowIso: string, offsetMinutes = 0) {
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("History", () => {
@@ -142,42 +143,122 @@ describe("History", () => {
     expect(screen.getByText("Today")).toHaveAttribute("title", expect.stringMatching(/2026/));
   });
 
-  // ADR 0028: History assembles EntryRow's `actions` from its own onEdit
-  // and onDelete props — both or neither, never one alone (see the props'
-  // own comment). Both-present is exercised end to end by
+  /** Same stand-in as entry-row.test.tsx's — see its own comment. */
+  function stubHoverCapable(matches: boolean) {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({ matches, media: query })),
+    );
+  }
+
+  // ADR 0028 (issue #78): History assembles EntryRow's `actions` — and the
+  // single shared EntryActionsSheet's open/closed state — from its own
+  // onEdit and onDelete props, both or neither, never one alone (see the
+  // props' own comment). Both-present is exercised end to end by
   // composer-page.test.tsx; this pins down the gating itself, including
-  // the intentionally-unhandled "only one given" case, at this component's
-  // own level.
-  describe("the Edit/Delete context menu", () => {
-    it("wires no menu when neither onEdit nor onDelete is given", () => {
+  // the intentionally-unhandled "only one given" case, plus the
+  // one-sheet-however-many-rows property, at this component's own level.
+  describe("the Edit/Delete actions", () => {
+    it("wires no hover buttons or sheet when neither onEdit nor onDelete is given", () => {
+      stubHoverCapable(false);
       render(<History entries={[entry({ body: "hello" })]} syncEnabled={false} />);
 
-      fireEvent.contextMenu(screen.getByText("hello"));
+      fireEvent.click(screen.getByText("hello"));
 
+      expect(screen.queryByLabelText("Edit")).not.toBeInTheDocument();
       expect(screen.queryByText("Edit")).not.toBeInTheDocument();
-      expect(screen.queryByText("Delete")).not.toBeInTheDocument();
     });
 
-    it("wires no menu when only one of onEdit/onDelete is given", () => {
+    it("wires nothing when only one of onEdit/onDelete is given", () => {
+      stubHoverCapable(false);
       render(<History entries={[entry({ body: "hello" })]} syncEnabled={false} onEdit={vi.fn()} />);
 
-      fireEvent.contextMenu(screen.getByText("hello"));
+      fireEvent.click(screen.getByText("hello"));
 
+      expect(screen.queryByLabelText("Edit")).not.toBeInTheDocument();
       expect(screen.queryByText("Edit")).not.toBeInTheDocument();
     });
 
-    it("wires a working menu onto every row when both are given", async () => {
+    it("wires hover Edit/Delete buttons onto every row when both are given", () => {
+      render(
+        <History
+          entries={[entry({ id: "1", body: "first" }), entry({ id: "2", body: "second" })]}
+          syncEnabled={false}
+          onEdit={vi.fn()}
+          onDelete={vi.fn()}
+        />,
+      );
+
+      expect(screen.getAllByLabelText("Edit")).toHaveLength(2);
+      expect(screen.getAllByLabelText("Delete")).toHaveLength(2);
+    });
+
+    it("opens the shared sheet for the tapped row's Entry on a touch device", () => {
+      stubHoverCapable(false);
+      render(
+        <History
+          entries={[entry({ body: "hello" })]}
+          syncEnabled={false}
+          onEdit={vi.fn()}
+          onDelete={vi.fn()}
+        />,
+      );
+
+      fireEvent.click(screen.getByText("hello"));
+
+      expect(screen.getByText("Edit")).toBeInTheDocument();
+      expect(screen.getByText("Delete")).toBeInTheDocument();
+    });
+
+    it("calls onEdit with the whole Entry through the sheet", () => {
+      stubHoverCapable(false);
       const onEdit = vi.fn();
+      const target = entry({ body: "hello" });
+      render(<History entries={[target]} syncEnabled={false} onEdit={onEdit} onDelete={vi.fn()} />);
+
+      fireEvent.click(screen.getByText("hello"));
+      fireEvent.click(screen.getByText("Edit"));
+
+      expect(onEdit).toHaveBeenCalledWith(target);
+    });
+
+    it("calls onDelete with the whole Entry through the sheet", () => {
+      stubHoverCapable(false);
       const onDelete = vi.fn();
       const target = entry({ body: "hello" });
       render(
-        <History entries={[target]} syncEnabled={false} onEdit={onEdit} onDelete={onDelete} />,
+        <History entries={[target]} syncEnabled={false} onEdit={vi.fn()} onDelete={onDelete} />,
       );
 
-      fireEvent.contextMenu(screen.getByText("hello"));
-      fireEvent.click(await screen.findByText("Edit"));
+      fireEvent.click(screen.getByText("hello"));
+      fireEvent.click(screen.getByText("Delete"));
 
-      expect(onEdit).toHaveBeenCalledWith(target);
+      expect(onDelete).toHaveBeenCalledWith(target);
+    });
+
+    // The property issue #78 exists to establish: no matter how many
+    // Entries are rendered, there is exactly one sheet in the DOM — never
+    // one per row (that was the old ContextMenu's per-row cost, just
+    // moved to a different primitive).
+    it("keeps exactly one sheet instance no matter how many rows are tapped", () => {
+      stubHoverCapable(false);
+      const e1 = entry({ id: "1", body: "first" });
+      const e2 = entry({ id: "2", body: "second" });
+      const e3 = entry({ id: "3", body: "third" });
+      render(
+        <History entries={[e1, e2, e3]} syncEnabled={false} onEdit={vi.fn()} onDelete={vi.fn()} />,
+      );
+
+      expect(screen.queryAllByRole("dialog")).toHaveLength(0);
+
+      fireEvent.click(screen.getByText("first"));
+      expect(screen.getAllByRole("dialog")).toHaveLength(1);
+
+      fireEvent.click(screen.getByText("second"));
+      expect(screen.getAllByRole("dialog")).toHaveLength(1);
+
+      fireEvent.click(screen.getByText("third"));
+      expect(screen.getAllByRole("dialog")).toHaveLength(1);
     });
   });
 });

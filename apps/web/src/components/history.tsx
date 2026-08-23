@@ -1,4 +1,6 @@
 import type { Entry } from "@meologue/core";
+import { useState } from "react";
+import { EntryActionsSheet } from "@/components/entry-actions";
 import { EntryRow } from "@/components/entry-row";
 import { deviceUtcOffsetMinutes, entryDayKey, formatDaySeparator } from "@/lib/entry-day";
 
@@ -20,13 +22,14 @@ interface HistoryProps {
    */
   query?: string;
   /**
-   * Wires the Edit/Delete context menu (ADR 0028) onto every row this
-   * renders. Both undefined and both present, never one or the other —
-   * see EntryRow's own `actions` prop, which this simply assembles and
-   * forwards. composer-page.tsx's footer, History's one remaining caller
-   * since issue #75 deleted `/history`'s own page, passes both; nothing
-   * here defaults them to a no-op, because a silently-broken menu item is
-   * worse than a type error at the call site that forgot one.
+   * Wires Edit/Delete (issue #78; ADR 0028) onto every row this renders.
+   * Both undefined and both present, never one or the other — see
+   * EntryRow's own `actions` prop, which this assembles (alongside the
+   * sheet-open setter below) and forwards. composer-page.tsx's footer,
+   * History's one remaining caller since issue #75 deleted `/history`'s
+   * own page, passes both; nothing here defaults them to a no-op, because
+   * a silently-broken action is worse than a type error at the call site
+   * that forgot one.
    */
   onEdit?: (entry: Entry) => void;
   onDelete?: (entry: Entry) => void;
@@ -83,12 +86,22 @@ function formatDaySeparatorTitle(dayKey: string): string | undefined {
 }
 
 export function History({ entries, syncEnabled, query = "", onEdit, onDelete }: HistoryProps) {
+  // The "which Entry is open" state behind the single shared
+  // EntryActionsSheet below (issue #78) — owned here, not per-row, which
+  // is what keeps exactly one sheet instance in the DOM no matter how many
+  // rows this renders. null means closed; a row's tap (touch device) or
+  // right-click (pointer device, optional) sets it via onOpenSheet below.
+  const [sheetEntry, setSheetEntry] = useState<Entry | null>(null);
+
   // Both-or-neither (see the props' own comment): assembled once here
   // rather than re-checked per row, and `undefined` when either is missing
-  // so EntryRow's own default ("no actions prop" -> "no menu") is what
-  // actually governs the no-menu case, instead of this component
-  // duplicating that decision.
-  const actions = onEdit && onDelete ? { onEdit, onDelete } : undefined;
+  // so EntryRow's own default ("no actions prop" -> "no actions") is what
+  // actually governs the no-actions case, instead of this component
+  // duplicating that decision. `onOpenSheet` is folded in here rather than
+  // being a third prop composer-page.tsx has to pass — it's this
+  // component's own state setter, not something an outside caller has any
+  // business supplying.
+  const actions = onEdit && onDelete ? { onEdit, onDelete, onOpenSheet: setSheetEntry } : undefined;
 
   if (entries.length === 0) {
     return (
@@ -137,6 +150,23 @@ export function History({ entries, syncEnabled, query = "", onEdit, onDelete }: 
           </div>
         </div>
       ))}
+      {actions && (
+        // The one EntryActionsSheet instance for however many rows are
+        // above (issue #78) — rendered here, once, rather than inside the
+        // `.map` that builds each EntryRow. Only mounted when `actions` is
+        // present at all: with no Edit/Delete wired up, nothing can ever
+        // set `sheetEntry`, so there is nothing for a sheet to show.
+        <EntryActionsSheet
+          entry={sheetEntry}
+          onOpenChange={(open) => {
+            if (!open) {
+              setSheetEntry(null);
+            }
+          }}
+          onEdit={actions.onEdit}
+          onDelete={actions.onDelete}
+        />
+      )}
     </div>
   );
 }

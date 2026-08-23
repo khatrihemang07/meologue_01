@@ -7,15 +7,12 @@
  * Reflection both import from here rather than each keeping their own copy.
  */
 import type { Entry } from "@meologue/core";
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu";
+import type * as React from "react";
+import { EntryHoverActions, hoverCapable } from "@/components/entry-actions";
 import { formatClockTime } from "@/lib/entry-day";
 import { formatAbsoluteTime } from "@/lib/entry-time";
 import { highlightMatches } from "@/lib/highlight-match";
+import { cn } from "@/lib/utils";
 
 export function EntryBody({ body, query }: { body: string; query: string }) {
   if (query.trim() === "") {
@@ -49,6 +46,17 @@ export function EntryBody({ body, query }: { body: string; query: string }) {
 export interface EntryRowActions {
   onEdit: (entry: Entry) => void;
   onDelete: (entry: Entry) => void;
+  /**
+   * Opens history.tsx's single shared EntryActionsSheet for this Entry
+   * (issue #78) — history.tsx's own sheet-open setter, assembled onto this
+   * bundle alongside onEdit/onDelete rather than being a fourth prop a
+   * caller has to know to pass. composer-page.tsx, the only outside
+   * caller, still only ever supplies onEdit and onDelete; both-or-neither
+   * (see EntryRowProps' `actions` comment) governs that external pair
+   * exactly as before, and history.tsx fills in this third field itself
+   * once both are present.
+   */
+  onOpenSheet: (entry: Entry) => void;
 }
 
 export interface EntryRowProps {
@@ -63,29 +71,86 @@ export interface EntryRowProps {
   query?: string;
   syncEnabled: boolean;
   /**
-   * Wires an Edit/Delete context menu onto this row (ADR 0028). Undefined
-   * by default — deliberately "no menu" rather than "menu, disabled" — so
-   * every existing caller of EntryRow is unaffected by this prop's
-   * existence: grounding-disclosure.tsx renders Reflection's Grounding,
-   * which CONTEXT.md requires to stay a read-only view of what an Answer
-   * was based on (offering to edit or delete an Entry from inside that
-   * disclosure would let editing a past Answer relied on look possible, and
-   * it must not be). Only history.tsx — which the Composer page's own
-   * footer History renders through (issue #75 removed `/history`'s own
-   * page, once the only other caller) — ever passes this, on rows it knows
-   * are real History, never Grounding.
+   * Wires Edit/Delete onto this row — hover buttons on a hover-capable
+   * device, a shared bottom sheet on a touch one (issue #78; ADR 0028 is
+   * why Edit/Delete exist on an Entry at all, not how they're exposed
+   * here). Undefined by default — deliberately "no actions" rather than
+   * "actions, disabled" — so every existing caller of EntryRow is
+   * unaffected by this prop's existence: grounding-disclosure.tsx renders
+   * Reflection's Grounding, which CONTEXT.md requires to stay a read-only
+   * view of what an Answer was based on (offering to edit or delete an
+   * Entry from inside that disclosure would let editing a past Answer
+   * relied on look possible, and it must not be). Only history.tsx — which
+   * the Composer page's own footer History renders through (issue #75
+   * removed `/history`'s own page, once the only other caller) — ever
+   * passes this, on rows it knows are real History, never Grounding.
    */
   actions?: EntryRowActions;
+}
+
+/**
+ * Opens history.tsx's shared sheet for a tap on this row, but only on a
+ * device without hover — issue #78's split is on hover-capability, not on
+ * pointer type or build target. On a hover-capable device the row's own
+ * EntryHoverActions buttons are the way to reach Edit/Delete, and this
+ * simply does nothing, leaving an ordinary click on the row body free to
+ * do what clicking text anywhere else does (place a selection), rather
+ * than popping a sheet over it.
+ */
+function handleRowTap(actions: EntryRowActions | undefined, entry: Entry) {
+  if (!actions || hoverCapable()) {
+    return;
+  }
+  actions.onOpenSheet(entry);
+}
+
+/**
+ * The optional half of "Right-click on a pointer device may open the same
+ * sheet/menu if that falls out cheaply" — cheap here because it's just
+ * `handleRowTap`'s own hover check, reused. `preventDefault` only runs
+ * behind that same hoverCapable() gate, so a touch device's long-press
+ * (which also dispatches `contextmenu` in most mobile browsers) is never
+ * intercepted: this handler simply returns, its default action runs
+ * unprevented, and that default action is exactly what starts native text
+ * selection. Long-press is left alone on every platform, per the ticket —
+ * this is what makes that true here specifically for a right-click-shaped
+ * event, not just for the removed long-press timer.
+ */
+function handleRowContextMenu(
+  event: React.MouseEvent,
+  actions: EntryRowActions | undefined,
+  entry: Entry,
+) {
+  if (!actions || !hoverCapable()) {
+    return;
+  }
+  event.preventDefault();
+  actions.onOpenSheet(entry);
 }
 
 // One full-width row (ticket 52, #49's "Discord" variant — no bubble, no
 // tails, no left/right split). Each Entry carries its own clock time
 // because timestamps are per-Entry rather than clustered (#49); the date
 // that time belongs to lives on the day separator above, not here.
+//
+// No `select-none` anywhere here (issue #78) — that's precisely what the
+// old ContextMenuTrigger's `asChild` merged onto this same `<div>`, and
+// why Entry text couldn't be dragged to select on any platform. `group` is
+// only added when `actions` is present: EntryHoverActions' `group-hover`
+// styling needs an ancestor to watch, and a bare row (grounding-
+// disclosure.tsx's caller) has nothing depending on it.
 export function EntryRow({ entry, query = "", syncEnabled, actions }: EntryRowProps) {
   const time = formatClockTime(entry.createdAt);
-  const row = (
-    <div className="flex items-baseline gap-3 py-1.5 text-sm text-foreground">
+
+  return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: onClick here is a touch-only progressive enhancement (handleRowTap no-ops on a hover-capable device — see its own comment) layered on a row that must stay plain, selectable text, not a control; giving it an interactive role would contradict that and would duplicate the two real <button>s below.
+    // biome-ignore lint/a11y/useKeyWithClickEvents: no keyboard equivalent is needed for the same reason — "reachable without a pointer" (the ticket's own requirement) is satisfied by EntryHoverActions' real, tabbable <button>s, not by this row.
+    <div
+      data-slot="entry-row"
+      className={cn("flex items-baseline gap-3 py-1.5 text-sm text-foreground", actions && "group")}
+      onClick={actions ? () => handleRowTap(actions, entry) : undefined}
+      onContextMenu={actions ? (event) => handleRowContextMenu(event, actions, entry) : undefined}
+    >
       <EntryBody body={entry.body} query={query} />
       <div className="flex shrink-0 items-center gap-2">
         {time !== null && (
@@ -108,29 +173,9 @@ export function EntryRow({ entry, query = "", syncEnabled, actions }: EntryRowPr
           </span>
         )}
       </div>
+      {actions && (
+        <EntryHoverActions entry={entry} onEdit={actions.onEdit} onDelete={actions.onDelete} />
+      )}
     </div>
-  );
-
-  if (!actions) {
-    return row;
-  }
-
-  return (
-    // Radix's ContextMenu (ADR 0028): right-click on a pointer device,
-    // long-press on a touch device, with zero extra code for either — the
-    // exact behaviour ADR 0028 asks for across Android, macOS and web, and
-    // zero pixels at rest since nothing renders until it's triggered.
-    // `asChild` on the Trigger below is what keeps `row`'s own <div> as the
-    // DOM node History's `divide-y` sibling styling depends on, rather than
-    // Radix wrapping it in a <span> of its own.
-    <ContextMenu>
-      <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
-      <ContextMenuContent>
-        <ContextMenuItem onSelect={() => actions.onEdit(entry)}>Edit</ContextMenuItem>
-        <ContextMenuItem variant="destructive" onSelect={() => actions.onDelete(entry)}>
-          Delete
-        </ContextMenuItem>
-      </ContextMenuContent>
-    </ContextMenu>
   );
 }

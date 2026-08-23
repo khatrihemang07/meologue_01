@@ -16,8 +16,22 @@ function entry(overrides: Partial<Entry>): Entry {
   };
 }
 
+/**
+ * Stands in for `matchMedia("(hover: hover)")`, the same idea as
+ * `theme.test.ts`'s own `stubMatchMedia` for `(prefers-color-scheme:
+ * dark)` — `hoverCapable()` (entry-actions.tsx) only ever reads `.matches`
+ * once per call, so this stub needs no `addEventListener` of its own.
+ */
+function stubHoverCapable(matches: boolean) {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn((query: string) => ({ matches, media: query })),
+  );
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("EntryRow", () => {
@@ -90,60 +104,184 @@ describe("EntryRow", () => {
     expect(screen.queryByRole("mark")).not.toBeInTheDocument();
   });
 
-  // ADR 0028: the context menu is opt-in via `actions`, defaulting to none
-  // — see EntryRow's own doc comment on why (grounding-disclosure.test.tsx
-  // covers the specific caller this default protects).
-  describe("the Edit/Delete context menu", () => {
-    it("offers no menu when actions is omitted, even on a long-press/right-click", () => {
-      render(<EntryRow entry={entry({ body: "hello" })} syncEnabled={false} />);
+  // Issue #78: `select-none` is what the old ContextMenuTrigger's
+  // `asChild` merged onto this row, and is exactly why Entry text couldn't
+  // be dragged to select. Covered for both an action-less row (grounding-
+  // disclosure.tsx's shape) and one with actions (history.tsx's), since
+  // the class is assembled conditionally.
+  describe("text selection", () => {
+    it("carries no select-none, with no actions", () => {
+      const { container } = render(
+        <EntryRow entry={entry({ body: "hello" })} syncEnabled={false} />,
+      );
 
-      fireEvent.contextMenu(screen.getByText("hello"));
-
-      expect(screen.queryByText("Edit")).not.toBeInTheDocument();
-      expect(screen.queryByText("Delete")).not.toBeInTheDocument();
+      const row = container.querySelector('[data-slot="entry-row"]');
+      expect(row).not.toHaveClass("select-none");
     });
 
-    it("opens Edit and Delete on right-click when actions is given", async () => {
-      const onEdit = vi.fn();
-      const onDelete = vi.fn();
+    it("carries no select-none, with actions", () => {
+      const { container } = render(
+        <EntryRow
+          entry={entry({ body: "hello" })}
+          syncEnabled={false}
+          actions={{ onEdit: vi.fn(), onDelete: vi.fn(), onOpenSheet: vi.fn() }}
+        />,
+      );
+
+      const row = container.querySelector('[data-slot="entry-row"]');
+      expect(row).not.toHaveClass("select-none");
+    });
+  });
+
+  // ADR 0028: Edit/Delete are opt-in via `actions`, defaulting to none —
+  // see EntryRow's own doc comment on why (grounding-disclosure.test.tsx
+  // covers the specific caller this default protects).
+  describe("the Edit/Delete actions", () => {
+    it("offers no hover buttons when actions is omitted", () => {
+      render(<EntryRow entry={entry({ body: "hello" })} syncEnabled={false} />);
+
+      expect(screen.queryByLabelText("Edit")).not.toBeInTheDocument();
+      expect(screen.queryByLabelText("Delete")).not.toBeInTheDocument();
+    });
+
+    it("offers Edit and Delete hover buttons when actions is given", () => {
       render(
         <EntryRow
           entry={entry({ body: "hello" })}
           syncEnabled={false}
-          actions={{ onEdit, onDelete }}
+          actions={{ onEdit: vi.fn(), onDelete: vi.fn(), onOpenSheet: vi.fn() }}
         />,
       );
 
-      fireEvent.contextMenu(screen.getByText("hello"));
-
-      expect(await screen.findByText("Edit")).toBeInTheDocument();
-      expect(screen.getByText("Delete")).toBeInTheDocument();
+      expect(screen.getByLabelText("Edit")).toBeInTheDocument();
+      expect(screen.getByLabelText("Delete")).toBeInTheDocument();
     });
 
-    it("calls onEdit with the whole Entry when Edit is chosen", async () => {
+    it("calls onEdit with the whole Entry when the Edit button is pressed", () => {
       const onEdit = vi.fn();
       const onDelete = vi.fn();
       const target = entry({ body: "hello" });
-      render(<EntryRow entry={target} syncEnabled={false} actions={{ onEdit, onDelete }} />);
+      render(
+        <EntryRow
+          entry={target}
+          syncEnabled={false}
+          actions={{ onEdit, onDelete, onOpenSheet: vi.fn() }}
+        />,
+      );
 
-      fireEvent.contextMenu(screen.getByText("hello"));
-      fireEvent.click(await screen.findByText("Edit"));
+      fireEvent.click(screen.getByLabelText("Edit"));
 
       expect(onEdit).toHaveBeenCalledWith(target);
       expect(onDelete).not.toHaveBeenCalled();
     });
 
-    it("calls onDelete with the whole Entry when Delete is chosen", async () => {
+    it("calls onDelete with the whole Entry when the Delete button is pressed", () => {
       const onEdit = vi.fn();
       const onDelete = vi.fn();
       const target = entry({ body: "hello" });
-      render(<EntryRow entry={target} syncEnabled={false} actions={{ onEdit, onDelete }} />);
+      render(
+        <EntryRow
+          entry={target}
+          syncEnabled={false}
+          actions={{ onEdit, onDelete, onOpenSheet: vi.fn() }}
+        />,
+      );
 
-      fireEvent.contextMenu(screen.getByText("hello"));
-      fireEvent.click(await screen.findByText("Delete"));
+      fireEvent.click(screen.getByLabelText("Delete"));
 
       expect(onDelete).toHaveBeenCalledWith(target);
       expect(onEdit).not.toHaveBeenCalled();
+    });
+  });
+
+  // Issue #78's hover/touch split: a tap opens history.tsx's shared sheet
+  // only on a device without hover; a hover-capable device's own inline
+  // buttons (covered above) are the entry point there instead, so a plain
+  // click on the row body must stay a no-op — otherwise dragging across
+  // Entry text to select it on a mouse-equipped device would pop a sheet
+  // over the selection the moment the mouse button is released.
+  describe("tapping the row", () => {
+    it("opens the sheet for this Entry on a device without hover", () => {
+      stubHoverCapable(false);
+      const onOpenSheet = vi.fn();
+      const target = entry({ body: "hello" });
+      render(
+        <EntryRow
+          entry={target}
+          syncEnabled={false}
+          actions={{ onEdit: vi.fn(), onDelete: vi.fn(), onOpenSheet }}
+        />,
+      );
+
+      fireEvent.click(screen.getByText("hello"));
+
+      expect(onOpenSheet).toHaveBeenCalledWith(target);
+    });
+
+    it("does nothing on a hover-capable device", () => {
+      stubHoverCapable(true);
+      const onOpenSheet = vi.fn();
+      render(
+        <EntryRow
+          entry={entry({ body: "hello" })}
+          syncEnabled={false}
+          actions={{ onEdit: vi.fn(), onDelete: vi.fn(), onOpenSheet }}
+        />,
+      );
+
+      fireEvent.click(screen.getByText("hello"));
+
+      expect(onOpenSheet).not.toHaveBeenCalled();
+    });
+
+    it("does nothing when actions is omitted", () => {
+      stubHoverCapable(false);
+      render(<EntryRow entry={entry({ body: "hello" })} syncEnabled={false} />);
+
+      // No onOpenSheet to spy on with no actions — this only asserts a
+      // click doesn't throw with nothing wired up.
+      expect(() => fireEvent.click(screen.getByText("hello"))).not.toThrow();
+    });
+  });
+
+  // The optional half of the ticket: right-click may open the same sheet
+  // on a pointer device, but must never intercept a touch device's
+  // long-press — which is what actually starts native text selection —
+  // by calling preventDefault on it.
+  describe("right-clicking the row (optional, pointer devices)", () => {
+    it("opens the sheet and prevents the native menu on a hover-capable device", () => {
+      stubHoverCapable(true);
+      const onOpenSheet = vi.fn();
+      const target = entry({ body: "hello" });
+      render(
+        <EntryRow
+          entry={target}
+          syncEnabled={false}
+          actions={{ onEdit: vi.fn(), onDelete: vi.fn(), onOpenSheet }}
+        />,
+      );
+
+      const notPrevented = fireEvent.contextMenu(screen.getByText("hello"));
+
+      expect(onOpenSheet).toHaveBeenCalledWith(target);
+      expect(notPrevented).toBe(false);
+    });
+
+    it("leaves a touch device's contextmenu (long-press) alone entirely", () => {
+      stubHoverCapable(false);
+      const onOpenSheet = vi.fn();
+      render(
+        <EntryRow
+          entry={entry({ body: "hello" })}
+          syncEnabled={false}
+          actions={{ onEdit: vi.fn(), onDelete: vi.fn(), onOpenSheet }}
+        />,
+      );
+
+      const notPrevented = fireEvent.contextMenu(screen.getByText("hello"));
+
+      expect(onOpenSheet).not.toHaveBeenCalled();
+      expect(notPrevented).toBe(true);
     });
   });
 });

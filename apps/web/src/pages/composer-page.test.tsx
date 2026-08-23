@@ -412,12 +412,16 @@ describe("ComposerPage", () => {
     });
   });
 
-  // ADR 0028: this is the real wiring — EntryRow's context menu, through
-  // History, into ComposerPage's own editingEntry state and the docked
-  // Composer. Each layer already has its own focused test (entry-row.test.tsx,
+  // ADR 0028 (issue #78): this is the real wiring — EntryRow's actions,
+  // through History's shared EntryActionsSheet, into ComposerPage's own
+  // editingEntry state and the docked Composer. Each layer already has its
+  // own focused test (entry-row.test.tsx, entry-actions.test.tsx,
   // composer.test.tsx, use-history.test.tsx); this is the one place that
-  // proves they're actually connected.
-  describe("Edit and Delete from a row's context menu", () => {
+  // proves they're actually connected. jsdom has no `matchMedia`
+  // (entry-actions.tsx's `hoverCapable()` reads that as "no hover"), so a
+  // plain tap on the row here opens the sheet exactly as it would on a
+  // touch device — no explicit stub needed for that default.
+  describe("Edit and Delete from a row's shared actions sheet", () => {
     const oneEntry: EntryStoreOutletContext["entries"] = [
       {
         id: "1",
@@ -433,7 +437,7 @@ describe("ComposerPage", () => {
     it("choosing Edit puts the Composer into editing mode, seeded with the Entry's body", async () => {
       renderComposerPage({ ...readyContext, entries: oneEntry });
 
-      fireEvent.contextMenu(screen.getByText("hello"));
+      fireEvent.click(screen.getByText("hello"));
       fireEvent.click(await screen.findByText("Edit"));
 
       expect(screen.getByText("Editing Entry")).toBeInTheDocument();
@@ -444,7 +448,7 @@ describe("ComposerPage", () => {
       const removeEntry = vi.fn();
       renderComposerPage({ ...readyContext, entries: oneEntry, removeEntry });
 
-      fireEvent.contextMenu(screen.getByText("hello"));
+      fireEvent.click(screen.getByText("hello"));
       fireEvent.click(await screen.findByText("Delete"));
 
       expect(removeEntry).toHaveBeenCalledWith(oneEntry[0]);
