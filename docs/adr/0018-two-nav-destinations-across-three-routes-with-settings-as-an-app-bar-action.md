@@ -15,6 +15,16 @@ stays an app-bar action rather than a nav destination, the Composer stays docked
 edge, the reading order and its view-only reversal are unchanged, and the day separators still
 group through the same local-day helper Export uses.
 
+Further superseded by [0030](0030-the-shell-gets-a-root-screen.md): History's route and page are
+deleted outright — no redirect — because the Composer view already renders the identical `History`
+component this ADR kept as a second, deliberately redundant door. Settings, which this ADR's
+Decision section keeps out of the nav on the grounds that it is "a utility, not a peer of the two
+views of a user's Entries," takes History's vacated slot instead, retiring that specific argument;
+this ADR's citation of Material 3's three-to-five destination bound is what still licenses the
+resulting four (Composer, Reflect, Digest, Settings). Everything else this ADR decided —
+bottom-docked Composer, the reading-order reversal, the shared day-separator helper, one `<nav>`
+repositioned by CSS rather than rendered twice — stands unchanged and is still load-bearing.
+
 ## Context
 
 The app grew its navigation one ticket at a time and never had a layout pass. Every page was a

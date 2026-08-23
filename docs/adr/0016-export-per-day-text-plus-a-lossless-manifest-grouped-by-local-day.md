@@ -2,7 +2,13 @@
 
 ## Status
 
-Accepted
+Accepted. Extended, not superseded, by
+[0030](0030-the-shell-gets-a-root-screen.md): `EntryStore.list()` gained an *optional* keyset page
+argument so History could load bounded windows instead of everything at once. Called with no
+argument — which is what Export still does — `list()` behaves byte-identically to before this
+ADR's own "a backup that quietly omits things is worse than none" rejection of a paginated read.
+That rejection is exactly why the argument had to be optional rather than required, and it still
+stands; nothing here needed to change for 0030 to ship.
 
 ## Context
 

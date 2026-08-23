@@ -9,6 +9,18 @@ table*. 0020's placement of Reflection as a third nav destination, its `/reflect
 `EntryStoreLayout`, its Sync-off gate and its reasoning for keeping Settings an app-bar action all
 stand unchanged and are still load-bearing. 0020 is amended in place to record this.
 
+Partially reversed, in one narrow direction, by [0030](0030-the-shell-gets-a-root-screen.md): the
+Device now remembers exactly one Session id, in `sessionStorage`, as a fallback for a bare
+`/reflect` — leaving Reflect for the Composer and returning used to open a fresh Session and
+silently discard whatever Conversation had been open, which stopped being a small loss once a
+Session held real inference behind it. This is deliberately narrower than it may sound: this ADR's
+"the Device stores nothing at all" clause is reversed only for *which* Session a bare `/reflect`
+resolves to, never for *what* a Session contains — the Server still holds every Session's
+Conversation, the URL is still authoritative and still the only thing a reload reads from, and the
+remembered id is only ever consulted when the URL itself carries none. Every other decision this
+ADR made — the Server as sole holder, no local mirror of Session content, no create endpoint, LWW
+by server arrival — stands unchanged and is still load-bearing.
+
 ## Context
 
 0020 decided a Conversation lives only in memory, and was explicit that this was a deferral rather

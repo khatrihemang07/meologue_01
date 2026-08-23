@@ -31,6 +31,14 @@ Sync-off gate's reasoning, Settings staying an app-bar action, the one-`<nav>`-r
 technique — stands unchanged; see `apps/web/src/components/nav.tsx`'s `DESTINATIONS` for where the
 fourth entry actually lives.
 
+Further superseded by [0030](0030-the-shell-gets-a-root-screen.md) — the count stays four, but the
+membership changes: History is deleted (its route and page both, no redirect — the Composer view
+already rendered the identical component), and Settings takes its place, making the four
+Composer, Reflect, Digest, Settings. This ADR's own placement of Reflection — the `/reflect` route
+inside `EntryStoreLayout`, the Sync-off gate and its reasoning, keeping Settings a sibling route
+outside that layout — stands unchanged and is still load-bearing; only which four things the
+persistent Nav shows changed, not how Reflection itself sits among them.
+
 ## Context
 
 CONTEXT.md just gained five terms — Reflection, Question, Answer, Conversation, Grounding —
