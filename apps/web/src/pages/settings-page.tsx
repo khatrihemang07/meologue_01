@@ -198,7 +198,24 @@ export function SettingsPage() {
         <label htmlFor="server-url" className="text-sm font-medium">
           Server URL
         </label>
-        <div className="flex gap-2">
+        {/*
+          Issue #76: a real <form>, submitted on plain Enter — not the
+          Composer's chord (submit-chord.ts). That chord exists to keep
+          Enter free for a newline inside a multi-line textarea; a
+          single-line input has no newline to protect, so there's nothing
+          for a modifier to guard here, and requiring one would just be an
+          extra keystroke standing between the user and Save for no
+          benefit. The button becomes type="submit" so it triggers the same
+          form submission Enter does, rather than the two paths calling
+          saveServerUrl independently and drifting apart later.
+        */}
+        <form
+          className="flex gap-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            saveServerUrl();
+          }}
+        >
           <Input
             id="server-url"
             type="text"
@@ -206,10 +223,8 @@ export function SettingsPage() {
             value={serverUrl}
             onChange={(event) => setServerUrl(event.target.value)}
           />
-          <Button type="button" onClick={saveServerUrl}>
-            Save
-          </Button>
-        </div>
+          <Button type="submit">Save</Button>
+        </form>
         {status && (
           <p
             data-testid="server-status"

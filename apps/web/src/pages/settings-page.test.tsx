@@ -188,6 +188,24 @@ describe("SettingsPage", () => {
     expect(screen.getByLabelText(/server url/i)).toHaveValue("https://phone.example:41207");
   });
 
+  it("saves the Server URL on plain Enter, with no chord needed (issue #76)", () => {
+    renderPage();
+    const input = screen.getByLabelText(/server url/i);
+
+    fireEvent.change(input, { target: { value: "https://phone.example:41207" } });
+    // A single-line input has no newline to protect the way a Composer's
+    // textarea does, so plain Enter — not the Composer's Cmd/Ctrl chord —
+    // is what saves here. Submitting a `<form>` on Enter in a text field is
+    // a native browser default action, not something settings-page.tsx
+    // wires up in JS, and jsdom doesn't simulate that default action for a
+    // synthetic keydown — so this fires the `submit` event a real Enter
+    // press causes the browser to dispatch, which is what settings-page.tsx
+    // actually listens for.
+    fireEvent.submit(input.closest("form") as HTMLFormElement);
+
+    expect(useSettingsStore.getState().serverUrl).toBe("https://phone.example:41207");
+  });
+
   it("keeps what the user typed when storage refuses the write", () => {
     vi.spyOn(localStorage, "setItem").mockImplementation(() => {
       throw new Error("storage unavailable");
