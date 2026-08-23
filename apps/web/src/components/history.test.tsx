@@ -515,4 +515,70 @@ describe("History", () => {
     expect(screen.getAllByText(/^(first|second|third)$/)).toHaveLength(3);
     expect(spy.mock.calls.length).toBe(callsForOneSeparator);
   });
+
+  // Code review on branch shell-batch: `position: sticky` OCCUPIES FLOW
+  // (it isn't `fixed`), so the old `{showOverlayPill && (<div
+  // className="sticky ...">)}` mounted and unmounted that wrapper on every
+  // flip — changing the height of everything above the bottom-alignment
+  // spacer, which this component measures via `spacerRef.current.offsetTop`
+  // (its own comment). Past the point History is longer than the viewport
+  // that height stops being cancelled out, so every row jumped by about
+  // the pill's height each time a day separator scrolled to the top —
+  // exactly when `showOverlayPill` flips.
+  //
+  // jsdom never lays anything out (see history.tsx's own OVERSCAN comment),
+  // so `offsetTop` itself is always 0 here and can't stand in for the real
+  // regression, and `virtualizer.range` never moves off its initial guess
+  // either — meaning the topmost row is always that day's own separator
+  // and `showOverlayPill` is always the *hidden* case (its own comment).
+  // What this asserts instead is the structural fix that keeps the real
+  // geometry constant: the wrapper renders unconditionally — only the
+  // inner `<span>`'s visibility toggles — so there is always exactly one
+  // element between the top of History and the spacer, never zero.
+  it("keeps the day pill's sticky wrapper mounted (never removed from flow) even while the pill itself is hidden", () => {
+    const { container } = render(
+      <History
+        entries={[entry({ id: "1", body: "first", createdAt: "2026-08-18T15:00:00.000Z" })]}
+        syncEnabled={false}
+      />,
+    );
+
+    const spacer = container.querySelector('[aria-hidden="true"]');
+    expect(spacer).not.toBeNull();
+    // The pill wrapper is the spacer's immediately preceding sibling — the
+    // one thing history.tsx measures itself as "content above the list"
+    // (its own `contentAboveList` comment).
+    const pillWrapper = spacer?.previousElementSibling;
+    expect(pillWrapper).toHaveClass("sticky");
+
+    const pillLabel = pillWrapper?.querySelector("span");
+    expect(pillLabel).not.toBeNull();
+    expect(pillLabel).toHaveClass("invisible");
+    // Withheld, not just visually hidden — see history.tsx's own comment
+    // on why an `invisible` span still carrying the day label would
+    // duplicate the inline separator's own text.
+    expect(pillLabel).toHaveTextContent("");
+  });
+
+  // Code review on branch shell-batch: the zero-viewport fallback used to
+  // map every one of `flatItems` — the exact per-row DOM cost issue #83
+  // exists to remove, paid on a real History's very first paint (before
+  // its first ResizeObserver callback lands), not just under jsdom. This
+  // pins down that a large History renders a bounded number of rows, not
+  // one per Entry, whenever there's no sized scroll element to virtualize
+  // against — jsdom's own case here, and this stands in for a real
+  // browser's first paint too, since both reach the fallback the same way
+  // (history.tsx's own comment on `hasSizedScrollElement`).
+  it("bounds the zero-viewport fallback to a fixed window instead of rendering the whole History", () => {
+    const entries = Array.from({ length: 200 }, (_, i) =>
+      entry({ id: String(i), body: `entry-${i}`, createdAt: "2026-08-18T15:00:00.000Z" }),
+    );
+
+    render(<History entries={entries} syncEnabled={false} />);
+
+    const rendered = screen.getAllByText(/^entry-\d+$/);
+    expect(rendered.length).toBeGreaterThan(0);
+    expect(rendered.length).toBeLessThan(entries.length);
+    expect(rendered.length).toBeLessThanOrEqual(30);
+  });
 });

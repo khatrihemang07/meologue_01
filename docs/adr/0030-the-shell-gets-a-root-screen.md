@@ -29,6 +29,12 @@ Composer, History, Reflect, Digest becomes Composer, Reflect, Digest, Settings. 
 0020 decided — the `/reflect` route inside `EntryStoreLayout`, the Sync-off gate, Settings staying
 a sibling route outside that layout — stands unchanged and is still load-bearing.
 
+Knowingly deviates from [0005](0005-one-vite-application-build-time-platform-seam.md) in one
+narrow place — see **The send chord branches in a shared module** below. 0005's build-time seam
+itself is untouched and still governs every existing platform difference; what this ADR departs
+from is its *Alternatives considered* rejection of branching on the target inside one shared
+module.
+
 Extends [0016](0016-export-per-day-text-plus-a-lossless-manifest-grouped-by-local-day.md) rather
 than superseding it: `EntryStore.list()` gains an optional keyset page argument, and 0016's own
 "a backup that quietly omits things is worse than none" reasoning is why that argument had to stay
@@ -236,6 +242,36 @@ month to read as a heavy month, and a model resolves a contradiction in favour o
 first-read instruction, which is why a heavy month had been reading as a paragraph. No `max_tokens`
 is added on either path — `llm.rs` records that the configured chat endpoint accepts only `model`,
 `messages` and `stream`.
+
+
+**The send chord branches in a shared module, and this deviates from ADR 0005 deliberately.**
+Enter no longer Sends: it inserts a newline, and Sending is a chord that differs by target —
+Android has none (its Send button is the only way), the macOS build takes Cmd strictly because it
+is always macOS, and the web build accepts either Cmd or Ctrl because one bundle runs on every OS
+and a reader pressing the "wrong" modifier still Sending is the failure nobody notices, where an
+OS probe that misfires is one that gets filed.
+
+That rule lives in `apps/web/src/lib/submit-chord.ts`, which reads `import.meta.env.MODE` — not in
+a `src/platform/submit-chord.<target>.ts` seam resolved by Vite alias, which is what 0005's
+Decision prescribes and whose *Alternatives considered* rejects the shape used here in as many
+words. The trade was made explicitly, with 0005's own objection in hand:
+
+- 0005's objection is that a runtime branch ships every target's code in every build and "invites
+  the wrong signals to silently apply on the wrong platform." The first half holds here and is
+  accepted. The second does not: `MODE` is fixed at build time, so a build cannot take another
+  target's branch — unlike the `navigator`-sniffing 0005 was actually arguing against.
+- What 0005's seam exists to isolate is *machinery*: a SQLite driver, a file-save implementation,
+  service-worker registration — modules with imports and lifecycles that genuinely must not be
+  linked into the wrong bundle. This is a three-branch predicate over a keyboard event, with no
+  imports of its own.
+- The predicate takes its mode as an ordinary parameter defaulting to `import.meta.env.MODE`,
+  which is what makes every branch testable without stubbing the environment. A seam file per
+  target would have made the Android branch unreachable from the test build, where `MODE` is
+  `"test"` and matches no target.
+
+The cost is real and recorded rather than argued away: this is now a second place a reader must
+look to answer "what differs by platform", and if a future difference needs real machinery rather
+than a predicate, it belongs in 0005's seam, not beside this.
 
 ## Alternatives considered
 

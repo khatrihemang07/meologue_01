@@ -184,6 +184,18 @@ const ESTIMATED_ROW_HEIGHT_PX = 56;
 // near "render everything," just generous.
 const OVERSCAN = 25;
 
+// Bounds the zero-viewport fallback below (its own comment) — reusing
+// OVERSCAN's own value rather than inventing a second, independent guess:
+// both are answering the same question ("how many rows is it reasonable to
+// render without knowing the real viewport size yet"), and OVERSCAN's own
+// comment already establishes that this codebase's largest single History
+// fixture (a handful of Entries plus their separators) sits comfortably
+// inside it. A real History can hold thousands of Entries; without this
+// cap, that fallback rendered every one of them on a real browser's very
+// first paint (before its first ResizeObserver callback lands) — exactly
+// the per-row DOM cost issue #83 exists to remove.
+const MAX_FALLBACK_ROWS = OVERSCAN;
+
 export function History({ entries, syncEnabled, query = "", onEdit, onDelete }: HistoryProps) {
   // The "which Entry is open" state behind the single shared
   // EntryActionsSheet below (issue #78) — owned here, not per-row, which
@@ -334,6 +346,16 @@ export function History({ entries, syncEnabled, query = "", onEdit, onDelete }: 
   // `getBoundingClientRect()` jsdom always reports as all-zero (every other
   // suite).
   //
+  // The fallback below is keyed on *that cause* — no scroll element, or one
+  // that hasn't measured to a real, non-zero size yet — rather than on
+  // `getVirtualItems()` itself coming back empty, which is only ever a
+  // symptom of it: the same "measured viewport size is exactly zero" shape
+  // a real browser is in for the handful of frames before its first
+  // ResizeObserver callback lands, not something unique to jsdom. Reading
+  // the cause directly, instead of that symptom, is what keeps this from
+  // ever silently also catching some other, unrelated reason a real, sized
+  // viewport's own range might come back empty.
+  //
   // The fallback is built here rather than read off the virtualizer's own
   // `measurementsCache` — that field holds exactly this data in principle,
   // but reading it turned out to be order-sensitive against this repo's own
@@ -348,19 +370,23 @@ export function History({ entries, syncEnabled, query = "", onEdit, onDelete }: 
   // ticket's own jsdom requirement, and a real window's very first paint
   // before its first ResizeObserver callback lands); the moment a genuine
   // viewport size is known, `getVirtualItems()` takes back over and
-  // `measureElement` corrects every row to its real height.
+  // `measureElement` corrects every row to its real height. Sliced to
+  // `MAX_FALLBACK_ROWS` (its own comment) rather than the whole of
+  // `flatItems` — a real History's very first paint is exactly the case
+  // this fallback must never let balloon into "render everything".
+  const viewportHeight = virtualizer.scrollRect?.height ?? 0;
+  const hasSizedScrollElement = scrollElement !== null && viewportHeight > 0;
   const rangedVirtualRows = virtualizer.getVirtualItems();
-  const virtualRows: VirtualItem[] =
-    rangedVirtualRows.length > 0
-      ? rangedVirtualRows
-      : flatItems.map((flatItem, index) => ({
-          index,
-          key: flatItem.key,
-          start: index * ESTIMATED_ROW_HEIGHT_PX,
-          end: (index + 1) * ESTIMATED_ROW_HEIGHT_PX,
-          size: ESTIMATED_ROW_HEIGHT_PX,
-          lane: 0,
-        }));
+  const virtualRows: VirtualItem[] = hasSizedScrollElement
+    ? rangedVirtualRows
+    : flatItems.slice(0, MAX_FALLBACK_ROWS).map((flatItem, index) => ({
+        index,
+        key: flatItem.key,
+        start: index * ESTIMATED_ROW_HEIGHT_PX,
+        end: (index + 1) * ESTIMATED_ROW_HEIGHT_PX,
+        size: ESTIMATED_ROW_HEIGHT_PX,
+        lane: 0,
+      }));
 
   // Issue #83: hands the virtualizer's own `scrollToIndex` up to Shell so
   // `usePinnedScroll` (called there) can jump to the newest row through it
@@ -388,12 +414,12 @@ export function History({ entries, syncEnabled, query = "", onEdit, onDelete }: 
   // flow (`justify-end` has nothing to distribute against an absolutely
   // positioned child; see PinnedThreadConfig's own `ownsBottomAlignment`
   // comment in shell.tsx for the fuller reasoning and why Shell's own
-  // treatment stands down for this page). `scrollRect` is the same
-  // ResizeObserver-backed size the virtualizer measures the scroll element
-  // with — reactive to the window resizing for free, and `{width:0,
+  // treatment stands down for this page). `viewportHeight` (computed above,
+  // alongside the fallback rows that key off this same reading of it) is
+  // the same ResizeObserver-backed size the virtualizer measures the scroll
+  // element with — reactive to the window resizing for free, and `{width:0,
   // height:0}` under jsdom (no ResizeObserver there), which is exactly
   // what floors this at zero in every unit test.
-  const viewportHeight = virtualizer.scrollRect?.height ?? 0;
   const totalSize = virtualizer.getTotalSize();
   const spacerHeight = Math.max(0, viewportHeight - contentAboveList - totalSize);
 
@@ -428,28 +454,75 @@ export function History({ entries, syncEnabled, query = "", onEdit, onDelete }: 
 
   return (
     <div className="flex flex-col">
-      {showOverlayPill && topmostDayKey !== null && (
-        // The always-present pill (issue #83), replacing the old
-        // per-group sticky separator below: `position: sticky` computes
-        // where to stick relative to the nearest ancestor with a
-        // scrolling mechanism, but an ancestor with `transform` set —
-        // exactly what every virtualized row below has, to place it —
-        // gives descendants a *new* containing block and breaks that
-        // calculation. A sticky separator nested inside one of those rows
-        // would stick relative to the row's own, constantly-repositioned
-        // box instead of the real scroll region. This element sits
-        // outside that subtree entirely (a sibling of the spacer and the
-        // virtualized list, not a descendant of either), so `sticky` here
-        // sticks the ordinary way, exactly like the old per-group pill did.
-        <div className="sticky top-0 z-10 flex justify-center py-2">
-          <span
-            title={formatDaySeparatorTitle(topmostDayKey)}
-            className="rounded-full border border-border bg-muted/90 px-3 py-0.5 text-xs font-medium text-muted-foreground backdrop-blur-sm"
-          >
-            {formatDaySeparator(topmostDayKey, todayKey)}
-          </span>
-        </div>
-      )}
+      {/* The always-present pill (issue #83), replacing the old per-group
+          sticky separator below: `position: sticky` computes where to
+          stick relative to the nearest ancestor with a scrolling
+          mechanism, but an ancestor with `transform` set — exactly what
+          every virtualized row below has, to place it — gives descendants
+          a *new* containing block and breaks that calculation. A sticky
+          separator nested inside one of those rows would stick relative
+          to the row's own, constantly-repositioned box instead of the
+          real scroll region. This element sits outside that subtree
+          entirely (a sibling of the spacer and the virtualized list, not
+          a descendant of either), so `sticky` here sticks the ordinary
+          way, exactly like the old per-group pill did.
+
+          Always mounted, never conditionally on `showOverlayPill`: sticky
+          still OCCUPIES FLOW (it isn't `fixed`), so mounting/unmounting
+          this wrapper on every flip changed the height of everything
+          above the spacer below, which reads that height via
+          `spacerRef.current.offsetTop`. Past the point History is longer
+          than the viewport, `spacerHeight` is floored at zero (its own
+          comment) and stops absorbing that change, so every row jumped by
+          about the pill's height each time a day separator scrolled to
+          the top — exactly when `showOverlayPill` flips. Toggling the
+          inner `<span>`'s visibility instead — `invisible`
+          (`visibility: hidden`), never `display: none`, which would pull
+          it out of flow the same way unmounting the wrapper did — keeps
+          this wrapper's own box (padding, border, the line height its
+          font size implies) constant either way, so
+          `spacerRef.current.offsetTop` never moves.
+
+          The label text itself is still withheld while hidden, not just
+          visually suppressed: whenever this pill is visible at all, its
+          day is also the one currently at the top of the flattened list
+          below — either still on screen (a real scroll position) or, at
+          mount and under jsdom, the fallback's own first row (`topIndex`
+          never moves off 0 there — see `topmostItem`'s own comment). An
+          `invisible` span carrying the same label text as that inline
+          separator would leave two DOM nodes with identical text — CSS
+          hides one from sight, but nothing hides it from
+          `getByText`/assistive tech, which is exactly what broke this
+          being unique. Rendering nothing inside instead keeps the box
+          (and so the height) without duplicating the text. */}
+      {/* `h-9` is load-bearing, not styling. This wrapper sits in flow
+          above the spacer `contentAboveList` is measured from, so any
+          change to its height shifts every absolutely-positioned row
+          below — and on a History longer than the viewport `spacerHeight`
+          is floored at 0, so nothing absorbs it. Keeping the element
+          mounted was not enough on its own: withholding the label text
+          (see above) leaves an empty inline span, which collapses to a
+          different height than one containing text, and that was still
+          worth 16px of jump per toggle, measured in a real browser. A
+          fixed height makes the flow contribution independent of the
+          contents entirely. */}
+      <div className="sticky top-0 z-10 flex h-9 items-center justify-center">
+        <span
+          title={
+            showOverlayPill && topmostDayKey !== null
+              ? formatDaySeparatorTitle(topmostDayKey)
+              : undefined
+          }
+          className={cn(
+            "rounded-full border border-border bg-muted/90 px-3 py-0.5 text-xs font-medium text-muted-foreground backdrop-blur-sm",
+            !showOverlayPill && "invisible",
+          )}
+        >
+          {showOverlayPill && topmostDayKey !== null
+            ? formatDaySeparator(topmostDayKey, todayKey)
+            : null}
+        </span>
+      </div>
       {/* The bottom-alignment spacer (issue #83) — see its height's own
           comment above. Also this component's own non-circular measuring
           point for `contentAboveList`, via `spacerRef`; it renders even at

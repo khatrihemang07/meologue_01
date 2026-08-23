@@ -219,18 +219,8 @@ export function Shell({
   pinnedThread,
   search,
 }: ShellProps) {
-  // Issue #83: the imperative escape hatch History registers its
-  // virtualizer's `scrollToIndex` into (see HistoryScrollContext's own
-  // comment above for the full why). A ref, not state — nothing here ever
-  // needs to re-render when *which function* is registered changes, only
-  // to have the current one available the next time `usePinnedScroll`
-  // below decides to jump. `runRegisteredScrollToNewest` is the stable
-  // closure actually handed to that hook: `usePinnedScroll` compares this
-  // option by identity to decide whether to skip rebuilding its own
-  // `scrollToNewest` callback (see that hook's own `scrollToNewestIndex`
-  // doc comment), so this must not be a fresh arrow function every render
-  // the way reading `scrollToNewestRef.current` inline at the call site
-  // below would be.
+  // Issue #83: the escape hatch History registers its virtualizer's
+  // `scrollToIndex` into (see HistoryScrollContext's own comment above).
   // Held in state, not a ref, and that is the whole point: registration has
   // to be observable. usePinnedScroll's pin effect runs on mount, before
   // History has mounted deep enough to register anything, so a ref would

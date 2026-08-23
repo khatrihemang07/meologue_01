@@ -102,8 +102,8 @@ export function SessionsLink() {
 }
 
 // Issue #80: a deliberate way to start a fresh Conversation, now that a
-// bare `/reflect` no longer reliably means "empty" — the resume effect
-// below reads `last-session.ts`'s memory on every such mount and redirects
+// bare `/reflect` no longer reliably means "empty" — the resume effect in
+// `reflection-page.tsx` reads `last-session.ts`'s memory on every such mount and redirects
 // straight back to whatever Session was last open. A plain `<Link
 // to="/reflect">` cannot do this on its own: it would land on that same
 // bare `/reflect`, the resume effect would run exactly the same way it

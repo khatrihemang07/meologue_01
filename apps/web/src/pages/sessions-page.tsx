@@ -104,9 +104,9 @@ export function formatLastUsed(iso: string, now: Date = new Date()): string | nu
  * live in the dialog now.
  *
  * `failed` is the one thing that still renders per-row rather than inside
- * the dialog: Radix's `AlertDialogAction` closes the dialog the instant
- * it's clicked (see ui/alert-dialog.tsx's own top comment for why Cancel
- * and Action both do this), before the DELETE it fires has even resolved
+ * the dialog: ConfirmDialog's destructive action closes the dialog the
+ * instant it's clicked (it is a `Dialog.Close` — see ui/alert-dialog.tsx's
+ * own top comment), before the DELETE it fires has even resolved
  * — so by the time a failure is known, the dialog that named this Session
  * is already gone. A banner pinned to the row is what keeps a failed
  * delete "surfaced, not swallowed" (ADR 0013) once the dialog can no
@@ -411,13 +411,14 @@ export function SessionsPage() {
           rule) — `confirmingSession` is looked up by id each render
           rather than the row handing over the whole Session object,
           since `sessions` is already the single source of truth this
-          page reads from. `null` while `confirmingId` is null (nothing
-          requested) or momentarily stale (the list refetched out from
-          under an id it no longer has, e.g. another Device deleted it
-          first) — either way Radix simply renders nothing, since `open`
-          is false whenever there's no Session to show. */}
+          page reads from. Gating `open` on the Session rather than on
+          `confirmingId` is what makes "no Session, no dialog" true: an id
+          can outlive the Session it names (the list refetches out from
+          under it because another Device deleted it first), and gating on
+          the id would leave a dialog open with no description and an
+          inert Delete. */}
       <ConfirmDialog
-        open={confirmingId !== null}
+        open={confirmingSession !== null}
         onOpenChange={(open) => {
           if (!open) {
             setConfirmingId(null);
