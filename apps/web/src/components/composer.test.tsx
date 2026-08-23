@@ -59,37 +59,71 @@ function EditableComposerHarness({
 }
 
 describe("Composer", () => {
-  it("sends on Enter and clears the textarea", () => {
+  it("inserts a newline on plain Enter, without sending, on every platform (issue #76)", () => {
     const onSend = vi.fn();
     render(<Composer onSend={onSend} />);
 
     fireEvent.change(getTextarea(), { target: { value: "hello" } });
-    fireEvent.keyDown(getTextarea(), { key: "Enter" });
+    const event = fireEvent.keyDown(getTextarea(), { key: "Enter" });
+
+    expect(onSend).not.toHaveBeenCalled();
+    // preventDefault() was not called — the textarea's own default
+    // behaviour (inserting a newline) was left alone, the same as any
+    // other unhandled key.
+    expect(event).toBe(true);
+  });
+
+  it("sends on Cmd+Enter and clears the textarea", () => {
+    const onSend = vi.fn();
+    render(<Composer onSend={onSend} />);
+
+    fireEvent.change(getTextarea(), { target: { value: "hello" } });
+    fireEvent.keyDown(getTextarea(), { key: "Enter", metaKey: true });
 
     expect(onSend).toHaveBeenCalledWith("hello");
     expect(getTextarea()).toHaveValue("");
   });
 
-  it("does not send on Shift+Enter, leaving the default newline behavior alone", () => {
+  it("sends on Ctrl+Enter (vitest's mode falls through to the desktop rule)", () => {
     const onSend = vi.fn();
     render(<Composer onSend={onSend} />);
 
     fireEvent.change(getTextarea(), { target: { value: "hello" } });
-    const event = fireEvent.keyDown(getTextarea(), { key: "Enter", shiftKey: true });
+    fireEvent.keyDown(getTextarea(), { key: "Enter", ctrlKey: true });
+
+    expect(onSend).toHaveBeenCalledWith("hello");
+  });
+
+  it("does not send on Shift+Enter, leaving the default newline behavior alone, even with a modifier also held", () => {
+    const onSend = vi.fn();
+    render(<Composer onSend={onSend} />);
+
+    fireEvent.change(getTextarea(), { target: { value: "hello" } });
+    const event = fireEvent.keyDown(getTextarea(), {
+      key: "Enter",
+      shiftKey: true,
+      metaKey: true,
+    });
 
     expect(onSend).not.toHaveBeenCalled();
     expect(event).toBe(true); // preventDefault() was not called
   });
 
-  it("does not send whitespace-only input, on Enter or via the button", () => {
+  it("does not send whitespace-only input, on the chord or via the button", () => {
     const onSend = vi.fn();
     render(<Composer onSend={onSend} />);
 
     fireEvent.change(getTextarea(), { target: { value: "   " } });
-    fireEvent.keyDown(getTextarea(), { key: "Enter" });
+    fireEvent.keyDown(getTextarea(), { key: "Enter", metaKey: true });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("shows the send-chord hint, naming both modifiers under the test/web rule", () => {
+    render(<Composer onSend={vi.fn()} />);
+
+    expect(screen.getByText("⌘↵ or Ctrl↵ to send")).toBeInTheDocument();
   });
 
   it("sends when the Send button is clicked", () => {
@@ -110,12 +144,12 @@ describe("Composer", () => {
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
   });
 
-  it("ignores Enter and the Send button while disabled", () => {
+  it("ignores the send chord and the Send button while disabled", () => {
     const onSend = vi.fn();
     render(<Composer onSend={onSend} disabled />);
 
     fireEvent.change(getTextarea(), { target: { value: "hello" } });
-    fireEvent.keyDown(getTextarea(), { key: "Enter" });
+    fireEvent.keyDown(getTextarea(), { key: "Enter", metaKey: true });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     expect(onSend).not.toHaveBeenCalled();
@@ -169,7 +203,7 @@ describe("Composer", () => {
       fireEvent.click(screen.getByRole("button", { name: "Start editing" }));
       fireEvent.change(getTextarea(), { target: { value: "   " } });
       fireEvent.click(screen.getByRole("button", { name: "Send" }));
-      fireEvent.keyDown(getTextarea(), { key: "Enter" });
+      fireEvent.keyDown(getTextarea(), { key: "Enter", metaKey: true });
 
       expect(onCommitEdit).not.toHaveBeenCalled();
       // Still in edit mode — refusing the commit didn't silently fall back

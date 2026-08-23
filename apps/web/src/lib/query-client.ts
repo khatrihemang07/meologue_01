@@ -18,7 +18,9 @@ export const queryClient = new QueryClient({
     // needs network — `sync()` — isn't itself a query or mutation (it's a
     // plain async call inside use-history.ts's sync loop), so it isn't
     // affected by this and still fails/retries normally when offline.
-    queries: { networkMode: "always" },
+    queries: {
+      networkMode: "always",
+    },
     mutations: { networkMode: "always" },
   },
 });

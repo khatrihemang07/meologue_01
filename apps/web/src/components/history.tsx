@@ -1,6 +1,16 @@
 import type { Entry } from "@meologue/core";
+import {
+  measureElement as measureElementDefault,
+  useVirtualizer,
+  type VirtualItem,
+} from "@tanstack/react-virtual";
+import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { EntryActionsSheet } from "@/components/entry-actions";
 import { EntryRow } from "@/components/entry-row";
+import { HistoryScrollContext } from "@/components/shell";
+import { ConfirmDialog } from "@/components/ui/alert-dialog";
 import { deviceUtcOffsetMinutes, entryDayKey, formatDaySeparator } from "@/lib/entry-day";
+import { cn } from "@/lib/utils";
 
 interface HistoryProps {
   entries: Entry[];
@@ -20,13 +30,14 @@ interface HistoryProps {
    */
   query?: string;
   /**
-   * Wires the Edit/Delete context menu (ADR 0028) onto every row this
-   * renders. Both undefined and both present, never one or the other —
-   * see EntryRow's own `actions` prop, which this simply assembles and
-   * forwards. Every caller of History (composer-page.tsx's footer,
-   * history-page.tsx) passes both; nothing here defaults them to a no-op,
-   * because a silently-broken menu item is worse than a type error at the
-   * call site that forgot one.
+   * Wires Edit/Delete (issue #78; ADR 0028) onto every row this renders.
+   * Both undefined and both present, never one or the other — see
+   * EntryRow's own `actions` prop, which this assembles (alongside the
+   * sheet-open setter below) and forwards. composer-page.tsx's footer,
+   * History's one remaining caller since issue #75 deleted `/history`'s
+   * own page, passes both; nothing here defaults them to a no-op, because
+   * a silently-broken action is worse than a type error at the call site
+   * that forgot one.
    */
   onEdit?: (entry: Entry) => void;
   onDelete?: (entry: Entry) => void;
@@ -74,21 +85,364 @@ function groupByDay(entries: Entry[], offsetMinutes: number): DayGroup[] {
 // none. `dayKey` is parsed as UTC midnight, matching `formatDaySeparator`'s
 // own parse in entry-day.ts, so the two never disagree about which day a
 // key names.
+// Same fast-path trap as entry-day.ts/entry-time.ts's own formatters
+// (issue #81): `toLocaleDateString` with an options bag builds a fresh
+// `Intl.DateTimeFormat` per call. This one's options are entirely fixed —
+// `timeZone` is always the literal "UTC" here, never a per-call argument —
+// so, unlike `formatDaySeparator` next door in entry-day.ts, a single
+// lazily-built instance covers every call; no keyed cache needed.
+let daySeparatorTitleFormatter: Intl.DateTimeFormat | undefined;
+function getDaySeparatorTitleFormatter(): Intl.DateTimeFormat {
+  if (daySeparatorTitleFormatter === undefined) {
+    daySeparatorTitleFormatter = new Intl.DateTimeFormat(undefined, {
+      dateStyle: "full",
+      timeZone: "UTC",
+    });
+  }
+  return daySeparatorTitleFormatter;
+}
+
 function formatDaySeparatorTitle(dayKey: string): string | undefined {
   const parsed = Date.parse(`${dayKey}T00:00:00.000Z`);
   if (Number.isNaN(parsed)) {
     return undefined;
   }
-  return new Date(parsed).toLocaleDateString(undefined, { dateStyle: "full", timeZone: "UTC" });
+  return getDaySeparatorTitleFormatter().format(parsed);
 }
 
+// Issue #83: one flattened row for `@tanstack/react-virtual` to index —
+// separators and Entries alike, in reading order, since the virtualizer has
+// no notion of "a group" and needs every rendered thing to be one item at
+// one index. `key` is what `getItemKey` (below) hands the virtualizer
+// instead of the plain array index virtual-core defaults to: prepending an
+// older page (issue #79) shifts every existing item's *index* by however
+// many rows landed above it, and the virtualizer caches measured sizes by
+// whatever `getItemKey` returns — keying by index instead would apply
+// yesterday's measured height to a row that used to be at that index and
+// no longer is, which is exactly the "overlap, gaps, drift" this ticket's
+// acceptance criteria rule out. An Entry's own id is already a stable,
+// globally-unique key (CONTEXT.md: minted on the Device that created it);
+// a separator's day key is equally stable and, within one flattened list,
+// equally unique (groupByDay only ever emits one run per day).
+interface FlatSeparatorItem {
+  kind: "separator";
+  key: string;
+  dayKey: string;
+}
+interface FlatEntryItem {
+  kind: "entry";
+  key: string;
+  entry: Entry;
+  /** Which day this row belongs to — null mirrors its group's own unparseable-date case. Read by the always-present pill to know which day the topmost rendered row is in. */
+  dayKey: string | null;
+  /** True for the first Entry in its group — the one row in each run that gets no divider above it (see the render below, replacing the old `divide-y` wrapper a virtualized list can't use: rows are no longer necessarily adjacent DOM siblings). */
+  isFirstInGroup: boolean;
+}
+type FlatItem = FlatSeparatorItem | FlatEntryItem;
+
+function flattenGroups(groups: DayGroup[]): FlatItem[] {
+  const items: FlatItem[] = [];
+  for (const group of groups) {
+    if (group.dayKey !== null) {
+      items.push({ kind: "separator", key: `sep:${group.dayKey}`, dayKey: group.dayKey });
+    }
+    group.entries.forEach((entry, index) => {
+      items.push({
+        kind: "entry",
+        key: entry.id,
+        entry,
+        dayKey: group.dayKey,
+        isFirstInGroup: index === 0,
+      });
+    });
+  }
+  return items;
+}
+
+// A single-line Entry row's rough height, in px — just a starting guess for
+// rows the virtualizer hasn't measured yet (its own `measureElement`, wired
+// onto each rendered row below, corrects it against the real, wrapped
+// height the instant a row actually renders). Separators render shorter
+// than this; that's fine, the same correction applies to them too.
+const ESTIMATED_ROW_HEIGHT_PX = 56;
+
+// jsdom lays nothing out — `getBoundingClientRect` is always zero, so the
+// scroll element's measured size is always `{width: 0, height: 0}` in every
+// test in history.test.tsx (which renders `<History>` with no `<Shell>`
+// around it, so there's no real scroll element at all) and in every other
+// suite that renders it through `<Shell>` without hand-setting
+// `scrollHeight`/`clientHeight` the way shell.test.tsx and
+// use-pinned-scroll.test.tsx do for their own, narrower assertions. With a
+// zero-size viewport the virtualizer's own range calculation only ever
+// wants to render the handful of rows nearest `scrollTop` (see
+// `calculateRangeImpl` in `@tanstack/virtual-core`) — `overscan` is what
+// pads that range back out regardless of viewport size, so a value at
+// least as large as any fixture in this codebase's test suites (the
+// largest is a few Entries plus their separators) keeps every row actually
+// rendered and queryable under jsdom, the same as before virtualization.
+// It's a perfectly reasonable overscan for a real window too — nowhere
+// near "render everything," just generous.
+const OVERSCAN = 25;
+
+// Bounds the zero-viewport fallback below (its own comment) — reusing
+// OVERSCAN's own value rather than inventing a second, independent guess:
+// both are answering the same question ("how many rows is it reasonable to
+// render without knowing the real viewport size yet"), and OVERSCAN's own
+// comment already establishes that this codebase's largest single History
+// fixture (a handful of Entries plus their separators) sits comfortably
+// inside it. A real History can hold thousands of Entries; without this
+// cap, that fallback rendered every one of them on a real browser's very
+// first paint (before its first ResizeObserver callback lands) — exactly
+// the per-row DOM cost issue #83 exists to remove.
+const MAX_FALLBACK_ROWS = OVERSCAN;
+
 export function History({ entries, syncEnabled, query = "", onEdit, onDelete }: HistoryProps) {
+  // The "which Entry is open" state behind the single shared
+  // EntryActionsSheet below (issue #78) — owned here, not per-row, which
+  // is what keeps exactly one sheet instance in the DOM no matter how many
+  // rows this renders. null means closed; a row's tap (touch device) or
+  // right-click (pointer device, optional) sets it via onOpenSheet below.
+  const [sheetEntry, setSheetEntry] = useState<Entry | null>(null);
+
+  // The Entry awaiting a delete confirmation, or null when no dialog is
+  // open (issue #82). It lives here for the same reason `sheetEntry` does:
+  // this is the one component above every row, so one dialog serves all of
+  // them. Choosing Delete — from a hover button or from the sheet — sets
+  // this rather than deleting, and only the dialog's own confirm calls the
+  // real `onDelete` below.
+  const [confirmEntry, setConfirmEntry] = useState<Entry | null>(null);
+
   // Both-or-neither (see the props' own comment): assembled once here
   // rather than re-checked per row, and `undefined` when either is missing
-  // so EntryRow's own default ("no actions prop" -> "no menu") is what
-  // actually governs the no-menu case, instead of this component
-  // duplicating that decision.
-  const actions = onEdit && onDelete ? { onEdit, onDelete } : undefined;
+  // so EntryRow's own default ("no actions prop" -> "no actions") is what
+  // actually governs the no-actions case, instead of this component
+  // duplicating that decision. `onOpenSheet` is folded in here rather than
+  // being a third prop composer-page.tsx has to pass — it's this
+  // component's own state setter, not something an outside caller has any
+  // business supplying.
+  //
+  // Memoised (issue #81) so this is the same object across renders whenever
+  // `onEdit`/`onDelete` themselves are: every row below receives `actions`
+  // as a prop, and `React.memo` on EntryRow (entry-row.tsx) only skips a
+  // row's re-render if every one of its props is `===` the last render's —
+  // rebuilding this object inline, as before, would hand every row a fresh
+  // `actions` reference each time and defeat that memoisation entirely,
+  // even though nothing it points to actually changed.
+  const actions = useMemo(
+    () =>
+      onEdit && onDelete
+        ? { onEdit, onDelete: setConfirmEntry, onOpenSheet: setSheetEntry }
+        : undefined,
+    [onEdit, onDelete],
+  );
+
+  // `groupByDay` is the one genuinely O(entries.length) piece of render-body
+  // work here (issue #81) — memoised so a render this component takes for
+  // an unrelated reason (e.g. `query` changing, which doesn't affect
+  // grouping) doesn't re-walk the whole Entry list. `deviceUtcOffsetMinutes`
+  // and `entryDayKey` just below stay un-memoised on purpose: both are O(1)
+  // (one `Date` read, one UTC-parts split), so recomputing them every
+  // render costs nothing, and it's what keeps `todayKey` correct across a
+  // midnight boundary within one session — folding them into the same memo
+  // as `groups` (keyed on `entries`) would freeze "Today" as whatever day
+  // it was when `entries` last changed, which could be wrong for however
+  // long the reader sits on this page with nothing new arriving.
+  const offsetMinutes = deviceUtcOffsetMinutes();
+  const todayKey = entryDayKey(new Date().toISOString(), offsetMinutes) ?? "";
+  const groups = useMemo(() => groupByDay(entries, offsetMinutes), [entries, offsetMinutes]);
+
+  // Issue #83: separators flattened in alongside Entries — see FlatItem's
+  // own comment for why this needs a real, stable per-row key rather than
+  // just position. Cheap (one pass over what `groups` already computed) and
+  // memoised on `groups` alone, the same reasoning as `groups`' own memo
+  // just above: a render triggered by something grouping doesn't depend on
+  // (`query` changing, say) must not re-walk the Entries a second time.
+  const flatItems = useMemo(() => flattenGroups(groups), [groups]);
+
+  // Issue #83: the scroll element and the upward jump-to-newest hookup —
+  // see HistoryScrollContext's own comment (shell.tsx) for why both cross
+  // this boundary as a context rather than a prop Shell would have to know
+  // the shape of.
+  const { scrollElement, registerScrollToNewest } = useContext(HistoryScrollContext);
+
+  // The one thing this measures itself, rather than asking Shell for it:
+  // how much of *this component's own* rendered content — the
+  // always-present day pill below, mainly — sits above the virtualized
+  // list, in the same pixel space as the scroll element's own height. A
+  // `<div>` with no height of its own placed immediately before the
+  // virtualized list's sizer; its `offsetTop`, once real layout has run,
+  // is exactly that quantity (relative to Shell's scroll region, which is
+  // why that element needs `position: relative` — see its own comment).
+  // Deliberately *not* measured from the sizer itself: the sizer's own
+  // offsetTop would include this spacer's own height, and this spacer's
+  // height is exactly what the calculation below is solving for — a
+  // circular measurement that would either read one render stale or (worse)
+  // never settle. Marking the boundary with its own, empty, non-circular
+  // element sidesteps that entirely.
+  const spacerRef = useRef<HTMLDivElement>(null);
+  const [contentAboveList, setContentAboveList] = useState(0);
+  // No dependency array: re-measures after every commit. Cheap (one
+  // `offsetTop` read) and correct however what's above the list changes —
+  // the always-present pill appearing/disappearing as the topmost visible
+  // day changes, most often. The explicit equality check earns its keep
+  // beyond the obvious "skip a pointless render": calling the setter
+  // unconditionally every commit — even with a value React's own
+  // `Object.is` bailout would otherwise have caught — measurably cost an
+  // extra invocation of this whole component on top of a render already in
+  // flight from a prop change (a second `todayKey` computation
+  // history.test.tsx's own memoisation test counts), rather than being
+  // free just because the state ends up unchanged.
+  useLayoutEffect(() => {
+    const next = spacerRef.current?.offsetTop ?? 0;
+    if (next !== contentAboveList) {
+      setContentAboveList(next);
+    }
+  });
+
+  const virtualizer = useVirtualizer({
+    count: flatItems.length,
+    getScrollElement: () => scrollElement,
+    estimateSize: () => ESTIMATED_ROW_HEIGHT_PX,
+    overscan: OVERSCAN,
+    // Issue #79/#83: see FlatItem's own comment — measured sizes must
+    // follow the row, not the index, across a prepend.
+    getItemKey: (index) => flatItems[index]?.key ?? index,
+    scrollMargin: contentAboveList,
+    // jsdom never lays anything out, so the default `measureElement` — real
+    // browser or not, it falls back to `element.offsetHeight` whenever
+    // there's no ResizeObserver `entry` to read a real size from, which is
+    // always, under jsdom — reports 0 for every row the instant its ref
+    // attaches. Correcting the estimate down to a real 0 is exactly what
+    // measurement is for in a real browser; in jsdom it is never real, and
+    // "every row's size changed" is exactly the kind of change that forces
+    // an extra render, which is what actually broke this: History re-runs
+    // its own `todayKey` computation (deliberately unmemoised — see its own
+    // comment above) on every render, so an extra virtualizer-driven render
+    // on mount meant an extra `entryDayKey` call history.test.tsx's own
+    // memoisation test counts exactly. Delegating to the library's own
+    // `measureElement` first keeps every real code path (ResizeObserver
+    // entries, `useCachedMeasurements`) exactly as it ships; the only thing
+    // added is treating a *measured* zero as "not actually measured" and
+    // keeping whatever size this row already had — the running estimate,
+    // or an earlier genuine measurement — instead of "correcting" to it.
+    measureElement: (element, entry, instance) => {
+      const measured = measureElementDefault(element, entry, instance);
+      if (measured > 0) {
+        return measured;
+      }
+      const index = instance.indexFromElement(element);
+      const key = instance.options.getItemKey(index);
+      return instance.itemSizeCache.get(key) ?? instance.options.estimateSize(index);
+    },
+  });
+  // `getVirtualItems()` comes back *empty* — not overscan-padded, actually
+  // empty — whenever the virtualizer's measured viewport size is exactly
+  // zero: `calculateRange` (`@tanstack/virtual-core`) bails out to "no
+  // range" before `overscan` ever gets a say, rather than treating a
+  // zero-size viewport as a viewport with nothing visible plus overscan
+  // around it. That's the real shape of both cases this ticket needs
+  // handled: no `scrollElement` at all (history.test.tsx renders `<History>`
+  // with no `<Shell>` around it) and a genuine `scrollElement` whose
+  // `getBoundingClientRect()` jsdom always reports as all-zero (every other
+  // suite).
+  //
+  // The fallback below is keyed on *that cause* — no scroll element, or one
+  // that hasn't measured to a real, non-zero size yet — rather than on
+  // `getVirtualItems()` itself coming back empty, which is only ever a
+  // symptom of it: the same "measured viewport size is exactly zero" shape
+  // a real browser is in for the handful of frames before its first
+  // ResizeObserver callback lands, not something unique to jsdom. Reading
+  // the cause directly, instead of that symptom, is what keeps this from
+  // ever silently also catching some other, unrelated reason a real, sized
+  // viewport's own range might come back empty.
+  //
+  // The fallback is built here rather than read off the virtualizer's own
+  // `measurementsCache` — that field holds exactly this data in principle,
+  // but reading it turned out to be order-sensitive against this repo's own
+  // integration (this hook's `getItemKey` is a fresh closure every render,
+  // which defeats `@tanstack/virtual-core`'s internal memoisation of it —
+  // see `getItemKey`'s own comment above — and observed behaviour reading
+  // `measurementsCache` shifted between renders in a way this comment isn't
+  // going to promise an explanation for holding up). Every position below
+  // uses the same flat `ESTIMATED_ROW_HEIGHT_PX` per row rather than
+  // anything the virtualizer has actually measured — acceptable because
+  // this path only exists to guarantee *something* real renders (this
+  // ticket's own jsdom requirement, and a real window's very first paint
+  // before its first ResizeObserver callback lands); the moment a genuine
+  // viewport size is known, `getVirtualItems()` takes back over and
+  // `measureElement` corrects every row to its real height. Sliced to
+  // `MAX_FALLBACK_ROWS` (its own comment) rather than the whole of
+  // `flatItems` — a real History's very first paint is exactly the case
+  // this fallback must never let balloon into "render everything".
+  const viewportHeight = virtualizer.scrollRect?.height ?? 0;
+  const hasSizedScrollElement = scrollElement !== null && viewportHeight > 0;
+  const rangedVirtualRows = virtualizer.getVirtualItems();
+  const virtualRows: VirtualItem[] = hasSizedScrollElement
+    ? rangedVirtualRows
+    : flatItems.slice(0, MAX_FALLBACK_ROWS).map((flatItem, index) => ({
+        index,
+        key: flatItem.key,
+        start: index * ESTIMATED_ROW_HEIGHT_PX,
+        end: (index + 1) * ESTIMATED_ROW_HEIGHT_PX,
+        size: ESTIMATED_ROW_HEIGHT_PX,
+        lane: 0,
+      }));
+
+  // Issue #83: hands the virtualizer's own `scrollToIndex` up to Shell so
+  // `usePinnedScroll` (called there) can jump to the newest row through it
+  // instead of the `scrollTop = scrollHeight` default that only ever
+  // worked when every row was really in the DOM — see
+  // HistoryScrollContext's own comment. Re-registers whenever the count
+  // changes (an Entry arriving moves which index is "newest"); unregisters
+  // on unmount so Shell can never call into a virtualizer that's gone.
+  useEffect(() => {
+    if (flatItems.length === 0) {
+      registerScrollToNewest(null);
+      return;
+    }
+    const newestIndex = flatItems.length - 1;
+    registerScrollToNewest(() => {
+      virtualizer.scrollToIndex(newestIndex, { align: "end" });
+    });
+    return () => registerScrollToNewest(null);
+  }, [flatItems.length, registerScrollToNewest, virtualizer]);
+
+  // Issue #83's bottom alignment: however much shorter the virtualized
+  // list is than the viewport, floored at zero — a leading spacer that
+  // pushes a short History down against the Composer instead of the
+  // `min-h-full justify-end` ADR 0018 used before rows were removed from
+  // flow (`justify-end` has nothing to distribute against an absolutely
+  // positioned child; see PinnedThreadConfig's own `ownsBottomAlignment`
+  // comment in shell.tsx for the fuller reasoning and why Shell's own
+  // treatment stands down for this page). `viewportHeight` (computed above,
+  // alongside the fallback rows that key off this same reading of it) is
+  // the same ResizeObserver-backed size the virtualizer measures the scroll
+  // element with — reactive to the window resizing for free, and `{width:0,
+  // height:0}` under jsdom (no ResizeObserver there), which is exactly
+  // what floors this at zero in every unit test.
+  const totalSize = virtualizer.getTotalSize();
+  const spacerHeight = Math.max(0, viewportHeight - contentAboveList - totalSize);
+
+  // Issue #83's always-present day pill: which day the topmost *visible*
+  // row belongs to — `range` (not `getVirtualItems()[0]`, which includes
+  // overscan rendered above what's actually on screen and would name the
+  // day one scroll-frame too early). Falls back to the very first
+  // flattened row once nothing has been measured yet (mount, or jsdom,
+  // where `range` never moves off its initial guess).
+  const topIndex = virtualizer.range?.startIndex ?? 0;
+  const topmostItem = flatItems[topIndex] ?? flatItems[0];
+  const topmostDayKey = topmostItem?.dayKey ?? null;
+  // The topmost visible row is itself that day's own (flattened, inline)
+  // separator exactly when the reader has scrolled to right where a day
+  // begins — including the very first paint, where the oldest day's own
+  // separator sits at the top of everything. Showing the always-present
+  // pill *too*, right then, would put the same day's name on screen twice
+  // — the inline separator already doing the job the pill exists for.
+  // `position: sticky` can't decide this the way the old, one-pill-per-day
+  // implementation did (see the pill's own comment below), so this is that
+  // same "hand off once the current one scrolls out of the way" judgement,
+  // made explicitly in JS instead.
+  const showOverlayPill = topmostDayKey !== null && topmostItem?.kind !== "separator";
 
   if (entries.length === 0) {
     return (
@@ -98,45 +452,185 @@ export function History({ entries, syncEnabled, query = "", onEdit, onDelete }: 
     );
   }
 
-  const offsetMinutes = deviceUtcOffsetMinutes();
-  const todayKey = entryDayKey(new Date().toISOString(), offsetMinutes) ?? "";
-  const groups = groupByDay(entries, offsetMinutes);
-
   return (
     <div className="flex flex-col">
-      {groups.map((group, index) => (
-        // biome-ignore lint/suspicious/noArrayIndexKey: a day's own key isn't unique across the whole thread (a null-dayKey Entry gets a fresh group every time — see groupByDay), and groups never reorder, so position is the stable identity here.
-        <div key={index}>
-          {group.dayKey !== null && (
-            // Sticky within History's scrolling ancestor (Shell's
-            // overflow-y-auto content region) — no scroller component of
-            // its own to build here, `position: sticky` on this pill is
-            // enough to float it while its day's Entries scroll underneath,
-            // and to hand off to the next separator once this day's last
-            // Entry scrolls past (ticket 52; scroll pinning is #53's, not
-            // this).
-            <div className="sticky top-0 z-10 flex justify-center py-2">
-              <span
-                title={formatDaySeparatorTitle(group.dayKey)}
-                className="rounded-full border border-border bg-muted/90 px-3 py-0.5 text-xs font-medium text-muted-foreground backdrop-blur-sm"
-              >
-                {formatDaySeparator(group.dayKey, todayKey)}
-              </span>
-            </div>
+      {/* The always-present pill (issue #83), replacing the old per-group
+          sticky separator below: `position: sticky` computes where to
+          stick relative to the nearest ancestor with a scrolling
+          mechanism, but an ancestor with `transform` set — exactly what
+          every virtualized row below has, to place it — gives descendants
+          a *new* containing block and breaks that calculation. A sticky
+          separator nested inside one of those rows would stick relative
+          to the row's own, constantly-repositioned box instead of the
+          real scroll region. This element sits outside that subtree
+          entirely (a sibling of the spacer and the virtualized list, not
+          a descendant of either), so `sticky` here sticks the ordinary
+          way, exactly like the old per-group pill did.
+
+          Always mounted, never conditionally on `showOverlayPill`: sticky
+          still OCCUPIES FLOW (it isn't `fixed`), so mounting/unmounting
+          this wrapper on every flip changed the height of everything
+          above the spacer below, which reads that height via
+          `spacerRef.current.offsetTop`. Past the point History is longer
+          than the viewport, `spacerHeight` is floored at zero (its own
+          comment) and stops absorbing that change, so every row jumped by
+          about the pill's height each time a day separator scrolled to
+          the top — exactly when `showOverlayPill` flips. Toggling the
+          inner `<span>`'s visibility instead — `invisible`
+          (`visibility: hidden`), never `display: none`, which would pull
+          it out of flow the same way unmounting the wrapper did — keeps
+          this wrapper's own box (padding, border, the line height its
+          font size implies) constant either way, so
+          `spacerRef.current.offsetTop` never moves.
+
+          The label text itself is still withheld while hidden, not just
+          visually suppressed: whenever this pill is visible at all, its
+          day is also the one currently at the top of the flattened list
+          below — either still on screen (a real scroll position) or, at
+          mount and under jsdom, the fallback's own first row (`topIndex`
+          never moves off 0 there — see `topmostItem`'s own comment). An
+          `invisible` span carrying the same label text as that inline
+          separator would leave two DOM nodes with identical text — CSS
+          hides one from sight, but nothing hides it from
+          `getByText`/assistive tech, which is exactly what broke this
+          being unique. Rendering nothing inside instead keeps the box
+          (and so the height) without duplicating the text. */}
+      {/* `h-9` is load-bearing, not styling. This wrapper sits in flow
+          above the spacer `contentAboveList` is measured from, so any
+          change to its height shifts every absolutely-positioned row
+          below — and on a History longer than the viewport `spacerHeight`
+          is floored at 0, so nothing absorbs it. Keeping the element
+          mounted was not enough on its own: withholding the label text
+          (see above) leaves an empty inline span, which collapses to a
+          different height than one containing text, and that was still
+          worth 16px of jump per toggle, measured in a real browser. A
+          fixed height makes the flow contribution independent of the
+          contents entirely. */}
+      <div className="sticky top-0 z-10 flex h-9 items-center justify-center">
+        <span
+          title={
+            showOverlayPill && topmostDayKey !== null
+              ? formatDaySeparatorTitle(topmostDayKey)
+              : undefined
+          }
+          className={cn(
+            "rounded-full border border-border bg-muted/90 px-3 py-0.5 text-xs font-medium text-muted-foreground backdrop-blur-sm",
+            !showOverlayPill && "invisible",
           )}
-          <div className="divide-y divide-border">
-            {group.entries.map((entry) => (
-              <EntryRow
-                key={entry.id}
-                entry={entry}
-                query={query}
-                syncEnabled={syncEnabled}
-                actions={actions}
-              />
-            ))}
-          </div>
-        </div>
-      ))}
+        >
+          {showOverlayPill && topmostDayKey !== null
+            ? formatDaySeparator(topmostDayKey, todayKey)
+            : null}
+        </span>
+      </div>
+      {/* The bottom-alignment spacer (issue #83) — see its height's own
+          comment above. Also this component's own non-circular measuring
+          point for `contentAboveList`, via `spacerRef`; it renders even at
+          zero height so that measurement always has something to attach
+          to. */}
+      <div ref={spacerRef} style={{ height: spacerHeight }} aria-hidden="true" />
+      <div style={{ position: "relative", height: totalSize, width: "100%" }}>
+        {virtualRows.map((virtualRow) => {
+          const item = flatItems[virtualRow.index];
+          if (!item) {
+            return null;
+          }
+          return (
+            <div
+              key={virtualRow.key}
+              data-index={virtualRow.index}
+              ref={virtualizer.measureElement}
+              // `top: 0` plus `transform: translateY` — not a plain `top`
+              // offset — is `@tanstack/react-virtual`'s own documented
+              // positioning shape (its `scrollMargin` accounting already
+              // assumes it), and it's a GPU-composited move rather than a
+              // layout-triggering one, which matters once there are enough
+              // rows scrolling past for the difference to be visible.
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                width: "100%",
+                transform: `translateY(${virtualRow.start - contentAboveList}px)`,
+              }}
+            >
+              {item.kind === "separator" ? (
+                // The inline, in-flow separator (ticket 52) — no longer
+                // itself `sticky` (see the always-present pill's own
+                // comment above for why that stopped working once rows
+                // moved out of flow); it still renders right where its
+                // day's Entries begin, exactly as before.
+                <div className="flex justify-center py-2">
+                  <span
+                    title={formatDaySeparatorTitle(item.dayKey)}
+                    className="rounded-full border border-border bg-muted/90 px-3 py-0.5 text-xs font-medium text-muted-foreground backdrop-blur-sm"
+                  >
+                    {formatDaySeparator(item.dayKey, todayKey)}
+                  </span>
+                </div>
+              ) : (
+                // Issue #83's replacement for the old `divide-y` wrapper:
+                // rows are no longer guaranteed adjacent DOM siblings (only
+                // whatever's near the viewport is actually rendered), so
+                // the divider has to travel with the row it belongs to
+                // instead of coming from a shared ancestor. `isFirstInGroup`
+                // (flattenGroups, above) is exactly the boundary `divide-y`
+                // used to find structurally, computed once instead.
+                <div className={cn(!item.isFirstInGroup && "border-t border-border")}>
+                  <EntryRow
+                    entry={item.entry}
+                    query={query}
+                    syncEnabled={syncEnabled}
+                    actions={actions}
+                  />
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {actions && (
+        // The one EntryActionsSheet instance for however many rows are
+        // above (issue #78) — rendered here, once, rather than inside the
+        // `.map` that builds each EntryRow. Only mounted when `actions` is
+        // present at all: with no Edit/Delete wired up, nothing can ever
+        // set `sheetEntry`, so there is nothing for a sheet to show.
+        <EntryActionsSheet
+          entry={sheetEntry}
+          onOpenChange={(open) => {
+            if (!open) {
+              setSheetEntry(null);
+            }
+          }}
+          onEdit={actions.onEdit}
+          onDelete={actions.onDelete}
+        />
+      )}
+      {onDelete && (
+        // The one confirm dialog for however many rows are above (issue
+        // #82). Guarded on the real `onDelete` rather than on `actions`,
+        // because `actions` already hands rows a *requester* — this is the
+        // only place the actual delete is reachable from.
+        <ConfirmDialog
+          open={confirmEntry !== null}
+          onOpenChange={(open) => {
+            // Escape, an outside click and Cancel all arrive here with
+            // `open === false`, and none of them may delete anything.
+            if (!open) {
+              setConfirmEntry(null);
+            }
+          }}
+          title="Delete this Entry?"
+          description="This can't be undone."
+          confirmLabel="Delete"
+          onConfirm={() => {
+            if (confirmEntry) {
+              onDelete(confirmEntry);
+            }
+            setConfirmEntry(null);
+          }}
+        />
+      )}
     </div>
   );
 }

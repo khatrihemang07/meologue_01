@@ -4,6 +4,7 @@ import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { normalizeEntryBody } from "@/lib/entry-text";
+import { isSubmitChord, submitHint } from "@/lib/submit-chord";
 
 interface ComposerProps {
   onSend: (body: string) => void;
@@ -118,8 +119,23 @@ export function Composer({
     onCancelEdit?.();
   };
 
+  // Issue #76: "a chord nobody can see is a chord nobody uses" — desktop
+  // targets (macos, web, and vitest's "test" fallback) get this rendered
+  // below; `null` on android, where Send is button-only and there's no
+  // chord to advertise. A plain function call, not memoised state: the
+  // build's mode never changes at runtime (ADR 0005), so this is as cheap
+  // on every render as reading a constant would be.
+  const hint = submitHint();
+
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === "Enter" && !event.shiftKey) {
+    // Issue #76: plain Enter is no longer Send on any platform — it falls
+    // through and lets the textarea insert its own newline, the same as
+    // every other unhandled key. Only the platform-specific chord
+    // (submit-chord.ts) sends; letting Enter through with no
+    // preventDefault() is what makes multi-line composition possible at
+    // all, since Shift+Enter was previously the *only* way to get a
+    // newline in here.
+    if (isSubmitChord(event)) {
       event.preventDefault();
       send();
       return;
@@ -141,21 +157,31 @@ export function Composer({
     // existed to cover before this ticket gave the Composer a real bottom
     // edge to own.
     <div className="shrink-0 border-t border-border bg-background [padding-bottom:env(safe-area-inset-bottom)]">
-      {editingEntry && (
+      {(editingEntry || hint) && (
         // The visible half of "this is an edit, not a new Send" (ADR
-        // 0028) — Escape (handleKeyDown above) is the keyboard half. Same
-        // proportional column as the input row below so its edges line up.
+        // 0028) on the left, plus the send-chord hint on the right — the
+        // same bar row covers both rather than growing a second one, since
+        // both are the same kind of thing: small muted text near the
+        // input, not requiring the reader's attention the way the field
+        // and Send button do. Escape (handleKeyDown above) is the keyboard
+        // half of the edit indicator. Same proportional column as the
+        // input row below so its edges line up.
         <div className="mx-auto flex w-[97%] items-center justify-between px-4 pt-2 text-xs text-muted-foreground md:w-[85%]">
-          <span>Editing Entry</span>
-          <button
-            type="button"
-            onClick={cancelEdit}
-            aria-label="Cancel edit"
-            className="flex items-center gap-0.5 rounded-md px-1 py-0.5 underline underline-offset-2 hover:text-foreground"
-          >
-            <X aria-hidden="true" className="size-3" />
-            Cancel
-          </button>
+          <span>{editingEntry ? "Editing Entry" : null}</span>
+          <div className="flex items-center gap-3">
+            {hint && <span>{hint}</span>}
+            {editingEntry && (
+              <button
+                type="button"
+                onClick={cancelEdit}
+                aria-label="Cancel edit"
+                className="flex items-center gap-0.5 rounded-md px-1 py-0.5 underline underline-offset-2 hover:text-foreground"
+              >
+                <X aria-hidden="true" className="size-3" />
+                Cancel
+              </button>
+            )}
+          </div>
         </div>
       )}
       <div className="mx-auto flex w-[97%] items-end gap-2 px-4 py-2.5 md:w-[85%]">

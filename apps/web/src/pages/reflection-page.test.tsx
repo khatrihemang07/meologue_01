@@ -5,6 +5,7 @@ import { MemoryRouter, Outlet, Route, Routes, useLocation } from "react-router";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as entryDayModule from "@/lib/entry-day";
+import { readLastSessionId, writeLastSessionId } from "@/lib/last-session";
 import { useSettingsStore } from "@/lib/settings";
 import type { EntryStoreOutletContext } from "@/pages/entry-store-layout";
 import { ReflectionPage } from "./reflection-page";
@@ -13,16 +14,18 @@ import { ReflectionPage } from "./reflection-page";
 // and passes it down to GroundingDisclosure for every rendered turn (the
 // page/component layering fix: pages own data access, components take
 // props), so this page needs the same EntryStoreLayout stand-in
-// composer-page.test.tsx and history-page.test.tsx already use — a bare
-// Outlet supplying a context of the test's choosing, in place of the real
-// store-opening machinery. Defaults to no local Entries; individual tests
-// override this to exercise GroundingDisclosure's lookup.
+// composer-page.test.tsx already uses — a bare Outlet supplying a context
+// of the test's choosing, in place of the real store-opening machinery.
+// Defaults to no local Entries; individual tests override this to exercise
+// GroundingDisclosure's lookup.
 const defaultEntryStoreContext: EntryStoreOutletContext = {
   entries: [],
   sendEntry: vi.fn(),
   editEntry: vi.fn(),
   removeEntry: vi.fn(),
   search: vi.fn(async () => []),
+  getEntries: vi.fn(async () => []),
+  pagination: { hasMore: false, fetching: false, fetchMore: vi.fn() },
   disabled: false,
 };
 
@@ -34,10 +37,10 @@ function LocationProbe() {
   return <p data-testid="location-path">{location.pathname}</p>;
 }
 
-// Wrapped in a QueryClientProvider (fresh per render, same as
-// history-page.test.tsx) because the Conversation now comes from a
-// TanStack Query query of GET /v1/sessions/:id, not an in-memory store
-// (ADR 0025). Both routes are registered — `/reflect` for a fresh Session,
+// Wrapped in a QueryClientProvider (fresh per render) because the
+// Conversation now comes from a TanStack Query query of GET
+// /v1/sessions/:id, not an in-memory store (ADR 0025). Both routes are
+// registered — `/reflect` for a fresh Session,
 // `/reflect/:sessionId` for an open one — mirroring App.tsx.
 function renderReflectionPage(
   initialPath = "/reflect",
@@ -126,6 +129,11 @@ function wireSession(overrides: Partial<Record<string, unknown>> = {}) {
 describe("ReflectionPage", () => {
   beforeEach(() => {
     localStorage.clear();
+    // Issue #80's remembered-Session backup (`last-session.ts`) lives in
+    // sessionStorage, not localStorage — cleared here too so one test's
+    // successful ask (which now writes to it) can't make a later test's
+    // bare `/reflect` mount silently resume into the wrong Session.
+    sessionStorage.clear();
     useSettingsStore.setState({ theme: "system", serverUrl: "" });
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
@@ -133,14 +141,17 @@ describe("ReflectionPage", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    sessionStorage.clear();
   });
 
-  it("renders persistent nav links to Composer, History and Reflect, plus a Settings action", () => {
+  // Issue #75: History is gone and Settings is now a fourth Nav
+  // destination rather than a separate app-bar action.
+  it("renders persistent nav links to Composer, Reflect, Digest and Settings", () => {
     renderReflectionPage();
 
     expect(screen.getByRole("link", { name: "Composer" })).toHaveAttribute("href", "/");
-    expect(screen.getByRole("link", { name: "History" })).toHaveAttribute("href", "/history");
     expect(screen.getByRole("link", { name: "Reflect" })).toHaveAttribute("href", "/reflect");
+    expect(screen.getByRole("link", { name: "Digest" })).toHaveAttribute("href", "/digest");
     expect(screen.getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings");
   });
 
@@ -151,12 +162,15 @@ describe("ReflectionPage", () => {
 
     expect(screen.getByRole("link", { name: "Reflect" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("link", { name: "Composer" })).not.toHaveAttribute("aria-current");
-    expect(screen.getByRole("link", { name: "History" })).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("link", { name: "Digest" })).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("link", { name: "Settings" })).not.toHaveAttribute("aria-current");
   });
 
-  // Ticket 62: an app-bar action beside Settings, not a fourth NavLink —
-  // ADR 0018/0020's three-to-five destination count stays exactly Composer,
-  // History, Reflect.
+  // Ticket 62: Sessions is an app-bar action, not a fifth NavLink — it's
+  // one level below the four Nav destinations (Composer, Reflect, Digest,
+  // Settings), unchanged by issue #75 moving Settings from an app-bar
+  // action into one of those four itself (see nav.tsx's own comment on
+  // SessionsLink).
   it("shows a Sessions affordance in the app bar, linking to /reflect/list", () => {
     renderReflectionPage();
 
@@ -586,7 +600,7 @@ describe("ReflectionPage", () => {
 
     renderReflectionPage("/reflect", {
       ...defaultEntryStoreContext,
-      entries: [entry({ id: "entry-1", body: "Knee felt better today" })],
+      getEntries: vi.fn(async () => [entry({ id: "entry-1", body: "Knee felt better today" })]),
     });
     ask("How has my knee been?");
 
@@ -609,7 +623,7 @@ describe("ReflectionPage", () => {
 
     renderReflectionPage("/reflect", {
       ...defaultEntryStoreContext,
-      entries: [entry({ id: "entry-1", body: "Just a regular Tuesday" })],
+      getEntries: vi.fn(async () => [entry({ id: "entry-1", body: "Just a regular Tuesday" })]),
     });
     ask("Anything about scuba diving?");
 
@@ -618,5 +632,213 @@ describe("ReflectionPage", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("1 recent Entry")).toBeInTheDocument();
     expect(screen.queryByText(/^Grounded/)).not.toBeInTheDocument();
+  });
+
+  // Issue #80: leaving Reflect for Composer and coming back must land on
+  // the same Conversation, not a blank one — the defect this ticket fixes.
+  // "Navigating away" is modelled by unmounting this render entirely
+  // (Composer lives in a different route, so it always fully unmounts
+  // Reflect) and mounting a fresh one at a bare `/reflect`, the same shape
+  // the persistent Nav's plain `to="/reflect"` link produces.
+  it("resumes the same Conversation after navigating away and back to a bare /reflect", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    stubFetch({
+      reflect: () => ({
+        answer: "It's improved since February.",
+        grounding_entry_ids: [],
+        grounded: true,
+        fallback_used: false,
+        session_id: "session-abc",
+        title: "How has my knee been?",
+      }),
+      session: (sessionId) =>
+        wireSession({
+          id: sessionId,
+          title: "How has my knee been?",
+          turns: [
+            {
+              question: "How has my knee been?",
+              answer: "It's improved since February.",
+              grounding_entry_ids: [],
+              grounded: true,
+              fallback_used: false,
+              created_at: "2026-08-01T00:00:05Z",
+            },
+          ],
+        }),
+    });
+
+    const { unmount } = renderReflectionPage();
+    ask("How has my knee been?");
+    await screen.findByText("It's improved since February.");
+    expect(screen.getByTestId("location-path")).toHaveTextContent("/reflect/session-abc");
+    unmount();
+
+    renderReflectionPage("/reflect");
+
+    expect(await screen.findByText("How has my knee been?")).toBeInTheDocument();
+    expect(await screen.findByText("It's improved since February.")).toBeInTheDocument();
+    expect(screen.getByTestId("location-path")).toHaveTextContent("/reflect/session-abc");
+  });
+
+  // A reload is a fresh mount at the *explicit* URL the reload kept
+  // (unlike the Nav's bare `/reflect` link) — ADR 0025's "the URL is the
+  // only state" must still hold: the remembered id is a fallback for a
+  // bare `/reflect`, never an override of an id already in the URL.
+  it("still restores the Conversation on a reload of /reflect/<id>, even with a different Session remembered", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    writeLastSessionId("session-other");
+    const fetchMock = stubFetch({
+      reflect: () => {
+        throw new Error("this test never asks a Question");
+      },
+      session: (sessionId) =>
+        wireSession({
+          id: sessionId,
+          title: "Explicit Session",
+          turns: [
+            {
+              question: "Explicit Question",
+              answer: "Explicit Answer",
+              grounding_entry_ids: [],
+              grounded: true,
+              fallback_used: false,
+              created_at: "2026-08-01T00:00:00Z",
+            },
+          ],
+        }),
+    });
+
+    renderReflectionPage("/reflect/session-explicit");
+
+    expect(await screen.findByText("Explicit Question")).toBeInTheDocument();
+    expect(screen.getByTestId("location-path")).toHaveTextContent("/reflect/session-explicit");
+    // The remembered id is never even fetched — the URL's own id wins outright.
+    expect(fetchMock.mock.calls.some(([url]) => (url as string).includes("session-other"))).toBe(
+      false,
+    );
+  });
+
+  it("New Session starts an empty Conversation, and the resume does not immediately undo it", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    stubFetch({
+      reflect: () => ({
+        answer: "It's improved since February.",
+        grounding_entry_ids: [],
+        grounded: true,
+        fallback_used: false,
+        session_id: "session-abc",
+        title: "How has my knee been?",
+      }),
+      session: (sessionId) =>
+        wireSession({
+          id: sessionId,
+          turns: [
+            {
+              question: "How has my knee been?",
+              answer: "It's improved since February.",
+              grounding_entry_ids: [],
+              grounded: true,
+              fallback_used: false,
+              created_at: "2026-08-01T00:00:05Z",
+            },
+          ],
+        }),
+    });
+
+    renderReflectionPage();
+    ask("How has my knee been?");
+    await screen.findByText("It's improved since February.");
+    expect(screen.getByTestId("location-path")).toHaveTextContent("/reflect/session-abc");
+
+    fireEvent.click(screen.getByRole("link", { name: "New Session" }));
+
+    expect(await screen.findByText(/ask a question about your history/i)).toBeInTheDocument();
+    expect(screen.getByTestId("location-path")).toHaveTextContent("/reflect");
+    expect(screen.queryByText("How has my knee been?")).not.toBeInTheDocument();
+
+    // Give the resume effect a chance to run — it must not bounce this
+    // deliberate bare /reflect back to the Session just left.
+    await waitFor(() => {
+      expect(screen.getByTestId("location-path")).toHaveTextContent("/reflect");
+    });
+    expect(screen.getByText(/ask a question about your history/i)).toBeInTheDocument();
+  });
+
+  it("silently starts a fresh, empty Reflection when the remembered Session was deleted elsewhere, without looping", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    writeLastSessionId("session-gone");
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/v1/sessions/session-gone")) {
+        return { ok: false, status: 404, json: async () => ({}) };
+      }
+      // Anything else (a second fetch of the same id, a reflect call) is
+      // not expected in this test — hanging makes an unwanted extra call
+      // show up as a stuck `findByText` rather than passing accidentally.
+      return new Promise(() => {});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderReflectionPage("/reflect");
+
+    expect(await screen.findByText(/ask a question about your history/i)).toBeInTheDocument();
+    expect(screen.getByTestId("location-path")).toHaveTextContent("/reflect");
+    expect(screen.queryByText(/could not be found/i)).not.toBeInTheDocument();
+    expect(readLastSessionId()).toBeNull();
+
+    // Exactly one fetch for the dead Session — clearing the memory before
+    // redirecting is what stops this looping back into the same 404.
+    expect(
+      fetchMock.mock.calls.filter(([url]) => (url as string).endsWith("/v1/sessions/session-gone")),
+    ).toHaveLength(1);
+  });
+
+  it("shows a plain not-found message (not the silent fresh-Reflection path) for a dead Session that wasn't the remembered one", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    writeLastSessionId("session-remembered");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false, status: 404, json: async () => ({}) })),
+    );
+
+    renderReflectionPage("/reflect/session-missing");
+
+    expect(await screen.findByText(/this conversation could not be found/i)).toBeInTheDocument();
+    // The memory is untouched — this 404 was for a different id entirely.
+    expect(readLastSessionId()).toBe("session-remembered");
+  });
+
+  it("keeps Reflection working when sessionStorage throws", async () => {
+    const originalDescriptor = Object.getOwnPropertyDescriptor(window, "sessionStorage");
+    Object.defineProperty(window, "sessionStorage", {
+      configurable: true,
+      get() {
+        throw new Error("storage disabled");
+      },
+    });
+
+    try {
+      useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+      stubFetch({
+        reflect: () => ({
+          answer: "It's improved since February.",
+          grounding_entry_ids: [],
+          grounded: true,
+          fallback_used: false,
+          session_id: "session-abc",
+          title: "How has my knee been?",
+        }),
+      });
+
+      renderReflectionPage();
+      ask("How has my knee been?");
+
+      expect(await screen.findByText("It's improved since February.")).toBeInTheDocument();
+      expect(screen.getByTestId("location-path")).toHaveTextContent("/reflect/session-abc");
+    } finally {
+      if (originalDescriptor) {
+        Object.defineProperty(window, "sessionStorage", originalDescriptor);
+      }
+    }
   });
 });

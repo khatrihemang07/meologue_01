@@ -8,8 +8,9 @@ import { isTabVisible, subscribeToWakeEvents } from "@/platform/wake-signals";
 
 /**
  * Mounted once in `main.tsx`, above the router — not inside
- * `EntryStoreLayout`, which wraps only `/` and `/history` and unmounts
- * while the user is on Settings (ADR 0008/0009). Ticket 38 deletes
+ * `EntryStoreLayout`, which wraps `/`, `/reflect` and `/digest` (issue #75
+ * deleted `/history`) and unmounts while the user is on Settings (ADR
+ * 0008/0009). Ticket 38 deletes
  * `@meologue/core`'s hand-rolled `startContinuousSync` scheduler in favor of
  * TanStack Query's own interval refetching for cadence; `requestSync`
  * (`lib/sync-runner.ts`) still owns coalescing overlapping triggers — an

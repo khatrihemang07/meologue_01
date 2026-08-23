@@ -1,7 +1,7 @@
 import type { Entry, EntryStore } from "@meologue/core";
 import { PROTOCOL_VERSION } from "@meologue/core";
 import { QueryClient, QueryClientProvider, queryOptions } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -49,32 +49,20 @@ function createFakeStore(entries: Entry[] = []): EntryStore {
     search: vi.fn(async () => []),
     edit: vi.fn(async () => {}),
     remove: vi.fn(async () => {}),
+    getMany: vi.fn(async () => []),
   };
 }
 
-// initialEntries/initialIndex are exposed (rather than hard-coded) for the
-// "Back" describe block below, which needs to control exactly what — if
-// anything — sits behind Settings in this tab's history. Defaulted to
-// `["/settings"]` alone (a single, first entry) so every other test in this
-// file keeps rendering exactly as before: Settings reachable with nothing
-// behind it, same as a direct deep link.
-//
-// The `/` and `/history` routes render probe elements rather than the real
-// ComposerPage/HistoryPage: the Back tests only need to know *which* route
-// navigation landed on, not re-render everything those pages depend on
-// (their own store, context, etc.) just to prove that. Two probes rather
-// than one is what lets the history-pop test below discriminate: landing on
-// History is something only a real pop can produce, since the fallback
-// branch is hard-wired to "/".
-function renderPage(options: { initialEntries?: string[]; initialIndex?: number } = {}) {
-  const { initialEntries = ["/settings"], initialIndex } = options;
+// The `/` route renders a probe element rather than the real ComposerPage:
+// nothing in this file needs to re-render everything that page depends on
+// (its own store, context, etc.) to prove a Nav link's href is correct.
+function renderPage() {
   const queryClient = new QueryClient();
   render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={initialEntries} initialIndex={initialIndex}>
+      <MemoryRouter initialEntries={["/settings"]}>
         <Routes>
           <Route path="/" element={<div>Composer probe</div>} />
-          <Route path="/history" element={<div>History probe</div>} />
           <Route path="/settings" element={<SettingsPage />} />
         </Routes>
       </MemoryRouter>
@@ -121,13 +109,34 @@ describe("SettingsPage", () => {
     vi.unstubAllGlobals();
   });
 
-  it("renders its title and persistent nav links to Composer, History and Reflect", () => {
+  // Issue #75: Settings is now one of the four Nav destinations itself
+  // (Composer, Reflect, Digest, Settings — no History), so this asserts the
+  // whole set rather than just the other three the way it did while
+  // Settings was reached through a separate app-bar gear.
+  it("renders its title and persistent nav links to Composer, Reflect, Digest and Settings", () => {
     renderPage();
 
-    expect(screen.getByText("Settings")).toBeInTheDocument();
+    // Scoped to the app bar (role "banner"): Settings is now also a visible
+    // Nav link's text (issue #75), so an unscoped getByText("Settings")
+    // would match both that link and this page's own title.
+    expect(
+      within(screen.getByRole("banner")).getByText("Settings", { exact: true }),
+    ).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Composer" })).toHaveAttribute("href", "/");
-    expect(screen.getByRole("link", { name: "History" })).toHaveAttribute("href", "/history");
     expect(screen.getByRole("link", { name: "Reflect" })).toHaveAttribute("href", "/reflect");
+    expect(screen.getByRole("link", { name: "Digest" })).toHaveAttribute("href", "/digest");
+    expect(screen.getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings");
+  });
+
+  // Ticket 54's acceptance criteria, now covering Settings itself: the
+  // current destination is visibly indicated, and only the current one.
+  it("marks Settings as the current destination in the persistent nav", () => {
+    renderPage();
+
+    expect(screen.getByRole("link", { name: "Settings" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "Composer" })).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("link", { name: "Reflect" })).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("link", { name: "Digest" })).not.toHaveAttribute("aria-current");
   });
 
   it("marks System as the initially selected theme", () => {
@@ -178,6 +187,24 @@ describe("SettingsPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     expect(screen.getByLabelText(/server url/i)).toHaveValue("https://phone.example:41207");
+  });
+
+  it("saves the Server URL on plain Enter, with no chord needed (issue #76)", () => {
+    renderPage();
+    const input = screen.getByLabelText(/server url/i);
+
+    fireEvent.change(input, { target: { value: "https://phone.example:41207" } });
+    // A single-line input has no newline to protect the way a Composer's
+    // textarea does, so plain Enter — not the Composer's Cmd/Ctrl chord —
+    // is what saves here. Submitting a `<form>` on Enter in a text field is
+    // a native browser default action, not something settings-page.tsx
+    // wires up in JS, and jsdom doesn't simulate that default action for a
+    // synthetic keydown — so this fires the `submit` event a real Enter
+    // press causes the browser to dispatch, which is what settings-page.tsx
+    // actually listens for.
+    fireEvent.submit(input.closest("form") as HTMLFormElement);
+
+    expect(useSettingsStore.getState().serverUrl).toBe("https://phone.example:41207");
   });
 
   it("keeps what the user typed when storage refuses the write", () => {
@@ -472,49 +499,6 @@ describe("SettingsPage", () => {
       await waitFor(() =>
         expect(errorToast).toHaveBeenCalledWith("Export isn't supported on Android yet."),
       );
-    });
-  });
-
-  // The two mechanisms goBack (settings-page.tsx) chooses between, per its
-  // own comment: location.key === "default" (nothing real to pop back to —
-  // a fresh/first entry) falls back to navigate("/"), otherwise it pops
-  // real history with navigate(-1).
-  //
-  // Each case is set up so that only its own mechanism could produce the
-  // landing it asserts. That's why the pop case below enters from
-  // /history rather than from "/": a Settings entered from History is the
-  // whole reason ADR 0019 chose a real pop over a fixed navigate("/"), and
-  // it's the only arrangement where the two branches disagree about where
-  // the reader ends up. Coming from "/", a fixed target and a real pop are
-  // indistinguishable, and the test would pass against either.
-  describe("Back", () => {
-    it('falls back to Composer when there is nothing behind Settings in history (location.key is "default")', () => {
-      // A single, first entry — react-router's memory history stamps this
-      // one "default" (history.js:49), the same key a fresh load or a
-      // direct deep link gets in a real browser. navigate(-1) here would
-      // have nothing to pop and would leave the app; only the "/"
-      // fallback branch can land on the probe.
-      renderPage({ initialEntries: ["/settings"] });
-
-      fireEvent.click(screen.getByRole("button", { name: "Back" }));
-
-      expect(screen.getByText("Composer probe")).toBeInTheDocument();
-    });
-
-    it("pops real history back to History, not to the Composer, when Settings was entered from History", () => {
-      // Two entries, parked on the second (Settings) — a real prior stop
-      // exists in this tab's history, so its key is whatever react-router
-      // generated for it rather than "default" (only index 0 gets that —
-      // history.js:49). Landing on History is reachable *only* by popping:
-      // the fallback branch navigates to "/" unconditionally, so if this
-      // ever regresses to a fixed target, this assertion is what catches
-      // it.
-      renderPage({ initialEntries: ["/history", "/settings"], initialIndex: 1 });
-
-      fireEvent.click(screen.getByRole("button", { name: "Back" }));
-
-      expect(screen.getByText("History probe")).toBeInTheDocument();
-      expect(screen.queryByText("Composer probe")).not.toBeInTheDocument();
     });
   });
 });

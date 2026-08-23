@@ -4,9 +4,10 @@ import { ArrowLeft, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import { toast } from "sonner";
-import { Nav } from "@/components/nav";
+import { Nav, NewSessionLink } from "@/components/nav";
 import { Shell } from "@/components/shell";
-import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/alert-dialog";
+import { clearLastSessionId, readLastSessionId } from "@/lib/last-session";
 import { sessionsDeleteTransport, sessionsListTransport } from "@/lib/sessions-transport";
 import { useSyncEnabled } from "@/lib/settings";
 
@@ -92,90 +93,69 @@ export function formatLastUsed(iso: string, now: Date = new Date()): string | nu
  * un-deletable by design), so it deliberately does not read like an
  * ordinary list row's hover state the way an Entry in History does.
  *
- * The confirm step is a plain in-row two-step (issue #63's own suggestion,
- * followed rather than reaching for a new dialog library the rest of the
- * codebase has none of): tapping the trash icon replaces the row's link
- * with a warning and a `destructive`-variant Button — the one place in this
- * app that variant is used — rather than firing the delete on the first
- * tap. The warning names both things ADR 0025/0003 make true of a Session
- * and nothing else in this app: the deletion is permanent, and it takes
- * effect on every Device, not just this one.
+ * The confirm step used to be a plain in-row two-step (issue #63). Issue
+ * #82 moved it onto the shared `ConfirmDialog` (ui/alert-dialog.tsx) —
+ * the same modal Entry delete now uses (entry-actions.tsx) — carrying its
+ * own copy through the `description` prop rather than the fixed in-row
+ * warning this row used to render itself; `SessionsPage` below renders
+ * that one dialog, not this row. This row's own job shrinks to "show the
+ * Session, and a trash icon that asks SessionsPage to open the dialog for
+ * this Session" — the warning text, Cancel, and "Delete permanently" all
+ * live in the dialog now.
+ *
+ * `failed` is the one thing that still renders per-row rather than inside
+ * the dialog: ConfirmDialog's destructive action closes the dialog the
+ * instant it's clicked (it is a `Dialog.Close` — see ui/alert-dialog.tsx's
+ * own top comment), before the DELETE it fires has even resolved
+ * — so by the time a failure is known, the dialog that named this Session
+ * is already gone. A banner pinned to the row is what keeps a failed
+ * delete "surfaced, not swallowed" (ADR 0013) once the dialog can no
+ * longer say so.
  */
 function SessionRow({
   session,
-  confirming,
-  onRequestDelete,
-  onConfirmDelete,
-  onCancel,
-  pending,
   failed,
+  onRequestDelete,
 }: {
   session: WireSessionSummary;
-  confirming: boolean;
-  /** The trash icon was tapped — opens the confirm step, sends nothing yet. */
-  onRequestDelete: () => void;
-  /** "Delete permanently" was tapped while already confirming — sends the DELETE. */
-  onConfirmDelete: () => void;
-  onCancel: () => void;
-  pending: boolean;
+  /** Whether this Session's most recent delete attempt failed and hasn't been retried since. */
   failed: boolean;
+  /** The trash icon was tapped — opens SessionsPage's shared ConfirmDialog for this Session. */
+  onRequestDelete: () => void;
 }) {
-  if (confirming) {
-    return (
-      <li className="flex flex-col gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2.5">
-        <p className="text-sm text-foreground">
-          {/* Stated rather than asked: a Session's title is derived from its first Question, so
-              it almost always ends in "?" — phrasing this as a question rendered it as ..."?"? */}
-          Deleting "{session.title}" is permanent, and removes the Conversation from every Device —
-          not just this one.
-        </p>
-        {failed && (
-          <p className="text-xs text-destructive">
-            Couldn't delete this Session. Check your Server and try again.
-          </p>
-        )}
-        <div className="flex gap-2">
-          <Button
-            type="button"
-            variant="destructive"
-            size="sm"
-            onClick={onConfirmDelete}
-            disabled={pending}
-          >
-            {pending ? "Deleting…" : "Delete permanently"}
-          </Button>
-          <Button type="button" variant="outline" size="sm" onClick={onCancel} disabled={pending}>
-            Cancel
-          </Button>
-        </div>
-      </li>
-    );
-  }
-
   return (
-    <li className="flex items-center gap-1">
-      <Link
-        to={`/reflect/${session.id}`}
-        className="flex min-w-0 flex-1 flex-col gap-0.5 rounded-lg px-3 py-2.5 transition-colors hover:bg-muted"
-      >
-        <span className="truncate text-sm font-medium">{session.title}</span>
-        <span className="text-xs text-muted-foreground">{formatLastUsed(session.updated_at)}</span>
-      </Link>
-      <button
-        type="button"
-        aria-label={`Delete "${session.title}"`}
-        onClick={onRequestDelete}
-        // A separate sibling control, not nested inside the Link above —
-        // deleting is its own action, not part of opening the Session, and
-        // a button inside an <a> is both invalid HTML and a tap-target trap
-        // on a touch device. Muted-to-destructive on hover, distinct from
-        // every other icon control in the app bar (nav.tsx) which only ever
-        // goes muted-to-foreground: this is the one control anywhere that
-        // destroys something.
-        className="flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
-      >
-        <Trash2 aria-hidden="true" className="size-4" />
-      </button>
+    <li className="flex flex-col">
+      <div className="flex items-center gap-1">
+        <Link
+          to={`/reflect/${session.id}`}
+          className="flex min-w-0 flex-1 flex-col gap-0.5 rounded-lg px-3 py-2.5 transition-colors hover:bg-muted"
+        >
+          <span className="truncate text-sm font-medium">{session.title}</span>
+          <span className="text-xs text-muted-foreground">
+            {formatLastUsed(session.updated_at)}
+          </span>
+        </Link>
+        <button
+          type="button"
+          aria-label={`Delete "${session.title}"`}
+          onClick={onRequestDelete}
+          // A separate sibling control, not nested inside the Link above —
+          // deleting is its own action, not part of opening the Session, and
+          // a button inside an <a> is both invalid HTML and a tap-target trap
+          // on a touch device. Muted-to-destructive on hover, distinct from
+          // every other icon control in the app bar (nav.tsx) which only ever
+          // goes muted-to-foreground: this is the one control anywhere that
+          // destroys something.
+          className="flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+        >
+          <Trash2 aria-hidden="true" className="size-4" />
+        </button>
+      </div>
+      {failed && (
+        <p className="px-3 pb-1.5 text-xs text-destructive">
+          Couldn't delete this Session. Check your Server and try again.
+        </p>
+      )}
     </li>
   );
 }
@@ -230,15 +210,26 @@ export function SessionsPage() {
   const unreachable = result !== undefined && !result.ok;
   const sessions = result?.ok ? result.sessions : [];
 
-  // At most one row's confirm step is open at a time — tapping a second
-  // row's trash icon closes whichever one was already open, the same "one
-  // thing at a time" rule Shell's own search mode follows.
+  // Which Session's ConfirmDialog is open, if any (issue #82) — at most one
+  // at a time, the same "one thing at a time" rule Shell's own search mode
+  // follows, now enforced structurally by there being exactly one
+  // ConfirmDialog instance below rather than one per row. Tapping a second
+  // row's trash icon simply re-points this at the new Session; Radix's own
+  // `onOpenChange(false)` (Escape, an outside click, Cancel, or Delete
+  // permanently — see ui/alert-dialog.tsx's own comment on why Action
+  // closes too) is what clears it back to null.
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
-  // Which Session's delete most recently failed, independent of
-  // `confirmingId` reaching zero: a failure must not silently close the
-  // confirm step and make the row look untouched (ADR 0013's write path —
-  // a failed write is surfaced, not swallowed), so this stays set until the
-  // reader either retries successfully or cancels.
+  // The Session `confirmingId` names, if it still names one — see the
+  // ConfirmDialog render below for why "still" matters.
+  const confirmingSession = sessions.find((session) => session.id === confirmingId) ?? null;
+  // Which Session's delete most recently failed. Independent of
+  // `confirmingId`, and deliberately not cleared when the dialog closes:
+  // the dialog is already gone by the time a failure comes back (Radix
+  // closes it the instant "Delete permanently" is clicked, before the
+  // DELETE this fires has resolved — see SessionRow's own comment), so
+  // `failedId` is what keeps a failed write "surfaced, not swallowed"
+  // (ADR 0013) after that — it stays set until the reader either retries
+  // successfully or opens the dialog again for some Session.
   const [failedId, setFailedId] = useState<string | null>(null);
   const navigate = useNavigate();
   const location = useLocation();
@@ -246,9 +237,21 @@ export function SessionsPage() {
   const deleteMutation = useMutation({
     mutationFn: (sessionId: string) => sessionsDeleteTransport(sessionId),
     onSuccess: (deleteResult, sessionId) => {
+      // Issue #80: if the Session just deleted is the one `last-session.ts`
+      // remembers, that memory is now dangling — a later bare `/reflect`
+      // would try to resume straight into the "not found" case this same
+      // ticket also teaches Reflection to handle silently, but there's no
+      // reason to let it happen at all when the deletion is known to have
+      // succeeded right here. Covers both ways a Session ends up actually
+      // gone: this Device's own successful DELETE, and `"not-found"` (it
+      // was already gone, likely deleted from another Device) — not the
+      // server-error `else` branch below, where the Session is still there.
+      const sessionIsGone = deleteResult.ok || deleteResult.reason === "not-found";
+      if (sessionIsGone && readLastSessionId() === sessionId) {
+        clearLastSessionId();
+      }
       if (deleteResult.ok) {
         setFailedId(null);
-        setConfirmingId(null);
         // The list is the only thing this page mirrors from the Server
         // (ADR 0025) — invalidating it is what makes the deleted row
         // disappear, the same TanStack Query write path `use-history.ts`'s
@@ -266,7 +269,6 @@ export function SessionsPage() {
         queryClient.invalidateQueries({ queryKey: ["session", sessionId] });
       } else if (deleteResult.reason === "not-found") {
         setFailedId(null);
-        setConfirmingId(null);
         // Already gone — almost certainly deleted on another Device, which
         // is an ordinary thing to happen now that the Server holds Sessions
         // and every Device reaches the same ones (ADR 0025). The user asked
@@ -311,14 +313,20 @@ export function SessionsPage() {
           type="button"
           onClick={goBack}
           aria-label="Back"
-          // Matches SettingsLink's/settings-page.tsx's back control exactly
-          // — same size-11 (44px) tap-target and hover treatment for the
-          // same kind of app-bar icon control.
+          // size-11 (44px) tap-target and hover treatment, same as every
+          // other app-bar icon control in this app (see nav.tsx's
+          // SessionsLink).
           className="flex size-11 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
         >
           <ArrowLeft aria-hidden="true" className="size-4" />
         </button>
       }
+      // Issue #80: the same New Session control Reflect's own app bar
+      // shows (reflection-page.tsx), reachable here too — this list is one
+      // of the two places acceptance criteria calls for it, since a reader
+      // browsing old Sessions is exactly someone who might want to start a
+      // new one without first opening one of the old ones.
+      action={<NewSessionLink />}
       nav={<Nav />}
       // Issue #64: the same Shell search slot History and the Composer
       // already use, `label` set to "Sessions" — see ShellSearchConfig's own
@@ -381,27 +389,59 @@ export function SessionsPage() {
             <SessionRow
               key={session.id}
               session={session}
-              confirming={confirmingId === session.id}
-              pending={deleteMutation.isPending && deleteMutation.variables === session.id}
               failed={failedId === session.id}
               onRequestDelete={() => {
-                // Opens the confirm step; sends nothing yet — the whole
-                // point of the two-step (issue #63's acceptance criteria:
-                // "behind a confirm step"). Switching to a different row's
-                // confirm also clears any stale failure banner left over
-                // from a previous attempt on another Session.
+                // Opens the shared ConfirmDialog for this Session; sends
+                // nothing yet — the whole point of the confirm step (issue
+                // #63's original acceptance criteria, "behind a confirm
+                // step," now issue #82's own too). Requesting a delete for
+                // any Session also clears any stale failure banner left
+                // over from a previous attempt — including on this same
+                // Session, since this is the start of a fresh attempt.
                 setConfirmingId(session.id);
-                setFailedId(null);
-              }}
-              onConfirmDelete={() => deleteMutation.mutate(session.id)}
-              onCancel={() => {
-                setConfirmingId(null);
                 setFailedId(null);
               }}
             />
           ))}
         </ul>
       )}
+
+      {/* The one ConfirmDialog instance for however many rows are above
+          (issue #82, matching entry-actions.tsx's own "one instance"
+          rule) — `confirmingSession` is looked up by id each render
+          rather than the row handing over the whole Session object,
+          since `sessions` is already the single source of truth this
+          page reads from. Gating `open` on the Session rather than on
+          `confirmingId` is what makes "no Session, no dialog" true: an id
+          can outlive the Session it names (the list refetches out from
+          under it because another Device deleted it first), and gating on
+          the id would leave a dialog open with no description and an
+          inert Delete. */}
+      <ConfirmDialog
+        open={confirmingSession !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setConfirmingId(null);
+          }
+        }}
+        title="Delete this Session?"
+        description={
+          confirmingSession && (
+            // Stated rather than asked: a Session's title is derived from its first Question, so
+            // it almost always ends in "?" — phrasing this as a question rendered it as ..."?"?
+            <>
+              Deleting "{confirmingSession.title}" is permanent, and removes the Conversation from
+              every Device — not just this one.
+            </>
+          )
+        }
+        confirmLabel="Delete permanently"
+        onConfirm={() => {
+          if (confirmingSession) {
+            deleteMutation.mutate(confirmingSession.id);
+          }
+        }}
+      />
     </Shell>
   );
 }

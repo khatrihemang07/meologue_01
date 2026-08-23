@@ -1,8 +1,6 @@
 import { exportEntriesToZip, PROTOCOL_VERSION } from "@meologue/core";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useLocation, useNavigate } from "react-router";
 import { toast } from "sonner";
 import { Nav } from "@/components/nav";
 import { Shell } from "@/components/shell";
@@ -55,8 +53,6 @@ export function SettingsPage() {
   const setStoredTheme = useSettingsStore((state) => state.setTheme);
   const setStoredServerUrl = useSettingsStore((state) => state.setServerUrl);
   const syncStatus = useSyncStatus();
-  const navigate = useNavigate();
-  const location = useLocation();
 
   // Settings is a sibling route outside EntryStoreLayout (ADR 0008/0009), so
   // it has no store handle of its own — subscribing to the same
@@ -100,40 +96,6 @@ export function SettingsPage() {
   function selectTheme(next: Theme) {
     applyTheme(next);
     setStoredTheme(next);
-  }
-
-  // Real history (navigate(-1)), not a fixed navigate("/") — Settings can be
-  // reached from either Composer or History (nav.tsx renders it as an
-  // app-bar action on both), and a fixed target would send the reader back
-  // to the wrong one whenever they arrived from History. But navigate(-1)
-  // alone isn't safe: with nothing behind Settings in this tab's history —
-  // a fresh load, a direct deep link, a hard reload with nothing behind it
-  // — it would pop the app itself off the stack and leave.
-  //
-  // react-router 8.3.0's own source is what settles which case that is,
-  // not a guess: every history implementation falls the current location's
-  // key back to the literal string "default" when the browser's history
-  // state carries no key of its own (createBrowserHistory and
-  // createHashHistory, history.js:144 and :171), and memory history does
-  // the same for its very first entry (history.js:49) — which is what
-  // makes this testable without a real browser. So `location.key ===
-  // "default"` is "there is nothing to pop back to," reliably.
-  //
-  // window.history.length was considered and rejected: it reads 1 both for
-  // a fresh tab on this app AND for a tab that navigated in from some other
-  // site first, so it can't tell "nothing behind us" from "something behind
-  // us that isn't ours" — exactly the distinction this needs.
-  //
-  // This has to be a <button>, not a <Link>: there's no destination URL to
-  // give it as an href until the click happens (it depends on `location.key`
-  // at click time), so middle-click / open-in-new-tab do nothing here. An
-  // accepted cost of choosing real history over a fixed target.
-  function goBack() {
-    if (location.key === "default") {
-      navigate("/");
-    } else {
-      navigate(-1);
-    }
   }
 
   async function saveServerUrl() {
@@ -199,26 +161,22 @@ export function SettingsPage() {
     // Settings gets the same persistent Nav as every other page (ticket 54
     // — "every page becomes reachable directly"), even though Settings
     // itself is a sibling route outside EntryStoreLayout (ADR 0008/0009):
-    // Nav is a pair of bare route links, not a reader of the Entry store,
-    // so it's just as live here as it is on Composer/History regardless of
-    // whether the store ever opens.
-    <Shell
-      back={
-        <button
-          type="button"
-          aria-label="Back"
-          onClick={goBack}
-          // Matches SettingsLink's own className exactly (nav.tsx) — same
-          // size-11 (44px) tap-target reason, same muted-to-foreground hover
-          // treatment, for the same kind of app-bar icon control.
-          className="flex size-11 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-        >
-          <ArrowLeft aria-hidden="true" className="size-4" />
-        </button>
-      }
-      title="Settings"
-      nav={<Nav />}
-    >
+    // Nav is four bare route links, not a reader of the Entry store, so
+    // it's just as live here as it is on Composer/Reflect/Digest regardless
+    // of whether the store ever opens.
+    //
+    // No `back` slot any more (issue #75, superseding ADR 0019's "Back
+    // returns to Settings" — that decision existed only because Settings
+    // used to be reachable but not a destination in its own right, so
+    // "where the user was" was the only useful thing Settings could say
+    // about leaving. Settings is now itself one of the four Nav
+    // destinations (nav.tsx's DESTINATIONS), same as Composer/Reflect/
+    // Digest, none of which get a Back either — ADR 0018's original
+    // argument for that ("with the destination always reachable, a back
+    // affordance only described where the user had been, not where they
+    // could go") applies to Settings now for the same reason it always
+    // applied to the other three.
+    <Shell title="Settings" nav={<Nav />}>
       <div className="flex flex-col gap-2">
         <span className="text-sm font-medium">Theme</span>
         <div className="inline-flex gap-1">
@@ -240,7 +198,24 @@ export function SettingsPage() {
         <label htmlFor="server-url" className="text-sm font-medium">
           Server URL
         </label>
-        <div className="flex gap-2">
+        {/*
+          Issue #76: a real <form>, submitted on plain Enter — not the
+          Composer's chord (submit-chord.ts). That chord exists to keep
+          Enter free for a newline inside a multi-line textarea; a
+          single-line input has no newline to protect, so there's nothing
+          for a modifier to guard here, and requiring one would just be an
+          extra keystroke standing between the user and Save for no
+          benefit. The button becomes type="submit" so it triggers the same
+          form submission Enter does, rather than the two paths calling
+          saveServerUrl independently and drifting apart later.
+        */}
+        <form
+          className="flex gap-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            saveServerUrl();
+          }}
+        >
           <Input
             id="server-url"
             type="text"
@@ -248,10 +223,8 @@ export function SettingsPage() {
             value={serverUrl}
             onChange={(event) => setServerUrl(event.target.value)}
           />
-          <Button type="button" onClick={saveServerUrl}>
-            Save
-          </Button>
-        </div>
+          <Button type="submit">Save</Button>
+        </form>
         {status && (
           <p
             data-testid="server-status"

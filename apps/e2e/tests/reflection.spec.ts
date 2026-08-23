@@ -92,8 +92,8 @@ test("ask a Question, reload, find it in Sessions, search for it, delete it", as
 // null` guard alongside its existing `embedding is not null` one (ADR
 // 0028's Ticket 2), so a deleted Entry can't come back through
 // Reflection's own door even though CONTEXT.md's Grounding disclosure is
-// otherwise the one place History gets re-displayed outside `/history` and
-// `/`. Every Entry
+// otherwise the one place History gets re-displayed outside `/` (issue #75
+// deleted `/history`, the collection's other former display). Every Entry
 // here gets the same fixed embedding (llm-stub.ts's constant vector), so
 // which of the two survives retrieval is entirely down to that guard, not
 // wording or similarity.

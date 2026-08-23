@@ -8,21 +8,20 @@ import { sendEntry, uniqueEntryBody } from "./helpers";
 // /settings directly and hard-reloads on it, against the real Rust server.
 
 // Every page, Settings included, is reachable directly (ticket 54), and this
-// same persistent nav is what proves the way back to the Composer works too.
-//
-// Settings also carries a Back control again (ADR 0019, partially superseding
-// 0018's rejection of one) — but deliberately not exercised here: on a direct
-// load like this one there is no history to pop, so Back takes its fallback
-// branch and lands on the Composer, which is exactly what the nav link below
-// already proves. settings-page.test.tsx covers both of Back's branches.
+// same persistent nav is what proves the way back to the Composer works
+// too. Settings lost its Back control when issue #75 made it a Nav
+// destination in its own right (ADR 0018's "an always-reachable destination
+// doesn't need Back" then applied to it the same way it always did to
+// Composer/Reflect/Digest) — the nav link below is now the only way back,
+// and this test is what proves it still works.
 test("/settings loads directly, survives a hard reload, and its persistent nav returns to a working composer", async ({
   page,
 }) => {
   await page.goto("/settings");
-  await expect(page.getByText("Settings")).toBeVisible();
+  await expect(page.getByRole("banner").getByText("Settings")).toBeVisible();
 
   await page.reload();
-  await expect(page.getByText("Settings")).toBeVisible();
+  await expect(page.getByRole("banner").getByText("Settings")).toBeVisible();
 
   await page.getByRole("link", { name: "Composer" }).click();
   await expect(page).toHaveURL("/");
@@ -32,77 +31,17 @@ test("/settings loads directly, survives a hard reload, and its persistent nav r
   await expect(page.getByText(body)).toBeVisible();
 });
 
-// ADR 0019's Back control, against a real browser history rather than the
-// memory history settings-page.test.tsx drives. Entering from /history is
-// the case the whole decision turns on: a fixed navigate("/") would land on
-// the Composer here and look almost right, so History is the only
-// destination that proves the pop actually happened.
-test("Back on Settings returns to History when Settings was entered from there", async ({
+// Issue #75: Settings moved from a gear-shaped app-bar action into the
+// persistent Nav's fourth destination — same navigation outcome as before,
+// reached a different way, and this is what proves the new way works.
+test("the Settings destination in the persistent nav navigates there from the composer", async ({
   page,
 }) => {
-  await page.goto("/history");
-  await page.getByRole("link", { name: "Settings" }).click();
-  await expect(page).toHaveURL("/settings");
-
-  await page.getByRole("button", { name: "Back" }).click();
-
-  await expect(page).toHaveURL("/history");
-});
-
-// The other branch, in a real browser: loaded directly, Settings has nothing
-// behind it in this tab, so location.key is "default" and Back takes its
-// fallback to the Composer rather than popping the app off the stack
-// entirely (which is what a bare navigate(-1) would do here).
-test("Back on a directly-loaded Settings falls back to the Composer", async ({ page }) => {
-  await page.goto("/settings");
-
-  await page.getByRole("button", { name: "Back" }).click();
-
-  await expect(page).toHaveURL("/");
-});
-
-test("the gear link on the composer navigates to Settings", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("link", { name: "Settings" }).click();
 
   await expect(page).toHaveURL("/settings");
-  await expect(page.getByText("Settings")).toBeVisible();
-});
-
-// ticket 27 — History becomes its own route, sharing the store and sync
-// loop that the composer at "/" opens, via a layout route above both.
-//
-// getByText("History") is scoped to the app bar (role "banner") rather
-// than left unscoped: ticket 54's persistent nav also renders a visible
-// "History" text label (the link to this same page), so an unscoped query
-// would now match both that link and this page's title.
-test("/history loads directly, survives a hard reload, and its persistent nav returns to a working composer", async ({
-  page,
-}) => {
-  await page.goto("/history");
-  await expect(page.getByRole("banner").getByText("History", { exact: true })).toBeVisible();
-
-  await page.reload();
-  await expect(page.getByRole("banner").getByText("History", { exact: true })).toBeVisible();
-
-  await page.getByRole("link", { name: "Composer" }).click();
-  await expect(page).toHaveURL("/");
-
-  const body = uniqueEntryBody("history-route");
-  await sendEntry(page, body);
-  await expect(page.getByText(body)).toBeVisible();
-});
-
-test("an Entry sent from the composer appears on /history", async ({ page }) => {
-  const body = uniqueEntryBody("shared-history");
-  await page.goto("/");
-  await sendEntry(page, body);
-  await expect(page.getByText(body)).toBeVisible();
-
-  await page.getByRole("link", { name: "History" }).click();
-
-  await expect(page).toHaveURL("/history");
-  await expect(page.getByText(body)).toBeVisible();
+  await expect(page.getByRole("banner").getByText("Settings")).toBeVisible();
 });
 
 // Unit tests already cover applyTheme/watchSystemTheme in isolation; what
@@ -143,16 +82,18 @@ test("the theme is on the document before the app bundle runs", async ({ page })
 // first for the OPFS pool lock. Routing away and back remounts EntryStoreLayout
 // (ticket 27) and re-runs its effect, which is exactly the path that would
 // reopen it — a reopened store surfaces the second-tab message instead of
-// the History.
-test("routing between /, /history and /settings does not reopen the store", async ({ page }) => {
+// the History. Routes through /reflect (issue #75 removed /history, this
+// spec's original second EntryStoreLayout child) on the way to Settings and
+// back, so this still exercises a round trip through two different pages
+// nested under the layout plus the sibling Settings route outside it.
+test("routing between /, /reflect and /settings does not reopen the store", async ({ page }) => {
   const body = uniqueEntryBody("round-trip");
   await page.goto("/");
   await sendEntry(page, body);
   await expect(page.getByText(body)).toBeVisible();
 
-  await page.getByRole("link", { name: "History" }).click();
-  await expect(page).toHaveURL("/history");
-  await expect(page.getByText(body)).toBeVisible();
+  await page.getByRole("link", { name: "Reflect" }).click();
+  await expect(page).toHaveURL("/reflect");
 
   await page.getByRole("link", { name: "Composer" }).click();
   await expect(page).toHaveURL("/");

@@ -11,7 +11,7 @@ export type { SqliteDriver, SqliteMethod, SqliteResult } from "./sqlite/driver";
 export type { OpenedSqliteStore } from "./sqlite/open";
 export { open } from "./sqlite/open";
 export { toPositionalRow, toPositionalRows } from "./sqlite/row-mapping";
-export type { EntryStore } from "./store";
+export type { EntryPage, EntryStore } from "./store";
 export type { SyncEngineOptions, SyncTransport } from "./sync-engine";
 export { sync } from "./sync-engine";
 export type { Entry } from "./types";

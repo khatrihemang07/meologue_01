@@ -1,4 +1,4 @@
-import type { Entry, EntryStore } from "@meologue/core";
+import type { Entry, EntryPage, EntryStore } from "@meologue/core";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
@@ -10,16 +10,6 @@ const { requestSyncMock } = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/sync-runner", () => ({ requestSync: requestSyncMock }));
-
-// Undo (ADR 0028) is wired through sonner's `toast`, which needs no mounted
-// `<Toaster />` to be called — but a real `<Toaster />` would only ever
-// render the toast's contents into a portal, never expose its `action`
-// callback in a form `fireEvent` can drive. Mocking the module and
-// capturing the call's arguments directly is what lets a test invoke
-// Undo's `onClick` itself, the same way `sync-runner` is mocked above.
-const { toastMock } = vi.hoisted(() => ({ toastMock: vi.fn() }));
-
-vi.mock("sonner", () => ({ toast: toastMock }));
 
 // use-history.ts reaches for the `queryClient` singleton exported by
 // lib/query-client.ts directly (not React context), so each test needs a
@@ -57,6 +47,7 @@ function createFakeStore(): EntryStore {
     search: vi.fn(async () => []),
     edit: vi.fn(async () => {}),
     remove: vi.fn(async () => {}),
+    getMany: vi.fn(async () => []),
   };
 }
 
@@ -64,7 +55,6 @@ describe("useHistory", () => {
   beforeEach(() => {
     localStorage.clear();
     requestSyncMock.mockClear();
-    toastMock.mockClear();
   });
 
   async function renderUseHistory(store: EntryStore, deviceId = "device-a") {
@@ -178,58 +168,162 @@ describe("useHistory", () => {
       await waitFor(() => expect(requestSyncMock).toHaveBeenCalledWith(store, "device-a"));
     });
 
-    it("offers Undo on a toast", async () => {
+    // Issue #82 removed the Undo toast and its restore mutation: with a
+    // confirm dialog now in front of Delete (entry-actions.tsx's
+    // ConfirmDialog), removeEntry itself is trusted to delete
+    // unconditionally the moment it's called, and offers no way back —
+    // see use-history.ts's own comment on removeEntry for the full
+    // reasoning, and its comment just above this mutation for why a
+    // restore path can never safely reuse the deleted id even if one were
+    // added back.
+    it("does not offer an Undo — deletes unconditionally, with no restore path", async () => {
       const store = createFakeStore();
       const { result } = await renderUseHistory(store);
       await waitFor(() => expect(result.current.entries).toEqual([]));
 
       act(() => result.current.removeEntry(entry({ id: "7" })));
 
-      expect(toastMock).toHaveBeenCalledWith(
-        "Entry deleted",
-        expect.objectContaining({ action: expect.objectContaining({ label: "Undo" }) }),
-      );
+      await waitFor(() => expect(store.remove).toHaveBeenCalledWith("7"));
+      // No restore call of any kind — store.upsert() is only ever used by
+      // sendEntry, never by removeEntry.
+      expect(store.upsert).not.toHaveBeenCalled();
+    });
+  });
+
+  // Issue #79: a fresh open reads one page, and fetchMore widens by one
+  // more. A page-aware fake (unlike createFakeStore above, whose list()
+  // ignores its argument entirely and is what every other test in this
+  // file relies on staying untouched) is what makes "the right cursor
+  // reached the store" and "hasMore turns false once list() runs out"
+  // observable here — the paging semantics of `before`/`limit` themselves
+  // are packages/core's own contract suite's job
+  // (entry-store-contract.ts), not this file's.
+  describe("pagination (issue #79)", () => {
+    function pagedEntry(index: number): Entry {
+      // Newest first (higher index = newer), matching list()'s own order —
+      // createdAt spaced a day apart so string comparison sorts the same
+      // way a real timestamp comparison would.
+      return entry({
+        id: String(index).padStart(4, "0"),
+        createdAt: `2026-${String(Math.floor(index / 28) + 1).padStart(2, "0")}-${String(
+          (index % 28) + 1,
+        ).padStart(2, "0")}T00:00:00.000Z`,
+      });
+    }
+
+    // Mirrors how SqliteEntryStore/InMemoryEntryStore both apply
+    // `before`/`limit` (see packages/core's own contract suite for the
+    // real thing being tested) — just enough of it, in one place, for this
+    // file's fake stores to apply consistently.
+    function pagedList(all: Entry[], page?: EntryPage): Entry[] {
+      let result = all;
+      if (page?.before) {
+        const { createdAt, id } = page.before;
+        result = result.filter((e) =>
+          e.createdAt !== createdAt ? e.createdAt < createdAt : e.id < id,
+        );
+      }
+      return page?.limit === undefined ? result : result.slice(0, page.limit);
+    }
+
+    function fakeStoreWithList(list: EntryStore["list"]): EntryStore {
+      return {
+        list,
+        upsert: vi.fn(async () => {}),
+        pending: vi.fn(async () => []),
+        getCursor: vi.fn(async () => 0),
+        setCursor: vi.fn(async () => {}),
+        search: vi.fn(async () => []),
+        edit: vi.fn(async () => {}),
+        remove: vi.fn(async () => {}),
+        getMany: vi.fn(async () => []),
+      };
+    }
+
+    function createPagedFakeStore(count: number): EntryStore {
+      // Newest-first, mirroring list()'s own order (ADR 0014) — built
+      // once, descending, so `before`/`limit` can be applied the same way
+      // SqliteEntryStore and InMemoryEntryStore both apply them.
+      const all = Array.from({ length: count }, (_, i) => pagedEntry(count - 1 - i));
+      return fakeStoreWithList(vi.fn(async (page) => pagedList(all, page)));
+    }
+
+    it("a fresh open reads only the newest page, not the whole History", async () => {
+      const store = createPagedFakeStore(75);
+      const { result } = await renderUseHistory(store);
+
+      await waitFor(() => expect(result.current.entries).toHaveLength(50));
+
+      expect(result.current.entries[0]?.id).toBe("0074");
+      expect(result.current.entries[49]?.id).toBe("0025");
+      expect(result.current.pagination.hasMore).toBe(true);
     });
 
-    it("Undo restores the Entry under a NEW id, keeping its body and createdAt", async () => {
-      // The id must change. The Server's own guard — `on conflict (id) do
-      // update ... where entries.deleted_at is null` — makes a delete
-      // terminal for that id forever, so a restore reusing it would be
-      // rejected on every push while looking fine locally: the Entry would
-      // never be assigned a seq, so it would sit in pending() and re-push
-      // every tick forever, diverging silently from every other Device.
-      // Minting a new id turns Undo into `nothing -> A'`, which the Server
-      // accepts. See use-history.ts's own comment on restoreEntryMutation.
-      const store = createFakeStore();
+    it("reports no more pages when the whole History fits in one page", async () => {
+      const store = createPagedFakeStore(10);
       const { result } = await renderUseHistory(store);
-      await waitFor(() => expect(result.current.entries).toEqual([]));
 
-      const removed = entry({ id: "7", body: "don't lose me", seq: 5, syncedAt: "2026-01-01" });
-      act(() => result.current.removeEntry(removed));
-      await waitFor(() => expect(store.remove).toHaveBeenCalledWith("7"));
+      await waitFor(() => expect(result.current.entries).toHaveLength(10));
 
-      const [, options] = toastMock.mock.calls[0] as [string, { action: { onClick: () => void } }];
-      act(() => options.action.onClick());
+      expect(result.current.pagination.hasMore).toBe(false);
+    });
 
-      await waitFor(() =>
-        expect(store.upsert).toHaveBeenCalledWith([
-          expect.objectContaining({
-            body: "don't lose me",
-            createdAt: removed.createdAt,
-            deletedAt: null,
-            seq: null,
-            syncedAt: null,
-          }),
-        ]),
+    it("fetchMore widens by one older page, using the oldest loaded Entry as the cursor", async () => {
+      const store = createPagedFakeStore(75);
+      const { result } = await renderUseHistory(store);
+      await waitFor(() => expect(result.current.entries).toHaveLength(50));
+
+      act(() => result.current.pagination.fetchMore());
+
+      await waitFor(() => expect(result.current.entries).toHaveLength(75));
+      // Still newest-first end to end, with no gap or overlap at the seam.
+      expect(result.current.entries[49]?.id).toBe("0025");
+      expect(result.current.entries[50]?.id).toBe("0024");
+      expect(result.current.entries[74]?.id).toBe("0000");
+      expect(result.current.pagination.hasMore).toBe(false);
+      expect(store.list).toHaveBeenLastCalledWith({
+        before: { createdAt: pagedEntry(25).createdAt, id: "0025" },
+        limit: 50,
+      });
+    });
+
+    it("fetching is true only while an older page is actually in flight", async () => {
+      const all = Array.from({ length: 75 }, (_, i) => pagedEntry(75 - 1 - i));
+      let resolveOlderPage: (entries: Entry[]) => void = () => {};
+      let calls = 0;
+      const store = fakeStoreWithList(
+        vi.fn(async (page) => {
+          calls++;
+          if (calls === 1) {
+            // The initial page — resolves immediately, same as every
+            // other test in this file.
+            return pagedList(all, page);
+          }
+          // The older page fetchMore triggers below — held open until the
+          // test resolves it explicitly.
+          return new Promise<Entry[]>((resolve) => {
+            resolveOlderPage = resolve;
+          });
+        }),
       );
-      const restoredId = vi.mocked(store.upsert).mock.calls.at(-1)?.[0]?.[0]?.id;
-      expect(restoredId).toBeDefined();
-      expect(restoredId).not.toBe("7");
-      // store.edit() carries the same `WHERE deleted_at IS NULL` guard and
-      // would no-op against the tombstone remove() just wrote, so it must
-      // not be the path Undo takes either.
-      expect(store.edit).not.toHaveBeenCalled();
-      await waitFor(() => expect(requestSyncMock).toHaveBeenCalledWith(store, "device-a"));
+      const { result } = await renderUseHistory(store);
+      await waitFor(() => expect(result.current.entries).toHaveLength(50));
+      expect(result.current.pagination.fetching).toBe(false);
+
+      act(() => result.current.pagination.fetchMore());
+      await waitFor(() => expect(result.current.pagination.fetching).toBe(true));
+
+      act(() =>
+        resolveOlderPage(
+          pagedList(all, {
+            before: { createdAt: pagedEntry(25).createdAt, id: "0025" },
+            limit: 50,
+          }),
+        ),
+      );
+
+      await waitFor(() => expect(result.current.pagination.fetching).toBe(false));
+      expect(result.current.entries).toHaveLength(75);
     });
   });
 });

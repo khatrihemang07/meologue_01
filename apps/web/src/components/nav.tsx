@@ -1,6 +1,5 @@
 import {
   CalendarDays,
-  History as HistoryIcon,
   Lightbulb,
   List as ListIcon,
   Settings as SettingsIcon,
@@ -9,18 +8,29 @@ import {
 import { Link, NavLink } from "react-router";
 import { cn } from "@/lib/utils";
 
-// Ticket 54, settling #49's chosen config, extended by ADR 0020 (Reflect,
-// three destinations) and issue #71 (Digest, four — see docs/adr/0020's own
-// amendment note): four persistent nav destinations — Composer, History,
-// Reflect, then Digest — Settings is deliberately not one of them
-// (SettingsLink below). All four are bare route links, not readers of the
-// Entry store, so — like the old SettingsLink — they stay live regardless
-// of whether the store ever opens; every page renders this same Nav
-// through Shell's `nav` prop (composer-page.tsx, history-page.tsx,
-// reflection-page.tsx, sessions-page.tsx, digest-page.tsx,
-// digest-reader-page.tsx, settings-page.tsx), which is what makes "every
-// page becomes reachable directly" (issue #54) literally true even from
-// Settings.
+// Issue #75 replaces the History destination with Settings: four
+// persistent nav destinations — Composer, Reflect, Digest, Settings — with
+// no History entry at all (the Composer view already renders the same
+// Entries through the same `history.tsx` component, so History's own page
+// was a second door into one room; see history.tsx's remaining consumer).
+// This supersedes ADR 0018's "Settings is a utility, not a peer" reasoning
+// for keeping Settings out of the nav — that argument held while Settings
+// was reachable another way (an app-bar action on every page); once the
+// app-bar gear disappears (this ticket removes SettingsLink below too),
+// nav is the *only* way in, and a utility that is the sole way to reach it
+// stops being distinguishable from a destination. All four are bare route
+// links, not readers of the Entry store, so they stay live regardless of
+// whether the store ever opens — that guarantee is what makes it safe for
+// Settings to move here despite ADR 0008/0009 requiring it to keep working
+// when the store never does (see App.tsx's route tree: `/settings` still
+// sits outside `EntryStoreLayout`, unchanged by this ticket — only how the
+// reader *reaches* it moved, not where it lives or what it depends on).
+// Every page renders this same Nav through Shell's `nav` prop
+// (composer-page.tsx, reflection-page.tsx, sessions-page.tsx,
+// digest-page.tsx, digest-reader-page.tsx, settings-page.tsx), which is
+// what makes "every page becomes reachable directly" (issue #54) literally
+// true even from Settings — including reaching Settings itself, and
+// Settings reaching everything else, from one control.
 //
 // This renders only the *contents* of Shell's single `<nav>` landmark
 // (ticket 50's element, ticket 54's fix for it being duplicated — see
@@ -29,9 +39,9 @@ import { cn } from "@/lib/utils";
 // or a bottom bar; only Shell's CSS decides which.
 const DESTINATIONS = [
   { to: "/", label: "Composer", Icon: SquarePen, end: true },
-  { to: "/history", label: "History", Icon: HistoryIcon, end: false },
   { to: "/reflect", label: "Reflect", Icon: Lightbulb, end: false },
   { to: "/digest", label: "Digest", Icon: CalendarDays, end: false },
+  { to: "/settings", label: "Settings", Icon: SettingsIcon, end: false },
 ] as const;
 
 export function Nav() {
@@ -68,31 +78,22 @@ export function Nav() {
   );
 }
 
-// Settings is an app-bar action, not a nav destination (#49's settled
-// config, reaffirmed by ADR 0020 when Reflect joined the nav and again by
-// issue #71 when Digest did): Material 3 reserves a navigation bar for 3-5
-// destinations at the same hierarchy level, and Settings is a utility, not
-// a peer of Composer/History/Reflect/Digest — Telegram and Slack both
-// demote settings the same way. Present regardless of Entry store status,
-// same reasoning as Nav above and ADR 0008/0009: Settings must stay
-// reachable and usable even when the store never opens.
-// Ticket 62's Sessions affordance: an app-bar action beside SettingsLink,
-// not a NavLink — Sessions is still correctly one level down, unchanged by
-// issue #71 raising Nav's own destination count to four (Composer,
-// History, Reflect, Digest; see ADR 0020's amendment note and
-// DESTINATIONS above) — the same shape Settings already has. It only ever
-// renders on Reflection's pages (reflection-page.tsx's `action` slot),
-// since it opens a list of Reflection's own Sessions (`/reflect/list`)
-// rather than being a peer view of History the way the four Nav
-// destinations above are.
+// Sessions stays an app-bar action, not a NavLink (ticket 62), unchanged by
+// issue #75 moving Settings the other way: Sessions is still correctly one
+// level down from the four Nav destinations above (Composer, Reflect,
+// Digest, Settings) — it opens a list of Reflection's own Sessions
+// (`/reflect/list`) rather than being a peer view of History the way those
+// four are, and it only ever renders on Reflection's pages
+// (reflection-page.tsx's `action` slot). Present regardless of Entry store
+// status, same reasoning as Nav above and ADR 0008/0009.
 export function SessionsLink() {
   return (
     <Link
       to="/reflect/list"
       aria-label="Sessions"
-      // Matches SettingsLink's own className exactly — same size-11 (44px)
-      // tap-target and muted-to-foreground hover treatment for the same
-      // kind of app-bar icon control.
+      // size-11 (44px) for the same tap-size reason as Nav's links above,
+      // even though this isn't a nav destination — it's still a target a
+      // thumb has to hit reliably in the app bar.
       className="flex size-11 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
     >
       <ListIcon aria-hidden="true" className="size-4" />
@@ -100,17 +101,35 @@ export function SessionsLink() {
   );
 }
 
-export function SettingsLink() {
+// Issue #80: a deliberate way to start a fresh Conversation, now that a
+// bare `/reflect` no longer reliably means "empty" — the resume effect in
+// `reflection-page.tsx` reads `last-session.ts`'s memory on every such mount and redirects
+// straight back to whatever Session was last open. A plain `<Link
+// to="/reflect">` cannot do this on its own: it would land on that same
+// bare `/reflect`, the resume effect would run exactly the same way it
+// always does, and the reader would be bounced straight back to the
+// Conversation they were trying to leave — indistinguishable, from the
+// effect's point of view, from Nav's own Reflect link (which *should*
+// resume). `state.freshSession` is what tells the two apart: a router-level
+// signal for "this one navigation means start over," not a param in the
+// URL (ADR 0025 reserves the URL for the Session id itself, not for
+// transient navigation intent) and not a write to `last-session.ts` (that
+// would forget the Conversation for every *other* tab and every later
+// visit too, not just this one deliberate one). It lives here beside
+// `SessionsLink` rather than in a page, because both Reflection pages
+// render it and a page importing a control out of another page is a
+// dependency neither of them wants.
+export function NewSessionLink() {
   return (
     <Link
-      to="/settings"
-      aria-label="Settings"
-      // size-11 (44px) for the same tap-size reason as Nav's links above,
-      // even though this isn't a nav destination — it's still a target a
-      // thumb has to hit reliably in the app bar.
+      to="/reflect"
+      state={{ freshSession: true }}
+      aria-label="New Session"
+      // Same size-11 tap target and hover treatment as every other app-bar
+      // icon control (nav.tsx's SessionsLink, sessions-page.tsx's Back).
       className="flex size-11 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
     >
-      <SettingsIcon aria-hidden="true" className="size-4" />
+      <SquarePen aria-hidden="true" className="size-4" />
     </Link>
   );
 }

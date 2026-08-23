@@ -43,9 +43,10 @@ Send is what the user does; the Entry is what results.
 
 ### Composer
 
-The view where the user writes an Entry before Sending it. Composer names the view, not the
-action performed in it — that's Send. Composer holds none of the user's captured Entries itself;
-once Send commits what's written there, the result lives in History, not in Composer.
+The view where the user writes an Entry before Sending it, and where they read the ones they
+have already captured. Composer names the view, not the action performed in it — that's Send.
+It renders History beneath its input rather than holding Entries of its own: what Send commits
+lives in History, and the Composer view is one way of looking at it.
 
 ### Sync
 

@@ -8,6 +8,15 @@ separators all stand unchanged and are still load-bearing. Two things in it are 
 reading-column width it inherited from ticket 50, and its rejection of a Back affordance, which was
 listed there under *Alternatives considered* and is un-rejected here for Settings only.
 
+This ADR's own "Back returns to Settings" clause is retired outright, not amended, by
+[0030](0030-the-shell-gets-a-root-screen.md): Settings became the fourth persistent Nav destination
+there, which is precisely the condition this ADR's own Decision section says Back doesn't apply
+to — "with both destinations always reachable, a back affordance only described where the user had
+been, not where they could go" is 0018's argument, and this ADR only ever carved Settings out of it
+because Settings wasn't a destination yet. Once it is, that carve-out has nothing left to except.
+The proportional reading column this ADR decided is untouched by 0030 and still governs every
+route, including the three that remain inside `EntryStoreLayout`.
+
 ## Context
 
 The reading column had been capped at `max-w-2xl` (672px) since ticket 50 introduced the app shell,

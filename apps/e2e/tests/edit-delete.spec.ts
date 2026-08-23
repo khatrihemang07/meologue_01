@@ -4,7 +4,7 @@ import {
   closeDevices,
   deleteEntryViaMenu,
   editEntryViaMenu,
-  openEntryMenu,
+  entryRow,
   openTwoDevices,
   sendEntry,
   uniqueEntryBody,
@@ -149,101 +149,18 @@ test("a delete survives a reload — the tombstone persisted, the Entry does not
   await expect(page.getByText(body)).toHaveCount(0);
 });
 
-// The online counterpart of the test below, and the one that actually
-// exercises the hard case. Once a delete *commits* on the Server, its
-// `where entries.deleted_at is null` guard (ADR 0028) makes that id
-// permanently un-writable — deliberately, since that guard is what lets
-// offline conflicts converge with no reconciliation machinery. So Undo
-// cannot resurrect the id; it re-creates the Entry under a new one
-// (`nothing -> A'`, which the Server always accepts). See
-// use-history.ts's comment on restoreEntryMutation.
+// Issue #82 removed the two Undo tests that used to live here ("Undo works
+// after the delete has already reached the Server, and converges on both
+// Devices" and "Undo restores a deleted Entry, and it stays restored after
+// sync settles") along with the feature itself: the Undo toast and its
+// restore mutation are gone from use-history.ts, replaced by the confirm
+// dialog `deleteEntryViaMenu` (helpers.ts) now accepts on every delete in this
+// file. There is nothing left for those two tests to exercise — the "revive
+// under a new id because the Server's delete guard is terminal" reasoning
+// they proved is recorded instead as a comment on use-history.ts's
+// `removeEntry`, for whoever next reaches for a restore path and needs to
+// know why one isn't there.
 //
-// Before that fix this test failed on pageB only: A showed the Entry
-// restored while the Server kept rejecting every push of it, so B went on
-// showing it deleted forever — a silent, permanent divergence. Asserting
-// on BOTH Devices is the whole point; a single-Device assertion passes
-// against the broken behaviour.
-test("Undo works after the delete has already reached the Server, and converges on both Devices", async ({
-  browser,
-}) => {
-  const devices = await openTwoDevices(browser);
-  const { pageA, pageB } = devices;
-
-  const body = uniqueEntryBody("undo-online");
-  await sendEntry(pageA, body);
-  await expect(pageB.getByText(body)).toBeVisible({ timeout: 10_000 });
-
-  await deleteEntryViaMenu(pageA, body);
-  await expect(pageA.getByText(body)).toHaveCount(0);
-
-  // Wait for the tombstone to actually reach B. That is what proves the
-  // delete committed server-side, so the Undo below is genuinely pushing
-  // against a Server that has already made this id terminal — rather than
-  // quietly winning a race with the push, which is the situation the
-  // offline test covers.
-  await expect(pageB.getByText(body)).toHaveCount(0, { timeout: 10_000 });
-
-  // Still inside the undo window (use-history.ts's UNDO_WINDOW_MS).
-  await pageA.getByRole("button", { name: "Undo" }).click();
-  await expect(pageA.getByText(body)).toBeVisible();
-
-  // It must come back on the OTHER Device too, and stay back.
-  await expect(pageB.getByText(body)).toBeVisible({ timeout: 10_000 });
-  await pageA.waitForTimeout(6_000);
-  await expect(pageA.getByText(body)).toHaveCount(1);
-  await expect(pageB.getByText(body)).toHaveCount(1);
-
-  await closeDevices(devices);
-});
-
-test("Undo restores a deleted Entry, and it stays restored after sync settles", async ({
-  browser,
-}) => {
-  const devices = await openTwoDevices(browser);
-  const { deviceA, pageA, pageB } = devices;
-
-  const body = uniqueEntryBody("undo-restore");
-  await sendEntry(pageA, body);
-  await expect(pageB.getByText(body)).toBeVisible({ timeout: 10_000 });
-
-  // Deliberately offline for the delete-then-Undo pair: `store.upsert()`
-  // (the Undo path, use-history.ts) blindly overwrites the local row with
-  // no last-writer-wins comparison of its own, and the Server's guard
-  // (`where entries.deleted_at is null`, ADR 0028) makes a delete
-  // permanent the moment it *commits* — server/tests/sync.rs's
-  // `pushing_an_edit_to_an_already_deleted_entry_is_a_no_op` proves that
-  // guard blocks a "revive" push exactly as hard as a stale edit, no
-  // matter how new the pushed state claims to be. Going offline for the
-  // whole delete-then-Undo sequence means the delete's tombstone never
-  // reaches the Server at all — pending() only ever sees the final,
-  // already-restored row once A comes back online — so there is no
-  // tombstone in play to "come back" and re-delete it. That's what the
-  // property this test names actually depends on, not a race won by
-  // clicking fast enough.
-  await deviceA.setOffline(true);
-
-  await deleteEntryViaMenu(pageA, body);
-  await expect(pageA.getByText(body)).toHaveCount(0);
-
-  await pageA.getByRole("button", { name: "Undo" }).click();
-  await expect(pageA.getByText(body)).toBeVisible();
-
-  await deviceA.setOffline(false);
-
-  // Give sync several rounds to settle, then confirm it's still there on
-  // both Devices — not a transient local-only appearance that a later
-  // pull silently reverts.
-  await pageA.waitForTimeout(8_000);
-  await expect(pageA.getByText(body)).toBeVisible();
-  await expect(pageB.getByText(body)).toBeVisible({ timeout: 10_000 });
-
-  await pageA.waitForTimeout(6_000);
-  await expect(pageA.getByText(body)).toBeVisible();
-  await expect(pageB.getByText(body)).toBeVisible();
-
-  await closeDevices(devices);
-});
-
 // THE IMPORTANT ONE. This is the convergence guarantee that lets ADR 0028
 // have no conflict-resolution machinery at all: delete is terminal,
 // enforced as a `where entries.deleted_at is null` guard on the write
@@ -324,21 +241,23 @@ test("Search reflects an edited body — the new text is found, the old text is 
   await expect(page.getByText("No matching Entries.")).toBeVisible();
 });
 
-// Exercises the ContextMenu's no-menu default from the pointer side, in a
-// real browser rather than jsdom's simulated contextmenu event — Reflection's
-// Grounding disclosure renders EntryRow with no `actions` prop at all
-// (entry-row.tsx's own comment on why), and this is the affordance that
-// default protects: a right-click on a History row must open Edit/Delete,
-// not do nothing, or the whole feature would be invisible in the one
-// browser real users actually right-click in.
-test("right-click opens Edit and Delete on a History row", async ({ page }) => {
-  const body = uniqueEntryBody("context-menu-smoke");
+// Exercises the hover affordance from the pointer side, in a real browser
+// rather than jsdom — the buttons issue #78 put on each row sit behind
+// `@media (hover: hover)` and are `opacity-0` until the row is hovered, and
+// neither of those is something jsdom evaluates. Reflection's Grounding
+// disclosure renders EntryRow with no `actions` prop at all (see
+// entry-row.tsx), so this is also what protects that default: a History row
+// must reveal Edit and Delete on hover, or the whole feature is invisible in
+// the browser real users point at it with.
+test("hovering a History row reveals Edit and Delete", async ({ page }) => {
+  const body = uniqueEntryBody("hover-actions-smoke");
 
   await page.goto("/");
   await sendEntry(page, body);
 
-  await openEntryMenu(page, body);
+  const row = entryRow(page, body);
+  await row.hover();
 
-  await expect(page.getByRole("menuitem", { name: "Edit" })).toBeVisible();
-  await expect(page.getByRole("menuitem", { name: "Delete" })).toBeVisible();
+  await expect(row.getByRole("button", { name: "Edit" })).toBeVisible();
+  await expect(row.getByRole("button", { name: "Delete" })).toBeVisible();
 });

@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router";
-import { Nav, SettingsLink } from "@/components/nav";
+import { Nav } from "@/components/nav";
 import { Shell } from "@/components/shell";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatDigestRange } from "@/lib/digest-format";
@@ -51,8 +51,9 @@ const PERIODS = [
  * "tapping a card opens that Digest" (issue #71), not tapping a headline.
  *
  * Takes its `result` as a prop rather than querying itself — `DigestCards`
- * below is what owns the three fetches (history-page.tsx's own convention:
- * pages own data access, components take props), both because it needs
+ * below is what owns the three fetches (this codebase's convention: pages
+ * own data access, components take props — see composer-page.tsx), both
+ * because it needs
  * all three results at once to decide the page-level unreachable/
  * not-supported states, and so this card never opens a second, redundant
  * subscription to a query `DigestCards` already holds.
@@ -135,7 +136,9 @@ export function DigestPage() {
   const syncEnabled = useSyncEnabled();
 
   return (
-    <Shell title="Digest" action={<SettingsLink />} nav={<Nav />}>
+    // No `action` slot (issue #75): Settings is a Nav destination now, not
+    // an app-bar gear — see nav.tsx's DESTINATIONS.
+    <Shell title="Digest" nav={<Nav />}>
       {!syncEnabled && (
         <p className="text-center text-sm text-muted-foreground">
           Sync is off —{" "}

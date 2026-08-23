@@ -1,4 +1,4 @@
-import type { EntryStore } from "../store";
+import type { EntryPage, EntryStore } from "../store";
 import type { Entry } from "../types";
 
 /**
@@ -10,12 +10,12 @@ export class InMemoryEntryStore implements EntryStore {
   private readonly entries = new Map<string, Entry>();
   private cursor = 0;
 
-  async list(): Promise<Entry[]> {
+  async list(page?: EntryPage): Promise<Entry[]> {
     // Excludes tombstones (ADR 0028) — mirrors SqliteEntryStore.list()'s
     // `deleted_at IS NULL` filter, since the shared contract suite
     // (../test-support/entry-store-contract.ts) has to see the same
     // behaviour from both implementations.
-    return [...this.entries.values()]
+    const all = [...this.entries.values()]
       .filter((entry) => entry.deletedAt === null)
       .sort((a, b) => {
         if (a.createdAt !== b.createdAt) {
@@ -23,6 +23,30 @@ export class InMemoryEntryStore implements EntryStore {
         }
         return a.id > b.id ? -1 : a.id < b.id ? 1 : 0;
       });
+    // `before` narrowed to a local const so it stays narrowed inside the
+    // filter callback below — mirrors SqliteEntryStore.list()'s WHERE:
+    // strictly older than the cursor in this same (createdAt desc, id
+    // desc) order, an OR of "smaller createdAt" and "same createdAt, smaller
+    // id" rather than a single comparison, because of the tie-break.
+    const before = page?.before;
+    const filtered = before === undefined ? all : all.filter((entry) => isOlderThan(entry, before));
+    return page?.limit === undefined ? filtered : filtered.slice(0, page.limit);
+  }
+
+  /**
+   * Mirrors SqliteEntryStore.getMany() — see EntryStore.getMany's doc
+   * comment for the contract both implementations owe callers. No
+   * chunking needed here: unlike a real SQLite statement, a JS `Set`
+   * lookup has no bound-parameter limit to respect.
+   */
+  async getMany(ids: string[]): Promise<Entry[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+    const wanted = new Set(ids);
+    return [...this.entries.values()].filter(
+      (entry) => wanted.has(entry.id) && entry.deletedAt === null,
+    );
   }
 
   async upsert(entries: Entry[]): Promise<void> {
@@ -90,6 +114,19 @@ export class InMemoryEntryStore implements EntryStore {
       syncedAt: null,
     });
   }
+}
+
+// Whether `entry` is strictly older than `cursor` in list()'s own order
+// (createdAt desc, then id desc) — used by list()'s `before` paging above.
+// Kept as its own function, not inlined into the filter callback, so its
+// two-part "earlier createdAt, or same createdAt with a smaller id" logic
+// reads the same way SqliteEntryStore.list()'s SQL WHERE does, rather than
+// as an easy-to-misread ternary inside a .filter().
+function isOlderThan(entry: Entry, cursor: { createdAt: string; id: string }): boolean {
+  if (entry.createdAt !== cursor.createdAt) {
+    return entry.createdAt < cursor.createdAt;
+  }
+  return entry.id < cursor.id;
 }
 
 // Mirrors the SQLite store's FTS5 unicode61 tokenizer closely enough for

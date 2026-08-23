@@ -1,7 +1,6 @@
 import type { EntryStore } from "@meologue/core";
 import { sync } from "@meologue/core";
-import { queryClient } from "@/lib/query-client";
-import { ENTRIES_QUERY_KEY } from "@/lib/query-keys";
+import { refreshNewestEntriesPage } from "@/lib/entries-pagination";
 import { useSettingsStore } from "@/lib/settings";
 import { useSyncStatusStore } from "@/lib/sync-status";
 import { syncTransport } from "@/lib/sync-transport";
@@ -23,7 +22,14 @@ async function runSyncOnce(store: EntryStore, deviceId: string): Promise<void> {
   }
   try {
     await sync({ store, transport: syncTransport, deviceId });
-    await queryClient.invalidateQueries({ queryKey: ENTRIES_QUERY_KEY });
+    // Issue #79: refreshes the newest loaded page only, not every page the
+    // reader has scrolled back through — see refreshNewestEntriesPage's own
+    // doc comment (entries-pagination.ts) for why a whole-key invalidation
+    // (this call's shape before this ticket) would make every sync tick
+    // progressively more expensive the further back the reader has
+    // scrolled, and why "newest page only" is still correct for what a
+    // sync pull can actually change.
+    await refreshNewestEntriesPage(store);
     useSyncStatusStore.getState().recordSuccess(serverUrl);
   } catch (error) {
     console.error("meologue: sync failed", error);

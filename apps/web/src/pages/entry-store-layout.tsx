@@ -3,16 +3,29 @@ import { open } from "@meologue/core";
 import { queryOptions, useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { Outlet, useOutletContext } from "react-router";
-import { useHistory } from "@/hooks/use-history";
+import { type UseHistoryPagination, useHistory } from "@/hooks/use-history";
 import { SecondTabError, StorageUnavailableError } from "@/lib/entry-store-errors";
 import { ENTRY_STORE_QUERY_KEY } from "@/lib/query-keys";
 import { createDriver } from "@/platform/sqlite-driver";
 
 export interface EntryStoreOutletContext {
   entries: Entry[];
+  /** Issue #79 — see UseHistoryPagination's own doc comment (use-history.ts). */
+  pagination: UseHistoryPagination;
   sendEntry: (raw: string) => void;
   /** Search (ticket 39) — narrows History to Entries whose body matches `query`, per EntryStore.search. */
   search: (query: string) => Promise<Entry[]>;
+  /**
+   * A direct by-id lookup, per EntryStore.getMany — added to fix issue
+   * #79's regression: `entries` above is only whatever pages of History
+   * `useHistory`'s infinite query has loaded so far, so a page that needs
+   * to resolve a specific, known set of ids (reflection-page.tsx's
+   * Grounding ids) can't rely on scanning `entries` for them the way it
+   * could before paging existed. Named to match `search`'s shape — a
+   * function a page calls, not a second array to keep in sync with the
+   * first.
+   */
+  getEntries: (ids: string[]) => Promise<Entry[]>;
   /** ADR 0028 — see use-history.ts's own doc comment for what these do and why removeEntry takes the whole Entry. */
   editEntry: (id: string, body: string) => void;
   removeEntry: (entry: Entry) => void;
@@ -83,6 +96,10 @@ async function noopSearch(): Promise<Entry[]> {
   return [];
 }
 
+async function noopGetEntries(): Promise<Entry[]> {
+  return [];
+}
+
 // ADR 0028's edit/delete affordances need the store to exist just as much
 // as sendEntry does — the not-ready outlet context below stands in with
 // these too, for the identical reason: the History rendered while
@@ -94,15 +111,30 @@ function noopEdit(_id: string, _body: string) {}
 
 function noopRemove(_entry: Entry) {}
 
+function noopFetchMore() {}
+
+// Mirrors `entries: []` just above: nothing to page through before the
+// store is open, and `hasMore: false` keeps Shell's scroll listener from
+// ever calling `noopFetchMore` in the first place (see
+// use-pinned-scroll.ts's own `hasMore` guard).
+const notReadyPagination: UseHistoryPagination = {
+  hasMore: false,
+  fetching: false,
+  fetchMore: noopFetchMore,
+};
+
 /**
  * The composition root for ADR 0001 and ADR 0013: opens the Entry store and
- * runs `useHistory` exactly once, above the routes that read from it — `/`
- * and `/history` (ticket 27), which both render whatever this layout puts
- * on the outlet context rather than each owning their own store. Settings is
- * a sibling route outside this layout, not a child of it (ADR 0008): it must
- * stay usable even when the store below never reaches "ready", and the only
- * way to guarantee that structurally is to keep it off this component's
- * subtree entirely.
+ * runs `useHistory` exactly once, above the routes that read from it — `/`,
+ * `/reflect` and `/digest` (ticket 27, extended by ADR 0020 and issue #71;
+ * issue #75 deleted `/history`, once a fourth), which all render whatever
+ * this layout puts on the outlet context rather than each owning their own
+ * store. Settings is a sibling route outside this layout, not a child of it
+ * (ADR 0008): it must stay usable even when the store below never reaches
+ * "ready", and the only way to guarantee that structurally is to keep it
+ * off this component's subtree entirely — unchanged by issue #75 moving
+ * Settings into the persistent Nav, since that only changed how a reader
+ * reaches `/settings`, not where the route sits in this tree.
  *
  * Opening happens through a TanStack Query query rather than a hand-rolled
  * module-scope promise: its cache gives the same single-open guarantee —
@@ -128,8 +160,10 @@ export function EntryStoreLayout() {
       context={
         {
           entries: [],
+          pagination: notReadyPagination,
           sendEntry: noop,
           search: noopSearch,
+          getEntries: noopGetEntries,
           editEntry: noopEdit,
           removeEntry: noopRemove,
           disabled: true,
@@ -141,14 +175,16 @@ export function EntryStoreLayout() {
 }
 
 function Ready({ store, deviceId }: { store: EntryStore; deviceId: string }) {
-  const { entries, sendEntry, editEntry, removeEntry } = useHistory(store, deviceId);
+  const { entries, pagination, sendEntry, editEntry, removeEntry } = useHistory(store, deviceId);
   return (
     <Outlet
       context={
         {
           entries,
+          pagination,
           sendEntry,
           search: (query: string) => store.search(query),
+          getEntries: (ids: string[]) => store.getMany(ids),
           editEntry,
           removeEntry,
           disabled: false,
@@ -158,7 +194,7 @@ function Ready({ store, deviceId }: { store: EntryStore; deviceId: string }) {
   );
 }
 
-/** Read by `/` and `/history` — anything rendered outside EntryStoreLayout's Outlet must not call this. */
+/** Read by `/` and `/reflect` (`/digest` reads nothing from the store — see this file's own comment above) — anything rendered outside EntryStoreLayout's Outlet must not call this. */
 export function useEntryStore(): EntryStoreOutletContext {
   return useOutletContext<EntryStoreOutletContext>();
 }

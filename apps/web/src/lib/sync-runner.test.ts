@@ -1,5 +1,6 @@
-import type { EntryStore } from "@meologue/core";
+import type { Entry, EntryStore } from "@meologue/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ENTRIES_QUERY_KEY } from "@/lib/query-keys";
 import { useSettingsStore } from "@/lib/settings";
 
 const { syncMock } = vi.hoisted(() => ({ syncMock: vi.fn(async () => {}) }));
@@ -15,14 +16,19 @@ vi.mock("@meologue/core", async (importOriginal) => {
 // fresh module registry, or state from one test would leak into the next.
 async function importFresh() {
   vi.resetModules();
-  // sync-status.ts is imported alongside sync-runner.ts (not just relied on
-  // via a stale top-level reference) for the same reason use-sync-loop.test.tsx
-  // imports lib/query-client fresh with use-sync-loop: resetModules() gives
-  // the freshly-imported sync-runner its own new Zustand store instance, and
-  // a test asserting against the old top-level import would be watching a
+  // sync-status.ts and query-client.ts are imported alongside sync-runner.ts
+  // (not just relied on via a stale top-level reference) for the same
+  // reason use-sync-loop.test.tsx imports lib/query-client fresh with
+  // use-sync-loop: resetModules() gives the freshly-imported sync-runner
+  // its own new Zustand store and QueryClient instances, and a test
+  // asserting against the old top-level import would be watching a
   // different object that the code under test never touches.
-  const [runner, status] = await Promise.all([import("./sync-runner"), import("./sync-status")]);
-  return { ...runner, ...status };
+  const [runner, status, client] = await Promise.all([
+    import("./sync-runner"),
+    import("./sync-status"),
+    import("./query-client"),
+  ]);
+  return { ...runner, ...status, ...client };
 }
 
 function createFakeStore(): EntryStore {
@@ -35,6 +41,7 @@ function createFakeStore(): EntryStore {
     search: vi.fn(async () => []),
     edit: vi.fn(async () => {}),
     remove: vi.fn(async () => {}),
+    getMany: vi.fn(async () => []),
   };
 }
 
@@ -189,6 +196,65 @@ describe("requestSync", () => {
       await requestSync(store, "device-a");
 
       expect(useSyncStatusStore.getState().lastAttempt).toBeNull();
+    });
+  });
+
+  // Issue #79: a successful sync used to invalidate the whole entries
+  // query key, which against an infinite query refetches every page
+  // currently held. This is what proves the replacement
+  // (refreshNewestEntriesPage, entries-pagination.ts) is actually wired
+  // in here — the boundary-aware refresh logic itself has its own
+  // dedicated tests in entries-pagination.test.ts.
+  describe("entries cache refresh (issue #79)", () => {
+    function entry(overrides: Partial<Entry> = {}): Entry {
+      return {
+        id: "1",
+        deviceId: "device-a",
+        body: "hello",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        seq: 1,
+        syncedAt: "2026-01-01T00:00:00.000Z",
+        deletedAt: null,
+        ...overrides,
+      };
+    }
+
+    it("on success, refreshes only the newest loaded page, leaving older loaded pages untouched", async () => {
+      const { requestSync, queryClient } = await importFresh();
+      const store = createFakeStore();
+      const boundary = { createdAt: "2026-01-05T00:00:00.000Z", id: "boundary" };
+      const pageOne = [entry({ id: "old-1" })];
+      const pageTwo = [entry({ id: "old-2" })];
+      queryClient.setQueryData(ENTRIES_QUERY_KEY, {
+        pages: [pageOne, pageTwo],
+        pageParams: [{ limit: 50 }, { before: boundary, limit: 50 }],
+      });
+      const refreshedPageOne = [entry({ id: "old-1" }), entry({ id: "new-from-sync" })];
+      (store.list as ReturnType<typeof vi.fn>).mockResolvedValueOnce(refreshedPageOne);
+
+      await requestSync(store, "device-a");
+
+      // Bounded by the second page's own cursor, not a fixed page size —
+      // see refreshNewestEntriesPage's own doc comment for why.
+      expect(store.list).toHaveBeenCalledWith({ before: boundary });
+      expect(queryClient.getQueryData(ENTRIES_QUERY_KEY)).toEqual({
+        pages: [refreshedPageOne, pageTwo],
+        pageParams: [{ limit: 50 }, { before: boundary, limit: 50 }],
+      });
+    });
+
+    it("leaves the entries cache untouched when sync fails", async () => {
+      const { requestSync } = await importFresh();
+      const store = createFakeStore();
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      syncMock.mockRejectedValueOnce(new Error("boom"));
+
+      await requestSync(store, "device-a");
+
+      // list() is never called by requestSync's own refresh path when
+      // sync() itself throws first — the refresh only runs after a
+      // successful sync().
+      expect(store.list).not.toHaveBeenCalled();
     });
   });
 });

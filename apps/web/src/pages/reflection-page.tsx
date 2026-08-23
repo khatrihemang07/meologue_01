@@ -1,11 +1,11 @@
 import type { Entry } from "@meologue/core";
 import { PROTOCOL_VERSION } from "@meologue/core";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router";
+import { useEffect, useMemo, useState } from "react";
+import { Link, useLocation, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import { GroundingDisclosure } from "@/components/grounding-disclosure";
-import { Nav, SessionsLink, SettingsLink } from "@/components/nav";
+import { Nav, NewSessionLink, SessionsLink } from "@/components/nav";
 import { QuestionComposer } from "@/components/question-composer";
 import { Shell } from "@/components/shell";
 import {
@@ -14,6 +14,8 @@ import {
   groundingOutcome,
 } from "@/lib/conversation";
 import { deviceUtcOffsetMinutes } from "@/lib/entry-day";
+import { clearLastSessionId, readLastSessionId, writeLastSessionId } from "@/lib/last-session";
+import { groundingEntriesQueryKey } from "@/lib/query-keys";
 import { reflectTransport } from "@/lib/reflect-transport";
 import { type SessionResult, sessionsTransport } from "@/lib/sessions-transport";
 import { useSyncEnabled } from "@/lib/settings";
@@ -102,11 +104,13 @@ function GroundingNote({ turn }: { turn: ConversationTurn }) {
 // see grounding-disclosure.tsx.
 function ConversationTurnRow({
   turn,
-  entries,
+  groundingEntries,
+  groundingEntriesLoading,
   syncEnabled,
 }: {
   turn: ConversationTurn;
-  entries: Entry[];
+  groundingEntries: Entry[];
+  groundingEntriesLoading: boolean;
   syncEnabled: boolean;
 }) {
   return (
@@ -114,7 +118,12 @@ function ConversationTurnRow({
       <AskedQuestion text={turn.question} />
       <GivenAnswer text={turn.answer} />
       <GroundingNote turn={turn} />
-      <GroundingDisclosure turn={turn} entries={entries} syncEnabled={syncEnabled} />
+      <GroundingDisclosure
+        turn={turn}
+        entries={groundingEntries}
+        loading={groundingEntriesLoading}
+        syncEnabled={syncEnabled}
+      />
     </div>
   );
 }
@@ -134,18 +143,44 @@ function ConversationTurnRow({
 // it renders immediately either way. Reflect still gates on Sync being on,
 // for the same reason ticket 2 already established: retrieval and
 // inference run on the Server, over Entries Sync put there.
+//
+// Issue #80 reverses part of ADR 0025 on purpose: the Device now remembers
+// the last Session id shown here (`last-session.ts`, a sessionStorage
+// backup — the same shape `use-history-search.ts` already uses for
+// Search), so leaving for Composer and coming back resumes the same
+// Conversation instead of starting a new one every time. The id in the URL
+// still wins whenever one is present — an explicit `/reflect/<id>` is never
+// second-guessed by the memory, only a *bare* `/reflect` ever consults it —
+// so ADR 0025's "the URL is the only state" still holds for anything that
+// actually has a URL; the memory only fills in for the one case that
+// doesn't (a bare `/reflect`), which is exactly the gap this ticket exists
+// to close.
 export function ReflectionPage() {
   const syncEnabled = useSyncEnabled();
   const { sessionId } = useParams<{ sessionId?: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const queryClient = useQueryClient();
-  // The Device's own Entry store, not a fetch — Entry ids are minted on the
-  // creating Device and preserved through Sync, so this Device's local copy
-  // (if it has one yet) is the same Entry the server meant. Read once here,
-  // page-level (history-page.tsx's own convention: pages own data access,
-  // components take props — see grounding-disclosure.tsx), rather than once
-  // per rendered turn.
-  const { entries } = useEntryStore();
+  // Snapshot of whatever `last-session.ts` remembered, taken once at this
+  // mount rather than read live wherever it's needed below. Two effects
+  // below (the resume, and the deleted-elsewhere redirect) both need to
+  // know what was remembered *coming into* this mount, and a live read
+  // would risk seeing this same mount's own writes instead — e.g. the
+  // deleted-elsewhere effect asking "is this 404 for the Session we would
+  // have resumed to" after some other effect had already written a
+  // different id. A remount happens on every route change between
+  // `/reflect` and `/reflect/:sessionId` (they're sibling `<Route>`s, not
+  // nested — see App.tsx), so a fresh snapshot is exactly what each of
+  // those transitions needs.
+  const [rememberedSessionId] = useState(() => readLastSessionId());
+  // Issue #79 regression fix: `useEntryStore()`'s `entries` array is only
+  // whatever pages of History `useHistory`'s infinite query has loaded so
+  // far (History's own scroll window), not the whole local store — a
+  // Grounding id can name an Entry this Device genuinely has without it
+  // being in that window. `getEntries` (EntryStoreOutletContext, backed by
+  // EntryStore.getMany) is a direct by-id lookup that bypasses paging
+  // entirely, so this page resolves Grounding ids through it instead.
+  const { getEntries } = useEntryStore();
 
   const sessionQuery = useQuery({
     // `sessionId ?? ""` rather than a "none" sentinel: `enabled` below already
@@ -165,11 +200,61 @@ export function ReflectionPage() {
 
   const sessionData = sessionId === undefined ? undefined : sessionQuery.data;
   const turns = sessionData?.ok ? sessionData.snapshot.turns : [];
+
+  // Issue #79 regression fix: every Grounding id across the whole
+  // Conversation, resolved in one batched lookup rather than one per
+  // rendered turn — sorted and deduplicated so the query key
+  // (groundingEntriesQueryKey) is stable across re-renders that don't
+  // actually change the id set, and so two turns that happen to share an
+  // id don't fetch it twice. Recomputed from `turns`, so a follow-up ask
+  // that appends a turn with a new id naturally produces a new key and a
+  // fresh fetch — no invalidation wiring needed.
+  const groundingIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const turn of turns) {
+      for (const id of turn.groundingEntryIds) {
+        ids.add(id);
+      }
+    }
+    return [...ids].sort();
+  }, [turns]);
+
+  const groundingEntriesQuery = useQuery({
+    queryKey: groundingEntriesQueryKey(groundingIds),
+    queryFn: () => getEntries(groundingIds),
+    // No ids yet (a fresh Reflection, or every turn so far had empty
+    // Grounding) → nothing to look up. Mirrors sessionQuery's own
+    // `enabled` reasoning just above: don't fetch when there's nothing to
+    // fetch.
+    enabled: groundingIds.length > 0,
+  });
+  const groundingEntries = groundingEntriesQuery.data ?? [];
+  // Only true while an id genuinely needs resolving — not merely because
+  // the query is `enabled: false` with no ids, which TanStack Query also
+  // reports as `isPending`. Read by GroundingDisclosure so it can show a
+  // neutral "loading" placeholder instead of the "hasn't reached this
+  // Device yet" message while a genuinely-local id just hasn't resolved
+  // yet — showing that message before the lookup has even run would be
+  // exactly the false claim CONTEXT.md's Grounding entry forbids, even if
+  // only for the moment before the query settles.
+  const groundingEntriesLoading = groundingIds.length > 0 && groundingEntriesQuery.isPending;
+
   const notFound =
     sessionData !== undefined && !sessionData.ok && sessionData.reason === "not-found";
   const unreachable =
     sessionData !== undefined && !sessionData.ok && sessionData.reason === "unreachable";
   const loadingSession = sessionId !== undefined && sessionQuery.isPending;
+  // The remembered Session was deleted — from this Device or another one,
+  // it doesn't matter which (ADR 0025: every Device reaches the same
+  // Sessions). Distinguished from an ordinary not-found (e.g. a stale
+  // bookmark, or a link to a Session that was never the remembered one) by
+  // comparing against `rememberedSessionId`'s mount-time snapshot: only a
+  // 404 for *that specific* id is "the user did nothing wrong, quietly
+  // start fresh" territory (issue #80's acceptance criteria) — a 404 for
+  // some other id is a real "this Conversation could not be found," and
+  // still renders that message exactly as it did before this ticket.
+  const deletedElsewhere =
+    notFound && rememberedSessionId !== null && sessionId === rememberedSessionId;
 
   // The Question currently in flight, or null when nothing is being asked.
   // Deliberately component-local rather than in the query cache: an
@@ -193,6 +278,67 @@ export function ReflectionPage() {
     const timer = setTimeout(() => setThinking(true), THINKING_AFTER_MS);
     return () => clearTimeout(timer);
   }, [pending]);
+
+  // Issue #80's resume: a bare `/reflect` mount (no `sessionId`) redirects
+  // to the remembered Session instead of staying empty, unless this
+  // navigation explicitly asked not to (`NewSessionLink` above sets
+  // `state.freshSession` for exactly that). `replace: true` keeps this out
+  // of history, the same reasoning `use-history-search.ts`'s own
+  // sessionStorage restore already uses for the identical shape of
+  // problem — a bare URL, and a previous visit's state to restore into it
+  // before the next paint the user notices.
+  //
+  // Mount-only by design, matching `use-history-search.ts`'s own restore
+  // effect: this must run once when a bare `/reflect` is first reached,
+  // not re-run merely because `location.state`'s object identity happens
+  // to change on a render this effect itself didn't cause.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally mount-only — see comment above.
+  useEffect(() => {
+    if (sessionId !== undefined) {
+      return;
+    }
+    const state = location.state as { freshSession?: boolean } | null;
+    if (state?.freshSession) {
+      return;
+    }
+    if (rememberedSessionId !== null) {
+      navigate(`/reflect/${rememberedSessionId}`, { replace: true });
+    }
+  }, []);
+
+  // Issue #80's deleted-elsewhere case: the Session this Device would have
+  // resumed to no longer exists. Not something the user did wrong — ADR
+  // 0025 made Sessions shared across every Device, so "deleted from
+  // somewhere else" is an ordinary thing to discover — so this clears the
+  // memory and lands back on a fresh, empty Reflection silently, with
+  // nothing surfaced (see `deletedElsewhere`'s own comment above for how
+  // this is told apart from an ordinary not-found). Clearing *before*
+  // navigating is what stops this from looping: `rememberedSessionId` is a
+  // mount-time snapshot, so the redirect below lands on a *new* mount with
+  // a *fresh* snapshot — read from storage this effect already emptied —
+  // rather than the same stale id bouncing forever. `state.freshSession` on
+  // the redirect is redundant insurance for the same reason (the resume
+  // effect above would already find nothing to resume to) but costs
+  // nothing and says the intent plainly.
+  useEffect(() => {
+    if (!deletedElsewhere) {
+      return;
+    }
+    clearLastSessionId();
+    navigate("/reflect", { replace: true, state: { freshSession: true } });
+  }, [deletedElsewhere, navigate]);
+
+  // Keeps the memory in step with whichever Session was actually fetched
+  // and opened successfully — not only the ones asked into from this page.
+  // Without this, opening a Session from `sessions-page.tsx` (or a direct
+  // link) without ever asking a follow-up Question would leave the old
+  // memory in place, so a later bare `/reflect` would resume to the
+  // *previous* Conversation instead of the one just read.
+  useEffect(() => {
+    if (sessionId !== undefined && sessionData?.ok) {
+      writeLastSessionId(sessionId);
+    }
+  }, [sessionId, sessionData]);
 
   async function handleAsk(question: string) {
     setNotSupported(false);
@@ -225,6 +371,12 @@ export function ReflectionPage() {
         },
       }));
 
+      // Issue #80: a successful ask — new Session or a follow-up in an
+      // open one — is what makes a bare `/reflect` worth resuming *to*, so
+      // this is the moment the memory updates, alongside the existing
+      // navigate below for the new-Session case.
+      writeLastSessionId(result.response.session_id);
+
       if (sessionId === undefined) {
         // A null session_id on the request is what created this Session
         // (ADR 0025) — `replace` so Back doesn't bounce through the empty
@@ -248,10 +400,15 @@ export function ReflectionPage() {
   return (
     <Shell
       title="Reflect"
+      // SessionsLink (issue #75: Settings moved into the persistent Nav's
+      // fourth destination, so it's no longer a second app-bar action
+      // alongside Sessions here) plus NewSessionLink (issue #80) — a
+      // deliberate way to start over now that a bare `/reflect` resumes
+      // the last Conversation instead of always being empty.
       action={
         <>
+          <NewSessionLink />
           <SessionsLink />
-          <SettingsLink />
         </>
       }
       nav={<Nav />}
@@ -272,10 +429,13 @@ export function ReflectionPage() {
         </p>
       )}
 
-      {syncEnabled && notFound && (
+      {syncEnabled && notFound && !deletedElsewhere && (
         // A plain, honest message rather than a blank page or a crash (ADR
         // 0025) — this Session was deleted, or the Server URL now points
-        // somewhere that never held it.
+        // somewhere that never held it. Excludes `deletedElsewhere`
+        // (issue #80): that case redirects to a fresh `/reflect` on the
+        // very next effect flush, silently — rendering this message first
+        // would flash an error the user did nothing to cause.
         <p className="text-center text-sm text-muted-foreground">
           This Conversation could not be found.
         </p>
@@ -308,7 +468,8 @@ export function ReflectionPage() {
             // biome-ignore lint/suspicious/noArrayIndexKey: turns never reorder or get removed — position is a stable identity for one render of this Conversation.
             key={index}
             turn={turn}
-            entries={entries}
+            groundingEntries={groundingEntries}
+            groundingEntriesLoading={groundingEntriesLoading}
             syncEnabled={syncEnabled}
           />
         ))}
