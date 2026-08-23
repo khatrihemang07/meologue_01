@@ -120,10 +120,10 @@ describe("Composer", () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
-  it("shows the send-chord hint, naming both modifiers under the test/web rule", () => {
+  it("does not show the send-chord hint", () => {
     render(<Composer onSend={vi.fn()} />);
 
-    expect(screen.getByText("⌘↵ or Ctrl↵ to send")).toBeInTheDocument();
+    expect(screen.queryByText("⌘↵ or Ctrl↵ to send")).not.toBeInTheDocument();
   });
 
   it("sends when the Send button is clicked", () => {

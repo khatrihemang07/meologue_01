@@ -2,7 +2,7 @@ import { ArrowUp } from "lucide-react";
 import { type KeyboardEvent, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { isSubmitChord, submitHint } from "@/lib/submit-chord";
+import { isSubmitChord } from "@/lib/submit-chord";
 
 interface QuestionComposerProps {
   onAsk: (question: string) => void;
@@ -62,21 +62,8 @@ export function QuestionComposer({ onAsk, disabled = false, restore }: QuestionC
     }
   };
 
-  // "A chord nobody can see is a chord nobody uses" (issue #76) — `null` on
-  // android, where Ask is button-only.
-  const hint = submitHint();
-
   return (
     <div className="shrink-0 border-t border-border bg-background [padding-bottom:env(safe-area-inset-bottom)]">
-      {hint && (
-        // Same proportional column as the input row below, and the same
-        // small-muted-text treatment Composer gives this hint, so the two
-        // composers read as one family of control rather than two that
-        // happen to look similar.
-        <div className="mx-auto flex w-[97%] justify-end px-4 pt-2 text-xs text-muted-foreground md:w-[85%]">
-          <span>{hint}</span>
-        </div>
-      )}
       <div className="mx-auto flex w-[97%] items-end gap-2 px-4 py-2.5 md:w-[85%]">
         <Textarea
           placeholder="Ask a Question about your History"

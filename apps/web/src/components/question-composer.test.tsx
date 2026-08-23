@@ -90,10 +90,10 @@ describe("QuestionComposer", () => {
     expect(onAsk).not.toHaveBeenCalled();
   });
 
-  it("shows the send-chord hint, naming both modifiers under the test/web rule", () => {
+  it("does not show the send-chord hint", () => {
     render(<QuestionComposer onAsk={vi.fn()} />);
 
-    expect(screen.getByText("⌘↵ or Ctrl↵ to send")).toBeInTheDocument();
+    expect(screen.queryByText("⌘↵ or Ctrl↵ to send")).not.toBeInTheDocument();
   });
 
   it("restores a failed Question's text when `restore.signal` changes", () => {

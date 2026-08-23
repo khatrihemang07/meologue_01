@@ -63,18 +63,3 @@ export function isSubmitChord(
   }
   return event.metaKey || event.ctrlKey;
 }
-
-/**
- * User-visible text naming the chord above, for rendering next to a Send
- * button — "a chord nobody can see is a chord nobody uses" (issue #76).
- * `null` on Android, where there is no chord to advertise.
- */
-export function submitHint(mode: string = import.meta.env.MODE): string | null {
-  if (mode === "android") {
-    return null;
-  }
-  if (mode === "macos") {
-    return "⌘↵ to send";
-  }
-  return "⌘↵ or Ctrl↵ to send";
-}

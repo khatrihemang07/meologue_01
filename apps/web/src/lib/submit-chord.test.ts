@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isSubmitChord, submitHint } from "./submit-chord";
+import { isSubmitChord } from "./submit-chord";
 
 // Every case below passes `mode` explicitly rather than relying on
 // vitest's own `import.meta.env.MODE` ("test") — the whole point of
@@ -72,25 +72,5 @@ describe("isSubmitChord", () => {
     expect(isSubmitChord(event({ metaKey: true }))).toBe(true);
     expect(isSubmitChord(event({ ctrlKey: true }))).toBe(true);
     expect(isSubmitChord(event())).toBe(false);
-  });
-});
-
-describe("submitHint", () => {
-  it('is null on "android" — there is no chord to advertise', () => {
-    expect(submitHint("android")).toBeNull();
-  });
-
-  it('names only Cmd on "macos"', () => {
-    expect(submitHint("macos")).toBe("⌘↵ to send");
-  });
-
-  it("names both modifiers on web (and sandbox, and test)", () => {
-    expect(submitHint("web")).toBe("⌘↵ or Ctrl↵ to send");
-    expect(submitHint("sandbox")).toBe("⌘↵ or Ctrl↵ to send");
-    expect(submitHint("test")).toBe("⌘↵ or Ctrl↵ to send");
-  });
-
-  it("defaults `mode` to import.meta.env.MODE", () => {
-    expect(submitHint()).toBe("⌘↵ or Ctrl↵ to send");
   });
 });
