@@ -325,15 +325,26 @@ than a predicate, it belongs in 0005's seam, not beside this.
 
 ## Consequences
 
-**The e2e suite is flaky under parallel workers on this branch, and the cause is not yet
-identified** (issue #86). Single-worker, the suite is green — 39/39 in roughly 2.5 minutes,
-matching `main`'s clean 46/46 in 1.9 minutes under the same conditions. At the default worker
-count, two consecutive runs produced 10 failures and then 4, with a partly different set each
-time, always as timeouts or not-found rather than wrong assertions. Ruled out already: general
-slowness (an empty store is fast — roughly 400ms to interactive, roughly 150ms to send, no console
-errors, no long tasks) and a functional defect reproducible by hand (against the Sandbox's 619
-Entries, initial pin-to-newest, re-pinning after navigating away and back, and both flavours of
-Send all behave correctly and repeatably). This is left open rather than worked around.
+**The e2e suite's flakiness under parallel workers was a symptom of this ADR's own virtualization,
+and is fixed** (issue #86, closed). The fallback that renders estimate-positioned rows when the
+virtualizer reports an empty range keyed on the *symptom* — `getVirtualItems()` being empty —
+rather than the cause, and that condition is true in a real browser on first paint, not only under
+jsdom. Every page load in the suite therefore rendered the entire History before measurement
+settled, which is exactly the cost this ADR exists to remove. Single-worker there was enough CPU to
+absorb it; under parallel workers it crossed assertion timeouts, which is why every failure was a
+timeout or a not-found rather than a wrong assertion, and why the failing set moved between runs.
+The fallback now keys on there being no usable scroll element and is capped regardless. Measured in
+a real browser, first paint peaks at 29 rows; three consecutive full runs at the default worker
+count give 39/39 in about 1.1 minutes each, against `main`'s 46/46 in 1.9.
+
+**The day pill's height is load-bearing.** It sits in flow above the spacer `contentAboveList` is
+measured from, so any variation in its height shifts every absolutely-positioned row below it — and
+on a History longer than the viewport `spacerHeight` is floored at 0 and absorbs nothing. Mounting
+it unconditionally was not sufficient on its own, because the label text is withheld while hidden
+(so it cannot duplicate the inline separator's text for `getByText` and assistive tech) and an empty
+inline span collapses to a different height than one containing text — still worth 16px of jump per
+toggle when measured. Its height is now fixed outright. Anything later added inside that wrapper
+must not be allowed to change its height.
 
 **Reflection has the identical seeded-at-0 reflow defect `composer-page.tsx`'s `sendSignal` had**
 (issue #85). `reflection-page.tsx`'s `askSignal` is seeded with `useState(0)`, which defeats
