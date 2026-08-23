@@ -68,14 +68,25 @@ pnpm --filter @meologue/web dev         # terminal B, from the repository root
 ```
 
 Use `http://localhost:5173` as the Server URL because Vite proxies `/v1` to the API. To develop
-against the Sandbox, start `./scripts/sandbox-server.sh`, then run:
+against the Sandbox instead, start `./scripts/sandbox-server.sh`, then run:
 
 ```bash
 MEOLOGUE_PROXY_TARGET=http://localhost:41307 pnpm --filter @meologue/web dev
 ```
 
-Only one Vite server can use `:5173` at a time. For a production-style build, use the personal or
-Sandbox commands in the preceding section; the Rust process serves the app and API together.
+Only one Vite server can bind `:5173`, so running both hot-reload frontends at once means giving
+the Sandbox Vite server a different port:
+
+```bash
+./scripts/sandbox-server.sh             # terminal C, from the repository root
+MEOLOGUE_PROXY_TARGET=http://localhost:41307 \
+  pnpm --filter @meologue/web dev --port 5174  # terminal D, from the repository root
+```
+
+Open `http://localhost:5173` for the personal instance and `http://localhost:5174` for the
+Sandbox, using each as that instance's own Server URL. For a production-style build instead, use
+the personal or Sandbox commands in the preceding section; the Rust process serves the app and API
+together.
 
 Browsers require a secure context for meologue's OPFS-backed SQLite store. `localhost` qualifies,
 but another Device needs HTTPS. One tailnet-only option is:
@@ -106,7 +117,8 @@ cd ../android
 
 Install an APK with `adb install -r <apk>`. Run `./scripts/setup-signing.sh` from the repository root
 before the first release build. Debug and release use different keys, so uninstall
-`com.meologue.app` before switching between them; the Sandbox installs alongside either one.
+`com.meologue.app` before switching between them; the Sandbox installs alongside either one. Both
+can run and sync at once, each reaching only its own Server.
 
 To reach a local Server over USB:
 
@@ -139,6 +151,7 @@ cd apps/macos
 Run `./scripts/setup-signing.sh` from the repository root before a release build. It creates a local,
 self-signed identity; builds are signed but not notarized, so another Mac requires one explicit
 right-click → Open. Personal and Sandbox bundles have separate identifiers and application data.
+Both can run and sync at once, each reaching only its own Server.
 
 ## Layout
 
