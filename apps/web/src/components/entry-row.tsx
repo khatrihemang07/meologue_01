@@ -7,7 +7,7 @@
  * Reflection both import from here rather than each keeping their own copy.
  */
 import type { Entry } from "@meologue/core";
-import { type MouseEvent, memo, useState } from "react";
+import { type MouseEvent, memo, useRef, useState } from "react";
 import { EntryHoverActions, hoverCapable } from "@/components/entry-actions";
 import { formatClockTime } from "@/lib/entry-day";
 import { formatAbsoluteTime } from "@/lib/entry-time";
@@ -89,6 +89,21 @@ export interface EntryRowProps {
 }
 
 /**
+ * The longest a press may last and still count as a tap. Android's WebView
+ * fires a `click` when a long-press is released, exactly as it does for a
+ * quick tap — the two are indistinguishable from the click alone. Without
+ * this threshold the sheet opened on long-press, which is the one gesture
+ * issue #78 promised to leave alone, because it is the gesture the platform
+ * itself uses to start selecting text. Verified on a device: the sheet
+ * appeared and no selection handles ever did.
+ *
+ * 400ms sits above a deliberate tap and below Android's own ~500ms
+ * long-press threshold, so a press that the platform is about to treat as a
+ * selection is never also treated as a tap here.
+ */
+const MAX_TAP_MS = 400;
+
+/**
  * Opens history.tsx's shared sheet for a tap on this row, but only on a
  * device without hover — issue #78's split is on hover-capability, not on
  * pointer type or build target. On a hover-capable device the row's own
@@ -96,9 +111,25 @@ export interface EntryRowProps {
  * simply does nothing, leaving an ordinary click on the row body free to
  * do what clicking text anywhere else does (place a selection), rather
  * than popping a sheet over it.
+ *
+ * Two things disqualify a click from being a tap, and both exist so that
+ * selecting text never costs the reader a sheet they did not ask for:
+ * a press held longer than MAX_TAP_MS, and a click that lands while text
+ * is actually selected (the release at the end of a drag-select, and the
+ * click that dismisses an existing selection).
  */
-function handleRowTap(actions: EntryRowActions | undefined, entry: Entry) {
+function handleRowTap(
+  actions: EntryRowActions | undefined,
+  entry: Entry,
+  pressStartedAt: number | null,
+) {
   if (!actions || hoverCapable()) {
+    return;
+  }
+  if (pressStartedAt !== null && Date.now() - pressStartedAt > MAX_TAP_MS) {
+    return;
+  }
+  if (!window.getSelection()?.isCollapsed) {
     return;
   }
   actions.onOpenSheet(entry);
@@ -182,13 +213,25 @@ export const EntryRow = memo(function EntryRow({
     }
   };
 
+  // When the current press began, so a click can tell a tap from the tail
+  // end of a long-press (see MAX_TAP_MS). A ref, not state: nothing renders
+  // from it, and a re-render per touch would be pure waste.
+  const pressStartedAtRef = useRef<number | null>(null);
+
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: onClick here is a touch-only progressive enhancement (handleRowTap no-ops on a hover-capable device — see its own comment) layered on a row that must stay plain, selectable text, not a control; giving it an interactive role would contradict that and would duplicate the two real <button>s below.
     // biome-ignore lint/a11y/useKeyWithClickEvents: no keyboard equivalent is needed for the same reason — "reachable without a pointer" (the ticket's own requirement) is satisfied by EntryHoverActions' real, tabbable <button>s, not by this row.
     <div
       data-slot="entry-row"
       className={cn("flex items-baseline gap-3 py-1.5 text-sm text-foreground", actions && "group")}
-      onClick={actions ? () => handleRowTap(actions, entry) : undefined}
+      onPointerDown={
+        actions
+          ? () => {
+              pressStartedAtRef.current = Date.now();
+            }
+          : undefined
+      }
+      onClick={actions ? () => handleRowTap(actions, entry, pressStartedAtRef.current) : undefined}
       onContextMenu={actions ? (event) => handleRowContextMenu(event, actions, entry) : undefined}
     >
       <EntryBody body={entry.body} query={query} />

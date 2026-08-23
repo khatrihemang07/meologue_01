@@ -238,6 +238,59 @@ describe("EntryRow", () => {
       expect(onOpenSheet).toHaveBeenCalledWith(target);
     });
 
+    // The bug this guards, seen on a real Android device: long-pressing an
+    // Entry opened the sheet instead of starting text selection. Android's
+    // WebView fires a `click` when a long-press is released, exactly as it
+    // does for a quick tap, so the click alone cannot tell them apart —
+    // which made the one gesture issue #78 promised to leave alone the one
+    // gesture that popped a sheet over the text being selected.
+    it("ignores the click that ends a long-press, so text selection is left alone", () => {
+      stubHoverCapable(false);
+      const onOpenSheet = vi.fn();
+      const target = entry({ body: "hello" });
+      render(
+        <EntryRow
+          entry={target}
+          syncEnabled={false}
+          actions={{ onEdit: vi.fn(), onDelete: vi.fn(), onOpenSheet }}
+        />,
+      );
+
+      const row = screen.getByText("hello");
+      const now = Date.now();
+      vi.spyOn(Date, "now").mockReturnValue(now);
+      fireEvent.pointerDown(row);
+      vi.spyOn(Date, "now").mockReturnValue(now + 600);
+      fireEvent.click(row);
+
+      expect(onOpenSheet).not.toHaveBeenCalled();
+      vi.mocked(Date.now).mockRestore();
+    });
+
+    it("ignores a click that lands while text is selected", () => {
+      stubHoverCapable(false);
+      const onOpenSheet = vi.fn();
+      const target = entry({ body: "hello" });
+      render(
+        <EntryRow
+          entry={target}
+          syncEnabled={false}
+          actions={{ onEdit: vi.fn(), onDelete: vi.fn(), onOpenSheet }}
+        />,
+      );
+
+      // A selection left over from a drag-select: the release at the end of
+      // it is a click, and it must not cost the reader their selection.
+      vi.spyOn(window, "getSelection").mockReturnValue({
+        isCollapsed: false,
+      } as unknown as Selection);
+
+      fireEvent.click(screen.getByText("hello"));
+
+      expect(onOpenSheet).not.toHaveBeenCalled();
+      vi.mocked(window.getSelection).mockRestore();
+    });
+
     it("does nothing on a hover-capable device", () => {
       stubHoverCapable(true);
       const onOpenSheet = vi.fn();
