@@ -68,12 +68,22 @@ interface Measurement {
  */
 async function measureColumns(page: Page): Promise<Measurement> {
   const scrollRegion = page.getByTestId("shell-scroll-region");
-  // The content column is the scroll region's one child (shell.tsx) — located
-  // from the scroll region's existing testid rather than adding a new one to
-  // the column itself. The Composer's inner column has no testid either; it's
-  // the Textarea's immediate parent (composer.tsx), so the placeholder —
-  // already queried elsewhere in this suite — locates it just as directly.
-  await expect(scrollRegion.locator("> div")).toBeVisible();
+  // The content column is still the scroll region's first child div
+  // (shell.tsx) — located from the scroll region's existing testid rather
+  // than adding a new one to the column itself. The Composer's inner
+  // column has no testid either; it's the Textarea's immediate parent
+  // (composer.tsx), so the placeholder — already queried elsewhere in this
+  // suite — locates it just as directly.
+  //
+  // `.first()` (issue #83): History virtualizes its own rows now, and the
+  // subtree it renders *inside* the content column is a variable number of
+  // item wrapper divs rather than one div per day group — none of that
+  // changes which element this locator means to find (still the content
+  // column itself, still `region.firstElementChild` in the `evaluate`
+  // below), but a plain `scrollRegion.locator("> div")` is strict-mode
+  // sensitive to exactly how many direct children the region ends up with,
+  // and that's no longer a detail this spec should have to track by hand.
+  await expect(scrollRegion.locator("> div").first()).toBeVisible();
   await expect(page.getByPlaceholder("What's on your mind?")).toBeVisible();
   await page.evaluate(() => document.fonts.ready);
 

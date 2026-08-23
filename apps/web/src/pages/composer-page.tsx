@@ -145,7 +145,16 @@ export function ComposerPage() {
       // Search is unbounded (ADR 0014's search() reads unpaged) and
       // whatever page History has already loaded stays available to widen
       // further once the reader dismisses Search and returns to it.
-      pinnedThread={{ watch: shown, forceToNewest: sendSignal, pagination }}
+      // ownsBottomAlignment (issue #83): History is virtualized and handles
+      // its own bottom alignment via a leading spacer sized off its own
+      // virtualizer — see PinnedThreadConfig's own comment for why Shell's
+      // plain `min-h-full justify-end` treatment has to stand down for it.
+      pinnedThread={{
+        watch: shown,
+        forceToNewest: sendSignal,
+        pagination,
+        ownsBottomAlignment: true,
+      }}
     >
       {!syncEnabled && (
         <p className="text-center text-sm text-muted-foreground">

@@ -1,10 +1,59 @@
 import { ArrowDown, ArrowLeft, Search as SearchIcon } from "lucide-react";
-import { type ReactNode, useEffect, useState } from "react";
+import {
+  createContext,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { SyncStatusIndicator } from "@/components/sync-status-indicator";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { usePinnedScroll } from "@/hooks/use-pinned-scroll";
 import { cn } from "@/lib/utils";
+
+/**
+ * Issue #83: what history.tsx's virtualizer needs from Shell, and the one
+ * thing Shell needs back from it.
+ *
+ * `scrollElement` exists here, rather than a ref History creates itself,
+ * because Shell — not History — owns the actual scrollable node: it's this
+ * file's own `scrollRef` below, already wired to `usePinnedScroll` for the
+ * pin/jump-to-newest logic ADR 0018 and issue #79 depend on. Rendering a
+ * second `overflow-y-auto` element inside History instead would give the
+ * page two independent scroll positions and break both of those. A plain
+ * DOM node in state, not a bare `RefObject` — History's virtualizer must
+ * react the moment this becomes non-null (a `RefObject` alone would read
+ * `null` on History's very first render, since Shell — the ref's owner —
+ * is History's *ancestor*, and refs attach bottom-up: History's own mount
+ * effects run before Shell's div ever gets its ref attached). Populating it
+ * through a callback ref into `useState` forces the one extra render that
+ * makes the real node visible to a descendant reliably, instead of leaving
+ * that timing to chance.
+ *
+ * `registerScrollToNewest` runs the other direction. Only History knows how
+ * to reach the newest row once rows are virtualized — most of them don't
+ * exist in the DOM at all, and getting to one is `@tanstack/react-virtual`'s
+ * `scrollToIndex`, not a `scrollTop` assignment. History calls this once
+ * mounted, and again whenever which row counts as "newest" changes, so
+ * `usePinnedScroll` (called here in Shell, for the reasons above) can route
+ * its jump through the virtualizer instead of the raw `el.scrollTop =
+ * el.scrollHeight` it falls back to for every other pinned thread (today,
+ * only Reflection's Conversation — see use-pinned-scroll.ts's own
+ * `scrollToNewestIndex` option). `null` unregisters, called on unmount so a
+ * stale closure over a since-unmounted virtualizer can never fire.
+ */
+export interface HistoryScrollContextValue {
+  scrollElement: HTMLDivElement | null;
+  registerScrollToNewest: (fn: (() => void) | null) => void;
+}
+
+export const HistoryScrollContext = createContext<HistoryScrollContextValue>({
+  scrollElement: null,
+  registerScrollToNewest: () => {},
+});
 
 interface PinnedThreadConfig {
   /** Changes exactly when new content that might need following has appeared — e.g. the page's Entries array. */
@@ -22,6 +71,28 @@ interface PinnedThreadConfig {
     fetching: boolean;
     fetchMore: () => void;
   };
+  /**
+   * Issue #83: History bottom-aligns itself now — a leading spacer sized
+   * from its own virtualizer, computed in history.tsx (see that file's own
+   * comment on why: `justify-end` can't act on rows it can't see, since a
+   * virtualized row is `position: absolute` and out of flow). Setting this
+   * tells Shell to skip its own `min-h-full justify-end` treatment of the
+   * scroll region's content column below rather than layer both on top of
+   * each other.
+   *
+   * That's not just belt-and-braces: both mechanisms try to consume the
+   * *same* slack space, and `justify-end`'s contribution feeds back into
+   * History's own measurement (the space it adds shows up as more room
+   * *above* the virtualized list, which is exactly the quantity History's
+   * spacer reacts to). Left running together, each render would correct
+   * for the other's last correction and the two would spend it back and
+   * forth — half undershooting, forever — rather than ever converging.
+   * Reflection's Conversation (reflection-page.tsx) leaves this undefined
+   * and keeps the plain CSS treatment: it renders every message for real,
+   * so `justify-end` still sees the whole thing and has nothing to fight
+   * with.
+   */
+  ownsBottomAlignment?: boolean;
 }
 
 /**
@@ -156,11 +227,52 @@ export function Shell({
   pinnedThread,
   search,
 }: ShellProps) {
+  // Issue #83: the imperative escape hatch History registers its
+  // virtualizer's `scrollToIndex` into (see HistoryScrollContext's own
+  // comment above for the full why). A ref, not state — nothing here ever
+  // needs to re-render when *which function* is registered changes, only
+  // to have the current one available the next time `usePinnedScroll`
+  // below decides to jump. `runRegisteredScrollToNewest` is the stable
+  // closure actually handed to that hook: `usePinnedScroll` compares this
+  // option by identity to decide whether to skip rebuilding its own
+  // `scrollToNewest` callback (see that hook's own `scrollToNewestIndex`
+  // doc comment), so this must not be a fresh arrow function every render
+  // the way reading `scrollToNewestRef.current` inline at the call site
+  // below would be.
+  const scrollToNewestRef = useRef<(() => void) | null>(null);
+  const runRegisteredScrollToNewest = useCallback(() => {
+    const fn = scrollToNewestRef.current;
+    if (!fn) {
+      // Nothing registered — either no pinned thread is virtualized on
+      // this page at all (Reflection's Conversation) or History hasn't
+      // mounted yet. Reporting failure is what tells usePinnedScroll to
+      // fall back to its own scrollHeight-based jump instead of silently
+      // doing nothing.
+      return false;
+    }
+    fn();
+    return true;
+  }, []);
+  const registerScrollToNewest = useCallback((fn: (() => void) | null) => {
+    scrollToNewestRef.current = fn;
+  }, []);
+
+  // Issue #83: the scroll element History's virtualizer measures against,
+  // populated via a callback ref rather than read straight off `scrollRef`
+  // below — see HistoryScrollContext's own comment for why a bare
+  // `RefObject` isn't enough for a descendant to react to reliably.
+  const [scrollElement, setScrollElement] = useState<HTMLDivElement | null>(null);
+  const historyScrollContextValue = useMemo(
+    () => ({ scrollElement, registerScrollToNewest }),
+    [scrollElement, registerScrollToNewest],
+  );
+
   const { scrollRef, handleScroll, awayFromNewest, jumpToNewest } = usePinnedScroll({
     enabled: pinnedThread !== undefined,
     watch: pinnedThread?.watch,
     forceToNewest: pinnedThread?.forceToNewest,
     pagination: pinnedThread?.pagination,
+    scrollToNewestIndex: runRegisteredScrollToNewest,
   });
 
   // Ticket 55's mode switch: whether the app bar currently shows the search
@@ -324,12 +436,35 @@ export function Shell({
             itself — padding it again here would double it under a home
             indicator. */}
         <div
-          ref={scrollRef}
+          ref={(node) => {
+            // Issue #83: this div is both `usePinnedScroll`'s own scroll
+            // element (`scrollRef`, unchanged) and the node
+            // HistoryScrollContext hands down to History's virtualizer
+            // (`scrollElement`, new). Two refs on one JSX element can't be
+            // written as `ref={a}` twice, so this callback fans the single
+            // attach/detach out to both — `scrollRef.current` synchronously
+            // (usePinnedScroll reads it directly, no re-render needed) and
+            // `setScrollElement` as state (History, a descendant, needs a
+            // value that actually changes to react to — see the context's
+            // own comment on why a bare ref isn't enough there).
+            scrollRef.current = node;
+            setScrollElement(node);
+          }}
           onScroll={pinnedThread ? handleScroll : undefined}
           data-testid="shell-scroll-region"
-          className="flex-1 overflow-x-hidden overflow-y-auto"
+          // `relative` (issue #83): the one thing History's virtualizer
+          // needs from this element beyond the ref itself. History measures
+          // how much of its own content (a leading spacer, an always-present
+          // day pill — see history.tsx) sits above the virtualized list by
+          // reading that content's own `offsetTop`, and `offsetTop` is
+          // relative to the nearest *positioned* ancestor — with nothing
+          // positioned in between, that would otherwise walk all the way up
+          // to the document body and return a number that includes the app
+          // bar, not just this region's own scrolled content.
+          className="relative flex-1 overflow-x-hidden overflow-y-auto"
         >
-          {/* A pinned thread hugs the bottom when it is shorter than the
+          <HistoryScrollContext.Provider value={historyScrollContextValue}>
+            {/* A pinned thread hugs the bottom when it is shorter than the
               viewport (ticket 53): the newest Entry belongs next to the
               Composer, and top-aligning a two-Entry History leaves it
               stranded at the top above a screen of empty space — the one
@@ -337,24 +472,29 @@ export function Shell({
               gives justify-end something to push against; without it the
               column is only as tall as its content and there is nothing to
               distribute. Settings passes no pinnedThread and keeps the
-              ordinary top-aligned flow. */}
-          <div
-            className={cn(
-              // ADR 0019's proportional reading column, flipping at the
-              // same `md` where the nav becomes a rail — one transition
-              // for the eye rather than two. 85% is narrower than 97% at
-              // every window size, so the column steps *down* here; that
-              // step is the rule's, not a bug in it. px-4 stays inside
-              // the percentage, so the text itself lands a few points
-              // narrower than the container.
-              "mx-auto flex w-[97%] flex-col gap-4 px-4 py-4 md:w-[85%]",
-              pinnedThread && "min-h-full justify-end",
-            )}
-          >
-            {message && <p className="text-sm text-destructive">{message}</p>}
-            {children}
-            {footer}
-          </div>
+              ordinary top-aligned flow. Issue #83: a pinned thread that
+              bottom-aligns itself (History, via its own virtualized-aware
+              leading spacer — see PinnedThreadConfig's own
+              `ownsBottomAlignment` comment) skips this treatment rather than
+              layering both on top of each other. */}
+            <div
+              className={cn(
+                // ADR 0019's proportional reading column, flipping at the
+                // same `md` where the nav becomes a rail — one transition
+                // for the eye rather than two. 85% is narrower than 97% at
+                // every window size, so the column steps *down* here; that
+                // step is the rule's, not a bug in it. px-4 stays inside
+                // the percentage, so the text itself lands a few points
+                // narrower than the container.
+                "mx-auto flex w-[97%] flex-col gap-4 px-4 py-4 md:w-[85%]",
+                pinnedThread && !pinnedThread.ownsBottomAlignment && "min-h-full justify-end",
+              )}
+            >
+              {message && <p className="text-sm text-destructive">{message}</p>}
+              {children}
+              {footer}
+            </div>
+          </HistoryScrollContext.Provider>
         </div>
 
         {/* Ticket 53's jump-to-newest control, as a band between the thread

@@ -50,6 +50,34 @@ export interface UsePinnedScrollOptions {
     fetching: boolean;
     fetchMore: () => void;
   };
+  /**
+   * Issue #83: an override for "jump to the newest end," tried before the
+   * default `el.scrollTop = el.scrollHeight` assignment rather than
+   * instead of it. With a virtualized thread (History), only rows near the
+   * viewport actually exist in the DOM — `scrollHeight` is still accurate
+   * (it's the virtualizer's own reported total, not a real laid-out
+   * height), but the *newest* row may still be at its estimated size if it
+   * has never been measured, which is exactly the moment a reader jumps to
+   * it (a fresh mount, or the very first Send after scrolling away). The
+   * caller hands this hook a function that reaches for the virtualizer's
+   * own `scrollToIndex` instead, which re-measures and corrects after the
+   * initial jump rather than trusting an assignment made against an
+   * estimate.
+   *
+   * Returns whether it actually handled the jump, not `void` — Shell
+   * (shell.tsx) passes the *same* function on every page it renders,
+   * including ones with no virtualizer at all (Reflection's Conversation),
+   * because it has no way to know from here which kind of thread this is.
+   * Returning `false` (nothing registered to receive the jump) is what
+   * tells this hook to fall through to the scrollHeight-based default
+   * instead of silently doing nothing — the shape a plain callback
+   * couldn't express. Undefined here (every test in
+   * use-pinned-scroll.test.tsx) is indistinguishable from "always returns
+   * false": both leave the scrollHeight-based jump as the only thing that
+   * ever runs, which is what keeps every existing assertion in that file
+   * unchanged by this option's addition.
+   */
+  scrollToNewestIndex?: () => boolean;
 }
 
 export interface UsePinnedScrollResult {
@@ -74,6 +102,7 @@ export function usePinnedScroll({
   watch,
   forceToNewest,
   pagination,
+  scrollToNewestIndex,
 }: UsePinnedScrollOptions): UsePinnedScrollResult {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   // A ref alongside the state: the effects below need the *current* pin
@@ -101,12 +130,19 @@ export function usePinnedScroll({
   }, []);
 
   const scrollToNewest = useCallback(() => {
+    // Issue #83: give the caller's own idea of "newest" (the virtualizer's
+    // scrollToIndex, for History) first refusal — see
+    // `scrollToNewestIndex`'s own doc comment for why this is a boolean
+    // hand-off rather than either function unconditionally winning.
+    if (scrollToNewestIndex?.()) {
+      return;
+    }
     const el = scrollRef.current;
     if (!el) {
       return;
     }
     el.scrollTop = el.scrollHeight;
-  }, []);
+  }, [scrollToNewestIndex]);
 
   const setPinned = useCallback((next: boolean) => {
     pinnedRef.current = next;
