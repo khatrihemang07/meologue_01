@@ -1,5 +1,5 @@
 services:
-  # The personal instance's database (issue #74). Nothing that runs as a test
+  # The production instance's database (issue #74). Nothing that runs as a test
   # touches this one: the Sandbox below has its own container, its own port
   # and its own volume, and every script that exists for testing names
   # `postgres-sandbox` explicitly rather than falling back to this service.
@@ -24,7 +24,7 @@ services:
   # The Sandbox instance's database (issue #74) — a fully separate Postgres,
   # not a second database inside the one above. That separation is the whole
   # point: a `docker compose down -v` or a stray DROP aimed at testing cannot
-  # reach the personal instance's volume, which is exactly the accident this
+  # reach the production instance's volume, which is exactly the accident this
   # replaced.
   #
   # It holds three databases:
@@ -40,7 +40,7 @@ services:
   # test. scripts/e2e.sh recreates both empty before every run.
   #
   # Behind the "sandbox" profile so a plain `docker compose up -d` — the
-  # everyday personal workflow (README.md) — starts only the instance above.
+  # everyday production workflow (README.md) — starts only the instance above.
   # Compose still starts this one when a script names it explicitly
   # (`docker compose up -d --wait postgres-sandbox`), profile or not.
   #
@@ -50,7 +50,7 @@ services:
   #
   # Not `docker compose --profile sandbox down -v`. A profile *widens* the set
   # of services a command applies to, it does not narrow it — so that second
-  # form removes `meologue-pgdata` as well and takes the personal instance's
+  # form removes `meologue-pgdata` as well and takes the production instance's
   # Entries with it. Verified with `--dry-run`, after doing it for real.
   postgres-sandbox:
     image: pgvector/pgvector:pg18

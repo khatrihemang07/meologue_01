@@ -18,13 +18,13 @@ override it if you're running the binary from somewhere else. One process serves
 and the built app on one port — open that port's address from any device on the same network
 (e.g. a phone) to get a working app; no separate web server or CORS configuration needed.
 
-Those defaults describe the **personal** instance. Testing runs the same binary against the
+Those defaults describe the **production** instance. Testing runs the same binary against the
 Sandbox instead (ADR 0029) — a separate Postgres on `:5442`, `dist/sandbox`, port `41307` — which
 `scripts/sandbox-server.sh` sets up. Nothing below distinguishes the two: it is the same server,
 and every command here works against either once `DATABASE_URL` says which. Run that script before
 `scripts/seed-sandbox.sh` on a fresh Sandbox — this server applies the migrations the seed needs.
 
-Android and macOS Sandbox shells install alongside the personal ones as `com.meologue.app.sandbox`:
+Android and macOS Sandbox shells install alongside the production ones as `com.meologue.app.sandbox`:
 `./gradlew assembleSandbox`, and `cargo tauri build --config tauri.sandbox.conf.json`.
 
 `server/.env` is read at startup, and does not override variables already in the environment
@@ -61,7 +61,7 @@ docker exec meologue-postgres psql -U meologue -d meologue -c \
   "select count(*) from entries where embedding is null"
 ```
 
-That names the personal instance's container; for the Sandbox it is
+That names the production instance's container; for the Sandbox it is
 `meologue-postgres-sandbox`. Both answer to the database name `meologue`, so the container name is
 the only thing that distinguishes them — worth reading twice before running anything destructive.
 

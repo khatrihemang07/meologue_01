@@ -34,7 +34,7 @@ out of the corpus was a wrapper script that a developer had to remember to use.
 
 Two instances that share the working tree and nothing else.
 
-| | Personal | Sandbox |
+| | Production | Sandbox |
 |---|---|---|
 | Postgres | `meologue-postgres`, `:5432`, volume `meologue-pgdata` | `meologue-postgres-sandbox`, `:5442`, volume `meologue-pgdata-sandbox` |
 | Server | `:41207` (`cd server && cargo run`) | `:41307` (`scripts/sandbox-server.sh`) |
@@ -48,7 +48,7 @@ The separation is load-bearing at each layer rather than conventional:
 - **Two Postgres containers, not two databases in one.** A database name is one `DROP` away from
   the wrong target and one `docker compose down -v` away from irrelevant. A separate container
   with a separate volume means the destructive commands testing is most likely to reach for
-  cannot address the personal instance at all.
+  cannot address the production instance at all.
 - **Two Server ports give two browser origins for free.** Both `meologue.server-url`
   (`apps/web/src/lib/settings.ts`) and the OPFS SQLite store are origin-keyed, so the web clients
   separate with no client code change whatsoever. This is the cheapest part of the split and the
@@ -59,7 +59,7 @@ The separation is load-bearing at each layer rather than conventional:
   `dist/android` is harmless on its own — only installing the *same* identifier replaces an
   installed app, which the `.sandbox` suffix prevents. Android uses a `sandbox` build type
   (`initWith debug`, `applicationIdSuffix ".sandbox"`) rather than a product flavor, because a
-  flavor would rename `assembleDebug` to `assemblePersonalDebug` and break every documented
+  flavor would rename `assembleDebug` to `assembleProductionDebug` and break every documented
   command. macOS uses a `--config` patch, `apps/macos/tauri.sandbox.conf.json`.
 
   **The native Sandboxes carry their own platform's bundle, not `dist/sandbox`.** The identifier
@@ -129,20 +129,20 @@ The Sandbox Server inherits the developer's `server/.env` for `MEOLOGUE_CHAT_*`,
 and `MEOLOGUE_TZ`. That is deliberate — those name stateless endpoints, and duplicating them would
 mean two files to keep in step. `scripts/sandbox-server.sh` sets `DATABASE_URL`, `STATIC_DIR` and
 `PORT` as plain assignments rather than `${VAR:-default}` fallbacks, so an exported variable from a
-shell that had been working on the personal instance cannot redirect it; dotenvy does not override
+shell that had been working on the production instance cannot redirect it; dotenvy does not override
 variables already in the environment, so those exports still win over `.env`.
 
-Nothing about the personal workflow changes. `docker compose up -d` still starts one container —
+Nothing about the production workflow changes. `docker compose up -d` still starts one container —
 the Sandbox service sits behind a `sandbox` profile, and the scripts that need it name it
 explicitly, which Compose honours regardless of profile.
 
 **The profile is not a safety boundary, and one command in particular is a trap.** A Compose
 profile *widens* the set of services a command applies to; it never narrows it. So
 `docker compose --profile sandbox down -v` removes `meologue-pgdata` along with the Sandbox's
-volume — it destroys the personal instance. Resetting the Sandbox means naming the service:
+volume — it destroys the production instance. Resetting the Sandbox means naming the service:
 `docker compose down -v postgres-sandbox`. This is written down because it was discovered by
 doing it, while building the very separation meant to prevent it: the container split stops a
-command aimed *at the Sandbox* from reaching the personal data, and does nothing about a command
+command aimed *at the Sandbox* from reaching the production data, and does nothing about a command
 that was quietly aimed at both.
 
 The Server owns the schema, so a Sandbox on a freshly created volume has no tables until

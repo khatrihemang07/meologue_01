@@ -22,13 +22,13 @@ pnpm install
 
 meologue has two isolated instances:
 
-| | Personal | Sandbox |
+| | Production | Sandbox |
 | --- | --- | --- |
 | Purpose | Your Entries | Testing and seeded data |
 | Postgres | `meologue-postgres` on `:5432` | `meologue-postgres-sandbox` on `:5442` |
 | Server | `:41207` | `:41307` |
 
-Start the personal app:
+Start the production app:
 
 ```bash
 docker compose up -d
@@ -49,9 +49,9 @@ For disposable testing, start and optionally seed the Sandbox instead:
 Open `http://localhost:41307`. The Sandbox uses a separate database, bundle, port, and native app
 identifier, so both instances can run together.
 
-Use `docker compose stop` for an everyday stop; it preserves the personal container and data. To
+Use `docker compose stop` for an everyday stop; it preserves the production container and data. To
 wipe only the Sandbox, run `docker compose down -v postgres-sandbox`. Do not substitute
-`docker compose --profile sandbox down -v`: the profile widens the command to include the personal
+`docker compose --profile sandbox down -v`: the profile widens the command to include the production
 volume.
 
 Reflection and Digest are off until an OpenAI-compatible chat endpoint is configured; Reflection
@@ -87,9 +87,9 @@ MEOLOGUE_PROXY_TARGET=http://localhost:41307 \
   pnpm --filter @meologue/web dev --port 5174  # terminal D, from the repository root
 ```
 
-Open `http://localhost:5173` for the personal instance and `http://localhost:5174` for the
+Open `http://localhost:5173` for the production instance and `http://localhost:5174` for the
 Sandbox, using each as that instance's own Server URL. For a production-style build instead, use
-the personal or Sandbox commands in the preceding section; the Rust process serves the app and API
+the production or Sandbox commands in the preceding section; the Rust process serves the app and API
 together.
 
 Browsers require a secure context for meologue's OPFS-backed SQLite store. `localhost` qualifies,
@@ -154,7 +154,7 @@ cd apps/macos
 
 Run `./scripts/setup-signing.sh` from the repository root before a release build. It creates a local,
 self-signed identity; builds are signed but not notarized, so another Mac requires one explicit
-right-click → Open. Personal and Sandbox bundles have separate identifiers and application data.
+right-click → Open. Production and Sandbox bundles have separate identifiers and application data.
 Both can run and sync at once, each reaching only its own Server.
 
 ## Layout
@@ -197,7 +197,7 @@ export DATABASE_URL=postgres://meologue:meologue@localhost:5442/meologue
 cargo test --manifest-path server/Cargo.toml
 ```
 
-Tests use the Sandbox Postgres, never the personal database. Stop a running Sandbox Server before a
+Tests use the Sandbox Postgres, never the production database. Stop a running Sandbox Server before a
 full end-to-end run if its Reflection and Digest workers cause timeouts. After changing Rust wire
 types, regenerate the committed TypeScript contract with:
 

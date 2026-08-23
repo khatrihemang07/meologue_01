@@ -16,7 +16,7 @@
 # multi-server.spec.ts proves an Entry follows its Device's Server URL rather
 # than the origin that served the page, which a shared database would defeat.
 #
-# A consequence worth naming: this no longer cares whether the personal server
+# A consequence worth naming: this no longer cares whether the production server
 # is running. It used to refuse to start if anything held a connection to the
 # database it wanted to rename.
 #
@@ -24,7 +24,7 @@
 # data: the Sandbox server (scripts/sandbox-server.sh) runs an embedding
 # worker and a Digest worker that drive local LLM endpoints, and leaving it up
 # during a run is enough load to push the slowest multi-Device specs past
-# their timeouts. Measured on this repo: 46/46 with only the personal server
+# their timeouts. Measured on this repo: 46/46 with only the production server
 # up, 44/46 with the Sandbox server up too, the failures being timeouts in
 # edit-delete and reflection rather than anything about isolation. Stop the
 # Sandbox server before a full run if the suite starts flaking.
