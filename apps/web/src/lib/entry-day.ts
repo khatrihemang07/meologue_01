@@ -39,6 +39,47 @@ function shiftDayKey(dayKey: string, days: number): string | null {
 }
 
 /**
+ * `toLocaleDateString`/`toLocaleTimeString` *with* an options bag skip V8's
+ * cached-formatter fast path (the one that applies to the zero-argument
+ * form) and build a brand-new `Intl.DateTimeFormat` internally on every
+ * call — for `formatClockTime` below, that was roughly one fresh formatter
+ * per Entry row per History render (issue #81). Each formatter this module
+ * needs is built once, lazily (only if this module's caller ever actually
+ * formats something — a pure-data test importing `entryDayKey` alone
+ * shouldn't pay for a clock formatter it never uses), and reused from then
+ * on via these tiny memoising getters.
+ *
+ * `formatDaySeparator`'s options bag isn't fixed the way `formatClockTime`'s
+ * is — it conditionally adds `year` — so a single cached instance can't
+ * serve both shapes; a two-entry cache keyed on that boolean does. Neither
+ * formatter's options depend on a per-call *timeZone*, so unlike
+ * `formatDaySeparatorTitle` in history.tsx (whose own comment covers that
+ * check), no larger keyed cache is needed here.
+ */
+let clockFormatter: Intl.DateTimeFormat | undefined;
+function getClockFormatter(): Intl.DateTimeFormat {
+  if (clockFormatter === undefined) {
+    clockFormatter = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
+  }
+  return clockFormatter;
+}
+
+const daySeparatorFormatters = new Map<boolean, Intl.DateTimeFormat>();
+function getDaySeparatorFormatter(includeYear: boolean): Intl.DateTimeFormat {
+  let formatter = daySeparatorFormatters.get(includeYear);
+  if (formatter === undefined) {
+    formatter = new Intl.DateTimeFormat(undefined, {
+      timeZone: "UTC",
+      month: "long",
+      day: "numeric",
+      ...(includeYear ? { year: "numeric" } : {}),
+    });
+    daySeparatorFormatters.set(includeYear, formatter);
+  }
+  return formatter;
+}
+
+/**
  * The label a day separator carries (ticket 52) — "Today", "Yesterday", or a
  * date. The separator is what carries the date in this design, which is what
  * lets each Entry below it show a clock time alone.
@@ -61,12 +102,8 @@ export function formatDaySeparator(dayKey: string, todayKey: string): string {
   if (Number.isNaN(parsed)) {
     return dayKey;
   }
-  return new Date(parsed).toLocaleDateString(undefined, {
-    timeZone: "UTC",
-    month: "long",
-    day: "numeric",
-    ...(dayKey.slice(0, 4) === todayKey.slice(0, 4) ? {} : { year: "numeric" }),
-  });
+  const includeYear = dayKey.slice(0, 4) !== todayKey.slice(0, 4);
+  return getDaySeparatorFormatter(includeYear).format(parsed);
 }
 
 /**
@@ -77,7 +114,5 @@ export function formatDaySeparator(dayKey: string, todayKey: string): string {
  */
 export function formatClockTime(createdAt: string): string | null {
   const parsed = Date.parse(createdAt);
-  return Number.isNaN(parsed)
-    ? null
-    : new Date(parsed).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  return Number.isNaN(parsed) ? null : getClockFormatter().format(parsed);
 }

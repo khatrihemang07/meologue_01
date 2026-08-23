@@ -1,6 +1,10 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { usePinnedScroll } from "./use-pinned-scroll";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 // jsdom lays nothing out, so scrollHeight/clientHeight are always 0 unless
 // a test overrides them — this is what makes "at the newest end" vs.
@@ -122,6 +126,63 @@ describe("usePinnedScroll", () => {
     setScrollGeometry(scroller, { scrollHeight: 1000, clientHeight: 400, scrollTop: 0 });
     fireEvent.scroll(scroller);
 
+    expect(screen.getByTestId("away")).toHaveTextContent("false");
+  });
+
+  // Issue #81, fix 5: `scrollToNewest` reads `el.scrollHeight`, which
+  // forces a synchronous layout of the whole pinned list — expensive for a
+  // History with hundreds of Entries. Two effects can each call it on
+  // mount: the `watch` effect (unconditional here, since a fresh pin
+  // starts engaged) and the `forceToNewest` effect, which is supposed to
+  // skip a mount via `forceToNewest === undefined`. `scrollHeight` is a
+  // getter on `Element.prototype` in jsdom (confirmed by inspecting its
+  // own property descriptor), so spying on that specific accessor —
+  // rather than on `scrollToNewest` itself, which the hook never exposes —
+  // counts exactly how many times a full-list layout read actually
+  // happened, with no other reads competing for the count here (the only
+  // other `scrollHeight` read in this hook, inside `isAtNewest`, only runs
+  // from a real scroll event, never during mount).
+  it("reads scrollHeight (forces a reflow) only once at mount when forceToNewest starts undefined", () => {
+    const scrollHeightReads = vi.spyOn(Element.prototype, "scrollHeight", "get");
+
+    render(<Harness enabled watch={1} forceToNewest={undefined} />);
+
+    // The `watch` effect's own unconditional read (a fresh pin starts
+    // engaged) — this one is unavoidable and not what issue #81 is about.
+    expect(scrollHeightReads).toHaveBeenCalledTimes(1);
+  });
+
+  // The seed this guards against: composer-page.tsx used to start its own
+  // `forceToNewest` counter at `0` rather than `undefined`, which defeats
+  // the hook's own `forceToNewest === undefined` mount guard (`0 !==
+  // undefined`) and runs a second, redundant reflow-forcing
+  // `scrollToNewest` back to back with the `watch` effect's. This test
+  // pins that failure mode at the hook's own level, independent of
+  // composer-page.tsx, as the thing the seed fix (`useState<number |
+  // undefined>(undefined)`, not `useState(0)`) exists to avoid.
+  it("reads scrollHeight twice at mount if forceToNewest is seeded at 0 instead of undefined — the bug the seed fix avoids", () => {
+    const scrollHeightReads = vi.spyOn(Element.prototype, "scrollHeight", "get");
+
+    render(<Harness enabled watch={1} forceToNewest={0} />);
+
+    expect(scrollHeightReads).toHaveBeenCalledTimes(2);
+  });
+
+  it("still jumps to newest unconditionally on the very first Send when forceToNewest starts undefined", () => {
+    const { rerender } = render(<Harness enabled watch={1} forceToNewest={undefined} />);
+    const scroller = screen.getByTestId("scroller");
+
+    // The reader has scrolled away before ever Sending anything.
+    setScrollGeometry(scroller, { scrollHeight: 1000, clientHeight: 400, scrollTop: 0 });
+    fireEvent.scroll(scroller);
+    expect(screen.getByTestId("away")).toHaveTextContent("true");
+
+    // The first Send: composer-page.tsx's own `(count ?? 0) + 1` turns
+    // `undefined` into `1`, which is what actually reaches this hook.
+    setScrollGeometry(scroller, { scrollHeight: 1000, clientHeight: 400, scrollTop: 0 });
+    rerender(<Harness enabled watch={1} forceToNewest={1} />);
+
+    expect(scroller.scrollTop).toBe(1000);
     expect(screen.getByTestId("away")).toHaveTextContent("false");
   });
 });

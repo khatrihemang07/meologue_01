@@ -37,11 +37,28 @@ export function ComposerPage() {
   // newest end unconditionally," ticket 53's rule for Send specifically,
   // as opposed to an Entry merely appearing (which only follows if the
   // reader was already pinned — see use-pinned-scroll.ts).
-  const [sendSignal, setSendSignal] = useState(0);
+  //
+  // Seeded `undefined`, not `0` (issue #81): `usePinnedScroll`'s own
+  // `forceToNewest` guard is `if (forceToNewest === undefined) return`,
+  // specifically so a mount — where nothing has been Sent yet — does
+  // nothing. Seeding this at `0` defeated that guard (`0 !== undefined`),
+  // so every mount of this page ran a *second* unconditional
+  // `scrollToNewest` back to back with the `watch` effect's own one,
+  // forcing the full-list layout read `scrollToNewest` does
+  // (`el.scrollHeight`) twice for no reason. The type stays `number |
+  // undefined` rather than switching to a boolean or a Date, because all
+  // that ever mattered here is "has this changed since last render" —
+  // `usePinnedScroll` only compares identity, never reads the value.
+  const [sendSignal, setSendSignal] = useState<number | undefined>(undefined);
 
   function handleSend(body: string) {
     sendEntry(body);
-    setSendSignal((count) => count + 1);
+    // `?? 0` covers the first Send specifically: `undefined + 1` is `NaN`,
+    // and — because `Object.is(NaN, NaN)` is `true` — a *second* Send would
+    // then leave `forceToNewest` looking unchanged to the effect's
+    // dependency check (`NaN` to `NaN`) and silently stop forcing the jump
+    // from then on.
+    setSendSignal((count) => (count ?? 0) + 1);
   }
 
   // ADR 0028: which Entry (if any) the Composer is editing, rather than
