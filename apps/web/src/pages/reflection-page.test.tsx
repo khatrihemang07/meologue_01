@@ -24,6 +24,7 @@ const defaultEntryStoreContext: EntryStoreOutletContext = {
   editEntry: vi.fn(),
   removeEntry: vi.fn(),
   search: vi.fn(async () => []),
+  pagination: { hasMore: false, fetching: false, fetchMore: vi.fn() },
   disabled: false,
 };
 

@@ -3,13 +3,15 @@ import { open } from "@meologue/core";
 import { queryOptions, useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { Outlet, useOutletContext } from "react-router";
-import { useHistory } from "@/hooks/use-history";
+import { type UseHistoryPagination, useHistory } from "@/hooks/use-history";
 import { SecondTabError, StorageUnavailableError } from "@/lib/entry-store-errors";
 import { ENTRY_STORE_QUERY_KEY } from "@/lib/query-keys";
 import { createDriver } from "@/platform/sqlite-driver";
 
 export interface EntryStoreOutletContext {
   entries: Entry[];
+  /** Issue #79 — see UseHistoryPagination's own doc comment (use-history.ts). */
+  pagination: UseHistoryPagination;
   sendEntry: (raw: string) => void;
   /** Search (ticket 39) — narrows History to Entries whose body matches `query`, per EntryStore.search. */
   search: (query: string) => Promise<Entry[]>;
@@ -94,6 +96,18 @@ function noopEdit(_id: string, _body: string) {}
 
 function noopRemove(_entry: Entry) {}
 
+function noopFetchMore() {}
+
+// Mirrors `entries: []` just above: nothing to page through before the
+// store is open, and `hasMore: false` keeps Shell's scroll listener from
+// ever calling `noopFetchMore` in the first place (see
+// use-pinned-scroll.ts's own `hasMore` guard).
+const notReadyPagination: UseHistoryPagination = {
+  hasMore: false,
+  fetching: false,
+  fetchMore: noopFetchMore,
+};
+
 /**
  * The composition root for ADR 0001 and ADR 0013: opens the Entry store and
  * runs `useHistory` exactly once, above the routes that read from it — `/`,
@@ -131,6 +145,7 @@ export function EntryStoreLayout() {
       context={
         {
           entries: [],
+          pagination: notReadyPagination,
           sendEntry: noop,
           search: noopSearch,
           editEntry: noopEdit,
@@ -144,12 +159,13 @@ export function EntryStoreLayout() {
 }
 
 function Ready({ store, deviceId }: { store: EntryStore; deviceId: string }) {
-  const { entries, sendEntry, editEntry, removeEntry } = useHistory(store, deviceId);
+  const { entries, pagination, sendEntry, editEntry, removeEntry } = useHistory(store, deviceId);
   return (
     <Outlet
       context={
         {
           entries,
+          pagination,
           sendEntry,
           search: (query: string) => store.search(query),
           editEntry,

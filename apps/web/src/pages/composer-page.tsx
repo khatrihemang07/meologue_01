@@ -15,7 +15,8 @@ import { useEntryStore } from "@/pages/entry-store-layout";
 // Uncapped on the theory that a future ticket might cap what shows here
 // without touching the shared History component itself.
 export function ComposerPage() {
-  const { entries, sendEntry, search, editEntry, removeEntry, disabled, message } = useEntryStore();
+  const { entries, pagination, sendEntry, search, editEntry, removeEntry, disabled, message } =
+    useEntryStore();
   // Subscribed, not a one-off read: a change saved on Settings now updates
   // this without a reload or a remount (ticket 36), on top of the render
   // this component already gets when it remounts navigating back from
@@ -138,7 +139,13 @@ export function ComposerPage() {
       }
       // `shown`, not `entries`: while a search is narrowing this thread the
       // pin should follow what's actually on screen.
-      pinnedThread={{ watch: shown, forceToNewest: sendSignal }}
+      //
+      // `pagination` is issue #79's own "load older" glue — passed through
+      // unconditionally rather than only while `query` is empty, because
+      // Search is unbounded (ADR 0014's search() reads unpaged) and
+      // whatever page History has already loaded stays available to widen
+      // further once the reader dismisses Search and returns to it.
+      pinnedThread={{ watch: shown, forceToNewest: sendSignal, pagination }}
     >
       {!syncEnabled && (
         <p className="text-center text-sm text-muted-foreground">

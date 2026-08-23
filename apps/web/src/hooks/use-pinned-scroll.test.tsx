@@ -26,13 +26,15 @@ interface HarnessProps {
   enabled: boolean;
   watch: unknown;
   forceToNewest?: unknown;
+  pagination?: { hasMore: boolean; fetching: boolean; fetchMore: () => void };
 }
 
-function Harness({ enabled, watch, forceToNewest }: HarnessProps) {
+function Harness({ enabled, watch, forceToNewest, pagination }: HarnessProps) {
   const { scrollRef, handleScroll, awayFromNewest, jumpToNewest } = usePinnedScroll({
     enabled,
     watch,
     forceToNewest,
+    pagination,
   });
   return (
     <div>
@@ -184,5 +186,140 @@ describe("usePinnedScroll", () => {
 
     expect(scroller.scrollTop).toBe(1000);
     expect(screen.getByTestId("away")).toHaveTextContent("false");
+  });
+
+  // Issue #79: reaching the oldest loaded edge triggers `pagination.fetchMore`.
+  describe("pagination", () => {
+    function pagination(overrides: Partial<{ hasMore: boolean; fetching: boolean }> = {}) {
+      const fetchMore = vi.fn();
+      return { hasMore: true, fetching: false, ...overrides, fetchMore };
+    }
+
+    it("calls fetchMore once the reader scrolls to the oldest loaded edge", () => {
+      const p = pagination();
+      render(<Harness enabled watch={1} pagination={p} />);
+      const scroller = screen.getByTestId("scroller");
+
+      setScrollGeometry(scroller, { scrollHeight: 1000, clientHeight: 400, scrollTop: 0 });
+      fireEvent.scroll(scroller);
+
+      expect(p.fetchMore).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not call fetchMore while scrolled away from the oldest edge", () => {
+      const p = pagination();
+      render(<Harness enabled watch={1} pagination={p} />);
+      const scroller = screen.getByTestId("scroller");
+
+      setScrollGeometry(scroller, { scrollHeight: 1000, clientHeight: 400, scrollTop: 500 });
+      fireEvent.scroll(scroller);
+
+      expect(p.fetchMore).not.toHaveBeenCalled();
+    });
+
+    it("does not call fetchMore once hasMore is false — nothing older left to fetch", () => {
+      const p = pagination({ hasMore: false });
+      render(<Harness enabled watch={1} pagination={p} />);
+      const scroller = screen.getByTestId("scroller");
+
+      setScrollGeometry(scroller, { scrollHeight: 1000, clientHeight: 400, scrollTop: 0 });
+      fireEvent.scroll(scroller);
+
+      expect(p.fetchMore).not.toHaveBeenCalled();
+    });
+
+    it("does not call fetchMore again while a fetch is already in flight", () => {
+      const p = pagination({ fetching: true });
+      render(<Harness enabled watch={1} pagination={p} />);
+      const scroller = screen.getByTestId("scroller");
+
+      setScrollGeometry(scroller, { scrollHeight: 1000, clientHeight: 400, scrollTop: 0 });
+      fireEvent.scroll(scroller);
+
+      expect(p.fetchMore).not.toHaveBeenCalled();
+    });
+
+    it("never reads scrollTop for this at all when pagination is left undefined — a thread with no paging stays inert", () => {
+      // No spy needed on scrollTop specifically (jsdom doesn't expose it as
+      // a spyable accessor the way scrollHeight is — see the "reads
+      // scrollHeight" tests below), so this instead proves the outward
+      // symptom: with no `pagination`, a scroll event at the very top does
+      // nothing extra beyond the ordinary pin bookkeeping.
+      render(<Harness enabled watch={1} />);
+      const scroller = screen.getByTestId("scroller");
+
+      setScrollGeometry(scroller, { scrollHeight: 1000, clientHeight: 400, scrollTop: 0 });
+      expect(() => fireEvent.scroll(scroller)).not.toThrow();
+      expect(screen.getByTestId("away")).toHaveTextContent("true");
+    });
+
+    // The core of issue #79's "prepending must not move the viewport":
+    // once the older page's Entries land (`watch` changes) after a
+    // fetchMore this hook itself triggered, scrollTop is adjusted by
+    // exactly how much scrollHeight grew above the reader — so whatever
+    // content they were looking at stays under them, pixel for pixel.
+    it("preserves the reader's visual position once an older page lands above them", () => {
+      const p = pagination();
+      const { rerender } = render(<Harness enabled watch={1} pagination={p} />);
+      const scroller = screen.getByTestId("scroller");
+
+      // Scrolled to the very top of what's loaded so far.
+      setScrollGeometry(scroller, { scrollHeight: 1000, clientHeight: 400, scrollTop: 0 });
+      fireEvent.scroll(scroller);
+      expect(p.fetchMore).toHaveBeenCalledTimes(1);
+
+      // The older page's Entries land, growing the content above the
+      // reader by 300px — jsdom doesn't reflow on its own, so the test
+      // sets the new scrollHeight by hand, the same way every other test
+      // in this file simulates layout.
+      setScrollGeometry(scroller, { scrollHeight: 1300, clientHeight: 400, scrollTop: 0 });
+      rerender(<Harness enabled watch={2} pagination={p} />);
+
+      // scrollTop moved by exactly the height added above (1300 - 1000 =
+      // 300), so the reader is still looking at the same content.
+      expect(scroller.scrollTop).toBe(300);
+    });
+
+    // The failure mode this must not reintroduce: an ordinary append while
+    // scrolled away (a Sync-delivered Entry landing at the newest,
+    // *bottom* end) also grows scrollHeight, but nothing above the reader
+    // actually moved — adjusting scrollTop for that would itself be the
+    // bug. This is exactly the "does not move the view when new content
+    // arrives after the reader scrolled away" case above, just asserted
+    // again here with `pagination` present, to prove the two mechanisms
+    // don't interfere with each other.
+    it("does not adjust scroll position for an ordinary append while scrolled away, even with pagination configured", () => {
+      const p = pagination();
+      const { rerender } = render(<Harness enabled watch={1} pagination={p} />);
+      const scroller = screen.getByTestId("scroller");
+
+      // Scrolled away, but not all the way to the oldest edge — no
+      // fetchMore triggered.
+      setScrollGeometry(scroller, { scrollHeight: 1000, clientHeight: 400, scrollTop: 500 });
+      fireEvent.scroll(scroller);
+      expect(p.fetchMore).not.toHaveBeenCalled();
+
+      // An Entry arrives from Sync, appended at the newest end.
+      setScrollGeometry(scroller, { scrollHeight: 1400, clientHeight: 400, scrollTop: 500 });
+      rerender(<Harness enabled watch={2} pagination={p} />);
+
+      expect(scroller.scrollTop).toBe(500);
+    });
+
+    // Mirrors the "reads scrollHeight once" test above (issue #81): a
+    // thread with `pagination` configured but never actually triggering a
+    // fetch (never reaching the oldest edge) must not add a second,
+    // unconditional `scrollHeight` read on top of the `watch` effect's own
+    // one — only an anchor this hook itself set should ever trigger the
+    // extra read the prepend-preserving effect does.
+    it("reads scrollHeight only once at mount with pagination configured but never triggered", () => {
+      const scrollHeightReads = vi.spyOn(Element.prototype, "scrollHeight", "get");
+      const p = pagination();
+
+      render(<Harness enabled watch={1} forceToNewest={undefined} pagination={p} />);
+
+      expect(scrollHeightReads).toHaveBeenCalledTimes(1);
+      expect(p.fetchMore).not.toHaveBeenCalled();
+    });
   });
 });

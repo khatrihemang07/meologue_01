@@ -1,4 +1,4 @@
-import type { Entry, EntryStore } from "@meologue/core";
+import type { Entry, EntryPage, EntryStore } from "@meologue/core";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
@@ -186,6 +186,142 @@ describe("useHistory", () => {
       // No restore call of any kind — store.upsert() is only ever used by
       // sendEntry, never by removeEntry.
       expect(store.upsert).not.toHaveBeenCalled();
+    });
+  });
+
+  // Issue #79: a fresh open reads one page, and fetchMore widens by one
+  // more. A page-aware fake (unlike createFakeStore above, whose list()
+  // ignores its argument entirely and is what every other test in this
+  // file relies on staying untouched) is what makes "the right cursor
+  // reached the store" and "hasMore turns false once list() runs out"
+  // observable here — the paging semantics of `before`/`limit` themselves
+  // are packages/core's own contract suite's job
+  // (entry-store-contract.ts), not this file's.
+  describe("pagination (issue #79)", () => {
+    function pagedEntry(index: number): Entry {
+      // Newest first (higher index = newer), matching list()'s own order —
+      // createdAt spaced a day apart so string comparison sorts the same
+      // way a real timestamp comparison would.
+      return entry({
+        id: String(index).padStart(4, "0"),
+        createdAt: `2026-${String(Math.floor(index / 28) + 1).padStart(2, "0")}-${String(
+          (index % 28) + 1,
+        ).padStart(2, "0")}T00:00:00.000Z`,
+      });
+    }
+
+    // Mirrors how SqliteEntryStore/InMemoryEntryStore both apply
+    // `before`/`limit` (see packages/core's own contract suite for the
+    // real thing being tested) — just enough of it, in one place, for this
+    // file's fake stores to apply consistently.
+    function pagedList(all: Entry[], page?: EntryPage): Entry[] {
+      let result = all;
+      if (page?.before) {
+        const { createdAt, id } = page.before;
+        result = result.filter((e) =>
+          e.createdAt !== createdAt ? e.createdAt < createdAt : e.id < id,
+        );
+      }
+      return page?.limit === undefined ? result : result.slice(0, page.limit);
+    }
+
+    function fakeStoreWithList(list: EntryStore["list"]): EntryStore {
+      return {
+        list,
+        upsert: vi.fn(async () => {}),
+        pending: vi.fn(async () => []),
+        getCursor: vi.fn(async () => 0),
+        setCursor: vi.fn(async () => {}),
+        search: vi.fn(async () => []),
+        edit: vi.fn(async () => {}),
+        remove: vi.fn(async () => {}),
+      };
+    }
+
+    function createPagedFakeStore(count: number): EntryStore {
+      // Newest-first, mirroring list()'s own order (ADR 0014) — built
+      // once, descending, so `before`/`limit` can be applied the same way
+      // SqliteEntryStore and InMemoryEntryStore both apply them.
+      const all = Array.from({ length: count }, (_, i) => pagedEntry(count - 1 - i));
+      return fakeStoreWithList(vi.fn(async (page) => pagedList(all, page)));
+    }
+
+    it("a fresh open reads only the newest page, not the whole History", async () => {
+      const store = createPagedFakeStore(75);
+      const { result } = await renderUseHistory(store);
+
+      await waitFor(() => expect(result.current.entries).toHaveLength(50));
+
+      expect(result.current.entries[0]?.id).toBe("0074");
+      expect(result.current.entries[49]?.id).toBe("0025");
+      expect(result.current.pagination.hasMore).toBe(true);
+    });
+
+    it("reports no more pages when the whole History fits in one page", async () => {
+      const store = createPagedFakeStore(10);
+      const { result } = await renderUseHistory(store);
+
+      await waitFor(() => expect(result.current.entries).toHaveLength(10));
+
+      expect(result.current.pagination.hasMore).toBe(false);
+    });
+
+    it("fetchMore widens by one older page, using the oldest loaded Entry as the cursor", async () => {
+      const store = createPagedFakeStore(75);
+      const { result } = await renderUseHistory(store);
+      await waitFor(() => expect(result.current.entries).toHaveLength(50));
+
+      act(() => result.current.pagination.fetchMore());
+
+      await waitFor(() => expect(result.current.entries).toHaveLength(75));
+      // Still newest-first end to end, with no gap or overlap at the seam.
+      expect(result.current.entries[49]?.id).toBe("0025");
+      expect(result.current.entries[50]?.id).toBe("0024");
+      expect(result.current.entries[74]?.id).toBe("0000");
+      expect(result.current.pagination.hasMore).toBe(false);
+      expect(store.list).toHaveBeenLastCalledWith({
+        before: { createdAt: pagedEntry(25).createdAt, id: "0025" },
+        limit: 50,
+      });
+    });
+
+    it("fetching is true only while an older page is actually in flight", async () => {
+      const all = Array.from({ length: 75 }, (_, i) => pagedEntry(75 - 1 - i));
+      let resolveOlderPage: (entries: Entry[]) => void = () => {};
+      let calls = 0;
+      const store = fakeStoreWithList(
+        vi.fn(async (page) => {
+          calls++;
+          if (calls === 1) {
+            // The initial page — resolves immediately, same as every
+            // other test in this file.
+            return pagedList(all, page);
+          }
+          // The older page fetchMore triggers below — held open until the
+          // test resolves it explicitly.
+          return new Promise<Entry[]>((resolve) => {
+            resolveOlderPage = resolve;
+          });
+        }),
+      );
+      const { result } = await renderUseHistory(store);
+      await waitFor(() => expect(result.current.entries).toHaveLength(50));
+      expect(result.current.pagination.fetching).toBe(false);
+
+      act(() => result.current.pagination.fetchMore());
+      await waitFor(() => expect(result.current.pagination.fetching).toBe(true));
+
+      act(() =>
+        resolveOlderPage(
+          pagedList(all, {
+            before: { createdAt: pagedEntry(25).createdAt, id: "0025" },
+            limit: 50,
+          }),
+        ),
+      );
+
+      await waitFor(() => expect(result.current.pagination.fetching).toBe(false));
+      expect(result.current.entries).toHaveLength(75);
     });
   });
 });

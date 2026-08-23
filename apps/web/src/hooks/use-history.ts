@@ -1,13 +1,35 @@
 import type { Entry, EntryStore } from "@meologue/core";
 import { mintId } from "@meologue/core";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation } from "@tanstack/react-query";
+import {
+  INITIAL_ENTRIES_PAGE_PARAM,
+  nextEntriesPageParam,
+  refreshNewestEntriesPage,
+} from "@/lib/entries-pagination";
 import { normalizeEntryBody } from "@/lib/entry-text";
-import { queryClient } from "@/lib/query-client";
 import { ENTRIES_QUERY_KEY } from "@/lib/query-keys";
 import { requestSync } from "@/lib/sync-runner";
 
+/**
+ * Issue #79's scroll-triggered "load older" glue, handed to Shell (via
+ * whichever page renders History) so it can call `fetchMore` once the
+ * reader reaches the oldest loaded edge — see use-pinned-scroll.ts's
+ * `pagination` option, whose shape this mirrors on purpose so a caller can
+ * pass this object straight through with no reshaping.
+ */
+export interface UseHistoryPagination {
+  /** Whether an older page exists to fetch — false once list() has run out of Entries. */
+  hasMore: boolean;
+  /** Whether a page fetch (the initial one or an older one) is already in flight. */
+  fetching: boolean;
+  /** Fetches the next older page. A no-op call while `!hasMore || fetching` is safe but pointless — callers should check first. */
+  fetchMore: () => void;
+}
+
 export interface UseHistoryResult {
   entries: Entry[];
+  /** Issue #79 — see UseHistoryPagination's own doc comment. */
+  pagination: UseHistoryPagination;
   sendEntry: (raw: string) => void;
   /** Changes an Entry's body locally, then pushes it (ADR 0028) — the Composer's edit-commit path. Refuses an edit to empty/whitespace, same as sendEntry. */
   editEntry: (id: string, body: string) => void;
@@ -46,20 +68,56 @@ export interface UseHistoryResult {
 }
 
 /**
- * Owns this Device's History: a TanStack Query query for `store.list()` and
- * mutations for Sending, editing and removing an Entry (ADR 0013, extended
- * by ADR 0028 for the latter two). Every mutation has the same shape —
- * `mutationFn` calls the store, `onSuccess` is `afterLocalWrite` below,
- * which is where the invalidate-then-nudge-Sync reasoning lives.
+ * Owns this Device's History: a TanStack Query infinite query for
+ * `store.list()` (issue #79 — 50 Entries at a time, widening as the reader
+ * scrolls back) and mutations for Sending, editing and removing an Entry
+ * (ADR 0013, extended by ADR 0028 for the latter two). Every mutation has
+ * the same shape — `mutationFn` calls the store, `onSuccess` is
+ * `afterLocalWrite` below, which is where the refresh-then-nudge-Sync
+ * reasoning lives.
  *
  * An Entry renders from the local write immediately; nothing here waits on
  * the network.
  */
 export function useHistory(store: EntryStore, deviceId: string): UseHistoryResult {
-  const entriesQuery = useQuery({
+  const entriesQuery = useInfiniteQuery({
     queryKey: ENTRIES_QUERY_KEY,
-    queryFn: () => store.list(),
+    // The first page ever fetched asks for the newest ENTRIES_PAGE_SIZE
+    // Entries, not the whole History — that's the acceptance criterion a
+    // fresh open only reads 50 of ("A fresh open reads 50 Entries, not all
+    // of them"), not merely a client-side slice of everything list()
+    // already returned.
+    queryFn: ({ pageParam }) => store.list(pageParam),
+    initialPageParam: INITIAL_ENTRIES_PAGE_PARAM,
+    getNextPageParam: (lastPage) => nextEntriesPageParam(lastPage),
+    // Off for this query alone, against the client-wide default (issue
+    // #79). TanStack Query refetches an infinite query by walking every
+    // page it holds, one queryFn call each, through the SQLite worker — so
+    // a reader who has scrolled back through a year of History pays that
+    // whole walk on every return to the window. A `staleTime` only narrows
+    // the window in which it is skipped; any absence longer than that (so,
+    // in practice, most of them) still pays in full.
+    //
+    // Nothing is lost by turning it off, because focus is already wired to
+    // the cheaper path: wake-signals.web.ts subscribes to both `focus` and
+    // `visibilitychange` and wakes the sync loop, and sync finishes by
+    // calling refreshNewestEntriesPage — a bounded refresh of page 0,
+    // which is where a newly Synced Entry lands. The catch-up the user
+    // sees is the same; what goes away is re-reading pages that a Sync
+    // could not have changed without also changing page 0.
+    refetchOnWindowFocus: false,
   });
+
+  // Consumers (composer-page.tsx, use-history-search.ts, reflection-page.tsx)
+  // all predate paging and expect a flat, newest-first Entry[] — the exact
+  // shape store.list() itself has always returned. Flattening here, once,
+  // keeps that boundary intact so none of them have to learn TanStack
+  // Query's `{ pages, pageParams }` shape just because this hook's own
+  // fetch strategy changed underneath it. Pages arrive oldest-page-last and
+  // each page is already newest-first internally (list()'s own order), so
+  // a plain concatenation is already newest-first end to end — no re-sort
+  // needed.
+  const entries = entriesQuery.data?.pages.flat() ?? [];
 
   // Every local write ends the same two ways (ADR 0013, ticket 38): make the
   // new state visible, then nudge Sync so the change leaves this Device now
@@ -68,11 +126,18 @@ export function useHistory(store: EntryStore, deviceId: string): UseHistoryResul
   // a second sync() against the store.
   //
   // Shared rather than repeated once per mutation because the failure mode of
-  // getting it wrong is invisible: a mutation that invalidates but forgets
+  // getting it wrong is invisible: a mutation that refreshes but forgets
   // requestSync looks completely correct on screen and simply takes up to
   // SYNC_INTERVAL_MS longer to reach the other Devices.
+  //
+  // refreshNewestEntriesPage, not invalidateQueries(ENTRIES_QUERY_KEY): a
+  // Send/edit/delete can only ever change the newest page's content (a Send
+  // always lands at the newest end; an edit or delete of something further
+  // back is the rare case this trades away deliberately — see that
+  // function's own doc comment, which sync-runner.ts's post-sync refresh
+  // shares this same reasoning with).
   const afterLocalWrite = async () => {
-    await queryClient.invalidateQueries({ queryKey: ENTRIES_QUERY_KEY });
+    await refreshNewestEntriesPage(store);
     void requestSync(store, deviceId);
   };
 
@@ -137,7 +202,12 @@ export function useHistory(store: EntryStore, deviceId: string): UseHistoryResul
   }
 
   return {
-    entries: entriesQuery.data ?? [],
+    entries,
+    pagination: {
+      hasMore: entriesQuery.hasNextPage,
+      fetching: entriesQuery.isFetchingNextPage,
+      fetchMore: () => void entriesQuery.fetchNextPage(),
+    },
     sendEntry,
     editEntry,
     removeEntry,

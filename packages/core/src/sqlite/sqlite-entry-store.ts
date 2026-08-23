@@ -1,7 +1,7 @@
-import { and, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, lt, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
 import { mintId } from "../id";
-import type { EntryStore } from "../store";
+import type { EntryPage, EntryStore } from "../store";
 import type { Entry } from "../types";
 import type { SqliteDriver } from "./driver";
 import { CURSOR_KEY, DEVICE_ID_KEY, entries, kv } from "./schema";
@@ -21,15 +21,40 @@ export class SqliteEntryStore implements EntryStore {
     this.db = drizzle((sqlText, params, method) => driver.execute(sqlText, params, method));
   }
 
-  async list(): Promise<Entry[]> {
+  async list(page?: EntryPage): Promise<Entry[]> {
     // Tombstones (ADR 0028) are excluded — a removed Entry has nothing
     // left worth showing in History. The row itself stays, permanently:
     // this is a query filter, not the store forgetting the Entry existed.
-    return this.db
+    const notDeleted = isNull(entries.deletedAt);
+    // `page.before` bounds this to Entries strictly *older* than the
+    // cursor in this method's own order (createdAt desc, then id desc —
+    // see the WHERE below and the ORDER BY it must agree with). That's an
+    // OR across two comparisons, not a single one, because the tie-break
+    // means "older" isn't just "smaller createdAt": a same-createdAt row
+    // with a smaller id is also older. `entries_created_at_id_idx`
+    // (schema.ts) is a composite index on exactly (createdAt, id), so
+    // SQLite can walk it directly for both this predicate and the ORDER BY
+    // instead of a full scan — the same index the unpaged query already
+    // relied on for its ORDER BY alone.
+    const where = page?.before
+      ? and(
+          notDeleted,
+          or(
+            lt(entries.createdAt, page.before.createdAt),
+            and(eq(entries.createdAt, page.before.createdAt), lt(entries.id, page.before.id)),
+          ),
+        )
+      : notDeleted;
+    const query = this.db
       .select()
       .from(entries)
-      .where(isNull(entries.deletedAt))
+      .where(where)
       .orderBy(desc(entries.createdAt), desc(entries.id));
+    // Applied conditionally rather than always calling .limit() with a
+    // sentinel "no cap" value: an explicit branch says plainly that "no
+    // limit" and "some limit" are two different requests, rather than
+    // leaning on a magic number to mean unbounded.
+    return page?.limit === undefined ? query : query.limit(page.limit);
   }
 
   async upsert(newEntries: Entry[]): Promise<void> {

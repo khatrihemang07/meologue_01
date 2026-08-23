@@ -1,5 +1,6 @@
-import { beforeEach, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { EntryStore } from "../store";
+import type { Entry } from "../types";
 import { entry } from "./entry-fixture";
 
 /**
@@ -45,6 +46,103 @@ export function entryStoreContract(createStore: () => EntryStore | Promise<Entry
     await store.upsert([later, earlierTieB, earlierTieA]);
 
     expect((await store.list()).map((e) => e.id)).toEqual(["c", "b", "a"]);
+  });
+
+  // issue #79: list()'s optional keyset page argument. No-arg behaviour
+  // (every test above and below that calls store.list() with nothing) is
+  // asserted unchanged elsewhere in this file — these cases are additive,
+  // covering `limit`, `before`, and the interaction between the two, using
+  // the exact same (createdAt desc, id desc) fixture shape the no-arg
+  // ordering test above already established.
+  describe("list() paging (issue #79)", () => {
+    it("a limit returns the newest N Entries, in the same order as no-arg list()", async () => {
+      const a = entry({ id: "a", createdAt: "2026-01-01T00:00:00.000Z" });
+      const b = entry({ id: "b", createdAt: "2026-01-02T00:00:00.000Z" });
+      const c = entry({ id: "c", createdAt: "2026-01-03T00:00:00.000Z" });
+      await store.upsert([a, b, c]);
+
+      expect((await store.list({ limit: 2 })).map((e) => e.id)).toEqual(["c", "b"]);
+    });
+
+    it("before walks backward through History a page at a time, with no gap or overlap", async () => {
+      const a = entry({ id: "a", createdAt: "2026-01-01T00:00:00.000Z" });
+      const b = entry({ id: "b", createdAt: "2026-01-02T00:00:00.000Z" });
+      const c = entry({ id: "c", createdAt: "2026-01-03T00:00:00.000Z" });
+      await store.upsert([a, b, c]);
+
+      const firstPage = await store.list({ limit: 2 });
+      expect(firstPage.map((e) => e.id)).toEqual(["c", "b"]);
+
+      const oldestLoaded = firstPage[firstPage.length - 1] as Entry;
+      const secondPage = await store.list({
+        before: { createdAt: oldestLoaded.createdAt, id: oldestLoaded.id },
+        limit: 2,
+      });
+      expect(secondPage.map((e) => e.id)).toEqual(["a"]);
+
+      // Nothing left older than "a" — walking one page further finds
+      // nothing, not an error and not a repeat of what's already loaded.
+      const thirdPage = await store.list({
+        before: { createdAt: secondPage[0]?.createdAt as string, id: secondPage[0]?.id as string },
+        limit: 2,
+      });
+      expect(thirdPage).toEqual([]);
+    });
+
+    // Same tie-break the no-arg ordering test above asserts (createdAt
+    // desc, ties broken by id desc) — paging has to agree with it, or a
+    // page boundary landing exactly on a tied createdAt could silently
+    // skip or duplicate one of the tied Entries.
+    it("before respects the createdAt desc / id desc tie-break", async () => {
+      const later = entry({ id: "c", createdAt: "2026-01-02T00:00:00.000Z" });
+      const earlierTieB = entry({ id: "b", createdAt: "2026-01-01T00:00:00.000Z" });
+      const earlierTieA = entry({ id: "a", createdAt: "2026-01-01T00:00:00.000Z" });
+      await store.upsert([later, earlierTieB, earlierTieA]);
+
+      const firstPage = await store.list({ limit: 2 });
+      expect(firstPage.map((e) => e.id)).toEqual(["c", "b"]);
+
+      // "before" the tied pair's *first* (id-descending) member must still
+      // find its tie-mate next, not skip past it.
+      const secondPage = await store.list({
+        before: { createdAt: "2026-01-01T00:00:00.000Z", id: "b" },
+      });
+      expect(secondPage.map((e) => e.id)).toEqual(["a"]);
+    });
+
+    it("before with no limit returns everything older than the cursor, unbounded", async () => {
+      const a = entry({ id: "a", createdAt: "2026-01-01T00:00:00.000Z" });
+      const b = entry({ id: "b", createdAt: "2026-01-02T00:00:00.000Z" });
+      const c = entry({ id: "c", createdAt: "2026-01-03T00:00:00.000Z" });
+      const d = entry({ id: "d", createdAt: "2026-01-04T00:00:00.000Z" });
+      await store.upsert([a, b, c, d]);
+
+      const page = await store.list({ before: { createdAt: d.createdAt, id: d.id } });
+      expect(page.map((e) => e.id)).toEqual(["c", "b", "a"]);
+    });
+
+    // The guarantee that makes keyset paging viable at all (CONTEXT.md:
+    // editing an Entry never moves it in History) — an edit must not shift
+    // an Entry out from under a cursor that already pointed at it, or a
+    // page boundary computed before the edit would silently skip or
+    // duplicate it afterward.
+    it("an edited Entry keeps its keyset position, so paging across an edit neither skips nor duplicates it", async () => {
+      const older = entry({ id: "older", createdAt: "2026-01-01T00:00:00.000Z", body: "old" });
+      const newer = entry({ id: "newer", createdAt: "2026-01-02T00:00:00.000Z", body: "new" });
+      await store.upsert([older, newer]);
+
+      await store.edit("older", "old, but edited");
+
+      const firstPage = await store.list({ limit: 1 });
+      expect(firstPage.map((e) => e.id)).toEqual(["newer"]);
+
+      const oldestLoaded = firstPage[0] as Entry;
+      const secondPage = await store.list({
+        before: { createdAt: oldestLoaded.createdAt, id: oldestLoaded.id },
+      });
+      expect(secondPage).toHaveLength(1);
+      expect(secondPage[0]).toMatchObject({ id: "older", body: "old, but edited" });
+    });
   });
 
   it("returns only Entries with a null sequence from pending()", async () => {

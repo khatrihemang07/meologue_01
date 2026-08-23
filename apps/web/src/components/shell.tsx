@@ -11,6 +11,17 @@ interface PinnedThreadConfig {
   watch: unknown;
   /** Bump on an action that must jump to the newest end unconditionally — e.g. a counter incremented on Send. See use-pinned-scroll.ts. */
   forceToNewest?: unknown;
+  /**
+   * Issue #79: passed straight through to usePinnedScroll's own
+   * `pagination` option — see that hook for what it does. Undefined for a
+   * thread with nothing paginated (Reflection's Conversation), same as
+   * composer-page.tsx before this ticket added History's own paging.
+   */
+  pagination?: {
+    hasMore: boolean;
+    fetching: boolean;
+    fetchMore: () => void;
+  };
 }
 
 /**
@@ -149,6 +160,7 @@ export function Shell({
     enabled: pinnedThread !== undefined,
     watch: pinnedThread?.watch,
     forceToNewest: pinnedThread?.forceToNewest,
+    pagination: pinnedThread?.pagination,
   });
 
   // Ticket 55's mode switch: whether the app bar currently shows the search
