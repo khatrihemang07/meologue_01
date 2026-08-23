@@ -58,6 +58,10 @@ Reflection and Digest are off until an OpenAI-compatible chat endpoint is config
 also needs an embedding endpoint. See [the Server configuration](server/README.md#reflection-chat-and-embedding-configuration)
 for variables and timezone behavior.
 
+Configuring an endpoint only points at it — for a local model (e.g. Ollama) it must also be
+running, or Reflection fails with a connection-refused error. Start it with
+`brew services start ollama` (or `ollama serve`) before using Reflection.
+
 ### Web
 
 For hot reload, run the API and Vite in separate terminals:
