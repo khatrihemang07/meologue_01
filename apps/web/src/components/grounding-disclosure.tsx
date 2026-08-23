@@ -8,8 +8,15 @@
  *
  * Pure, like every other component under `components/` (`history.tsx` is
  * the repo's own precedent): pages own data access, components take props.
- * `reflection-page.tsx` calls `useEntryStore()` once and passes `entries`
- * down, rather than this component calling it once per rendered turn.
+ * `reflection-page.tsx` batches every Grounding id across the whole
+ * Conversation into a single `getEntries` lookup (EntryStoreOutletContext,
+ * per EntryStore.getMany) and passes the *result* down as `entries`, rather
+ * than this component reading the store itself — and, since issue #79,
+ * rather than the page handing this component the whole (paginated) local
+ * `entries` array to scan. `entries` here is deliberately not "every Entry
+ * this Device has": it's exactly the Entries the page already resolved for
+ * this Conversation's Grounding ids, so `find` below only ever has to
+ * search a small, relevant set.
  *
  * `groundingOutcome(turn)` is what the summary label keys off, per ADR
  * 0024 — not whether `groundingEntryIds` is empty, since both the real-
@@ -25,8 +32,19 @@ import { type ConversationTurn, groundingOutcome } from "@/lib/conversation";
 interface GroundingDisclosureProps {
   /** The completed turn to disclose Grounding for — carries `groundingEntryIds`, `grounded` and `fallbackUsed` together, rather than unbundling them into three separate props. */
   turn: ConversationTurn;
-  /** This Device's own Entries, from the page's single `useEntryStore()` call — see the module comment. */
+  /** The Grounding Entries the page already resolved for this Conversation (`getEntries`, issue #79's regression fix) — see the module comment for why this is not this Device's whole local `entries`. */
   entries: Entry[];
+  /**
+   * Whether the page's Grounding lookup is still in flight. While true, an
+   * id with no matching Entry in `entries` yet renders a neutral loading
+   * placeholder instead of "This Entry hasn't reached this Device yet" —
+   * that message is only honest once the lookup has actually settled and
+   * still found nothing, per CONTEXT.md's Grounding honesty rule. Before
+   * issue #79, `entries` was always the whole local store already in hand
+   * synchronously, so there was no in-between moment for this to matter;
+   * a fetched-by-id lookup has one.
+   */
+  loading: boolean;
   syncEnabled: boolean;
 }
 
@@ -46,7 +64,12 @@ function summaryLabel(count: number, outcome: ReturnType<typeof groundingOutcome
   return `${count} recent ${noun}`;
 }
 
-export function GroundingDisclosure({ turn, entries, syncEnabled }: GroundingDisclosureProps) {
+export function GroundingDisclosure({
+  turn,
+  entries,
+  loading,
+  syncEnabled,
+}: GroundingDisclosureProps) {
   const { groundingEntryIds } = turn;
 
   if (groundingEntryIds.length === 0) {
@@ -67,6 +90,11 @@ export function GroundingDisclosure({ turn, entries, syncEnabled }: GroundingDis
                 // No search query of its own (EntryRow's query defaults to
                 // "") — Reflection has no Search query to highlight against.
                 <EntryRow entry={entry} syncEnabled={syncEnabled} />
+              ) : loading ? (
+                // The page's lookup hasn't settled yet — see `loading`'s own
+                // doc comment for why this can't just fall through to the
+                // "hasn't reached this Device yet" branch below.
+                <p className="py-1.5 text-xs italic text-muted-foreground">Loading…</p>
               ) : (
                 // Sync can be behind, and a Device can hold less than the
                 // Server does (CONTEXT.md: History). An id with no local

@@ -15,6 +15,17 @@ export interface EntryStoreOutletContext {
   sendEntry: (raw: string) => void;
   /** Search (ticket 39) — narrows History to Entries whose body matches `query`, per EntryStore.search. */
   search: (query: string) => Promise<Entry[]>;
+  /**
+   * A direct by-id lookup, per EntryStore.getMany — added to fix issue
+   * #79's regression: `entries` above is only whatever pages of History
+   * `useHistory`'s infinite query has loaded so far, so a page that needs
+   * to resolve a specific, known set of ids (reflection-page.tsx's
+   * Grounding ids) can't rely on scanning `entries` for them the way it
+   * could before paging existed. Named to match `search`'s shape — a
+   * function a page calls, not a second array to keep in sync with the
+   * first.
+   */
+  getEntries: (ids: string[]) => Promise<Entry[]>;
   /** ADR 0028 — see use-history.ts's own doc comment for what these do and why removeEntry takes the whole Entry. */
   editEntry: (id: string, body: string) => void;
   removeEntry: (entry: Entry) => void;
@@ -85,6 +96,10 @@ async function noopSearch(): Promise<Entry[]> {
   return [];
 }
 
+async function noopGetEntries(): Promise<Entry[]> {
+  return [];
+}
+
 // ADR 0028's edit/delete affordances need the store to exist just as much
 // as sendEntry does — the not-ready outlet context below stands in with
 // these too, for the identical reason: the History rendered while
@@ -148,6 +163,7 @@ export function EntryStoreLayout() {
           pagination: notReadyPagination,
           sendEntry: noop,
           search: noopSearch,
+          getEntries: noopGetEntries,
           editEntry: noopEdit,
           removeEntry: noopRemove,
           disabled: true,
@@ -168,6 +184,7 @@ function Ready({ store, deviceId }: { store: EntryStore; deviceId: string }) {
           pagination,
           sendEntry,
           search: (query: string) => store.search(query),
+          getEntries: (ids: string[]) => store.getMany(ids),
           editEntry,
           removeEntry,
           disabled: false,

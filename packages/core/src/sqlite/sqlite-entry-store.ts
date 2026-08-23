@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull, lt, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
 import { mintId } from "../id";
 import type { EntryPage, EntryStore } from "../store";
@@ -55,6 +55,28 @@ export class SqliteEntryStore implements EntryStore {
     // limit" and "some limit" are two different requests, rather than
     // leaning on a magic number to mean unbounded.
     return page?.limit === undefined ? query : query.limit(page.limit);
+  }
+
+  /**
+   * See EntryStore.getMany's doc comment for the contract this owes
+   * callers. A single `WHERE id IN (...) AND deleted_at IS NULL` per
+   * chunk, not one query per id — see `GET_MANY_CHUNK_SIZE`'s own comment
+   * for why this is chunked at all rather than one IN-list of arbitrary
+   * size.
+   */
+  async getMany(ids: string[]): Promise<Entry[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+    const results: Entry[] = [];
+    for (const chunk of chunkIds(ids)) {
+      const rows = await this.db
+        .select()
+        .from(entries)
+        .where(and(inArray(entries.id, chunk), isNull(entries.deletedAt)));
+      results.push(...rows);
+    }
+    return results;
   }
 
   async upsert(newEntries: Entry[]): Promise<void> {
@@ -263,6 +285,27 @@ export class SqliteEntryStore implements EntryStore {
       .values({ key, value })
       .onConflictDoUpdate({ target: kv.key, set: { value } });
   }
+}
+
+// SQLite caps how many bound parameters a single statement can carry
+// (`SQLITE_MAX_VARIABLE_NUMBER`) — 999 on a build compiled against the
+// pre-3.32.0 default, tens of thousands on a build compiled with the newer
+// one; getMany() has no way to know at runtime which this driver's
+// underlying SQLite was compiled with, since SqliteDriver (./driver.ts) is
+// platform-free and doesn't expose it. 500 is comfortably under even the
+// old, stricter cap while still batching almost every real Grounding
+// disclosure (issue #79's regression fix — dozens of ids, not thousands)
+// into one round trip; a very large `ids` list just costs more than one
+// statement, correctly, rather than one call risking `ids.length` params
+// against a limit it can't check.
+const GET_MANY_CHUNK_SIZE = 500;
+
+function chunkIds(ids: string[]): string[][] {
+  const chunks: string[][] = [];
+  for (let i = 0; i < ids.length; i += GET_MANY_CHUNK_SIZE) {
+    chunks.push(ids.slice(i, i + GET_MANY_CHUNK_SIZE));
+  }
+  return chunks;
 }
 
 /**

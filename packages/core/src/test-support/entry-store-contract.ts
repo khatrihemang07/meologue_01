@@ -145,6 +145,54 @@ export function entryStoreContract(createStore: () => EntryStore | Promise<Entry
     });
   });
 
+  // getMany() (issue #79's regression fix): a by-id lookup that bypasses
+  // list()'s pagination entirely — see EntryStore.getMany's doc comment
+  // for why grounding-disclosure.tsx needs this rather than scanning
+  // whatever page of History happens to be loaded.
+  describe("getMany()", () => {
+    it("returns the live Entries among the asked-for ids", async () => {
+      const a = entry({ id: "a" });
+      const b = entry({ id: "b" });
+      const c = entry({ id: "c" });
+      await store.upsert([a, b, c]);
+
+      const result = await store.getMany(["a", "c"]);
+
+      expect(result.map((e) => e.id).sort()).toEqual(["a", "c"]);
+    });
+
+    it("omits an id this Device has never seen, rather than erroring", async () => {
+      await store.upsert([entry({ id: "a" })]);
+
+      const result = await store.getMany(["a", "never-seen"]);
+
+      expect(result.map((e) => e.id)).toEqual(["a"]);
+    });
+
+    // The property apps/e2e/tests/reflection.spec.ts's "a deleted Entry
+    // does not come back through Reflection's Grounding" test exists to
+    // prove end to end — a tombstone must never resurrect through this
+    // door either.
+    it("omits a deleted Entry — a tombstone never comes back through getMany()", async () => {
+      await store.upsert([entry({ id: "a", seq: 1 })]);
+      await store.remove("a");
+
+      expect(await store.getMany(["a"])).toEqual([]);
+    });
+
+    it("an empty id list returns empty without hitting the database", async () => {
+      // No upsert() first — if this reached the database at all with an
+      // empty id list, there is nothing there to match anyway, so this
+      // alone can't distinguish "returned empty because it asked the
+      // database" from "returned empty because it short-circuited before
+      // asking." What it does establish is the contract every caller
+      // relies on: calling getMany([]) is always safe and always empty,
+      // never an error from an implementation that assumes at least one
+      // id (an empty SQL IN-list, for example).
+      expect(await store.getMany([])).toEqual([]);
+    });
+  });
+
   it("returns only Entries with a null sequence from pending()", async () => {
     const unsynced = entry({ id: "unsynced", seq: null });
     const synced = entry({ id: "synced", seq: 42 });

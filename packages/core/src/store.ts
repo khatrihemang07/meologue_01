@@ -98,4 +98,33 @@ export interface EntryStore {
    * than throwing.
    */
   remove(id: string): Promise<void>;
+  /**
+   * The live (non-deleted) Entries among `ids`, in no particular order —
+   * a direct-by-id lookup, not a page of History. Exists for callers that
+   * already know which specific ids they want and can't get them from
+   * list(): grounding-disclosure.tsx is the motivating case (a regression
+   * in issue #79) — a Grounding id can name an Entry that's genuinely
+   * local but simply hasn't been paged into whatever window of History
+   * list() has loaded so far, and scanning that loaded window for the id
+   * was silently wrong the moment paging shipped. getMany() bypasses
+   * paging entirely and asks the store directly.
+   *
+   * An id this Device has never received, and an id whose Entry is now a
+   * tombstone (ADR 0028), are both simply absent from the result — the
+   * same "absent means not here" contract list() and search() already
+   * give tombstones. A deleted Entry must never come back through this
+   * method: CONTEXT.md's Grounding entry requires an Answer's disclosed
+   * basis to be honest, and resurrecting a deleted Entry into a Grounding
+   * disclosure would be exactly the kind of invented past that rule
+   * forbids. Callers cannot (and don't need to) tell "never reached this
+   * Device" apart from "reached it, then was deleted here" from this
+   * method alone — both simply produce no result, which is the only
+   * distinction the "hasn't reached this Device yet" message is allowed
+   * to describe.
+   *
+   * An empty `ids` array returns an empty result without touching the
+   * database — the common case once the caller has already resolved
+   * everything it needed from a smaller set of ids.
+   */
+  getMany(ids: string[]): Promise<Entry[]>;
 }

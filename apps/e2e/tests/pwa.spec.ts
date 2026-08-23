@@ -35,7 +35,7 @@ test("History still renders after a reload with the network off", async ({ page,
   // still proves navigateFallback resolves an offline, non-precached path
   // to the app shell, same as `/history` did.
   await page.goto("/settings");
-  await expect(page.getByText("Settings")).toBeVisible();
+  await expect(page.getByRole("banner").getByText("Settings")).toBeVisible();
 
   // Back to the Composer via client-side routing (no further network hit)
   // to prove the Entry survives the round trip and the store keeps reading

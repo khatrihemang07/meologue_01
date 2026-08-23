@@ -5,7 +5,6 @@ import {
   deleteEntryViaMenu,
   editEntryViaMenu,
   entryRow,
-  hoverEntryRow,
   openTwoDevices,
   sendEntry,
   uniqueEntryBody,

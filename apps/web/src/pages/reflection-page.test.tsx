@@ -24,6 +24,7 @@ const defaultEntryStoreContext: EntryStoreOutletContext = {
   editEntry: vi.fn(),
   removeEntry: vi.fn(),
   search: vi.fn(async () => []),
+  getEntries: vi.fn(async () => []),
   pagination: { hasMore: false, fetching: false, fetchMore: vi.fn() },
   disabled: false,
 };
@@ -599,7 +600,7 @@ describe("ReflectionPage", () => {
 
     renderReflectionPage("/reflect", {
       ...defaultEntryStoreContext,
-      entries: [entry({ id: "entry-1", body: "Knee felt better today" })],
+      getEntries: vi.fn(async () => [entry({ id: "entry-1", body: "Knee felt better today" })]),
     });
     ask("How has my knee been?");
 
@@ -622,7 +623,7 @@ describe("ReflectionPage", () => {
 
     renderReflectionPage("/reflect", {
       ...defaultEntryStoreContext,
-      entries: [entry({ id: "entry-1", body: "Just a regular Tuesday" })],
+      getEntries: vi.fn(async () => [entry({ id: "entry-1", body: "Just a regular Tuesday" })]),
     });
     ask("Anything about scuba diving?");
 

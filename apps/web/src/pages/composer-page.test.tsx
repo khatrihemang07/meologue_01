@@ -41,6 +41,7 @@ const readyContext: EntryStoreOutletContext = {
   editEntry: vi.fn(),
   removeEntry: vi.fn(),
   search: vi.fn(async () => []),
+  getEntries: vi.fn(async () => []),
   pagination: { hasMore: false, fetching: false, fetchMore: vi.fn() },
   disabled: false,
 };
@@ -87,6 +88,7 @@ describe("ComposerPage", () => {
       editEntry: vi.fn(),
       removeEntry: vi.fn(),
       search: vi.fn(async () => []),
+      getEntries: vi.fn(async () => []),
       pagination: { hasMore: false, fetching: false, fetchMore: vi.fn() },
       disabled: true,
     });
@@ -101,6 +103,7 @@ describe("ComposerPage", () => {
       editEntry: vi.fn(),
       removeEntry: vi.fn(),
       search: vi.fn(async () => []),
+      getEntries: vi.fn(async () => []),
       pagination: { hasMore: false, fetching: false, fetchMore: vi.fn() },
       disabled: true,
       message: "meologue couldn't open its storage. Reloading may help.",
@@ -128,6 +131,7 @@ describe("ComposerPage", () => {
       editEntry: vi.fn(),
       removeEntry: vi.fn(),
       search: vi.fn(async () => []),
+      getEntries: vi.fn(async () => []),
       pagination: { hasMore: false, fetching: false, fetchMore: vi.fn() },
       disabled: false,
     });
@@ -174,6 +178,7 @@ describe("ComposerPage", () => {
       editEntry: vi.fn(),
       removeEntry: vi.fn(),
       search: vi.fn(async () => []),
+      getEntries: vi.fn(async () => []),
       pagination: { hasMore: false, fetching: false, fetchMore: vi.fn() },
       disabled: false,
     });
@@ -265,6 +270,7 @@ describe("ComposerPage", () => {
         editEntry: vi.fn(),
         removeEntry: vi.fn(),
         search,
+        getEntries: vi.fn(async () => []),
         pagination: { hasMore: false, fetching: false, fetchMore: vi.fn() },
         disabled: false,
       });
@@ -312,6 +318,7 @@ describe("ComposerPage", () => {
         editEntry: vi.fn(),
         removeEntry: vi.fn(),
         search,
+        getEntries: vi.fn(async () => []),
         pagination: { hasMore: false, fetching: false, fetchMore: vi.fn() },
         disabled: false,
       });
@@ -363,6 +370,7 @@ describe("ComposerPage", () => {
         editEntry: vi.fn(),
         removeEntry: vi.fn(),
         search: vi.fn(async () => []),
+        getEntries: vi.fn(async () => []),
         pagination: { hasMore: false, fetching: false, fetchMore: vi.fn() },
         disabled: false,
       });
@@ -410,6 +418,7 @@ describe("ComposerPage", () => {
           editEntry: vi.fn(),
           removeEntry: vi.fn(),
           search,
+          getEntries: vi.fn(async () => []),
           pagination: { hasMore: false, fetching: false, fetchMore: vi.fn() },
           disabled: false,
         },

@@ -1,13 +1,5 @@
 import { ArrowDown, ArrowLeft, Search as SearchIcon } from "lucide-react";
-import {
-  createContext,
-  type ReactNode,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { createContext, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { SyncStatusIndicator } from "@/components/sync-status-indicator";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -239,22 +231,35 @@ export function Shell({
   // doc comment), so this must not be a fresh arrow function every render
   // the way reading `scrollToNewestRef.current` inline at the call site
   // below would be.
-  const scrollToNewestRef = useRef<(() => void) | null>(null);
+  // Held in state, not a ref, and that is the whole point: registration has
+  // to be observable. usePinnedScroll's pin effect runs on mount, before
+  // History has mounted deep enough to register anything, so a ref would
+  // leave it reading null, falling back to `scrollTop = scrollHeight` on a
+  // virtual list that has not sized yet (so, zero), and never trying again.
+  // On a cold load that went unnoticed because Entries arrive later and
+  // change the hook's `watch`, re-running the effect after registration; on
+  // a remount the data is already cached, `watch` never changes, and the
+  // reader landed on the OLDEST Entries instead of pinned to the newest.
+  // Storing the callback in state gives `runRegisteredScrollToNewest` a new
+  // identity the moment History registers, which is exactly the signal the
+  // hook already knows how to react to.
+  const [scrollToNewestFn, setScrollToNewestFn] = useState<(() => void) | null>(null);
   const runRegisteredScrollToNewest = useCallback(() => {
-    const fn = scrollToNewestRef.current;
-    if (!fn) {
-      // Nothing registered — either no pinned thread is virtualized on
-      // this page at all (Reflection's Conversation) or History hasn't
+    if (!scrollToNewestFn) {
+      // Nothing registered — either no pinned thread on this page is
+      // virtualized at all (Reflection's Conversation) or History has not
       // mounted yet. Reporting failure is what tells usePinnedScroll to
-      // fall back to its own scrollHeight-based jump instead of silently
+      // fall back to its own scrollHeight-based jump rather than silently
       // doing nothing.
       return false;
     }
-    fn();
+    scrollToNewestFn();
     return true;
-  }, []);
+  }, [scrollToNewestFn]);
+  // The updater form is required, not stylistic: a bare
+  // `setScrollToNewestFn(fn)` would have React *call* `fn` as a reducer.
   const registerScrollToNewest = useCallback((fn: (() => void) | null) => {
-    scrollToNewestRef.current = fn;
+    setScrollToNewestFn(() => fn);
   }, []);
 
   // Issue #83: the scroll element History's virtualizer measures against,

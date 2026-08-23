@@ -36,9 +36,15 @@ function renderDisclosure(
   props: { groundingEntryIds: string[]; grounded: boolean; fallbackUsed: boolean },
   entries: Entry[] = [],
   syncEnabled = false,
+  loading = false,
 ) {
   return render(
-    <GroundingDisclosure turn={turn(props)} entries={entries} syncEnabled={syncEnabled} />,
+    <GroundingDisclosure
+      turn={turn(props)}
+      entries={entries}
+      loading={loading}
+      syncEnabled={syncEnabled}
+    />,
   );
 }
 
@@ -146,6 +152,24 @@ describe("GroundingDisclosure", () => {
 
     expect(screen.getByText("Knee felt better")).toBeInTheDocument();
     expect(screen.getByText(/hasn't reached this device yet/i)).toBeInTheDocument();
+  });
+
+  // Issue #79 regression fix: the page's by-id lookup is now async
+  // (EntryStoreOutletContext.getEntries), so there's a real moment where an
+  // id genuinely local to this Device just hasn't resolved yet. Showing
+  // "hasn't reached this Device yet" in that window would be exactly the
+  // false claim CONTEXT.md's Grounding entry forbids, so `loading: true`
+  // must render a neutral placeholder instead.
+  it("shows a neutral placeholder, not the false 'hasn't reached' claim, while the lookup is still in flight", () => {
+    renderDisclosure(
+      { groundingEntryIds: ["entry-1"], grounded: true, fallbackUsed: false },
+      [],
+      false,
+      true,
+    );
+
+    expect(screen.getByText("Loading…")).toBeInTheDocument();
+    expect(screen.queryByText(/hasn't reached this device yet/i)).not.toBeInTheDocument();
   });
 
   // ADR 0028: Grounding is a read-only view of what an Answer was based

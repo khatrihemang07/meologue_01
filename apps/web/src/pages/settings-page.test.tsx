@@ -49,6 +49,7 @@ function createFakeStore(entries: Entry[] = []): EntryStore {
     search: vi.fn(async () => []),
     edit: vi.fn(async () => {}),
     remove: vi.fn(async () => {}),
+    getMany: vi.fn(async () => []),
   };
 }
 

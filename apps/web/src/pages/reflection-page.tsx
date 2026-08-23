@@ -1,7 +1,7 @@
 import type { Entry } from "@meologue/core";
 import { PROTOCOL_VERSION } from "@meologue/core";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import { GroundingDisclosure } from "@/components/grounding-disclosure";
@@ -15,6 +15,7 @@ import {
 } from "@/lib/conversation";
 import { deviceUtcOffsetMinutes } from "@/lib/entry-day";
 import { clearLastSessionId, readLastSessionId, writeLastSessionId } from "@/lib/last-session";
+import { groundingEntriesQueryKey } from "@/lib/query-keys";
 import { reflectTransport } from "@/lib/reflect-transport";
 import { type SessionResult, sessionsTransport } from "@/lib/sessions-transport";
 import { useSyncEnabled } from "@/lib/settings";
@@ -103,11 +104,13 @@ function GroundingNote({ turn }: { turn: ConversationTurn }) {
 // see grounding-disclosure.tsx.
 function ConversationTurnRow({
   turn,
-  entries,
+  groundingEntries,
+  groundingEntriesLoading,
   syncEnabled,
 }: {
   turn: ConversationTurn;
-  entries: Entry[];
+  groundingEntries: Entry[];
+  groundingEntriesLoading: boolean;
   syncEnabled: boolean;
 }) {
   return (
@@ -115,7 +118,12 @@ function ConversationTurnRow({
       <AskedQuestion text={turn.question} />
       <GivenAnswer text={turn.answer} />
       <GroundingNote turn={turn} />
-      <GroundingDisclosure turn={turn} entries={entries} syncEnabled={syncEnabled} />
+      <GroundingDisclosure
+        turn={turn}
+        entries={groundingEntries}
+        loading={groundingEntriesLoading}
+        syncEnabled={syncEnabled}
+      />
     </div>
   );
 }
@@ -165,13 +173,14 @@ export function ReflectionPage() {
   // nested — see App.tsx), so a fresh snapshot is exactly what each of
   // those transitions needs.
   const [rememberedSessionId] = useState(() => readLastSessionId());
-  // The Device's own Entry store, not a fetch — Entry ids are minted on the
-  // creating Device and preserved through Sync, so this Device's local copy
-  // (if it has one yet) is the same Entry the server meant. Read once here,
-  // page-level (this codebase's convention: pages own data access,
-  // components take props — see composer-page.tsx and
-  // grounding-disclosure.tsx), rather than once per rendered turn.
-  const { entries } = useEntryStore();
+  // Issue #79 regression fix: `useEntryStore()`'s `entries` array is only
+  // whatever pages of History `useHistory`'s infinite query has loaded so
+  // far (History's own scroll window), not the whole local store — a
+  // Grounding id can name an Entry this Device genuinely has without it
+  // being in that window. `getEntries` (EntryStoreOutletContext, backed by
+  // EntryStore.getMany) is a direct by-id lookup that bypasses paging
+  // entirely, so this page resolves Grounding ids through it instead.
+  const { getEntries } = useEntryStore();
 
   const sessionQuery = useQuery({
     // `sessionId ?? ""` rather than a "none" sentinel: `enabled` below already
@@ -191,6 +200,45 @@ export function ReflectionPage() {
 
   const sessionData = sessionId === undefined ? undefined : sessionQuery.data;
   const turns = sessionData?.ok ? sessionData.snapshot.turns : [];
+
+  // Issue #79 regression fix: every Grounding id across the whole
+  // Conversation, resolved in one batched lookup rather than one per
+  // rendered turn — sorted and deduplicated so the query key
+  // (groundingEntriesQueryKey) is stable across re-renders that don't
+  // actually change the id set, and so two turns that happen to share an
+  // id don't fetch it twice. Recomputed from `turns`, so a follow-up ask
+  // that appends a turn with a new id naturally produces a new key and a
+  // fresh fetch — no invalidation wiring needed.
+  const groundingIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const turn of turns) {
+      for (const id of turn.groundingEntryIds) {
+        ids.add(id);
+      }
+    }
+    return [...ids].sort();
+  }, [turns]);
+
+  const groundingEntriesQuery = useQuery({
+    queryKey: groundingEntriesQueryKey(groundingIds),
+    queryFn: () => getEntries(groundingIds),
+    // No ids yet (a fresh Reflection, or every turn so far had empty
+    // Grounding) → nothing to look up. Mirrors sessionQuery's own
+    // `enabled` reasoning just above: don't fetch when there's nothing to
+    // fetch.
+    enabled: groundingIds.length > 0,
+  });
+  const groundingEntries = groundingEntriesQuery.data ?? [];
+  // Only true while an id genuinely needs resolving — not merely because
+  // the query is `enabled: false` with no ids, which TanStack Query also
+  // reports as `isPending`. Read by GroundingDisclosure so it can show a
+  // neutral "loading" placeholder instead of the "hasn't reached this
+  // Device yet" message while a genuinely-local id just hasn't resolved
+  // yet — showing that message before the lookup has even run would be
+  // exactly the false claim CONTEXT.md's Grounding entry forbids, even if
+  // only for the moment before the query settles.
+  const groundingEntriesLoading = groundingIds.length > 0 && groundingEntriesQuery.isPending;
+
   const notFound =
     sessionData !== undefined && !sessionData.ok && sessionData.reason === "not-found";
   const unreachable =
@@ -420,7 +468,8 @@ export function ReflectionPage() {
             // biome-ignore lint/suspicious/noArrayIndexKey: turns never reorder or get removed — position is a stable identity for one render of this Conversation.
             key={index}
             turn={turn}
-            entries={entries}
+            groundingEntries={groundingEntries}
+            groundingEntriesLoading={groundingEntriesLoading}
             syncEnabled={syncEnabled}
           />
         ))}

@@ -33,6 +33,22 @@ export class InMemoryEntryStore implements EntryStore {
     return page?.limit === undefined ? filtered : filtered.slice(0, page.limit);
   }
 
+  /**
+   * Mirrors SqliteEntryStore.getMany() — see EntryStore.getMany's doc
+   * comment for the contract both implementations owe callers. No
+   * chunking needed here: unlike a real SQLite statement, a JS `Set`
+   * lookup has no bound-parameter limit to respect.
+   */
+  async getMany(ids: string[]): Promise<Entry[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+    const wanted = new Set(ids);
+    return [...this.entries.values()].filter(
+      (entry) => wanted.has(entry.id) && entry.deletedAt === null,
+    );
+  }
+
   async upsert(entries: Entry[]): Promise<void> {
     for (const entry of entries) {
       this.entries.set(entry.id, entry);
