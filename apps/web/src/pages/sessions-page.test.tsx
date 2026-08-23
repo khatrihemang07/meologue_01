@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Outlet, Route, Routes, useLocation } from "react-router";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readLastSessionId, writeLastSessionId } from "@/lib/last-session";
 import { useSettingsStore } from "@/lib/settings";
 import type { EntryStoreOutletContext } from "@/pages/entry-store-layout";
 import { SessionsPage } from "./sessions-page";
@@ -139,6 +140,10 @@ function confirmDelete() {
 describe("SessionsPage", () => {
   beforeEach(() => {
     localStorage.clear();
+    // Issue #80's remembered-Session backup (`last-session.ts`) lives in
+    // sessionStorage, not localStorage — cleared here too so a prior
+    // test's write can't leak into this one's delete/back assertions.
+    sessionStorage.clear();
     useSettingsStore.setState({ theme: "system", serverUrl: "" });
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
@@ -146,6 +151,7 @@ describe("SessionsPage", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    sessionStorage.clear();
   });
 
   it("shows a hint that Sessions need a Server URL when Sync is off, and never fetches", () => {
@@ -475,5 +481,87 @@ describe("SessionsPage", () => {
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith("https://phone.example:41207/v1/sessions?q=knee+%25"),
     );
+  });
+
+  // Issue #80: Sessions is one of the two places acceptance criteria asks
+  // for a deliberate way to start over (reflection-page.test.tsx covers
+  // the other, Reflect's own app bar).
+  it("shows a New Session control in the app bar, linking to /reflect", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    stubSessionsFetch([]);
+
+    renderSessionsPage();
+    await screen.findByText(/no sessions yet/i);
+
+    expect(screen.getByRole("link", { name: "New Session" })).toHaveAttribute("href", "/reflect");
+  });
+
+  it("clears the remembered Session id when the deleted Session is the one remembered", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    writeLastSessionId(oneSession.id);
+    stubSessionsFetchWithDelete([oneSession]);
+
+    renderSessionsPage();
+    await screen.findByText("How has my knee been?");
+
+    openConfirm();
+    confirmDelete();
+
+    await waitFor(() =>
+      expect(screen.queryByText("How has my knee been?")).not.toBeInTheDocument(),
+    );
+    expect(readLastSessionId()).toBeNull();
+  });
+
+  it("leaves a different remembered Session id untouched when deleting some other Session", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    writeLastSessionId("session-other");
+    stubSessionsFetchWithDelete([oneSession]);
+
+    renderSessionsPage();
+    await screen.findByText("How has my knee been?");
+
+    openConfirm();
+    confirmDelete();
+
+    await waitFor(() =>
+      expect(screen.queryByText("How has my knee been?")).not.toBeInTheDocument(),
+    );
+    expect(readLastSessionId()).toBe("session-other");
+  });
+
+  it("clears the remembered Session id even when the delete 404s (already gone, e.g. deleted from another Device)", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    writeLastSessionId(oneSession.id);
+    stubSessionsFetchWithDelete([oneSession], "not-found");
+
+    renderSessionsPage();
+    await screen.findByText("How has my knee been?");
+
+    openConfirm();
+    confirmDelete();
+
+    await waitFor(() =>
+      expect(screen.queryByText("How has my knee been?")).not.toBeInTheDocument(),
+    );
+    expect(readLastSessionId()).toBeNull();
+  });
+
+  it("leaves the remembered Session id in place when the delete fails with a real Server error", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    writeLastSessionId(oneSession.id);
+    stubSessionsFetchWithDelete([oneSession], "server-error");
+
+    renderSessionsPage();
+    await screen.findByText("How has my knee been?");
+
+    openConfirm();
+    confirmDelete();
+
+    await waitFor(() =>
+      expect(screen.getByText(/couldn't delete this session/i)).toBeInTheDocument(),
+    );
+    // The Session wasn't actually deleted, so nothing about the memory changes.
+    expect(readLastSessionId()).toBe(oneSession.id);
   });
 });

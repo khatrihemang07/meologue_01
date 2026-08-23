@@ -4,9 +4,10 @@ import { ArrowLeft, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import { toast } from "sonner";
-import { Nav } from "@/components/nav";
+import { Nav, NewSessionLink } from "@/components/nav";
 import { Shell } from "@/components/shell";
 import { Button } from "@/components/ui/button";
+import { clearLastSessionId, readLastSessionId } from "@/lib/last-session";
 import { sessionsDeleteTransport, sessionsListTransport } from "@/lib/sessions-transport";
 import { useSyncEnabled } from "@/lib/settings";
 
@@ -246,6 +247,19 @@ export function SessionsPage() {
   const deleteMutation = useMutation({
     mutationFn: (sessionId: string) => sessionsDeleteTransport(sessionId),
     onSuccess: (deleteResult, sessionId) => {
+      // Issue #80: if the Session just deleted is the one `last-session.ts`
+      // remembers, that memory is now dangling — a later bare `/reflect`
+      // would try to resume straight into the "not found" case this same
+      // ticket also teaches Reflection to handle silently, but there's no
+      // reason to let it happen at all when the deletion is known to have
+      // succeeded right here. Covers both ways a Session ends up actually
+      // gone: this Device's own successful DELETE, and `"not-found"` (it
+      // was already gone, likely deleted from another Device) — not the
+      // server-error `else` branch below, where the Session is still there.
+      const sessionIsGone = deleteResult.ok || deleteResult.reason === "not-found";
+      if (sessionIsGone && readLastSessionId() === sessionId) {
+        clearLastSessionId();
+      }
       if (deleteResult.ok) {
         setFailedId(null);
         setConfirmingId(null);
@@ -319,6 +333,12 @@ export function SessionsPage() {
           <ArrowLeft aria-hidden="true" className="size-4" />
         </button>
       }
+      // Issue #80: the same New Session control Reflect's own app bar
+      // shows (reflection-page.tsx), reachable here too — this list is one
+      // of the two places acceptance criteria calls for it, since a reader
+      // browsing old Sessions is exactly someone who might want to start a
+      // new one without first opening one of the old ones.
+      action={<NewSessionLink />}
       nav={<Nav />}
       // Issue #64: the same Shell search slot History and the Composer
       // already use, `label` set to "Sessions" — see ShellSearchConfig's own
