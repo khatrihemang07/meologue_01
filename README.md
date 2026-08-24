@@ -27,17 +27,16 @@ meologue has two isolated instances, and one script per job for each:
 | Purpose | Your Entries | Testing and seeded data |
 | Postgres | `meologue-postgres` on `:5432` | `meologue-postgres-sandbox` on `:5442` |
 | Server | `:41207` | `:41307` |
-| Web (dev) | `:5173` | `:5174` |
+| Web | Server on `:41207` | Vite on `:5174` |
 | Run it | `./scripts/run-production.sh` | `./scripts/run-sandbox.sh` |
 | Build an APK | `./scripts/build-android-production.sh` | `./scripts/build-android-sandbox.sh` |
 | Build a `.app` | `./scripts/build-macos-production.sh` | `./scripts/build-macos-sandbox.sh` |
 | Artifacts land in | `build/production/` | `build/sandbox/` |
 
 Each one is the whole job: it checks its prerequisites, starts or builds everything it needs, and
-reports what it produced. `./scripts/run-production.sh` starts Postgres, the Server and Vite
-together, interleaves both log streams into the terminal, and stops both on Ctrl-C. Open the web
-port it prints and set that same address as the Server URL in Settings — an unset Server URL means
-Sync is off, even when the Server serves the app.
+reports what it produced. `./scripts/run-production.sh` builds and serves Production from one
+process on the Server port above. Set that same address as the Server URL in Settings — an unset
+Server URL means Sync is off, even when the Server serves the app.
 
 Both instances can run at once; they share the working tree and nothing else. Seed the Sandbox with
 `./scripts/seed-sandbox.sh`, in another terminal once its Server has applied migrations.
@@ -61,13 +60,20 @@ running, or Reflection fails with a connection-refused error. Start it with
 
 ### Web
 
-The run scripts above are the hot-reload path: each starts the API and a Vite server that proxies
-`/v1` to it, so the Vite port is the Server URL to use. Run both scripts in two terminals to work on
-both instances at once — they bind different ports and never collide.
+`./scripts/run-production.sh` is a frozen, production-style process: it builds the bundle and the
+release binary, then serves both from one process on the Server port — Production holds real
+Entries, so nothing there watches the working tree. The first `cargo build --release` takes
+minutes; later runs, and `--no-build`, are near-instant.
 
-For a production-style single process instead — the Rust Server holding the built bundle and the
-API on one port — use `./scripts/sandbox-server.sh` for the Sandbox, or the run script's
-`--bundle` flag for either instance.
+`./scripts/run-sandbox.sh` stays the hot-reload path: it starts the API and a Vite server that
+proxies `/v1` to it, so the Vite port is the Server URL there, and only there.
+`./scripts/sandbox-server.sh` remains its single-process alternative.
+
+Production's web app therefore moved off the Vite port onto the Server port. `localStorage` and
+the OPFS SQLite store are keyed to the origin, so the new address starts empty with an unset Server
+URL — set it and History fills back in from Sync. The frozen bundle is a real PWA build, so it now
+has a service worker Vite's dev server never did; it updates with a prompt rather than a silent
+reload, so it won't interrupt a half-typed Entry.
 
 Browsers require a secure context for meologue's OPFS-backed SQLite store. `localhost` qualifies,
 but another Device needs HTTPS. One tailnet-only option is:

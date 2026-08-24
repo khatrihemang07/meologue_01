@@ -1,10 +1,14 @@
-# The body of scripts/run-production.sh and scripts/run-sandbox.sh.
+# The body of scripts/run-sandbox.sh.
 # Sourced, never executed.
 #
-# Starts one instance's backend and frontend together, hot-reload style: the
-# Rust server on its own port and a Vite dev server proxying /v1 to it. Both
-# streams are prefixed and interleaved into this one terminal, both PIDs are
-# tracked, and Ctrl-C takes both down.
+# Starts the Sandbox instance's backend and frontend together, hot-reload
+# style: the Rust server on its own port and a Vite dev server proxying /v1 to
+# it. Both streams are prefixed and interleaved into this one terminal, both
+# PIDs are tracked, and Ctrl-C takes both down.
+#
+# Production no longer uses this file: it runs a frozen build (one process,
+# no Vite, nothing watching the tree) instead of a hot-reload pair, so its
+# machinery lives entirely in scripts/run-production.sh now.
 #
 # WHY THE PROCESS-GROUP DANCE BELOW EXISTS
 #
@@ -31,8 +35,8 @@
 #     longer in the terminal's foreground process group. The trap forwarding
 #     below is not belt-and-braces; it is the only thing that stops them.
 #
-# Callers set: INSTANCE, COMPOSE_SERVICE, CONTAINER, DB_PORT, SERVER_PORT,
-# VITE_PORT, DATABASE_URL, STATIC_DIR, WEB_BUILD_SCRIPT, WEB_DIST.
+# scripts/run-sandbox.sh sets: INSTANCE, COMPOSE_SERVICE, CONTAINER, DB_PORT,
+# SERVER_PORT, VITE_PORT, DATABASE_URL, STATIC_DIR, WEB_BUILD_SCRIPT, WEB_DIST.
 
 # Palette from preflight.sh, which every caller sources first. Named here so a
 # future reordering fails with this sentence instead of `_C_CYA: unbound
@@ -50,7 +54,7 @@ _ri_usage() {
   cat <<USAGE
 usage: $0 [--bundle] [--no-preflight]
 
-  --bundle         build this instance's web bundle first, so :$SERVER_PORT
+  --bundle         build the Sandbox web bundle first, so :$SERVER_PORT
                    serves the app too. Off by default: a hot-reload session
                    uses :$VITE_PORT, and the build costs seconds on every start.
   --no-preflight   skip the prerequisite checks. Postgres is still started —
