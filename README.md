@@ -31,6 +31,7 @@ meologue has two isolated instances, and one script per job for each:
 | Run it | `./scripts/run-production.sh` | `./scripts/run-sandbox.sh` |
 | Build an APK | `./scripts/build-android-production.sh` | `./scripts/build-android-sandbox.sh` |
 | Build a `.app` | `./scripts/build-macos-production.sh` | `./scripts/build-macos-sandbox.sh` |
+| Artifacts land in | `build/production/` | `build/sandbox/` |
 
 Each one is the whole job: it checks its prerequisites, starts or builds everything it needs, and
 reports what it produced. `./scripts/run-production.sh` starts Postgres, the Server and Vite
@@ -91,6 +92,10 @@ The build scripts run the web build, `cap sync`, and Gradle in one step, and pri
 | Release | `./scripts/build-android-production.sh` | `com.meologue.app` |
 | Sandbox | `./scripts/build-android-sandbox.sh` | `com.meologue.app.sandbox` |
 
+Each script copies its APK into `build/production/` or `build/sandbox/`, renaming Gradle's
+build-type-derived `app-release.apk` to `meologue.apk` on the way. `build/` is generated and
+gitignored.
+
 A debug build stays a manual `./gradlew assembleDebug` in `apps/android`. Run
 `./scripts/setup-signing.sh` from the repository root before the first release build; the Sandbox
 uses the debug key and needs no setup. Debug and release use different keys, so uninstall
@@ -125,10 +130,14 @@ but not notarized, so another Mac requires one explicit right-click → Open. Pr
 bundles have separate identifiers and application data. Both can run and sync at once, each reaching
 only its own Server.
 
-Only one `.dmg` survives at a time: Tauri clears `target/release/bundle/dmg/` on every run, so
-building either macOS variant deletes the other's disk image, and the build that removes it reports
-nothing but its own success. Build whichever you need last, or copy its `.dmg` aside. The two `.app`
-bundles are unaffected, as are both APKs — Gradle gives each build type its own output directory.
+The `.app` and its `.dmg` are copied into `build/production/` or `build/sandbox/`, keeping their
+real bundle names — renaming the Sandbox to `meologue.app` would put two indistinguishable entries
+in the Dock.
+
+They also sidestep a Tauri quirk worth knowing if you build by hand: it clears
+`target/release/bundle/dmg/` on every run, so there only the most recently built variant's disk
+image survives, and the build that removes the other reports nothing but its own success. The
+copies keep both; a manual `cargo tauri build` still loses one.
 
 ## Layout
 
@@ -140,6 +149,7 @@ apps/e2e       Playwright tests against the production serving path
 packages/core  domain types, local persistence, and Sync engine
 server         Rust, Axum, sqlx, and Postgres
 scripts        one script per job per instance, plus shared lib/ helpers
+build          generated: the .apk, .app, and .dmg each build script collects
 ```
 
 There is one Vite application, selected for each platform with a build mode. Environment-specific

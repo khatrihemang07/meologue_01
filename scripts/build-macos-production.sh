@@ -26,6 +26,7 @@ cd "$(dirname "$0")/.."
 APP=apps/macos/target/release/bundle/macos/meologue.app
 DMG_DIR=apps/macos/target/release/bundle/dmg
 DMG_PRODUCT=meologue
+OUT_DIR=build/production
 BUNDLE_ID=com.meologue.app
 
 _usage() {
@@ -64,6 +65,15 @@ nb_report_artifact "$APP" identifier "$BUNDLE_ID"
 # a failure inside $( ) can only abort the script from an assignment.
 DMG=$(nb_find_dmg "$DMG_DIR" "$DMG_PRODUCT")
 nb_report_artifact "$DMG" identifier "$BUNDLE_ID"
+
+nb_say "collecting into $OUT_DIR/"
+# Real bundle names kept, unlike the APKs: the .app filename is what
+# Finder and the Dock display, so renaming the Sandbox to meologue.app
+# would put two indistinguishable "meologue" entries on screen. The .dmg
+# keeps its versioned name because that is the file you would hand
+# someone.
+nb_publish "$APP" "$OUT_DIR" "$(basename "$APP")"
+nb_publish "$DMG" "$OUT_DIR" "$(basename "$DMG")"
 
 cat <<NEXT
 

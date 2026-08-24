@@ -104,6 +104,53 @@ nb_find_dmg() {
   return 0
 }
 
+# ---------------------------------------------------------------------------
+# Collecting artifacts
+# ---------------------------------------------------------------------------
+
+# Copies a finished artifact to `build/<instance>/`, so the things you actually
+# install sit two directories deep instead of six, and the two instances'
+# outputs cannot be mistaken for each other.
+#
+# It also quietly fixes the .dmg collision documented in
+# build-macos-production.sh: Tauri clears target/release/bundle/dmg/ on every
+# run, so only the most recently built variant's disk image survives *there* —
+# but each one is copied out before the next build can remove it, so
+# build/production/ and build/sandbox/ end up holding both.
+#
+# `/build/` is gitignored, anchored to the repo root: an unanchored `build/`
+# would also match apps/android/build/ and apps/android/app/build/, which are
+# Gradle's and are already handled by their own ignore rules.
+#
+# Usage: nb_publish <src> <dest-dir> <dest-name>
+nb_publish() {
+  local src=$1 dest_dir=$2 name=$3 dest
+  dest="$dest_dir/$name"
+  mkdir -p "$dest_dir"
+  # rm -rf first, and it matters for the .app case specifically: a bundle is a
+  # directory, so copying over an older one MERGES them, leaving files from a
+  # previous build inside a bundle that now claims to be this one.
+  rm -rf "$dest"
+  case $src in
+    *.app)
+      # ditto, not `cp -R`. It is the macOS-native bundle copy and preserves the
+      # extended attributes and permission bits the code signature is verified
+      # against; a bundle that stops passing `codesign -v` because of how it was
+      # copied is worse than not copying it at all.
+      ditto "$src" "$dest"
+      ;;
+    *)
+      cp -p "$src" "$dest"
+      ;;
+  esac
+  printf '  %s\n' "$dest"
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# Artifact report
+# ---------------------------------------------------------------------------
+
 # Fails loudly rather than letting a missing artifact surface later as a
 # confusing `adb install` or `codesign` error against a path that was never
 # written. `du -sh` (not a bare `du -h`) matters for the macOS .app case: du

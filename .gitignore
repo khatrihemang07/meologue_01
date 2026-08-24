@@ -16,3 +16,8 @@ apps/e2e/.cache/
 
 # Throwaway prototypes
 .scratch/
+
+# Installable artifacts collected by scripts/build-*.sh into build/production/
+# and build/sandbox/. Anchored to the repo root: an unanchored `build/` would
+# also match Gradle's apps/android/build/.
+/build/

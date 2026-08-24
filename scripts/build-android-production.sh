@@ -30,6 +30,8 @@ cd "$(dirname "$0")/.."
 
 APK=apps/android/app/build/outputs/apk/release/app-release.apk
 APP_ID=com.meologue.app
+OUT_DIR=build/production
+COLLECTED=build/production/meologue.apk
 SERVER_PORT=41207
 
 _usage() {
@@ -69,10 +71,16 @@ nb_say "gradlew assembleRelease"
 
 nb_report_artifact "$APK" applicationId "$APP_ID"
 
+nb_say "collecting into $OUT_DIR/"
+# Gradle names every APK after its build type (app-release.apk,
+# app-sandbox.apk), which says nothing about the app once the file is
+# out of its build directory. Rename on the way out.
+nb_publish "$APK" "$OUT_DIR" "meologue.apk"
+
 cat <<NEXT
 
 Install and reach a local Server over USB:
-  adb install -r $APK
+  adb install -r $COLLECTED
   adb reverse tcp:$SERVER_PORT tcp:$SERVER_PORT
 
 Use http://127.0.0.1:$SERVER_PORT in Settings, not localhost — Capacitor
