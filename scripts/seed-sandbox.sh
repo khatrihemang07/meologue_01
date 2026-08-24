@@ -34,8 +34,9 @@ fi
 if ! docker exec "$CONTAINER" psql -U meologue -d "$DB" -tAc \
   "select to_regclass('public.entries') is not null" 2>/dev/null | grep -qx t; then
   echo "error: '$DB' in $CONTAINER has no 'entries' table yet." >&2
-  echo "The Server owns the schema. Run scripts/sandbox-server.sh once to apply" >&2
-  echo "migrations, then re-run this script." >&2
+  echo "The Server owns the schema. Run scripts/run-sandbox.sh (or" >&2
+  echo "scripts/sandbox-server.sh) once to apply migrations, then re-run this" >&2
+  echo "script." >&2
   exit 1
 fi
 

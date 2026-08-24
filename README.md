@@ -20,34 +20,30 @@ Requires Node 22+, pnpm, Rust, and Docker. Install dependencies from the reposit
 pnpm install
 ```
 
-meologue has two isolated instances:
+meologue has two isolated instances, and one script per job for each:
 
 | | Production | Sandbox |
 | --- | --- | --- |
 | Purpose | Your Entries | Testing and seeded data |
 | Postgres | `meologue-postgres` on `:5432` | `meologue-postgres-sandbox` on `:5442` |
 | Server | `:41207` | `:41307` |
+| Web (dev) | `:5173` | `:5174` |
+| Run it | `./scripts/run-production.sh` | `./scripts/run-sandbox.sh` |
+| Build an APK | `./scripts/build-android-production.sh` | `./scripts/build-android-sandbox.sh` |
+| Build a `.app` | `./scripts/build-macos-production.sh` | `./scripts/build-macos-sandbox.sh` |
 
-Start the production app:
+Each one is the whole job: it checks its prerequisites, starts or builds everything it needs, and
+reports what it produced. `./scripts/run-production.sh` starts Postgres, the Server and Vite
+together, interleaves both log streams into the terminal, and stops both on Ctrl-C. Open the web
+port it prints and set that same address as the Server URL in Settings — an unset Server URL means
+Sync is off, even when the Server serves the app.
 
-```bash
-docker compose up -d
-pnpm --filter @meologue/web build
-cd server && cargo run
-```
+Both instances can run at once; they share the working tree and nothing else. Seed the Sandbox with
+`./scripts/seed-sandbox.sh`, in another terminal once its Server has applied migrations.
 
-Open `http://localhost:41207`, then set that same address as the Server URL in Settings to enable
-Sync. An unset Server URL means Sync is off, even when the Server serves the app.
-
-For disposable testing, start and optionally seed the Sandbox instead:
-
-```bash
-./scripts/sandbox-server.sh
-./scripts/seed-sandbox.sh       # run in another terminal after the Server is ready
-```
-
-Open `http://localhost:41307`. The Sandbox uses a separate database, bundle, port, and native app
-identifier, so both instances can run together.
+The checks warn rather than fail when a local model endpoint is configured but not running, which
+is otherwise invisible until a Reflection call returns connection-refused. Pass `-h` to any script
+for its own flags.
 
 Use `docker compose stop` for an everyday stop; it preserves the production container and data. To
 wipe only the Sandbox, run `docker compose down -v postgres-sandbox`. Do not substitute
@@ -64,33 +60,13 @@ running, or Reflection fails with a connection-refused error. Start it with
 
 ### Web
 
-For hot reload, run the API and Vite in separate terminals:
+The run scripts above are the hot-reload path: each starts the API and a Vite server that proxies
+`/v1` to it, so the Vite port is the Server URL to use. Run both scripts in two terminals to work on
+both instances at once — they bind different ports and never collide.
 
-```bash
-cd server && cargo run                  # terminal A
-pnpm --filter @meologue/web dev         # terminal B, from the repository root
-```
-
-Use `http://localhost:5173` as the Server URL because Vite proxies `/v1` to the API. To develop
-against the Sandbox instead, start `./scripts/sandbox-server.sh`, then run:
-
-```bash
-MEOLOGUE_PROXY_TARGET=http://localhost:41307 pnpm --filter @meologue/web dev
-```
-
-Only one Vite server can bind `:5173`, so running both hot-reload frontends at once means giving
-the Sandbox Vite server a different port:
-
-```bash
-./scripts/sandbox-server.sh             # terminal C, from the repository root
-MEOLOGUE_PROXY_TARGET=http://localhost:41307 \
-  pnpm --filter @meologue/web dev --port 5174  # terminal D, from the repository root
-```
-
-Open `http://localhost:5173` for the production instance and `http://localhost:5174` for the
-Sandbox, using each as that instance's own Server URL. For a production-style build instead, use
-the production or Sandbox commands in the preceding section; the Rust process serves the app and API
-together.
+For a production-style single process instead — the Rust Server holding the built bundle and the
+API on one port — use `./scripts/sandbox-server.sh` for the Sandbox, or the run script's
+`--bundle` flag for either instance.
 
 Browsers require a secure context for meologue's OPFS-backed SQLite store. `localhost` qualifies,
 but another Device needs HTTPS. One tailnet-only option is:
@@ -104,23 +80,20 @@ has no application-level authentication. The web app is installable and remains 
 
 ### Android
 
-Requires the Android SDK command-line tools, a JDK, `ANDROID_HOME`, `JAVA_HOME`, and a connected
-Device with adb; Android Studio and an emulator are not required.
+Requires the Android SDK command-line tools and a JDK 21. Android Studio and an emulator are not
+needed. The SDK path comes from `apps/android/local.properties` or `ANDROID_HOME`, and Gradle uses
+the `java` on `PATH` when `JAVA_HOME` is unset. `adb` is needed only to install the result.
 
-```bash
-pnpm --filter @meologue/web build:android
-cd apps/web && npx cap sync android
-cd ../android
-```
+The build scripts run the web build, `cap sync`, and Gradle in one step, and print the APK path:
 
-| Variant | Command | Application ID |
+| Variant | Script | Application ID |
 | --- | --- | --- |
-| Debug | `./gradlew assembleDebug` | `com.meologue.app` |
-| Release | `./gradlew assembleRelease` | `com.meologue.app` |
-| Sandbox | `./gradlew assembleSandbox` | `com.meologue.app.sandbox` |
+| Release | `./scripts/build-android-production.sh` | `com.meologue.app` |
+| Sandbox | `./scripts/build-android-sandbox.sh` | `com.meologue.app.sandbox` |
 
-Install an APK with `adb install -r <apk>`. Run `./scripts/setup-signing.sh` from the repository root
-before the first release build. Debug and release use different keys, so uninstall
+A debug build stays a manual `./gradlew assembleDebug` in `apps/android`. Run
+`./scripts/setup-signing.sh` from the repository root before the first release build; the Sandbox
+uses the debug key and needs no setup. Debug and release use different keys, so uninstall
 `com.meologue.app` before switching between them; the Sandbox installs alongside either one. Both
 can run and sync at once, each reaching only its own Server.
 
@@ -140,22 +113,17 @@ away from USB or the current LAN.
 The native shell uses Tauri v2. macOS Command Line Tools are sufficient; install its CLI with
 `cargo install tauri-cli --version "^2"`.
 
-```bash
-pnpm --filter @meologue/web build:macos
-cd apps/macos
-```
+| Variant | Script | Bundle |
+| --- | --- | --- |
+| Release | `./scripts/build-macos-production.sh` | `meologue.app`, `com.meologue.app` |
+| Sandbox | `./scripts/build-macos-sandbox.sh` | `meologue-sandbox.app`, `com.meologue.app.sandbox` |
 
-| Variant | Command |
-| --- | --- |
-| Debug | `cargo tauri build --debug` |
-| Release | `cargo tauri build` |
-| Sandbox debug | `cargo tauri build --debug --config tauri.sandbox.conf.json` |
-| Sandbox release | `cargo tauri build --config tauri.sandbox.conf.json` |
-
-Run `./scripts/setup-signing.sh` from the repository root before a release build. It creates a local,
-self-signed identity; builds are signed but not notarized, so another Mac requires one explicit
-right-click → Open. Production and Sandbox bundles have separate identifiers and application data.
-Both can run and sync at once, each reaching only its own Server.
+A debug build stays a manual `cargo tauri build --debug` in `apps/macos`, with
+`--config tauri.sandbox.conf.json` for the Sandbox. Run `./scripts/setup-signing.sh` from the
+repository root before a release build. It creates a local, self-signed identity; builds are signed
+but not notarized, so another Mac requires one explicit right-click → Open. Production and Sandbox
+bundles have separate identifiers and application data. Both can run and sync at once, each reaching
+only its own Server.
 
 ## Layout
 
@@ -166,6 +134,7 @@ apps/macos     Tauri macOS shell
 apps/e2e       Playwright tests against the production serving path
 packages/core  domain types, local persistence, and Sync engine
 server         Rust, Axum, sqlx, and Postgres
+scripts        one script per job per instance, plus shared lib/ helpers
 ```
 
 There is one Vite application, selected for each platform with a build mode. Environment-specific
