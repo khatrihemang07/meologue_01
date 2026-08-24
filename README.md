@@ -125,6 +125,11 @@ but not notarized, so another Mac requires one explicit right-click → Open. Pr
 bundles have separate identifiers and application data. Both can run and sync at once, each reaching
 only its own Server.
 
+Only one `.dmg` survives at a time: Tauri clears `target/release/bundle/dmg/` on every run, so
+building either macOS variant deletes the other's disk image, and the build that removes it reports
+nothing but its own success. Build whichever you need last, or copy its `.dmg` aside. The two `.app`
+bundles are unaffected, as are both APKs — Gradle gives each build type its own output directory.
+
 ## Layout
 
 ```text
@@ -167,8 +172,14 @@ cargo test --manifest-path server/Cargo.toml
 ```
 
 Tests use the Sandbox Postgres, never the production database. Stop a running Sandbox Server before a
-full end-to-end run if its Reflection and Digest workers cause timeouts. After changing Rust wire
-types, regenerate the committed TypeScript contract with:
+full end-to-end run if its Reflection and Digest workers cause timeouts.
+
+One server test currently fails on `main`, so `cargo test` is not green:
+`a_chat_client_that_always_fails_stops_after_exactly_max_attempts` in `server/tests/digest.rs`
+sees exactly twice `MAX_ATTEMPTS` calls. It is not a flake — it fails with `--test-threads=1`
+too. Noted here so it is not mistaken for damage from whatever you are working on.
+
+After changing Rust wire types, regenerate the committed TypeScript contract with:
 
 ```bash
 pnpm --filter @meologue/core generate:wire-types
