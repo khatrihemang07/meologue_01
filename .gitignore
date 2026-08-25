@@ -21,3 +21,9 @@ apps/e2e/.cache/
 # and build/sandbox/. Anchored to the repo root: an unanchored `build/` would
 # also match Gradle's apps/android/build/.
 /build/
+
+# graphify knowledge graph (generated; rebuilt by `graphify update .`)
+graphify-out/
+
+# Serena MCP local state
+.serena/

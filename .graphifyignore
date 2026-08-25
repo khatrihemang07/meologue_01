@@ -1,0 +1,18 @@
+# graphify ignores — merged on top of .gitignore, evaluated last.
+# Purpose: keep icon/raster assets out of the semantic (vision) pass. Each image
+# costs its own extraction agent, and app icons carry no architectural signal.
+# The docs/screenshot-*.png UI captures ARE kept — they describe real screens.
+
+# macOS + Android + web icon assets
+apps/macos/icons/
+apps/android/app/src/main/res/mipmap-*/
+apps/android/app/src/main/res/drawable-*/
+apps/android/app/src/main/res/drawable/
+apps/web/public/*.png
+apps/web/public/*.svg
+
+# Brand marks (logos, not diagrams)
+docs/brand/
+
+# Lockfiles: huge, no architectural signal
+pnpm-lock.yaml
