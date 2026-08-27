@@ -363,6 +363,133 @@ journal doesn't contain enough to answer, say so plainly instead of guessing or 
 — a Reflection that invents a past the user did not live is worse than one that admits it found \
 nothing. Speak directly to the user in the second person, in plain prose.";
 
+/// One extra turn given to the loop when its final reply comes back empty
+/// (`is_empty_final_reply`) — issue #102. `agent_loop::run_one_tool_call`'s
+/// own doc comment already establishes this codebase's precedent: an
+/// unknown tool, an unparseable `<tool_call>` tag, a failing tool
+/// execution — every one of those becomes a result the model reads on its
+/// next turn and can correct from, never a failed Question outright. An
+/// empty final reply is the one exit point that precedent didn't reach,
+/// because it isn't a tool-call failure at all; it's the loop's *normal*
+/// stopping condition firing on a reply that has nothing in it. This
+/// message is what gives it the same second chance, in the same spirit:
+/// tell the model plainly what happened and what to do next, then let it
+/// try again.
+///
+/// Bounded to exactly one extra call to `agent_loop::run` —
+/// `run_reflect_loop` only ever sends this once. Unlike `agent_loop::run`'s
+/// own "no step budget" (deliberate, per that module's doc comment, for a
+/// Question that genuinely needs several tool calls), an empty reply isn't
+/// evidence the Question needs more looking; it's evidence the model wrote
+/// nothing on a turn where it was free to write anything. Telling it so
+/// once is a reasonable accommodation for whatever intermittent cause
+/// issue #102 observed (never reproduced on demand, and not chased here);
+/// telling it forever would turn a single bad turn into an unbounded loop
+/// with no evidence a third or fourth attempt would behave any
+/// differently, so a second empty reply fails the request instead
+/// (`run_reflect_loop`).
+const EMPTY_REPLY_CORRECTION: &str = "Your last reply had no text in it — nothing was written, and \
+no tool was called either. Look again at the Question above: either call a tool to look something \
+up, or write your Answer to the user in plain prose. Do not send an empty reply again.";
+
+/// Every shape of "nothing to say" `is_empty_final_reply` recognises, given
+/// what `harness::prompted::PromptedToolClient` can actually hand back as a
+/// tool-call-free reply's text (`ToolCallScanner`'s own doc comment covers
+/// the wire mechanics each case below reasons about):
+///
+/// - Genuinely empty, or only whitespace — the shape issue #102 was
+///   actually filed against: a live Turn with `length(answer) = 0`.
+/// - Only a markdown code fence with nothing inside it (`` ``` `` or
+///   `` ```\n``` ``). `strip_code_fences` already exists to strip a *real*
+///   fence wrapped around real content (`parse_extraction`,
+///   `parse_tool_call_block` reuse it for exactly that); reused here
+///   because the same function correctly reduces a fence-only reply to an
+///   empty string.
+/// - Only a stray `<tool_call>`/`</tool_call>` tag fragment.
+///   `ToolCallScanner`'s own doc comment explains how a `</tool_call>` that
+///   was never opened — nothing upstream of it ever matched
+///   `<tool_call>` — survives into `ContentBlock::Text` as literal
+///   characters instead of being consumed as protocol (the scanner only
+///   watches for `<` starting a *new* candidate tag; a bare `<` is not one
+///   until proven otherwise). If that fragment is *all* the text is, there
+///   is nothing under it.
+/// - Only the bare `GROUNDED: yes`/`GROUNDED: no` verdict line
+///   `SYSTEM_INSTRUCTION` (the fixed pipeline, still reachable through
+///   `run_reflect`) asks for, read with `parse_and_strip_verdict`.
+///   `LOOP_SYSTEM_INSTRUCTION` never asks the live loop for this marker,
+///   but the same configured model answers both prompts, and issue #93's
+///   own prototype already noted it stays "on protocol" from whatever it
+///   was most recently asked to do — a bare marker with nothing after it is
+///   exactly the fixed pipeline's own verdict line with the Answer half
+///   missing.
+///
+/// Deliberately *not* on this list: ordinary prose that happens to be
+/// short, or a marker line followed by real content (`GROUNDED: no\nI
+/// found nothing about that.` is a real Answer, not an empty one — see
+/// `parse_and_strip_verdict`'s own tests). Only the degenerate case where
+/// stripping every one of these away leaves nothing counts as empty.
+fn is_empty_final_reply(text: &str) -> bool {
+    let candidate = strip_code_fences(text)
+        .replace("<tool_call>", "")
+        .replace("</tool_call>", "");
+    let candidate = candidate.trim();
+    if candidate.is_empty() {
+        return true;
+    }
+    let (verdict, rest) = parse_and_strip_verdict(candidate);
+    verdict.is_some() && rest.trim().is_empty()
+}
+
+/// A model's final reply, guaranteed non-empty — `new` is the only way to
+/// build one, and it refuses everything `is_empty_final_reply` recognises
+/// as nothing to say. This is issue #102's answer to its own acceptance
+/// criterion that `grounded: true` be unreachable with an empty Answer
+/// "structurally rather than by convention": `docs/adr/0024` made the
+/// mirror case (`grounded: true` reachable with empty `grounding_entry_ids`)
+/// unrepresentable by deriving `grounded` from the same data at the one
+/// place it's computed, rather than trusting a second independent field —
+/// there is no equivalent shared derivation available here, since whether
+/// the model found any Entries and whether it wrote a non-empty Answer are
+/// genuinely independent facts. What *is* available, and is the same idea
+/// applied to what's actually true here, is a single gate every route from
+/// "a raw model reply" to "the `answer: String` stored in `ReflectResponse`
+/// and `NewTurn`" has to pass through: `run_reflect_loop` never reads
+/// `outcome.answer` directly into either of those — it only ever reads
+/// `NonEmptyAnswer::into_inner()`'s output, and that function does not
+/// exist unless `new` already accepted the text. A future caller who
+/// forgets to check emptiness has nothing to forget: there is no plain
+/// `String` in scope by the time `grounded` and `answer` are packaged
+/// together.
+///
+/// This is a narrower guarantee than a type-level ban on ever constructing
+/// `ReflectResponse { answer: String::new(), grounded: true, .. }`
+/// anywhere in the crate — both structs keep plain `pub` fields (they
+/// always did, and `ReflectResponse` is serialized wire shape besides), so
+/// nothing stops a hypothetical future call site from building one by hand
+/// with an empty string. Locking that down would mean giving both structs
+/// private fields and a smart constructor, which would also have to reach
+/// `run_reflect`'s own, already-`#[allow(dead_code)]`, construction of the
+/// same two types — exactly the "elaborate machinery around `grounded`"
+/// issue #102 says not to build, for a field issue #99 is already removing.
+/// What this type actually guarantees is narrower but still load-bearing:
+/// the *only* code path that exists today for turning a live model reply
+/// into a persisted, client-visible Answer cannot do so with an empty one.
+struct NonEmptyAnswer(String);
+
+impl NonEmptyAnswer {
+    fn new(raw: &str) -> Option<Self> {
+        if is_empty_final_reply(raw) {
+            None
+        } else {
+            Some(Self(raw.trim().to_string()))
+        }
+    }
+
+    fn into_inner(self) -> String {
+        self.0
+    }
+}
+
 /// `/v1/reflect`'s live implementation (issue #93 pass 2): loads the
 /// Session's prior Turns exactly as `run_reflect` always did, builds a
 /// `harness::types::Context` from them plus the active tool set, runs
@@ -446,9 +573,79 @@ async fn run_reflect_loop(
     // `should_stop_after_turn` is `agent_loop::run`'s own unused hook
     // (`ShouldStopAfterTurn`'s doc comment) — issue #93 pass 2 ships no
     // step budget, deliberately, so `None` every time.
-    let outcome = agent_loop::run(&chat_client, system_prompt, &tools, messages, None).await;
+    //
+    // `messages`/`system_prompt` are cloned here, rather than moved
+    // straight into `run`, so both are still around to build a retry below
+    // if this first call's final reply turns out to be empty — the
+    // ordinary case never needs them again, so the clone is spent only
+    // once, ahead of a chat call that already costs several seconds.
+    let mut outcome = agent_loop::run(
+        &chat_client,
+        system_prompt.clone(),
+        &tools,
+        messages.clone(),
+        None,
+    )
+    .await;
 
-    let Some(answer) = outcome.answer else {
+    // issue #102: "no tool call left in the reply" is the loop's normal
+    // stopping condition (`agent_loop::LoopOutcome::answer`'s own doc
+    // comment), and an *empty* reply satisfies that condition exactly as
+    // well as a real Answer does — nothing about the stopping rule implies
+    // the model actually wrote something. `EMPTY_REPLY_CORRECTION`'s own
+    // doc comment covers why this gets exactly one corrective turn, giving
+    // the model the same chance to self-correct issue #93 already gives an
+    // unknown tool or an unparseable call, bounded so a model that keeps
+    // producing nothing can't turn one bad Question into an unbounded loop.
+    let mut retried = false;
+    if outcome.answer.as_deref().is_some_and(is_empty_final_reply) {
+        retried = true;
+        tracing::warn!(
+            question = %req.question,
+            session_id = ?req.session_id,
+            "reflect loop's final reply was empty; giving it one corrective turn"
+        );
+        let mut retry_messages = messages;
+        retry_messages.extend(agent_loop::steps_to_messages(&outcome.steps));
+        retry_messages.push(Message::User(EMPTY_REPLY_CORRECTION.to_string()));
+        let retry_outcome =
+            agent_loop::run(&chat_client, system_prompt, &tools, retry_messages, None).await;
+
+        // Every `Step` from *both* attempts is kept, not just the retry's
+        // own — the first attempt's tool calls are real Grounding (the bug
+        // this issue was filed against found 35 real Entries before the
+        // reply that described them came back empty), and dropping them
+        // just because the reply that followed them didn't land would
+        // silently narrow the Answer's Grounding for no honest reason. The
+        // empty reply itself is kept too, as an ordinary, non-final
+        // `Step::Assistant` — `build_tree_payloads` already treats every
+        // Assistant step but the last as "made a tool call, isn't the
+        // Answer", so this reads the same way a malformed tool call
+        // already does: a truthful record of what actually happened on
+        // the way to the real Answer, not the Answer itself.
+        let mut steps = outcome.steps;
+        steps.extend(retry_outcome.steps);
+        outcome = agent_loop::LoopOutcome {
+            steps,
+            answer: retry_outcome.answer,
+            error: retry_outcome.error,
+        };
+    }
+
+    // `NonEmptyAnswer::new` is the single gate issue #102 adds — see its own
+    // doc comment for why this, rather than a second independent check, is
+    // what keeps `grounded: true` from ever reaching the client (or
+    // `sessions::record_turn_from_steps`) paired with an empty Answer:
+    // nothing below this point ever reads `outcome.answer` directly again.
+    let Some(answer) = outcome.answer.as_deref().and_then(NonEmptyAnswer::new) else {
+        if retried {
+            tracing::warn!(
+                question = %req.question,
+                session_id = ?req.session_id,
+                "reflect loop's final reply was still empty after a corrective turn; \
+                 failing the request"
+            );
+        }
         let reason = outcome.error.unwrap_or_else(|| {
             "the model stopped without ever producing a reply with no tool \
                                  call left in it"
@@ -458,6 +655,7 @@ async fn run_reflect_loop(
             "reflect loop did not produce an Answer: {reason}"
         )));
     };
+    let answer = answer.into_inner();
 
     // Every Entry id any tool result surfaced, deduped keeping first
     // occurrence — the loop-based counterpart of `run_reflect`'s own
@@ -1615,8 +1813,9 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        TITLE_MAX_CHARS, derive_title, extract_json_object, keyword_query, local_date_range_to_utc,
-        local_today, parse_and_strip_verdict, parse_extraction, search_words, strip_code_fences,
+        NonEmptyAnswer, TITLE_MAX_CHARS, derive_title, extract_json_object, is_empty_final_reply,
+        keyword_query, local_date_range_to_utc, local_today, parse_and_strip_verdict,
+        parse_extraction, search_words, strip_code_fences,
     };
 
     #[test]
@@ -1828,6 +2027,83 @@ mod tests {
         assert!(!yes_answer.contains("GROUNDED:"));
         let (_, no_answer) = parse_and_strip_verdict("**grounded: no**\nNothing found.");
         assert!(!no_answer.contains("GROUNDED:"));
+    }
+
+    // -------------------------------------------------------------------
+    // Issue #102 — is_empty_final_reply / NonEmptyAnswer
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn a_genuinely_empty_reply_is_empty() {
+        assert!(is_empty_final_reply(""));
+    }
+
+    #[test]
+    fn a_whitespace_only_reply_is_empty() {
+        assert!(is_empty_final_reply("   \n\t  \n"));
+    }
+
+    #[test]
+    fn a_bare_code_fence_with_nothing_inside_it_is_empty() {
+        assert!(is_empty_final_reply("```\n```"));
+        assert!(is_empty_final_reply("```"));
+        assert!(is_empty_final_reply("```json\n```"));
+    }
+
+    #[test]
+    fn a_stray_closing_tool_call_tag_with_nothing_else_is_empty() {
+        assert!(is_empty_final_reply("</tool_call>"));
+    }
+
+    #[test]
+    fn a_bare_grounded_marker_with_nothing_after_it_is_empty() {
+        assert!(is_empty_final_reply("GROUNDED: yes"));
+        assert!(is_empty_final_reply("**grounded: no**"));
+    }
+
+    #[test]
+    fn a_marker_followed_by_a_real_answer_is_not_empty() {
+        // The fixed pipeline's own case (docs/adr/0024): a marker line is
+        // scaffolding, but real prose after it is a real Answer, not
+        // nothing to say.
+        assert!(!is_empty_final_reply(
+            "GROUNDED: no\nI found nothing about that."
+        ));
+    }
+
+    #[test]
+    fn ordinary_prose_is_not_empty() {
+        assert!(!is_empty_final_reply("Nothing to report."));
+        assert!(!is_empty_final_reply(
+            "Your knee has improved since February."
+        ));
+    }
+
+    /// The structural half of issue #102's acceptance criteria: the single
+    /// constructor `run_reflect_loop` routes every model reply through
+    /// before it can become `ReflectResponse::answer`/`NewTurn::answer`
+    /// rejects every shape `is_empty_final_reply` recognises as nothing to
+    /// say, and accepts everything else. There is no second path to a
+    /// `NonEmptyAnswer` that skips this check.
+    #[test]
+    fn non_empty_answer_rejects_every_shape_of_nothing_to_say_and_accepts_real_text() {
+        for empty in [
+            "",
+            "   \n  ",
+            "```\n```",
+            "</tool_call>",
+            "GROUNDED: yes",
+            "**grounded: no**",
+        ] {
+            assert!(
+                NonEmptyAnswer::new(empty).is_none(),
+                "expected {empty:?} to be rejected"
+            );
+        }
+
+        let answer =
+            NonEmptyAnswer::new("Your knee has improved.").expect("real prose must be accepted");
+        assert_eq!(answer.into_inner(), "Your knee has improved.");
     }
 
     // -------------------------------------------------------------------

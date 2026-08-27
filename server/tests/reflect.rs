@@ -757,6 +757,166 @@ async fn a_malformed_tool_call_recovers_and_still_answers(pool: PgPool) {
     );
 }
 
+// -- issue #102: an empty final reply is not an Answer ---------------------
+//
+// The loop's stopping rule is "a reply with no tool call ends the loop and
+// its text is the Answer" — a rule that says nothing about that text
+// actually containing anything. `run_reflect_loop` gives an empty final
+// reply exactly one corrective turn (`EMPTY_REPLY_CORRECTION`), the same
+// "something the model can self-correct from" precedent issue #93 already
+// established for an unknown tool or a malformed `<tool_call>` tag
+// (`an_unknown_tool_name_recovers_and_still_answers`,
+// `a_malformed_tool_call_recovers_and_still_answers`, above); unlike those,
+// a *second* empty reply fails the request rather than looping forever —
+// `a_final_reply_still_empty_after_a_corrective_turn_fails_the_request_and_persists_nothing`
+// pins that bound.
+
+#[sqlx::test]
+async fn an_empty_final_reply_gets_one_corrective_turn_and_then_answers(pool: PgPool) {
+    let chat = Arc::new(FakeChatClient::new([
+        "".to_string(),
+        "A real answer, the second time around.".to_string(),
+    ]));
+    let reflect = reflect_state(chat.clone());
+
+    let (status, body) = post_reflect(
+        &pool,
+        Some(reflect),
+        json!({ "protocol_version": 2, "question": "How did the flat move go?" }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["answer"], "A real answer, the second time around.");
+    assert_eq!(
+        chat.call_count(),
+        2,
+        "the empty first reply must cost exactly one corrective turn"
+    );
+
+    // The corrective turn must actually tell the model what happened —
+    // not a silent retry it has no way to learn from.
+    let second_call = chat.nth_call(1);
+    assert!(
+        second_call
+            .iter()
+            .any(|m| m.content.contains("Your last reply had no text in it")),
+        "the correction should have reached the retried turn: {second_call:?}"
+    );
+}
+
+#[sqlx::test]
+async fn a_whitespace_only_final_reply_counts_as_empty_and_is_retried(pool: PgPool) {
+    let chat = Arc::new(FakeChatClient::new([
+        "   \n\t  \n".to_string(),
+        "A real answer.".to_string(),
+    ]));
+    let reflect = reflect_state(chat.clone());
+
+    let (status, body) = post_reflect(
+        &pool,
+        Some(reflect),
+        json!({ "protocol_version": 2, "question": "Anything?" }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["answer"], "A real answer.");
+    assert_eq!(chat.call_count(), 2);
+}
+
+#[sqlx::test]
+async fn a_grounded_marker_only_final_reply_counts_as_empty_and_is_retried(pool: PgPool) {
+    // The old fixed pipeline's "GROUNDED: yes/no" verdict marker
+    // (docs/adr/0024) — `LOOP_SYSTEM_INSTRUCTION` never asks for it, but
+    // the same configured model answers both prompts, so a bare marker
+    // with nothing after it is a real shape this loop can receive.
+    let chat = Arc::new(FakeChatClient::new([
+        "GROUNDED: yes".to_string(),
+        "A real answer.".to_string(),
+    ]));
+    let reflect = reflect_state(chat.clone());
+
+    let (status, body) = post_reflect(
+        &pool,
+        Some(reflect),
+        json!({ "protocol_version": 2, "question": "Anything?" }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["answer"], "A real answer.");
+    assert_eq!(chat.call_count(), 2);
+}
+
+/// The exact shape issue #102 was filed against: a tool call finds real
+/// Entries, and *then* the reply that was meant to describe them comes back
+/// empty. Proves the retry doesn't just answer — it keeps the Grounding the
+/// first attempt already found, rather than silently losing it because the
+/// reply that followed it didn't land.
+#[sqlx::test]
+async fn an_empty_reply_after_a_real_tool_call_still_carries_that_grounding_once_it_answers(
+    pool: PgPool,
+) {
+    let entry_id = Uuid::new_v4();
+    insert_entry_at(
+        &pool,
+        entry_id,
+        "Finished moving into the new flat today.",
+        DateTime::parse_from_rfc3339("2026-07-05T08:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc),
+    )
+    .await;
+
+    let chat = Arc::new(FakeChatClient::new([
+        tool_call_tag(
+            "entries_in_range",
+            json!({"from": "2026-07-01", "to": "2026-07-31"}),
+        ),
+        "".to_string(),
+        "The flat move went well, it sounds like.".to_string(),
+    ]));
+    let reflect = reflect_state(chat.clone());
+
+    let (status, body) = post_reflect(
+        &pool,
+        Some(reflect),
+        json!({ "protocol_version": 2, "question": "How did the flat move go?" }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["answer"], "The flat move went well, it sounds like.");
+    assert_eq!(body["grounded"], true);
+    assert_eq!(grounding_ids(&body), vec![entry_id]);
+    assert_eq!(chat.call_count(), 3);
+}
+
+#[sqlx::test]
+async fn a_final_reply_still_empty_after_a_corrective_turn_fails_the_request_and_persists_nothing(
+    pool: PgPool,
+) {
+    let chat = Arc::new(FakeChatClient::new(["".to_string(), "   ".to_string()]));
+    let reflect = reflect_state(chat.clone());
+
+    let (status, _) = post_reflect(
+        &pool,
+        Some(reflect),
+        json!({ "protocol_version": 2, "question": "How did the flat move go?" }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(session_count(&pool).await, 0);
+    assert_eq!(turn_count(&pool).await, 0);
+    assert_eq!(
+        chat.call_count(),
+        2,
+        "a second empty reply must fail the request, not retry again"
+    );
+}
+
 #[sqlx::test]
 async fn a_chat_client_error_fails_the_request_and_persists_nothing(pool: PgPool) {
     let chat = Arc::new(FakeChatClient::failing(

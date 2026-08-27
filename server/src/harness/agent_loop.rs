@@ -343,6 +343,38 @@ fn render_text(content: &[ContentBlock]) -> String {
         .join("\n")
 }
 
+/// Replays a finished run's own `Step`s back into the `Message` form `run`
+/// itself would have accumulated in its internal `messages` — the same
+/// mapping `run`'s own loop already does turn by turn (each `messages.push`
+/// sitting next to the `steps.push` that recorded the same event, above).
+/// Factored out for issue #102: `reflect.rs`'s one corrective retry after an
+/// empty final reply needs to hand a *finished* run's transcript to a fresh
+/// `run` call as its starting `messages`, and this is that transcript,
+/// without duplicating the mapping a second time. `Step::ToolResult`'s
+/// `details`/`entry_ids` have no counterpart on the wire `Message::ToolResult`
+/// — `Step`'s own doc comment explains why — so they're dropped here exactly
+/// as `run` already drops them when it builds its own `messages`.
+pub fn steps_to_messages(steps: &[Step]) -> Vec<Message> {
+    steps
+        .iter()
+        .map(|step| match step {
+            Step::Assistant(assistant) => Message::Assistant(assistant.clone()),
+            Step::ToolResult {
+                tool_call_id,
+                tool_name,
+                content,
+                is_error,
+                ..
+            } => Message::ToolResult {
+                tool_call_id: tool_call_id.clone(),
+                tool_name: tool_name.clone(),
+                content: content.clone(),
+                is_error: *is_error,
+            },
+        })
+        .collect()
+}
+
 /// A generic, wire-agnostic rendering of an assistant reply's content
 /// blocks — for storing an `Assistant` `Step` in the Session entry tree
 /// (`sessions::MessagePayload::Assistant::text`). Deliberately not
@@ -844,5 +876,51 @@ mod tests {
         let rendered = render_content_for_display(&content);
         assert!(rendered.contains("unparseable"));
         assert!(rendered.contains("garbled"));
+    }
+
+    // -- steps_to_messages ------------------------------------------------
+
+    #[test]
+    fn steps_to_messages_reproduces_what_run_would_have_accumulated() {
+        let steps = vec![
+            Step::Assistant(one_tool_call("call_0", "echo", json!({"n": 1}))),
+            Step::ToolResult {
+                tool_call_id: "call_0".to_string(),
+                tool_name: "echo".to_string(),
+                content: "echoed {\"n\":1}".to_string(),
+                is_error: false,
+                details: Value::Null,
+                entry_ids: vec![Uuid::nil()],
+            },
+            Step::Assistant(prose("")),
+        ];
+
+        let messages = steps_to_messages(&steps);
+
+        assert_eq!(messages.len(), 3);
+        assert!(matches!(messages[0], Message::Assistant(_)));
+        assert!(matches!(
+            messages[1],
+            Message::ToolResult {
+                is_error: false,
+                ..
+            }
+        ));
+        // `details`/`entry_ids` have no counterpart on `Message::ToolResult`
+        // — only the four fields `run`'s own `messages.push` already
+        // carries forward survive the trip.
+        let Message::ToolResult {
+            tool_call_id,
+            tool_name,
+            content,
+            ..
+        } = &messages[1]
+        else {
+            panic!("expected a ToolResult message");
+        };
+        assert_eq!(tool_call_id, "call_0");
+        assert_eq!(tool_name, "echo");
+        assert_eq!(content, "echoed {\"n\":1}");
+        assert!(matches!(messages[2], Message::Assistant(_)));
     }
 }
