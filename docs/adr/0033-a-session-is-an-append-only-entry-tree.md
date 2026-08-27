@@ -70,9 +70,16 @@ copy of it — the same six-line function issue #97 built compaction against is 
 "rebuild."
 
 **`type` is one of `message | model_change | compaction | branch_summary | custom`**, matching
-pi's own entry kinds minus the ones this port has no use for yet. The type-specific shape lives in
-a `jsonb` `payload` rather than in more columns, because a `session_entries` row that had to carry
-a column for every kind's own fields would grow a new nullable column every time a kind was added.
+pi's own entry kinds minus the ones this port has no use for yet. `message` is not a slip against
+CONTEXT.md's "Terms we avoid" — issue #107 resolved that it names a different thing than the
+Question/Answer/Entry vocabulary that entry prohibits. A `session_entries` row of type `message`
+is a frame in the transcript addressed *to* the model (a prior reply replayed for it, a tool
+result handed back for it to read), which genuinely has an addressee the way an Entry, a Question,
+and an Answer do not; CONTEXT.md's "message" entry now states this exception directly, scoped to
+that transcript layer alone, rather than leaving the choice unreconciled with the glossary. The
+type-specific shape lives in a `jsonb` `payload` rather than in more columns, because a
+`session_entries` row that had to carry a column for every kind's own fields would grow a new
+nullable column every time a kind was added.
 
 **`session_records` is a separate, non-tree operation log** — `operation_started |
 operation_finished | step_attempt | tool_started | abort_requested | usage` — sharing one
@@ -150,20 +157,25 @@ removing the table rather than a separate scope decision.
 
 ## Consequences
 
-**`Turn` is used two different ways across this codebase now, and that ambiguity is inherited by
-this ADR rather than created by it.** `sessions.rs` and `reflect.rs` both still use "Turn" to mean
-a whole Question/Answer exchange — `SessionTurnRow` ("one Question/Answer pair, rebuilt from a
-Session's entry tree"), `record_turn`, `prior_turns`, `CONVERSATION_WINDOW`'s "how many of a
-Session's most recent Turns" — exactly the sense 0025 used it in. `agent_loop.rs`'s own vocabulary
-(`LoopEvent::TurnStart`, and the `turn_start` SSE event it becomes on the wire in
-[0034](0034-reflection-reports-its-progress-as-it-runs.md)) uses "turn" for one loop iteration —
-one model reply, plus whatever tool calls it made — which is a *piece* of what `sessions.rs` calls
-a Turn, not the same thing. CONTEXT.md is updated to define the domain term Turn as the
-loop-iteration meaning, per issue #99's own instruction. **This leaves the dominant Rust
-identifiers (`SessionTurnRow`, `record_turn`, `prior_turns`) naming the older, now-superseded
-sense of the word** — a real inconsistency between the glossary and the code's own naming that
-this docs-only pass records rather than fixes, since renaming those identifiers is a code change
-outside this ticket's scope.
+**`Turn` was used two different ways across this codebase, and issue #104 settled which one the
+glossary follows.** `sessions.rs` and `reflect.rs` both used "Turn" to mean a whole Question/Answer
+exchange — `SessionTurnRow` ("one Question/Answer pair, rebuilt from a Session's entry tree"),
+`record_turn`, `prior_turns`, `CONVERSATION_WINDOW`'s "how many of a Session's most recent Turns" —
+exactly the sense 0025 used it in. `agent_loop.rs`'s own vocabulary (`LoopEvent::TurnStart`, and
+the `turn_start` SSE event it became on the wire in
+[0034](0034-reflection-reports-its-progress-as-it-runs.md)) used "turn" for one loop iteration —
+one model reply, plus whatever tool calls it made — a *piece* of what `sessions.rs` called a Turn,
+not the same thing. This ADR recorded that clash rather than resolving it, following issue #99's
+own guess that CONTEXT.md should define Turn as the loop-iteration meaning instead.
+
+**Issue #104 reversed that guess: Turn keeps the sense this file's own identifiers already
+carried, and the loop-iteration unit is renamed Step** — `agent_loop.rs`'s own pre-existing name
+for it (`Step`, `steps_to_messages`), which #99's glossary pass never reached for.
+`SessionTurnRow`, `record_turn`, `prior_turns`, and `CONVERSATION_WINDOW` needed no change at all:
+the sense they always carried is now the glossary's Turn. What changed instead is confined to
+`agent_loop.rs` and `reflect.rs` — `LoopEvent::TurnStart` became `StepStart`, and the `turn_start`
+SSE event became `step_start` — rather than to this file's own ~74 call sites, which is exactly
+the cost asymmetry issue #104 weighed in choosing this direction over the other.
 
 **A Conversation reload after a Digest-sourced Turn now shows correct provenance**, closing the
 gap [0034](0034-reflection-reports-its-progress-as-it-runs.md)'s own client pass (`871b00b`)

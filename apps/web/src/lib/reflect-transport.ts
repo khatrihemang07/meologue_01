@@ -3,7 +3,7 @@ import { serverRequest } from "@/lib/server-request";
 
 /**
  * Issue #96: `/v1/reflect` answers over `text/event-stream` now — pi's own
- * event vocabulary (`turn_start`, `message_start`/`message_update`/
+ * event vocabulary (`step_start`, `message_start`/`message_update`/
  * `message_end`, `tool_execution_start`/`tool_execution_end`), emitted as
  * `server/src/harness/agent_loop.rs`'s loop actually makes progress — so
  * this is what a caller receives live, in order, as `onEvent` callbacks,
@@ -24,7 +24,7 @@ import { serverRequest } from "@/lib/server-request";
  * talking to.
  */
 export type ReflectStreamEvent =
-  | { type: "turn_start" }
+  | { type: "step_start" }
   | { type: "message_start" }
   | { type: "message_update"; delta: string }
   | { type: "message_end"; text: string; stopReason: string }
@@ -155,8 +155,8 @@ function asStringArray(value: unknown): string[] {
 function toStreamEvent(frame: RawFrame): ReflectStreamEvent | null {
   const data = asRecord(frame.data);
   switch (frame.event) {
-    case "turn_start":
-      return { type: "turn_start" };
+    case "step_start":
+      return { type: "step_start" };
     case "message_start":
       return { type: "message_start" };
     case "message_update":

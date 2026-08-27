@@ -205,14 +205,26 @@ instance, by asking the model to cite which of the Entries it read actually info
 that is a new mechanism to design and measure, not a reason to redefine the term it would be
 measuring.
 
-**`Turn` needs its meaning stated plainly, because this ADR pulls two established usages of the
-word apart.** `docs/adr/0025` used "Turn" informally for a whole Question/Answer exchange (and
-`sessions.rs`'s `SessionTurnRow`, `record_turn`, and `reflect.rs`'s `prior_turns` all still carry
+**`Turn` pulled two established usages of the word apart, and issue #104 resolved which one
+wins.** `docs/adr/0025` used "Turn" informally for a whole Question/Answer exchange
+(`sessions.rs`'s `SessionTurnRow`, `record_turn`, and `reflect.rs`'s `prior_turns` all still carry
 that meaning — see [0033](0033-a-session-is-an-append-only-entry-tree.md)'s own note on this).
 `agent_loop`'s own vocabulary (`LoopEvent::TurnStart`, ported directly from pi and exposed on the
 wire in [0034](0034-reflection-reports-its-progress-as-it-runs.md) as the `turn_start` SSE event)
-names one iteration of the loop — one model reply, plus whatever tool calls that reply contained.
-Those are not the same thing: a single Question/Answer exchange can now take several loop Turns.
-CONTEXT.md is updated to define Turn as the loop-iteration meaning, per issue #99's own
-instruction — see CONTEXT.md's own entry, and this ADR's cross-reference to the naming
-inconsistency this leaves in the Rust identifiers that still use the older sense.
+named one iteration of the loop — one model reply, plus whatever tool calls that reply contained —
+a different thing from a whole Question/Answer exchange, which can take several loop iterations.
+This docs-only pass recorded that clash rather than fixing it, guessing per issue #99's own
+instruction that CONTEXT.md should define Turn as the loop-iteration meaning. Issue #104
+revisited that guess and reversed it.
+
+**Turn keeps 0025's sense — a Question and the Answer it produced — and the loop-iteration unit
+is named Step instead**, the name `agent_loop.rs` already used for it (`Step`, `steps: Vec<Step>`,
+`steps_to_messages`) and the shipped UI already said, which #99's glossary pass never reached for.
+Two things decided the direction: `Step` was already sitting right there as a candidate name
+nobody had to invent, and the two renames were not symmetric in cost. Renaming the loop's handful
+of sites (`LoopEvent::TurnStart` → `StepStart`, the `turn_start` SSE event → `step_start`, one
+`PROTOCOL_VERSION` bump) is bounded and entirely inside `agent_loop.rs`/`reflect.rs`; renaming
+`SessionTurnRow` and its ~74 call sites instead would have meant renaming a type serialized into
+`openapi.rs`'s public API, for no reader benefit the glossary actually needed. `LoopEvent::TurnStart`
+is now `StepStart`, the wire event is `step_start`, and CONTEXT.md's Turn and Step entries record
+the result.

@@ -176,7 +176,7 @@ function finishedLabel(
  */
 export function applyReflectEvent(state: LiveRunState, event: ReflectStreamEvent): LiveRunState {
   switch (event.type) {
-    case "turn_start":
+    case "step_start":
       return { ...state, thinking: true };
 
     case "message_start":

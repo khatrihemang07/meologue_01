@@ -102,7 +102,7 @@ pub enum Step {
 /// is `reflect.rs`'s job, the one place that already owns every other
 /// wire-shape decision `/v1/reflect` makes.
 ///
-/// One `TurnStart`/`MessageStart`/`MessageEnd` triplet brackets every call
+/// One `StepStart`/`MessageStart`/`MessageEnd` triplet brackets every call
 /// to `client.stream`, in that order, with zero or more `MessageUpdate`s in
 /// between (`chat::StreamEvent::TextDelta`, forwarded verbatim — see that
 /// variant's own doc comment for why nothing today ever produces one:
@@ -118,7 +118,7 @@ pub enum Step {
 pub enum LoopEvent {
     /// One loop turn is starting — `run`'s own `loop` body has just begun
     /// another iteration and is about to ask the model for a reply.
-    TurnStart,
+    StepStart,
     /// The model has started producing this turn's reply.
     MessageStart,
     /// One chunk of this turn's reply text, in reply order — see this
@@ -339,7 +339,7 @@ async fn run_inner(
         }
         turn += 1;
 
-        emit(events, LoopEvent::TurnStart);
+        emit(events, LoopEvent::StepStart);
         emit(events, LoopEvent::MessageStart);
 
         // Drains `client.stream`'s events one at a time, rather than
@@ -1343,9 +1343,9 @@ mod tests {
     /// (`reflect.rs`'s own SSE tests assert the same shape end to end, one
     /// layer up, through real HTTP `event:`/`data:` frames) — one tool call,
     /// then a prose Answer. Order matters here, not just presence: a
-    /// `turn_start` must precede its own `message_start`/`message_end`, the
+    /// `step_start` must precede its own `message_start`/`message_end`, the
     /// tool events must fall strictly between the turn that requested them
-    /// and the next `turn_start`, and there must be exactly two turns, not
+    /// and the next `step_start`, and there must be exactly two turns, not
     /// three or one.
     #[tokio::test]
     async fn run_with_events_reports_the_full_event_sequence_for_a_two_step_run() {
@@ -1372,7 +1372,7 @@ mod tests {
 
         fn label(event: &LoopEvent) -> &'static str {
             match event {
-                LoopEvent::TurnStart => "turn_start",
+                LoopEvent::StepStart => "step_start",
                 LoopEvent::MessageStart => "message_start",
                 LoopEvent::MessageUpdate { .. } => "message_update",
                 LoopEvent::MessageEnd { .. } => "message_end",
@@ -1384,12 +1384,12 @@ mod tests {
         assert_eq!(
             sequence,
             vec![
-                "turn_start",
+                "step_start",
                 "message_start",
                 "message_end",
                 "tool_execution_start",
                 "tool_execution_end",
-                "turn_start",
+                "step_start",
                 "message_start",
                 "message_end",
             ]

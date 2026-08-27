@@ -240,11 +240,11 @@ describe("ReflectionPage", () => {
 
   it("shows a live in-flight indicator while a Question is being answered, then renders the Answer", async () => {
     useSettingsStore.getState().setServerUrl("https://phone.example:41207");
-    let enqueueTurnStart!: () => void;
+    let enqueueStepStart!: () => void;
     const encoder = new TextEncoder();
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
-        enqueueTurnStart = () => controller.enqueue(encoder.encode(sseFrame("turn_start", {})));
+        enqueueStepStart = () => controller.enqueue(encoder.encode(sseFrame("step_start", {})));
       },
     });
     vi.stubGlobal(
@@ -260,7 +260,7 @@ describe("ReflectionPage", () => {
 
     renderReflectionPage();
     ask("How has my knee been?");
-    enqueueTurnStart();
+    enqueueStepStart();
 
     expect(await screen.findByText("How has my knee been?")).toBeInTheDocument();
     expect(await screen.findByText("Thinking…")).toBeInTheDocument();
@@ -905,7 +905,7 @@ describe("ReflectionPage", () => {
       renderReflectionPage();
       ask("How did the flat move go?");
 
-      push(["turn_start", {}]);
+      push(["step_start", {}]);
       push(["message_start", {}]);
       push(["message_end", { text: "", stop_reason: "tool_use" }]);
       push([
@@ -958,7 +958,7 @@ describe("ReflectionPage", () => {
       ask("How does this knee compare to last year?");
 
       // First loop turn: the model calls search_entries.
-      push(["turn_start", {}]);
+      push(["step_start", {}]);
       push(["message_start", {}]);
       push(["message_end", { text: "", stop_reason: "tool_use" }]);
       push([
@@ -980,7 +980,7 @@ describe("ReflectionPage", () => {
       await screen.findByText('Searched your Entries for "knee" — 1 Entry found.');
 
       // Second loop turn: the model calls entries_in_range too.
-      push(["turn_start", {}]);
+      push(["step_start", {}]);
       push(["message_start", {}]);
       push(["message_end", { text: "", stop_reason: "tool_use" }]);
       push([
@@ -1017,7 +1017,7 @@ describe("ReflectionPage", () => {
       ).toBeInTheDocument();
 
       // Third loop turn: the final Answer.
-      push(["turn_start", {}]);
+      push(["step_start", {}]);
       push(["message_start", {}]);
       push(["message_end", { text: "It's improved since last year.", stop_reason: "stop" }]);
       push([
@@ -1057,7 +1057,7 @@ describe("ReflectionPage", () => {
       renderReflectionPage();
       ask("How has my knee been?");
 
-      push(["turn_start", {}]);
+      push(["step_start", {}]);
       push(["message_start", {}]);
       push(["message_update", { delta: "It's " }]);
       push(["message_update", { delta: "improved." }]);
@@ -1090,7 +1090,7 @@ describe("ReflectionPage", () => {
 
       renderReflectionPage();
       ask("How has my knee been?");
-      push(["turn_start", {}]);
+      push(["step_start", {}]);
 
       const thinking = await screen.findByText("Thinking…");
       const stepsRegion = thinking.closest("ul");

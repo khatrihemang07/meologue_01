@@ -56,8 +56,8 @@ const STUB_DIGEST = "This is the Digest writer's fixed reply for meologue's e2e 
  * comment specifies (server/src/harness/prompted.rs). This stub plays a
  * model that always takes exactly two turns: a `<tool_call>` on the first,
  * then prose on the second — the shortest script that still exercises a
- * genuinely multi-step run (`turn_start → ... → tool_execution_end →
- * turn_start → ... → agent_end`), which is the whole reason issue #96
+ * genuinely multi-step run (`step_start → ... → tool_execution_end →
+ * step_start → ... → agent_end`), which is the whole reason issue #96
  * asked for this stub to be stateful at all.
  *
  * "Stateful" here means reading it off the request's own message history,

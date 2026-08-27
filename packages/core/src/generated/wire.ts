@@ -93,7 +93,7 @@ export interface paths {
         put?: never;
         /**
          * Issue #96: `/v1/reflect` answers over `text/event-stream` now, not a
-         *     single JSON body — pi's own event vocabulary (`turn_start`,
+         *     single JSON body — pi's own event vocabulary (`step_start`,
          *     `tool_execution_start`, `tool_execution_end`, `message_start`,
          *     `message_update`, `message_end`, `agent_end`), emitted as
          *     `harness::agent_loop::run_with_events` actually makes progress, so the

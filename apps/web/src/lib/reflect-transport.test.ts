@@ -83,7 +83,7 @@ describe("reflectTransport", () => {
       "fetch",
       vi.fn(async () =>
         streamedResponse([
-          frame("turn_start", {}),
+          frame("step_start", {}),
           frame("message_start", {}),
           frame("message_end", { text: "", stop_reason: "tool_use" }),
           frame("tool_execution_start", {
@@ -99,7 +99,7 @@ describe("reflectTransport", () => {
             entry_ids: ["entry-1"],
             entry_count: 1,
           }),
-          frame("turn_start", {}),
+          frame("step_start", {}),
           frame("message_start", {}),
           frame("message_end", { text: "Your knee has improved.", stop_reason: "stop" }),
           agentEndOk({ answer: "Your knee has improved." }),
@@ -112,12 +112,12 @@ describe("reflectTransport", () => {
 
     expect(result.ok).toBe(true);
     expect(events.map((event) => event.type)).toEqual([
-      "turn_start",
+      "step_start",
       "message_start",
       "message_end",
       "tool_execution_start",
       "tool_execution_end",
-      "turn_start",
+      "step_start",
       "message_start",
       "message_end",
     ]);
@@ -159,7 +159,7 @@ describe("reflectTransport", () => {
   // The frame separator itself (the blank line between two frames) can
   // just as easily fall on a chunk boundary as anywhere inside one frame.
   it("parses two frames whose \\n\\n separator is split across two reads", async () => {
-    const first = frame("turn_start", {});
+    const first = frame("step_start", {});
     const second = frame("message_start", {});
     const combined = first + second;
     const splitPoint = first.length - 1; // inside first's own trailing \n\n
@@ -173,7 +173,7 @@ describe("reflectTransport", () => {
     const events: ReflectStreamEvent[] = [];
     await reflectTransport(request, { onEvent: (event) => events.push(event) });
 
-    expect(events.map((event) => event.type)).toEqual(["turn_start", "message_start"]);
+    expect(events.map((event) => event.type)).toEqual(["step_start", "message_start"]);
   });
 
   it("reports an agent_end carrying status: error as a distinct agent-error reason, not unreachable", async () => {
@@ -181,7 +181,7 @@ describe("reflectTransport", () => {
       "fetch",
       vi.fn(async () =>
         streamedResponse([
-          frame("turn_start", {}),
+          frame("step_start", {}),
           frame("agent_end", { status: "error", error: "the chat endpoint returned a 500" }),
         ]),
       ),
@@ -196,13 +196,13 @@ describe("reflectTransport", () => {
       error: "the chat endpoint returned a 500",
     });
     // The failure event itself was still reported before the terminal frame.
-    expect(events.map((event) => event.type)).toEqual(["turn_start"]);
+    expect(events.map((event) => event.type)).toEqual(["step_start"]);
   });
 
   it("reports a stream that closes with no agent_end at all as unreachable, not a hang or a throw", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => streamedResponse([frame("turn_start", {}), frame("message_start", {})])),
+      vi.fn(async () => streamedResponse([frame("step_start", {}), frame("message_start", {})])),
     );
 
     const result = await reflectTransport(request);

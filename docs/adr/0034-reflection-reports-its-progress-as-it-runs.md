@@ -22,15 +22,17 @@ that existed anywhere the client could see it until the entire run was over.
 ## Decision
 
 **`POST /v1/reflect` becomes `text/event-stream`.** As the loop runs, it emits pi's own event
-vocabulary — `turn_start`, `message_start`, `message_update`, `message_end`,
+vocabulary — `step_start`, `message_start`, `message_update`, `message_end`,
 `tool_execution_start`, `tool_execution_end`, `agent_end` — so the interface can say which search
 ran, what it looked for, and how many Entries came back, while it is happening rather than after.
-A two-step Question produces:
+(Issue #104 later renamed the first of these from pi's own `turn_start` to `step_start`, to match
+the domain vocabulary CONTEXT.md settled on — see this ADR's Consequences.) A two-step Question
+produces:
 
 ```
-turn_start → message_start → message_end
+step_start → message_start → message_end
            → tool_execution_start → tool_execution_end
-turn_start → message_start → message_end → agent_end
+step_start → message_start → message_end → agent_end
 ```
 
 `agent_loop::LoopEvent` is where this vocabulary is actually produced (see
@@ -68,7 +70,9 @@ version 3 or does not: the alternative, a second version constant scoped to `/v1
 would be more machinery than the problem deserves, and a mismatch on either route stays the same
 clean `426` it already was. `packages/core`'s constant moves with it, and two source comments that
 had claimed the version "stays 1" were already wrong by the time this ADR's code landed and are
-now corrected.
+now corrected. (Issue #104 moved it again, to 4, for the `turn_start` → `step_start` rename
+covered above — the same one-constant-behind-both-routes reasoning applied again, not a reason to
+revisit it.)
 
 **A failed Question can no longer be a 500, because the stream has already committed to 200 by
 the time the loop runs.** The Session is resolved synchronously *before* the stream opens — an

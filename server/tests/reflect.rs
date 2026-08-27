@@ -595,7 +595,7 @@ async fn the_route_is_absent_when_chat_is_unconfigured(pool: PgPool) {
         &pool,
         None,
         json!({
-            "protocol_version": 3,
+            "protocol_version": 4,
             "question": "Anything?",
         }),
     )
@@ -659,6 +659,41 @@ async fn a_device_speaking_the_pre_bump_protocol_version_is_rejected(pool: PgPoo
     );
 }
 
+/// Issue #104 bumped `PROTOCOL_VERSION` from 3 to 4 for the
+/// `turn_start` → `step_start` rename. The sibling above froze issue #96's
+/// own 2 → 3 boundary and is deliberately left saying `2` — these are
+/// historical markers, one per bump, not a single test tracking
+/// "current − 1" (`sync.rs`'s `protocol_version_1_is_now_rejected` and
+/// `_2_is_now_rejected` are frozen the same way). This one matters most of
+/// the three right now: 3 is the version every Device already in the
+/// user's hands speaks today, so this is the case a real macOS or Android
+/// app hits the moment the Server is updated ahead of it, and #104's own
+/// criterion is that such a Device is told plainly rather than failing
+/// obscurely.
+#[sqlx::test]
+async fn a_device_speaking_protocol_version_3_is_rejected(pool: PgPool) {
+    let chat = Arc::new(FakeChatClient::new(["unused"]));
+    let reflect = reflect_state(chat.clone());
+
+    let (status, _) = post_reflect(
+        &pool,
+        Some(reflect),
+        json!({
+            "protocol_version": 3,
+            "question": "Anything?",
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::UPGRADE_REQUIRED);
+    assert_eq!(
+        chat.call_count(),
+        0,
+        "a stale protocol_version must short-circuit before any chat call, and before any \
+         stream is ever opened"
+    );
+}
+
 #[sqlx::test]
 async fn an_unknown_session_id_is_a_404(pool: PgPool) {
     let chat = Arc::new(FakeChatClient::new(["unused"]));
@@ -668,7 +703,7 @@ async fn an_unknown_session_id_is_a_404(pool: PgPool) {
         &pool,
         Some(reflect),
         json!({
-            "protocol_version": 3,
+            "protocol_version": 4,
             "question": "Anything?",
             "session_id": Uuid::new_v4(),
         }),
@@ -706,7 +741,7 @@ async fn an_absent_utc_offset_defaults_to_zero_and_still_answers(pool: PgPool) {
     let (status, body) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 3, "question": "Anything?" }),
+        json!({ "protocol_version": 4, "question": "Anything?" }),
     )
     .await;
 
@@ -736,7 +771,7 @@ async fn a_prose_only_reply_is_the_answer_with_no_grounding(pool: PgPool) {
     let (status, body) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 3, "question": "Anything about scuba diving?" }),
+        json!({ "protocol_version": 4, "question": "Anything about scuba diving?" }),
     )
     .await;
 
@@ -782,7 +817,7 @@ async fn a_tool_call_that_finds_nothing_still_reports_it_was_tried(pool: PgPool)
     let (status, body) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 3, "question": "Anything about kayaking?" }),
+        json!({ "protocol_version": 4, "question": "Anything about kayaking?" }),
     )
     .await;
 
@@ -838,7 +873,7 @@ async fn a_false_no_access_denial_gets_one_corrective_turn_and_then_answers(pool
     let (status, body) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 3, "question": "how is my knee doing" }),
+        json!({ "protocol_version": 4, "question": "how is my knee doing" }),
     )
     .await;
 
@@ -896,7 +931,7 @@ async fn a_no_tool_call_reply_with_ordinary_wording_still_gets_a_corrective_turn
     let (status, body) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 3, "question": "how is my knee doing" }),
+        json!({ "protocol_version": 4, "question": "how is my knee doing" }),
     )
     .await;
 
@@ -935,7 +970,7 @@ async fn the_two_corrective_turns_cannot_both_fire_for_one_question(pool: PgPool
     let (status, body) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 3, "question": "How did the flat move go?" }),
+        json!({ "protocol_version": 4, "question": "How did the flat move go?" }),
     )
     .await;
 
@@ -973,7 +1008,7 @@ async fn a_denial_whose_corrective_retry_also_fails_falls_back_to_the_original_d
     let (status, body) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 3, "question": "how is my knee doing" }),
+        json!({ "protocol_version": 4, "question": "how is my knee doing" }),
     )
     .await;
 
@@ -1035,7 +1070,7 @@ async fn a_tool_call_then_prose_grounds_the_answer_in_the_entry_it_found(pool: P
     let (status, body) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 3, "question": "Did I run in July?" }),
+        json!({ "protocol_version": 4, "question": "Did I run in July?" }),
     )
     .await;
 
@@ -1064,9 +1099,9 @@ async fn a_tool_call_then_prose_grounds_the_answer_in_the_entry_it_found(pool: P
 /// The full ordered SSE event sequence a two-step Question produces, end to
 /// end through real HTTP `event:`/`data:` frames — the acceptance criterion
 /// issue #96 states directly: "steps appear as they happen ... in order."
-/// Order matters here, not just presence: a `turn_start` must precede its
+/// Order matters here, not just presence: a `step_start` must precede its
 /// own turn's `message_start`/`message_end`, the tool events must fall
-/// strictly between the turn that requested them and the next `turn_start`,
+/// strictly between the turn that requested them and the next `step_start`,
 /// and the whole stream must end in exactly one `agent_end`.
 /// `agent_loop`'s own equivalent test
 /// (`run_with_events_reports_the_full_event_sequence_for_a_two_step_run`)
@@ -1098,7 +1133,7 @@ async fn the_full_event_sequence_for_a_two_step_question(pool: PgPool) {
     let (status, events) = post_reflect_events(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 3, "question": "Did I run in July?" }),
+        json!({ "protocol_version": 4, "question": "Did I run in July?" }),
     )
     .await;
 
@@ -1107,12 +1142,12 @@ async fn the_full_event_sequence_for_a_two_step_question(pool: PgPool) {
     assert_eq!(
         names,
         vec![
-            "turn_start",
+            "step_start",
             "message_start",
             "message_end",
             "tool_execution_start",
             "tool_execution_end",
-            "turn_start",
+            "step_start",
             "message_start",
             "message_end",
             "agent_end",
@@ -1159,7 +1194,7 @@ async fn a_tool_event_pair_names_what_was_searched_and_how_much_came_back(pool: 
     let (_, events) = post_reflect_events(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 3, "question": "Did I run in July?" }),
+        json!({ "protocol_version": 4, "question": "Did I run in July?" }),
     )
     .await;
 
@@ -1224,7 +1259,7 @@ async fn a_read_digest_tool_event_still_reports_a_correct_entry_count(pool: PgPo
     let (_, events) = post_reflect_events(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 3, "question": "What happened on March 15th?" }),
+        json!({ "protocol_version": 4, "question": "What happened on March 15th?" }),
     )
     .await;
 
@@ -1290,7 +1325,7 @@ async fn a_digest_read_then_abandoned_for_a_different_periods_entries_carries_no
     let (status, body) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 3, "question": "And what about the month before?" }),
+        json!({ "protocol_version": 4, "question": "And what about the month before?" }),
     )
     .await;
 
@@ -1357,7 +1392,7 @@ async fn the_configured_model_never_produces_message_update_events(pool: PgPool)
     let (_, events) = post_reflect_events(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 3, "question": "Anything?" }),
+        json!({ "protocol_version": 4, "question": "Anything?" }),
     )
     .await;
 
@@ -1398,7 +1433,7 @@ async fn a_streaming_model_produces_message_update_events_the_default_does_not(p
         &pool,
         Some(reflect),
         json!({
-            "protocol_version": 3,
+            "protocol_version": 4,
             "question": "What did I write about?",
             "model": "claude-sonnet",
         }),
@@ -1474,7 +1509,7 @@ async fn choosing_a_model_is_honoured_and_asking_nothing_uses_the_default(pool: 
     let (status, body) = post_reflect(
         &pool,
         Some(reflect_state(default_chat.clone())),
-        json!({ "protocol_version": 3, "question": "First question?" }),
+        json!({ "protocol_version": 4, "question": "First question?" }),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -1487,7 +1522,7 @@ async fn choosing_a_model_is_honoured_and_asking_nothing_uses_the_default(pool: 
         &pool,
         Some(reflect_state(default_chat.clone())),
         json!({
-            "protocol_version": 3,
+            "protocol_version": 4,
             "session_id": id,
             "question": "Second question?",
             "model": "claude-sonnet",
@@ -1539,7 +1574,7 @@ async fn a_mid_conversation_model_change_is_recorded_and_each_turn_reads_back_it
     let (_, body) = post_reflect(
         &pool,
         Some(reflect_state(default_chat.clone())),
-        json!({ "protocol_version": 3, "question": "First question?" }),
+        json!({ "protocol_version": 4, "question": "First question?" }),
     )
     .await;
     let id = session_id(&body);
@@ -1548,7 +1583,7 @@ async fn a_mid_conversation_model_change_is_recorded_and_each_turn_reads_back_it
         &pool,
         Some(reflect_state(default_chat.clone())),
         json!({
-            "protocol_version": 3,
+            "protocol_version": 4,
             "session_id": id,
             "question": "Second question?",
             "model": "claude-sonnet",
@@ -1564,7 +1599,7 @@ async fn a_mid_conversation_model_change_is_recorded_and_each_turn_reads_back_it
         &pool,
         Some(reflect_state(default_chat.clone())),
         json!({
-            "protocol_version": 3,
+            "protocol_version": 4,
             "session_id": id,
             "question": "Third question?",
         }),
@@ -1611,7 +1646,7 @@ async fn an_unreachable_model_fails_its_turn_without_corrupting_the_conversation
     let (_, body) = post_reflect(
         &pool,
         Some(reflect_state(chat.clone())),
-        json!({ "protocol_version": 3, "question": "First question?" }),
+        json!({ "protocol_version": 4, "question": "First question?" }),
     )
     .await;
     let id = session_id(&body);
@@ -1620,7 +1655,7 @@ async fn an_unreachable_model_fails_its_turn_without_corrupting_the_conversation
         &pool,
         Some(reflect_state(chat.clone())),
         json!({
-            "protocol_version": 3,
+            "protocol_version": 4,
             "session_id": id,
             "question": "Second question?",
             "model": "a-model-nothing-serves",
@@ -1672,7 +1707,7 @@ async fn a_search_entries_call_then_prose_grounds_the_answer(pool: PgPool) {
     let (status, body) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 3, "question": "What have I been reading?" }),
+        json!({ "protocol_version": 4, "question": "What have I been reading?" }),
     )
     .await;
 
@@ -1719,7 +1754,7 @@ async fn a_similar_entries_call_then_prose_grounds_the_answer(pool: PgPool) {
     let (status, body) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 3, "question": "How did the move go?" }),
+        json!({ "protocol_version": 4, "question": "How did the move go?" }),
     )
     .await;
 
@@ -1767,7 +1802,7 @@ async fn an_embedding_failure_recovers_and_still_answers(pool: PgPool) {
     let (status, body) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 3, "question": "How did the move go?" }),
+        json!({ "protocol_version": 4, "question": "How did the move go?" }),
     )
     .await;
 
@@ -1828,7 +1863,7 @@ async fn two_tool_calls_in_one_reply_both_ground_the_answer(pool: PgPool) {
     let (status, body) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 3, "question": "Did I keep my resolution?" }),
+        json!({ "protocol_version": 4, "question": "Did I keep my resolution?" }),
     )
     .await;
 
@@ -1873,7 +1908,7 @@ async fn an_entry_found_by_two_tool_calls_appears_once_in_grounding_ids(pool: Pg
     let (status, body) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 3, "question": "What did I write in May?" }),
+        json!({ "protocol_version": 4, "question": "What did I write in May?" }),
     )
     .await;
 
@@ -1892,7 +1927,7 @@ async fn an_unknown_tool_name_recovers_and_still_answers(pool: PgPool) {
     let (status, body) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 3, "question": "Anything?" }),
+        json!({ "protocol_version": 4, "question": "Anything?" }),
     )
     .await;
 
@@ -1924,7 +1959,7 @@ async fn a_malformed_tool_call_recovers_and_still_answers(pool: PgPool) {
     let (status, body) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 3, "question": "Anything?" }),
+        json!({ "protocol_version": 4, "question": "Anything?" }),
     )
     .await;
 
@@ -1965,7 +2000,7 @@ async fn an_empty_final_reply_gets_one_corrective_turn_and_then_answers(pool: Pg
     let (status, body) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 3, "question": "How did the flat move go?" }),
+        json!({ "protocol_version": 4, "question": "How did the flat move go?" }),
     )
     .await;
 
@@ -1999,7 +2034,7 @@ async fn a_whitespace_only_final_reply_counts_as_empty_and_is_retried(pool: PgPo
     let (status, body) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 3, "question": "Anything?" }),
+        json!({ "protocol_version": 4, "question": "Anything?" }),
     )
     .await;
 
@@ -2041,7 +2076,7 @@ async fn an_empty_reply_after_a_real_tool_call_still_carries_that_grounding_once
     let (status, body) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 3, "question": "How did the flat move go?" }),
+        json!({ "protocol_version": 4, "question": "How did the flat move go?" }),
     )
     .await;
 
@@ -2099,7 +2134,7 @@ async fn a_tool_call_inside_a_rejected_no_tool_call_retry_does_not_ground_the_ke
     let (status, body) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 3, "question": "how is my knee doing" }),
+        json!({ "protocol_version": 4, "question": "how is my knee doing" }),
     )
     .await;
 
@@ -2179,7 +2214,7 @@ async fn a_final_reply_still_empty_after_a_corrective_turn_ends_the_stream_with_
     let (status, events) = post_reflect_events(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 3, "question": "How did the flat move go?" }),
+        json!({ "protocol_version": 4, "question": "How did the flat move go?" }),
     )
     .await;
 
@@ -2220,7 +2255,7 @@ async fn a_chat_client_error_ends_the_stream_with_an_agent_end_error_event(pool:
     let (status, events) = post_reflect_events(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 3, "question": "Anything?" }),
+        json!({ "protocol_version": 4, "question": "Anything?" }),
     )
     .await;
 
@@ -2253,7 +2288,7 @@ async fn the_active_tool_set_is_named_in_the_system_prompt(pool: PgPool) {
     let (status, _) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 3, "question": "Anything?" }),
+        json!({ "protocol_version": 4, "question": "Anything?" }),
     )
     .await;
 
@@ -2294,7 +2329,7 @@ async fn the_system_prompt_states_the_tools_are_the_only_way_to_see_the_journal(
     let (status, _) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 3, "question": "Anything?" }),
+        json!({ "protocol_version": 4, "question": "Anything?" }),
     )
     .await;
 
@@ -2330,7 +2365,7 @@ async fn a_null_session_id_mints_a_new_session(pool: PgPool) {
         &pool,
         Some(reflect),
         json!({
-            "protocol_version": 3,
+            "protocol_version": 4,
             "question": "How has my knee been this year?",
             "session_id": null,
         }),
@@ -2358,7 +2393,7 @@ async fn a_successful_answer_persists_its_turn(pool: PgPool) {
     let (status, body) = post_reflect(
         &pool,
         Some(reflect_state(chat.clone())),
-        json!({ "protocol_version": 3, "question": "How's my knee?" }),
+        json!({ "protocol_version": 4, "question": "How's my knee?" }),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -2386,7 +2421,7 @@ async fn an_unknown_session_id_persists_no_session_and_no_turn(pool: PgPool) {
         &pool,
         Some(reflect),
         json!({
-            "protocol_version": 3,
+            "protocol_version": 4,
             "question": "Anything?",
             "session_id": Uuid::new_v4(),
         }),
@@ -2408,7 +2443,7 @@ async fn a_second_ask_on_the_same_session_appends_and_bumps_updated_at(pool: PgP
     let (status, body) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 3, "question": "First question?" }),
+        json!({ "protocol_version": 4, "question": "First question?" }),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -2433,7 +2468,7 @@ async fn a_second_ask_on_the_same_session_appends_and_bumps_updated_at(pool: PgP
         &pool,
         Some(reflect2),
         json!({
-            "protocol_version": 3,
+            "protocol_version": 4,
             "question": "Second question?",
             "session_id": id,
         }),
@@ -2485,7 +2520,7 @@ async fn steps_land_in_the_session_entry_tree_in_order(pool: PgPool) {
     let (status, body) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 3, "question": "Did I run in April?" }),
+        json!({ "protocol_version": 4, "question": "Did I run in April?" }),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -2579,7 +2614,7 @@ async fn a_real_run_writes_operation_log_records_in_order(pool: PgPool) {
     let (status, body) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 3, "question": "Did I run in April?" }),
+        json!({ "protocol_version": 4, "question": "Did I run in April?" }),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -2642,7 +2677,7 @@ async fn an_interrupted_run_leaves_a_tool_started_record_with_no_matching_entry(
         &pool,
         Some(reflect),
         json!({
-            "protocol_version": 3,
+            "protocol_version": 4,
             "question": "Did I run in April?",
             "session_id": id,
         }),
@@ -2720,7 +2755,7 @@ async fn a_sessions_conversation_reaches_the_chat_call(pool: PgPool) {
         &pool,
         Some(reflect),
         json!({
-            "protocol_version": 3,
+            "protocol_version": 4,
             "question": "Did it start with physical therapy?",
             "session_id": session_id,
         }),
@@ -2772,7 +2807,7 @@ async fn a_session_with_more_than_ten_turns_replays_only_the_ten_most_recent(poo
         &pool,
         Some(reflect_state(chat.clone())),
         json!({
-            "protocol_version": 3,
+            "protocol_version": 4,
             "question": "Anything new to add?",
             "session_id": session_id,
         }),
@@ -2827,7 +2862,7 @@ async fn replayed_turns_stay_oldest_first_after_the_window_is_applied(pool: PgPo
         &pool,
         Some(reflect_state(chat.clone())),
         json!({
-            "protocol_version": 3,
+            "protocol_version": 4,
             "question": "Anything new to add?",
             "session_id": session_id,
         }),
@@ -2866,7 +2901,7 @@ async fn a_session_with_ten_or_fewer_turns_replays_all_of_them(pool: PgPool) {
         &pool,
         Some(reflect_state(chat.clone())),
         json!({
-            "protocol_version": 3,
+            "protocol_version": 4,
             "question": "Anything new to add?",
             "session_id": session_id,
         }),
@@ -2982,7 +3017,7 @@ async fn a_session_nearing_its_context_window_gets_compacted_between_turns(pool:
     let (status, body) = post_reflect(
         &pool,
         Some(generous),
-        json!({ "protocol_version": 3, "question": "What did I write about running?" }),
+        json!({ "protocol_version": 4, "question": "What did I write about running?" }),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -3000,7 +3035,7 @@ async fn a_session_nearing_its_context_window_gets_compacted_between_turns(pool:
     let (status, _) = post_reflect(
         &pool,
         Some(generous),
-        json!({ "protocol_version": 3, "session_id": id, "question": "And the wedding?" }),
+        json!({ "protocol_version": 4, "session_id": id, "question": "And the wedding?" }),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -3026,7 +3061,7 @@ async fn a_session_nearing_its_context_window_gets_compacted_between_turns(pool:
     let (status, body) = post_reflect(
         &pool,
         Some(tight),
-        json!({ "protocol_version": 3, "session_id": id, "question": "What about my knee?" }),
+        json!({ "protocol_version": 4, "session_id": id, "question": "What about my knee?" }),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -3087,7 +3122,7 @@ async fn a_summary_reaches_every_question_after_it_not_only_the_one_that_wrote_i
     let (_, body) = post_reflect(
         &pool,
         Some(seed),
-        json!({ "protocol_version": 3, "question": "What did I write about running?" }),
+        json!({ "protocol_version": 4, "question": "What did I write about running?" }),
     )
     .await;
     let id = session_id(&body);
@@ -3109,7 +3144,7 @@ async fn a_summary_reaches_every_question_after_it_not_only_the_one_that_wrote_i
     let (status, _) = post_reflect(
         &pool,
         Some(compacting),
-        json!({ "protocol_version": 3, "session_id": id, "question": "And the wedding?" }),
+        json!({ "protocol_version": 4, "session_id": id, "question": "And the wedding?" }),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -3135,7 +3170,7 @@ async fn a_summary_reaches_every_question_after_it_not_only_the_one_that_wrote_i
     let (status, body) = post_reflect(
         &pool,
         Some(later),
-        json!({ "protocol_version": 3, "session_id": id, "question": "What about my knee?" }),
+        json!({ "protocol_version": 4, "session_id": id, "question": "What about my knee?" }),
     )
     .await;
     assert_eq!(status, StatusCode::OK);

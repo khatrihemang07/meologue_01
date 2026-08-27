@@ -71,7 +71,15 @@ use uuid::Uuid;
 /// unchanged by this bump — an old Device is turned away not because
 /// anything about *sync* broke, but because there is exactly one version
 /// number for "this Device's whole build is current," and it just isn't.
-pub const PROTOCOL_VERSION: i32 = 3;
+///
+/// Bumped again, to 4, by issue #104: `agent_loop::LoopEvent::TurnStart` and
+/// the `turn_start` SSE event it became on the wire are renamed to
+/// `StepStart`/`step_start`, so a Device still expecting `turn_start` would
+/// wait on an event that no longer arrives. Same reasoning as the bump to 3
+/// above — one shared constant, so this Reflection-only rename still turns
+/// away a stale `/v1/sync` caller too, and that is the correct, honest
+/// behaviour rather than a side effect to route around.
+pub const PROTOCOL_VERSION: i32 = 4;
 
 /// Caps how many Entries a single sync response returns, so a Device far behind
 /// doesn't pull the whole History in one response. Note: since the batch is the

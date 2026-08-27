@@ -357,7 +357,7 @@ impl From<anyhow::Error> for ReflectError {
 }
 
 /// Issue #96: `/v1/reflect` answers over `text/event-stream` now, not a
-/// single JSON body — pi's own event vocabulary (`turn_start`,
+/// single JSON body — pi's own event vocabulary (`step_start`,
 /// `tool_execution_start`, `tool_execution_end`, `message_start`,
 /// `message_update`, `message_end`, `agent_end`), emitted as
 /// `harness::agent_loop::run_with_events` actually makes progress, so the
@@ -833,7 +833,7 @@ fn tool_entry_count(entry_ids: &[Uuid], details: &Value) -> usize {
 /// identical to the order `agent_loop::run_with_events` reported them in.
 fn loop_event_to_sse(event: LoopEvent) -> Event {
     match event {
-        LoopEvent::TurnStart => sse_event("turn_start", json!({})),
+        LoopEvent::StepStart => sse_event("step_start", json!({})),
         LoopEvent::MessageStart => sse_event("message_start", json!({})),
         LoopEvent::MessageUpdate { delta } => {
             sse_event("message_update", json!({ "delta": delta }))
