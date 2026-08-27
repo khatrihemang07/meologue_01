@@ -139,12 +139,34 @@ async fn main() -> anyhow::Result<()> {
                 .chat_base_url
                 .clone()
                 .expect("reflect_config() only returns Some when chat_base_url is set");
+            let chat_model = llm_config
+                .chat_model
+                .clone()
+                .expect("reflect_config() only returns Some when chat_model is set");
+            // Issue #98: whether the configured default model itself
+            // streams — resolved once, here, the same "at startup, not per
+            // request" reasoning `context_window` above already follows.
+            // `list_models` degrades to an empty list on any failure to
+            // reach the wrapper (its own doc comment), which folds into
+            // `unwrap_or(false)` below the same conservative way an unknown
+            // context window folds into `DEFAULT_CONTEXT_WINDOW` — a
+            // wrapper Reflection can't reach yet is not a reason to guess
+            // it streams.
+            let chat_streaming =
+                llm::list_models(&chat_base_url, llm_config.chat_api_key.as_deref())
+                    .await
+                    .into_iter()
+                    .find(|model| model.id == chat_model)
+                    .map(|model| model.streaming)
+                    .unwrap_or(false);
             Some(meologue_server::reflect::ReflectState {
                 chat_client,
                 embed_client,
                 context_window,
                 chat_base_url,
                 chat_api_key: llm_config.chat_api_key.clone(),
+                chat_model,
+                chat_streaming,
             })
         }
         None => None,

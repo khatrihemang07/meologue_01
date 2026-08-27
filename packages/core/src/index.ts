@@ -18,6 +18,8 @@ export type { Entry } from "./types";
 export type {
   WireDigest,
   WireDigestResponse,
+  WireModelInfo,
+  WireModelsResponse,
   WireReflectRequest,
   WireReflectResponse,
   WireSessionResponse,

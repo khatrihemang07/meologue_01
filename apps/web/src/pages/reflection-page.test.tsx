@@ -119,14 +119,27 @@ function reflectAnswer(response: Record<string, unknown>) {
  * background Session refetch returns can omit `session` entirely — the GET
  * then hangs forever, which is exactly what proves a rendered turn came
  * from the optimistic cache write and not from that refetch resolving.
+ *
+ * Issue #98: `GET /v1/models` (this page's own picker query, fired on every
+ * mount) always resolves to an empty list here — no test in this file
+ * exercises the picker itself (`question-composer.test.tsx` does, in
+ * isolation), so every existing assertion here keeps seeing exactly the
+ * no-picker behaviour it always did, and a fixed empty response (rather
+ * than the catch-all hang below) is what keeps that query from staying
+ * pending — and TanStack Query retrying it — for the rest of a test's run.
  */
 function stubFetch(options: {
   reflect: (init: RequestInit | undefined) => Record<string, unknown>;
   session?: (sessionId: string) => unknown;
+  /** Issue #98: what `GET /v1/models` reports — empty by default, matching every test written before this ticket. */
+  models?: Array<{ id: string; streaming: boolean; context_window: number | null }>;
 }) {
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     if (url.endsWith("/v1/reflect")) {
       return reflectAnswer(options.reflect(init));
+    }
+    if (url.endsWith("/v1/models")) {
+      return { ok: true, status: 200, json: async () => ({ models: options.models ?? [] }) };
     }
     const sessionId = url.match(/\/v1\/sessions\/(.+)$/)?.[1];
     const { session } = options;
@@ -417,15 +430,125 @@ describe("ReflectionPage", () => {
     renderReflectionPage();
     ask("What did I write yesterday?");
 
+    // Issue #98: `stubFetch` has no branch for `GET /v1/models` (this page's
+    // own picker query), which falls through to its catch-all hang — so
+    // that call, if it's raced in ahead of the ask, must not be mistaken
+    // for the `/v1/reflect` POST this test actually cares about. Filtering
+    // by URL, rather than indexing `mock.calls[0]` positionally, is what
+    // keeps this test's own outcome independent of how many other requests
+    // this page happens to make on mount.
+    let reflectCalls: (typeof fetchMock.mock.calls)[number][] = [];
     await waitFor(() => {
-      const reflectCalls = fetchMock.mock.calls.filter(([url]) =>
+      reflectCalls = fetchMock.mock.calls.filter(([url]) =>
         (url as string).endsWith("/v1/reflect"),
       );
       expect(reflectCalls).toHaveLength(1);
     });
-    const requestInit = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    const requestInit = reflectCalls[0]?.[1] as RequestInit;
     const requestBody = JSON.parse(requestInit?.body as string);
     expect(requestBody.utc_offset_minutes).toBe(330);
+  });
+
+  // -- issue #98: a Conversation chooses its own model ---------------------
+
+  it("offers the models GET /v1/models reports in the composer's own picker", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    stubFetch({
+      reflect: () => ({ answer: "unused", grounding_entry_ids: [], grounded: true }),
+      models: [
+        { id: "codex-terra", streaming: false, context_window: 272000 },
+        { id: "claude-sonnet", streaming: true, context_window: 200000 },
+      ],
+    });
+
+    renderReflectionPage();
+
+    const picker = await screen.findByLabelText("Model");
+    const options = Array.from(picker.querySelectorAll("option")).map(
+      (option) => option.textContent,
+    );
+    expect(options).toEqual(["Server default", "codex-terra", "claude-sonnet"]);
+  });
+
+  it("renders no picker at all when the Server offers no models — the default case, unchanged", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    stubFetch({ reflect: () => ({ answer: "unused", grounding_entry_ids: [], grounded: true }) });
+
+    renderReflectionPage();
+
+    await screen.findByPlaceholderText("Ask a Question about your History");
+    expect(screen.queryByLabelText("Model")).not.toBeInTheDocument();
+  });
+
+  it("sends the chosen model on the wire when the picker is changed, and shows nothing chosen by default", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    const fetchMock = stubFetch({
+      reflect: () => ({
+        answer: "An answer from claude-sonnet.",
+        grounding_entry_ids: [],
+        grounded: true,
+        fallback_used: false,
+        session_id: "session-model",
+        title: "What did I write about?",
+        model: "claude-sonnet",
+      }),
+      models: [
+        { id: "codex-terra", streaming: false, context_window: 272000 },
+        { id: "claude-sonnet", streaming: true, context_window: 200000 },
+      ],
+    });
+
+    renderReflectionPage();
+    const picker = await screen.findByLabelText("Model");
+    fireEvent.change(picker, { target: { value: "claude-sonnet" } });
+
+    ask("What did I write about?");
+    await screen.findByText("An answer from claude-sonnet.");
+
+    const reflectCalls = fetchMock.mock.calls.filter(([url]) =>
+      (url as string).endsWith("/v1/reflect"),
+    );
+    const requestBody = JSON.parse((reflectCalls[0]?.[1] as RequestInit)?.body as string);
+    expect(requestBody.model).toBe("claude-sonnet");
+  });
+
+  it("reads back each turn attributed to the model that actually produced it", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    stubFetch({
+      reflect: () => ({ answer: "unused", grounding_entry_ids: [], grounded: true }),
+      session: (sessionId) =>
+        wireSession({
+          id: sessionId,
+          turns: [
+            {
+              question: "How has my knee been?",
+              answer: "It's improved since February.",
+              grounding_entry_ids: [],
+              grounded: true,
+              fallback_used: false,
+              tool_called: true,
+              model: "codex-terra",
+              created_at: "2026-08-01T00:00:00Z",
+            },
+            {
+              question: "And after physical therapy?",
+              answer: "Even better.",
+              grounding_entry_ids: [],
+              grounded: true,
+              fallback_used: false,
+              tool_called: true,
+              model: "claude-sonnet",
+              created_at: "2026-08-01T00:00:05Z",
+            },
+          ],
+        }),
+    });
+
+    renderReflectionPage("/reflect/session-existing");
+
+    expect(await screen.findByText("It's improved since February.")).toBeInTheDocument();
+    expect(screen.getByText("codex-terra")).toBeInTheDocument();
+    expect(screen.getByText("claude-sonnet")).toBeInTheDocument();
   });
 
   it("shows a distinct hint when the Server 404s (doesn't support Reflection yet), starting no Session", async () => {

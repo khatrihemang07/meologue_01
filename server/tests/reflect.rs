@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -8,10 +8,11 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use chrono::{DateTime, NaiveDate, Utc};
 use http_body_util::BodyExt;
-use meologue_server::llm::{ChatMessage, ChatReply, LlmClient};
+use meologue_server::llm::{ChatMessage, ChatReply, ChatStreamEvent, LlmClient, ModelInfo};
 use meologue_server::reflect::{ReflectState, claims_no_journal_access};
 use serde_json::{Value, json};
 use sqlx::PgPool;
+use tokio::sync::mpsc;
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -23,6 +24,16 @@ use uuid::Uuid;
 // is more honest than a valid-looking placeholder a future test could
 // accidentally start depending on.
 const UNUSED_CHAT_BASE_URL: &str = "http://127.0.0.1:1";
+
+// Issue #98: the Server's own configured default model id, matching
+// `server/.env`'s real `codex-terra` — `reflect_state`'s own `chat_model`.
+// Naming it, rather than an arbitrary placeholder, is what lets
+// `FakeChatClient::new`'s script keep answering every test that never sets
+// `req.model` exactly as it always has: `reflect.rs::resolve_model` treats
+// this id as "no lookup needed," so a test built before issue #98 (every
+// one of them but the model-selection tests below) never has to know this
+// constant exists at all.
+const DEFAULT_MODEL: &str = "codex-terra";
 
 // These tests only ever hit /v1/reflect (or /v1/sessions), never a static
 // asset — any directory that exists is fine as the (otherwise unused)
@@ -54,6 +65,20 @@ fn empty_static_dir() -> PathBuf {
 struct FakeChatClient {
     replies: Mutex<VecDeque<Result<String, String>>>,
     calls: Mutex<Vec<Vec<ChatMessage>>>,
+    // Issue #98: what this client reports for `list_models`/`for_model` —
+    // both default to empty/"nothing scripted", which is deliberately the
+    // same shape a genuinely unreachable wrapper degrades to
+    // (`llm::list_models`'s own doc comment), so a test that never calls
+    // `with_models`/`with_model_client` at all still gets an honest
+    // "unreachable model" for anything but this client's own default.
+    models: Vec<ModelInfo>,
+    model_clients: Mutex<HashMap<String, Arc<dyn LlmClient + Send + Sync>>>,
+    // Issue #98: deltas `chat_stream` sends before its `Done`, and whether
+    // a call was ever actually made through it — `chat()`'s own `calls`
+    // above doesn't see these, since `PromptedToolClient` never calls both
+    // methods on the same Turn.
+    stream_deltas: Vec<&'static str>,
+    stream_calls: Mutex<usize>,
 }
 
 impl FakeChatClient {
@@ -78,11 +103,53 @@ impl FakeChatClient {
         Self {
             replies: Mutex::new(results.into_iter().collect()),
             calls: Mutex::new(Vec::new()),
+            models: Vec::new(),
+            model_clients: Mutex::new(HashMap::new()),
+            stream_deltas: Vec::new(),
+            stream_calls: Mutex::new(0),
+        }
+    }
+
+    /// Issue #98: what `list_models` reports — `resolve_model`'s own live
+    /// lookup for a Turn resolving onto a model other than the Server's
+    /// configured default.
+    fn with_models(mut self, models: Vec<ModelInfo>) -> Self {
+        self.models = models;
+        self
+    }
+
+    /// Issue #98: the client `for_model(id)` hands back — what actually
+    /// answers once a Turn resolves onto `id`. A model never registered
+    /// this way still resolves (`for_model` never panics), but the client
+    /// it gets back always fails its one call, standing in for "the
+    /// wrapper cannot reach this model."
+    fn with_model_client(
+        self,
+        id: impl Into<String>,
+        client: Arc<dyn LlmClient + Send + Sync>,
+    ) -> Self {
+        self.model_clients.lock().unwrap().insert(id.into(), client);
+        self
+    }
+
+    /// Issue #98: scripts `chat_stream` to send these deltas, concatenated,
+    /// as the reply `Done` carries — the streaming counterpart of `new`'s
+    /// plain-reply script. A `FakeChatClient` built this way is meant to be
+    /// handed to `resolve_model` as a non-default model's client (via
+    /// `with_model_client`) whose own `ModelInfo::streaming` is `true`.
+    fn streaming(deltas: Vec<&'static str>) -> Self {
+        Self {
+            stream_deltas: deltas,
+            ..Self::from_results(std::iter::empty())
         }
     }
 
     fn call_count(&self) -> usize {
         self.calls.lock().unwrap().len()
+    }
+
+    fn stream_call_count(&self) -> usize {
+        *self.stream_calls.lock().unwrap()
     }
 
     /// The `n`th call's messages (0-indexed) — what the harness sent on
@@ -118,6 +185,34 @@ impl LlmClient for FakeChatClient {
             Some(Err(message)) => bail!("{message}"),
             None => panic!("FakeChatClient's script ran out of replies"),
         }
+    }
+
+    async fn chat_stream(
+        &self,
+        _messages: &[ChatMessage],
+    ) -> mpsc::UnboundedReceiver<ChatStreamEvent> {
+        *self.stream_calls.lock().unwrap() += 1;
+        let (tx, rx) = mpsc::unbounded_channel();
+        let mut whole = String::new();
+        for delta in &self.stream_deltas {
+            whole.push_str(delta);
+            let _ = tx.send(ChatStreamEvent::Delta((*delta).to_string()));
+        }
+        let _ = tx.send(ChatStreamEvent::Done(Ok(ChatReply::text(whole))));
+        rx
+    }
+
+    async fn list_models(&self) -> Vec<ModelInfo> {
+        self.models.clone()
+    }
+
+    fn for_model(&self, model: &str) -> Arc<dyn LlmClient + Send + Sync> {
+        if let Some(client) = self.model_clients.lock().unwrap().get(model) {
+            return client.clone();
+        }
+        Arc::new(FakeChatClient::failing(format!(
+            "no chat endpoint reachable for model {model}"
+        )))
     }
 
     async fn embed_document(&self, _text: &str) -> Result<Vec<f32>> {
@@ -274,6 +369,14 @@ fn reflect_state(chat: Arc<FakeChatClient>) -> ReflectState {
         context_window: 200_000,
         chat_base_url: UNUSED_CHAT_BASE_URL.to_string(),
         chat_api_key: None,
+        // Issue #98: matches `DEFAULT_MODEL` — every test that never sets
+        // `req.model` (nearly all of them) resolves onto this and reuses
+        // `chat` (`FakeChatClient`) directly, making zero calls to
+        // `list_models`/`for_model`; `chat_streaming: false` is what keeps
+        // `the_configured_model_never_produces_message_update_events`
+        // pinned to today's real default.
+        chat_model: DEFAULT_MODEL.to_string(),
+        chat_streaming: false,
     }
 }
 
@@ -307,6 +410,8 @@ fn reflect_state_with_embedding(chat: Arc<FakeChatClient>) -> ReflectState {
         context_window: 200_000,
         chat_base_url: UNUSED_CHAT_BASE_URL.to_string(),
         chat_api_key: None,
+        chat_model: DEFAULT_MODEL.to_string(),
+        chat_streaming: false,
     }
 }
 
@@ -1032,12 +1137,17 @@ async fn a_read_digest_tool_event_still_reports_a_correct_entry_count(pool: PgPo
     assert_eq!(end.data["entry_count"], 1);
 }
 
-/// Issue #93: the loop's model never streamed answer-token deltas because
-/// `PromptedToolClient` only ever produces a single `Done` — this pins that
-/// exact behaviour on the live route, so a future change to `prompted.rs`
-/// that starts emitting `TextDelta` (or doesn't) is caught here rather than
-/// only in `agent_loop`'s own unit test
-/// (`run_with_events_forwards_text_deltas_as_message_updates_in_order`).
+/// Issue #93 (updated for issue #98): `PromptedToolClient` only produces
+/// `TextDelta`s when the Turn's own resolved model streams
+/// (`PromptedToolClient::streaming`) — the configured default,
+/// `reflect_state`'s own `chat_streaming: false`, never does. This pins
+/// that on the live route, so a future change to `prompted.rs` or
+/// `resolve_model` that starts emitting deltas for the default (or stops
+/// emitting them for a streaming model — see
+/// `a_streaming_model_produces_message_update_events_the_default_does_not`
+/// below) is caught here, not only in `agent_loop`'s own unit test
+/// (`run_with_events_forwards_text_deltas_as_message_updates_in_order`) or
+/// `prompted`'s own (`a_streaming_model_forwards_every_delta_before_the_terminal_done`).
 /// "On codex-terra ... nothing else differs" (issue #96) means exactly this:
 /// zero `message_update` events, but the rest of the sequence unaffected.
 #[sqlx::test]
@@ -1054,10 +1164,287 @@ async fn the_configured_model_never_produces_message_update_events(pool: PgPool)
 
     assert!(
         !events.iter().any(|e| e.event == "message_update"),
-        "PromptedToolClient never streams deltas today; a message_update here would mean \
-         something upstream started producing StreamEvent::TextDelta without this test \
+        "the configured default never streams deltas; a message_update here would mean \
+         something upstream started producing StreamEvent::TextDelta for it without this test \
          having been updated to expect it: {events:?}"
     );
+}
+
+/// The other half of the same criterion, and issue #98's own most-scrutinised
+/// one: a Turn resolved onto a *streaming* model (`ModelInfo::streaming:
+/// true`, discovered via `resolve_model`'s live `list_models` lookup — see
+/// `FakeChatClient::with_models`) does produce `message_update` events, one
+/// per delta its own `chat_stream` sends, and the final `agent_end.answer`
+/// is still the whole, correctly-assembled reply — streaming the Answer
+/// changes *when* the client learns it, not *what* it eventually reads.
+#[sqlx::test]
+async fn a_streaming_model_produces_message_update_events_the_default_does_not(pool: PgPool) {
+    let streaming_chat = Arc::new(FakeChatClient::streaming(vec![
+        "You wrote ",
+        "about running ",
+        "twice last week.",
+    ]));
+    let chat = Arc::new(
+        FakeChatClient::new(["unused — the default is never asked for this Turn"])
+            .with_models(vec![ModelInfo {
+                id: "claude-sonnet".to_string(),
+                streaming: true,
+                context_window: Some(200_000),
+            }])
+            .with_model_client("claude-sonnet", streaming_chat.clone()),
+    );
+    let reflect = reflect_state(chat);
+
+    let (_, events) = post_reflect_events(
+        &pool,
+        Some(reflect),
+        json!({
+            "protocol_version": 3,
+            "question": "What did I write about?",
+            "model": "claude-sonnet",
+        }),
+    )
+    .await;
+
+    let deltas: Vec<&str> = events
+        .iter()
+        .filter(|e| e.event == "message_update")
+        .map(|e| e.data["delta"].as_str().unwrap())
+        .collect();
+    // Issue #103's structural corrective turn fires on any zero-tool-call
+    // Answer (`a_null_session_id_mints_a_new_session`'s own comment covers
+    // why) — this reply has no tool call, so the loop calls `chat_stream`
+    // a second time to confirm it, and a real streaming model asked twice
+    // really does stream twice: the deltas below are one full pass,
+    // repeated.
+    assert_eq!(
+        deltas,
+        vec![
+            "You wrote ",
+            "about running ",
+            "twice last week.",
+            "You wrote ",
+            "about running ",
+            "twice last week.",
+        ],
+        "every delta the streaming model sent, across both calls, must arrive as its own \
+         message_update, in order: {events:?}"
+    );
+    assert_eq!(streaming_chat.stream_call_count(), 2);
+
+    let agent_end = events
+        .iter()
+        .rev()
+        .find(|e| e.event == "agent_end")
+        .expect("an agent_end event must have been sent");
+    assert_eq!(
+        agent_end.data["answer"],
+        "You wrote about running twice last week."
+    );
+}
+
+// -- issue #98: a Conversation chooses its own model -----------------------
+
+/// "A Conversation can be started on a chosen model, and asking nothing
+/// uses the Server's default" (issue #98's own acceptance criterion),
+/// proven both ways in one test: the first Question, with no `model` at
+/// all, is answered by the default `chat` client alone; the second, naming
+/// `claude-sonnet`, is answered by the second scripted client
+/// `resolve_model` reaches through `chat_client.for_model` — never `chat`
+/// again.
+#[sqlx::test]
+async fn choosing_a_model_is_honoured_and_asking_nothing_uses_the_default(pool: PgPool) {
+    // Every script repeats its reply once — issue #103's structural
+    // corrective turn fires on any zero-tool-call Answer (this file's own
+    // `a_session_nearing_its_context_window_gets_compacted_between_turns`
+    // comment covers why).
+    let claude_chat = Arc::new(FakeChatClient::new([
+        "An answer from claude-sonnet.",
+        "An answer from claude-sonnet.",
+    ]));
+    let default_chat = Arc::new(
+        FakeChatClient::new(["An answer from the default.", "An answer from the default."])
+            .with_models(vec![ModelInfo {
+                id: "claude-sonnet".to_string(),
+                streaming: false,
+                context_window: Some(200_000),
+            }])
+            .with_model_client("claude-sonnet", claude_chat.clone()),
+    );
+
+    let (status, body) = post_reflect(
+        &pool,
+        Some(reflect_state(default_chat.clone())),
+        json!({ "protocol_version": 3, "question": "First question?" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["answer"], "An answer from the default.");
+    assert_eq!(default_chat.call_count(), 2);
+    assert_eq!(claude_chat.call_count(), 0);
+    let id = session_id(&body);
+
+    let (status, body) = post_reflect(
+        &pool,
+        Some(reflect_state(default_chat.clone())),
+        json!({
+            "protocol_version": 3,
+            "session_id": id,
+            "question": "Second question?",
+            "model": "claude-sonnet",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["answer"], "An answer from claude-sonnet.");
+    assert_eq!(
+        claude_chat.call_count(),
+        2,
+        "the chosen model's own client must have answered, not the default's"
+    );
+    assert_eq!(
+        default_chat.call_count(),
+        2,
+        "the default's client must not have been asked again for a Turn that named a different \
+         model"
+    );
+}
+
+/// "The model can be changed midway through a Conversation, and the change
+/// is recorded in it" plus "reading a Conversation back shows which model
+/// produced which part" — issue #98's two most load-bearing acceptance
+/// criteria, proven together: three Turns, only the middle one naming a
+/// model explicitly, read back through `GET /v1/sessions/{id}` (the same
+/// path a client restoring a Conversation uses) and checked against
+/// `SessionTurnRow::model` for each.
+#[sqlx::test]
+async fn a_mid_conversation_model_change_is_recorded_and_each_turn_reads_back_its_own_model(
+    pool: PgPool,
+) {
+    let claude_chat = Arc::new(FakeChatClient::new([
+        "Second answer.",
+        "Second answer.",
+        "Third answer.",
+        "Third answer.",
+    ]));
+    let default_chat = Arc::new(
+        FakeChatClient::new(["First answer.", "First answer."])
+            .with_models(vec![ModelInfo {
+                id: "claude-sonnet".to_string(),
+                streaming: false,
+                context_window: Some(200_000),
+            }])
+            .with_model_client("claude-sonnet", claude_chat.clone()),
+    );
+
+    let (_, body) = post_reflect(
+        &pool,
+        Some(reflect_state(default_chat.clone())),
+        json!({ "protocol_version": 3, "question": "First question?" }),
+    )
+    .await;
+    let id = session_id(&body);
+
+    post_reflect(
+        &pool,
+        Some(reflect_state(default_chat.clone())),
+        json!({
+            "protocol_version": 3,
+            "session_id": id,
+            "question": "Second question?",
+            "model": "claude-sonnet",
+        }),
+    )
+    .await;
+
+    // No `model` on this third ask — "asking nothing" must mean "stay on
+    // whatever this Conversation is already on" (`claude-sonnet`), not
+    // "fall back to the default": `ReflectRequest::model`'s own doc comment
+    // is explicit these are different things.
+    post_reflect(
+        &pool,
+        Some(reflect_state(default_chat.clone())),
+        json!({
+            "protocol_version": 3,
+            "session_id": id,
+            "question": "Third question?",
+        }),
+    )
+    .await;
+
+    assert_eq!(
+        claude_chat.call_count(),
+        4,
+        "claude-sonnet must have answered both the second and third Turns"
+    );
+    assert_eq!(
+        default_chat.call_count(),
+        2,
+        "the default must only ever have answered the first Turn"
+    );
+
+    let session = get_session(&pool, reflect_state(default_chat), id).await;
+    let turns = session["turns"]
+        .as_array()
+        .expect("SessionResponse::turns should be a JSON array");
+    let models: Vec<&str> = turns.iter().map(|t| t["model"].as_str().unwrap()).collect();
+    assert_eq!(
+        models,
+        vec![DEFAULT_MODEL, "claude-sonnet", "claude-sonnet"],
+        "each Turn must read back attributed to the model that actually produced it, including \
+         the third Turn carrying the change forward with no model named on its own request: \
+         {turns:?}"
+    );
+}
+
+/// "A model that disappears from the Server's reach does not break an
+/// existing Conversation" — issue #98's own decision, pinned here: a model
+/// `resolve_model` cannot find (`FakeChatClient::for_model`'s own default,
+/// unregistered by this test on purpose) fails the Turn it was asked for
+/// cleanly, via `agent_end`'s `status: "error"`, and writes nothing at all
+/// — the Conversation still has exactly the one real Turn it had before
+/// the attempt, still correctly attributed to the model that actually
+/// produced it.
+#[sqlx::test]
+async fn an_unreachable_model_fails_its_turn_without_corrupting_the_conversation(pool: PgPool) {
+    let chat = Arc::new(FakeChatClient::new(["First answer.", "First answer."]));
+
+    let (_, body) = post_reflect(
+        &pool,
+        Some(reflect_state(chat.clone())),
+        json!({ "protocol_version": 3, "question": "First question?" }),
+    )
+    .await;
+    let id = session_id(&body);
+
+    let (status, body) = post_reflect(
+        &pool,
+        Some(reflect_state(chat.clone())),
+        json!({
+            "protocol_version": 3,
+            "session_id": id,
+            "question": "Second question?",
+            "model": "a-model-nothing-serves",
+        }),
+    )
+    .await;
+    // The stream itself still opens cleanly (`reflect_handler`'s own doc
+    // comment: the HTTP status is decided before any chat call runs) —
+    // the failure surfaces inside the stream, on `agent_end` alone.
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["status"], "error");
+
+    let session = get_session(&pool, reflect_state(chat), id).await;
+    let turns = session["turns"]
+        .as_array()
+        .expect("SessionResponse::turns should be a JSON array");
+    assert_eq!(
+        turns.len(),
+        1,
+        "a failed Turn on an unreachable model must not be persisted at all: {turns:?}"
+    );
+    assert_eq!(turns[0]["question"], "First question?");
+    assert_eq!(turns[0]["model"], DEFAULT_MODEL);
 }
 
 /// Issue #94: proves `search_entries` is actually wired into the live
@@ -1176,6 +1563,8 @@ async fn an_embedding_failure_recovers_and_still_answers(pool: PgPool) {
         context_window: 200_000,
         chat_base_url: UNUSED_CHAT_BASE_URL.to_string(),
         chat_api_key: None,
+        chat_model: DEFAULT_MODEL.to_string(),
+        chat_streaming: false,
     };
 
     let (status, body) = post_reflect(
@@ -2155,6 +2544,8 @@ async fn a_session_nearing_its_context_window_gets_compacted_between_turns(pool:
         context_window: 200_000,
         chat_base_url: UNUSED_CHAT_BASE_URL.to_string(),
         chat_api_key: None,
+        chat_model: DEFAULT_MODEL.to_string(),
+        chat_streaming: false,
     };
     let (status, body) = post_reflect(
         &pool,
@@ -2171,6 +2562,8 @@ async fn a_session_nearing_its_context_window_gets_compacted_between_turns(pool:
         context_window: 200_000,
         chat_base_url: UNUSED_CHAT_BASE_URL.to_string(),
         chat_api_key: None,
+        chat_model: DEFAULT_MODEL.to_string(),
+        chat_streaming: false,
     };
     let (status, _) = post_reflect(
         &pool,
@@ -2195,6 +2588,8 @@ async fn a_session_nearing_its_context_window_gets_compacted_between_turns(pool:
         context_window: 20_000,
         chat_base_url: UNUSED_CHAT_BASE_URL.to_string(),
         chat_api_key: None,
+        chat_model: DEFAULT_MODEL.to_string(),
+        chat_streaming: false,
     };
     let (status, body) = post_reflect(
         &pool,
@@ -2218,6 +2613,8 @@ async fn a_session_nearing_its_context_window_gets_compacted_between_turns(pool:
         context_window: 200_000,
         chat_base_url: UNUSED_CHAT_BASE_URL.to_string(),
         chat_api_key: None,
+        chat_model: DEFAULT_MODEL.to_string(),
+        chat_streaming: false,
     };
     let session = get_session(&pool, unused, id).await;
     let turns = session["turns"]
@@ -2252,6 +2649,8 @@ async fn a_summary_reaches_every_question_after_it_not_only_the_one_that_wrote_i
         context_window: 200_000,
         chat_base_url: UNUSED_CHAT_BASE_URL.to_string(),
         chat_api_key: None,
+        chat_model: DEFAULT_MODEL.to_string(),
+        chat_streaming: false,
     };
     let (_, body) = post_reflect(
         &pool,
@@ -2272,6 +2671,8 @@ async fn a_summary_reaches_every_question_after_it_not_only_the_one_that_wrote_i
         context_window: 20_000,
         chat_base_url: UNUSED_CHAT_BASE_URL.to_string(),
         chat_api_key: None,
+        chat_model: DEFAULT_MODEL.to_string(),
+        chat_streaming: false,
     };
     let (status, _) = post_reflect(
         &pool,
@@ -2296,6 +2697,8 @@ async fn a_summary_reaches_every_question_after_it_not_only_the_one_that_wrote_i
         context_window: 20_000,
         chat_base_url: UNUSED_CHAT_BASE_URL.to_string(),
         chat_api_key: None,
+        chat_model: DEFAULT_MODEL.to_string(),
+        chat_streaming: false,
     };
     let (status, body) = post_reflect(
         &pool,

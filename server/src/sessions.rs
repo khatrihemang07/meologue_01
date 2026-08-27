@@ -87,6 +87,8 @@ use sqlx::{FromRow, PgPool, Postgres, Transaction};
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
+use crate::reflect::ReflectState;
+
 /// A Session's own row — everything about it except its Turns. `Serialize`
 /// and `ToSchema` earn their keep here (rather than living on a
 /// list-only-shaped twin) because this is *exactly* the wire shape
@@ -128,6 +130,21 @@ pub struct SessionTurnRow {
     /// set — the derivation precedent `docs/adr/0024` already set for
     /// `grounded` itself.
     pub tool_called: bool,
+    /// Issue #98: the model that produced this Turn's Answer — never
+    /// stored on the Turn itself (there is no `model` column on
+    /// `session_turns`, and `record_turn`/`record_turn_from_steps` gained
+    /// no new field either). Derived the same way `tool_called` above is:
+    /// `entries_to_turns` tracks whichever model a `model_change` entry
+    /// most recently named while it walks the tree, and stamps that value
+    /// onto every Turn it finishes — see `ModelChangePayload`'s own doc
+    /// comment for why that's the single source of truth this field reads
+    /// from, rather than a second, independently-writable value. A Turn
+    /// read off the pre-#91 `session_turns` fallback (`load_turns_from_session_turns`)
+    /// has no tree to derive this from at all; it's set to `load_turns`'s
+    /// own `default_model` there, which is simply true — every Turn that
+    /// old only ever had one model to run on, the Server's sole configured
+    /// one, because per-Conversation choice didn't exist yet.
+    pub model: String,
     pub created_at: DateTime<Utc>,
 }
 
@@ -144,18 +161,15 @@ pub(crate) struct NewTurn {
 
 /// The five kinds an entry in a Session's tree can be (migration `0006`'s
 /// `session_entries.type` check constraint) — ported from pi's own entry
-/// kinds. This ticket's `record_turn` only ever writes `Message`; the
-/// other four exist so the schema doesn't grow a new `type` value (and a
-/// new migration) the day something starts writing them — `Compaction`
-/// specifically is issue #97's job, not this one's. `#[allow(dead_code)]`
-/// on the four unwritten variants records that this is deliberate scope,
-/// not an oversight: `project_from_last_compaction`'s test already
-/// constructs a `Compaction` entry by hand to prove the projection logic,
-/// because nothing else does yet.
+/// kinds. Issue #98 is what finally writes `ModelChange` (see
+/// `ModelChangePayload`) and reads it back (`decode_model_change`,
+/// `entries_to_turns`); `BranchSummary`/`Custom` still have no writer, so
+/// `#[allow(dead_code)]` stays on those two only — the same reasoning the
+/// original comment gave for all four still applies to them: the schema
+/// shouldn't need a new migration the day something starts writing one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum EntryType {
     Message,
-    #[allow(dead_code)]
     ModelChange,
     Compaction,
     #[allow(dead_code)]
@@ -288,6 +302,26 @@ pub(crate) enum MessagePayload {
     },
 }
 
+/// The type-specific shape a `model_change` entry's `payload` holds —
+/// issue #98's own addition to the tree's fixed vocabulary of entry kinds
+/// (`EntryType::ModelChange`, reserved but unwritten since migration
+/// `0006`). `model` is the model id a Conversation moves onto from this
+/// point forward: `entries_to_turns` treats every Turn it reads after this
+/// entry, up to the next `model_change` (or the end of the path), as
+/// having run on it — that's the whole mechanism behind "reading a
+/// Conversation back shows which model produced which part," the
+/// acceptance criterion issue #98 names directly. `reflect.rs` appends one
+/// of these — chained into the same `payloads` list `build_tree_payloads`
+/// already builds, immediately before the Question it precedes — whenever
+/// the model a Turn is about to run under differs from whatever the
+/// Conversation was already on; an unbroken run on one model needs no
+/// entries here at all, which is exactly why a Session that never changes
+/// models reads identically to how it always has.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub(crate) struct ModelChangePayload {
+    pub model: String,
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 pub struct SessionResponse {
     pub id: Uuid,
@@ -311,9 +345,23 @@ pub struct SessionResponse {
 )]
 pub async fn get_session_handler(
     State(pool): State<PgPool>,
+    State(reflect): State<Option<ReflectState>>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<SessionResponse>, StatusCode> {
-    match run_get_session(&pool, id).await {
+    // Issue #98: reading a Turn's `model` back (`SessionTurnRow::model`,
+    // via `load_turns`) needs the Server's own configured default to
+    // attribute a Turn that predates any `model_change` entry — the same
+    // defensive fallback `reflect_handler`/`models_handler` already take
+    // for this route's registration invariant (`lib.rs`: this route only
+    // exists when `reflect.is_some()`), not the mechanism a client is
+    // meant to observe.
+    let Some(reflect) = reflect else {
+        tracing::error!(
+            "get_session_handler invoked with no ReflectState — route should not be registered"
+        );
+        return Err(StatusCode::NOT_FOUND);
+    };
+    match run_get_session(&pool, id, &reflect.chat_model).await {
         Ok(Some(response)) => Ok(Json(response)),
         Ok(None) => Err(StatusCode::NOT_FOUND),
         Err(err) => {
@@ -456,11 +504,15 @@ fn escape_like_pattern(term: &str) -> String {
     escaped
 }
 
-async fn run_get_session(pool: &PgPool, id: Uuid) -> anyhow::Result<Option<SessionResponse>> {
+async fn run_get_session(
+    pool: &PgPool,
+    id: Uuid,
+    default_model: &str,
+) -> anyhow::Result<Option<SessionResponse>> {
     let Some(session) = find_session(pool, id).await? else {
         return Ok(None);
     };
-    let turns = load_turns(pool, id).await?;
+    let turns = load_turns(pool, id, default_model).await?;
     Ok(Some(SessionResponse {
         id: session.id,
         title: session.title,
@@ -513,17 +565,29 @@ pub(crate) async fn find_session(pool: &PgPool, id: Uuid) -> anyhow::Result<Opti
 /// what a Session holds regardless of which path wrote it — and keeps
 /// `reflect.rs`, which this ticket must leave unedited, seeing the
 /// Conversations its own tests build the same way it always has.
+///
+/// `default_model` (issue #98) is the model to attribute a Turn to when
+/// nothing in the tree says otherwise — the Server's own configured
+/// default, `reflect::ReflectState::chat_model`. It seeds `entries_to_turns`'s
+/// walk directly for a Session that has never changed models at all, and
+/// also (via `model_before_projection`) for the Turns that survive a
+/// compaction: `project_from_last_compaction` trims everything *before*
+/// the compaction away, which would otherwise silently drop whatever
+/// `model_change` entry was still in force at that point and misattribute
+/// every Turn after it back to the default.
 pub(crate) async fn load_turns(
     pool: &PgPool,
     session_id: Uuid,
+    default_model: &str,
 ) -> anyhow::Result<Vec<SessionTurnRow>> {
     let Some(leaf_id) = session_main_leaf_id(pool, session_id).await? else {
-        return load_turns_from_session_turns(pool, session_id).await;
+        return load_turns_from_session_turns(pool, session_id, default_model).await;
     };
     let entries = load_entries(pool, session_id).await?;
     let path = walk_to_root(&entries, leaf_id)?;
+    let seed_model = model_before_projection(&path, default_model)?;
     let projected = project_from_last_compaction(&path);
-    entries_to_turns(&projected)
+    entries_to_turns(&projected, &seed_model)
 }
 
 /// The summary text of the *last* compaction on `session_id`'s current
@@ -596,9 +660,15 @@ struct LegacySessionTurnRow {
 /// to make, so issue #103's failure mode is structurally impossible on data
 /// this old. Reporting `false` here would be a plausible-looking guess
 /// about something this function actually knows.
+///
+/// `model` is `default_model` for the same reason `tool_called` is a fixed
+/// `true`: data this old predates per-Conversation model choice entirely,
+/// so the Server's single configured model is not a guess about what ran
+/// it — it is the only model that could have.
 async fn load_turns_from_session_turns(
     pool: &PgPool,
     session_id: Uuid,
+    default_model: &str,
 ) -> anyhow::Result<Vec<SessionTurnRow>> {
     let turns = sqlx::query_as::<_, LegacySessionTurnRow>(
         "select question, answer, grounding_entry_ids, grounded, fallback_used, created_at
@@ -618,6 +688,7 @@ async fn load_turns_from_session_turns(
             grounded: row.grounded,
             fallback_used: row.fallback_used,
             tool_called: true,
+            model: default_model.to_string(),
             created_at: row.created_at,
         })
         .collect())
@@ -1135,6 +1206,47 @@ fn decode_message(entry: &EntryRow) -> anyhow::Result<Option<MessagePayload>> {
     Ok(Some(payload))
 }
 
+/// Issue #98's counterpart to `decode_message`: decodes a `model_change`
+/// entry's `payload` into the model id it names, or `None` for any other
+/// `entry_type` — same "skip, don't fail" posture as `decode_message` for
+/// an entry kind it isn't looking for, same "a malformed payload of the
+/// kind this *is* looking for is a real bug" posture for one it is.
+fn decode_model_change(entry: &EntryRow) -> anyhow::Result<Option<String>> {
+    if entry.entry_type != EntryType::ModelChange.as_str() {
+        return Ok(None);
+    }
+    let payload: ModelChangePayload = serde_json::from_value(entry.payload.clone())
+        .with_context(|| format!("entry {} has a malformed model_change payload", entry.id))?;
+    Ok(Some(payload.model))
+}
+
+/// The model in force at the *start* of `project_from_last_compaction`'s
+/// trim point — `default_model` when the path holds no `compaction` entry
+/// at all (in which case `entries_to_turns` will walk every `model_change`
+/// on the untrimmed path itself and never needs this seed to be anything
+/// but the Server's own default), or whatever `model_change` entry was
+/// nearest the compaction, scanning backward from it, when one exists.
+/// Without this, a Session that changed models and *then* compacted would
+/// have that `model_change` entry trimmed away with everything else before
+/// the cut, and every Turn after it would silently misattribute back to
+/// `default_model` — the same class of bug `project_from_last_compaction`'s
+/// own doc comment is careful never to lose the compaction's summary to,
+/// applied here to the model instead of the text.
+fn model_before_projection(path: &[&EntryRow], default_model: &str) -> anyhow::Result<String> {
+    let Some(cut) = path
+        .iter()
+        .rposition(|entry| entry.entry_type == EntryType::Compaction.as_str())
+    else {
+        return Ok(default_model.to_string());
+    };
+    for entry in path[..cut].iter().rev() {
+        if let Some(model) = decode_model_change(entry)? {
+            return Ok(model);
+        }
+    }
+    Ok(default_model.to_string())
+}
+
 /// Rebuilds `SessionTurnRow`s from a root-first path of entries — the
 /// inverse of what `record_turn`/`record_turn_from_steps` write. A `user`
 /// `message` starts a Turn; everything after it up to (not including) the
@@ -1162,11 +1274,28 @@ fn decode_message(entry: &EntryRow) -> anyhow::Result<Option<MessagePayload>> {
 /// `SessionTurnRow::tool_called`, which is how that field stays derived
 /// from the tree rather than a second value someone has to remember to
 /// write — see that field's own doc comment.
-fn entries_to_turns(path: &[&EntryRow]) -> anyhow::Result<Vec<SessionTurnRow>> {
+///
+/// Issue #98: also tracks `current_model`, seeded from `seed_model`
+/// (`load_turns`'s `model_before_projection`) and updated every time a
+/// `model_change` entry is walked over, wherever in the path it falls —
+/// between two Turns (the ordinary case: `reflect.rs` always appends one
+/// immediately before the Question it precedes) or, in principle, inside
+/// one. Every Turn this function finishes is stamped with whatever
+/// `current_model` holds at the moment its own answering `assistant` entry
+/// is reached, which is what makes a change that happens to land mid-Turn
+/// attribute to the model that actually produced the Answer rather than
+/// the one the Question was asked under.
+fn entries_to_turns(path: &[&EntryRow], seed_model: &str) -> anyhow::Result<Vec<SessionTurnRow>> {
     let mut turns = Vec::new();
     let mut index = 0;
+    let mut current_model = seed_model.to_string();
 
     while index < path.len() {
+        if let Some(model) = decode_model_change(path[index])? {
+            current_model = model;
+            index += 1;
+            continue;
+        }
         let Some(MessagePayload::User { text: question }) = decode_message(path[index])? else {
             index += 1;
             continue;
@@ -1185,6 +1314,11 @@ fn entries_to_turns(path: &[&EntryRow]) -> anyhow::Result<Vec<SessionTurnRow>> {
         // reply.
         let mut tool_called = false;
         while cursor < path.len() {
+            if let Some(model) = decode_model_change(path[cursor])? {
+                current_model = model;
+                cursor += 1;
+                continue;
+            }
             match decode_message(path[cursor])? {
                 Some(MessagePayload::User { .. }) => break,
                 Some(MessagePayload::Assistant {
@@ -1200,6 +1334,7 @@ fn entries_to_turns(path: &[&EntryRow]) -> anyhow::Result<Vec<SessionTurnRow>> {
                         grounded,
                         fallback_used,
                         tool_called,
+                        model: current_model.clone(),
                         created_at: path[cursor].created_at,
                     });
                 }
@@ -1362,6 +1497,29 @@ mod tests {
             .unwrap(),
         )
     }
+
+    /// Issue #98: a `model_change` entry — never paired with a Question the
+    /// way `user_message`/`assistant_message` are, since a real one always
+    /// sits *before* the Question it precedes (`reflect.rs::build_tree_payloads`).
+    fn model_change_entry(id: Uuid, parent_id: Option<Uuid>, model: &str) -> EntryRow {
+        entry(
+            id,
+            parent_id,
+            EntryType::ModelChange,
+            serde_json::to_value(ModelChangePayload {
+                model: model.to_string(),
+            })
+            .unwrap(),
+        )
+    }
+
+    /// Every hand-built-tree test in this module that doesn't care what a
+    /// Turn's model reads as (i.e. every one written before issue #98) uses
+    /// this as `entries_to_turns`'/`load_turns`'s `default_model` — a real,
+    /// specific value rather than an empty string or `"test"`, matching
+    /// this file's own precedent of preferring a plausible value a stray
+    /// assertion couldn't confuse with "unset."
+    const DEFAULT_MODEL: &str = "codex-terra";
 
     /// The basic contract `append_entry`/`load_entries` exist to provide:
     /// what's appended is what comes back, in `seq` order, with the parent
@@ -1644,7 +1802,7 @@ mod tests {
         assert_eq!(forked_leaf, Some(fork_point_id));
 
         // The Turn is readable through the tree in the forked Session too.
-        let forked_turns = load_turns(&pool, forked_id).await.unwrap();
+        let forked_turns = load_turns(&pool, forked_id, DEFAULT_MODEL).await.unwrap();
         assert_eq!(forked_turns.len(), 1);
         assert_eq!(forked_turns[0].question, "How has my knee been?");
         assert_eq!(forked_turns[0].answer, "Recurring since February.");
@@ -1689,6 +1847,66 @@ mod tests {
         assert_eq!(
             unprojected.iter().map(|e| e.id).collect::<Vec<_>>(),
             vec![first_user.id, first_assistant.id]
+        );
+    }
+
+    /// Issue #98: `project_from_last_compaction` trims everything *before*
+    /// the compaction away — including, on a Session that changed models,
+    /// whatever `model_change` entry was still in force at that point.
+    /// `model_before_projection` is what `load_turns` seeds `entries_to_turns`
+    /// with instead of blindly reaching for `default_model`, so a Turn that
+    /// survives the trim still reads as the model it actually ran on rather
+    /// than silently reverting to the Server's default.
+    #[test]
+    fn model_before_projection_carries_a_changed_model_across_a_compaction() {
+        let first_user = user_message(Uuid::new_v4(), None, "first question");
+        let change = model_change_entry(Uuid::new_v4(), Some(first_user.id), "claude-sonnet");
+        let second_user = user_message(Uuid::new_v4(), Some(change.id), "second question");
+        let second_assistant =
+            assistant_message(Uuid::new_v4(), Some(second_user.id), "second answer");
+        let compaction = entry(
+            Uuid::new_v4(),
+            Some(second_assistant.id),
+            EntryType::Compaction,
+            serde_json::json!({"summary": "the Conversation so far, condensed"}),
+        );
+        let third_user = user_message(Uuid::new_v4(), Some(compaction.id), "third question");
+        let third_assistant =
+            assistant_message(Uuid::new_v4(), Some(third_user.id), "third answer");
+
+        let full_path = vec![
+            &first_user,
+            &change,
+            &second_user,
+            &second_assistant,
+            &compaction,
+            &third_user,
+            &third_assistant,
+        ];
+
+        let seed = model_before_projection(&full_path, DEFAULT_MODEL).unwrap();
+        assert_eq!(
+            seed, "claude-sonnet",
+            "the model_change entry sits before the compaction and must still seed the model \
+             that survives the trim"
+        );
+
+        // Read straight through `entries_to_turns` as `load_turns` actually
+        // uses these together — the third Turn (the only one that survives
+        // `project_from_last_compaction`) must read as "claude-sonnet", not
+        // silently revert to `DEFAULT_MODEL`.
+        let projected = project_from_last_compaction(&full_path);
+        let turns = entries_to_turns(&projected, &seed).unwrap();
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].model, "claude-sonnet");
+
+        // No compaction at all: the seed is just `default_model`, since
+        // `entries_to_turns` will walk the untrimmed path's own
+        // `model_change` entries itself.
+        let no_compaction_path = vec![&first_user, &change, &second_user, &second_assistant];
+        assert_eq!(
+            model_before_projection(&no_compaction_path, DEFAULT_MODEL).unwrap(),
+            DEFAULT_MODEL
         );
     }
 
@@ -1745,7 +1963,7 @@ mod tests {
                 .unwrap();
         assert_eq!(entry_count, 4, "two chained entries per Turn");
 
-        let turns = load_turns(&pool, session_id).await.unwrap();
+        let turns = load_turns(&pool, session_id, DEFAULT_MODEL).await.unwrap();
         assert_eq!(turns.len(), 2);
         assert_eq!(turns[0].question, "How has my knee been?");
         assert_eq!(turns[0].answer, "Recurring since February.");
@@ -1781,13 +1999,17 @@ mod tests {
         .await
         .unwrap();
 
-        let turns = load_turns(&pool, session_id).await.unwrap();
+        let turns = load_turns(&pool, session_id, DEFAULT_MODEL).await.unwrap();
         assert_eq!(turns.len(), 1);
         assert!(
             turns[0].tool_called,
             "a Turn with no tree at all predates the loop's tool-calling protocol entirely, so \
              it must never read back as the no-tool-call shape issue #103 is about"
         );
+        // Issue #98: same reasoning, applied to `model` — a Turn this old
+        // predates per-Conversation model choice too, so `default_model` is
+        // the only model it could have run on, not a guess.
+        assert_eq!(turns[0].model, DEFAULT_MODEL);
     }
 
     // -- issue #93 pass 2: a loop-driven Turn's run can hold more than one
@@ -1829,7 +2051,7 @@ mod tests {
         );
 
         let path = vec![&question, &first_assistant, &tool_result, &final_assistant];
-        let turns = entries_to_turns(&path).unwrap();
+        let turns = entries_to_turns(&path, DEFAULT_MODEL).unwrap();
 
         assert_eq!(turns.len(), 1);
         assert_eq!(turns[0].question, "What did I write about running?");
@@ -1863,7 +2085,7 @@ mod tests {
         let a2 = assistant_message(a2_id, Some(result_id), "Second answer.");
 
         let path = vec![&q1, &a1, &q2, &tool_call, &result, &a2];
-        let turns = entries_to_turns(&path).unwrap();
+        let turns = entries_to_turns(&path, DEFAULT_MODEL).unwrap();
 
         assert_eq!(turns.len(), 2);
         assert_eq!(turns[0].answer, "First answer.");
@@ -1876,6 +2098,58 @@ mod tests {
             turns[1].tool_called,
             "the second Turn's run called a tool and must read back as such, distinguishable \
              from the first Turn above"
+        );
+    }
+
+    /// Issue #98's own acceptance criterion: "reading a Conversation back
+    /// shows which model produced which part." A Session that never
+    /// changed models reads every Turn as `seed_model` — the ordinary case,
+    /// and the one every test above this one already exercises implicitly
+    /// via `DEFAULT_MODEL`.
+    #[test]
+    fn a_session_that_never_changes_models_attributes_every_turn_to_the_seed() {
+        let q_id = Uuid::new_v4();
+        let q = user_message(q_id, None, "First question?");
+        let a_id = Uuid::new_v4();
+        let a = assistant_message(a_id, Some(q_id), "First answer.");
+
+        let path = vec![&q, &a];
+        let turns = entries_to_turns(&path, DEFAULT_MODEL).unwrap();
+
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].model, DEFAULT_MODEL);
+    }
+
+    /// The mechanism itself: a `model_change` entry, chained exactly where
+    /// `reflect.rs::build_tree_payloads` puts a real one (immediately
+    /// before the Question it precedes), moves every Turn after it — but
+    /// not before it — onto the new model.
+    #[test]
+    fn a_model_change_entry_attributes_every_turn_after_it_to_the_new_model() {
+        let q1_id = Uuid::new_v4();
+        let q1 = user_message(q1_id, None, "First question?");
+        let a1_id = Uuid::new_v4();
+        let a1 = assistant_message(a1_id, Some(q1_id), "First answer.");
+
+        let change_id = Uuid::new_v4();
+        let change = model_change_entry(change_id, Some(a1_id), "claude-sonnet");
+
+        let q2_id = Uuid::new_v4();
+        let q2 = user_message(q2_id, Some(change_id), "Second question?");
+        let a2_id = Uuid::new_v4();
+        let a2 = assistant_message(a2_id, Some(q2_id), "Second answer.");
+
+        let path = vec![&q1, &a1, &change, &q2, &a2];
+        let turns = entries_to_turns(&path, DEFAULT_MODEL).unwrap();
+
+        assert_eq!(turns.len(), 2);
+        assert_eq!(
+            turns[0].model, DEFAULT_MODEL,
+            "the Turn before the model_change entry must still read as the seed model"
+        );
+        assert_eq!(
+            turns[1].model, "claude-sonnet",
+            "the Turn after the model_change entry must read as the new model"
         );
     }
 
@@ -1900,13 +2174,13 @@ mod tests {
         // *some* assistant entry in the run, not one with particular
         // content.
         let no_assistant_path = vec![&question, &result];
-        let turns = entries_to_turns(&no_assistant_path).unwrap();
+        let turns = entries_to_turns(&no_assistant_path, DEFAULT_MODEL).unwrap();
         assert_eq!(turns.len(), 0);
 
         // Sanity: the tool-call-bearing fixture above still finds an
         // assistant entry (it has one), proving the empty case above is
         // really about absence, not some other defect.
-        let turns_with_assistant = entries_to_turns(&path).unwrap();
+        let turns_with_assistant = entries_to_turns(&path, DEFAULT_MODEL).unwrap();
         assert_eq!(turns_with_assistant.len(), 1);
     }
 
@@ -1987,7 +2261,7 @@ mod tests {
                 .unwrap();
         assert_eq!(leaf, Some(entries[3].id));
 
-        let turns = load_turns(&pool, session_id).await.unwrap();
+        let turns = load_turns(&pool, session_id, DEFAULT_MODEL).await.unwrap();
         assert_eq!(turns.len(), 1);
         assert_eq!(turns[0].answer, "You ran a 5k on July 5th.");
     }

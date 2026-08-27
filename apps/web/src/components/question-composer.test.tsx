@@ -27,7 +27,7 @@ describe("QuestionComposer", () => {
     fireEvent.change(getTextarea(), { target: { value: "what did I do today" } });
     fireEvent.keyDown(getTextarea(), { key: "Enter", metaKey: true });
 
-    expect(onAsk).toHaveBeenCalledWith("what did I do today");
+    expect(onAsk).toHaveBeenCalledWith("what did I do today", undefined);
     expect(getTextarea()).toHaveValue("");
   });
 
@@ -38,7 +38,7 @@ describe("QuestionComposer", () => {
     fireEvent.change(getTextarea(), { target: { value: "what did I do today" } });
     fireEvent.keyDown(getTextarea(), { key: "Enter", ctrlKey: true });
 
-    expect(onAsk).toHaveBeenCalledWith("what did I do today");
+    expect(onAsk).toHaveBeenCalledWith("what did I do today", undefined);
   });
 
   it("does not ask on Shift+Enter even with a modifier also held", () => {
@@ -69,7 +69,7 @@ describe("QuestionComposer", () => {
     fireEvent.change(getTextarea(), { target: { value: "hello" } });
     fireEvent.click(screen.getByRole("button", { name: "Ask" }));
 
-    expect(onAsk).toHaveBeenCalledWith("hello");
+    expect(onAsk).toHaveBeenCalledWith("hello", undefined);
   });
 
   it("disables the textarea and Ask button while disabled", () => {
@@ -105,5 +105,67 @@ describe("QuestionComposer", () => {
     );
 
     expect(getTextarea()).toHaveValue("typed while asking");
+  });
+});
+
+// Issue #98: the model picker. `models` is `undefined`/empty in every test
+// above this point — those pin "the default case is unchanged" on their
+// own: no picker renders, and `onAsk`'s second argument is always
+// `undefined`, exactly what a Server that predates GET /v1/models (or one
+// whose wrapper is unreachable) leaves this component with.
+describe("QuestionComposer's model picker", () => {
+  const models = [
+    { id: "codex-terra", streaming: false, context_window: 272000 },
+    { id: "claude-sonnet", streaming: true, context_window: 200000 },
+  ];
+
+  it("renders no picker at all when no models are offered", () => {
+    render(<QuestionComposer onAsk={vi.fn()} />);
+    expect(screen.queryByLabelText("Model")).not.toBeInTheDocument();
+  });
+
+  it("offers exactly the models the Server returned, plus Server default", () => {
+    render(<QuestionComposer onAsk={vi.fn()} models={models} />);
+    const picker = screen.getByLabelText("Model");
+    const options = Array.from(picker.querySelectorAll("option")).map(
+      (option) => option.textContent,
+    );
+    expect(options).toEqual(["Server default", "codex-terra", "claude-sonnet"]);
+  });
+
+  it("asks with no model chosen when the picker is left on Server default", () => {
+    const onAsk = vi.fn();
+    render(<QuestionComposer onAsk={onAsk} models={models} />);
+
+    fireEvent.change(getTextarea(), { target: { value: "hello" } });
+    fireEvent.click(screen.getByRole("button", { name: "Ask" }));
+
+    expect(onAsk).toHaveBeenCalledWith("hello", undefined);
+  });
+
+  it("asks with the chosen model's id once the picker is changed", () => {
+    const onAsk = vi.fn();
+    render(<QuestionComposer onAsk={onAsk} models={models} />);
+
+    fireEvent.change(screen.getByLabelText("Model"), { target: { value: "claude-sonnet" } });
+    fireEvent.change(getTextarea(), { target: { value: "hello" } });
+    fireEvent.click(screen.getByRole("button", { name: "Ask" }));
+
+    expect(onAsk).toHaveBeenCalledWith("hello", "claude-sonnet");
+  });
+
+  it("points the picker at currentModel — an opened Conversation already on a chosen model", () => {
+    render(<QuestionComposer onAsk={vi.fn()} models={models} currentModel="claude-sonnet" />);
+    expect(screen.getByLabelText("Model")).toHaveValue("claude-sonnet");
+  });
+
+  it("re-points the picker when currentModel changes, e.g. opening a different Session", () => {
+    const { rerender } = render(
+      <QuestionComposer onAsk={vi.fn()} models={models} currentModel="claude-sonnet" />,
+    );
+    expect(screen.getByLabelText("Model")).toHaveValue("claude-sonnet");
+
+    rerender(<QuestionComposer onAsk={vi.fn()} models={models} currentModel={undefined} />);
+    expect(screen.getByLabelText("Model")).toHaveValue("");
   });
 });

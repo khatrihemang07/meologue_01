@@ -12,3 +12,7 @@ export type WireReflectRequest = components["schemas"]["ReflectRequest"];
 export type WireReflectResponse = components["schemas"]["ReflectResponse"];
 export type WireDigestResponse = components["schemas"]["DigestResponse"];
 export type WireDigest = components["schemas"]["Digest"];
+// Issue #98: `GET /v1/models` (issue #96 built the route; this is its first
+// client-side consumer).
+export type WireModelsResponse = components["schemas"]["ModelsResponse"];
+export type WireModelInfo = components["schemas"]["ModelInfo"];

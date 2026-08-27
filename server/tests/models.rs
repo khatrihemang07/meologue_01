@@ -55,6 +55,11 @@ fn reflect_state(chat_base_url: &str) -> ReflectState {
         context_window: 200_000,
         chat_base_url: chat_base_url.to_string(),
         chat_api_key: None,
+        // Issue #98: `models_handler` never reads either of these — same
+        // "exists only to satisfy the struct's shape" reasoning as every
+        // other field on `reflect_state` here.
+        chat_model: "codex-terra".to_string(),
+        chat_streaming: false,
     }
 }
 

@@ -327,6 +327,21 @@ export interface components {
             models: components["schemas"]["ModelInfo"][];
         };
         ReflectRequest: {
+            /**
+             * @description Issue #98: the model this Question should run on, or `None` to mean
+             *     "whatever this Conversation is already on" — the Server's own
+             *     configured default (`ReflectState::chat_model`) for a brand-new
+             *     Session, or the model its own last Turn already recorded otherwise.
+             *     **Choosing nothing is not the same as choosing the default on every
+             *     request** — a Conversation that moved onto `claude-sonnet` keeps
+             *     asking on `claude-sonnet` until a client names a different model
+             *     again, it does not silently fall back the moment a request omits
+             *     this field. `run_reflect_stream_inner`'s own call to `resolve_model`
+             *     is where that resolution actually happens; a `Some` naming a model
+             *     this Server can no longer reach is not rejected here — see this
+             *     module's own doc comment on what happens instead.
+             */
+            model?: string | null;
             /** Format: int32 */
             protocol_version: number;
             question: string;
@@ -397,6 +412,15 @@ export interface components {
              *     Grounding by construction, not by omission.
              */
             grounding_entry_ids: string[];
+            /**
+             * @description Issue #98: the model this Turn actually ran on — `resolve_model`'s
+             *     own `resolved_model_id`, echoed back so a client can attribute the
+             *     Answer it just watched arrive without a second round trip to
+             *     `GET /v1/sessions/{id}` (which would carry the same value, via
+             *     `SessionTurnRow::model`, but only after the tree write this
+             *     response is itself the result of has already committed).
+             */
+            model: string;
             /**
              * Format: uuid
              * @description The Session this Turn was recorded into — freshly minted when the
@@ -480,6 +504,23 @@ export interface components {
             fallback_used: boolean;
             grounded: boolean;
             grounding_entry_ids: string[];
+            /**
+             * @description Issue #98: the model that produced this Turn's Answer — never
+             *     stored on the Turn itself (there is no `model` column on
+             *     `session_turns`, and `record_turn`/`record_turn_from_steps` gained
+             *     no new field either). Derived the same way `tool_called` above is:
+             *     `entries_to_turns` tracks whichever model a `model_change` entry
+             *     most recently named while it walks the tree, and stamps that value
+             *     onto every Turn it finishes — see `ModelChangePayload`'s own doc
+             *     comment for why that's the single source of truth this field reads
+             *     from, rather than a second, independently-writable value. A Turn
+             *     read off the pre-#91 `session_turns` fallback (`load_turns_from_session_turns`)
+             *     has no tree to derive this from at all; it's set to `load_turns`'s
+             *     own `default_model` there, which is simply true — every Turn that
+             *     old only ever had one model to run on, the Server's sole configured
+             *     one, because per-Conversation choice didn't exist yet.
+             */
+            model: string;
             question: string;
             /**
              * @description Issue #103: whether this Turn's run called a tool at all, kept apart

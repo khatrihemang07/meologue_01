@@ -16,7 +16,8 @@ import {
 } from "@/lib/conversation";
 import { deviceUtcOffsetMinutes } from "@/lib/entry-day";
 import { clearLastSessionId, readLastSessionId, writeLastSessionId } from "@/lib/last-session";
-import { groundingEntriesQueryKey } from "@/lib/query-keys";
+import { modelsTransport } from "@/lib/models-transport";
+import { groundingEntriesQueryKey, MODELS_QUERY_KEY } from "@/lib/query-keys";
 import { applyReflectEvent, initialLiveRunState, type LiveRunState } from "@/lib/reflect-live-run";
 import { reflectTransport } from "@/lib/reflect-transport";
 import { type SessionResult, sessionsTransport } from "@/lib/sessions-transport";
@@ -133,6 +134,13 @@ function ConversationTurnRow({
     <div className="flex flex-col gap-2">
       <AskedQuestion text={turn.question} />
       <GivenAnswer text={turn.answer} />
+      {/* Issue #98: "reading a Conversation back shows which model produced
+          which part" — shown for every turn, not only on a change, so a
+          limit hit under one model is never mistaken for one under
+          whichever model replaced it (this ticket's own acceptance
+          criterion, server/src/reflect.rs's ReflectResponse.model doc
+          comment). */}
+      <p className="mr-auto text-xs text-muted-foreground">{turn.model}</p>
       <GroundingNote turn={turn} />
       <GroundingDisclosure
         turn={turn}
@@ -252,6 +260,31 @@ export function ReflectionPage() {
 
   const sessionData = sessionId === undefined ? undefined : sessionQuery.data;
   const turns = sessionData?.ok ? sessionData.snapshot.turns : [];
+
+  // Issue #98: the models the Server can actually reach right now, offered
+  // to `QuestionComposer`'s own picker. Degrades to an empty array (no
+  // picker at all) on any failure — a Server that predates the route, or
+  // one whose wrapper is unreachable (`modelsTransport`'s own doc comment)
+  // — the same "unknown becomes off" posture `useSyncEnabled` already takes
+  // for a missing Server URL (ADR 0011), applied here to a missing model
+  // list instead. Not gated on `syncEnabled`/a Session existing: the picker
+  // is meaningful for a brand-new `/reflect` too, which is exactly where
+  // "start a Conversation on a chosen model" (issue #98's first acceptance
+  // criterion) has to be offered.
+  const modelsQuery = useQuery({
+    queryKey: MODELS_QUERY_KEY,
+    queryFn: async () => {
+      const result = await modelsTransport();
+      return result.ok ? result.models : [];
+    },
+  });
+  const models = modelsQuery.data ?? [];
+
+  // Whatever model this Conversation is already on — the last Turn's own
+  // `model`, or `undefined` for a brand-new one (`QuestionComposer`'s own
+  // picker then shows "Server default", which is exactly right: nothing
+  // has been asked yet, so nothing has resolved a model at all).
+  const currentModel = turns.at(-1)?.model;
 
   // Issue #79 regression fix: every Grounding id across the whole
   // Conversation, resolved in one batched lookup rather than one per
@@ -403,7 +436,7 @@ export function ReflectionPage() {
     }
   }, [sessionId, sessionData]);
 
-  async function handleAsk(question: string) {
+  async function handleAsk(question: string, model?: string) {
     setNotSupported(false);
     setPending(question);
     setLiveRun(initialLiveRunState);
@@ -433,6 +466,12 @@ export function ReflectionPage() {
         // against this Device's own local day, never the server's clock —
         // see ADR 0016's precedent (Export's per-day grouping) and ADR 0023.
         utc_offset_minutes: deviceUtcOffsetMinutes(),
+        // Issue #98: `undefined` (the picker left on "Server default", or
+        // every ask before this ticket) becomes `null` on the wire — "stay
+        // on whatever this Conversation is already on," never "reset to the
+        // default" (`WireReflectRequest.model`'s own doc comment,
+        // server/src/reflect.rs).
+        model: model ?? null,
       },
       {
         signal: controller.signal,
@@ -517,7 +556,13 @@ export function ReflectionPage() {
       pinnedThread={syncEnabled ? { watch: turns.length, forceToNewest: askSignal } : undefined}
       composerSlot={
         syncEnabled && !notFound ? (
-          <QuestionComposer onAsk={handleAsk} disabled={pending !== null} restore={restore} />
+          <QuestionComposer
+            onAsk={handleAsk}
+            disabled={pending !== null}
+            restore={restore}
+            models={models}
+            currentModel={currentModel}
+          />
         ) : undefined
       }
     >

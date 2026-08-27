@@ -502,6 +502,13 @@
           "question"
         ],
         "properties": {
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Issue #98: the model this Question should run on, or `None` to mean\n\"whatever this Conversation is already on\" — the Server's own\nconfigured default (`ReflectState::chat_model`) for a brand-new\nSession, or the model its own last Turn already recorded otherwise.\n**Choosing nothing is not the same as choosing the default on every\nrequest** — a Conversation that moved onto `claude-sonnet` keeps\nasking on `claude-sonnet` until a client names a different model\nagain, it does not silently fall back the moment a request omits\nthis field. `run_reflect_stream_inner`'s own call to `resolve_model`\nis where that resolution actually happens; a `Some` naming a model\nthis Server can no longer reach is not rejected here — see this\nmodule's own doc comment on what happens instead."
+          },
           "protocol_version": {
             "type": "integer",
             "format": "int32"
@@ -533,7 +540,8 @@
           "grounding_entry_ids",
           "grounded",
           "fallback_used",
-          "tool_called"
+          "tool_called",
+          "model"
         ],
         "properties": {
           "answer": {
@@ -554,6 +562,10 @@
               "format": "uuid"
             },
             "description": "The Entry ids that appeared in a tool result during this run, in the\norder they first appeared — `run_reflect_stream_inner`'s own dedup, over\nevery `harness::agent_loop::Step::ToolResult` the loop produced, not\nretrieval's merge-and-sort (that description, and everything below\nthrough `docs/adr/0023`/`0024`, is what these fields meant under\n`run_reflect`, the fixed pipeline `/v1/reflect` no longer calls —\nsee this module's own doc comment). Empty when the loop never called\na tool at all — a prose-only reply is not unusual, and carries no\nGrounding by construction, not by omission."
+          },
+          "model": {
+            "type": "string",
+            "description": "Issue #98: the model this Turn actually ran on — `resolve_model`'s\nown `resolved_model_id`, echoed back so a client can attribute the\nAnswer it just watched arrive without a second round trip to\n`GET /v1/sessions/{id}` (which would carry the same value, via\n`SessionTurnRow::model`, but only after the tree write this\nresponse is itself the result of has already committed)."
           },
           "session_id": {
             "type": "string",
@@ -641,6 +653,7 @@
           "grounded",
           "fallback_used",
           "tool_called",
+          "model",
           "created_at"
         ],
         "properties": {
@@ -663,6 +676,10 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          "model": {
+            "type": "string",
+            "description": "Issue #98: the model that produced this Turn's Answer — never\nstored on the Turn itself (there is no `model` column on\n`session_turns`, and `record_turn`/`record_turn_from_steps` gained\nno new field either). Derived the same way `tool_called` above is:\n`entries_to_turns` tracks whichever model a `model_change` entry\nmost recently named while it walks the tree, and stamps that value\nonto every Turn it finishes — see `ModelChangePayload`'s own doc\ncomment for why that's the single source of truth this field reads\nfrom, rather than a second, independently-writable value. A Turn\nread off the pre-#91 `session_turns` fallback (`load_turns_from_session_turns`)\nhas no tree to derive this from at all; it's set to `load_turns`'s\nown `default_model` there, which is simply true — every Turn that\nold only ever had one model to run on, the Server's sole configured\none, because per-Conversation choice didn't exist yet."
           },
           "question": {
             "type": "string"

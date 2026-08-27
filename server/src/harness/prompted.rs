@@ -36,7 +36,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 use tokio::sync::mpsc;
 
-use crate::llm::{ChatMessage, LlmClient};
+use crate::llm::{ChatMessage, ChatReply, ChatStreamEvent, LlmClient};
 use crate::reflect::{extract_json_object, strip_code_fences};
 
 use super::chat::{AssistantMessageStream, ChatClient, StreamEvent};
@@ -83,21 +83,76 @@ no way to check something before trying one; if you are unsure whether a tool wi
 call it and see, rather than assuming in your reply that it wouldn't.";
 
 /// The `chat::ChatClient` this ticket builds. Wraps an ordinary
-/// `llm::LlmClient` — today, always `llm::OpenAiCompatibleClient`, whose
-/// `chat` call is not streaming, matching the documented reality that the
-/// configured model behind it (`codex-terra`) cannot stream at all and so
-/// delivers its whole reply as a single chunk. `ToolCallScanner`, which
-/// does the actual parsing below, is written to be indifferent to how many
-/// chunks it's fed — that's what lets a later, genuinely streaming
-/// transport (`claude-*` models can stream) start delivering many chunks
-/// through `stream` without anything here changing.
+/// `llm::LlmClient` — today, always `llm::OpenAiCompatibleClient` — plus
+/// `streaming`, issue #98's own addition: whether *this* Turn's resolved
+/// model actually streams (`reflect::resolve_model`, which is the only
+/// place that decides this and passes it into `PromptedToolClient::new`).
+/// `ToolCallScanner`, which does the actual tool-call parsing below, was
+/// already written to be indifferent to how many chunks it's fed — that
+/// was always in anticipation of this: a genuinely streaming transport
+/// delivering many chunks through `stream` needed nothing here to change
+/// about how those chunks get parsed into `ContentBlock`s, only *when* and
+/// *how many* of them arrive.
 pub struct PromptedToolClient {
     chat_client: Arc<dyn LlmClient + Send + Sync>,
+    streaming: bool,
 }
 
 impl PromptedToolClient {
-    pub fn new(chat_client: Arc<dyn LlmClient + Send + Sync>) -> Self {
-        Self { chat_client }
+    pub fn new(chat_client: Arc<dyn LlmClient + Send + Sync>, streaming: bool) -> Self {
+        Self {
+            chat_client,
+            streaming,
+        }
+    }
+}
+
+/// Turns the `Result<ChatReply>` either call path ends with into the
+/// `AssistantMessage` `chat::ChatClient::stream`'s contract requires —
+/// shared by both `PromptedToolClient::stream` branches below so parsing
+/// the tool-call wire format out of a reply, and turning a failed request
+/// into `chat::ChatClient`'s never-`Err` terminal message, is written
+/// exactly once regardless of which transport produced the reply.
+fn assistant_message_from_reply(result: anyhow::Result<ChatReply>) -> AssistantMessage {
+    match result {
+        Ok(reply) => {
+            let mut scanner = ToolCallScanner::new();
+            scanner.feed(&reply.content);
+            let content = scanner.finish();
+            let stop_reason = if content
+                .iter()
+                .any(|block| matches!(block, ContentBlock::ToolCall { .. }))
+            {
+                StopReason::ToolUse
+            } else {
+                StopReason::Stop
+            };
+            AssistantMessage {
+                content,
+                stop_reason,
+                error_message: None,
+                // Issue #97: the one place `llm::Usage` (the wire
+                // vocabulary — `prompt_tokens`/`completion_tokens`) and
+                // `harness::types::Usage` (`compaction::estimate_tokens`'s
+                // own vocabulary — `input_tokens`/`output_tokens`) meet.
+                // Both name the same two numbers; the rename exists
+                // because each module speaks its own domain's language,
+                // not because the values mean anything different.
+                usage: reply.usage.map(|usage| Usage {
+                    input_tokens: usage.prompt_tokens,
+                    output_tokens: usage.completion_tokens,
+                }),
+            }
+        }
+        // The never-`Err` contract `chat::ChatClient` documents: a failed
+        // request becomes a terminal message, never a propagated
+        // `Result::Err`.
+        Err(err) => AssistantMessage {
+            content: Vec::new(),
+            stop_reason: StopReason::Error,
+            error_message: Some(err.to_string()),
+            usage: None,
+        },
     }
 }
 
@@ -112,51 +167,64 @@ impl ChatClient for PromptedToolClient {
         }];
         messages.extend(ctx.messages.iter().map(render_message));
 
-        let message = match self.chat_client.chat(&messages).await {
-            Ok(reply) => {
-                let mut scanner = ToolCallScanner::new();
-                scanner.feed(&reply.content);
-                let content = scanner.finish();
-                let stop_reason = if content
-                    .iter()
-                    .any(|block| matches!(block, ContentBlock::ToolCall { .. }))
-                {
-                    StopReason::ToolUse
-                } else {
-                    StopReason::Stop
-                };
-                AssistantMessage {
-                    content,
-                    stop_reason,
-                    error_message: None,
-                    // Issue #97: the one place `llm::Usage` (the wire
-                    // vocabulary — `prompt_tokens`/`completion_tokens`) and
-                    // `harness::types::Usage` (`compaction::estimate_tokens`'s
-                    // own vocabulary — `input_tokens`/`output_tokens`) meet.
-                    // Both name the same two numbers; the rename exists
-                    // because each module speaks its own domain's language,
-                    // not because the values mean anything different.
-                    usage: reply.usage.map(|usage| Usage {
-                        input_tokens: usage.prompt_tokens,
-                        output_tokens: usage.completion_tokens,
-                    }),
+        if self.streaming {
+            // Issue #98: the genuinely live path. Spawned, not awaited
+            // inline — `chat::ChatClient::stream`'s whole contract is to
+            // hand back a receiver a caller can read progressively
+            // (`agent_loop::run_inner` does exactly this, forwarding each
+            // `TextDelta` as a `LoopEvent::MessageUpdate` the moment it
+            // arrives), which requires this method to return *before* the
+            // reply is complete. Each `ChatStreamEvent::Delta` is forwarded
+            // verbatim, as its own raw text, the moment `chat_stream`
+            // produces it — including, in principle, text that turns out to
+            // sit inside a `<tool_call>` tag once the whole reply is in:
+            // `ToolCallScanner` (fed only once, from the complete
+            // accumulated reply in `ChatStreamEvent::Done`, exactly like the
+            // non-streaming branch below) is what decides the *final*,
+            // authoritative `content` a Turn is recorded and answered with,
+            // never the raw deltas a client watched arrive. A live view
+            // that briefly shows a stray `<tool_call>` fragment before a
+            // tool-calling reply's `message_end` corrects it is the
+            // accepted cost of forwarding real, unfiltered progress rather
+            // than a second, delayed parse of it — issue #98 is about
+            // making genuine streaming arrive at all, not about masking
+            // tool-call syntax from a live view, which nothing before this
+            // ticket did either.
+            let chat_client = self.chat_client.clone();
+            let messages = messages;
+            tokio::spawn(async move {
+                let mut inner_rx = chat_client.chat_stream(&messages).await;
+                let mut result = None;
+                while let Some(event) = inner_rx.recv().await {
+                    match event {
+                        ChatStreamEvent::Delta(text) => {
+                            let _ = tx.send(StreamEvent::TextDelta(text));
+                        }
+                        ChatStreamEvent::Done(reply_result) => {
+                            result = Some(reply_result);
+                        }
+                    }
                 }
-            }
-            // The never-`Err` contract `chat::ChatClient` documents: a
-            // failed request becomes a terminal message, never a
-            // propagated `Result::Err`.
-            Err(err) => AssistantMessage {
-                content: Vec::new(),
-                stop_reason: StopReason::Error,
-                error_message: Some(err.to_string()),
-                usage: None,
-            },
-        };
+                let result = result.expect(
+                    "LlmClient::chat_stream must send exactly one Done event before closing its channel",
+                );
+                let message = assistant_message_from_reply(result);
+                // The receiver can only be dropped if the caller abandoned
+                // the stream entirely, in which case there is nothing left
+                // to deliver this event to — not an error worth surfacing.
+                let _ = tx.send(StreamEvent::Done(message));
+            });
+        } else {
+            // Unchanged from before issue #98: one inline, non-streaming
+            // call, exactly the request `codex-terra` (or any model
+            // `resolve_model` didn't find streaming) has always received —
+            // no spawn, no extra channel hop, nothing about this branch's
+            // own behaviour or timing differs from what shipped before this
+            // ticket.
+            let message = assistant_message_from_reply(self.chat_client.chat(&messages).await);
+            let _ = tx.send(StreamEvent::Done(message));
+        }
 
-        // The receiver can only be dropped if the caller abandoned the
-        // stream entirely, in which case there is nothing left to deliver
-        // this event to — not an error worth surfacing.
-        let _ = tx.send(StreamEvent::Done(message));
         AssistantMessageStream::new(rx)
     }
 }
@@ -1020,9 +1088,12 @@ mod tests {
 
     #[tokio::test]
     async fn a_reply_with_no_tool_call_stops_with_the_text_as_the_answer() {
-        let client = PromptedToolClient::new(Arc::new(RecordingLlmClient::new(
-            "You wrote about this twice last week.",
-        )));
+        let client = PromptedToolClient::new(
+            Arc::new(RecordingLlmClient::new(
+                "You wrote about this twice last week.",
+            )),
+            false,
+        );
         let ctx = Context {
             system_prompt: "You are Reflection.".to_string(),
             messages: vec![Message::User("What did I write about running?".to_string())],
@@ -1041,9 +1112,12 @@ mod tests {
 
     #[tokio::test]
     async fn a_reply_containing_a_tool_call_stops_with_tool_use() {
-        let client = PromptedToolClient::new(Arc::new(RecordingLlmClient::new(
-            "<tool_call>{\"name\": \"entries_in_range\", \"arguments\": {\"from\": \"2026-07-01\", \"to\": \"2026-07-31\"}}</tool_call>",
-        )));
+        let client = PromptedToolClient::new(
+            Arc::new(RecordingLlmClient::new(
+                "<tool_call>{\"name\": \"entries_in_range\", \"arguments\": {\"from\": \"2026-07-01\", \"to\": \"2026-07-31\"}}</tool_call>",
+            )),
+            false,
+        );
         let ctx = Context {
             system_prompt: "You are Reflection.".to_string(),
             messages: vec![Message::User("What did I write last July?".to_string())],
@@ -1057,7 +1131,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_failed_chat_call_becomes_a_terminal_error_message_never_a_panic_or_err() {
-        let client = PromptedToolClient::new(Arc::new(FailingLlmClient));
+        let client = PromptedToolClient::new(Arc::new(FailingLlmClient), false);
         let ctx = Context {
             system_prompt: "You are Reflection.".to_string(),
             messages: vec![Message::User("hello".to_string())],
@@ -1081,12 +1155,15 @@ mod tests {
     /// correctly is what makes real usage reach compaction at all.
     #[tokio::test]
     async fn real_usage_reaches_the_assistant_message_with_the_harness_names() {
-        let client = PromptedToolClient::new(Arc::new(RecordingLlmClient::new("done").with_usage(
-            crate::llm::Usage {
-                prompt_tokens: 17_432,
-                completion_tokens: 214,
-            },
-        )));
+        let client = PromptedToolClient::new(
+            Arc::new(
+                RecordingLlmClient::new("done").with_usage(crate::llm::Usage {
+                    prompt_tokens: 17_432,
+                    completion_tokens: 214,
+                }),
+            ),
+            false,
+        );
         let ctx = Context {
             system_prompt: "You are Reflection.".to_string(),
             messages: vec![Message::User("hello".to_string())],
@@ -1103,10 +1180,129 @@ mod tests {
         );
     }
 
+    /// A scripted `LlmClient` whose `chat_stream` override sends several
+    /// `ChatStreamEvent::Delta`s before its `Done` — issue #98's own
+    /// "streaming model" test double, the `RecordingLlmClient`-shaped
+    /// counterpart to `harness::agent_loop`'s `StreamingChatClient` (which
+    /// scripts one layer up, at the `chat::ChatClient` level, and so cannot
+    /// stand in for `PromptedToolClient` itself — this is what proves
+    /// `PromptedToolClient::stream` is the thing that actually turns a
+    /// streaming `LlmClient` into `chat::StreamEvent::TextDelta`s, not just
+    /// that `agent_loop::run_inner` forwards them once they exist).
+    struct StreamingLlmClient {
+        deltas: Vec<&'static str>,
+    }
+
+    #[async_trait]
+    impl LlmClient for StreamingLlmClient {
+        async fn chat(&self, _messages: &[ChatMessage]) -> anyhow::Result<crate::llm::ChatReply> {
+            unimplemented!("PromptedToolClient never calls chat() when streaming: true")
+        }
+
+        async fn chat_stream(
+            &self,
+            _messages: &[ChatMessage],
+        ) -> mpsc::UnboundedReceiver<ChatStreamEvent> {
+            let (tx, rx) = mpsc::unbounded_channel();
+            let mut whole = String::new();
+            for delta in &self.deltas {
+                whole.push_str(delta);
+                let _ = tx.send(ChatStreamEvent::Delta((*delta).to_string()));
+            }
+            let _ = tx.send(ChatStreamEvent::Done(Ok(crate::llm::ChatReply::text(
+                whole,
+            ))));
+            rx
+        }
+
+        async fn embed_document(&self, _text: &str) -> anyhow::Result<Vec<f32>> {
+            unimplemented!("not exercised by PromptedToolClient")
+        }
+
+        async fn embed_query(&self, _text: &str) -> anyhow::Result<Vec<f32>> {
+            unimplemented!("not exercised by PromptedToolClient")
+        }
+    }
+
+    /// Issue #98's own acceptance criterion: "a streaming-capable model
+    /// streams its Answer." `streaming: true` is what tells
+    /// `PromptedToolClient` to call `chat_stream` instead of `chat` at all
+    /// — this proves that, once it does, every `ChatStreamEvent::Delta`
+    /// `StreamingLlmClient` sends reaches `stream`'s own receiver as a
+    /// `chat::StreamEvent::TextDelta`, in order, before the terminal
+    /// `Done` — and that the `Done` message's `content` is still the whole,
+    /// correctly-parsed reply, not just the last delta.
+    #[tokio::test]
+    async fn a_streaming_model_forwards_every_delta_before_the_terminal_done() {
+        let client = PromptedToolClient::new(
+            Arc::new(StreamingLlmClient {
+                deltas: vec!["You ", "wrote ", "about running."],
+            }),
+            true,
+        );
+        let ctx = Context {
+            system_prompt: "You are Reflection.".to_string(),
+            messages: vec![Message::User("What did I write about?".to_string())],
+            tools: vec![],
+        };
+
+        let mut stream = client.stream(&ctx).await;
+        let mut deltas = Vec::new();
+        let mut done = None;
+        while let Some(event) = stream.next_event().await {
+            match event {
+                StreamEvent::TextDelta(delta) => deltas.push(delta),
+                StreamEvent::Done(message) => done = Some(message),
+            }
+        }
+
+        assert_eq!(deltas, vec!["You ", "wrote ", "about running."]);
+        let message = done.expect("a Done event must have been sent");
+        assert_eq!(message.stop_reason, StopReason::Stop);
+        assert_eq!(
+            message.content,
+            vec![ContentBlock::Text("You wrote about running.".to_string())]
+        );
+    }
+
+    /// The other half of the same criterion: a Turn resolved to a
+    /// non-streaming model (`streaming: false`, the default's own value)
+    /// must produce no `TextDelta` at all, even from an `LlmClient` whose
+    /// `chat_stream` *could* have scripted some — `PromptedToolClient`
+    /// never calls it in this branch, `chat()` is what runs instead.
+    #[tokio::test]
+    async fn a_non_streaming_model_never_calls_chat_stream_or_emits_a_delta() {
+        let client = PromptedToolClient::new(
+            Arc::new(RecordingLlmClient::new("You wrote about running.")),
+            false,
+        );
+        let ctx = Context {
+            system_prompt: "You are Reflection.".to_string(),
+            messages: vec![Message::User("What did I write about?".to_string())],
+            tools: vec![],
+        };
+
+        let mut stream = client.stream(&ctx).await;
+        let mut saw_delta = false;
+        let mut done = None;
+        while let Some(event) = stream.next_event().await {
+            match event {
+                StreamEvent::TextDelta(_) => saw_delta = true,
+                StreamEvent::Done(message) => done = Some(message),
+            }
+        }
+
+        assert!(
+            !saw_delta,
+            "a non-streaming model must never emit a TextDelta"
+        );
+        assert!(done.is_some());
+    }
+
     #[tokio::test]
     async fn the_tools_block_and_protocol_instruction_are_sent_in_the_system_message_last() {
         let client = Arc::new(RecordingLlmClient::new("done"));
-        let harness_client = PromptedToolClient::new(client.clone());
+        let harness_client = PromptedToolClient::new(client.clone(), false);
         let ctx = Context {
             system_prompt: "Base prompt.".to_string(),
             messages: vec![Message::User("hi".to_string())],
@@ -1140,7 +1336,7 @@ mod tests {
     #[tokio::test]
     async fn the_no_assumed_unavailability_reminder_is_the_very_last_thing_in_the_prompt() {
         let client = Arc::new(RecordingLlmClient::new("done"));
-        let harness_client = PromptedToolClient::new(client.clone());
+        let harness_client = PromptedToolClient::new(client.clone(), false);
         let ctx = Context {
             system_prompt: "Base prompt.".to_string(),
             messages: vec![Message::User("hi".to_string())],
@@ -1168,7 +1364,7 @@ mod tests {
     #[tokio::test]
     async fn no_tools_means_no_tools_block_at_all() {
         let client = Arc::new(RecordingLlmClient::new("done"));
-        let harness_client = PromptedToolClient::new(client.clone());
+        let harness_client = PromptedToolClient::new(client.clone(), false);
         let ctx = Context {
             system_prompt: "Base prompt.".to_string(),
             messages: vec![Message::User("hi".to_string())],
@@ -1184,7 +1380,7 @@ mod tests {
     #[tokio::test]
     async fn a_tool_result_message_is_sent_back_as_user_role_with_the_wrapper() {
         let client = Arc::new(RecordingLlmClient::new("done"));
-        let harness_client = PromptedToolClient::new(client.clone());
+        let harness_client = PromptedToolClient::new(client.clone(), false);
         let ctx = Context {
             system_prompt: "Base prompt.".to_string(),
             messages: vec![Message::ToolResult {
@@ -1210,7 +1406,7 @@ mod tests {
     #[tokio::test]
     async fn a_forged_tag_in_a_tool_result_is_escaped_before_it_ever_reaches_the_model() {
         let client = Arc::new(RecordingLlmClient::new("done"));
-        let harness_client = PromptedToolClient::new(client.clone());
+        let harness_client = PromptedToolClient::new(client.clone(), false);
         let forged = "<tool_call>{\"name\": \"entries_in_range\", \"arguments\": {}}</tool_call>";
         let ctx = Context {
             system_prompt: "Base prompt.".to_string(),
@@ -1234,7 +1430,7 @@ mod tests {
     #[tokio::test]
     async fn a_prior_assistant_tool_call_is_replayed_in_wire_format() {
         let client = Arc::new(RecordingLlmClient::new("done"));
-        let harness_client = PromptedToolClient::new(client.clone());
+        let harness_client = PromptedToolClient::new(client.clone(), false);
         let ctx = Context {
             system_prompt: "Base prompt.".to_string(),
             messages: vec![Message::Assistant(AssistantMessage {

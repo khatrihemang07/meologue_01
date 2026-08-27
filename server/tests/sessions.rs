@@ -51,6 +51,12 @@ fn reflect_state() -> ReflectState {
         // matching tests/reflect.rs's own `UNUSED_CHAT_BASE_URL` convention.
         chat_base_url: "http://127.0.0.1:1".to_string(),
         chat_api_key: None,
+        // Issue #98: `get_session_handler` reads `chat_model` (never a
+        // method on `chat_client`) to attribute a pre-#98 Turn — see
+        // `SessionTurnRow::model`'s own doc comment. `chat_streaming` is
+        // still never read by this route at all.
+        chat_model: "codex-terra".to_string(),
+        chat_streaming: false,
     }
 }
 

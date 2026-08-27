@@ -72,7 +72,9 @@ use crate::harness::tools::{
 };
 use crate::harness::types::{AssistantMessage, ContentBlock, Message, StopReason};
 use crate::llm::{ChatMessage, LlmClient};
-use crate::sessions::{self, EntryType, MessagePayload, NewTurn, SessionTurnRow};
+use crate::sessions::{
+    self, EntryType, MessagePayload, ModelChangePayload, NewTurn, SessionTurnRow,
+};
 use crate::sync::PROTOCOL_VERSION;
 
 /// One SSE frame, already built and ready to send — what every branch of
@@ -188,6 +190,20 @@ pub struct ReflectRequest {
     /// rejected Question.
     #[serde(default)]
     pub utc_offset_minutes: i32,
+    /// Issue #98: the model this Question should run on, or `None` to mean
+    /// "whatever this Conversation is already on" — the Server's own
+    /// configured default (`ReflectState::chat_model`) for a brand-new
+    /// Session, or the model its own last Turn already recorded otherwise.
+    /// **Choosing nothing is not the same as choosing the default on every
+    /// request** — a Conversation that moved onto `claude-sonnet` keeps
+    /// asking on `claude-sonnet` until a client names a different model
+    /// again, it does not silently fall back the moment a request omits
+    /// this field. `run_reflect_stream_inner`'s own call to `resolve_model`
+    /// is where that resolution actually happens; a `Some` naming a model
+    /// this Server can no longer reach is not rejected here — see this
+    /// module's own doc comment on what happens instead.
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -246,6 +262,13 @@ pub struct ReflectResponse {
     /// `tool_called: false` versus a genuine empty search is left to
     /// whichever ticket touches the client next.
     pub tool_called: bool,
+    /// Issue #98: the model this Turn actually ran on — `resolve_model`'s
+    /// own `resolved_model_id`, echoed back so a client can attribute the
+    /// Answer it just watched arrive without a second round trip to
+    /// `GET /v1/sessions/{id}` (which would carry the same value, via
+    /// `SessionTurnRow::model`, but only after the tree write this
+    /// response is itself the result of has already committed).
+    pub model: String,
 }
 
 /// `pub` (rather than crate-private, its original visibility) so
@@ -302,6 +325,25 @@ pub struct ReflectState {
     /// needs would widen that contract for no benefit to the other four.
     pub chat_base_url: String,
     pub chat_api_key: Option<String>,
+    /// Issue #98: the model id `chat_client`/`context_window` above are
+    /// already bound to — `LlmConfig::chat_model`, unwrapped once at
+    /// startup the same way `chat_base_url` already is (`main.rs`). This is
+    /// "choosing nothing" — the default this ticket's own acceptance
+    /// criterion says must not change. `resolve_model` (this module)
+    /// compares a request's own `ReflectRequest::model` against this field
+    /// to decide whether a Turn can reuse `chat_client`/`context_window`/
+    /// `chat_streaming` as-is or has to resolve a different model instead.
+    pub chat_model: String,
+    /// Issue #98: whether `chat_model` itself streams — read once at
+    /// startup from the same `GET /v1/models` list `chat_base_url` proxies
+    /// (`main.rs`), exactly like `context_window` is resolved once from
+    /// the single-model form of that same call. Any *other* model's
+    /// streaming support is looked up live, per Turn, through
+    /// `chat_client.list_models()` (`resolve_model`) — only the default
+    /// gets this startup-time shortcut, which is what keeps a Question
+    /// asked with no `model` making zero extra network calls, exactly as
+    /// it did before this ticket.
+    pub chat_streaming: bool,
 }
 
 /// The answering call's system prompt (chat call 2). `docs/adr/0024`: this
@@ -437,14 +479,15 @@ pub async fn reflect_handler(
     // stream that opens and then has to explain the same failure through an
     // event instead (this function's own doc comment covers why that
     // distinction matters: once headers go out, the status can't change).
-    let (prior_turns, title) = match resolve_session(&pool, req.session_id, &req.question).await {
-        Ok(resolved) => resolved,
-        Err(ReflectError::SessionNotFound) => return StatusCode::NOT_FOUND.into_response(),
-        Err(ReflectError::Internal(err)) => {
-            tracing::error!(error = ?err, "reflect failed while resolving the Session");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
+    let (prior_turns, title) =
+        match resolve_session(&pool, req.session_id, &req.question, &reflect.chat_model).await {
+            Ok(resolved) => resolved,
+            Err(ReflectError::SessionNotFound) => return StatusCode::NOT_FOUND.into_response(),
+            Err(ReflectError::Internal(err)) => {
+                tracing::error!(error = ?err, "reflect failed while resolving the Session");
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+        };
 
     // Unbounded: every sender here (`run_reflect_stream`'s own event sink,
     // plus its final `agent_end`) is synchronous and never awaits back-
@@ -478,13 +521,14 @@ async fn resolve_session(
     pool: &PgPool,
     session_id: Option<Uuid>,
     question: &str,
+    default_model: &str,
 ) -> Result<(Vec<SessionTurnRow>, String), ReflectError> {
     match session_id {
         Some(id) => {
             let session = sessions::find_session(pool, id)
                 .await?
                 .ok_or(ReflectError::SessionNotFound)?;
-            let turns = sessions::load_turns(pool, id).await?;
+            let turns = sessions::load_turns(pool, id, default_model).await?;
             Ok((turns, session.title))
         }
         None => Ok((Vec::new(), derive_title(question))),
@@ -958,6 +1002,85 @@ async fn run_reflect_stream(
 /// `false` — the loop has no disclosed-fallback mechanism yet. These two
 /// fields keep their old *names* on the wire while this function gives them
 /// the simplest honest meaning available today.
+/// What one Turn actually runs on: which `LlmClient` to call, whether it
+/// streams, and how much context it holds — everything `run_reflect_stream_inner`
+/// needs to build a `PromptedToolClient` and a compaction budget for
+/// whichever model this Turn resolved to.
+struct ResolvedModel {
+    client: Arc<dyn LlmClient + Send + Sync>,
+    streaming: bool,
+    context_window: u32,
+}
+
+/// Issue #98: resolves `model` — either a Question's own explicit choice,
+/// or whatever model a Conversation was already on (`run_reflect_stream_inner`'s
+/// own call site works out which) — into what actually running a Turn on
+/// it needs.
+///
+/// The Server's own configured default needs nothing looked up: `reflect`
+/// already carries `chat_client`/`chat_streaming`/`context_window`,
+/// resolved once at startup for exactly this model (`main.rs`,
+/// `LlmConfig::resolve_context_window`'s own doc comment on why a live
+/// call belongs there and not per Question) — reusing them here is what
+/// keeps a Question that never names a model, on a Conversation that never
+/// changed one, making zero extra network calls, exactly as it did before
+/// this ticket existed.
+///
+/// Any other model is looked up live, through `reflect.chat_client.list_models()`
+/// — the same list `GET /v1/models` reports, reached through the
+/// `LlmClient` trait rather than `llm::list_models` directly so a test can
+/// script it via `FakeChatClient::list_models` instead of needing a live
+/// (or mocked) wrapper to ask (see `LlmClient::list_models`'s own doc
+/// comment). A model absent from that list — never existed, or existed
+/// once and has since disappeared from the wrapper's own reach (issue
+/// #98's own "a model that disappears" acceptance criterion) — is **not**
+/// rejected here, and does **not** fall back to the default: `reflect.chat_client.for_model(model)`
+/// is called regardless (the same trait method that produces the client
+/// for a model this list *did* find), with the same conservative "unknown"
+/// defaults `resolve_context_window` already uses (`streaming: false`,
+/// `harness::compaction::DEFAULT_CONTEXT_WINDOW`), and left to fail at the
+/// one place that actually knows whether it's reachable — the chat call
+/// itself. Its `chat`/`chat_stream` turns that failure into an `Err`,
+/// `chat::ChatClient`'s never-`Err` contract turns *that*
+/// into a terminal `StopReason::Error`, and `run_reflect_stream_inner`
+/// only ever persists a Turn once `outcome.answer` exists — so a
+/// disappeared model produces a clean `agent_end` error event and writes
+/// nothing at all, leaving the Conversation exactly as it was before the
+/// attempt. This is a deliberate choice over silently falling back to the
+/// default: issue #98 is explicit that a limit hit under one model must
+/// not be mistaken for a limit under whatever replaced it, and a silent
+/// substitution would produce exactly that confusion — the model that
+/// actually answered would no longer be the one the Conversation (and any
+/// `model_change` entry already in it) says it's running on. A clear
+/// failure the user can retry, or explicitly change model past, is the
+/// honest alternative.
+async fn resolve_model(reflect: &ReflectState, model: &str) -> ResolvedModel {
+    if model == reflect.chat_model {
+        return ResolvedModel {
+            client: reflect.chat_client.clone(),
+            streaming: reflect.chat_streaming,
+            context_window: reflect.context_window,
+        };
+    }
+
+    let info = reflect
+        .chat_client
+        .list_models()
+        .await
+        .into_iter()
+        .find(|listed| listed.id == model);
+    let streaming = info.as_ref().is_some_and(|listed| listed.streaming);
+    let context_window = info
+        .and_then(|listed| listed.context_window)
+        .unwrap_or(compaction::DEFAULT_CONTEXT_WINDOW);
+    let client = reflect.chat_client.for_model(model);
+    ResolvedModel {
+        client,
+        streaming,
+        context_window,
+    }
+}
+
 async fn run_reflect_stream_inner(
     pool: &PgPool,
     reflect: &ReflectState,
@@ -969,6 +1092,30 @@ async fn run_reflect_stream_inner(
     let offset_minutes = req
         .utc_offset_minutes
         .clamp(MIN_UTC_OFFSET_MINUTES, MAX_UTC_OFFSET_MINUTES);
+
+    // Issue #98: which model this Turn actually runs on. `prior_turns` here
+    // is still the *whole*, un-windowed Conversation `resolve_session`
+    // loaded — its own `SessionTurnRow::model` (via `load_turns`'s
+    // tree-walk) already tells us exactly what the Conversation's last
+    // Turn ran on, so reading `.last()` off it is cheaper and more direct
+    // than re-walking the tree a second time here just to answer the same
+    // question. A brand-new Session (`prior_turns` empty) has nothing to
+    // read, and is on the Server's own default by construction. `req.model`
+    // overrides either: `None` means "stay on whatever this Conversation is
+    // already on" (`ReflectRequest::model`'s own doc comment is explicit
+    // this is *not* the same as "use the default" for an ongoing
+    // Conversation), `Some` names the model to move to, whether or not that
+    // differs from where the Conversation already was.
+    let current_model = prior_turns
+        .last()
+        .map(|turn| turn.model.clone())
+        .unwrap_or_else(|| reflect.chat_model.clone());
+    let resolved_model_id = req.model.clone().unwrap_or_else(|| current_model.clone());
+    // `None` when this Turn doesn't change anything — the ordinary case,
+    // and the reason an unbroken run on one model appends no `model_change`
+    // entries at all (`ModelChangePayload`'s own doc comment).
+    let model_change = (resolved_model_id != current_model).then(|| resolved_model_id.clone());
+    let resolved = resolve_model(reflect, &resolved_model_id).await;
 
     // Same windowing `run_reflect` applies — `CONVERSATION_WINDOW`'s own
     // doc comment covers why, and it applies identically here: what's
@@ -1001,8 +1148,8 @@ async fn run_reflect_stream_inner(
                 session_id,
                 prior_turns,
                 existing_summary,
-                &reflect.chat_client,
-                reflect.context_window,
+                &resolved.client,
+                resolved.context_window,
             )
             .await?
         }
@@ -1045,7 +1192,7 @@ async fn run_reflect_stream_inner(
     messages.extend(turns_to_messages(&prior_turns));
     messages.push(Message::User(req.question.clone()));
 
-    let chat_client = PromptedToolClient::new(reflect.chat_client.clone());
+    let chat_client = PromptedToolClient::new(resolved.client.clone(), resolved.streaming);
     // The one place `agent_loop::LoopEvent`s become SSE frames as the loop
     // actually produces them, rather than after the fact — `tx.send` is
     // synchronous and non-blocking (`SseSender`'s own doc comment), which is
@@ -1073,7 +1220,7 @@ async fn run_reflect_stream_inner(
         &tools,
         messages.clone(),
         None,
-        Some(reflect.context_window),
+        Some(resolved.context_window),
         &sink,
     )
     .await;
@@ -1108,7 +1255,7 @@ async fn run_reflect_stream_inner(
             &tools,
             retry_messages,
             None,
-            Some(reflect.context_window),
+            Some(resolved.context_window),
             &sink,
         )
         .await;
@@ -1189,7 +1336,7 @@ async fn run_reflect_stream_inner(
             &tools,
             retry_messages,
             None,
-            Some(reflect.context_window),
+            Some(resolved.context_window),
             &sink,
         )
         .await;
@@ -1306,6 +1453,7 @@ async fn run_reflect_stream_inner(
         &outcome.steps,
         &grounding_entry_ids,
         grounded,
+        model_change.as_deref(),
     );
     let session_id = sessions::record_turn_from_steps(
         pool,
@@ -1330,6 +1478,7 @@ async fn run_reflect_stream_inner(
         grounded,
         fallback_used,
         tool_called,
+        model: resolved_model_id,
     })
 }
 
@@ -1492,13 +1641,34 @@ async fn summarize_prior_turns(
 /// step exists only because it made a tool call; giving it the same
 /// Grounding as the real answer would be misleading if anything ever read
 /// it directly, and `entries_to_turns` never will.
+///
+/// `model_change` (issue #98) is `Some(model)` exactly when this Turn's own
+/// `resolve_model` call found the Conversation moving onto a different
+/// model than it was already on — `run_reflect_stream_inner`'s own
+/// `model_change` local, computed once before any chat call runs. When
+/// present, its `model_change` entry is chained on *first*, immediately
+/// before the Question it precedes and inside the same `payloads` list —
+/// same transaction, same `record_turn_from_steps` call — which is what
+/// "recorded in the Conversation itself, in order, alongside everything
+/// else" actually means: not a second write, not a separate endpoint, just
+/// one more entry in the same append.
 fn build_tree_payloads(
     question: &str,
     steps: &[Step],
     grounding_entry_ids: &[Uuid],
     grounded: bool,
+    model_change: Option<&str>,
 ) -> Vec<(EntryType, Value)> {
-    let mut payloads = Vec::with_capacity(steps.len() + 1);
+    let mut payloads = Vec::with_capacity(steps.len() + 2);
+    if let Some(model) = model_change {
+        payloads.push((
+            EntryType::ModelChange,
+            serde_json::to_value(ModelChangePayload {
+                model: model.to_string(),
+            })
+            .expect("serializing a model_change payload can't fail"),
+        ));
+    }
     payloads.push((
         EntryType::Message,
         serde_json::to_value(MessagePayload::User {
@@ -1573,7 +1743,7 @@ async fn run_reflect(
             let session = sessions::find_session(pool, id)
                 .await?
                 .ok_or(ReflectError::SessionNotFound)?;
-            let turns = sessions::load_turns(pool, id).await?;
+            let turns = sessions::load_turns(pool, id, &reflect.chat_model).await?;
             (turns, session.title)
         }
         None => (Vec::new(), derive_title(&req.question)),
@@ -1854,6 +2024,9 @@ async fn run_reflect(
         // is exactly why the loop replaced it as `/v1/reflect`'s live
         // implementation (`run_reflect_stream_inner`, above) rather than this one.
         tool_called: true,
+        // This pipeline has no model-selection concept either (issue #98
+        // postdates it) — always the Server's own configured default.
+        model: reflect.chat_model.clone(),
     })
 }
 

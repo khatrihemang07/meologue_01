@@ -69,6 +69,15 @@ export interface ConversationTurn {
    * honest, distinct thing the interface says, not silence.
    */
   digestSource?: DigestGroundingSource;
+  /**
+   * Issue #98: the model that actually produced this turn's Answer —
+   * `WireSessionTurn.model`/`WireReflectResponse.model`. Always present
+   * (both wire shapes require it — even a Turn stored before this ticket
+   * reads back as the Server's own configured default,
+   * `SessionTurnRow::model`'s own doc comment on `server/src/sessions.rs`),
+   * so this is never optional here either.
+   */
+  model: string;
 }
 
 /**
@@ -82,7 +91,13 @@ export interface ConversationTurn {
  */
 type WireConversationTurn = Pick<
   WireSessionTurn,
-  "question" | "answer" | "grounding_entry_ids" | "grounded" | "fallback_used" | "tool_called"
+  | "question"
+  | "answer"
+  | "grounding_entry_ids"
+  | "grounded"
+  | "fallback_used"
+  | "tool_called"
+  | "model"
 >;
 
 /**
@@ -113,6 +128,7 @@ export function conversationTurnFromWire(
     fallbackUsed: wire.fallback_used,
     toolCalled: wire.tool_called,
     digestSource: live?.digestSource,
+    model: wire.model,
   };
 }
 

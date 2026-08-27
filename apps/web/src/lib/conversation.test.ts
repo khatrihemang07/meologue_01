@@ -17,6 +17,7 @@ describe("conversationTurnFromWire", () => {
         grounded: true,
         fallback_used: false,
         tool_called: true,
+        model: "codex-terra",
       }),
     ).toEqual({
       question: "How has my knee been?",
@@ -25,6 +26,7 @@ describe("conversationTurnFromWire", () => {
       grounded: true,
       fallbackUsed: false,
       toolCalled: true,
+      model: "codex-terra",
     });
   });
 
@@ -37,6 +39,7 @@ describe("conversationTurnFromWire", () => {
         grounded: false,
         fallback_used: true,
         tool_called: true,
+        model: "codex-terra",
       }),
     ).toEqual({
       question: "Anything about scuba diving?",
@@ -45,6 +48,7 @@ describe("conversationTurnFromWire", () => {
       grounded: false,
       fallbackUsed: true,
       toolCalled: true,
+      model: "codex-terra",
     });
   });
 
@@ -58,6 +62,7 @@ describe("conversationTurnFromWire", () => {
       grounded: true,
       fallback_used: false,
       tool_called: true,
+      model: "codex-terra",
       session_id: "11111111-1111-1111-1111-111111111111",
       title: "What did I write yesterday?",
     };
@@ -71,6 +76,7 @@ describe("conversationTurnFromWire", () => {
       grounded: true,
       fallbackUsed: false,
       toolCalled: true,
+      model: "codex-terra",
     });
   });
 
@@ -89,6 +95,7 @@ describe("conversationTurnFromWire", () => {
         grounded: false,
         fallback_used: false,
         tool_called: true,
+        model: "codex-terra",
       },
       { digestSource: { period: "week", periodStart: "2026-08-17", periodEnd: "2026-08-23" } },
     );
@@ -108,6 +115,7 @@ describe("conversationTurnFromWire", () => {
       grounded: false,
       fallback_used: false,
       tool_called: true,
+      model: "codex-terra",
     });
 
     expect(turn.digestSource).toBeUndefined();
@@ -184,6 +192,7 @@ describe("conversationTurnFromWire maps tool_called", () => {
       grounded: true,
       fallback_used: false,
       tool_called: true,
+      model: "codex-terra",
     });
     expect(turn.toolCalled).toBe(true);
   });
@@ -196,7 +205,25 @@ describe("conversationTurnFromWire maps tool_called", () => {
       grounded: false,
       fallback_used: false,
       tool_called: false,
+      model: "codex-terra",
     });
     expect(turn.toolCalled).toBe(false);
+  });
+});
+
+// Issue #98: `model` maps onto `ConversationTurn.model` the same plain,
+// direct copy every other wire field here does.
+describe("conversationTurnFromWire maps model", () => {
+  it("carries the model that actually produced this turn's Answer", () => {
+    const turn = conversationTurnFromWire({
+      question: "How is my knee doing?",
+      answer: "Your knee has improved since February.",
+      grounding_entry_ids: [],
+      grounded: false,
+      fallback_used: false,
+      tool_called: false,
+      model: "claude-sonnet",
+    });
+    expect(turn.model).toBe("claude-sonnet");
   });
 });

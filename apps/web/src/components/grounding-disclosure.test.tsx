@@ -31,6 +31,11 @@ function turn(overrides: Partial<ConversationTurn>): ConversationTurn {
     // grounding-disclosure.tsx's own doc comment), so a fixed `true` here
     // keeps every existing case exactly what it always tested.
     toolCalled: true,
+    // Issue #98: `ConversationTurn.model` is always present on the wire
+    // (`SessionTurnRow.model`/`ReflectResponse.model` are both required
+    // fields) — a fixed placeholder here, since nothing in this file's own
+    // behaviour depends on which model produced a turn.
+    model: "codex-terra",
     ...overrides,
   };
 }

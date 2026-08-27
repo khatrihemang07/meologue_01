@@ -7,6 +7,8 @@
 export const ENTRY_STORE_QUERY_KEY = ["entry-store"] as const;
 export const ENTRIES_QUERY_KEY = ["entries"] as const;
 export const SYNC_QUERY_KEY = ["sync"] as const;
+// Issue #98: `GET /v1/models`, the Question composer's own model picker.
+export const MODELS_QUERY_KEY = ["models"] as const;
 
 /**
  * Digest's keys (issue #71), kept here rather than inline in

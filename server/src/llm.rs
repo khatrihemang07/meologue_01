@@ -11,6 +11,7 @@ use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use tokio::sync::mpsc;
 use utoipa::ToSchema;
 
 /// One turn in a Conversation, in the shape a chat-completions endpoint
@@ -66,6 +67,25 @@ impl ChatReply {
     }
 }
 
+/// One increment of `LlmClient::chat_stream` — the `llm.rs`-level
+/// counterpart of `harness::chat::StreamEvent`, one layer further from the
+/// harness: this module has no dependency on `harness` for its types (see
+/// `Usage`'s own doc comment for the same boundary drawn around token
+/// accounting), so it names its own terminal/partial split rather than
+/// reusing the harness's. `harness::prompted::PromptedToolClient` is the
+/// one place that translates between the two.
+#[derive(Debug)]
+pub enum ChatStreamEvent {
+    /// One chunk of reply text, in order, exactly as the endpoint sent it
+    /// — never re-chunked or buffered beyond whatever one SSE frame
+    /// carried.
+    Delta(String),
+    /// The stream has ended, successfully or not — the same `Result`
+    /// shape `chat` itself returns, carrying the whole accumulated reply
+    /// on success.
+    Done(Result<ChatReply>),
+}
+
 /// The task instruction Harrier's model card documents for query
 /// embeddings. Never used for `embed_document` — see that method.
 const QUERY_INSTRUCTION: &str =
@@ -84,6 +104,57 @@ pub trait LlmClient {
     /// first caller. Defined now so the trait doesn't need a breaking
     /// change when that ticket lands.
     async fn chat(&self, messages: &[ChatMessage]) -> Result<ChatReply>;
+
+    /// Issue #98: the same reply `chat` would return, delivered as it's
+    /// generated rather than all at once. Defaults to calling `chat` once
+    /// and reporting the whole reply as a single `Done` with no `Delta` in
+    /// front of it — correct for every `LlmClient` written before this
+    /// ticket (none of them has anything to stream), and for
+    /// `OpenAiCompatibleClient` itself whenever the model behind it turns
+    /// out not to support `stream: true` (see that impl's own override).
+    /// `harness::prompted::PromptedToolClient` only ever calls this once
+    /// it already knows, from `list_models` below, that the model it
+    /// resolved for this Turn streams — this method is never used to
+    /// *discover* that fact itself.
+    async fn chat_stream(
+        &self,
+        messages: &[ChatMessage],
+    ) -> mpsc::UnboundedReceiver<ChatStreamEvent> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let result = self.chat(messages).await;
+        let _ = tx.send(ChatStreamEvent::Done(result));
+        rx
+    }
+
+    /// Issue #98: the models this endpoint can currently reach — the same
+    /// list `GET /v1/models` (`models::models_handler`) reports, reached
+    /// through this trait rather than calling `llm::list_models` directly
+    /// so `reflect.rs`'s own per-Turn model resolution can be exercised
+    /// against a scripted `FakeChatClient` in tests, the same way every
+    /// other model-facing behaviour in that test file already is, rather
+    /// than needing a live (or mocked) wrapper to ask. Defaults to an
+    /// empty list — correct for `embed_client` (never asked) and for any
+    /// existing `LlmClient` test double that has no reason to script one.
+    async fn list_models(&self) -> Vec<ModelInfo> {
+        Vec::new()
+    }
+
+    /// Issue #98: a client scoped to `model` — the same endpoint this one
+    /// already talks to, just bound to a different model id.
+    /// `OpenAiCompatibleClient::for_model` rebuilds itself with the same
+    /// `base_url`/`api_key`; `reflect.rs::resolve_model` is the only
+    /// caller, reached through this trait (rather than reflect.rs
+    /// constructing an `OpenAiCompatibleClient` directly) for the same
+    /// reason `list_models` is: a test can override it to hand back a
+    /// second scripted `LlmClient`, proving a chosen model's replies
+    /// actually come from a client bound to that model, without a live (or
+    /// mocked) wrapper. The default `unimplemented!`s — every `LlmClient`
+    /// written before this ticket has no second model to be scoped to, and
+    /// nothing but `resolve_model`'s own non-default branch ever calls
+    /// this, so no existing implementation needs to override it.
+    fn for_model(&self, model: &str) -> Arc<dyn LlmClient + Send + Sync> {
+        unimplemented!("no per-model LlmClient available for {model}")
+    }
 
     /// Embeds an Entry's body for storage, so it can later be compared
     /// against a query embedding. Harrier is instruction-tuned and expects
@@ -227,6 +298,62 @@ impl LlmClient for OpenAiCompatibleClient {
         })
     }
 
+    // Issue #98: the same three fields as `chat`'s own request, plus
+    // `"stream": true` — this is what actually asks the wrapper to dribble
+    // its reply rather than deliver it whole. Spawned rather than run
+    // inline: `LlmClient::chat_stream`'s contract is to hand back a
+    // receiver a caller can read progressively, not one that only starts
+    // filling once this method itself has already finished, which is
+    // exactly what awaiting the whole request here (as `chat` does) would
+    // produce. `stream_chat_completion` does the actual reading and
+    // forwarding; this method's only job is building the request and
+    // spawning the task that drives it.
+    async fn chat_stream(
+        &self,
+        messages: &[ChatMessage],
+    ) -> mpsc::UnboundedReceiver<ChatStreamEvent> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let payload_messages: Vec<_> = messages
+            .iter()
+            .map(|m| json!({ "role": m.role, "content": m.content }))
+            .collect();
+        let request = self.authed(
+            self.http
+                .post(format!("{}/chat/completions", self.base_url))
+                .json(&json!({
+                    "model": self.model,
+                    "messages": payload_messages,
+                    "stream": true,
+                })),
+        );
+
+        tokio::spawn(async move {
+            let result = stream_chat_completion(request, &tx).await;
+            let _ = tx.send(ChatStreamEvent::Done(result));
+        });
+
+        rx
+    }
+
+    // Issue #98: `reflect.rs`'s per-Turn model resolution reaches this
+    // through the trait (see `LlmClient::list_models`'s own doc comment
+    // for why) rather than calling the free function directly; this is
+    // just that free function, reached through `self.base_url`/
+    // `self.api_key` — `self.model` plays no part, since the wrapper's
+    // model list isn't scoped to whichever one model this instance is
+    // bound to.
+    async fn list_models(&self) -> Vec<ModelInfo> {
+        list_models(&self.base_url, self.api_key.as_deref()).await
+    }
+
+    fn for_model(&self, model: &str) -> Arc<dyn LlmClient + Send + Sync> {
+        Arc::new(Self::new(
+            self.base_url.clone(),
+            model.to_string(),
+            self.api_key.clone(),
+        ))
+    }
+
     async fn embed_document(&self, text: &str) -> Result<Vec<f32>> {
         self.embed(text.to_string()).await
     }
@@ -238,6 +365,87 @@ impl LlmClient for OpenAiCompatibleClient {
         ))
         .await
     }
+}
+
+/// The network half of `OpenAiCompatibleClient::chat_stream`: sends the
+/// already-built streaming request, then reads the response body chunk by
+/// chunk (`reqwest::Response::chunk`, which needs no extra Cargo feature —
+/// unlike `bytes_stream`, this crate has no dependency on `futures` for
+/// it), forwarding each `choices[0].delta.content` the moment its SSE
+/// frame (`data: {...}\n\n`) is fully buffered.
+///
+/// `buffer` accumulates raw bytes across `chunk()` calls and only acts once
+/// it finds the blank-line frame terminator — a chunk boundary from the
+/// network has no reason to land on an SSE frame boundary, the same
+/// tolerance `harness::prompted::ToolCallScanner` builds in for a
+/// tool-call tag split across chunks, for the same reason. `[DONE]` (the
+/// OpenAI-compatible sentinel, sent as its own frame) and any frame that
+/// fails to parse as JSON are both skipped rather than treated as errors —
+/// a stray non-JSON keep-alive frame must not fail a reply that is
+/// otherwise streaming fine.
+///
+/// Returns the whole accumulated reply as an ordinary `ChatReply`, exactly
+/// what `chat` itself would have returned for the same Conversation — the
+/// only difference this function's caller sees is that the content also
+/// arrived, piece by piece, on `tx` along the way.
+async fn stream_chat_completion(
+    request: reqwest::RequestBuilder,
+    tx: &mpsc::UnboundedSender<ChatStreamEvent>,
+) -> Result<ChatReply> {
+    let response = request
+        .send()
+        .await
+        .context("chat request failed to send")?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        bail!("chat request returned {status}: {body}");
+    }
+
+    let mut response = response;
+    let mut buffer = String::new();
+    let mut content = String::new();
+    let mut usage = None;
+
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .context("reading a chat stream chunk failed")?
+    {
+        buffer.push_str(&String::from_utf8_lossy(&chunk));
+        while let Some(pos) = buffer.find("\n\n") {
+            let frame: String = buffer.drain(..pos + 2).collect();
+            for line in frame.lines() {
+                let Some(data) = line.strip_prefix("data:") else {
+                    continue;
+                };
+                let data = data.trim();
+                if data.is_empty() || data == "[DONE]" {
+                    continue;
+                }
+                let Ok(parsed) = serde_json::from_str::<Value>(data) else {
+                    continue;
+                };
+                if let Some(reported) = parse_usage(parsed.get("usage")) {
+                    usage = Some(reported);
+                }
+                let delta = parsed
+                    .get("choices")
+                    .and_then(|choices| choices.get(0))
+                    .and_then(|choice| choice.get("delta"))
+                    .and_then(|delta| delta.get("content"))
+                    .and_then(Value::as_str);
+                if let Some(delta) = delta {
+                    if !delta.is_empty() {
+                        content.push_str(delta);
+                        let _ = tx.send(ChatStreamEvent::Delta(delta.to_string()));
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(ChatReply { content, usage })
 }
 
 /// Ensures a Question ends in sentence-final punctuation before it is
