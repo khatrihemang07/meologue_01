@@ -53,28 +53,22 @@ use crate::sync::PROTOCOL_VERSION;
 ///
 /// This is also the cap applied to the *merged* set after the fan-out below
 /// — see `run_reflect` — not just each individual retrieval's own limit.
+///
+/// It is also, since issue #92, the *only* thing standing between
+/// `retrieve_nearest` and the chat call — there is no similarity floor
+/// underneath it any more. A floor (`MIN_SIMILARITY`, formerly 0.60) used
+/// to be applied first; issue #90's eval harness measured it against the
+/// seeded corpus and found the score it thresholds tracks phrasing, not
+/// topic — "Did I mention a trip to Japan anywhere?" cleared it five times
+/// over for a topic absent from the journal, while "what did I write about
+/// Priya's wedding" topped out at 0.363 and returned nothing for one that
+/// is present. No constant separates those two cases, so none is applied:
+/// `retrieve_nearest` now returns its top-`limit` rows unconditionally, and
+/// the answering call's own relevance judgment (`docs/adr/0024`, already
+/// this codebase's actual relevance mechanism before this ticket) is what
+/// decides whether any of them answer the Question. See `docs/adr/0023`
+/// for the full amendment.
 pub const RETRIEVAL_LIMIT: i64 = 40;
-
-/// Cosine similarity an Entry must reach to count as Grounding.
-///
-/// Without a floor, a nearest-neighbour search always returns
-/// `RETRIEVAL_LIMIT` rows no matter how unrelated they are — so `grounded`
-/// would be true for every Question a non-empty History ever receives, and
-/// CONTEXT.md's rule that "an Answer with no Grounding behind it says so
-/// plainly" would be unenforceable: there would be no such thing as no
-/// Grounding.
-///
-/// 0.60 is measured against this corpus, not guessed. Questions with a real
-/// thread behind them ("how has my knee been", "what happened with the
-/// Aurora migration") clear it with 5-7 Entries each; a question about
-/// something never written down ("scuba diving in Portugal") clears it with
-/// none, while a 0.55 floor still admitted four unrelated Entries. Harrier's
-/// vectors are L2-normalised (ADR 0022), so `1 - (a <=> b)` is exactly
-/// cosine similarity and this number is directly comparable. See
-/// `docs/adr/0023` for the fuller measurement this ADR absorbed from this
-/// comment, and for the recall gap (the three-source fan-out below) this
-/// floor leaves that a single vector search alone can't close.
-pub const MIN_SIMILARITY: f64 = 0.60;
 
 /// Minutes east of UTC, clamped to the real-world extreme (±14h) before
 /// `run_reflect` uses it for anything — see `ReflectRequest::utc_offset_minutes`.
@@ -648,8 +642,9 @@ async fn run_reflect(
 /// Harrier pools the **last token** (`llm.rs`), so a bare topic word is out
 /// of distribution against Entries that are ordinary prose — the model has
 /// nothing prose-like to pool from. Measured on the live 572-Entry corpus,
-/// top cosine and count of Entries clearing `MIN_SIMILARITY` (0.60), bare
-/// keyword vs. the same keyword wrapped as a question:
+/// top cosine and count of Entries at or above cosine 0.60 (the floor this
+/// codebase carried at the time, since removed — issue #92), bare keyword
+/// vs. the same keyword wrapped as a question:
 ///
 /// | keyword | bare: top / ≥0.60 | wrapped: top / ≥0.60 |
 /// |---|---|---|
@@ -664,17 +659,28 @@ async fn run_reflect(
 ///
 /// The cost is real, not hidden: wrapping raises similarity across the
 /// board, not just for topics that are actually present, so it also lifts
-/// unrelated Entries above the floor — an absent topic, "my cat", goes from
-/// 0 Entries over the floor to 7. It buys recall at the cost of precision,
-/// a trade taken deliberately because the relevance judgment is moving off
-/// the cosine floor entirely in ticket 6 — see `docs/adr/0023`.
+/// unrelated Entries toward the top of the ranking — an absent topic, "my
+/// cat", goes from 0 Entries over the then-floor to 7. It buys recall at
+/// the cost of precision, a trade taken deliberately because the relevance
+/// judgment moved off cosine entirely in ticket 6 (`docs/adr/0024`) and the
+/// floor itself was later deleted outright, not recalibrated (issue #92,
+/// `docs/adr/0023`) — precision is the answering call's job now, not this
+/// function's.
 fn keyword_query(keyword: &str) -> String {
     format!("What did I write about {keyword}?")
 }
 
 /// `pub` for the same reason as `GroundingEntry` above — issue #90's
 /// `tests/eval_retrieval.rs` measures this arm directly against the
-/// Sandbox corpus, floor included. No behaviour changed.
+/// Sandbox corpus.
+///
+/// Returns its top `limit` rows by cosine distance, unconditionally — no
+/// similarity floor is applied (issue #92 deleted `MIN_SIMILARITY`; see
+/// `docs/adr/0023`'s amendment for the measurement that killed it). This
+/// function no longer has an opinion about what counts as relevant; the
+/// answering call does (`docs/adr/0024`), because it is the only place in
+/// this request that ever sees the Question and a candidate Entry side by
+/// side.
 pub async fn retrieve_nearest(
     pool: &PgPool,
     query_vector: &[f32],
@@ -694,13 +700,11 @@ pub async fn retrieve_nearest(
         "select id, body, created_at from entries
          where embedding is not null
            and deleted_at is null
-           and 1 - (embedding <=> $1::vector) >= $3
          order by embedding <=> $1::vector
          limit $2",
     )
     .bind(vector_literal(query_vector))
     .bind(limit)
-    .bind(MIN_SIMILARITY)
     .fetch_all(pool)
     .await?;
     Ok(rows)

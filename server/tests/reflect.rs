@@ -273,9 +273,39 @@ async fn insert_embedded_entry(
 ) {
     // The same vector `FakeEmbedClient`'s default returns, so these Entries
     // sit at cosine similarity 1.0 to a Question embedded with the default
-    // and clear `MIN_SIMILARITY` comfortably — these tests are about
-    // retrieval count and prompt shape, not about the relevance floor.
+    // and sort first in `retrieve_nearest`'s ranking (there is no
+    // similarity floor to clear since issue #92) — these tests are about
+    // retrieval count and prompt shape, not about relevance scoring.
     insert_embedded_entry_with_vector(pool, id, device_id, body, created_at, &[0.1_f32; 640]).await;
+}
+
+/// Seeds an Entry with `embedding` left `null` — as if the background
+/// embedding worker (ADR 0022) hasn't reached it yet. Since issue #92
+/// deleted `MIN_SIMILARITY`, this is the *only* way left to make an Entry
+/// invisible to `retrieve_nearest`: that function's `embedding is not
+/// null` guard is a mechanical necessity of `<=>`, not a relevance
+/// judgment, but it is still the one thing standing between an Entry and
+/// question-search now that similarity is no longer filtered. `retrieve_range`
+/// carries no such guard (`docs/adr/0023`), so an Entry seeded this way is
+/// still reachable by date — this is what makes it useful for testing the
+/// disclosed fallback (`docs/adr/0024`) in isolation from question-search.
+async fn insert_unembedded_entry(
+    pool: &PgPool,
+    id: Uuid,
+    device_id: Uuid,
+    body: &str,
+    created_at: &str,
+) {
+    sqlx::query(
+        "insert into entries (id, device_id, body, created_at) values ($1, $2, $3, $4::timestamptz)",
+    )
+    .bind(id)
+    .bind(device_id)
+    .bind(body)
+    .bind(created_at)
+    .execute(pool)
+    .await
+    .unwrap();
 }
 
 async fn insert_embedded_entry_with_vector(
@@ -302,9 +332,14 @@ async fn insert_embedded_entry_with_vector(
 
 /// A vector orthogonal to `FakeEmbedClient`'s default query vector: half
 /// the dimensions positive, half negative, so the dot product is exactly
-/// zero and cosine similarity is 0.0 — far below `MIN_SIMILARITY`. Used for
-/// Entries that must be invisible to question-search and reachable only
-/// through `retrieve_range` or a keyword override.
+/// zero and cosine similarity is 0.0 — the worst possible rank in
+/// `retrieve_nearest`'s ordering, though (since issue #92 deleted
+/// `MIN_SIMILARITY`) not by itself enough to keep an Entry out of a small
+/// corpus's top-k. Used to make an Entry sort *last* under question-search,
+/// so a test can show it was found through `retrieve_range` or a keyword
+/// override instead — not to make it invisible to question-search, which a
+/// bare vector can no longer guarantee. A test that needs true invisibility
+/// (an empty merged set) uses `insert_unembedded_entry` instead.
 fn orthogonal_vector() -> Vec<f32> {
     (0..640).map(|i| if i < 320 { 0.1 } else { -0.1 }).collect()
 }
@@ -846,14 +881,18 @@ async fn an_unrecognised_protocol_version_is_rejected(pool: PgPool) {
     assert_eq!(status, StatusCode::UPGRADE_REQUIRED);
 }
 
-/// The relevance floor is what makes "no Grounding" a state that can
-/// actually happen. A nearest-neighbour search with only a `limit` returns
-/// its full quota however unrelated the rows are, which would make
-/// `grounded` true for every Question a non-empty History ever sees — and
-/// CONTEXT.md requires an Answer with no Grounding behind it to say so
-/// plainly, which it cannot do if there is never no Grounding.
+/// The answering call's own judgment (`docs/adr/0024`) is what makes "no
+/// Grounding" a state that can actually happen — there is no similarity
+/// floor behind it any more (issue #92 deleted `MIN_SIMILARITY`;
+/// `docs/adr/0023`'s amendment records why). An orthogonal-vector Entry is
+/// no longer excluded from the merged set by `retrieve_nearest` — it *is*
+/// handed to the model as a Grounding candidate, in full, alongside the
+/// Question. What still produces `grounded: false` here is the model's own
+/// verdict (mocked below as "GROUNDED: no") plus the disclosed fallback
+/// finding nothing recent to show instead: two judgments about content, not
+/// a score compared against a constant.
 #[sqlx::test]
-async fn an_entry_below_the_similarity_floor_is_not_used_as_grounding(pool: PgPool) {
+async fn an_off_topic_entry_is_judged_ungrounded_with_no_similarity_floor_involved(pool: PgPool) {
     let device_id = Uuid::new_v4();
     insert_embedded_entry_with_vector(
         &pool,
@@ -880,7 +919,8 @@ async fn an_entry_below_the_similarity_floor_is_not_used_as_grounding(pool: PgPo
     assert_eq!(
         body["grounding_entry_ids"].as_array().unwrap().len(),
         0,
-        "an Entry at cosine 0.0 must not be handed to the model as Grounding"
+        "the model's own \"GROUNDED: no\" verdict, not a similarity score, is what keeps this \
+         Entry out of the final Grounding — retrieve_nearest already handed it over"
     );
     assert_eq!(body["grounded"], json!(false));
     // The seeded Entry is dated 2026-03-01 — well outside the 3-day
@@ -1392,19 +1432,28 @@ async fn grounding_entry_ids_are_chronological(pool: PgPool) {
 /// resolves against. An Entry whose UTC timestamp is late on the previous
 /// UTC day falls inside the extracted local day at a large positive
 /// (IST-like) offset, and does not at offset 0.
+///
+/// Seeded unembedded (`insert_unembedded_entry`), not with an orthogonal
+/// vector: since issue #92 deleted `MIN_SIMILARITY`, an embedded Entry can
+/// no longer be kept out of question-search by giving it an unrelated
+/// vector — `retrieve_nearest` returns its top-k unconditionally, and this
+/// is the only Entry in the corpus, so it would appear at every offset
+/// regardless of the date boundary this test exists to isolate.
+/// `retrieve_range` never checks `embedding` (`docs/adr/0023`), so leaving
+/// it unembedded keeps this test's assertions about *only* the date
+/// boundary.
 #[sqlx::test]
 async fn utc_offset_minutes_shifts_the_extracted_day_boundary(pool: PgPool) {
     let device = Uuid::new_v4();
     let entry = Uuid::new_v4();
     // 2026-08-14T20:00:00Z is 2026-08-15 01:30 IST (+330) — inside the
     // local day 2026-08-15 at that offset, but outside it at offset 0.
-    insert_embedded_entry_with_vector(
+    insert_unembedded_entry(
         &pool,
         entry,
         device,
         "wrote this just after midnight, IST",
         "2026-08-14T20:00:00Z",
-        &orthogonal_vector(),
     )
     .await;
 
@@ -1874,6 +1923,16 @@ async fn a_question_embedding_failure_still_fails_the_request(pool: PgPool) {
 /// set, "no marker" now defaults to `grounded: false`, and the disclosed
 /// fallback runs exactly as it would for an explicit "GROUNDED: no" when
 /// recent Entries exist to show.
+///
+/// Since issue #92 deleted `MIN_SIMILARITY`, an *embedded* Entry can no
+/// longer be kept out of the merged set by giving it an orthogonal vector —
+/// `retrieve_nearest` returns its top-k unconditionally now, so any
+/// embedded Entry in a corpus this small is in it. The seeded Entry below
+/// is therefore left unembedded (`insert_unembedded_entry`) instead: that
+/// keeps it out of `retrieve_nearest`'s guard (a mechanical necessity, not
+/// a relevance floor) while `retrieve_range`'s fallback lookup — which
+/// never checks `embedding` — still finds it by date, which is what this
+/// test needs to isolate.
 #[sqlx::test]
 async fn no_marker_with_an_empty_merged_set_defaults_to_ungrounded_and_runs_the_fallback(
     pool: PgPool,
@@ -1881,20 +1940,18 @@ async fn no_marker_with_an_empty_merged_set_defaults_to_ungrounded_and_runs_the_
     let device = Uuid::new_v4();
     let now = Utc::now();
     let recent = Uuid::new_v4();
-    insert_embedded_entry_with_vector(
+    insert_unembedded_entry(
         &pool,
         recent,
         device,
         "went for a run today",
         &(now - Duration::hours(2)).to_rfc3339(),
-        &orthogonal_vector(),
     )
     .await;
 
     // No "GROUNDED:" marker at all in the first answering call's response,
-    // and nothing in the History matches the Question's own search (the
-    // only seeded Entry is orthogonal to it), so the merged Grounding set
-    // is empty.
+    // and the only seeded Entry has no embedding yet, so question-search
+    // finds nothing and the merged Grounding set is empty.
     let chat = Arc::new(
         FakeChatClient::new("I couldn't find anything about scuba diving.").with_fallback_answer(
             "Nothing matching the Question was found; lately you wrote about a run.",

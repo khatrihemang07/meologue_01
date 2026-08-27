@@ -4,11 +4,13 @@
 //! "felt right." This harness turns that into a number: a fixed set of
 //! Questions over the seeded Sandbox corpus, each with hand-marked expected
 //! Entry ids, run independently against each retrieval arm that exists
-//! today — `semantic` (`retrieve_nearest`, `MIN_SIMILARITY` floor included)
-//! and `date_range` (`retrieve_range`) — reporting recall per arm, and
-//! cost (wall-clock, call counts) *separately* from the score. See
-//! `docs/adr/0023` for why those two functions exist and what the floor
-//! does and doesn't guarantee; this harness measures that ADR's claims
+//! today — `semantic` (`retrieve_nearest`, top-k only — issue #92 deleted
+//! the `MIN_SIMILARITY` floor this baseline was originally measured with;
+//! see `docs/adr/0023`'s amendment) and `date_range` (`retrieve_range`) —
+//! reporting recall per arm, and cost (wall-clock, call counts)
+//! *separately* from the score. See `docs/adr/0023` for why those two
+//! functions exist and what the floor did and didn't guarantee before it
+//! was removed; this harness measures that ADR's claims
 //! against a much smaller corpus than the 572-Entry one it was written
 //! against (see `docs/adr/0029`'s "Consequences" — retrieval looks better
 //! on ~120 Entries than it will on a real History, and that gap is exactly
@@ -72,9 +74,7 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use meologue_server::llm::{LlmClient, OpenAiCompatibleClient};
-use meologue_server::reflect::{
-    GroundingEntry, MIN_SIMILARITY, RETRIEVAL_LIMIT, retrieve_nearest, retrieve_range,
-};
+use meologue_server::reflect::{GroundingEntry, RETRIEVAL_LIMIT, retrieve_nearest, retrieve_range};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -582,8 +582,8 @@ struct EvalContext<'a> {
 /// question-search retrieval calls it: embed the Question with
 /// `embed_query` (the same `Instruct:`-wrapping, sentence-punctuation-
 /// normalising path production code uses — this file never reimplements
-/// that template), then the floored nearest-neighbour query, capped at
-/// `RETRIEVAL_LIMIT`.
+/// that template), then the top-k nearest-neighbour query (no similarity
+/// floor, since issue #92), capped at `RETRIEVAL_LIMIT`.
 struct SemanticArm;
 
 #[async_trait]
@@ -746,12 +746,15 @@ async fn eval_retrieval_baseline() {
             let hits = retrieved.intersection(&expected).count();
             let recall = if expected.is_empty() {
                 // Absent-topic control: there is no "fraction found," only
-                // "did anything wrongly clear the floor." Report as
-                // Some(0.0) when clean (nothing retrieved) and leave the
-                // retrieved_count column to show the false-positive count
-                // otherwise — recall as a fraction genuinely doesn't apply
-                // to an empty expected set, so it stays a count, not a
-                // divide-by-zero dressed up as 0.0 either way.
+                // "did anything get retrieved at all" — with no floor
+                // (issue #92), `semantic` always returns its full top-k, so
+                // this reports as a count, not a Some(0.0)/Some(1.0) fraction
+                // that would misleadingly suggest a pass/fail line exists.
+                // Report as None and leave the retrieved_count column to
+                // show the false-positive count instead — recall as a
+                // fraction genuinely doesn't apply to an empty expected set,
+                // so it stays a count, not a divide-by-zero dressed up as
+                // 0.0 either way.
                 None
             } else {
                 Some(hits as f64 / expected.len() as f64)
@@ -830,8 +833,8 @@ fn print_report(rows: &[RecallRow], cost_by_arm: &[(&'static str, Duration, u32,
     println!("\n=== Absent-topic controls (expected: nothing retrieved) ===");
     for row in rows.iter().filter(|r| r.thread == "absent") {
         println!(
-            "{:<24} {:<12} retrieved {} Entries above the {:.2} floor (false positives, since nothing about this topic exists)",
-            row.question_id, row.arm, row.retrieved_count, MIN_SIMILARITY
+            "{:<24} {:<12} retrieved {} Entries (false positives, since nothing about this topic exists — `semantic` has no floor to clear since issue #92, so this is now always its full top-k)",
+            row.question_id, row.arm, row.retrieved_count
         );
     }
 

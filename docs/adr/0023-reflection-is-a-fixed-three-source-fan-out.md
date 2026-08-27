@@ -22,7 +22,28 @@ Conversation died on reload and almost every Question was a first Question. Once
 ("that", "the week before") lived in the Conversation the extraction call could not see. 0026 gives
 it the same bounded window the answering call gets. This ADR's floor — any extraction failure
 degrades to "no range, no keyword", never to a failed Question — is explicitly unchanged, and so is
-everything else here.
+everything else here. (Note: "floor" in that sentence means the degrade-to-baseline guarantee for
+extraction failure, unrelated to the `MIN_SIMILARITY` floor the amendment below removes — the two
+uses of "floor" in this ADR's history mean different things and neither reader should assume the
+other changed.)
+
+**Amended by issue #92: `MIN_SIMILARITY` is deleted outright, not merely "kept as a cheap noise
+filter."** The "Why no floor was chosen instead" section below already argued the number could
+never be tuned to a correct value; issue #90's eval harness
+(`server/tests/eval-retrieval-baseline.md`) then measured what that indecision cost in practice —
+mean recall **0.319** across 22 Questions with the floor applied, **7 of them scoring exactly
+zero** — and found the mechanism itself is the problem, not the constant: **the score tracks
+phrasing, not topic.** "Did I mention a trip to Japan anywhere?" cleared 0.60 five times over for a
+topic entirely absent from the journal, while "what did I write about Priya's wedding" topped out
+at 0.363 and returned nothing for a topic that is present. No threshold value can fix that, because
+the quantity being thresholded does not mean the same thing from one Question to the next — the
+same finding this ADR's own "absolute cosine is not comparable" section already named, taken to
+its conclusion. `retrieve_nearest` now returns its top-k unconditionally; the answering call's own
+judgment ([0024](0024-the-answering-call-judges-its-own-grounding.md), already this codebase's real
+relevance mechanism since that ticket) is what decides relevance, with nothing underneath it. The
+"MIN_SIMILARITY stays at 0.60" decision and the "Why no floor was chosen instead" section below are
+superseded by this — kept in place, not deleted, as the record of why a floor was tried before this
+ADR's own measurements caught up with its reasoning.
 
 ## Context
 
@@ -161,6 +182,10 @@ did verifiably improve" below), not because "no Grounding" is a state the floor 
 
 ### Why no floor was chosen instead
 
+*(This section's own reasoning is what issue #92 eventually acted on fully — see this ADR's Status.
+It is kept exactly as written below because every word of it turned out to be correct; what changed
+is the conclusion drawn from it, not the argument.)*
+
 The present-topic and absent-topic ranges above overlap — "my cat" (absent) tops out higher than
 "Tell me about the wedding" (present, five real Entries) — so no single threshold separates them on
 this corpus. And the number drifts as more Entries are written, so any value chosen today expires:
@@ -169,7 +194,11 @@ maintenance with no stable target to aim at.
 
 `MIN_SIMILARITY` stays at 0.60, but only as a cheap noise filter — it still keeps an obviously
 unrelated Entry from ever reaching the prompt — never as the mechanism that decides whether a
-Question is grounded. That judgment is moving off cosine entirely in ticket 6. The chat call
+Question is grounded. *(Deleted outright by issue #92, not merely demoted further — see this ADR's
+Status. Issue #90's eval harness measured that this "cheap noise filter" framing was itself too
+generous: the filter doesn't separate noise from signal, it separates phrasing from phrasing, so
+keeping it around "just in case" was still doing nothing but discarding correct Entries before the
+chat call could see them.)* That judgment is moving off cosine entirely in ticket 6. The chat call
 already sees the Grounding it's handed and already reports correctly when the Grounding doesn't
 answer the Question: observed live, asking "Have I written anything about scuba diving in
 Portugal?" while holding two unrelated Entries as Grounding, the model answered "I found nothing in
