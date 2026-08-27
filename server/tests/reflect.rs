@@ -433,26 +433,74 @@ async fn insert_session(pool: &PgPool, session_id: Uuid, title: &str) {
 }
 
 /// Appends one already-answered Turn to a Session that already exists
-/// (`insert_session`), directly via SQL — standing in for what
+/// (`insert_session`) — a chained `user`/`assistant` pair of tree entries,
+/// directly via SQL, standing in for what
 /// `sessions::record_turn_from_steps` would already have done on an earlier
-/// ask. `load_turns` falls back to reading `session_turns` directly for a
-/// Session with no tree entries yet (`sessions.rs`'s own doc comment), which
-/// is exactly the state this helper leaves a Session in — so these seeded
-/// Sessions exercise the loop's prior-Turn replay without needing a tree at
-/// all.
+/// ask. Issue #99 removed `session_turns` (`sessions.rs`'s own doc comment)
+/// and, with it, `load_turns`'s fallback to reading it directly for a
+/// Session with no tree yet — the tree is the only representation left, so
+/// this is the only shape a seeded prior Turn can take now. This test crate
+/// has no access to `sessions.rs`'s `pub(crate)` internals, hence SQL rather
+/// than calling `record_turn_from_steps` itself.
 async fn insert_turn(pool: &PgPool, session_id: Uuid, question: &str, answer: &str) {
-    sqlx::query(
-        "insert into session_turns
-            (id, session_id, question, answer, grounding_entry_ids, grounded, fallback_used)
-         values ($1, $2, $3, $4, '{}', true, false)",
+    let leaf: Option<Uuid> = sqlx::query_scalar("select main_leaf_id from sessions where id = $1")
+        .bind(session_id)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+
+    let user_seq: i64 = sqlx::query_scalar(
+        "update sessions set next_seq = next_seq + 1 where id = $1 returning next_seq - 1",
     )
-    .bind(Uuid::new_v4())
     .bind(session_id)
-    .bind(question)
-    .bind(answer)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let user_entry_id = Uuid::new_v4();
+    sqlx::query(
+        "insert into session_entries (session_id, id, parent_id, seq, type, payload)
+         values ($1, $2, $3, $4, 'message', $5)",
+    )
+    .bind(session_id)
+    .bind(user_entry_id)
+    .bind(leaf)
+    .bind(user_seq)
+    .bind(json!({"role": "user", "text": question}))
     .execute(pool)
     .await
     .unwrap();
+
+    let assistant_seq: i64 = sqlx::query_scalar(
+        "update sessions set next_seq = next_seq + 1 where id = $1 returning next_seq - 1",
+    )
+    .bind(session_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let assistant_entry_id = Uuid::new_v4();
+    sqlx::query(
+        "insert into session_entries (session_id, id, parent_id, seq, type, payload)
+         values ($1, $2, $3, $4, 'message', $5)",
+    )
+    .bind(session_id)
+    .bind(assistant_entry_id)
+    .bind(user_entry_id)
+    .bind(assistant_seq)
+    .bind(json!({
+        "role": "assistant",
+        "text": answer,
+        "grounding_entry_ids": Vec::<Uuid>::new(),
+    }))
+    .execute(pool)
+    .await
+    .unwrap();
+
+    sqlx::query("update sessions set main_leaf_id = $1 where id = $2")
+        .bind(assistant_entry_id)
+        .bind(session_id)
+        .execute(pool)
+        .await
+        .unwrap();
 }
 
 /// Seeds a Session with exactly one already-answered Turn.
@@ -485,11 +533,19 @@ async fn session_count(pool: &PgPool) -> i64 {
         .unwrap()
 }
 
+/// How many Turns exist across every Session, counted the way a Turn is
+/// actually represented since issue #99 removed `session_turns`: one `user`
+/// `message` tree entry per Turn — `sessions::entries_to_turns`'s own
+/// pairing rule (a `user` entry starts a Turn) makes this an exact count,
+/// not an approximation.
 async fn turn_count(pool: &PgPool) -> i64 {
-    sqlx::query_scalar("select count(*) from session_turns")
-        .fetch_one(pool)
-        .await
-        .unwrap()
+    sqlx::query_scalar(
+        "select count(*) from session_entries
+         where type = 'message' and payload->>'role' = 'user'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap()
 }
 
 async fn entry_count_for(pool: &PgPool, session_id: Uuid) -> i64 {
@@ -658,14 +714,13 @@ async fn a_prose_only_reply_is_the_answer_with_no_grounding(pool: PgPool) {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["answer"], "You haven't written about that yet.");
     assert_eq!(grounding_ids(&body), Vec::<Uuid>::new());
-    assert_eq!(body["grounded"], false);
-    assert_eq!(body["fallback_used"], false);
-    // Issue #103: `grounded: false` alone doesn't say whether the model
-    // ever tried a tool. This exact shape — a reply with no tool call and
-    // no Grounding — is what the live bug looked like on the wire before
-    // `tool_called` existed, indistinguishable here from a tool genuinely
-    // finding nothing (see `a_tool_call_that_finds_nothing_still_reports_it_was_tried`
-    // below for that contrasting case).
+    // Issue #103: an empty `grounding_entry_ids` alone doesn't say whether
+    // the model ever tried a tool. This exact shape — a reply with no tool
+    // call and no Grounding — is what the live bug looked like on the wire
+    // before `tool_called` existed, indistinguishable here from a tool
+    // genuinely finding nothing (see
+    // `a_tool_call_that_finds_nothing_still_reports_it_was_tried` below for
+    // that contrasting case).
     assert_eq!(body["tool_called"], false);
     assert_eq!(
         chat.call_count(),
@@ -677,12 +732,13 @@ async fn a_prose_only_reply_is_the_answer_with_no_grounding(pool: PgPool) {
 
 /// The other half of issue #103's acceptance criterion: a run that *did*
 /// call a tool, and that tool genuinely found nothing, must still read
-/// `tool_called: true` — reaching `grounded: false` by a completely
-/// different route than the test above (`a_prose_only_reply_is_the_answer_with_no_grounding`),
-/// which never called anything at all. Before `tool_called` existed these
-/// two runs were wire-identical (`grounded: false`, `grounding_entry_ids:
-/// []`), which is exactly what let the no-tool-call bug go unnoticed: a
-/// Server operator, or a client, had no field to tell them apart.
+/// `tool_called: true` — reaching an empty `grounding_entry_ids` by a
+/// completely different route than the test above
+/// (`a_prose_only_reply_is_the_answer_with_no_grounding`), which never
+/// called anything at all. Before `tool_called` existed these two runs
+/// were wire-identical (`grounding_entry_ids: []`), which is exactly what
+/// let the no-tool-call bug go unnoticed: a Server operator, or a client,
+/// had no field to tell them apart.
 #[sqlx::test]
 async fn a_tool_call_that_finds_nothing_still_reports_it_was_tried(pool: PgPool) {
     // No Entries inserted at all — `search_entries` is guaranteed to come
@@ -703,9 +759,9 @@ async fn a_tool_call_that_finds_nothing_still_reports_it_was_tried(pool: PgPool)
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["answer"], "You haven't written about that yet.");
-    assert_eq!(grounding_ids(&body), Vec::<Uuid>::new());
     assert_eq!(
-        body["grounded"], false,
+        grounding_ids(&body),
+        Vec::<Uuid>::new(),
         "an empty search carries no Grounding"
     );
     assert_eq!(
@@ -762,7 +818,6 @@ async fn a_false_no_access_denial_gets_one_corrective_turn_and_then_answers(pool
         body["answer"],
         "You wrote about your knee still being sore after a run, but improving."
     );
-    assert_eq!(body["grounded"], true);
     assert_eq!(body["tool_called"], true);
     assert_eq!(grounding_ids(&body), vec![entry_id]);
     assert_eq!(
@@ -818,7 +873,7 @@ async fn a_no_tool_call_reply_with_ordinary_wording_still_gets_a_corrective_turn
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["answer"], vague_reply);
-    assert_eq!(body["grounded"], false);
+    assert_eq!(grounding_ids(&body), Vec::<Uuid>::new());
     assert_eq!(body["tool_called"], false);
     assert_eq!(
         chat.call_count(),
@@ -898,7 +953,7 @@ async fn a_denial_whose_corrective_retry_also_fails_falls_back_to_the_original_d
         body["answer"],
         "I can't access any journal entries from here."
     );
-    assert_eq!(body["grounded"], false);
+    assert_eq!(grounding_ids(&body), Vec::<Uuid>::new());
     assert_eq!(
         body["tool_called"], false,
         "neither attempt ever called a tool"
@@ -938,7 +993,6 @@ async fn a_tool_call_then_prose_grounds_the_answer_in_the_entry_it_found(pool: P
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["answer"], "You ran a 5k on July 5th.");
     assert_eq!(grounding_ids(&body), vec![entry_id]);
-    assert_eq!(body["grounded"], true);
     assert_eq!(
         chat.call_count(),
         2,
@@ -1020,7 +1074,6 @@ async fn the_full_event_sequence_for_a_two_step_question(pool: PgPool) {
     let agent_end = events.last().unwrap();
     assert_eq!(agent_end.data["status"], "ok");
     assert_eq!(agent_end.data["answer"], "You ran a 5k on July 5th.");
-    assert_eq!(agent_end.data["grounded"], true);
     assert_eq!(grounding_ids(&agent_end.data), vec![entry_id]);
 }
 
@@ -1480,7 +1533,6 @@ async fn a_search_entries_call_then_prose_grounds_the_answer(pool: PgPool) {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["answer"], "You started reading Piranesi.");
     assert_eq!(grounding_ids(&body), vec![entry_id]);
-    assert_eq!(body["grounded"], true);
 }
 
 /// Issue #94's counterpart for `similar_entries` — the same proof, through
@@ -1528,7 +1580,6 @@ async fn a_similar_entries_call_then_prose_grounds_the_answer(pool: PgPool) {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["answer"], "You've been settling into the new flat.");
     assert_eq!(grounding_ids(&body), vec![entry_id]);
-    assert_eq!(body["grounded"], true);
 }
 
 /// Issue #94's own words: an embedding failure "must become an
@@ -1811,30 +1862,6 @@ async fn a_whitespace_only_final_reply_counts_as_empty_and_is_retried(pool: PgPo
     assert_eq!(chat.call_count(), 2);
 }
 
-#[sqlx::test]
-async fn a_grounded_marker_only_final_reply_counts_as_empty_and_is_retried(pool: PgPool) {
-    // The old fixed pipeline's "GROUNDED: yes/no" verdict marker
-    // (docs/adr/0024) — `LOOP_SYSTEM_INSTRUCTION` never asks for it, but
-    // the same configured model answers both prompts, so a bare marker
-    // with nothing after it is a real shape this loop can receive.
-    let chat = Arc::new(FakeChatClient::new([
-        "GROUNDED: yes".to_string(),
-        "A real answer.".to_string(),
-    ]));
-    let reflect = reflect_state(chat.clone());
-
-    let (status, body) = post_reflect(
-        &pool,
-        Some(reflect),
-        json!({ "protocol_version": 3, "question": "Anything?" }),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["answer"], "A real answer.");
-    assert_eq!(chat.call_count(), 2);
-}
-
 /// The exact shape issue #102 was filed against: a tool call finds real
 /// Entries, and *then* the reply that was meant to describe them comes back
 /// empty. Proves the retry doesn't just answer — it keeps the Grounding the
@@ -1874,7 +1901,6 @@ async fn an_empty_reply_after_a_real_tool_call_still_carries_that_grounding_once
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["answer"], "The flat move went well, it sounds like.");
-    assert_eq!(body["grounded"], true);
     assert_eq!(grounding_ids(&body), vec![entry_id]);
     assert_eq!(chat.call_count(), 3);
 }
@@ -2064,6 +2090,9 @@ async fn a_null_session_id_mints_a_new_session(pool: PgPool) {
     assert_eq!(body["title"], "How has my knee been this year?");
 }
 
+/// Issue #99: the Question and Answer land in the tree — the only place a
+/// Turn is persisted now — and `GET /v1/sessions/{id}`, which reads the
+/// tree, sees exactly what was asked and answered.
 #[sqlx::test]
 async fn a_successful_answer_persists_its_turn(pool: PgPool) {
     // Two identical replies — see `a_null_session_id_mints_a_new_session`'s
@@ -2072,11 +2101,10 @@ async fn a_successful_answer_persists_its_turn(pool: PgPool) {
         "Your knee has improved since February.",
         "Your knee has improved since February.",
     ]));
-    let reflect = reflect_state(chat);
 
     let (status, body) = post_reflect(
         &pool,
-        Some(reflect),
+        Some(reflect_state(chat.clone())),
         json!({ "protocol_version": 3, "question": "How's my knee?" }),
     )
     .await;
@@ -2085,22 +2113,15 @@ async fn a_successful_answer_persists_its_turn(pool: PgPool) {
     let id = session_id(&body);
     assert_eq!(session_count(&pool).await, 1);
 
-    let (question, answer, grounded, fallback_used): (String, String, bool, bool) = sqlx::query_as(
-        "select question, answer, grounded, fallback_used from session_turns \
-             where session_id = $1",
-    )
-    .bind(id)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-
-    assert_eq!(question, "How's my knee?");
-    assert_eq!(answer, "Your knee has improved since February.");
-    assert!(
-        !grounded,
+    let session = get_session(&pool, reflect_state(chat), id).await;
+    let turns = session["turns"].as_array().unwrap();
+    assert_eq!(turns.len(), 1);
+    assert_eq!(turns[0]["question"], "How's my knee?");
+    assert_eq!(turns[0]["answer"], "Your knee has improved since February.");
+    assert_eq!(
+        turns[0]["tool_called"], false,
         "no tool ever ran, so nothing grounds this Answer"
     );
-    assert!(!fallback_used);
 }
 
 #[sqlx::test]

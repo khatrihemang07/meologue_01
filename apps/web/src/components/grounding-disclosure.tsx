@@ -1,10 +1,18 @@
 /**
- * A per-turn expander (ticket 7) showing the Entries an Answer was actually
- * built from — the only way to tell a confident wrong Answer from a right
- * one by eye, since the two read identically otherwise. Collapsed by
- * default behind a native <details>/<summary>: keyboard-accessible and
- * screen-reader-correct with no state to manage, and the repo has no
- * collapsible primitive of its own to reach for instead.
+ * A per-turn expander (ticket 7) showing the Entries a tool call returned
+ * and the model read while answering — the only way to see what was behind
+ * an Answer by eye, since a confident wrong Answer and a right one
+ * otherwise read identically. Collapsed by default behind a native
+ * <details>/<summary>: keyboard-accessible and screen-reader-correct with
+ * no state to manage, and the repo has no collapsible primitive of its own
+ * to reach for instead.
+ *
+ * Deliberately does *not* claim these Entries are what the Answer was
+ * "actually built from" (carry-over #2 on issue #99 — see `summaryLabel`'s
+ * own doc comment for the live contradiction that wording produced): the
+ * Server cannot know that under the loop, only that a tool call returned
+ * them and the model had them in its own context. What the Answer actually
+ * rests on is left to the Answer's own words.
  *
  * Pure, like every other component under `components/` (`history.tsx` is
  * the repo's own precedent): pages own data access, components take props.
@@ -18,14 +26,19 @@
  * this Conversation's Grounding ids, so `find` below only ever has to
  * search a small, relevant set.
  *
- * `groundingOutcome(turn)` is what the summary label keys off, per ADR
- * 0024 — not whether `groundingEntryIds` is empty, since both the real-
- * Grounding case and the disclosed-fallback case can be non-empty. Getting
- * this backwards would label a fallback as Grounding, which is exactly the
- * falsehood CONTEXT.md's Grounding entry forbids ("a Reflection that
- * invents a past the user did not live").
+ * `groundingOutcome(turn)` is what the render below branches on — a Digest
+ * gets its own caption (no Entries to expand into a list), an empty
+ * `groundingEntryIds` renders nothing at all, and anything else is a real
+ * list of Entries the tools returned. Issue #99 removed the one case that
+ * used to make this more than a length check on `groundingEntryIds` — the
+ * fixed pipeline's disclosed fallback, which could carry a non-empty
+ * `groundingEntryIds` under a `grounded: false` verdict, and needed
+ * `groundingOutcome` to tell that apart from real Grounding rather than
+ * label it "Grounded". The loop has no such fallback; every non-empty
+ * `groundingEntryIds` this component sees now really is what the tools
+ * returned.
  *
- * Issue #96: `groundingOutcome` can also come back `"digest"` now, read off
+ * Issue #96: `groundingOutcome` can also come back `"digest"`, read off
  * `turn.digestSource` — set only for a turn this browser session just
  * watched a `read_digest` tool call surface a real Digest for, from the
  * live `tool_execution_end` event's own `details`
@@ -44,7 +57,7 @@ import { EntryRow } from "@/components/entry-row";
 import { type ConversationTurn, groundingOutcome } from "@/lib/conversation";
 
 interface GroundingDisclosureProps {
-  /** The completed turn to disclose Grounding for — carries `groundingEntryIds`, `grounded` and `fallbackUsed` together, rather than unbundling them into three separate props. */
+  /** The completed turn to disclose Grounding for — carries `groundingEntryIds`, `toolCalled` and `digestSource` together, rather than unbundling them into three separate props. */
   turn: ConversationTurn;
   /** The Grounding Entries the page already resolved for this Conversation (`getEntries`, issue #79's regression fix) — see the module comment for why this is not this Device's whole local `entries`. */
   entries: Entry[];
@@ -62,25 +75,37 @@ interface GroundingDisclosureProps {
   syncEnabled: boolean;
 }
 
-function summaryLabel(count: number, outcome: ReturnType<typeof groundingOutcome>): string {
+/**
+ * "N Entries returned" is the only wording this ever produces — the one
+ * outcome `groundingOutcome` can return with a non-empty `groundingEntryIds`
+ * (`"neverLooked"`/`"nothingFound"` both require it empty by construction,
+ * and `"digest"` is handled by its own branch in the render below, before
+ * this is ever called). No `outcome` parameter to switch on: issue #99
+ * removed the one case (the fixed pipeline's disclosed fallback) that used
+ * to make this anything but a length check — see this module's own doc
+ * comment.
+ *
+ * Deliberately not "Grounded in N Entries" any more (carry-over #2 on issue
+ * #99, caught live on the Sandbox): CONTEXT.md's Grounding entry defines
+ * Grounding as the Entries an Answer was *actually built from* — a claim
+ * this component has no way to verify under the loop. `groundingEntryIds`
+ * is simply what a tool call returned and the model read; since issue #92
+ * removed the similarity floor, `similar_entries` returns its top-k for
+ * every Question, including one about a topic absent from the journal, so
+ * a non-empty list here is now the *common* case, not evidence the Answer
+ * used any of it. Observed live: "What did I think of the football match?"
+ * correctly answered "I couldn't find a journal entry about a football
+ * match..." while this label still said "Grounded in 10 Entries" directly
+ * beneath it — asserting a relationship between the Answer and those
+ * Entries that the Server cannot actually know. "N Entries returned"
+ * states only the fact this component does know: a tool call found this
+ * many and the model saw them. Whether the Answer actually rests on any of
+ * them is left to the Answer's own words, exactly as CONTEXT.md's
+ * don't-invent rule already asks of everything else here.
+ */
+function summaryLabel(count: number): string {
   const noun = count === 1 ? "Entry" : "Entries";
-  if (outcome === "grounded") {
-    return `Grounded in ${count} ${noun}`;
-  }
-  // Every remaining outcome that reaches this function ("disclosedFallback"
-  // and the defensive "nothingFound"/"neverLooked"/"digest" below) shares
-  // this wording: ADR 0024's fallback ids are the last few days of
-  // Entries, not Grounding the server judged relevant, and this must never
-  // say "Grounded" once `grounded` is false. "nothingFound", "neverLooked"
-  // and "digest" can't actually reach this function in practice — the
-  // guards in the render below return before it's ever called for any of
-  // them (`neverLooked` always has an empty `groundingEntryIds`, same as
-  // `nothingFound` — issue #103's own field distinguishes them for
-  // `GroundingNote`'s caption, not for whether there's anything here to
-  // expand) — but the wording stays correct regardless, since a defensive
-  // branch that lies about what it would say is worse than a redundant
-  // one.
-  return `${count} recent ${noun}`;
+  return `${count} ${noun} returned`;
 }
 
 /** The period label a Digest-sourced disclosure shows — "day"/"week"/"month" plus its date range, collapsed to one date when the Digest is a single day. */
@@ -120,7 +145,7 @@ export function GroundingDisclosure({
   return (
     <details className="mr-auto max-w-[85%] text-xs text-muted-foreground">
       <summary className="cursor-pointer select-none">
-        {summaryLabel(groundingEntryIds.length, outcome)}
+        {summaryLabel(groundingEntryIds.length)}
       </summary>
       <div className="mt-1 divide-y divide-border rounded-md border border-border px-2">
         {groundingEntryIds.map((id) => {

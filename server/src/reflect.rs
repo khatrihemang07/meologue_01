@@ -1,50 +1,59 @@
-//! `POST /v1/reflect` — issue #93 pass 2: a Question is now answered by
-//! `harness::agent_loop`, a tool-calling loop that decides for itself how
-//! many times to look before it answers, with one tool so far
-//! (`harness::tools::EntriesInRangeTool`). Issue #96 turned the route from a
-//! single request/response call into a `text/event-stream`: `reflect_handler`
-//! resolves the Session synchronously (`resolve_session`) and then spawns
-//! `run_reflect_stream`, which runs `run_reflect_stream_inner` — the loop
-//! itself — reporting every step onto the stream as it happens, live,
-//! rather than only once the whole Question is answered.
+//! `POST /v1/reflect` — a Question is answered by `harness::agent_loop`, a
+//! tool-calling loop that decides for itself how many times to look before
+//! it answers, and how, from four tools (`harness::tools`:
+//! `EntriesInRangeTool`, `SearchEntriesTool`, `SimilarEntriesTool`,
+//! `ReadDigestTool`). `reflect_handler` resolves the Session synchronously
+//! (`resolve_session`) and then spawns `run_reflect_stream`, which runs
+//! `run_reflect_stream_inner` — the loop itself — reporting every step onto
+//! a `text/event-stream` as it happens, live, rather than only once the
+//! whole Question is answered (issue #96).
 //!
-//! Tickets 4 through 8 built a different thing: a *fixed* pipeline that got
-//! exactly one look — an extraction chat call found a date range and/or a
-//! keyword hiding in the Question, three retrievals ran concurrently, the
-//! results were merged, deduped, capped and reordered, and a second chat
-//! call turned them into an Answer, judging its own Grounding and falling
-//! back to a disclosed "here's what you've written lately" when it judged
-//! that Grounding didn't answer the Question. `run_reflect` is that
-//! pipeline, kept exactly as it was — working, tested, `#[allow(dead_code)]`
-//! — because issue #93 pass 2's instructions are explicit that removing it
-//! is issue #99's job, not this one's. Nothing below `run_reflect`'s own
-//! doc comment describes the *current* behaviour of `/v1/reflect`.
+//! This replaced a different thing: a *fixed* pipeline (tickets 4 through 8,
+//! issue #93 pass 1 and earlier) that got exactly one look — an extraction
+//! chat call found a date range and/or a keyword hiding in the Question,
+//! three retrievals ran concurrently, the results were merged, deduped,
+//! capped and reordered, and a second chat call turned them into an Answer,
+//! judging its own Grounding via a "GROUNDED: yes/no" marker it was
+//! instructed to prefix its reply with, and falling back to a disclosed
+//! "here's what you've written lately" when it judged that Grounding didn't
+//! answer the Question. That pipeline (`run_reflect`, and everything only it
+//! called — the extraction call, the marker parser, the disclosed fallback)
+//! is gone: issue #93 pass 2 stopped calling it, kept it working and tested
+//! behind `#[allow(dead_code)]` because removing it was explicitly this
+//! ticket's job, and issue #99 is that ticket. Each piece existed to
+//! compensate for a shape that could only look once; a loop that keeps
+//! looking until it's satisfied has no job left for any of them.
 //!
 //! The Server holds the Conversation now (`docs/adr/0025`), superseding ADR
 //! 0020's "a Conversation ... belongs to the Device it happened on and does
 //! not Sync." A request names the Session it belongs to with `session_id`
 //! — `None` starts a new one — instead of round-tripping every prior
 //! Question and Answer on every call. `resolve_session` loads that
-//! Session's Turns (`sessions::load_turns`) before asking, and
-//! `run_reflect_stream_inner` persists the new one
-//! (`sessions::record_turn_from_steps`) only once an Answer has actually
-//! succeeded, so a failed ask leaves neither a Session nor a Turn behind —
-//! the same guarantee `run_reflect`'s own doc comment describes, carried
-//! over unchanged.
+//! Session's Turns (`sessions::load_turns`, which reads a Session's entry
+//! tree — the only representation a Session has, since issue #99 removed
+//! the older `session_turns` table `sessions.rs`'s own doc comment
+//! describes) before asking, and `run_reflect_stream_inner` persists the
+//! new one (`sessions::record_turn_from_steps`) only once an Answer has
+//! actually succeeded, so a failed ask leaves neither a Session nor a Turn
+//! behind (`docs/adr/0025`).
 //!
 //! See CONTEXT.md's Grounding entry for the rule this route exists to
 //! honour: an Answer with nothing behind it says so, rather than inventing
 //! a past the user didn't live. The loop's own system prompt
-//! (`LOOP_SYSTEM_INSTRUCTION`) says this directly; nothing enforces it the
-//! way `run_reflect`'s "GROUNDED: yes/no" verdict marker did — that
-//! mechanism belongs to the pipeline this ticket stopped calling, and a
-//! later ticket decides what, if anything, replaces it for the loop.
+//! (`LOOP_SYSTEM_INSTRUCTION`) says this directly. There is no verdict
+//! marker enforcing it any more, and no `grounded`/`fallback_used` on the
+//! wire either (issue #99) — whether an Answer was "grounded" was a verdict
+//! the Server extracted from the model's own words for a pipeline that only
+//! ever got one look; the loop stops when it is satisfied rather than being
+//! handed a fixed pile of Entries and asked to grade it, which makes that
+//! verdict meaningless rather than merely obsolete. `grounding_entry_ids` is
+//! what survives: not a merged, ranked list computed in advance, simply the
+//! Entry ids whichever tools this run called happened to return.
 
 use std::collections::HashSet;
 use std::convert::Infallible;
 use std::sync::Arc;
 
-use anyhow::Context as _;
 use axum::{
     Json,
     extract::State,
@@ -72,9 +81,7 @@ use crate::harness::tools::{
 };
 use crate::harness::types::{AssistantMessage, ContentBlock, Message, StopReason};
 use crate::llm::{ChatMessage, LlmClient};
-use crate::sessions::{
-    self, EntryType, MessagePayload, ModelChangePayload, NewTurn, SessionTurnRow,
-};
+use crate::sessions::{self, EntryType, MessagePayload, ModelChangePayload, SessionTurnRow};
 use crate::sync::PROTOCOL_VERSION;
 
 /// One SSE frame, already built and ready to send — what every branch of
@@ -88,14 +95,14 @@ use crate::sync::PROTOCOL_VERSION;
 /// (`TryStream<Ok = Event>`) of whatever `Stream` it wraps.
 type SseSender = mpsc::UnboundedSender<Result<Event, Infallible>>;
 
-/// How many nearest Entries retrieval pulls before handing them to the chat
-/// call, mirroring the shape `docs/adr/0022` already settled for writes:
-/// bind the vector as a formatted `::vector` string, no `pgvector` crate.
-/// 40 is generous for a personal-scale History — the chat call, not this
-/// query, is what should decide whether an Entry was actually relevant.
-///
-/// This is also the cap applied to the *merged* set after the fan-out below
-/// — see `run_reflect` — not just each individual retrieval's own limit.
+/// How many nearest Entries retrieval pulls before handing them to whatever
+/// asked for them, mirroring the shape `docs/adr/0022` already settled for
+/// writes: bind the vector as a formatted `::vector` string, no `pgvector`
+/// crate. 40 is generous for a personal-scale History — the chat call, not
+/// this query, is what should decide whether an Entry was actually
+/// relevant. Shared by `SimilarEntriesTool`, `SearchEntriesTool` and
+/// `EntriesInRangeTool` (`harness::tools`) as their own tool-call default,
+/// and by `retrieve_nearest`/`retrieve_range`/`search_words` below.
 ///
 /// It is also, since issue #92, the *only* thing standing between
 /// `retrieve_nearest` and the chat call — there is no similarity floor
@@ -107,33 +114,22 @@ type SseSender = mpsc::UnboundedSender<Result<Event, Infallible>>;
 /// Priya's wedding" topped out at 0.363 and returned nothing for one that
 /// is present. No constant separates those two cases, so none is applied:
 /// `retrieve_nearest` now returns its top-`limit` rows unconditionally, and
-/// the answering call's own relevance judgment (`docs/adr/0024`, already
-/// this codebase's actual relevance mechanism before this ticket) is what
-/// decides whether any of them answer the Question. See `docs/adr/0023`
-/// for the full amendment.
+/// the model's own judgment of what it's given — via whichever tool call
+/// surfaced it — is what decides whether any of them answer the Question.
+/// See `docs/adr/0023` for the full amendment.
 pub const RETRIEVAL_LIMIT: i64 = 40;
 
 /// Minutes east of UTC, clamped to the real-world extreme (±14h) before
-/// `run_reflect` uses it for anything — see `ReflectRequest::utc_offset_minutes`.
+/// `run_reflect_stream_inner` and its tools use it for anything — see
+/// `ReflectRequest::utc_offset_minutes`.
 const MIN_UTC_OFFSET_MINUTES: i32 = -840;
 const MAX_UTC_OFFSET_MINUTES: i32 = 840;
 
-/// How many days back the disclosed fallback (`run_reflect`) looks when
-/// Reflection judges its own Grounding as not answering the Question —
-/// `docs/adr/0024`. A rolling `Utc::now() - FALLBACK_WINDOW_DAYS .. Utc::now()`
-/// window, deliberately not the local-calendar-day machinery
-/// `local_date_range_to_utc` gives the *extracted* range above: this window
-/// answers "what have you written lately", not a date the user named, so
-/// there is no local day to align to — recency relative to right now is
-/// exactly what's wanted, and it is the same for every asking Device
-/// regardless of `utc_offset_minutes`.
-const FALLBACK_WINDOW_DAYS: i64 = 3;
-
-/// How many of a Session's most recent Turns `run_reflect` replays into
-/// each chat call — the extraction call, the answering call, and the
-/// disclosed-fallback call alike. `docs/adr/0025`'s Consequences section names exactly the problem
-/// this bounds: a Session is durable now and can be returned to over weeks,
-/// so replaying *every* prior Turn on every Question grows both latency and
+/// How many of a Session's most recent Turns `run_reflect_stream_inner`
+/// replays into the loop's own `Context` on every Question.
+/// `docs/adr/0025`'s Consequences section names exactly the problem this
+/// bounds: a Session is durable now and can be returned to over weeks, so
+/// replaying *every* prior Turn on every Question grows both latency and
 /// context without limit against a chat endpoint that costs roughly seven
 /// seconds a call and (`llm.rs`) has no timeout configured. This is the
 /// same kind of bound `RETRIEVAL_LIMIT` already puts on the other side of
@@ -146,10 +142,12 @@ const FALLBACK_WINDOW_DAYS: i64 = 3;
 /// This windows what's *replayed into the chat call*, not what a Session
 /// holds or what `GET /v1/sessions/{id}` returns — `sessions::load_turns`
 /// is shared by both, and the read endpoint must keep returning every Turn
-/// a Session has. The cap is applied here, in `run_reflect`, to whatever
-/// `load_turns` returns, deliberately not pushed into the SQL: it's a
-/// property of what the model is asked to read, not of what the Session
-/// contains.
+/// a Session has. The cap is applied here to whatever `load_turns` returns,
+/// deliberately not pushed into the SQL: it's a property of what the model
+/// is asked to read, not of what the Session contains. Issue #97's
+/// token-aware compaction (`maybe_compact_prior_turns`) sits underneath
+/// this same cap and can trim a Session's replayed history well before ten
+/// Turns ever accumulate.
 const CONVERSATION_WINDOW: usize = 10;
 
 /// The longest a derived Session title can be before `derive_title`
@@ -163,21 +161,22 @@ pub struct ReflectRequest {
     pub question: String,
     /// The Session this Question belongs to, or `None` to start a new one
     /// — a null id on an ask *is* the create (`docs/adr/0025`); there is no
-    /// separate create endpoint. `run_reflect` loads that Session's prior
-    /// Turns (`sessions::load_turns`) to read this Question "in the light
-    /// of the Conversation before it" (CONTEXT.md's own phrase for what a
-    /// Conversation is) — the server holds that Conversation now, so this
-    /// replaces what used to round-trip on every request as `prior_turns`.
-    /// A `Some` naming a Session that doesn't exist is a 404, not a
-    /// silently-ignored value.
+    /// separate create endpoint. `resolve_session` loads that Session's
+    /// prior Turns (`sessions::load_turns`) to read this Question "in the
+    /// light of the Conversation before it" (CONTEXT.md's own phrase for
+    /// what a Conversation is) — the server holds that Conversation now, so
+    /// this replaces what used to round-trip on every request as
+    /// `prior_turns`. A `Some` naming a Session that doesn't exist is a 404,
+    /// not a silently-ignored value.
     #[serde(default)]
     pub session_id: Option<Uuid>,
     /// Minutes east of UTC for the asking Device, right now — the same sign
     /// convention `apps/web/src/lib/entry-day.ts::deviceUtcOffsetMinutes`
     /// and ADR 0016's `toLocalParts` already use for Export's day grouping.
-    /// The extraction call (`extract_date_range_and_keyword`) uses this to
-    /// resolve phrases like "last week" against the user's own local day,
-    /// never the server's clock.
+    /// `EntriesInRangeTool` and `SearchEntriesTool` (`harness::tools`) both
+    /// take this to resolve a date phrase the model names in a tool call
+    /// — "last week," "in March" — against the user's own local day, never
+    /// the server's clock.
     ///
     /// `#[serde(default)]` rather than required, independent of whatever
     /// `PROTOCOL_VERSION` happens to be: a mismatched `protocol_version`
@@ -219,48 +218,31 @@ pub struct ReflectResponse {
     pub title: String,
     pub answer: String,
     /// The Entry ids that appeared in a tool result during this run, in the
-    /// order they first appeared — `run_reflect_stream_inner`'s own dedup, over
-    /// every `harness::agent_loop::Step::ToolResult` the loop produced, not
-    /// retrieval's merge-and-sort (that description, and everything below
-    /// through `docs/adr/0023`/`0024`, is what these fields meant under
-    /// `run_reflect`, the fixed pipeline `/v1/reflect` no longer calls —
-    /// see this module's own doc comment). Empty when the loop never called
-    /// a tool at all — a prose-only reply is not unusual, and carries no
-    /// Grounding by construction, not by omission.
+    /// order they first appeared — `run_reflect_stream_inner`'s own dedup,
+    /// over every `harness::agent_loop::Step::ToolResult` the loop
+    /// produced. Never a merged, ranked list computed in advance (issue
+    /// #99 removed the pipeline that used to build one) — simply the Entry
+    /// ids the tools this run called happened to return. Empty when the
+    /// loop never called a tool at all — a prose-only reply is not unusual,
+    /// and carries no Grounding by construction, not by omission.
     pub grounding_entry_ids: Vec<Uuid>,
-    /// Whether at least one Entry appeared in a tool result this run —
-    /// `!grounding_entry_ids.is_empty()`, nothing more judged about it.
-    /// Under the old pipeline this was a real verdict, read off a
-    /// "GROUNDED: yes/no" marker the answering chat call was instructed to
-    /// produce; the loop has no equivalent judgment yet, so this field
-    /// keeps its old *name* on the wire (`PROTOCOL_VERSION` is unchanged)
-    /// while meaning something simpler until a later ticket decides whether
-    /// it needs to mean more again.
-    pub grounded: bool,
-    /// Always `false`. The disclosed fallback (`docs/adr/0024`) belongs to
-    /// the fixed pipeline this ticket stopped calling; the loop has no
-    /// fallback mechanism of its own. Kept on the wire, rather than
-    /// dropped, for the same reason `grounded` is — the wire shape itself
-    /// is issue #96's to change, not this one's.
-    pub fallback_used: bool,
     /// Whether this run called a tool at all — `true` the moment any
     /// `harness::agent_loop::Step::ToolResult` appears in `outcome.steps`,
     /// regardless of whether that call (or any other) found anything.
-    /// Issue #103's own acceptance criterion: `grounded: false` alone
-    /// cannot tell a client, or a person reading a log, which of two very
-    /// different runs actually happened — one that called `search_entries`
-    /// and it came back empty, or one that never called anything and wrote
-    /// a reply anyway (the bug this issue was filed against: the model
-    /// answered "I can't access any journal entries from here" having
-    /// tried nothing). Both reach this struct with an identical
-    /// `grounding_entry_ids: []`/`grounded: false`, and both used to render
+    /// Issue #103's own acceptance criterion: an empty `grounding_entry_ids`
+    /// alone cannot tell a client, or a person reading a log, which of two
+    /// very different runs actually happened — one that called
+    /// `search_entries` and it came back empty, or one that never called
+    /// anything and wrote a reply anyway (the bug this issue was filed
+    /// against: the model answered "I can't access any journal entries from
+    /// here" having tried nothing). Both reach this struct with an
+    /// identical `grounding_entry_ids: []`, and both used to render
     /// identically to the user ("Nothing in your History matched this
-    /// Question") for exactly that reason. This field is the one place
-    /// that distinction survives past `run_reflect_stream_inner` into
-    /// whatever reads the record next. Server-side only for now: no
-    /// existing client reads it, and changing what a client shows for
-    /// `tool_called: false` versus a genuine empty search is left to
-    /// whichever ticket touches the client next.
+    /// Question") for exactly that reason. This field is what lets that
+    /// distinction survive past `run_reflect_stream_inner` — both server-
+    /// side (the `tracing::warn!` below) and on the wire, where the client
+    /// renders it as a distinct "never looked" outcome
+    /// (`apps/web/src/lib/conversation.ts`'s `groundingOutcome`).
     pub tool_called: bool,
     /// Issue #98: the model this Turn actually ran on — `resolve_model`'s
     /// own `resolved_model_id`, echoed back so a client can attribute the
@@ -281,23 +263,6 @@ pub struct GroundingEntry {
     pub id: Uuid,
     pub body: String,
     pub created_at: DateTime<Utc>,
-}
-
-/// What the extraction chat call (`extract_date_range_and_keyword`) found in
-/// a Question, or nothing at all — the safe default any parsing failure
-/// degrades to. Both fields are independent: a Question can supply neither,
-/// either, or both, and a malformed date range is dropped on its own
-/// without discarding a keyword found alongside it.
-#[derive(Debug, Default, PartialEq)]
-struct Extraction {
-    /// Inclusive local `[from, to]` calendar dates, already validated
-    /// (`to >= from`) — see `parse_extraction`. Converted to a half-open
-    /// UTC instant range by `local_date_range_to_utc` before it reaches
-    /// `retrieve_range`.
-    date_range: Option<(NaiveDate, NaiveDate)>,
-    /// A short topical phrase to run a second vector search on — e.g.
-    /// Question "how did the move go" might extract "moving flat".
-    keyword: Option<String>,
 }
 
 /// Reflection's server-side dependencies, held in `AppState` only when both
@@ -346,57 +311,13 @@ pub struct ReflectState {
     pub chat_streaming: bool,
 }
 
-/// The answering call's system prompt (chat call 2). `docs/adr/0024`: this
-/// is also where the relevance verdict now comes from — the reply must
-/// *begin* with a "GROUNDED: yes"/"GROUNDED: no" marker line
-/// (`parse_and_strip_verdict` reads it back out, and strips it before the
-/// Answer ever reaches the client) — folded into this existing call rather
-/// than spent on a third one, because the endpoint this ticket talks to
-/// costs ~7s per call and Reflection is already two calls deep.
-const SYSTEM_INSTRUCTION: &str = "You are Reflection, part of meologue, a personal journal. \
-A user is asking a Question about their own journal Entries. Below, under \"Grounding\", are the \
-journal Entries retrieval found most relevant to the Question, each labelled with the date it was \
-written. Your reply must begin with exactly one line, on its own: either \"GROUNDED: yes\" or \
-\"GROUNDED: no\". Answer \"GROUNDED: yes\" only if the Grounding actually contains enough to answer \
-the Question — an Entry that merely shares a mood or a turn of phrase with the Question is not an \
-answer to it. Answer \"GROUNDED: no\" if the Grounding does not answer the Question. After that \
-marker line, answer the Question using only what these Entries say. If the Entries don't contain \
-enough to answer the Question, say so plainly instead of guessing or inventing anything — a \
-Reflection that invents a past the user did not live is worse than one that admits it found \
-nothing. Speak directly to the user in the second person, in plain prose.";
-
-/// The disclosed-fallback answering call's system prompt (`docs/adr/0024`)
-/// — used only after the *first* answering call's own "GROUNDED: no"
-/// verdict, and only when Entries exist in the last `FALLBACK_WINDOW_DAYS`
-/// days to show. Unlike `SYSTEM_INSTRUCTION`, this call takes no verdict
-/// marker: its verdict is already known (`grounded: false`), so
-/// `run_reflect` never runs this response through `parse_and_strip_verdict`
-/// at all. "nothing matching the Question was found" is deliberately
-/// specific wording, distinct enough from `SYSTEM_INSTRUCTION`'s own prose
-/// that a test double can tell the two calls apart by content alone.
-///
-/// Neither this prompt nor `SYSTEM_INSTRUCTION` names a sentence count or
-/// length target (issue #77): an Answer should follow the Grounding it is
-/// drawn from, and the two prompts describing the same Answer must not
-/// disagree with each other about how long it should be — this one used to
-/// say "briefly describe" while `SYSTEM_INSTRUCTION` said "a few sentences,"
-/// two different length instructions for the same kind of reply.
-const FALLBACK_SYSTEM_INSTRUCTION: &str = "You are Reflection, part of meologue, a personal \
-journal. Nothing in the user's journal answered their Question. Below, under \"Grounding\", are \
-the Entries the user wrote in the last few days — they were not judged relevant to the Question, \
-only recent. Begin your reply by saying plainly that nothing matching the Question was found in \
-their journal, then describe what they have been writing about in the last few days, using \
-only these Entries. Do not imply these Entries answer the Question. Speak directly to the user \
-in the second person, in plain prose.";
-
-/// The two ways `run_reflect` (the retired fixed pipeline) or
-/// `resolve_session` (issue #96's own synchronous preflight, run before
-/// `reflect_handler` ever commits to a 200 and starts streaming) can end
-/// other than success. `SessionNotFound` is the one case that must reach
-/// the client as a clean 404 rather than the catch-all 500 every other
-/// failure gets — see `ReflectRequest::session_id`. `From<anyhow::Error>`
-/// is what lets every existing `?` on an `anyhow::Result` inside either of
-/// them keep working unchanged: it's the conversion Rust's `?` reaches for
+/// The two ways `resolve_session` (issue #96's own synchronous preflight,
+/// run before `reflect_handler` ever commits to a 200 and starts streaming)
+/// can end other than success. `SessionNotFound` is the one case that must
+/// reach the client as a clean 404 rather than the catch-all 500 every
+/// other failure gets — see `ReflectRequest::session_id`. `From<anyhow::Error>`
+/// is what lets every existing `?` on an `anyhow::Result` inside it keep
+/// working unchanged: it's the conversion Rust's `?` reaches for
 /// automatically. `run_reflect_stream_inner`, by contrast, returns a plain
 /// `anyhow::Result` — once session resolution has already happened, nothing
 /// left inside the streamed run can turn into a distinct HTTP status (the
@@ -544,11 +465,10 @@ async fn resolve_session(
 /// comment for why the *tool set*, not this constant, owns describing what
 /// each tool does.
 ///
-/// Deliberately carries no "GROUNDED: yes/no" verdict instruction, unlike
-/// `SYSTEM_INSTRUCTION` above: that judgment, and the disclosed fallback it
-/// drove, belong to the fixed pipeline this ticket stopped calling
-/// (`run_reflect`) — a later ticket decides what, if anything, replaces it
-/// for the loop.
+/// Deliberately carries no "GROUNDED: yes/no" verdict instruction — that
+/// judgment, and the disclosed fallback it drove, belonged to the fixed
+/// pipeline issue #99 removed (this module's own doc comment), which had no
+/// equivalent for the loop to inherit.
 ///
 /// **Issue #103: says outright that the tools are the *only* way to see the
 /// journal, and forbids claiming otherwise.** The version before this ticket
@@ -668,10 +588,11 @@ the journal, you may give the same answer again.";
 /// correctness has misread what it's for.
 ///
 /// `pub` (rather than crate-private, its original visibility) for the same
-/// reason `run_reflect` elsewhere in this module is: `tests/reflect.rs` needs to assert a
-/// phrasing does *not* match this function's own list, as the negative
-/// control that proves the corrective turn no longer depends on matching
-/// it.
+/// reason `retrieve_nearest`/`retrieve_range`/`search_words`/`RETRIEVAL_LIMIT`
+/// elsewhere in this module are: `server/tests/reflect.rs`, an integration
+/// test compiled outside this crate, needs to assert a phrasing does *not*
+/// match this function's own list, as the negative control that proves the
+/// corrective turn no longer depends on matching it.
 pub fn claims_no_journal_access(text: &str) -> bool {
     // Live-verified against the real Sandbox while building this ticket's
     // fix (`docs/adr` doesn't cover this — it's recorded here instead,
@@ -730,10 +651,9 @@ pub fn claims_no_journal_access(text: &str) -> bool {
 ///   actually filed against: a live Turn with `length(answer) = 0`.
 /// - Only a markdown code fence with nothing inside it (`` ``` `` or
 ///   `` ```\n``` ``). `strip_code_fences` already exists to strip a *real*
-///   fence wrapped around real content (`parse_extraction`,
-///   `parse_tool_call_block` reuse it for exactly that); reused here
-///   because the same function correctly reduces a fence-only reply to an
-///   empty string.
+///   fence wrapped around real content (`parse_tool_call_block` reuses it
+///   for exactly that); reused here because the same function correctly
+///   reduces a fence-only reply to an empty string.
 /// - Only a stray `<tool_call>`/`</tool_call>` tag fragment.
 ///   `ToolCallScanner`'s own doc comment explains how a `</tool_call>` that
 ///   was never opened — nothing upstream of it ever matched
@@ -742,67 +662,49 @@ pub fn claims_no_journal_access(text: &str) -> bool {
 ///   watches for `<` starting a *new* candidate tag; a bare `<` is not one
 ///   until proven otherwise). If that fragment is *all* the text is, there
 ///   is nothing under it.
-/// - Only the bare `GROUNDED: yes`/`GROUNDED: no` verdict line
-///   `SYSTEM_INSTRUCTION` (the fixed pipeline, still reachable through
-///   `run_reflect`) asks for, read with `parse_and_strip_verdict`.
-///   `LOOP_SYSTEM_INSTRUCTION` never asks the live loop for this marker,
-///   but the same configured model answers both prompts, and issue #93's
-///   own prototype already noted it stays "on protocol" from whatever it
-///   was most recently asked to do — a bare marker with nothing after it is
-///   exactly the fixed pipeline's own verdict line with the Answer half
-///   missing.
+///
+/// Before issue #99 removed it, this list also recognised a bare
+/// `GROUNDED: yes`/`GROUNDED: no` verdict line with nothing after it — the
+/// fixed pipeline's own answering call could produce exactly that shape,
+/// and the same configured model answers `LOOP_SYSTEM_INSTRUCTION` too, so
+/// a stray marker from old habit was worth catching. That pipeline, and the
+/// marker itself, are gone (this module's own doc comment), and nothing the
+/// live loop is ever instructed to write looks like it, so there is no
+/// longer a marker-shaped case to strip before checking for emptiness.
 ///
 /// Deliberately *not* on this list: ordinary prose that happens to be
-/// short, or a marker line followed by real content (`GROUNDED: no\nI
-/// found nothing about that.` is a real Answer, not an empty one — see
-/// `parse_and_strip_verdict`'s own tests). Only the degenerate case where
-/// stripping every one of these away leaves nothing counts as empty.
+/// short. Only the degenerate case where stripping every one of these away
+/// leaves nothing counts as empty.
 fn is_empty_final_reply(text: &str) -> bool {
     let candidate = strip_code_fences(text)
         .replace("<tool_call>", "")
         .replace("</tool_call>", "");
-    let candidate = candidate.trim();
-    if candidate.is_empty() {
-        return true;
-    }
-    let (verdict, rest) = parse_and_strip_verdict(candidate);
-    verdict.is_some() && rest.trim().is_empty()
+    candidate.trim().is_empty()
 }
 
 /// A model's final reply, guaranteed non-empty — `new` is the only way to
 /// build one, and it refuses everything `is_empty_final_reply` recognises
 /// as nothing to say. This is issue #102's answer to its own acceptance
-/// criterion that `grounded: true` be unreachable with an empty Answer
-/// "structurally rather than by convention": `docs/adr/0024` made the
-/// mirror case (`grounded: true` reachable with empty `grounding_entry_ids`)
-/// unrepresentable by deriving `grounded` from the same data at the one
-/// place it's computed, rather than trusting a second independent field —
-/// there is no equivalent shared derivation available here, since whether
-/// the model found any Entries and whether it wrote a non-empty Answer are
-/// genuinely independent facts. What *is* available, and is the same idea
-/// applied to what's actually true here, is a single gate every route from
-/// "a raw model reply" to "the `answer: String` stored in `ReflectResponse`
-/// and `NewTurn`" has to pass through: `run_reflect_stream_inner` never reads
-/// `outcome.answer` directly into either of those — it only ever reads
-/// `NonEmptyAnswer::into_inner()`'s output, and that function does not
-/// exist unless `new` already accepted the text. A future caller who
-/// forgets to check emptiness has nothing to forget: there is no plain
-/// `String` in scope by the time `grounded` and `answer` are packaged
-/// together.
+/// criterion that a client-visible Answer be unreachable while empty
+/// "structurally rather than by convention": a single gate every route from
+/// "a raw model reply" to the `answer: String` stored in `ReflectResponse`
+/// and persisted to the tree has to pass through. `run_reflect_stream_inner`
+/// never reads `outcome.answer` directly into either of those — it only
+/// ever reads `NonEmptyAnswer::into_inner()`'s output, and that function
+/// does not exist unless `new` already accepted the text. A future caller
+/// who forgets to check emptiness has nothing to forget: there is no plain
+/// `String` in scope by the time the Answer is packaged for either
+/// destination.
 ///
 /// This is a narrower guarantee than a type-level ban on ever constructing
-/// `ReflectResponse { answer: String::new(), grounded: true, .. }`
-/// anywhere in the crate — both structs keep plain `pub` fields (they
-/// always did, and `ReflectResponse` is serialized wire shape besides), so
-/// nothing stops a hypothetical future call site from building one by hand
-/// with an empty string. Locking that down would mean giving both structs
-/// private fields and a smart constructor, which would also have to reach
-/// `run_reflect`'s own, already-`#[allow(dead_code)]`, construction of the
-/// same two types — exactly the "elaborate machinery around `grounded`"
-/// issue #102 says not to build, for a field issue #99 is already removing.
-/// What this type actually guarantees is narrower but still load-bearing:
-/// the *only* code path that exists today for turning a live model reply
-/// into a persisted, client-visible Answer cannot do so with an empty one.
+/// `ReflectResponse { answer: String::new(), .. }` anywhere in the crate —
+/// the struct keeps plain `pub` fields (it always did, and it's serialized
+/// wire shape besides), so nothing stops a hypothetical future call site
+/// from building one by hand with an empty string. Locking that down would
+/// mean giving it private fields and a smart constructor instead. What this
+/// type actually guarantees is narrower but still load-bearing: the *only*
+/// code path that exists today for turning a live model reply into a
+/// persisted, client-visible Answer cannot do so with an empty one.
 struct NonEmptyAnswer(String);
 
 impl NonEmptyAnswer {
@@ -965,7 +867,7 @@ async fn run_reflect_stream(
                 // client's whole response body used to be — flattened onto
                 // `agent_end` rather than replaced, so everything that shape
                 // already meant (session_id/title/answer/grounding_entry_ids/
-                // grounded/fallback_used) survives the move from "the response
+                // tool_called/model) survives the move from "the response
                 // body" to "the terminal event's data" unchanged.
                 let mut payload = serde_json::to_value(&response)
                     .expect("serializing a ReflectResponse can't fail");
@@ -989,19 +891,13 @@ async fn run_reflect_stream(
 /// onto `tx` as an SSE frame, live, via `loop_event_to_sse` — and, only once
 /// the loop actually produced an Answer, persists every step it took into
 /// the Session entry tree (`sessions::record_turn_from_steps`) in one
-/// transaction, the same "persist only after success" guarantee
-/// `record_turn` always gave. Session resolution itself
-/// (`resolve_session`) already happened in `reflect_handler`, synchronously,
-/// before this function's caller (`run_reflect_stream`) was ever spawned —
-/// see that handler's own doc comment for why.
+/// transaction: a failed run never reaches that call at all, so a Session
+/// never ends up holding a Question with no Answer behind it. Session
+/// resolution itself (`resolve_session`) already happened in
+/// `reflect_handler`, synchronously, before this function's caller
+/// (`run_reflect_stream`) was ever spawned — see that handler's own doc
+/// comment for why.
 ///
-/// `grounded`/`fallback_used` mean something narrower here than they did
-/// under the old pipeline (`ReflectResponse`'s own doc comments describe
-/// what they used to mean): `grounded` is simply "at least one Entry
-/// appeared in a tool result this run", and `fallback_used` is always
-/// `false` — the loop has no disclosed-fallback mechanism yet. These two
-/// fields keep their old *names* on the wire while this function gives them
-/// the simplest honest meaning available today.
 /// What one Turn actually runs on: which `LlmClient` to call, whether it
 /// streams, and how much context it holds — everything `run_reflect_stream_inner`
 /// needs to build a `PromptedToolClient` and a compaction budget for
@@ -1117,10 +1013,8 @@ async fn run_reflect_stream_inner(
     let model_change = (resolved_model_id != current_model).then(|| resolved_model_id.clone());
     let resolved = resolve_model(reflect, &resolved_model_id).await;
 
-    // Same windowing `run_reflect` applies — `CONVERSATION_WINDOW`'s own
-    // doc comment covers why, and it applies identically here: what's
-    // replayed into the loop's own `Context.messages` is bounded the same
-    // way what used to be replayed into the two fixed chat calls was.
+    // `CONVERSATION_WINDOW`'s own doc comment covers why this is bounded —
+    // what's replayed into the loop's own `Context.messages` here.
     let prior_turns = {
         let mut turns = prior_turns;
         let start = turns.len().saturating_sub(CONVERSATION_WINDOW);
@@ -1370,9 +1264,9 @@ async fn run_reflect_stream_inner(
 
     // `NonEmptyAnswer::new` is the single gate issue #102 adds — see its own
     // doc comment for why this, rather than a second independent check, is
-    // what keeps `grounded: true` from ever reaching the client (or
-    // `sessions::record_turn_from_steps`) paired with an empty Answer:
-    // nothing below this point ever reads `outcome.answer` directly again.
+    // what keeps an empty Answer from ever reaching the client or
+    // `sessions::record_turn_from_steps`: nothing below this point ever
+    // reads `outcome.answer` directly again.
     let Some(answer) = outcome.answer.as_deref().and_then(NonEmptyAnswer::new) else {
         if retried {
             tracing::warn!(
@@ -1394,9 +1288,9 @@ async fn run_reflect_stream_inner(
     let answer = answer.into_inner();
 
     // Every Entry id any tool result surfaced, deduped keeping first
-    // occurrence — the loop-based counterpart of `run_reflect`'s own
-    // `merged`/`seen` dedup, generic across whatever tool produced it
-    // rather than specific to the fixed pipeline's three named sources.
+    // occurrence — generic across whatever tool produced it, not a merged,
+    // ranked list computed in advance (issue #99 removed the pipeline that
+    // used to build one): simply the Entry ids the tools returned.
     let mut seen_entry_ids = HashSet::new();
     let mut grounding_entry_ids = Vec::new();
     for step in &outcome.steps {
@@ -1408,15 +1302,12 @@ async fn run_reflect_stream_inner(
             }
         }
     }
-    let grounded = !grounding_entry_ids.is_empty();
-    let fallback_used = false;
-
-    // Issue #103: distinct from `grounded` above — `grounded` asks whether
-    // any Entry surfaced, `tool_called` asks whether the model ever tried.
+    // Issue #103: `tool_called` asks whether the model ever tried, kept
+    // apart from `grounding_entry_ids` on purpose — an empty
     // `grounding_entry_ids` alone conflates "tried and found nothing" with
     // "never tried at all"; this is the flag that keeps them apart in the
     // record (`ReflectResponse::tool_called`'s own doc comment covers why
-    // that distinction matters and what still reads only `grounded`).
+    // that distinction matters).
     let tool_called = outcome
         .steps
         .iter()
@@ -1425,9 +1316,9 @@ async fn run_reflect_stream_inner(
     // The exact shape issue #103 was filed against: a non-empty, confident
     // Answer with no Grounding *and* no tool ever attempted — as opposed to
     // the ordinary and unremarkable case of a tool genuinely finding
-    // nothing (`tool_called: true`, `grounded: false`), which needs no
-    // warning at all. `is_empty_final_reply`'s own retry path already logs
-    // the empty-reply shape (issue #102); this is the other way a
+    // nothing (`tool_called: true`, `grounding_entry_ids: []`), which needs
+    // no warning at all. `is_empty_final_reply`'s own retry path already
+    // logs the empty-reply shape (issue #102); this is the other way a
     // Question can end with no real Grounding and nothing seen. By the
     // time this line can fire, the structural corrective turn above has
     // already had its one chance to fix it (`NO_TOOL_CALL_CORRECTION`'s own
@@ -1438,7 +1329,7 @@ async fn run_reflect_stream_inner(
     // purely to keep the specific "this reads like a denial" shape
     // greppable in the log, distinguishable from an ordinary — and
     // legitimate — no-tool-call reply that also has no Grounding.
-    if !grounded && !tool_called {
+    if grounding_entry_ids.is_empty() && !tool_called {
         tracing::warn!(
             question = %req.question,
             session_id = ?req.session_id,
@@ -1452,31 +1343,16 @@ async fn run_reflect_stream_inner(
         &req.question,
         &outcome.steps,
         &grounding_entry_ids,
-        grounded,
         model_change.as_deref(),
     );
-    let session_id = sessions::record_turn_from_steps(
-        pool,
-        req.session_id,
-        title,
-        NewTurn {
-            question: req.question.clone(),
-            answer: answer.clone(),
-            grounding_entry_ids: grounding_entry_ids.clone(),
-            grounded,
-            fallback_used,
-        },
-        payloads,
-    )
-    .await?;
+    let session_id =
+        sessions::record_turn_from_steps(pool, req.session_id, title, payloads).await?;
 
     Ok(ReflectResponse {
         session_id,
         title: title.to_string(),
         answer,
         grounding_entry_ids,
-        grounded,
-        fallback_used,
         tool_called,
         model: resolved_model_id,
     })
@@ -1554,11 +1430,11 @@ fn turns_to_messages(turns: &[SessionTurnRow]) -> Vec<Message> {
 /// Returns `(existing_summary, prior_turns)` unchanged whenever nothing new
 /// needs to happen — no prior Turns, comfortably under budget, or a Session
 /// with no entry tree yet to safely write onto (`sessions::append_compaction`'s
-/// own `Ok(false)`, mirroring the same conservative choice
-/// `sessions::load_turns`'s `session_turns` fallback already makes for that
-/// case) — so a caller always gets back *some* summary to show the model
-/// when one exists, whether or not this particular call is the one that
-/// just wrote it.
+/// own `Ok(false)` — see that function's own doc comment for why this state
+/// is defended against even though a real, committed Session can't actually
+/// be in it) — so a caller always gets back *some* summary to show the
+/// model when one exists, whether or not this particular call is the one
+/// that just wrote it.
 async fn maybe_compact_prior_turns(
     pool: &PgPool,
     session_id: Uuid,
@@ -1589,9 +1465,8 @@ async fn maybe_compact_prior_turns(
 /// summary — a separate, one-off chat call against `llm::LlmClient`
 /// directly (not `harness::chat::ChatClient` — this runs before
 /// `agent_loop::run` even starts, and has no tool-calling protocol to speak
-/// in the first place), the same interface `reflect.rs`'s own extraction
-/// call (`try_extract`) already uses this way. `existing_summary`, when
-/// given, is rendered first, ahead of every Turn — see
+/// in the first place). `existing_summary`, when given, is rendered first,
+/// ahead of every Turn — see
 /// `maybe_compact_prior_turns`'s own doc comment for why folding it in here
 /// is the one place this ticket doesn't avoid re-reading already-condensed
 /// text through the model.
@@ -1633,14 +1508,14 @@ async fn summarize_prior_turns(
 /// `Context.messages` does), then one entry per `Step`, in the order they
 /// happened.
 ///
-/// Only the *last* `Assistant` step carries `grounding_entry_ids`/
-/// `grounded` in its persisted payload — it is the only one
-/// `sessions::entries_to_turns` will ever read back as a Turn's answer (its
-/// own doc comment covers why: the *last* Assistant entry in a Turn's run
-/// is the one that actually answered, not the first). An earlier Assistant
-/// step exists only because it made a tool call; giving it the same
-/// Grounding as the real answer would be misleading if anything ever read
-/// it directly, and `entries_to_turns` never will.
+/// Only the *last* `Assistant` step carries `grounding_entry_ids` in its
+/// persisted payload — it is the only one `sessions::entries_to_turns` will
+/// ever read back as a Turn's answer (its own doc comment covers why: the
+/// *last* Assistant entry in a Turn's run is the one that actually
+/// answered, not the first). An earlier Assistant step exists only because
+/// it made a tool call; giving it the same Grounding as the real answer
+/// would be misleading if anything ever read it directly, and
+/// `entries_to_turns` never will.
 ///
 /// `model_change` (issue #98) is `Some(model)` exactly when this Turn's own
 /// `resolve_model` call found the Conversation moving onto a different
@@ -1656,7 +1531,6 @@ fn build_tree_payloads(
     question: &str,
     steps: &[Step],
     grounding_entry_ids: &[Uuid],
-    grounded: bool,
     model_change: Option<&str>,
 ) -> Vec<(EntryType, Value)> {
     let mut payloads = Vec::with_capacity(steps.len() + 2);
@@ -1689,8 +1563,6 @@ fn build_tree_payloads(
                     } else {
                         Vec::new()
                     },
-                    grounded: is_final_answer && grounded,
-                    fallback_used: false,
                 })
             }
             Step::ToolResult {
@@ -1713,361 +1585,6 @@ fn build_tree_payloads(
     payloads
 }
 
-/// The fixed three-source pipeline tickets 4 through 8 built
-/// (`docs/adr/0023`, `docs/adr/0024`) — an extraction chat call, three
-/// concurrent retrievals merged and capped, an answering call that judges
-/// its own Grounding via a "GROUNDED: yes/no" marker, and a disclosed
-/// fallback when it judges "no". Issue #93 pass 2 stopped calling this from
-/// `reflect_handler` (see `run_reflect_stream_inner`, the loop-based replacement,
-/// above) but was instructed *not* to delete it — issue #99 is the ticket
-/// that formally retires this function and everything only it still calls.
-/// Kept exactly as it was, working and tested, rather than removed early.
-#[allow(dead_code)]
-async fn run_reflect(
-    pool: &PgPool,
-    reflect: &ReflectState,
-    req: ReflectRequest,
-) -> Result<ReflectResponse, ReflectError> {
-    let offset_minutes = req
-        .utc_offset_minutes
-        .clamp(MIN_UTC_OFFSET_MINUTES, MAX_UTC_OFFSET_MINUTES);
-
-    // Resolved before any retrieval or chat call runs, so a `session_id`
-    // naming no Session fails fast — as a clean 404 — instead of spending
-    // an extraction call, three retrievals and an answering call on a
-    // Question that can never be persisted. `None` starts a new Session:
-    // no prior Turns, and a title derived from this Question rather than an
-    // existing one's.
-    let (prior_turns, title): (Vec<SessionTurnRow>, String) = match req.session_id {
-        Some(id) => {
-            let session = sessions::find_session(pool, id)
-                .await?
-                .ok_or(ReflectError::SessionNotFound)?;
-            let turns = sessions::load_turns(pool, id, &reflect.chat_model).await?;
-            (turns, session.title)
-        }
-        None => (Vec::new(), derive_title(&req.question)),
-    };
-
-    // `load_turns` returns every Turn the Session has, oldest first — that
-    // full history is exactly right for `GET /v1/sessions/{id}`, which
-    // reuses the same function to render a whole Conversation. What's
-    // replayed into a chat call is a narrower thing (`CONVERSATION_WINDOW`'s
-    // own doc comment): keep only the most recent `CONVERSATION_WINDOW`
-    // Turns, dropping older ones, while leaving the survivors in the same
-    // oldest-first order `build_messages` expects — `split_off` on a
-    // saturating start index does exactly that without reversing anything,
-    // and is a no-op slice when there are `CONVERSATION_WINDOW` Turns or
-    // fewer.
-    let prior_turns = {
-        let mut turns = prior_turns;
-        let start = turns.len().saturating_sub(CONVERSATION_WINDOW);
-        turns.split_off(start)
-    };
-
-    // Chat call 1 — never fails this Question. Any failure (a chat call
-    // that errors or times out, a response that isn't JSON, a nonsensical
-    // range) degrades to `Extraction::default()`, which makes the fan-out
-    // below behave exactly like ticket 4: question-only retrieval. Reads
-    // the same windowed `prior_turns` the answering call gets, so a
-    // follow-up ("and the week before that?") resolves against the
-    // Conversation it's actually a follow-up to, rather than being extracted
-    // from the bare Question text alone (issue #66).
-    let extraction =
-        extract_date_range_and_keyword(reflect, &req.question, offset_minutes, &prior_turns).await;
-
-    // Three retrievals, run concurrently — they are independent and each
-    // embedding call costs real latency. Source 2 and 3 are no-ops (an
-    // immediate empty `Ok`) when extraction found nothing to feed them, so
-    // this always resolves to exactly the three futures below regardless of
-    // what extraction returned.
-    //
-    // Question search is the one source with no floor left to fall back to
-    // if it fails: ticket 4 (question-only retrieval) *is* the floor
-    // everything else here has to preserve, so a failure here propagates —
-    // that "at least what ticket 4 already gave" (docs/adr/0023, on
-    // extraction failure) is exactly as true of the Question's own
-    // embedding call as it is of extraction, since ticket 4 already
-    // returned an error in precisely this case.
-    let question_search = async {
-        // The *query* embedding, not `embed_document` — Harrier's
-        // instruction wrapper is what widens the relevant-vs-irrelevant
-        // margin for text used to search, per `llm.rs`'s own doc comment on
-        // the trait method.
-        let query_vector = reflect
-            .embed_client
-            .embed_query(&req.question)
-            .await
-            .context("embedding the question failed")?;
-        retrieve_nearest(pool, &query_vector, RETRIEVAL_LIMIT).await
-    };
-
-    // Keyword and range search exist purely to *widen* recall beyond
-    // question-only retrieval (docs/adr/0023's fan-out) — a source whose
-    // only job is widening must never be able to narrow the Answer to zero
-    // by failing. Each degrades its own `Err` (a transient embedding-call
-    // or database failure) to an empty `Vec` plus a `warn` naming which
-    // source failed and why — exactly the posture extraction failure
-    // already takes — rather than failing a Question that question-only
-    // retrieval alone would have answered.
-    let keyword_search = async {
-        let result: anyhow::Result<Vec<GroundingEntry>> = async {
-            match &extraction.keyword {
-                Some(keyword) => {
-                    let keyword_vector = reflect
-                        .embed_client
-                        .embed_query(&keyword_query(keyword))
-                        .await
-                        .context("embedding the extracted keyword failed")?;
-                    retrieve_nearest(pool, &keyword_vector, RETRIEVAL_LIMIT).await
-                }
-                None => Ok(Vec::new()),
-            }
-        }
-        .await;
-
-        result.unwrap_or_else(|err| {
-            tracing::warn!(
-                error = ?err,
-                source = "keyword",
-                "widening retrieval failed; degrading to empty rather than narrowing the Answer \
-                 below what question-only retrieval already gives"
-            );
-            Vec::new()
-        })
-    };
-
-    let range_search = async {
-        let result: anyhow::Result<Vec<GroundingEntry>> = async {
-            match extraction.date_range {
-                Some((from, to)) => {
-                    let (from_utc, to_utc) = local_date_range_to_utc(from, to, offset_minutes);
-                    retrieve_range(pool, from_utc, to_utc, RETRIEVAL_LIMIT).await
-                }
-                None => Ok(Vec::new()),
-            }
-        }
-        .await;
-
-        result.unwrap_or_else(|err| {
-            tracing::warn!(
-                error = ?err,
-                source = "range",
-                "widening retrieval failed; degrading to empty rather than narrowing the Answer \
-                 below what question-only retrieval already gives"
-            );
-            Vec::new()
-        })
-    };
-
-    // `join!`, not `try_join!` — the two widening sources above have
-    // already turned their own failures into an empty `Vec`, so the only
-    // `Result` left to resolve here is the question search's, and it alone
-    // can still fail the Question (see its own comment above).
-    let (question_result, keyword_entries, range_entries) =
-        tokio::join!(question_search, keyword_search, range_search);
-    let question_entries = question_result?;
-
-    // Merge rule (docs/adr/0023): concatenate in source *priority* order —
-    // question-search (similarity desc, as `retrieve_nearest` already
-    // orders it), then keyword-search (similarity desc), then range
-    // (recency desc, as `retrieve_range` already orders it) — dedupe by
-    // Entry id keeping the first occurrence, then truncate to
-    // `RETRIEVAL_LIMIT`. Priority order is load-bearing: the Question's own
-    // vector is the most trustworthy signal, and a wide extracted range
-    // ("this year") can return `RETRIEVAL_LIMIT` rows on its own — putting
-    // range last means it never crowds out the Entries the Question's own
-    // search actually asked for.
-    let mut seen = HashSet::with_capacity(RETRIEVAL_LIMIT as usize);
-    let mut merged: Vec<GroundingEntry> = Vec::with_capacity(RETRIEVAL_LIMIT as usize);
-    for entry in question_entries
-        .into_iter()
-        .chain(keyword_entries)
-        .chain(range_entries)
-    {
-        if seen.insert(entry.id) {
-            merged.push(entry);
-        }
-    }
-    merged.truncate(RETRIEVAL_LIMIT as usize);
-
-    // Retrieval order above is by priority/similarity/recency; reading
-    // order for the prompt should be by time, so the model sees the user's
-    // history unfold the way the user lived it rather than in a
-    // relevance-shuffled order. Sorting happens *after* the cap, not
-    // before — the priority order is what decides which Entries survive
-    // truncation.
-    merged.sort_by_key(|entry| entry.created_at);
-
-    let grounding_entry_ids: Vec<Uuid> = merged.iter().map(|entry| entry.id).collect();
-
-    let messages = build_messages(SYSTEM_INSTRUCTION, &merged, &prior_turns, &req.question);
-    let raw_answer = reflect
-        .chat_client
-        .chat(&messages)
-        .await
-        .context("chat call failed")?
-        .content;
-    let (verdict, answer) = parse_and_strip_verdict(&raw_answer);
-    let grounded = match verdict {
-        Some(verdict) => verdict,
-        None => {
-            // A missing or unrecognised marker must still fail open when
-            // there is real Grounding behind it — the opposite default
-            // (always ungrounded) would fire the fallback and its extra
-            // chat call on every response that merely forgot the marker,
-            // even when retrieval genuinely found something. But it must
-            // never let `grounded: true` reach the client paired with an
-            // empty `grounding_entry_ids`: that combination is exactly what
-            // CONTEXT.md's "an Answer with no Grounding behind it says so
-            // plainly" forbids, and nothing but the model's own wording
-            // would say anything was missing if it were allowed. Defaulting
-            // to `!merged.is_empty()` gets both: a forgotten marker over
-            // real Grounding still degrades to ticket 5's behaviour
-            // (grounded, no fallback, no third call); a forgotten marker
-            // over nothing falls into the disclosed fallback below, which
-            // is the correct outcome when retrieval genuinely found
-            // nothing, not a wasted call.
-            tracing::warn!(
-                answer = %raw_answer,
-                merged_is_empty = merged.is_empty(),
-                "no GROUNDED marker found in the answering call's response; defaulting grounded \
-                 to whether retrieval found anything"
-            );
-            !merged.is_empty()
-        }
-    };
-
-    // The four ways this function can end (this success match, its two
-    // nested arms below, plus the `?`-propagated error paths above) all
-    // funnel through the single `Ok(ReflectResponse { .. })` construction at
-    // the bottom of this function instead of each returning early with their
-    // own hand-assembled response — see `docs/adr/0024` and ticket 6.
-    let (answer, grounding_entry_ids, grounded, fallback_used) = if grounded {
-        (answer, grounding_entry_ids, true, false)
-    } else {
-        // Reflection judged its own Grounding didn't answer the Question. The
-        // disclosed fallback (docs/adr/0024): show what the user actually wrote
-        // in the last FALLBACK_WINDOW_DAYS days instead of a wrong-but-confident
-        // Answer built on Entries that merely shared a mood or a phrase with the
-        // Question. This never merges into Grounding above and only ever runs
-        // after a "no" verdict — it is a disclosed fallback, not a fourth
-        // retrieval source.
-        let now = Utc::now();
-        let mut recent = retrieve_range(
-            pool,
-            now - Duration::days(FALLBACK_WINDOW_DAYS),
-            now,
-            RETRIEVAL_LIMIT,
-        )
-        .await
-        .context("fallback range retrieval failed")?;
-        recent.sort_by_key(|entry| entry.created_at);
-
-        if recent.is_empty() {
-            // Nothing to disclose either — keep the model's own "I found
-            // nothing" Answer from the first call rather than spending a third
-            // chat call on an empty result.
-            (answer, Vec::new(), false, false)
-        } else {
-            let fallback_ids: Vec<Uuid> = recent.iter().map(|entry| entry.id).collect();
-            let fallback_messages = build_messages(
-                FALLBACK_SYSTEM_INSTRUCTION,
-                &recent,
-                &prior_turns,
-                &req.question,
-            );
-            let fallback_answer = reflect
-                .chat_client
-                .chat(&fallback_messages)
-                .await
-                .context("fallback chat call failed")?
-                .content;
-            (fallback_answer, fallback_ids, false, true)
-        }
-    };
-
-    // Persisted only now that a successful Answer exists — the one
-    // insertion point every path above funnels through (this is the same
-    // single `Ok(ReflectResponse { .. })` construction the comment above
-    // describes). `sessions::record_turn` does the Session-creation-plus-
-    // Turn-insert as a single transaction, so a failure anywhere above this
-    // point (every `?` in this function) never reaches here at all, and a
-    // failure inside `record_turn` itself leaves nothing behind either.
-    let session_id = sessions::record_turn(
-        pool,
-        req.session_id,
-        &title,
-        NewTurn {
-            question: req.question.clone(),
-            answer: answer.clone(),
-            grounding_entry_ids: grounding_entry_ids.clone(),
-            grounded,
-            fallback_used,
-        },
-    )
-    .await?;
-
-    Ok(ReflectResponse {
-        session_id,
-        title,
-        answer,
-        grounding_entry_ids,
-        grounded,
-        fallback_used,
-        // The fixed three-source pipeline has no tool-calling concept at
-        // all (`docs/adr/0023`) — every Question here always ran all three
-        // retrievals directly, never through a model-issued call it could
-        // decline to make. `true` is the honest answer for "did this run
-        // look," not a placeholder: issue #103's failure mode (a confident
-        // reply that never looked) cannot happen on this dead path, which
-        // is exactly why the loop replaced it as `/v1/reflect`'s live
-        // implementation (`run_reflect_stream_inner`, above) rather than this one.
-        tool_called: true,
-        // This pipeline has no model-selection concept either (issue #98
-        // postdates it) — always the Server's own configured default.
-        model: reflect.chat_model.clone(),
-    })
-}
-
-/// Wraps an extracted keyword as a question before it is embedded — e.g.
-/// "wedding" becomes "What did I write about wedding?" — rather than
-/// embedding the bare word. This does not touch `llm.rs`: `embed_query`
-/// still adds Harrier's `Instruct:` wrapper on top of whatever string it is
-/// given, and that layering is correct; this function only decides what
-/// string reaches it.
-///
-/// Harrier pools the **last token** (`llm.rs`), so a bare topic word is out
-/// of distribution against Entries that are ordinary prose — the model has
-/// nothing prose-like to pool from. Measured on the live 572-Entry corpus,
-/// top cosine and count of Entries at or above cosine 0.60 (the floor this
-/// codebase carried at the time, since removed — issue #92), bare keyword
-/// vs. the same keyword wrapped as a question:
-///
-/// | keyword | bare: top / ≥0.60 | wrapped: top / ≥0.60 |
-/// |---|---|---|
-/// | wedding | 0.507 / 0 | 0.684 / 5 |
-/// | guitar | 0.558 / 0 | 0.645 / 3 |
-/// | marathon training | 0.662 / 3 | 0.706 / 7 |
-/// | knee | 0.670 / 4 | 0.750 / 6 |
-/// | Aurora migration | 0.697 / 5 | 0.752 / 6 |
-///
-/// Five real wedding Entries exist in the corpus; the bare keyword found
-/// none of them. This is the recall gap ticket 5 exists to close.
-///
-/// The cost is real, not hidden: wrapping raises similarity across the
-/// board, not just for topics that are actually present, so it also lifts
-/// unrelated Entries toward the top of the ranking — an absent topic, "my
-/// cat", goes from 0 Entries over the then-floor to 7. It buys recall at
-/// the cost of precision, a trade taken deliberately because the relevance
-/// judgment moved off cosine entirely in ticket 6 (`docs/adr/0024`) and the
-/// floor itself was later deleted outright, not recalibrated (issue #92,
-/// `docs/adr/0023`) — precision is the answering call's job now, not this
-/// function's.
-fn keyword_query(keyword: &str) -> String {
-    format!("What did I write about {keyword}?")
-}
-
 /// `pub` for the same reason as `GroundingEntry` above — issue #90's
 /// `tests/eval_retrieval.rs` measures this arm directly against the
 /// Sandbox corpus.
@@ -2076,9 +1593,8 @@ fn keyword_query(keyword: &str) -> String {
 /// similarity floor is applied (issue #92 deleted `MIN_SIMILARITY`; see
 /// `docs/adr/0023`'s amendment for the measurement that killed it). This
 /// function no longer has an opinion about what counts as relevant; the
-/// answering call does (`docs/adr/0024`), because it is the only place in
-/// this request that ever sees the Question and a candidate Entry side by
-/// side.
+/// model does, once it actually sees the Question and a candidate Entry
+/// side by side in whichever tool result surfaced it.
 pub async fn retrieve_nearest(
     pool: &PgPool,
     query_vector: &[f32],
@@ -2387,199 +1903,6 @@ fn local_midnight_to_utc(date: NaiveDate, offset_minutes: i32) -> DateTime<Utc> 
     DateTime::<Utc>::from_naive_utc_and_offset(utc_naive, Utc)
 }
 
-/// Today's date in the asking Device's local day, derived from
-/// `offset_minutes` — never the server's own clock, which may be in a
-/// different timezone than the Device asking. Mirrors the sign convention
-/// `local_midnight_to_utc` uses in reverse: local time is UTC plus offset.
-fn local_today(offset_minutes: i32) -> NaiveDate {
-    (Utc::now() + Duration::minutes(i64::from(offset_minutes))).date_naive()
-}
-
-/// Builds the extraction call's system prompt — always starting with
-/// "Today's date" (`is_extraction_call` in `tests/reflect.rs` depends on
-/// that exact phrase appearing in this call's first message, so it must
-/// stay the leading sentence), and, when `prior_turns` is non-empty, folding
-/// in a compact rendering of the windowed recent Conversation
-/// (`render_conversation_for_extraction`) so a follow-up Question like "and
-/// the week before that?" can be resolved against what it actually follows
-/// (issue #66).
-///
-/// The Conversation is folded into *this* system message's content as
-/// plain `Q:`/`A:` prose, not appended to `try_extract`'s `messages` as real
-/// `user`/`assistant` turns. That choice is deliberate: this call's entire
-/// contract is a small JSON object (`parse_extraction`), and a real
-/// `assistant`-role Answer in the message list risks the model continuing
-/// in prose the way a genuine conversation would, rather than replying with
-/// bare JSON. A rendered block inside one system message carries the same
-/// information without ever looking, to the model, like a turn it should
-/// continue. The JSON-only instruction is repeated at the very end, after
-/// the Conversation block, so it is the last thing the model reads
-/// regardless of how much Conversation precedes it.
-fn extraction_system_prompt(today_local: NaiveDate, prior_turns: &[SessionTurnRow]) -> String {
-    let mut prompt = format!(
-        "Today's date, in the user's own local timezone, is {today}. The user is about to ask a \
-         Question about their own personal journal.",
-        today = today_local.format("%Y-%m-%d")
-    );
-
-    if !prior_turns.is_empty() {
-        prompt.push_str(
-            "\n\nFor context only, here is the recent Conversation leading up to this new \
-             Question, oldest first. Use it only to work out what the new Question refers to \
-             (e.g. \"that\", \"the week before\", \"him\") — none of it is itself the Question \
-             to extract from, and nothing in it changes the JSON-only instruction below.\n\n",
-        );
-        prompt.push_str(&render_conversation_for_extraction(prior_turns));
-        prompt.push_str("\n\nEnd of recent Conversation.");
-    }
-
-    prompt.push_str(
-        "\n\nRead the new Question below — in light of the recent Conversation above, if any \
-         was given — and extract two things from it, if present:\n\
-         1. A date range the Question refers to (e.g. \"last week\", \"yesterday\", \"this \
-         summer\"), resolved against today's local date above — as local calendar dates, \
-         inclusive of both ends. Null if the Question does not refer to any particular time.\n\
-         2. A short topical keyword phrase suitable for a second, independent search of the \
-         journal — e.g. Question \"how did the move go\" might extract \"moving flat\". Null if \
-         the Question has no separable topic.\n\n\
-         Respond with a single JSON object and nothing else — no prose, no markdown code fence, \
-         no matter what the Conversation above discussed — in exactly this shape:\n\
-         {\"date_range\": {\"from\": \"YYYY-MM-DD\", \"to\": \"YYYY-MM-DD\"} or null, \
-         \"keyword\": \"...\" or null}",
-    );
-
-    prompt
-}
-
-/// Renders the windowed recent Conversation (`CONVERSATION_WINDOW`, already
-/// applied by `run_reflect` before it reaches here) as plain `Q:`/`A:`
-/// prose, oldest first, separated by a blank line between pairs — the
-/// compact, non-role-bearing rendering `extraction_system_prompt` folds
-/// into its own system-message content. See that function's doc comment for
-/// why this is prose inside one message rather than real `user`/`assistant`
-/// `ChatMessage` turns.
-fn render_conversation_for_extraction(prior_turns: &[SessionTurnRow]) -> String {
-    prior_turns
-        .iter()
-        .map(|turn| format!("Q: {}\nA: {}", turn.question, turn.answer))
-        .collect::<Vec<_>>()
-        .join("\n\n")
-}
-
-/// Chat call 1 — asks the chat client to pull a date range and/or a
-/// keyword out of the Question, for the fan-out in `run_reflect` to widen
-/// retrieval with. `prior_turns` is the same `CONVERSATION_WINDOW`-capped
-/// slice the answering call gets (`run_reflect` applies the cap once,
-/// before either call), so a follow-up Question is extracted in the light
-/// of what it follows rather than in isolation (issue #66) — see
-/// `extraction_system_prompt` for how it's folded in. Never propagates an
-/// error: any failure at all (the chat call itself erroring or timing out,
-/// an unparseable or absent response) degrades to `Extraction::default()`,
-/// logged at `warn`, so the Question still gets an Answer from
-/// question-only retrieval — exactly ticket 4's behaviour, and `docs/adr/
-/// 0023`'s floor: a step that exists to widen recall must never be able to
-/// narrow it to zero.
-///
-/// The endpoint `ChatMessage`s are sent to accepts only `model`,
-/// `messages`, `stream` (see `llm.rs`) — no `response_format`, no tools —
-/// so this is prompt-and-parse, never structured-output mode.
-async fn extract_date_range_and_keyword(
-    reflect: &ReflectState,
-    question: &str,
-    offset_minutes: i32,
-    prior_turns: &[SessionTurnRow],
-) -> Extraction {
-    match try_extract(reflect, question, offset_minutes, prior_turns).await {
-        Ok(extraction) => extraction,
-        Err(err) => {
-            tracing::warn!(
-                error = ?err,
-                "extraction discarded; falling back to question-only retrieval"
-            );
-            Extraction::default()
-        }
-    }
-}
-
-async fn try_extract(
-    reflect: &ReflectState,
-    question: &str,
-    offset_minutes: i32,
-    prior_turns: &[SessionTurnRow],
-) -> anyhow::Result<Extraction> {
-    let messages = vec![
-        ChatMessage {
-            role: "system".to_string(),
-            content: extraction_system_prompt(local_today(offset_minutes), prior_turns),
-        },
-        ChatMessage {
-            role: "user".to_string(),
-            content: question.to_string(),
-        },
-    ];
-
-    let raw = reflect
-        .chat_client
-        .chat(&messages)
-        .await
-        .context("extraction chat call failed")?
-        .content;
-    parse_extraction(&raw)
-}
-
-/// Parses the extraction chat call's raw response into an `Extraction`,
-/// defensively: strips markdown code fences, takes the substring from the
-/// first `{` to the last `}`, and parses that as JSON. `date_range` and
-/// `keyword` are then read out of a loosely-typed `serde_json::Value`
-/// rather than a strict struct, specifically so that a missing field, a
-/// `null`, or a field of the wrong type degrades that one field to `None`
-/// instead of failing the whole response — only "no JSON object could be
-/// found at all" or "what was found doesn't parse as JSON" fail this
-/// function, and even those are caught by `extract_date_range_and_keyword`
-/// above rather than failing the Question.
-fn parse_extraction(raw: &str) -> anyhow::Result<Extraction> {
-    let candidate = strip_code_fences(raw);
-    let json_str =
-        extract_json_object(candidate).context("no JSON object found in extraction response")?;
-    let value: Value =
-        serde_json::from_str(json_str).context("extraction response was not valid JSON")?;
-
-    let keyword = value
-        .get("keyword")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
-
-    let date_range = value.get("date_range").and_then(parse_date_range);
-
-    Ok(Extraction {
-        date_range,
-        keyword,
-    })
-}
-
-/// Parses `{"from": "YYYY-MM-DD", "to": "YYYY-MM-DD"}` (or `null`) into a
-/// validated `(from, to)` pair, or `None` on any defect: a `null` value, a
-/// missing or non-string `from`/`to`, an unparseable date, or a
-/// nonsensical range where `to < from`. A model that got the date order
-/// wrong probably got the dates themselves wrong too, so the range is
-/// dropped rather than swapped.
-fn parse_date_range(value: &Value) -> Option<(NaiveDate, NaiveDate)> {
-    if value.is_null() {
-        return None;
-    }
-    let from = value.get("from")?.as_str()?;
-    let to = value.get("to")?.as_str()?;
-    let from = NaiveDate::parse_from_str(from, "%Y-%m-%d").ok()?;
-    let to = NaiveDate::parse_from_str(to, "%Y-%m-%d").ok()?;
-    if to < from {
-        tracing::warn!(%from, %to, "extracted date range dropped: to is before from");
-        return None;
-    }
-    Some((from, to))
-}
-
 /// Strips a leading/trailing ``` fence, with an optional language tag on
 /// the opening line (e.g. "```json"). A no-op when there is no fence — most
 /// defensive parsing here actually happens in `extract_json_object`, which
@@ -2618,116 +1941,6 @@ pub(crate) fn extract_json_object(text: &str) -> Option<&str> {
         return None;
     }
     Some(&text[start..=end])
-}
-
-/// The characters treated as markdown noise around the verdict marker line
-/// — asterisks/underscores for bold or italic, backticks for inline code,
-/// `#` for a heading. A model that wraps "GROUNDED: no" in any of these
-/// must still be recognised — see `parse_and_strip_verdict`.
-const MARKER_NOISE_CHARS: [char; 4] = ['*', '_', '`', '#'];
-
-/// Reads the "GROUNDED: yes"/"GROUNDED: no" verdict marker
-/// (`SYSTEM_INSTRUCTION`) off the front of the answering chat call's raw
-/// response, and returns the Answer with that marker line removed — the
-/// marker must never reach the client: the Answer is persisted verbatim
-/// (`sessions::record_turn`) and replayed into a follow-up Question's
-/// prompt (`build_messages`'s `prior_turns`), so a leaked marker would
-/// poison every later Turn in the Session.
-///
-/// Matches the *first non-empty* line, case-insensitively, after stripping
-/// `MARKER_NOISE_CHARS` and surrounding whitespace — tolerant of a model
-/// that wraps the marker in markdown (`**GROUNDED: no**`,
-/// `` `GROUNDED: NO` ``, `# Grounded: Yes`) rather than sending the bare
-/// line the prompt asked for.
-///
-/// Returns `(None, raw unchanged)` when that first non-empty line isn't a
-/// recognised marker at all (missing entirely, or something else). This is
-/// the *only* failure mode — unlike `parse_extraction`, there is no
-/// "mostly parses, one field is bad" case here, since a verdict is a single
-/// yes/no rather than a structured JSON object. `run_reflect` is what
-/// decides what a `None` degrades to (grounded, by default) and why.
-fn parse_and_strip_verdict(raw: &str) -> (Option<bool>, String) {
-    let mut lines_consumed = 0usize;
-    let mut marker_line: Option<&str> = None;
-    for line in raw.lines() {
-        lines_consumed += 1;
-        if !line.trim().is_empty() {
-            marker_line = Some(line);
-            break;
-        }
-    }
-
-    let Some(line) = marker_line else {
-        return (None, raw.to_string());
-    };
-
-    let normalized: String = line
-        .chars()
-        .filter(|c| !MARKER_NOISE_CHARS.contains(c))
-        .collect::<String>()
-        .trim()
-        .to_lowercase();
-
-    let verdict = match normalized.as_str() {
-        "grounded: yes" => Some(true),
-        "grounded: no" => Some(false),
-        _ => None,
-    };
-
-    let Some(verdict) = verdict else {
-        return (None, raw.to_string());
-    };
-
-    let rest: String = raw
-        .lines()
-        .skip(lines_consumed)
-        .collect::<Vec<_>>()
-        .join("\n");
-    (Some(verdict), rest.trim_start().to_string())
-}
-
-fn build_messages(
-    system_instruction: &str,
-    entries: &[GroundingEntry],
-    prior_turns: &[SessionTurnRow],
-    question: &str,
-) -> Vec<ChatMessage> {
-    let mut messages = vec![ChatMessage {
-        role: "system".to_string(),
-        content: system_instruction.to_string(),
-    }];
-
-    let grounding_block = if entries.is_empty() {
-        "(No Entries were found.)".to_string()
-    } else {
-        entries
-            .iter()
-            .map(|entry| format!("[{}] {}", entry.created_at.format("%Y-%m-%d"), entry.body))
-            .collect::<Vec<_>>()
-            .join("\n\n")
-    };
-    messages.push(ChatMessage {
-        role: "system".to_string(),
-        content: format!("Grounding:\n{grounding_block}"),
-    });
-
-    for turn in prior_turns {
-        messages.push(ChatMessage {
-            role: "user".to_string(),
-            content: turn.question.clone(),
-        });
-        messages.push(ChatMessage {
-            role: "assistant".to_string(),
-            content: turn.answer.clone(),
-        });
-    }
-
-    messages.push(ChatMessage {
-        role: "user".to_string(),
-        content: question.to_string(),
-    });
-
-    messages
 }
 
 /// Derives a new Session's title from its first Question (CONTEXT.md: "a
@@ -2770,91 +1983,9 @@ mod tests {
 
     use super::{
         NonEmptyAnswer, TITLE_MAX_CHARS, claims_no_journal_access, derive_title,
-        extract_json_object, is_empty_final_reply, keyword_query, local_date_range_to_utc,
-        local_today, parse_and_strip_verdict, parse_extraction, search_words, strip_code_fences,
+        extract_json_object, is_empty_final_reply, local_date_range_to_utc, search_words,
+        strip_code_fences,
     };
-
-    #[test]
-    fn a_date_range_and_keyword_are_parsed_from_clean_json() {
-        let raw = r#"{"date_range": {"from": "2026-08-01", "to": "2026-08-07"}, "keyword": "moving flat"}"#;
-        let extraction = parse_extraction(raw).unwrap();
-        assert_eq!(
-            extraction.date_range,
-            Some((
-                NaiveDate::from_ymd_opt(2026, 8, 1).unwrap(),
-                NaiveDate::from_ymd_opt(2026, 8, 7).unwrap(),
-            ))
-        );
-        assert_eq!(extraction.keyword.as_deref(), Some("moving flat"));
-    }
-
-    #[test]
-    fn both_fields_null_parses_to_no_extraction() {
-        let raw = r#"{"date_range": null, "keyword": null}"#;
-        let extraction = parse_extraction(raw).unwrap();
-        assert_eq!(extraction.date_range, None);
-        assert_eq!(extraction.keyword, None);
-    }
-
-    #[test]
-    fn a_markdown_code_fence_is_stripped() {
-        let raw = "```json\n{\"date_range\": null, \"keyword\": \"wedding\"}\n```";
-        let extraction = parse_extraction(raw).unwrap();
-        assert_eq!(extraction.keyword.as_deref(), Some("wedding"));
-    }
-
-    #[test]
-    fn surrounding_prose_around_the_json_object_is_ignored() {
-        let raw =
-            "Sure, here you go: {\"date_range\": null, \"keyword\": \"knee\"} — hope that helps!";
-        let extraction = parse_extraction(raw).unwrap();
-        assert_eq!(extraction.keyword.as_deref(), Some("knee"));
-    }
-
-    #[test]
-    fn not_json_at_all_fails_to_parse() {
-        assert!(parse_extraction("I'm not sure what you mean.").is_err());
-    }
-
-    #[test]
-    fn a_reversed_range_is_dropped_but_the_keyword_survives() {
-        let raw =
-            r#"{"date_range": {"from": "2026-08-07", "to": "2026-08-01"}, "keyword": "wedding"}"#;
-        let extraction = parse_extraction(raw).unwrap();
-        assert_eq!(extraction.date_range, None);
-        assert_eq!(extraction.keyword.as_deref(), Some("wedding"));
-    }
-
-    #[test]
-    fn an_unparseable_date_drops_only_the_range() {
-        let raw =
-            r#"{"date_range": {"from": "not-a-date", "to": "2026-08-07"}, "keyword": "wedding"}"#;
-        let extraction = parse_extraction(raw).unwrap();
-        assert_eq!(extraction.date_range, None);
-        assert_eq!(extraction.keyword.as_deref(), Some("wedding"));
-    }
-
-    #[test]
-    fn wrong_field_types_degrade_to_none_instead_of_failing() {
-        let raw = r#"{"date_range": "not an object", "keyword": 42}"#;
-        let extraction = parse_extraction(raw).unwrap();
-        assert_eq!(extraction.date_range, None);
-        assert_eq!(extraction.keyword, None);
-    }
-
-    #[test]
-    fn missing_fields_entirely_degrade_to_none() {
-        let extraction = parse_extraction("{}").unwrap();
-        assert_eq!(extraction.date_range, None);
-        assert_eq!(extraction.keyword, None);
-    }
-
-    #[test]
-    fn an_empty_keyword_string_is_treated_as_absent() {
-        let raw = r#"{"date_range": null, "keyword": "   "}"#;
-        let extraction = parse_extraction(raw).unwrap();
-        assert_eq!(extraction.keyword, None);
-    }
 
     #[test]
     fn extract_json_object_finds_the_outermost_braces() {
@@ -2870,18 +2001,6 @@ mod tests {
     fn strip_code_fences_removes_a_language_tagged_fence() {
         assert_eq!(strip_code_fences("```json\n{\"a\": 1}\n```"), "{\"a\": 1}");
         assert_eq!(strip_code_fences("{\"a\": 1}"), "{\"a\": 1}");
-    }
-
-    /// The keyword search must embed the keyword wrapped as a question, not
-    /// the bare word — see `keyword_query`'s doc comment for the measured
-    /// recall gap this closes.
-    #[test]
-    fn keyword_query_wraps_the_keyword_as_a_question() {
-        assert_eq!(keyword_query("wedding"), "What did I write about wedding?");
-        assert_eq!(
-            keyword_query("marathon training"),
-            "What did I write about marathon training?"
-        );
     }
 
     /// The boundary this ADR/ticket cares most about getting right: a
@@ -2914,77 +2033,6 @@ mod tests {
         assert_eq!(to_utc.to_rfc3339(), "2026-08-08T00:00:00+00:00");
     }
 
-    #[test]
-    fn local_today_shifts_with_the_offset_rather_than_using_the_servers_clock() {
-        // Not asserting an exact date (that would make this test flaky
-        // around a real clock's day boundary) — asserting the *relationship*
-        // between two offsets is what actually exercises "the server never
-        // guesses the timezone from its own clock."
-        let utc_today = local_today(0);
-        let far_east = local_today(MAX_OFFSET_MINUTES_FOR_TEST);
-        // A 14-hour-east offset's local date is never earlier than UTC's.
-        assert!(far_east >= utc_today);
-    }
-
-    const MAX_OFFSET_MINUTES_FOR_TEST: i32 = 840;
-
-    // -------------------------------------------------------------------
-    // Ticket 6 — parse_and_strip_verdict (docs/adr/0024)
-    // -------------------------------------------------------------------
-
-    #[test]
-    fn a_clean_grounded_yes_marker_is_parsed_and_stripped() {
-        let (verdict, answer) = parse_and_strip_verdict("GROUNDED: yes\nYour knee has improved.");
-        assert_eq!(verdict, Some(true));
-        assert_eq!(answer, "Your knee has improved.");
-    }
-
-    #[test]
-    fn a_clean_grounded_no_marker_is_parsed_and_stripped() {
-        let (verdict, answer) =
-            parse_and_strip_verdict("GROUNDED: no\nI found nothing about that.");
-        assert_eq!(verdict, Some(false));
-        assert_eq!(answer, "I found nothing about that.");
-    }
-
-    #[test]
-    fn markdown_bold_and_case_noise_around_the_marker_is_tolerated() {
-        let (verdict, answer) = parse_and_strip_verdict("  **grounded: NO**  \n\nNothing found.");
-        assert_eq!(verdict, Some(false));
-        assert_eq!(answer, "Nothing found.");
-    }
-
-    #[test]
-    fn a_backtick_and_heading_wrapped_marker_is_tolerated() {
-        let (verdict, answer) = parse_and_strip_verdict("# `GROUNDED: YES`\nHere you go.");
-        assert_eq!(verdict, Some(true));
-        assert_eq!(answer, "Here you go.");
-    }
-
-    #[test]
-    fn no_marker_at_all_leaves_the_answer_unchanged() {
-        let raw = "Your knee has improved since February.";
-        let (verdict, answer) = parse_and_strip_verdict(raw);
-        assert_eq!(verdict, None);
-        assert_eq!(answer, raw);
-    }
-
-    #[test]
-    fn an_unrecognised_first_line_is_not_treated_as_a_marker() {
-        let raw = "Sure, here's your answer:\nIt went well.";
-        let (verdict, answer) = parse_and_strip_verdict(raw);
-        assert_eq!(verdict, None);
-        assert_eq!(answer, raw);
-    }
-
-    #[test]
-    fn the_stripped_answer_never_contains_the_marker_string() {
-        let (_, yes_answer) = parse_and_strip_verdict("GROUNDED: yes\nAll good here.");
-        assert!(!yes_answer.contains("GROUNDED:"));
-        let (_, no_answer) = parse_and_strip_verdict("**grounded: no**\nNothing found.");
-        assert!(!no_answer.contains("GROUNDED:"));
-    }
-
     // -------------------------------------------------------------------
     // Issue #102 — is_empty_final_reply / NonEmptyAnswer
     // -------------------------------------------------------------------
@@ -3009,22 +2057,6 @@ mod tests {
     #[test]
     fn a_stray_closing_tool_call_tag_with_nothing_else_is_empty() {
         assert!(is_empty_final_reply("</tool_call>"));
-    }
-
-    #[test]
-    fn a_bare_grounded_marker_with_nothing_after_it_is_empty() {
-        assert!(is_empty_final_reply("GROUNDED: yes"));
-        assert!(is_empty_final_reply("**grounded: no**"));
-    }
-
-    #[test]
-    fn a_marker_followed_by_a_real_answer_is_not_empty() {
-        // The fixed pipeline's own case (docs/adr/0024): a marker line is
-        // scaffolding, but real prose after it is a real Answer, not
-        // nothing to say.
-        assert!(!is_empty_final_reply(
-            "GROUNDED: no\nI found nothing about that."
-        ));
     }
 
     #[test]
@@ -3108,21 +2140,14 @@ mod tests {
     }
 
     /// The structural half of issue #102's acceptance criteria: the single
-    /// constructor `run_reflect_stream_inner` routes every model reply through
-    /// before it can become `ReflectResponse::answer`/`NewTurn::answer`
-    /// rejects every shape `is_empty_final_reply` recognises as nothing to
-    /// say, and accepts everything else. There is no second path to a
+    /// constructor `run_reflect_stream_inner` routes every model reply
+    /// through before it can become `ReflectResponse::answer` rejects every
+    /// shape `is_empty_final_reply` recognises as nothing to say, and
+    /// accepts everything else. There is no second path to a
     /// `NonEmptyAnswer` that skips this check.
     #[test]
     fn non_empty_answer_rejects_every_shape_of_nothing_to_say_and_accepts_real_text() {
-        for empty in [
-            "",
-            "   \n  ",
-            "```\n```",
-            "</tool_call>",
-            "GROUNDED: yes",
-            "**grounded: no**",
-        ] {
+        for empty in ["", "   \n  ", "```\n```", "</tool_call>"] {
             assert!(
                 NonEmptyAnswer::new(empty).is_none(),
                 "expected {empty:?} to be rejected"

@@ -14,8 +14,6 @@ describe("conversationTurnFromWire", () => {
         question: "How has my knee been?",
         answer: "It's been improving since February.",
         grounding_entry_ids: ["entry-1", "entry-2"],
-        grounded: true,
-        fallback_used: false,
         tool_called: true,
         model: "codex-terra",
       }),
@@ -23,31 +21,8 @@ describe("conversationTurnFromWire", () => {
       question: "How has my knee been?",
       answer: "It's been improving since February.",
       groundingEntryIds: ["entry-1", "entry-2"],
-      grounded: true,
-      fallbackUsed: false,
       toolCalled: true,
-      model: "codex-terra",
-    });
-  });
-
-  it("carries fallbackUsed for a turn where the server showed recent Entries instead of an Answer", () => {
-    expect(
-      conversationTurnFromWire({
-        question: "Anything about scuba diving?",
-        answer: "Nothing matched, but here's what you wrote lately.",
-        grounding_entry_ids: ["entry-3"],
-        grounded: false,
-        fallback_used: true,
-        tool_called: true,
-        model: "codex-terra",
-      }),
-    ).toEqual({
-      question: "Anything about scuba diving?",
-      answer: "Nothing matched, but here's what you wrote lately.",
-      groundingEntryIds: ["entry-3"],
-      grounded: false,
-      fallbackUsed: true,
-      toolCalled: true,
+      digestSource: undefined,
       model: "codex-terra",
     });
   });
@@ -59,8 +34,6 @@ describe("conversationTurnFromWire", () => {
     const response = {
       answer: "You wrote about the move.",
       grounding_entry_ids: [] as string[],
-      grounded: true,
-      fallback_used: false,
       tool_called: true,
       model: "codex-terra",
       session_id: "11111111-1111-1111-1111-111111111111",
@@ -73,27 +46,24 @@ describe("conversationTurnFromWire", () => {
       question: "What did I write yesterday?",
       answer: "You wrote about the move.",
       groundingEntryIds: [],
-      grounded: true,
-      fallbackUsed: false,
       toolCalled: true,
+      digestSource: undefined,
       model: "codex-terra",
     });
   });
 
   // Issue #96: the live event stream (`reflect-live-run.ts`) can learn a
-  // just-answered turn drew on a real Digest — something the wire's own
-  // `WireReflectResponse`/`WireSessionTurn` shape has no field for at all.
-  // `conversationTurnFromWire`'s optional second argument is how that
-  // carries onto the `ConversationTurn` the components render, without the
-  // wire mapping itself needing to know anything about it.
-  it("carries a live digestSource onto the mapped turn when one is passed", () => {
+  // just-answered turn drew on a real Digest before the tree write behind
+  // it has committed — `WireReflectResponse` carries no `digest_source`
+  // field of its own (only `WireSessionTurn` does, since issue #99).
+  // `conversationTurnFromWire`'s optional second argument is how the live
+  // value still reaches the mapped `ConversationTurn` in that case.
+  it("carries a live digestSource onto the mapped turn when the wire itself has none", () => {
     const turn = conversationTurnFromWire(
       {
         question: "How was last week?",
         answer: "A quiet week, mostly focused on the move.",
         grounding_entry_ids: [],
-        grounded: false,
-        fallback_used: false,
         tool_called: true,
         model: "codex-terra",
       },
@@ -107,73 +77,100 @@ describe("conversationTurnFromWire", () => {
     });
   });
 
-  it("leaves digestSource undefined for a turn restored from a fetched Session, with no live argument", () => {
+  // Issue #99's carry-over from #96 pass 2: `GET /v1/sessions/:id` now
+  // derives `digest_source` from the tree (`SessionTurnRow::digest_source`,
+  // server/src/sessions.rs), so a turn restored after a page reload still
+  // reports where its Answer came from — no `live` argument needed at all.
+  it("carries digestSource straight off the wire for a turn restored from a fetched Session", () => {
     const turn = conversationTurnFromWire({
       question: "How was last week?",
       answer: "A quiet week, mostly focused on the move.",
       grounding_entry_ids: [],
-      grounded: false,
-      fallback_used: false,
+      tool_called: true,
+      model: "codex-terra",
+      digest_source: { period: "week", period_start: "2026-08-17", period_end: "2026-08-23" },
+    });
+
+    expect(turn.digestSource).toEqual({
+      period: "week",
+      periodStart: "2026-08-17",
+      periodEnd: "2026-08-23",
+    });
+  });
+
+  it("leaves digestSource undefined when neither the wire nor a live argument has one", () => {
+    const turn = conversationTurnFromWire({
+      question: "How was last week?",
+      answer: "A quiet week, mostly focused on the move.",
+      grounding_entry_ids: [],
       tool_called: true,
       model: "codex-terra",
     });
 
     expect(turn.digestSource).toBeUndefined();
   });
+
+  it("prefers the wire's own digestSource over a live one when, implausibly, both are present", () => {
+    const turn = conversationTurnFromWire(
+      {
+        question: "How was last week?",
+        answer: "A quiet week, mostly focused on the move.",
+        grounding_entry_ids: [],
+        tool_called: true,
+        model: "codex-terra",
+        digest_source: { period: "week", period_start: "2026-08-17", period_end: "2026-08-23" },
+      },
+      { digestSource: { period: "day", periodStart: "2026-08-23", periodEnd: "2026-08-23" } },
+    );
+
+    expect(turn.digestSource).toEqual({
+      period: "week",
+      periodStart: "2026-08-17",
+      periodEnd: "2026-08-23",
+    });
+  });
 });
 
-// ADR 0024's three-way outcome, derived once so GroundingNote
-// (reflection-page.tsx) and summaryLabel (grounding-disclosure.tsx) can't
-// drift apart on the same (grounded, fallbackUsed) pair.
+// Issue #99 removed `grounded`/`fallback_used` from the wire entirely — the
+// fixed pipeline's own verdict, meaningless once the loop replaced it (see
+// `server/src/reflect.rs`'s own module doc comment) — so `groundingOutcome`
+// derives its answer purely from `groundingEntryIds`/`toolCalled`/
+// `digestSource` now. Derived once, still, so `GroundingNote`
+// (reflection-page.tsx) and `summaryLabel` (grounding-disclosure.tsx) can't
+// drift apart on what happened.
 describe("groundingOutcome", () => {
-  it("is 'grounded' when the server judged its Grounding answers the Question", () => {
-    expect(groundingOutcome({ grounded: true, fallbackUsed: false, toolCalled: true })).toBe(
-      "grounded",
-    );
-  });
-
-  it("is 'disclosedFallback' when the server showed recent Entries instead of an Answer", () => {
-    expect(groundingOutcome({ grounded: false, fallbackUsed: true, toolCalled: true })).toBe(
-      "disclosedFallback",
-    );
+  it("is 'grounded' when the tools returned at least one Entry", () => {
+    expect(groundingOutcome({ groundingEntryIds: ["entry-1"], toolCalled: true })).toBe("grounded");
   });
 
   it("is 'nothingFound' when a tool ran and genuinely found nothing", () => {
-    expect(groundingOutcome({ grounded: false, fallbackUsed: false, toolCalled: true })).toBe(
-      "nothingFound",
-    );
+    expect(groundingOutcome({ groundingEntryIds: [], toolCalled: true })).toBe("nothingFound");
   });
 
   // Issue #103: the case a keyword-free, structural corrective turn exists
   // for — a run that answered with no tool call at all must not be
   // reported the same way as one that looked and found nothing. Before
   // `toolCalled` existed, both reached this function with an identical
-  // (grounded: false, fallbackUsed: false) pair and were indistinguishable
-  // here, which is what let the live bug this ticket fixes render as an
-  // ordinary "nothing matched" Answer.
+  // empty `groundingEntryIds` and were indistinguishable here, which is
+  // what let the live bug this ticket fixes render as an ordinary "nothing
+  // matched" Answer.
   it("is 'neverLooked' when the run never called a tool at all", () => {
-    expect(groundingOutcome({ grounded: false, fallbackUsed: false, toolCalled: false })).toBe(
-      "neverLooked",
-    );
+    expect(groundingOutcome({ groundingEntryIds: [], toolCalled: false })).toBe("neverLooked");
   });
 
-  it("prefers 'grounded' even if fallbackUsed were somehow also true", () => {
-    expect(groundingOutcome({ grounded: true, fallbackUsed: true, toolCalled: true })).toBe(
-      "grounded",
-    );
-  });
-
-  // Issue #96: a Digest-sourced Answer leaves grounded/fallbackUsed both
-  // false (read_digest populates no entry_ids — server/src/reflect.rs's
-  // own doc comment) — digestSource is what tells that case apart from
-  // "nothing matched at all," and it must win outright.
-  it("is 'digest' whenever digestSource is set, regardless of grounded/fallbackUsed/toolCalled", () => {
+  // Issue #96: a Digest-sourced Answer usually leaves `groundingEntryIds`
+  // empty (`read_digest` populates no `entry_ids` — server/src/harness/tools/read_digest.rs's
+  // own doc comment) — `digestSource` is what tells that case apart from
+  // "nothing matched at all," and it must win outright regardless of what
+  // `groundingEntryIds`/`toolCalled` happen to carry (a Digest-answered
+  // Turn's run can still have called another tool first).
+  it("is 'digest' whenever digestSource is set, regardless of groundingEntryIds/toolCalled", () => {
     const digestSource = { period: "day", periodStart: "2026-08-20", periodEnd: "2026-08-20" };
+    expect(groundingOutcome({ groundingEntryIds: [], toolCalled: false, digestSource })).toBe(
+      "digest",
+    );
     expect(
-      groundingOutcome({ grounded: false, fallbackUsed: false, toolCalled: false, digestSource }),
-    ).toBe("digest");
-    expect(
-      groundingOutcome({ grounded: true, fallbackUsed: false, toolCalled: true, digestSource }),
+      groundingOutcome({ groundingEntryIds: ["entry-1"], toolCalled: true, digestSource }),
     ).toBe("digest");
   });
 });
@@ -182,15 +179,13 @@ describe("groundingOutcome", () => {
 // wire field here does — a plain, direct copy, no derivation. Kept as its
 // own test rather than folded into the mapping tests above, since those
 // predate this field and stay focused on what they always tested
-// (grounded/fallbackUsed/digestSource).
+// (groundingEntryIds/digestSource).
 describe("conversationTurnFromWire maps tool_called", () => {
   it("carries tool_called: true onto toolCalled", () => {
     const turn = conversationTurnFromWire({
       question: "How is my knee doing?",
       answer: "Your knee has improved since February.",
       grounding_entry_ids: ["entry-1"],
-      grounded: true,
-      fallback_used: false,
       tool_called: true,
       model: "codex-terra",
     });
@@ -202,8 +197,6 @@ describe("conversationTurnFromWire maps tool_called", () => {
       question: "How is my knee doing?",
       answer: "I can't access any journal entries from here.",
       grounding_entry_ids: [],
-      grounded: false,
-      fallback_used: false,
       tool_called: false,
       model: "codex-terra",
     });
@@ -219,8 +212,6 @@ describe("conversationTurnFromWire maps model", () => {
       question: "How is my knee doing?",
       answer: "Your knee has improved since February.",
       grounding_entry_ids: [],
-      grounded: false,
-      fallback_used: false,
       tool_called: false,
       model: "claude-sonnet",
     });

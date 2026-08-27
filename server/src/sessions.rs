@@ -7,46 +7,53 @@
 //! Turns, so it stays cheap regardless of how long any one Conversation
 //! has grown — newest first by `updated_at`, the column `record_turn` bumps
 //! on every appended Turn. An optional `?q=` (issue #64) narrows that list
-//! to Sessions whose Conversation — the full text of every Turn's Question
-//! and Answer inside `session_turns`, not just the Session's title —
-//! contains the given text, case-insensitively. A title is only a
-//! truncated first Question (CONTEXT.md's Session entry), so matching the
-//! title alone would find a Session by how it opened and by nothing it
-//! went on to discuss. This is Search (CONTEXT.md): plain SQL `ILIKE`
-//! against Postgres, deliberately not the vector search `reflect.rs` uses
-//! to find Grounding for a Question — that exists to answer a different
-//! question ("what's relevant to this Question") and reusing it here would
-//! blur the two jobs and mean embedding every Question and Answer into a
-//! queue that exists for Entries.
+//! to Sessions whose Conversation — the full text of every `user`/`assistant`
+//! `message` entry in the tree, not just the Session's title — contains the
+//! given text, case-insensitively. A title is only a truncated first
+//! Question (CONTEXT.md's Session entry), so matching the title alone would
+//! find a Session by how it opened and by nothing it went on to discuss.
+//! This is Search (CONTEXT.md): plain SQL `ILIKE` against Postgres,
+//! deliberately not the vector search `reflect.rs` uses to find Grounding
+//! for a Question — that exists to answer a different question ("what's
+//! relevant to this Question") and reusing it here would blur the two jobs
+//! and mean embedding every Question and Answer into a queue that exists
+//! for Entries.
 //!
 //! `DELETE /v1/sessions/{id}` (issue #63) removes a Session outright.
-//! `session_turns.session_id references sessions(id) on delete cascade`
-//! (migration `0003`) does the rest — deleting the Session row is enough to
-//! take every Turn inside it with it, so this handler issues exactly one
-//! `delete from sessions` and nothing against `session_turns` directly.
-//! Deleting an id that doesn't exist is a 404, the same as `GET
-//! /v1/sessions/{id}` — so a client can tell "already gone" (someone else
-//! deleted it, or it never existed) from "I just deleted it."
+//! `session_entries.session_id references sessions(id) on delete cascade`
+//! (migration `0006`) does the rest — deleting the Session row is enough to
+//! take its whole tree with it, so this handler issues exactly one `delete
+//! from sessions` and nothing against `session_entries` directly. Deleting
+//! an id that doesn't exist is a 404, the same as `GET /v1/sessions/{id}` —
+//! so a client can tell "already gone" (someone else deleted it, or it
+//! never existed) from "I just deleted it."
 //!
 //! This module also holds the row types and SQL `reflect.rs` uses to load a
 //! Session's prior Turns before asking, and to persist a new Turn (creating
 //! the Session first if it doesn't exist yet) once an Answer succeeds —
 //! kept here rather than duplicated in `reflect.rs` so there is exactly one
-//! place that knows the shape of `sessions`/`session_turns`.
+//! place that knows the shape of `sessions`/`session_entries`.
 //!
-//! ## The entry tree (issue #91)
+//! ## The entry tree (issue #91, contracted by issue #99)
 //!
-//! Underneath the Turn shape above, a Session is really an append-only tree
-//! of entries (`session_entries`, migration `0006`) — the shape a harness
-//! needs, where the model speaks, calls a tool, reads a result, and speaks
-//! again, none of which fits "one Question, one Answer." This is the
-//! expand half of an expand-and-contract: `session_turns` stays exactly as
-//! it was (issue #64's Search still queries it directly), `record_turn`
-//! now writes *both* shapes in one transaction, and `load_turns` — used by
-//! both `GET /v1/sessions/{id}` and `reflect.rs`'s prior-Turns read — now
-//! rebuilds its answer by walking the tree rather than by reading
-//! `session_turns`. Nothing here is removed until issue #99, the contract
-//! half.
+//! A Session is really an append-only tree of entries (`session_entries`,
+//! migration `0006`) — the shape a harness needs, where the model speaks,
+//! calls a tool, reads a result, and speaks again, none of which fits "one
+//! Question, one Answer." Issue #91 was the expand half of an
+//! expand-and-contract: it kept `session_turns` (the one-row-per-pair table
+//! migration `0003` created) alongside the new tree, had `record_turn` write
+//! both shapes, and had `load_turns` rebuild its answer by walking the tree
+//! rather than reading `session_turns` — with a fallback to reading
+//! `session_turns` directly for the one case the tree couldn't yet cover
+//! (a Session written some other way, most visibly this module's and
+//! `reflect.rs`'s own tests seeding a Conversation by hand). Issue #99 is
+//! the contract half: `session_turns` is gone (migration `0008` drops it —
+//! migration `0006`'s own backfill had already converted every row that
+//! existed at the time it ran), `record_turn`/`record_turn_from_steps`
+//! write the tree and nothing else, `load_turns` has no fallback left to
+//! fall back to, and every test that used to seed a Conversation by
+//! inserting into `session_turns` now appends tree entries directly
+//! instead. The tree is the only representation a Session has now.
 //!
 //! A few names worth knowing before reading the functions below:
 //!
@@ -103,60 +110,87 @@ pub struct SessionRow {
     pub updated_at: DateTime<Utc>,
 }
 
-/// One Question/Answer pair persisted inside a Session, as loaded from
-/// `session_turns` — oldest first (`load_turns` orders by `seq asc`). This
-/// is also what `reflect.rs`'s `build_messages` takes a slice of in place
-/// of the wire's old `PriorTurn`, and it doubles as the wire shape for one
-/// entry of `SessionResponse::turns` below — the same fields both a
-/// follow-up Question's prompt and a client restoring a Conversation need.
-#[derive(Debug, Clone, FromRow, Serialize, ToSchema)]
+/// One Question/Answer pair, rebuilt from a Session's entry tree
+/// (`entries_to_turns`) — oldest first (`load_turns` walks the tree root to
+/// leaf). This is also what `reflect.rs`'s `turns_to_messages` takes a
+/// slice of to replay a Conversation into the loop's own `Context`, and it
+/// doubles as the wire shape for one entry of `SessionResponse::turns`
+/// below — the same fields both a follow-up Question's prompt and a client
+/// restoring a Conversation need. Nothing here is stored directly: every
+/// field is derived from the tree each time a Session is read, which is
+/// what issue #99 means by "every Conversation reads from the tree" — see
+/// this module's own doc comment for the `session_turns` table this
+/// replaced. `FromRow` is deliberately not derived here any more — nothing
+/// decodes this struct straight off a query row today (`entries_to_turns`
+/// below builds every field itself), and `digest_source`'s nested
+/// `DigestSourcePayload` has no `sqlx::Decode` impl to derive one against.
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct SessionTurnRow {
     pub question: String,
     pub answer: String,
+    /// The Entry ids that appeared in a tool result during this Turn's run,
+    /// in the order they first appeared — never a merged, deduped,
+    /// relevance-ranked list computed in advance (that description
+    /// belonged to the fixed pipeline issue #99 removed): simply what the
+    /// tools returned, read back off the tree's own `tool_result` entries.
     pub grounding_entry_ids: Vec<Uuid>,
-    pub grounded: bool,
-    pub fallback_used: bool,
-    /// Issue #103: whether this Turn's run called a tool at all, kept apart
-    /// from `grounded` for the same reason `reflect::ReflectResponse::tool_called`
-    /// is (see that field's own doc comment) — `grounding_entry_ids` alone
-    /// cannot tell "a tool ran and found nothing" from "no tool ever ran."
-    /// No column backs this on `session_turns`: it's derived, not stored —
-    /// `entries_to_turns` computes it from whether a `tool_result` entry
-    /// appears anywhere in the Turn's own run through the tree, the same
-    /// tree `session_entries` already holds every tool call in
-    /// (`harness::agent_loop::Step::ToolResult`, via
+    /// Issue #103: whether this Turn's run called a tool at all —
+    /// `grounding_entry_ids` alone cannot tell "a tool ran and found
+    /// nothing" from "no tool ever ran." No column backs this: it's
+    /// derived, not stored — `entries_to_turns` computes it from whether a
+    /// `tool_result` entry appears anywhere in the Turn's own run through
+    /// the tree, the same tree `session_entries` already holds every tool
+    /// call in (`harness::agent_loop::Step::ToolResult`, via
     /// `reflect.rs::build_tree_payloads`), rather than adding a second,
     /// independently-writable flag that a future write path could forget to
-    /// set — the derivation precedent `docs/adr/0024` already set for
-    /// `grounded` itself.
+    /// set.
     pub tool_called: bool,
+    /// Issue #99's carry-over from #96 pass 2: a `read_digest` tool result
+    /// found a real Digest for this Turn, and this is what it was — the
+    /// same `period`/`period_start`/`period_end` the *live* `tool_execution_end`
+    /// event's `details` carries (`harness/tools/read_digest.rs`'s own
+    /// `source: "digest"` tagging), now derived from the tree instead of
+    /// only ever available while the browser tab that asked the Question is
+    /// still open. Before this field existed, `GET /v1/sessions/{id}`
+    /// returned `SessionTurnRow` with no per-tool detail at all, so a
+    /// Digest-sourced Turn read back — after a page reload — as though its
+    /// Grounding were an ordinary list of Entries (whichever ids the same
+    /// run's *other* tool calls happened to surface, or none), not as
+    /// having come from a Digest. `entries_to_turns` walks the same
+    /// `tool_result` entries `tool_called` above reads and keeps the last
+    /// one tagged `"source": "digest"`, mirroring the live reducer's own
+    /// "last one wins" rule (`apps/web/src/lib/reflect-live-run.ts`'s
+    /// `digestSource ?? state.digestSource`) — a Turn with more than one
+    /// `read_digest` call attributes to whichever it asked about most
+    /// recently before answering. `None` for every other Turn, including
+    /// every one that predates issue #95.
+    pub digest_source: Option<DigestSourcePayload>,
     /// Issue #98: the model that produced this Turn's Answer — never
-    /// stored on the Turn itself (there is no `model` column on
-    /// `session_turns`, and `record_turn`/`record_turn_from_steps` gained
-    /// no new field either). Derived the same way `tool_called` above is:
+    /// stored on the Turn itself (there is no `model` column anywhere in
+    /// the tree, and `record_turn`/`record_turn_from_steps` carry no such
+    /// field either). Derived the same way `tool_called` above is:
     /// `entries_to_turns` tracks whichever model a `model_change` entry
     /// most recently named while it walks the tree, and stamps that value
     /// onto every Turn it finishes — see `ModelChangePayload`'s own doc
     /// comment for why that's the single source of truth this field reads
-    /// from, rather than a second, independently-writable value. A Turn
-    /// read off the pre-#91 `session_turns` fallback (`load_turns_from_session_turns`)
-    /// has no tree to derive this from at all; it's set to `load_turns`'s
-    /// own `default_model` there, which is simply true — every Turn that
-    /// old only ever had one model to run on, the Server's sole configured
-    /// one, because per-Conversation choice didn't exist yet.
+    /// from, rather than a second, independently-writable value.
     pub model: String,
     pub created_at: DateTime<Utc>,
 }
 
-/// One Question/Answer pair `reflect.rs::run_reflect` is about to persist —
-/// built only after a successful Answer exists (`record_turn`'s doc
-/// comment), never before.
-pub(crate) struct NewTurn {
-    pub question: String,
-    pub answer: String,
-    pub grounding_entry_ids: Vec<Uuid>,
-    pub grounded: bool,
-    pub fallback_used: bool,
+/// What a `read_digest` tool call found, when it found a real Digest — see
+/// `SessionTurnRow::digest_source`'s own doc comment for how this is
+/// derived and why. Field names deliberately match
+/// `harness/tools/read_digest.rs`'s own `details` JSON one for one (minus
+/// the `"source": "digest"` tag itself, which this type's mere presence
+/// already says), which is also what lets the client's existing
+/// `parseDigestSource` (`apps/web/src/lib/reflect-live-run.ts`) and this
+/// struct agree on shape without either one having to translate the other.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct DigestSourcePayload {
+    pub period: String,
+    pub period_start: String,
+    pub period_end: String,
 }
 
 /// The five kinds an entry in a Session's tree can be (migration `0006`'s
@@ -284,12 +318,15 @@ pub(crate) enum MessagePayload {
     },
     Assistant {
         text: String,
+        /// Only the *last* `Assistant` entry in a Turn's own run ever
+        /// carries a non-empty `Vec` here — the Entry ids the tools this
+        /// Turn called returned, in the order they first appeared. Never a
+        /// merged, deduped, relevance-ranked list computed in advance (that
+        /// belonged to the fixed pipeline issue #99 removed): simply what
+        /// the tools returned. See `build_tree_payloads`'s own doc comment
+        /// on `server/src/reflect.rs` for why only the last entry gets it.
         #[serde(default)]
         grounding_entry_ids: Vec<Uuid>,
-        #[serde(default)]
-        grounded: bool,
-        #[serde(default)]
-        fallback_used: bool,
     },
     ToolResult {
         text: String,
@@ -372,8 +409,9 @@ pub async fn get_session_handler(
 }
 
 /// Deletes a Session outright — the id itself, not its Turns, which
-/// `session_turns_session_id_fkey`'s `on delete cascade` (migration `0003`)
-/// removes as a consequence of this one statement. `204 No Content` on
+/// `session_entries`' own `session_id references sessions(id) on delete
+/// cascade` (migration `0006`) removes as a consequence of this one
+/// statement. `204 No Content` on
 /// success, `404` when `id` names no Session — never a distinct "already
 /// deleted" status, since from the Server's point of view those are the
 /// same fact: there's nothing at `id` to delete.
@@ -451,14 +489,23 @@ pub async fn list_sessions_handler(
 /// an empty `Vec`, not an error — there is no such thing as "no Sessions
 /// yet" as a failure.
 ///
-/// `q` narrows the list to Sessions with at least one Turn (Question or
-/// Answer) matching, case-insensitively (issue #64). Absent or
-/// whitespace-only is exactly "no filter" — the same unfiltered query this
-/// ran before the `q` param existed. `select distinct` on `s.*` is what
-/// collapses a Session with two matching Turns (e.g. a Question and its own
-/// Answer both containing the term) back down to one row: the join against
-/// `session_turns` fans a Session out per matching Turn, and `distinct`
-/// folds it back by the Session's own columns before `order by` sees it.
+/// `q` narrows the list to Sessions with at least one `user`/`assistant`
+/// `message` entry matching, case-insensitively (issue #64) — a Question or
+/// an Answer, never a `tool_result` entry, which is raw tool output (Entry
+/// bodies, digest prose) rather than something either party actually said;
+/// including it would make this Search overlap confusingly with Entry
+/// Search proper. Absent or whitespace-only is exactly "no filter" — the
+/// same unfiltered query this ran before the `q` param existed. `select
+/// distinct` on `s.*` is what collapses a Session with two matching entries
+/// (e.g. a Question and its own Answer both containing the term, or the
+/// same term appearing in two different Turns) back down to one row: the
+/// join against `session_entries` fans a Session out per matching entry,
+/// and `distinct` folds it back by the Session's own columns before `order
+/// by` sees it. Issue #99: this used to join `session_turns` — one row per
+/// Turn, `question`/`answer` as plain columns — and reads the tree instead
+/// now that `session_turns` is gone (this module's own doc comment); a
+/// `jsonb` payload's `->>'text'` extraction is what stands in for what was
+/// a plain column read.
 async fn list_sessions(pool: &PgPool, q: Option<&str>) -> anyhow::Result<Vec<SessionRow>> {
     let term = q.map(str::trim).filter(|term| !term.is_empty());
     let sessions =
@@ -473,8 +520,10 @@ async fn list_sessions(pool: &PgPool, q: Option<&str>) -> anyhow::Result<Vec<Ses
                 sqlx::query_as::<_, SessionRow>(
                     "select distinct s.id, s.title, s.created_at, s.updated_at
                  from sessions s
-                 join session_turns t on t.session_id = s.id
-                 where t.question ilike $1 or t.answer ilike $1
+                 join session_entries e on e.session_id = s.id
+                 where e.type = 'message'
+                   and e.payload->>'role' in ('user', 'assistant')
+                   and e.payload->>'text' ilike $1
                  order by s.updated_at desc",
                 )
                 .bind(pattern)
@@ -541,30 +590,26 @@ pub(crate) async fn find_session(pool: &PgPool, id: Uuid) -> anyhow::Result<Opti
 /// never creates a Session without one) but is not this function's job to
 /// enforce.
 ///
-/// Issue #91: this reads the *tree* when `session_id` has one —
-/// `main_leaf_id` walked back to a root (`walk_to_root`), trimmed to
-/// whatever lies at or after the last compaction on that path
-/// (`project_from_last_compaction`, a no-op today since nothing writes a
-/// compaction yet), and paired back into Turns (`entries_to_turns`). This
-/// is what lets both callers of `load_turns` — `run_get_session` below and
-/// `reflect.rs`'s prior-Turns read — see a forked Session's Turns
-/// correctly: `fork_session` copies tree entries only, never
-/// `session_turns` rows, so a `session_turns`-based read alone would see a
-/// forked Session as having no Turns at all.
+/// Issue #91 introduced reading the *tree* — `main_leaf_id` walked back to a
+/// root (`walk_to_root`), trimmed to whatever lies at or after the last
+/// compaction on that path (`project_from_last_compaction`), and paired
+/// back into Turns (`entries_to_turns`) — and issue #99 made it the *only*
+/// way this function reads: the tree is a Session's sole representation
+/// now, and `session_turns`, which #91 kept around as a fallback for
+/// exactly the state a Session before this point in the migration could
+/// still be in, is gone (this module's own doc comment covers why removing
+/// it was safe). The tree read is also what lets both callers of
+/// `load_turns` — `run_get_session` below and `reflect.rs`'s prior-Turns
+/// read — see a forked Session's Turns correctly: `fork_session` copies
+/// tree entries only.
 ///
-/// **A Session with no `main_leaf_id` falls back to reading `session_turns`
-/// directly.** This is not a hedge — it is the correct answer for a real
-/// state the database can be in: `record_turn` always writes both shapes
-/// from this point on, and migration `0006`'s backfill gives every
-/// pre-#91 Session a tree too, but a row written some other way (most
-/// visibly, the direct `insert into session_turns` this module's own tests
-/// and `reflect.rs`'s use to seed a Conversation without going through
-/// `record_turn`, exactly as `insert_turn`/`insert_session_with_turns`
-/// there do) has no entries at all. Falling back to `session_turns` for
-/// exactly that case is what keeps `load_turns` telling the truth about
-/// what a Session holds regardless of which path wrote it — and keeps
-/// `reflect.rs`, which this ticket must leave unedited, seeing the
-/// Conversations its own tests build the same way it always has.
+/// A Session id naming a real row with no `main_leaf_id` yet returns an
+/// empty `Vec` rather than erroring — `begin_turn`/`record_turn` are the
+/// only things that ever create a `sessions` row, and both always append at
+/// least one entry and set `main_leaf_id` inside the very same transaction,
+/// so a committed Session with `main_leaf_id is null` can't actually happen
+/// today. Empty is the honest answer for that state regardless: a Session
+/// holding no Turns yet has no Turns to return, not an error to raise.
 ///
 /// `default_model` (issue #98) is the model to attribute a Turn to when
 /// nothing in the tree says otherwise — the Server's own configured
@@ -581,7 +626,7 @@ pub(crate) async fn load_turns(
     default_model: &str,
 ) -> anyhow::Result<Vec<SessionTurnRow>> {
     let Some(leaf_id) = session_main_leaf_id(pool, session_id).await? else {
-        return load_turns_from_session_turns(pool, session_id, default_model).await;
+        return Ok(Vec::new());
     };
     let entries = load_entries(pool, session_id).await?;
     let path = walk_to_root(&entries, leaf_id)?;
@@ -628,72 +673,6 @@ pub(crate) async fn latest_compaction_summary(
     }
 }
 
-/// The exact columns `session_turns` itself carries — kept as its own row
-/// type, rather than decoding straight into `SessionTurnRow` the way this
-/// query did before issue #103, because `SessionTurnRow::tool_called` has
-/// no column here to decode from (see that field's own doc comment: it's
-/// derived from the tree, not stored). This struct exists only to give
-/// `sqlx::query_as` something whose fields match the query one for one;
-/// `load_turns_from_session_turns` immediately turns each row into a real
-/// `SessionTurnRow` below.
-#[derive(Debug, FromRow)]
-struct LegacySessionTurnRow {
-    question: String,
-    answer: String,
-    grounding_entry_ids: Vec<Uuid>,
-    grounded: bool,
-    fallback_used: bool,
-    created_at: DateTime<Utc>,
-}
-
-/// The pre-#91 read `load_turns` always did — kept verbatim as the
-/// fallback for a Session with no tree entries yet. See `load_turns`'s own
-/// doc comment for when this path is taken and why.
-///
-/// `tool_called` is hardcoded `true` for every row this reads, not left to
-/// default or guessed at: a Session still being read off `session_turns`
-/// alone has no tree (`load_turns`'s own doc comment — this is the
-/// fallback for exactly that case), which means it predates issue #91's
-/// entry tree and, with it, issue #93 pass 2's tool-calling loop. The fixed
-/// pipeline that wrote it always ran all three retrievals directly
-/// (`docs/adr/0023`) — there was no model-issued call it could ever decline
-/// to make, so issue #103's failure mode is structurally impossible on data
-/// this old. Reporting `false` here would be a plausible-looking guess
-/// about something this function actually knows.
-///
-/// `model` is `default_model` for the same reason `tool_called` is a fixed
-/// `true`: data this old predates per-Conversation model choice entirely,
-/// so the Server's single configured model is not a guess about what ran
-/// it — it is the only model that could have.
-async fn load_turns_from_session_turns(
-    pool: &PgPool,
-    session_id: Uuid,
-    default_model: &str,
-) -> anyhow::Result<Vec<SessionTurnRow>> {
-    let turns = sqlx::query_as::<_, LegacySessionTurnRow>(
-        "select question, answer, grounding_entry_ids, grounded, fallback_used, created_at
-         from session_turns
-         where session_id = $1
-         order by seq asc",
-    )
-    .bind(session_id)
-    .fetch_all(pool)
-    .await?;
-    Ok(turns
-        .into_iter()
-        .map(|row| SessionTurnRow {
-            question: row.question,
-            answer: row.answer,
-            grounding_entry_ids: row.grounding_entry_ids,
-            grounded: row.grounded,
-            fallback_used: row.fallback_used,
-            tool_called: true,
-            model: default_model.to_string(),
-            created_at: row.created_at,
-        })
-        .collect())
-}
-
 /// `session_id`'s current `main_leaf_id` — `None` both when no Session has
 /// this id and when a Session exists but has never had anything appended
 /// to it (a state `record_turn` never leaves committed, per `0006`'s own
@@ -710,111 +689,15 @@ async fn session_main_leaf_id(pool: &PgPool, session_id: Uuid) -> anyhow::Result
     Ok(leaf.flatten())
 }
 
-/// Persists `turn` inside a single transaction, creating the Session first
-/// when `session_id` is `None` — the *only* place a Session or a Turn is
-/// ever written, and only ever called by `reflect.rs::run_reflect` after a
-/// successful Answer already exists. Any failure here (a dropped
-/// connection, a constraint violation) rolls the whole transaction back, so
-/// a failed ask can never leave a half-written Session or an orphaned Turn
-/// behind — see `docs/adr/0025`, which is where "a Session holding an empty
-/// Conversation is unrepresentable" is decided. (CONTEXT.md defines what a
-/// Session *is*; it deliberately carries no implementation guarantees.)
-///
-/// `title` is used only when minting a new Session — an existing Session's
-/// title is immutable once set (CONTEXT.md: "a title taken from its first
-/// Question"), so a follow-up Question never overwrites it.
-///
-/// Issue #91: alongside the `session_turns` row this always wrote, this now
-/// also appends two chained tree entries — a `user` `message` carrying the
-/// Question, then an `assistant` `message` carrying the Answer and its
-/// Grounding — onto whatever `main_leaf_id` the Session had before this
-/// call (`None` for a brand-new Session, so the `user` entry becomes a
-/// root). This is the *only* place either shape is ever written, which is
-/// exactly what "dual-writing must be done inside `record_turn`" buys:
-/// `reflect.rs` calls this one function after a successful Answer and
-/// neither knows nor needs to know that two representations exist behind
-/// it. Both entries' `seq` come from the same `sessions.next_seq` counter
-/// `session_records` also draws from — see `allocate_seq`.
-///
-/// Returns the Session's id: freshly minted for a new Session, or
-/// `session_id` unchanged for an existing one.
-pub(crate) async fn record_turn(
-    pool: &PgPool,
-    session_id: Option<Uuid>,
-    title: &str,
-    turn: NewTurn,
-) -> anyhow::Result<Uuid> {
-    let (mut tx, session_id, parent_leaf) = begin_turn(pool, session_id, title).await?;
-
-    sqlx::query(
-        "insert into session_turns
-            (id, session_id, question, answer, grounding_entry_ids, grounded, fallback_used)
-         values ($1, $2, $3, $4, $5, $6, $7)",
-    )
-    .bind(Uuid::new_v4())
-    .bind(session_id)
-    .bind(&turn.question)
-    .bind(&turn.answer)
-    .bind(&turn.grounding_entry_ids)
-    .bind(turn.grounded)
-    .bind(turn.fallback_used)
-    .execute(&mut *tx)
-    .await?;
-
-    let user_entry_id = Uuid::new_v4();
-    let user_payload = serde_json::to_value(MessagePayload::User {
-        text: turn.question.clone(),
-    })
-    .context("serializing a user message payload can't fail")?;
-    append_entry(
-        &mut tx,
-        session_id,
-        user_entry_id,
-        parent_leaf,
-        EntryType::Message,
-        user_payload,
-    )
-    .await?;
-
-    let assistant_entry_id = Uuid::new_v4();
-    let assistant_payload = serde_json::to_value(MessagePayload::Assistant {
-        text: turn.answer.clone(),
-        grounding_entry_ids: turn.grounding_entry_ids.clone(),
-        grounded: turn.grounded,
-        fallback_used: turn.fallback_used,
-    })
-    .context("serializing an assistant message payload can't fail")?;
-    append_entry(
-        &mut tx,
-        session_id,
-        assistant_entry_id,
-        Some(user_entry_id),
-        EntryType::Message,
-        assistant_payload,
-    )
-    .await?;
-
-    sqlx::query("update sessions set main_leaf_id = $1 where id = $2")
-        .bind(assistant_entry_id)
-        .bind(session_id)
-        .execute(&mut *tx)
-        .await?;
-
-    tx.commit().await?;
-    Ok(session_id)
-}
-
 /// Opens a transaction and resolves the Session a new Turn is about to be
 /// appended to — an existing Session's `main_leaf_id` (its current leaf,
 /// about to be extended) for `Some(session_id)`, or a freshly minted
-/// Session with no leaf yet for `None`. Factored out of `record_turn` so a
-/// harness-driven persistence path (`reflect.rs::run_reflect_loop`, issue
-/// #93 pass 2) that appends more than the one User/Assistant pair
-/// `record_turn` itself writes — a loop can call a tool, or several, before
-/// it answers — can share the same session-upsert logic rather than
-/// duplicating it. Returns the still-open transaction: every caller has
-/// more to do inside it (an insert, one or more `append_entry` calls, a
-/// `main_leaf_id` update) before committing.
+/// Session with no leaf yet for `None`. Factored out of
+/// `record_turn_from_steps` (its one caller) purely to keep that function's
+/// own body focused on the shape only it needs — the session-upsert logic
+/// itself has nothing loop-specific about it. Returns the still-open
+/// transaction: the caller has more to do inside it (one or more
+/// `append_entry` calls, a `main_leaf_id` update) before committing.
 async fn begin_turn<'a>(
     pool: &'a PgPool,
     session_id: Option<Uuid>,
@@ -846,25 +729,36 @@ async fn begin_turn<'a>(
     Ok((tx, session_id, parent_leaf))
 }
 
-/// The harness-driven twin of `record_turn` (issue #93 pass 2): still
-/// exactly one `session_turns` row per request — `NewTurn` is unchanged,
-/// and Search (issue #64) still only ever needs one Question/Answer pair
-/// per Turn to index — but the tree underneath it can hold more than the
-/// one User/Assistant pair `record_turn` itself appends, because a loop can
-/// call a tool (or several) before it answers. `payloads` is every entry
-/// this Turn adds to the tree, in the order they happened, already encoded
-/// as `(EntryType, Value)` pairs by the caller — `reflect.rs`'s
-/// `build_tree_payloads`, which is what actually knows the shape of a
-/// loop's steps; this function only chains them onto the Session's existing
-/// leaf and commits, exactly like `record_turn` does for its own two.
-/// `payloads` must not be empty — a Turn with no entries at all is not a
-/// Turn, the same invariant `record_turn` upholds by construction (it always
-/// writes exactly two).
+/// Persists one Turn — the *only* place a Session or a Turn is ever
+/// written, called by `reflect.rs::run_reflect_stream_inner` once a loop
+/// run has actually produced an Answer, never before: any failure before
+/// this call (a chat call erroring, the loop never producing a reply) never
+/// reaches here, so a failed ask can never leave a half-written Session or
+/// an orphaned Turn behind — see `docs/adr/0025`, which is where "a Session
+/// holding an empty Conversation is unrepresentable" is decided. (CONTEXT.md
+/// defines what a Session *is*; it deliberately carries no implementation
+/// guarantees.)
+///
+/// `title` is used only when minting a new Session — an existing Session's
+/// title is immutable once set (CONTEXT.md: "a title taken from its first
+/// Question"), so a follow-up Question never overwrites it.
+///
+/// `payloads` is every tree entry this Turn adds, in the order they
+/// happened, already encoded as `(EntryType, Value)` pairs by the caller —
+/// `reflect.rs`'s `build_tree_payloads`, which is what actually knows the
+/// shape of a loop's steps; this function only chains them onto the
+/// Session's existing leaf and commits. Before issue #99 this also took a
+/// `NewTurn` and wrote a matching `session_turns` row alongside the tree —
+/// that row's own columns (`question`, `answer`, `grounding_entry_ids`)
+/// were always a plain re-derivation of the same `payloads` this function
+/// was already given, never a second source of truth, so once nothing read
+/// `session_turns` any more (this module's own doc comment) carrying it was
+/// pure duplication with no reader left to justify it. `payloads` must not
+/// be empty — a Turn with no entries at all is not a Turn.
 pub(crate) async fn record_turn_from_steps(
     pool: &PgPool,
     session_id: Option<Uuid>,
     title: &str,
-    turn: NewTurn,
     payloads: Vec<(EntryType, Value)>,
 ) -> anyhow::Result<Uuid> {
     anyhow::ensure!(
@@ -873,21 +767,6 @@ pub(crate) async fn record_turn_from_steps(
     );
 
     let (mut tx, session_id, mut leaf) = begin_turn(pool, session_id, title).await?;
-
-    sqlx::query(
-        "insert into session_turns
-            (id, session_id, question, answer, grounding_entry_ids, grounded, fallback_used)
-         values ($1, $2, $3, $4, $5, $6, $7)",
-    )
-    .bind(Uuid::new_v4())
-    .bind(session_id)
-    .bind(&turn.question)
-    .bind(&turn.answer)
-    .bind(&turn.grounding_entry_ids)
-    .bind(turn.grounded)
-    .bind(turn.fallback_used)
-    .execute(&mut *tx)
-    .await?;
 
     for (entry_type, payload) in payloads {
         let id = Uuid::new_v4();
@@ -923,14 +802,14 @@ pub(crate) async fn record_turn_from_steps(
 /// so there is nothing yet for a typed shape to buy.
 ///
 /// Returns `Ok(false)`, writing nothing, for a Session with no
-/// `main_leaf_id` yet — the same real, pre-#91 state `load_turns`'s own
-/// `session_turns` fallback exists for (that function's own doc comment):
-/// chaining a fresh tree entry onto a Session that has none would make this
-/// entry the tree's *root*, which would flip `load_turns` from its
-/// `session_turns` fallback over to reading a tree holding only this one
-/// node — silently hiding every Turn that Session already had rather than
-/// summarising them. `Ok(true)` for the ordinary case: the entry was
-/// written and `sessions.main_leaf_id` now points at it.
+/// `main_leaf_id` yet — a state a real, committed Session can't actually be
+/// in today (`load_turns`'s own doc comment), but chaining a fresh tree
+/// entry onto one anyway would make this entry the tree's *root*, silently
+/// discarding whatever it should have summarised instead of failing loudly.
+/// A defensive `Ok(false)` costs nothing against a case that can't happen;
+/// writing a wrong root would cost a Session's history. `Ok(true)` for the
+/// ordinary case: the entry was written and `sessions.main_leaf_id` now
+/// points at it.
 ///
 /// **Always chains onto the *current* leaf — there is no partial-keep
 /// variant, and there cannot be one.** `session_entries` is append-only
@@ -1087,8 +966,9 @@ pub(crate) async fn append_record(
 /// Session's timeline after a fork existed). Loaded all at once rather than
 /// one row per `parent_id` hop: a Session's entry count is small enough
 /// that one query and an in-memory walk (`walk_to_root`) beats a
-/// round-trip per hop, the same trade `load_turns` already made reading
-/// `session_turns` in full before this ticket.
+/// round-trip per hop — the same trade the pre-tree `load_turns` already
+/// made, reading all of a Session's `session_turns` rows in one query
+/// rather than one at a time.
 pub(crate) async fn load_entries(pool: &PgPool, session_id: Uuid) -> anyhow::Result<Vec<EntryRow>> {
     let entries = sqlx::query_as::<_, EntryRow>(
         "select session_id, id, parent_id, seq, type as entry_type, payload, created_at
@@ -1248,20 +1128,19 @@ fn model_before_projection(path: &[&EntryRow], default_model: &str) -> anyhow::R
 }
 
 /// Rebuilds `SessionTurnRow`s from a root-first path of entries — the
-/// inverse of what `record_turn`/`record_turn_from_steps` write. A `user`
-/// `message` starts a Turn; everything after it up to (not including) the
-/// *next* `user` `message`, or the end of the path, belongs to that same
-/// Turn's own run — which, since issue #93 pass 2, can hold more than the
-/// single `assistant` entry `record_turn` itself ever wrote: a loop can
-/// call a tool (or several `assistant`/`tool_result` entries deep) before
-/// it actually answers. The Turn's answer is the *last* `assistant` entry
-/// in that run, not the first — the first one right after a `user` entry
-/// may only be "I'm going to look that up," with the tool call attached;
-/// the last one is what the loop's own stopping rule
-/// (`harness::agent_loop::run`) guarantees has no tool call left in it,
-/// which is what makes it the real Answer. `created_at` is taken from that
-/// same entry, matching what `session_turns.created_at` always meant: when
-/// the Answer, not the Question, was recorded.
+/// inverse of what `record_turn_from_steps` writes. A `user` `message`
+/// starts a Turn; everything after it up to (not including) the *next*
+/// `user` `message`, or the end of the path, belongs to that same Turn's
+/// own run — which, since issue #93 pass 2, can hold more than one
+/// `assistant` entry: a loop can call a tool (or several `assistant`/
+/// `tool_result` entries deep) before it actually answers. The Turn's
+/// answer is the *last* `assistant` entry in that run, not the first — the
+/// first one right after a `user` entry may only be "I'm going to look
+/// that up," with the tool call attached; the last one is what the loop's
+/// own stopping rule (`harness::agent_loop::run`) guarantees has no tool
+/// call left in it, which is what makes it the real Answer. `created_at` is
+/// taken from that same entry: when the Answer, not the Question, was
+/// recorded.
 ///
 /// A `user` entry whose run never contains an `assistant` entry at all (an
 /// interrupted Turn — the loop errored, aborted, or unanimously terminated
@@ -1273,7 +1152,15 @@ fn model_before_projection(path: &[&EntryRow], default_model: &str) -> anyhow::R
 /// undersells: seeing even one anywhere in the run sets the reconstructed
 /// `SessionTurnRow::tool_called`, which is how that field stays derived
 /// from the tree rather than a second value someone has to remember to
-/// write — see that field's own doc comment.
+/// write — see that field's own doc comment. Issue #99 gives it a second
+/// effect: a `tool_result` tagged `"source": "digest"` in its own `details`
+/// (`digest_source_from_details`) sets `digest_source` too, last one in the
+/// run winning if there's more than one — see `SessionTurnRow::digest_source`'s
+/// own doc comment. Both a `tool_result` can never appear after the run's
+/// final `assistant` entry (the loop's stopping rule guarantees the last
+/// step is an answer with no further tool call), so by the time that final
+/// entry is reached, every `tool_result` this Turn will ever have has
+/// already been walked.
 ///
 /// Issue #98: also tracks `current_model`, seeded from `seed_model`
 /// (`load_turns`'s `model_before_projection`) and updated every time a
@@ -1313,6 +1200,11 @@ fn entries_to_turns(path: &[&EntryRow], seed_model: &str) -> anyhow::Result<Vec<
         // never did, not only what happened immediately before the final
         // reply.
         let mut tool_called = false;
+        // Issue #99: the most recent digest-sourced `tool_result` seen so
+        // far in this Turn's own run — see this function's own doc comment
+        // for why "most recent" (last one wins) and why nothing after the
+        // final `assistant` entry can ever change it again.
+        let mut digest_source: Option<DigestSourcePayload> = None;
         while cursor < path.len() {
             if let Some(model) = decode_model_change(path[cursor])? {
                 current_model = model;
@@ -1324,22 +1216,22 @@ fn entries_to_turns(path: &[&EntryRow], seed_model: &str) -> anyhow::Result<Vec<
                 Some(MessagePayload::Assistant {
                     text,
                     grounding_entry_ids,
-                    grounded,
-                    fallback_used,
                 }) => {
                     answer = Some(SessionTurnRow {
                         question: question.clone(),
                         answer: text,
                         grounding_entry_ids,
-                        grounded,
-                        fallback_used,
                         tool_called,
+                        digest_source: digest_source.clone(),
                         model: current_model.clone(),
                         created_at: path[cursor].created_at,
                     });
                 }
-                Some(MessagePayload::ToolResult { .. }) => {
+                Some(MessagePayload::ToolResult { details, .. }) => {
                     tool_called = true;
+                    if let Some(source) = digest_source_from_details(&details) {
+                        digest_source = Some(source);
+                    }
                 }
                 None => {}
             }
@@ -1355,6 +1247,26 @@ fn entries_to_turns(path: &[&EntryRow], seed_model: &str) -> anyhow::Result<Vec<
     Ok(turns)
 }
 
+/// Reads a `tool_result` entry's own `details` for `read_digest`'s
+/// `"source": "digest"` tagging (`harness/tools/read_digest.rs`), and
+/// returns the Digest it names when present — `None` for any other tool's
+/// `details`, for a `read_digest` call that found no Digest for the Period
+/// asked about (`details` carries no `source` field at all in that case),
+/// or for a malformed/partial match. Mirrors the client's own
+/// `parseDigestSource` (`apps/web/src/lib/reflect-live-run.ts`) field for
+/// field, so a server-derived `digest_source` and a live-streamed one agree
+/// about what counts.
+fn digest_source_from_details(details: &Value) -> Option<DigestSourcePayload> {
+    if details.get("source")?.as_str()? != "digest" {
+        return None;
+    }
+    Some(DigestSourcePayload {
+        period: details.get("period")?.as_str()?.to_string(),
+        period_start: details.get("period_start")?.as_str()?.to_string(),
+        period_end: details.get("period_end")?.as_str()?.to_string(),
+    })
+}
+
 /// Copies the root-to-`at_entry_id` path of `source_session_id`'s tree into
 /// a brand new Session, preserving every copied entry's `id` — issue #91's
 /// "Entry identities survive a fork". Ported from pi, where this matters
@@ -1367,15 +1279,13 @@ fn entries_to_turns(path: &[&EntryRow], seed_model: &str) -> anyhow::Result<Vec<
 /// happened in *this* Session's timeline" — the copy has its own timeline,
 /// starting now, even though its content is a shared history.
 ///
-/// `session_turns` is deliberately not copied — a fork can happen at any
-/// entry, not only at a Turn boundary a legacy read would recognise, and
-/// `load_turns` reads the tree regardless of which Session it's asked
-/// about, so a forked Session's Turns are already correct without a
-/// `session_turns` row to back them (see `load_turns`'s own doc comment).
+/// Nothing else needs copying — the tree is a Session's sole
+/// representation (this module's own doc comment), and `load_turns` reads
+/// it regardless of which Session it's asked about, so a forked Session's
+/// Turns are already correct once its entries are.
 ///
 /// No HTTP route calls this (issue #91: "no interface offers it yet") —
-/// `pub(crate)` records that on its own, the same way `NewTurn` does for
-/// "only `reflect.rs` builds one of these." `#[allow(dead_code)]` for the
+/// `pub(crate)` records that on its own. `#[allow(dead_code)]` for the
 /// same reason: `fork_preserves_entry_ids` is this function's only caller
 /// today, and that's the point of this ticket, not an oversight.
 #[allow(dead_code)]
@@ -1476,8 +1386,6 @@ mod tests {
             serde_json::to_value(MessagePayload::Assistant {
                 text: text.to_string(),
                 grounding_entry_ids: Vec::new(),
-                grounded: true,
-                fallback_used: false,
             })
             .unwrap(),
         )
@@ -1555,8 +1463,6 @@ mod tests {
             serde_json::to_value(MessagePayload::Assistant {
                 text: "Recurring since February.".to_string(),
                 grounding_entry_ids: Vec::new(),
-                grounded: true,
-                fallback_used: false,
             })
             .unwrap(),
         )
@@ -1693,8 +1599,6 @@ mod tests {
             serde_json::to_value(MessagePayload::Assistant {
                 text: "A".to_string(),
                 grounding_entry_ids: Vec::new(),
-                grounded: true,
-                fallback_used: false,
             })
             .unwrap(),
         )
@@ -1748,8 +1652,6 @@ mod tests {
             serde_json::to_value(MessagePayload::Assistant {
                 text: "Recurring since February.".to_string(),
                 grounding_entry_ids: Vec::new(),
-                grounded: true,
-                fallback_used: false,
             })
             .unwrap(),
         )
@@ -1910,106 +1812,18 @@ mod tests {
         );
     }
 
-    /// Ties `record_turn` (the only place either shape is written) to
-    /// `load_turns` (the only place the tree is read back into Turns),
-    /// across two calls — a fresh Session, then a follow-up on it — to
-    /// prove the dual-write chains correctly and that
-    /// `session_turns`/the tree agree on what happened.
+    /// A Session with `main_leaf_id is null` — the state `load_turns`'s own
+    /// doc comment says a real, committed Session can't actually be in, but
+    /// which this function still has to answer *something* for rather than
+    /// panicking. Empty is that answer: a Session holding no Turns yet has
+    /// no Turns to return.
     #[sqlx::test]
-    async fn record_turn_writes_both_shapes_and_load_turns_reads_the_tree(pool: PgPool) {
-        let session_id = record_turn(
-            &pool,
-            None,
-            "How has my knee been?",
-            NewTurn {
-                question: "How has my knee been?".to_string(),
-                answer: "Recurring since February.".to_string(),
-                grounding_entry_ids: Vec::new(),
-                grounded: true,
-                fallback_used: false,
-            },
-        )
-        .await
-        .unwrap();
-
-        record_turn(
-            &pool,
-            Some(session_id),
-            "unused for an existing session",
-            NewTurn {
-                question: "Did PT help?".to_string(),
-                answer: "Yes.".to_string(),
-                grounding_entry_ids: Vec::new(),
-                grounded: true,
-                fallback_used: false,
-            },
-        )
-        .await
-        .unwrap();
-
-        let turn_count: i64 =
-            sqlx::query_scalar("select count(*) from session_turns where session_id = $1")
-                .bind(session_id)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        assert_eq!(turn_count, 2, "session_turns must still get a row per Turn");
-
-        let entry_count: i64 =
-            sqlx::query_scalar("select count(*) from session_entries where session_id = $1")
-                .bind(session_id)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        assert_eq!(entry_count, 4, "two chained entries per Turn");
-
-        let turns = load_turns(&pool, session_id, DEFAULT_MODEL).await.unwrap();
-        assert_eq!(turns.len(), 2);
-        assert_eq!(turns[0].question, "How has my knee been?");
-        assert_eq!(turns[0].answer, "Recurring since February.");
-        assert_eq!(turns[1].question, "Did PT help?");
-        assert_eq!(turns[1].answer, "Yes.");
-    }
-
-    /// Issue #103: a Session with a `session_turns` row but no tree at all
-    /// — the state a pre-#91 Session is still in (`load_turns_from_session_turns`'s
-    /// own doc comment) — reads back `tool_called: true`, not `false`. This
-    /// is not the derived-from-the-tree answer (there is no tree here to
-    /// derive it from); it is the honest one, because the fixed pipeline
-    /// that wrote every row shaped like this always ran its three
-    /// retrievals directly, with no model-issued call it could ever decline
-    /// to make. Data this old cannot exhibit issue #103's failure, so
-    /// reporting `false` for it would be a guess dressed up as a reading.
-    #[sqlx::test]
-    async fn a_session_turns_only_row_with_no_tree_reads_back_as_tool_called(pool: PgPool) {
+    async fn a_session_with_no_leaf_yet_reads_back_as_no_turns(pool: PgPool) {
         let session_id = Uuid::new_v4();
-        sqlx::query("insert into sessions (id, title) values ($1, 'Pre-tree session')")
-            .bind(session_id)
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query(
-            "insert into session_turns
-                (id, session_id, question, answer, grounding_entry_ids, grounded, fallback_used)
-             values ($1, $2, 'Anything?', 'Nothing recorded.', '{}', false, false)",
-        )
-        .bind(Uuid::new_v4())
-        .bind(session_id)
-        .execute(&pool)
-        .await
-        .unwrap();
+        insert_bare_session(&pool, session_id).await;
 
         let turns = load_turns(&pool, session_id, DEFAULT_MODEL).await.unwrap();
-        assert_eq!(turns.len(), 1);
-        assert!(
-            turns[0].tool_called,
-            "a Turn with no tree at all predates the loop's tool-calling protocol entirely, so \
-             it must never read back as the no-tool-call shape issue #103 is about"
-        );
-        // Issue #98: same reasoning, applied to `model` — a Turn this old
-        // predates per-Conversation model choice too, so `default_model` is
-        // the only model it could have run on, not a guess.
-        assert_eq!(turns[0].model, DEFAULT_MODEL);
+        assert_eq!(turns.len(), 0);
     }
 
     // -- issue #93 pass 2: a loop-driven Turn's run can hold more than one
@@ -2203,8 +2017,6 @@ mod tests {
                 serde_json::to_value(MessagePayload::Assistant {
                     text: "[calling entries_in_range]".to_string(),
                     grounding_entry_ids: Vec::new(),
-                    grounded: false,
-                    fallback_used: false,
                 })
                 .unwrap(),
             ),
@@ -2223,22 +2035,12 @@ mod tests {
                 serde_json::to_value(MessagePayload::Assistant {
                     text: "You ran a 5k on July 5th.".to_string(),
                     grounding_entry_ids: Vec::new(),
-                    grounded: true,
-                    fallback_used: false,
                 })
                 .unwrap(),
             ),
         ];
 
-        let turn = NewTurn {
-            question: "What did I write about running?".to_string(),
-            answer: "You ran a 5k on July 5th.".to_string(),
-            grounding_entry_ids: Vec::new(),
-            grounded: true,
-            fallback_used: false,
-        };
-
-        let session_id = record_turn_from_steps(&pool, None, "Running", turn, payloads)
+        let session_id = record_turn_from_steps(&pool, None, "Running", payloads)
             .await
             .unwrap();
 

@@ -21,7 +21,7 @@
 //!
 //! **A Digest is not an Entry, and this tool never claims otherwise.**
 //! `ToolOutcome::entry_ids` feeds `grounding_entry_ids` on the wire
-//! (`reflect.rs::run_reflect_loop`), which is specifically "an Entry
+//! (`reflect.rs::run_reflect_stream_inner`), which is specifically "an Entry
 //! appeared in a tool result this run" — so `execute` below never calls
 //! `.with_entry_ids(...)`, even though a found Digest carries its own
 //! `grounding_entry_ids` (the Entries *it* was written from). Laundering
@@ -36,10 +36,13 @@
 //! exactly this kind of tool-specific structured detail, and every other
 //! tool already leaves it well alone for anything the model needs to see.
 //! One consequence worth being explicit about: a Question answered from a
-//! Digest alone (no other tool call in the same run) reports
-//! `grounded: false` on the wire, because `grounding_entry_ids` stays
-//! empty — correct under `grounded`'s own definition, not a gap this ticket
-//! left open.
+//! Digest alone (no other tool call in the same run) reports an empty
+//! `grounding_entry_ids` on the wire — correct, not a gap: nothing this
+//! call read was an Entry. Issue #99's `sessions::SessionTurnRow::digest_source`
+//! is what a client reads *instead*, after `entries_to_turns` finds this
+//! same `"source": "digest"` tag while walking the tree — see that field's
+//! own doc comment for why the read path needed its own fix here, separate
+//! from the live event stream this tag already drove.
 
 use async_trait::async_trait;
 use chrono::NaiveDate;

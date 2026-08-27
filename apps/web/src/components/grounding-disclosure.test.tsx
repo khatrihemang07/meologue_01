@@ -22,12 +22,10 @@ function turn(overrides: Partial<ConversationTurn>): ConversationTurn {
     question: "How has my knee been?",
     answer: "It's improved since February.",
     groundingEntryIds: [],
-    grounded: true,
-    fallbackUsed: false,
     // Issue #103: every fixture in this file is about a tool that *did*
-    // run (grounded, disclosed-fallback, or found-nothing) — none of this
-    // component's own behaviour differs for `neverLooked` vs `nothingFound`
-    // (both hit the same `groundingEntryIds.length === 0` early return, see
+    // run (grounded or found-nothing) — none of this component's own
+    // behaviour differs for `neverLooked` vs `nothingFound` (both hit the
+    // same `groundingEntryIds.length === 0` early return, see
     // grounding-disclosure.tsx's own doc comment), so a fixed `true` here
     // keeps every existing case exactly what it always tested.
     toolCalled: true,
@@ -45,7 +43,7 @@ function turn(overrides: Partial<ConversationTurn>): ConversationTurn {
 // store itself, so rendering it needs no router or store stand-in — a plain
 // render suffices.
 function renderDisclosure(
-  props: { groundingEntryIds: string[]; grounded: boolean; fallbackUsed: boolean },
+  props: { groundingEntryIds: string[] },
   entries: Entry[] = [],
   syncEnabled = false,
   loading = false,
@@ -62,70 +60,34 @@ function renderDisclosure(
 
 describe("GroundingDisclosure", () => {
   it("renders nothing when there are no grounding Entry ids", () => {
-    const { container } = renderDisclosure({
-      groundingEntryIds: [],
-      grounded: true,
-      fallbackUsed: false,
-    });
+    const { container } = renderDisclosure({ groundingEntryIds: [] });
 
     expect(container).toBeEmptyDOMElement();
   });
 
   it("labels a single grounded Entry with singular wording", () => {
-    renderDisclosure({ groundingEntryIds: ["entry-1"], grounded: true, fallbackUsed: false }, [
+    renderDisclosure({ groundingEntryIds: ["entry-1"] }, [
       entry({ id: "entry-1", body: "Knee felt better" }),
     ]);
 
-    expect(screen.getByText("Grounded in 1 Entry")).toBeInTheDocument();
+    expect(screen.getByText("1 Entry returned")).toBeInTheDocument();
   });
 
   it("labels multiple grounded Entries with plural wording", () => {
-    renderDisclosure(
-      {
-        groundingEntryIds: ["entry-1", "entry-2"],
-        grounded: true,
-        fallbackUsed: false,
-      },
-      [
-        entry({ id: "entry-1", body: "Knee felt better" }),
-        entry({ id: "entry-2", body: "Physio went well" }),
-      ],
-    );
-
-    expect(screen.getByText("Grounded in 2 Entries")).toBeInTheDocument();
-  });
-
-  it("labels a fallback turn as recent Entries, never as Grounding — ADR 0024", () => {
-    renderDisclosure({ groundingEntryIds: ["entry-1"], grounded: false, fallbackUsed: true }, [
-      entry({ id: "entry-1", body: "Just a Tuesday" }),
+    renderDisclosure({ groundingEntryIds: ["entry-1", "entry-2"] }, [
+      entry({ id: "entry-1", body: "Knee felt better" }),
+      entry({ id: "entry-2", body: "Physio went well" }),
     ]);
 
-    expect(screen.getByText("1 recent Entry")).toBeInTheDocument();
-    expect(screen.queryByText(/^Grounded/)).not.toBeInTheDocument();
-  });
-
-  it("pluralizes the fallback label for multiple recent Entries", () => {
-    renderDisclosure(
-      {
-        groundingEntryIds: ["entry-1", "entry-2"],
-        grounded: false,
-        fallbackUsed: true,
-      },
-      [
-        entry({ id: "entry-1", body: "Just a Tuesday" }),
-        entry({ id: "entry-2", body: "Just a Wednesday" }),
-      ],
-    );
-
-    expect(screen.getByText("2 recent Entries")).toBeInTheDocument();
+    expect(screen.getByText("2 Entries returned")).toBeInTheDocument();
   });
 
   it("is collapsed by default and expands to show Entry bodies", () => {
-    renderDisclosure({ groundingEntryIds: ["entry-1"], grounded: true, fallbackUsed: false }, [
+    renderDisclosure({ groundingEntryIds: ["entry-1"] }, [
       entry({ id: "entry-1", body: "Knee felt better" }),
     ]);
 
-    const details = screen.getByText("Grounded in 1 Entry").closest("details");
+    const details = screen.getByText("1 Entry returned").closest("details");
     expect(details).not.toBeNull();
     expect(details).not.toHaveAttribute("open");
     expect(screen.queryByText("Knee felt better")).not.toBeVisible();
@@ -136,31 +98,19 @@ describe("GroundingDisclosure", () => {
   });
 
   it("renders Entries in the server's order, not re-sorted", () => {
-    renderDisclosure(
-      {
-        groundingEntryIds: ["entry-2", "entry-1"],
-        grounded: true,
-        fallbackUsed: false,
-      },
-      [
-        entry({ id: "entry-1", body: "First written" }),
-        entry({ id: "entry-2", body: "Second written" }),
-      ],
-    );
+    renderDisclosure({ groundingEntryIds: ["entry-2", "entry-1"] }, [
+      entry({ id: "entry-1", body: "First written" }),
+      entry({ id: "entry-2", body: "Second written" }),
+    ]);
 
     const bodies = screen.getAllByText(/written$/).map((element) => element.textContent);
     expect(bodies).toEqual(["Second written", "First written"]);
   });
 
   it("discloses an id with no local Entry as a placeholder, not by dropping it", () => {
-    renderDisclosure(
-      {
-        groundingEntryIds: ["entry-1", "entry-missing"],
-        grounded: true,
-        fallbackUsed: false,
-      },
-      [entry({ id: "entry-1", body: "Knee felt better" })],
-    );
+    renderDisclosure({ groundingEntryIds: ["entry-1", "entry-missing"] }, [
+      entry({ id: "entry-1", body: "Knee felt better" }),
+    ]);
 
     expect(screen.getByText("Knee felt better")).toBeInTheDocument();
     expect(screen.getByText(/hasn't reached this device yet/i)).toBeInTheDocument();
@@ -173,12 +123,7 @@ describe("GroundingDisclosure", () => {
   // false claim CONTEXT.md's Grounding entry forbids, so `loading: true`
   // must render a neutral placeholder instead.
   it("shows a neutral placeholder, not the false 'hasn't reached' claim, while the lookup is still in flight", () => {
-    renderDisclosure(
-      { groundingEntryIds: ["entry-1"], grounded: true, fallbackUsed: false },
-      [],
-      false,
-      true,
-    );
+    renderDisclosure({ groundingEntryIds: ["entry-1"] }, [], false, true);
 
     expect(screen.getByText("Loading…")).toBeInTheDocument();
     expect(screen.queryByText(/hasn't reached this device yet/i)).not.toBeInTheDocument();
@@ -189,11 +134,11 @@ describe("GroundingDisclosure", () => {
   // never passes EntryRow an `actions` prop, so EntryRow's own default
   // ("no actions" -> "no menu") is what enforces this here.
   it("never offers an Edit/Delete menu on a Grounding row, even on long-press/right-click", async () => {
-    renderDisclosure({ groundingEntryIds: ["entry-1"], grounded: true, fallbackUsed: false }, [
+    renderDisclosure({ groundingEntryIds: ["entry-1"] }, [
       entry({ id: "entry-1", body: "Knee felt better" }),
     ]);
 
-    const details = screen.getByText("Grounded in 1 Entry").closest("details");
+    const details = screen.getByText("1 Entry returned").closest("details");
     expect(details).not.toBeNull();
     // biome-ignore lint/style/noNonNullAssertion: asserted not-null above.
     details!.setAttribute("open", "");
@@ -205,30 +150,25 @@ describe("GroundingDisclosure", () => {
   });
 
   it("counts the server's ids in the summary, not just the Entries found locally", () => {
-    renderDisclosure(
-      {
-        groundingEntryIds: ["entry-1", "entry-missing-a", "entry-missing-b"],
-        grounded: true,
-        fallbackUsed: false,
-      },
-      [entry({ id: "entry-1", body: "Knee felt better" })],
-    );
+    renderDisclosure({ groundingEntryIds: ["entry-1", "entry-missing-a", "entry-missing-b"] }, [
+      entry({ id: "entry-1", body: "Knee felt better" }),
+    ]);
 
-    expect(screen.getByText("Grounded in 3 Entries")).toBeInTheDocument();
+    expect(screen.getByText("3 Entries returned")).toBeInTheDocument();
   });
 
-  // Issue #96: a Digest-sourced Answer is driven from the live
-  // tool_execution_end event's own `details` (`turn.digestSource`), not
-  // from `groundingEntryIds` — `read_digest` deliberately populates none.
-  // Before this ticket the component returned null here, so the user saw
+  // Issue #96: a Digest-sourced Answer is driven from `turn.digestSource`
+  // (live, from the `tool_execution_end` event's own `details` while
+  // answering — or, since issue #99, straight off the wire after a reload
+  // — `apps/web/src/lib/conversation.ts`'s own doc comment), not from
+  // `groundingEntryIds` — `read_digest` deliberately populates none. Before
+  // digestSource existed the component returned null here, so the user saw
   // no disclosure at all for a Digest-only Answer.
   it("says the Answer came from a Digest, distinctly from Entries, when digestSource is set", () => {
     render(
       <GroundingDisclosure
         turn={turn({
           groundingEntryIds: [],
-          grounded: false,
-          fallbackUsed: false,
           digestSource: { period: "week", periodStart: "2026-08-17", periodEnd: "2026-08-23" },
         })}
         entries={[]}
@@ -249,8 +189,6 @@ describe("GroundingDisclosure", () => {
       <GroundingDisclosure
         turn={turn({
           groundingEntryIds: [],
-          grounded: false,
-          fallbackUsed: false,
           digestSource: { period: "day", periodStart: "2026-08-20", periodEnd: "2026-08-20" },
         })}
         entries={[]}
@@ -267,8 +205,6 @@ describe("GroundingDisclosure", () => {
       <GroundingDisclosure
         turn={turn({
           groundingEntryIds: [],
-          grounded: false,
-          fallbackUsed: false,
           digestSource: { period: "day", periodStart: "2026-08-20", periodEnd: "2026-08-20" },
         })}
         entries={[]}

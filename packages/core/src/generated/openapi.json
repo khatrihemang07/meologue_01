@@ -240,7 +240,7 @@
         "tags": [
           "crate::sessions"
         ],
-        "summary": "Deletes a Session outright — the id itself, not its Turns, which\n`session_turns_session_id_fkey`'s `on delete cascade` (migration `0003`)\nremoves as a consequence of this one statement. `204 No Content` on\nsuccess, `404` when `id` names no Session — never a distinct \"already\ndeleted\" status, since from the Server's point of view those are the\nsame fact: there's nothing at `id` to delete.",
+        "summary": "Deletes a Session outright — the id itself, not its Turns, which\n`session_entries`' own `session_id references sessions(id) on delete\ncascade` (migration `0006`) removes as a consequence of this one\nstatement. `204 No Content` on\nsuccess, `404` when `id` names no Session — never a distinct \"already\ndeleted\" status, since from the Server's point of view those are the\nsame fact: there's nothing at `id` to delete.",
         "operationId": "delete_session_handler",
         "parameters": [
           {
@@ -364,6 +364,26 @@
                 "$ref": "#/components/schemas/Digest"
               }
             ]
+          }
+        }
+      },
+      "DigestSourcePayload": {
+        "type": "object",
+        "description": "What a `read_digest` tool call found, when it found a real Digest — see\n`SessionTurnRow::digest_source`'s own doc comment for how this is\nderived and why. Field names deliberately match\n`harness/tools/read_digest.rs`'s own `details` JSON one for one (minus\nthe `\"source\": \"digest\"` tag itself, which this type's mere presence\nalready says), which is also what lets the client's existing\n`parseDigestSource` (`apps/web/src/lib/reflect-live-run.ts`) and this\nstruct agree on shape without either one having to translate the other.",
+        "required": [
+          "period",
+          "period_start",
+          "period_end"
+        ],
+        "properties": {
+          "period": {
+            "type": "string"
+          },
+          "period_end": {
+            "type": "string"
+          },
+          "period_start": {
+            "type": "string"
           }
         }
       },
@@ -522,12 +542,12 @@
               "null"
             ],
             "format": "uuid",
-            "description": "The Session this Question belongs to, or `None` to start a new one\n— a null id on an ask *is* the create (`docs/adr/0025`); there is no\nseparate create endpoint. `run_reflect` loads that Session's prior\nTurns (`sessions::load_turns`) to read this Question \"in the light\nof the Conversation before it\" (CONTEXT.md's own phrase for what a\nConversation is) — the server holds that Conversation now, so this\nreplaces what used to round-trip on every request as `prior_turns`.\nA `Some` naming a Session that doesn't exist is a 404, not a\nsilently-ignored value."
+            "description": "The Session this Question belongs to, or `None` to start a new one\n— a null id on an ask *is* the create (`docs/adr/0025`); there is no\nseparate create endpoint. `resolve_session` loads that Session's\nprior Turns (`sessions::load_turns`) to read this Question \"in the\nlight of the Conversation before it\" (CONTEXT.md's own phrase for\nwhat a Conversation is) — the server holds that Conversation now, so\nthis replaces what used to round-trip on every request as\n`prior_turns`. A `Some` naming a Session that doesn't exist is a 404,\nnot a silently-ignored value."
           },
           "utc_offset_minutes": {
             "type": "integer",
             "format": "int32",
-            "description": "Minutes east of UTC for the asking Device, right now — the same sign\nconvention `apps/web/src/lib/entry-day.ts::deviceUtcOffsetMinutes`\nand ADR 0016's `toLocalParts` already use for Export's day grouping.\nThe extraction call (`extract_date_range_and_keyword`) uses this to\nresolve phrases like \"last week\" against the user's own local day,\nnever the server's clock.\n\n`#[serde(default)]` rather than required, independent of whatever\n`PROTOCOL_VERSION` happens to be: a mismatched `protocol_version`\nalready rejects a stale Device outright (`reflect_handler`, 426), so\nthis field's own default exists to keep a *current* Device's request\nwell-formed even if some future caller ever omits it, not to soften\na version bump. Falling back to `0` (UTC) rather than rejecting the\nrequest is a graceful degrade either way: date phrases resolve\nagainst UTC instead of the asking Device's own local day, not a\nrejected Question."
+            "description": "Minutes east of UTC for the asking Device, right now — the same sign\nconvention `apps/web/src/lib/entry-day.ts::deviceUtcOffsetMinutes`\nand ADR 0016's `toLocalParts` already use for Export's day grouping.\n`EntriesInRangeTool` and `SearchEntriesTool` (`harness::tools`) both\ntake this to resolve a date phrase the model names in a tool call\n— \"last week,\" \"in March\" — against the user's own local day, never\nthe server's clock.\n\n`#[serde(default)]` rather than required, independent of whatever\n`PROTOCOL_VERSION` happens to be: a mismatched `protocol_version`\nalready rejects a stale Device outright (`reflect_handler`, 426), so\nthis field's own default exists to keep a *current* Device's request\nwell-formed even if some future caller ever omits it, not to soften\na version bump. Falling back to `0` (UTC) rather than rejecting the\nrequest is a graceful degrade either way: date phrases resolve\nagainst UTC instead of the asking Device's own local day, not a\nrejected Question."
           }
         }
       },
@@ -538,8 +558,6 @@
           "title",
           "answer",
           "grounding_entry_ids",
-          "grounded",
-          "fallback_used",
           "tool_called",
           "model"
         ],
@@ -547,21 +565,13 @@
           "answer": {
             "type": "string"
           },
-          "fallback_used": {
-            "type": "boolean",
-            "description": "Always `false`. The disclosed fallback (`docs/adr/0024`) belongs to\nthe fixed pipeline this ticket stopped calling; the loop has no\nfallback mechanism of its own. Kept on the wire, rather than\ndropped, for the same reason `grounded` is — the wire shape itself\nis issue #96's to change, not this one's."
-          },
-          "grounded": {
-            "type": "boolean",
-            "description": "Whether at least one Entry appeared in a tool result this run —\n`!grounding_entry_ids.is_empty()`, nothing more judged about it.\nUnder the old pipeline this was a real verdict, read off a\n\"GROUNDED: yes/no\" marker the answering chat call was instructed to\nproduce; the loop has no equivalent judgment yet, so this field\nkeeps its old *name* on the wire (`PROTOCOL_VERSION` is unchanged)\nwhile meaning something simpler until a later ticket decides whether\nit needs to mean more again."
-          },
           "grounding_entry_ids": {
             "type": "array",
             "items": {
               "type": "string",
               "format": "uuid"
             },
-            "description": "The Entry ids that appeared in a tool result during this run, in the\norder they first appeared — `run_reflect_stream_inner`'s own dedup, over\nevery `harness::agent_loop::Step::ToolResult` the loop produced, not\nretrieval's merge-and-sort (that description, and everything below\nthrough `docs/adr/0023`/`0024`, is what these fields meant under\n`run_reflect`, the fixed pipeline `/v1/reflect` no longer calls —\nsee this module's own doc comment). Empty when the loop never called\na tool at all — a prose-only reply is not unusual, and carries no\nGrounding by construction, not by omission."
+            "description": "The Entry ids that appeared in a tool result during this run, in the\norder they first appeared — `run_reflect_stream_inner`'s own dedup,\nover every `harness::agent_loop::Step::ToolResult` the loop\nproduced. Never a merged, ranked list computed in advance (issue\n#99 removed the pipeline that used to build one) — simply the Entry\nids the tools this run called happened to return. Empty when the\nloop never called a tool at all — a prose-only reply is not unusual,\nand carries no Grounding by construction, not by omission."
           },
           "model": {
             "type": "string",
@@ -578,7 +588,7 @@
           },
           "tool_called": {
             "type": "boolean",
-            "description": "Whether this run called a tool at all — `true` the moment any\n`harness::agent_loop::Step::ToolResult` appears in `outcome.steps`,\nregardless of whether that call (or any other) found anything.\nIssue #103's own acceptance criterion: `grounded: false` alone\ncannot tell a client, or a person reading a log, which of two very\ndifferent runs actually happened — one that called `search_entries`\nand it came back empty, or one that never called anything and wrote\na reply anyway (the bug this issue was filed against: the model\nanswered \"I can't access any journal entries from here\" having\ntried nothing). Both reach this struct with an identical\n`grounding_entry_ids: []`/`grounded: false`, and both used to render\nidentically to the user (\"Nothing in your History matched this\nQuestion\") for exactly that reason. This field is the one place\nthat distinction survives past `run_reflect_stream_inner` into\nwhatever reads the record next. Server-side only for now: no\nexisting client reads it, and changing what a client shows for\n`tool_called: false` versus a genuine empty search is left to\nwhichever ticket touches the client next."
+            "description": "Whether this run called a tool at all — `true` the moment any\n`harness::agent_loop::Step::ToolResult` appears in `outcome.steps`,\nregardless of whether that call (or any other) found anything.\nIssue #103's own acceptance criterion: an empty `grounding_entry_ids`\nalone cannot tell a client, or a person reading a log, which of two\nvery different runs actually happened — one that called\n`search_entries` and it came back empty, or one that never called\nanything and wrote a reply anyway (the bug this issue was filed\nagainst: the model answered \"I can't access any journal entries from\nhere\" having tried nothing). Both reach this struct with an\nidentical `grounding_entry_ids: []`, and both used to render\nidentically to the user (\"Nothing in your History matched this\nQuestion\") for exactly that reason. This field is what lets that\ndistinction survive past `run_reflect_stream_inner` — both server-\nside (the `tracing::warn!` below) and on the wire, where the client\nrenders it as a distinct \"never looked\" outcome\n(`apps/web/src/lib/conversation.ts`'s `groundingOutcome`)."
           }
         }
       },
@@ -645,13 +655,11 @@
       },
       "SessionTurnRow": {
         "type": "object",
-        "description": "One Question/Answer pair persisted inside a Session, as loaded from\n`session_turns` — oldest first (`load_turns` orders by `seq asc`). This\nis also what `reflect.rs`'s `build_messages` takes a slice of in place\nof the wire's old `PriorTurn`, and it doubles as the wire shape for one\nentry of `SessionResponse::turns` below — the same fields both a\nfollow-up Question's prompt and a client restoring a Conversation need.",
+        "description": "One Question/Answer pair, rebuilt from a Session's entry tree\n(`entries_to_turns`) — oldest first (`load_turns` walks the tree root to\nleaf). This is also what `reflect.rs`'s `turns_to_messages` takes a\nslice of to replay a Conversation into the loop's own `Context`, and it\ndoubles as the wire shape for one entry of `SessionResponse::turns`\nbelow — the same fields both a follow-up Question's prompt and a client\nrestoring a Conversation need. Nothing here is stored directly: every\nfield is derived from the tree each time a Session is read, which is\nwhat issue #99 means by \"every Conversation reads from the tree\" — see\nthis module's own doc comment for the `session_turns` table this\nreplaced. `FromRow` is deliberately not derived here any more — nothing\ndecodes this struct straight off a query row today (`entries_to_turns`\nbelow builds every field itself), and `digest_source`'s nested\n`DigestSourcePayload` has no `sqlx::Decode` impl to derive one against.",
         "required": [
           "question",
           "answer",
           "grounding_entry_ids",
-          "grounded",
-          "fallback_used",
           "tool_called",
           "model",
           "created_at"
@@ -664,29 +672,35 @@
             "type": "string",
             "format": "date-time"
           },
-          "fallback_used": {
-            "type": "boolean"
-          },
-          "grounded": {
-            "type": "boolean"
+          "digest_source": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DigestSourcePayload",
+                "description": "Issue #99's carry-over from #96 pass 2: a `read_digest` tool result\nfound a real Digest for this Turn, and this is what it was — the\nsame `period`/`period_start`/`period_end` the *live* `tool_execution_end`\nevent's `details` carries (`harness/tools/read_digest.rs`'s own\n`source: \"digest\"` tagging), now derived from the tree instead of\nonly ever available while the browser tab that asked the Question is\nstill open. Before this field existed, `GET /v1/sessions/{id}`\nreturned `SessionTurnRow` with no per-tool detail at all, so a\nDigest-sourced Turn read back — after a page reload — as though its\nGrounding were an ordinary list of Entries (whichever ids the same\nrun's *other* tool calls happened to surface, or none), not as\nhaving come from a Digest. `entries_to_turns` walks the same\n`tool_result` entries `tool_called` above reads and keeps the last\none tagged `\"source\": \"digest\"`, mirroring the live reducer's own\n\"last one wins\" rule (`apps/web/src/lib/reflect-live-run.ts`'s\n`digestSource ?? state.digestSource`) — a Turn with more than one\n`read_digest` call attributes to whichever it asked about most\nrecently before answering. `None` for every other Turn, including\nevery one that predates issue #95."
+              }
+            ]
           },
           "grounding_entry_ids": {
             "type": "array",
             "items": {
               "type": "string",
               "format": "uuid"
-            }
+            },
+            "description": "The Entry ids that appeared in a tool result during this Turn's run,\nin the order they first appeared — never a merged, deduped,\nrelevance-ranked list computed in advance (that description\nbelonged to the fixed pipeline issue #99 removed): simply what the\ntools returned, read back off the tree's own `tool_result` entries."
           },
           "model": {
             "type": "string",
-            "description": "Issue #98: the model that produced this Turn's Answer — never\nstored on the Turn itself (there is no `model` column on\n`session_turns`, and `record_turn`/`record_turn_from_steps` gained\nno new field either). Derived the same way `tool_called` above is:\n`entries_to_turns` tracks whichever model a `model_change` entry\nmost recently named while it walks the tree, and stamps that value\nonto every Turn it finishes — see `ModelChangePayload`'s own doc\ncomment for why that's the single source of truth this field reads\nfrom, rather than a second, independently-writable value. A Turn\nread off the pre-#91 `session_turns` fallback (`load_turns_from_session_turns`)\nhas no tree to derive this from at all; it's set to `load_turns`'s\nown `default_model` there, which is simply true — every Turn that\nold only ever had one model to run on, the Server's sole configured\none, because per-Conversation choice didn't exist yet."
+            "description": "Issue #98: the model that produced this Turn's Answer — never\nstored on the Turn itself (there is no `model` column anywhere in\nthe tree, and `record_turn`/`record_turn_from_steps` carry no such\nfield either). Derived the same way `tool_called` above is:\n`entries_to_turns` tracks whichever model a `model_change` entry\nmost recently named while it walks the tree, and stamps that value\nonto every Turn it finishes — see `ModelChangePayload`'s own doc\ncomment for why that's the single source of truth this field reads\nfrom, rather than a second, independently-writable value."
           },
           "question": {
             "type": "string"
           },
           "tool_called": {
             "type": "boolean",
-            "description": "Issue #103: whether this Turn's run called a tool at all, kept apart\nfrom `grounded` for the same reason `reflect::ReflectResponse::tool_called`\nis (see that field's own doc comment) — `grounding_entry_ids` alone\ncannot tell \"a tool ran and found nothing\" from \"no tool ever ran.\"\nNo column backs this on `session_turns`: it's derived, not stored —\n`entries_to_turns` computes it from whether a `tool_result` entry\nappears anywhere in the Turn's own run through the tree, the same\ntree `session_entries` already holds every tool call in\n(`harness::agent_loop::Step::ToolResult`, via\n`reflect.rs::build_tree_payloads`), rather than adding a second,\nindependently-writable flag that a future write path could forget to\nset — the derivation precedent `docs/adr/0024` already set for\n`grounded` itself."
+            "description": "Issue #103: whether this Turn's run called a tool at all —\n`grounding_entry_ids` alone cannot tell \"a tool ran and found\nnothing\" from \"no tool ever ran.\" No column backs this: it's\nderived, not stored — `entries_to_turns` computes it from whether a\n`tool_result` entry appears anywhere in the Turn's own run through\nthe tree, the same tree `session_entries` already holds every tool\ncall in (`harness::agent_loop::Step::ToolResult`, via\n`reflect.rs::build_tree_payloads`), rather than adding a second,\nindependently-writable flag that a future write path could forget to\nset."
           }
         }
       },

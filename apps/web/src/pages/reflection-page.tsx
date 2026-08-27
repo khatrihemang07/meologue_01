@@ -54,10 +54,12 @@ async function fetchSession(sessionId: string): Promise<SessionQueryData> {
       // calls its callback with `(value, index, array)`, and
       // `conversationTurnFromWire`'s own optional second parameter
       // (`live`) would otherwise get `index` (a `number`) handed to it —
-      // caught only by `tsc`, not by any test, since a restored Session
-      // never actually has a live digestSource to lose. A turn restored
-      // from a fetched Session always takes the no-`live` path (see
-      // `conversationTurnFromWire`'s own doc comment).
+      // caught only by `tsc`, not by any test. A turn restored from a
+      // fetched Session always takes the no-`live` path — it has nothing
+      // live to contribute, but since issue #99 that's no longer a loss:
+      // `digestSource` for a restored turn comes straight off the wire
+      // (`WireSessionTurn.digest_source`), not from `live` at all — see
+      // `conversationTurnFromWire`'s own doc comment.
       turns: result.session.turns.map((turn) => conversationTurnFromWire(turn)),
     },
   };
@@ -78,13 +80,13 @@ function GivenAnswer({ text }: { text: string }) {
 // An explicit note per turn, independent of the Answer's own wording — the
 // point of ticket 6 (docs/adr/0024) is that the user can tell a real Answer
 // from a confident wrong one without trusting how the model phrased itself.
-// "grounded" (the server judged its Grounding actually answered the
-// Question) renders no note at all; the other outcomes each render a short
-// caption in CONTEXT.md's own vocabulary (History, Question, Entries),
-// matching the muted-caption styling already used elsewhere on this page.
-// The outcome itself comes from `groundingOutcome` (lib/conversation.ts) —
-// shared with grounding-disclosure.tsx's `summaryLabel` so the caption here
-// and the expander label below it can never disagree about what happened.
+// "grounded" (the tools returned at least one Entry) renders no note at
+// all; the other outcomes each render a short caption in CONTEXT.md's own
+// vocabulary (History, Question, Entries), matching the muted-caption
+// styling already used elsewhere on this page. The outcome itself comes
+// from `groundingOutcome` (lib/conversation.ts) — shared with
+// grounding-disclosure.tsx's `summaryLabel` so the caption here and the
+// expander label below it can never disagree about what happened.
 //
 // Issue #103: "neverLooked" gets its own caption, distinct from
 // "nothingFound" — before `toolCalled` existed on the wire, a run that
@@ -93,6 +95,12 @@ function GivenAnswer({ text }: { text: string }) {
 // confidently wrong "I can't access your journal" hide behind an ordinary,
 // unremarkable-looking caption. The two are different situations and now
 // read as different sentences.
+//
+// Issue #99 removed "disclosedFallback" from `GroundingOutcome` entirely —
+// the fixed pipeline's disclosed fallback has no equivalent in the
+// tool-calling loop that replaced it, so there is no third caption left to
+// choose between; "neverLooked" and "nothingFound" are the only outcomes
+// that ever reach the return below.
 function GroundingNote({ turn }: { turn: ConversationTurn }) {
   const outcome = groundingOutcome(turn);
   // "digest" (issue #96) gets no note here either: GroundingDisclosure's
@@ -105,11 +113,9 @@ function GroundingNote({ turn }: { turn: ConversationTurn }) {
   }
   return (
     <p className="mr-auto text-xs text-muted-foreground">
-      {outcome === "disclosedFallback"
-        ? "Nothing in your History matched this Question — this is what you wrote in the last few days."
-        : outcome === "neverLooked"
-          ? "This Question was answered without checking your History."
-          : "Nothing in your History matched this Question."}
+      {outcome === "neverLooked"
+        ? "This Question was answered without checking your History."
+        : "Nothing in your History matched this Question."}
     </p>
   );
 }
@@ -117,8 +123,7 @@ function GroundingNote({ turn }: { turn: ConversationTurn }) {
 // The disclosure (ticket 7) renders beneath GroundingNote, not instead of
 // it: the note explains *why* (in prose, independent of the Answer's own
 // wording), the disclosure shows *what* (the actual Entries, collapsed
-// behind a summary that also carries the grounded/fallback distinction) —
-// see grounding-disclosure.tsx.
+// behind a summary) — see grounding-disclosure.tsx.
 function ConversationTurnRow({
   turn,
   groundingEntries,

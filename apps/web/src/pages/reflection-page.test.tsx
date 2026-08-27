@@ -275,8 +275,6 @@ describe("ReflectionPage", () => {
       reflect: () => ({
         answer: "It's improved since February.",
         grounding_entry_ids: [],
-        grounded: true,
-        fallback_used: false,
         session_id: "session-abc",
         title: "How has my knee been?",
       }),
@@ -300,8 +298,6 @@ describe("ReflectionPage", () => {
       reflect: () => ({
         answer: "It's improved since February.",
         grounding_entry_ids: [],
-        grounded: true,
-        fallback_used: false,
         session_id: "session-abc",
         title: "How has my knee been?",
       }),
@@ -328,8 +324,6 @@ describe("ReflectionPage", () => {
               question: "How has my knee been?",
               answer: "It's improved since February.",
               grounding_entry_ids: ["entry-1"],
-              grounded: true,
-              fallback_used: false,
               created_at: "2026-08-01T00:00:05Z",
             },
           ],
@@ -343,6 +337,62 @@ describe("ReflectionPage", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "https://phone.example:41207/v1/sessions/session-existing",
     );
+  });
+
+  // Issue #99's carry-over from #96 pass 2, verified as a live-Sandbox
+  // regression before this ticket fixed it: a Turn answered from a
+  // `read_digest` tool call correctly showed "Answered from the month
+  // Digest for ..." while the browser session that asked was still open,
+  // but reloading the same Session — this test's own shape, a restore on
+  // mount rather than an optimistic cache write — read back "Grounded in
+  // N Entries" instead, misattributing the Answer to whatever *other* tool
+  // calls in that Turn's run happened to surface Entries. The fix was
+  // entirely server-side (`GET /v1/sessions/:id` now derives
+  // `digest_source` from the tree — `SessionTurnRow::digest_source`'s own
+  // doc comment, server/src/sessions.rs), so this test only needs to stub
+  // that field on the wire and confirm the client still renders it
+  // correctly with no live event stream involved at all.
+  it("still says a restored Turn was answered from a Digest, not from the Entries its run also touched", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    stubFetch({
+      reflect: () => {
+        throw new Error("this test never asks a Question");
+      },
+      session: (sessionId) =>
+        wireSession({
+          id: sessionId,
+          title: "How did the flat move go?",
+          turns: [
+            {
+              question: "And what about the month before?",
+              answer: "The month before was quieter — mostly settling in.",
+              // The same shape #96 pass 2's own regression report named:
+              // other tool calls in this Turn's run surfaced real Entry
+              // ids, which must not be what the disclosure attributes the
+              // Answer to once `digest_source` is present.
+              grounding_entry_ids: ["entry-1", "entry-2"],
+              tool_called: true,
+              model: "codex-terra",
+              digest_source: {
+                period: "month",
+                period_start: "2026-07-01",
+                period_end: "2026-07-31",
+              },
+              created_at: "2026-08-01T00:00:05Z",
+            },
+          ],
+        }),
+    });
+
+    renderReflectionPage("/reflect/session-existing");
+
+    expect(
+      await screen.findByText("The month before was quieter — mostly settling in."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Answered from the month Digest for 2026-07-01 to 2026-07-31."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/^Grounded/)).not.toBeInTheDocument();
   });
 
   it("renders a plain not-found message for an unknown sessionId, rather than a blank page or a crash", async () => {
@@ -366,8 +416,6 @@ describe("ReflectionPage", () => {
       reflect: () => ({
         answer: "Yes, in March.",
         grounding_entry_ids: [],
-        grounded: true,
-        fallback_used: false,
         session_id: "session-knee",
         title: "How has my knee been this year?",
       }),
@@ -379,8 +427,6 @@ describe("ReflectionPage", () => {
               question: "How has my knee been this year?",
               answer: "Yes, in March.",
               grounding_entry_ids: [],
-              grounded: true,
-              fallback_used: false,
               created_at: "2026-08-01T00:00:00Z",
             },
           ],
@@ -420,8 +466,6 @@ describe("ReflectionPage", () => {
       reflect: () => ({
         answer: "It went well.",
         grounding_entry_ids: [],
-        grounded: true,
-        fallback_used: false,
         session_id: "session-tz",
         title: "What did I write yesterday?",
       }),
@@ -454,7 +498,7 @@ describe("ReflectionPage", () => {
   it("offers the models GET /v1/models reports in the composer's own picker", async () => {
     useSettingsStore.getState().setServerUrl("https://phone.example:41207");
     stubFetch({
-      reflect: () => ({ answer: "unused", grounding_entry_ids: [], grounded: true }),
+      reflect: () => ({ answer: "unused", grounding_entry_ids: [] }),
       models: [
         { id: "codex-terra", streaming: false, context_window: 272000 },
         { id: "claude-sonnet", streaming: true, context_window: 200000 },
@@ -472,7 +516,7 @@ describe("ReflectionPage", () => {
 
   it("renders no picker at all when the Server offers no models — the default case, unchanged", async () => {
     useSettingsStore.getState().setServerUrl("https://phone.example:41207");
-    stubFetch({ reflect: () => ({ answer: "unused", grounding_entry_ids: [], grounded: true }) });
+    stubFetch({ reflect: () => ({ answer: "unused", grounding_entry_ids: [] }) });
 
     renderReflectionPage();
 
@@ -486,8 +530,6 @@ describe("ReflectionPage", () => {
       reflect: () => ({
         answer: "An answer from claude-sonnet.",
         grounding_entry_ids: [],
-        grounded: true,
-        fallback_used: false,
         session_id: "session-model",
         title: "What did I write about?",
         model: "claude-sonnet",
@@ -515,7 +557,7 @@ describe("ReflectionPage", () => {
   it("reads back each turn attributed to the model that actually produced it", async () => {
     useSettingsStore.getState().setServerUrl("https://phone.example:41207");
     stubFetch({
-      reflect: () => ({ answer: "unused", grounding_entry_ids: [], grounded: true }),
+      reflect: () => ({ answer: "unused", grounding_entry_ids: [] }),
       session: (sessionId) =>
         wireSession({
           id: sessionId,
@@ -524,8 +566,6 @@ describe("ReflectionPage", () => {
               question: "How has my knee been?",
               answer: "It's improved since February.",
               grounding_entry_ids: [],
-              grounded: true,
-              fallback_used: false,
               tool_called: true,
               model: "codex-terra",
               created_at: "2026-08-01T00:00:00Z",
@@ -534,8 +574,6 @@ describe("ReflectionPage", () => {
               question: "And after physical therapy?",
               answer: "Even better.",
               grounding_entry_ids: [],
-              grounded: true,
-              fallback_used: false,
               tool_called: true,
               model: "claude-sonnet",
               created_at: "2026-08-01T00:00:05Z",
@@ -678,8 +716,6 @@ describe("ReflectionPage", () => {
       reflect: () => ({
         answer: "It went well.",
         grounding_entry_ids: [],
-        grounded: true,
-        fallback_used: false,
         session_id: "session-move",
         title: "How did the flat move go?",
       }),
@@ -695,14 +731,12 @@ describe("ReflectionPage", () => {
   // Ticket 6 (ADR 0024): an explicit note per turn, independent of the
   // Answer's own wording, so the user can tell a real Answer from a
   // confident wrong one without trusting how the model phrased itself.
-  it("shows no note when the server judged its Grounding grounded", async () => {
+  it("shows no note when the tools returned at least one Entry", async () => {
     useSettingsStore.getState().setServerUrl("https://phone.example:41207");
     stubFetch({
       reflect: () => ({
         answer: "It's improved since February.",
         grounding_entry_ids: ["entry-1"],
-        grounded: true,
-        fallback_used: false,
         session_id: "session-note-1",
         title: "How has my knee been?",
       }),
@@ -715,40 +749,12 @@ describe("ReflectionPage", () => {
     expect(screen.queryByText(/nothing in your history matched/i)).not.toBeInTheDocument();
   });
 
-  it("shows a fallback note when the server disclosed recent Entries instead of an Answer", async () => {
-    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
-    stubFetch({
-      reflect: () => ({
-        answer: "Nothing matched, but here's what you wrote lately.",
-        grounding_entry_ids: ["entry-1"],
-        grounded: false,
-        fallback_used: true,
-        session_id: "session-note-2",
-        title: "Anything about scuba diving?",
-      }),
-    });
-
-    renderReflectionPage();
-    ask("Anything about scuba diving?");
-
-    expect(
-      await screen.findByText("Nothing matched, but here's what you wrote lately."),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        /nothing in your history matched this question — this is what you wrote in the last few days/i,
-      ),
-    ).toBeInTheDocument();
-  });
-
-  it("shows an ungrounded note (no fallback) when a tool ran and genuinely found nothing", async () => {
+  it("shows an ungrounded note when a tool ran and genuinely found nothing", async () => {
     useSettingsStore.getState().setServerUrl("https://phone.example:41207");
     stubFetch({
       reflect: () => ({
         answer: "I couldn't find anything about that.",
         grounding_entry_ids: [],
-        grounded: false,
-        fallback_used: false,
         // Issue #103: explicit, not this fixture's usual omission — this
         // test is specifically about the "a tool ran and found nothing"
         // outcome, distinct from `tool_called: false` below, which is a
@@ -765,8 +771,45 @@ describe("ReflectionPage", () => {
     expect(await screen.findByText("I couldn't find anything about that.")).toBeInTheDocument();
     const note = screen.getByText(/nothing in your history matched this question/i);
     expect(note).toBeInTheDocument();
-    expect(note.textContent).not.toMatch(/last few days/i);
     expect(note.textContent).not.toMatch(/without checking/i);
+  });
+
+  // Carry-over #2 recorded on issue #99, confirmed live on the Sandbox:
+  // since issue #92 removed MIN_SIMILARITY, `similar_entries` returns its
+  // top-k for *every* Question, including one about a topic absent from
+  // the journal — so a non-empty `grounding_entry_ids` under an Answer
+  // that plainly says nothing was found is now the *common* shape, not an
+  // edge case. Before this fix, the disclosure still read "Grounded in N
+  // Entries" here — an on-screen contradiction directly beneath an Answer
+  // saying the opposite, because `groundingOutcome`/`summaryLabel` treated
+  // "the tools returned Entries" as "the Answer is grounded in them," a
+  // verdict the Server cannot make under the loop (this ticket's own
+  // module doc comment on `server/src/reflect.rs`). The fix is wording,
+  // not data: the disclosure must say what the list honestly is — Entries
+  // the tools returned — never that the Answer is grounded in them.
+  it("does not claim the Answer is grounded in Entries the tools returned but the model said it found nothing in", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    stubFetch({
+      reflect: () => ({
+        answer:
+          "I couldn't find a journal entry about a football match, so I can't tell what you thought of it.",
+        grounding_entry_ids: Array.from({ length: 10 }, (_, i) => `entry-${i}`),
+        tool_called: true,
+        session_id: "session-absent-topic",
+        title: "What did I think of the football match?",
+      }),
+    });
+
+    renderReflectionPage();
+    ask("What did I think of the football match?");
+
+    expect(
+      await screen.findByText(
+        "I couldn't find a journal entry about a football match, so I can't tell what you thought of it.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/^Grounded in/)).not.toBeInTheDocument();
+    expect(screen.getByText("10 Entries returned")).toBeInTheDocument();
   });
 
   // Issue #103: the case that used to be indistinguishable from the one
@@ -782,8 +825,6 @@ describe("ReflectionPage", () => {
       reflect: () => ({
         answer: "I can't access any journal entries from here.",
         grounding_entry_ids: [],
-        grounded: false,
-        fallback_used: false,
         tool_called: false,
         session_id: "session-note-4",
         title: "How is my knee doing?",
@@ -805,20 +846,18 @@ describe("ReflectionPage", () => {
   });
 
   // Ticket 7: the disclosure beneath each turn is the only way to tell a
-  // confident wrong Answer from a right one by eye — its label must carry
-  // ADR 0024's grounded/fallback distinction, not just render *something*.
-  // ADR 0025's acceptance criteria requires this to keep working on a
-  // restored turn too, including the "hasn't reached this Device yet"
-  // placeholder — this Entry is present locally, so the ordinary label path
-  // is what's under test here.
+  // confident wrong Answer from a right one by eye — its label must show
+  // what the tools actually returned, not just render *something*. ADR
+  // 0025's acceptance criteria requires this to keep working on a restored
+  // turn too, including the "hasn't reached this Device yet" placeholder —
+  // this Entry is present locally, so the ordinary label path is what's
+  // under test here.
   it("shows a Grounding disclosure labelled 'Grounded' for a grounded turn", async () => {
     useSettingsStore.getState().setServerUrl("https://phone.example:41207");
     stubFetch({
       reflect: () => ({
         answer: "It's improved since February.",
         grounding_entry_ids: ["entry-1"],
-        grounded: true,
-        fallback_used: false,
         session_id: "session-disclosure-1",
         title: "How has my knee been?",
       }),
@@ -831,33 +870,7 @@ describe("ReflectionPage", () => {
     ask("How has my knee been?");
 
     expect(await screen.findByText("It's improved since February.")).toBeInTheDocument();
-    expect(screen.getByText("Grounded in 1 Entry")).toBeInTheDocument();
-  });
-
-  it("shows a Grounding disclosure labelled as recent Entries, not Grounding, for a fallback turn", async () => {
-    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
-    stubFetch({
-      reflect: () => ({
-        answer: "Nothing matched, but here's what you wrote lately.",
-        grounding_entry_ids: ["entry-1"],
-        grounded: false,
-        fallback_used: true,
-        session_id: "session-disclosure-2",
-        title: "Anything about scuba diving?",
-      }),
-    });
-
-    renderReflectionPage("/reflect", {
-      ...defaultEntryStoreContext,
-      getEntries: vi.fn(async () => [entry({ id: "entry-1", body: "Just a regular Tuesday" })]),
-    });
-    ask("Anything about scuba diving?");
-
-    expect(
-      await screen.findByText("Nothing matched, but here's what you wrote lately."),
-    ).toBeInTheDocument();
-    expect(screen.getByText("1 recent Entry")).toBeInTheDocument();
-    expect(screen.queryByText(/^Grounded/)).not.toBeInTheDocument();
+    expect(screen.getByText("1 Entry returned")).toBeInTheDocument();
   });
 
   // Issue #96: steps appear live, in order, as the harness reports them —
@@ -1015,8 +1028,6 @@ describe("ReflectionPage", () => {
           title: "How does this knee compare to last year?",
           answer: "It's improved since last year.",
           grounding_entry_ids: ["entry-1", "entry-2"],
-          grounded: true,
-          fallback_used: false,
         },
       ]);
       close();
@@ -1111,8 +1122,6 @@ describe("ReflectionPage", () => {
       reflect: () => ({
         answer: "It's improved since February.",
         grounding_entry_ids: [],
-        grounded: true,
-        fallback_used: false,
         session_id: "session-abc",
         title: "How has my knee been?",
       }),
@@ -1125,8 +1134,6 @@ describe("ReflectionPage", () => {
               question: "How has my knee been?",
               answer: "It's improved since February.",
               grounding_entry_ids: [],
-              grounded: true,
-              fallback_used: false,
               created_at: "2026-08-01T00:00:05Z",
             },
           ],
@@ -1166,8 +1173,6 @@ describe("ReflectionPage", () => {
               question: "Explicit Question",
               answer: "Explicit Answer",
               grounding_entry_ids: [],
-              grounded: true,
-              fallback_used: false,
               created_at: "2026-08-01T00:00:00Z",
             },
           ],
@@ -1190,8 +1195,6 @@ describe("ReflectionPage", () => {
       reflect: () => ({
         answer: "It's improved since February.",
         grounding_entry_ids: [],
-        grounded: true,
-        fallback_used: false,
         session_id: "session-abc",
         title: "How has my knee been?",
       }),
@@ -1203,8 +1206,6 @@ describe("ReflectionPage", () => {
               question: "How has my knee been?",
               answer: "It's improved since February.",
               grounding_entry_ids: [],
-              grounded: true,
-              fallback_used: false,
               created_at: "2026-08-01T00:00:05Z",
             },
           ],
@@ -1288,8 +1289,6 @@ describe("ReflectionPage", () => {
         reflect: () => ({
           answer: "It's improved since February.",
           grounding_entry_ids: [],
-          grounded: true,
-          fallback_used: false,
           session_id: "session-abc",
           title: "How has my knee been?",
         }),

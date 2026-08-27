@@ -188,41 +188,18 @@ async fn insert_session_with_times(
         .unwrap();
 }
 
-/// Writes only a `session_turns` row, with no matching tree entries — the
-/// shape a Session written before issue #91 actually has. Every other test
-/// in this file wants a Session that already looks the way `record_turn`
-/// leaves one today (both shapes, see `insert_turn` below); this one is
-/// reserved for `existing_turns_convert_to_entries_and_still_read_via_the_api`,
-/// which needs data the migration's backfill has never touched so it can
-/// prove that backfill actually does something.
-async fn insert_legacy_turn(pool: &PgPool, session_id: Uuid, question: &str, answer: &str) {
-    sqlx::query(
-        "insert into session_turns
-            (id, session_id, question, answer, grounding_entry_ids, grounded, fallback_used)
-         values ($1, $2, $3, $4, '{}', true, false)",
-    )
-    .bind(Uuid::new_v4())
-    .bind(session_id)
-    .bind(question)
-    .bind(answer)
-    .execute(pool)
-    .await
-    .unwrap();
-}
-
-/// Writes a `session_turns` row *and* the matching pair of chained tree
-/// entries `sessions::record_turn` would append for the same Turn (issue
-/// #91: both shapes are always written together from this point on). This
-/// test crate has no access to `record_turn`'s `pub(crate)` internals, so
-/// it replicates the shape directly in SQL rather than reimplementing
-/// `record_turn` itself — `session_entries_append_and_read_back` and
-/// friends in `server/src/sessions.rs`'s own `#[cfg(test)]` module are what
-/// actually exercise `append_entry`. What matters here is only that
-/// `GET /v1/sessions/{id}` — which now reads the tree, not `session_turns`
-/// — sees exactly the Turns these tests seed.
+/// Writes the pair of chained tree entries `sessions::record_turn_from_steps`
+/// would append for the same simple, no-tool-call Turn. This test crate has
+/// no access to that function's `pub(crate)` internals, so it replicates
+/// the shape directly in SQL rather than reimplementing it —
+/// `session_entries_append_and_read_back` and friends in
+/// `server/src/sessions.rs`'s own `#[cfg(test)]` module are what actually
+/// exercise `append_entry`. What matters here is only that `GET
+/// /v1/sessions/{id}` — which reads the tree, the only representation a
+/// Session has (issue #99 removed `session_turns`, the older one-row-per-Turn
+/// table this helper used to write alongside the tree) — sees exactly the
+/// Turns these tests seed.
 async fn insert_turn(pool: &PgPool, session_id: Uuid, question: &str, answer: &str) {
-    insert_legacy_turn(pool, session_id, question, answer).await;
-
     let leaf: Option<Uuid> = sqlx::query_scalar("select main_leaf_id from sessions where id = $1")
         .bind(session_id)
         .fetch_one(pool)
@@ -270,8 +247,6 @@ async fn insert_turn(pool: &PgPool, session_id: Uuid, question: &str, answer: &s
         "role": "assistant",
         "text": answer,
         "grounding_entry_ids": Vec::<Uuid>::new(),
-        "grounded": true,
-        "fallback_used": false,
     }))
     .execute(pool)
     .await
@@ -283,6 +258,149 @@ async fn insert_turn(pool: &PgPool, session_id: Uuid, question: &str, answer: &s
         .execute(pool)
         .await
         .unwrap();
+}
+
+/// Appends one tree entry onto whatever a Session's `main_leaf_id` currently
+/// is, and moves the leaf onto it — the same chaining `append_entry`/
+/// `record_turn_from_steps` do, reimplemented in raw SQL for the same reason
+/// `insert_turn` above is: this test crate has no access to `sessions.rs`'s
+/// `pub(crate)` internals. Returns the new entry's id, so a caller building
+/// a multi-step run (a tool call, a tool result, a real answer) can chain
+/// each one onto the last without re-deriving `main_leaf_id` itself.
+async fn append_tree_entry(pool: &PgPool, session_id: Uuid, payload: Value) -> Uuid {
+    let leaf: Option<Uuid> = sqlx::query_scalar("select main_leaf_id from sessions where id = $1")
+        .bind(session_id)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    let seq: i64 = sqlx::query_scalar(
+        "update sessions set next_seq = next_seq + 1 where id = $1 returning next_seq - 1",
+    )
+    .bind(session_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let id = Uuid::new_v4();
+    sqlx::query(
+        "insert into session_entries (session_id, id, parent_id, seq, type, payload)
+         values ($1, $2, $3, $4, 'message', $5)",
+    )
+    .bind(session_id)
+    .bind(id)
+    .bind(leaf)
+    .bind(seq)
+    .bind(payload)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query("update sessions set main_leaf_id = $1 where id = $2")
+        .bind(id)
+        .bind(session_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    id
+}
+
+/// Carry-over from #96 pass 2, recorded on issue #99: a Turn answered from a
+/// `read_digest` tool call must still say so — via `digest_source` on the
+/// wire — after a page reload, not just while the browser session that
+/// asked is still open. Before this ticket, `GET /v1/sessions/{id}` returned
+/// `SessionTurnRow` with no per-tool detail at all, so a Turn shaped exactly
+/// like this one — a tool call, a `tool_result` tagged `"source": "digest"`
+/// (`harness/tools/read_digest.rs`'s own shape), then the real answer — read
+/// back indistinguishable from an ordinary Entry-grounded Turn: this test
+/// would have failed to compile against the pre-#99 `SessionTurnRow` (no
+/// `digest_source` field existed to assert on at all), and would have
+/// failed at runtime against the pre-#99 `GET /v1/sessions/{id}`, which had
+/// nowhere in its response to carry this.
+#[sqlx::test]
+async fn a_digest_sourced_turn_reads_back_with_its_digest_source_after_reload(pool: PgPool) {
+    let session_id = Uuid::new_v4();
+    insert_session(&pool, session_id, "How did the flat move go?").await;
+
+    append_tree_entry(
+        &pool,
+        session_id,
+        serde_json::json!({"role": "user", "text": "And what about the month before?"}),
+    )
+    .await;
+    append_tree_entry(
+        &pool,
+        session_id,
+        serde_json::json!({
+            "role": "assistant",
+            "text": "[calling read_digest]",
+            "grounding_entry_ids": Vec::<Uuid>::new(),
+        }),
+    )
+    .await;
+    append_tree_entry(
+        &pool,
+        session_id,
+        serde_json::json!({
+            "role": "tool_result",
+            "text": "Digest for 2026-07-01 to 2026-07-31: ...",
+            "tool_name": "read_digest",
+            "is_error": false,
+            "details": {
+                "source": "digest",
+                "period": "month",
+                "period_start": "2026-07-01",
+                "period_end": "2026-07-31",
+            },
+        }),
+    )
+    .await;
+    append_tree_entry(
+        &pool,
+        session_id,
+        serde_json::json!({
+            "role": "assistant",
+            "text": "The month before was quieter — mostly settling in.",
+            "grounding_entry_ids": Vec::<Uuid>::new(),
+        }),
+    )
+    .await;
+
+    let (status, body) = get_session(&pool, Some(reflect_state()), session_id).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let turns = body["turns"].as_array().unwrap();
+    assert_eq!(turns.len(), 1);
+    assert_eq!(
+        turns[0]["digest_source"],
+        serde_json::json!({
+            "period": "month",
+            "period_start": "2026-07-01",
+            "period_end": "2026-07-31",
+        }),
+        "a Turn answered from a Digest must still say so after the read that survives a reload"
+    );
+}
+
+/// The mirror of the case above: a Turn whose tool calls never touched
+/// `read_digest` at all must read back with no `digest_source` — the field
+/// is `None`, not a guess or a leftover from a different Turn in the same
+/// Conversation.
+#[sqlx::test]
+async fn a_turn_with_no_digest_tool_call_reads_back_with_no_digest_source(pool: PgPool) {
+    let session_id = Uuid::new_v4();
+    insert_session(&pool, session_id, "How has my knee been?").await;
+    insert_turn(
+        &pool,
+        session_id,
+        "How has my knee been?",
+        "It's been a recurring issue since February.",
+    )
+    .await;
+
+    let (status, body) = get_session(&pool, Some(reflect_state()), session_id).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let turns = body["turns"].as_array().unwrap();
+    assert_eq!(turns.len(), 1);
+    assert_eq!(turns[0]["digest_source"], serde_json::Value::Null);
 }
 
 /// The whole point of a server-held Conversation (`docs/adr/0025`): a
@@ -341,25 +459,26 @@ async fn the_route_is_absent_when_chat_is_unconfigured(pool: PgPool) {
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
-/// `session_turns.session_id references sessions(id) on delete cascade` —
-/// exercised directly against Postgres rather than through
-/// `DELETE /v1/sessions/{id}`, so this proves the foreign key itself is
-/// wired the way the migration claims, independent of the handler built on
-/// top of it. `the_delete_endpoint_removes_the_session_and_cascades_its_turns`
-/// below exercises the same cascade through the real endpoint.
+/// `session_entries.session_id references sessions(id) on delete cascade`
+/// (migration `0006`) — exercised directly against Postgres rather than
+/// through `DELETE /v1/sessions/{id}`, so this proves the foreign key
+/// itself is wired the way the migration claims, independent of the
+/// handler built on top of it.
+/// `the_delete_endpoint_removes_the_session_and_cascades_its_turns` below
+/// exercises the same cascade through the real endpoint.
 #[sqlx::test]
 async fn deleting_a_session_cascades_its_turns(pool: PgPool) {
     let session_id = Uuid::new_v4();
     insert_session(&pool, session_id, "Anything?").await;
     insert_turn(&pool, session_id, "Anything?", "Not much.").await;
 
-    let turn_count_before: i64 =
-        sqlx::query_scalar("select count(*) from session_turns where session_id = $1")
+    let entry_count_before: i64 =
+        sqlx::query_scalar("select count(*) from session_entries where session_id = $1")
             .bind(session_id)
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert_eq!(turn_count_before, 1);
+    assert_eq!(entry_count_before, 2);
 
     sqlx::query("delete from sessions where id = $1")
         .bind(session_id)
@@ -367,13 +486,13 @@ async fn deleting_a_session_cascades_its_turns(pool: PgPool) {
         .await
         .unwrap();
 
-    let turn_count_after: i64 =
-        sqlx::query_scalar("select count(*) from session_turns where session_id = $1")
+    let entry_count_after: i64 =
+        sqlx::query_scalar("select count(*) from session_entries where session_id = $1")
             .bind(session_id)
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert_eq!(turn_count_after, 0);
+    assert_eq!(entry_count_after, 0);
 }
 
 /// `GET /v1/sessions` orders newest-first by `updated_at` — the column
@@ -439,8 +558,8 @@ async fn the_list_route_is_absent_when_chat_is_unconfigured(pool: PgPool) {
 
 /// `DELETE /v1/sessions/{id}` (issue #63): `204`, the Session is gone from
 /// `GET /v1/sessions`, and — proving the cascade through the real endpoint
-/// rather than assuming it from the foreign key alone — its Turns are gone
-/// from `session_turns` too, queried directly.
+/// rather than assuming it from the foreign key alone — its tree entries
+/// are gone from `session_entries` too, queried directly.
 #[sqlx::test]
 async fn the_delete_endpoint_removes_the_session_and_cascades_its_turns(pool: PgPool) {
     let session_id = Uuid::new_v4();
@@ -461,13 +580,13 @@ async fn the_delete_endpoint_removes_the_session_and_cascades_its_turns(pool: Pg
         "the deleted Session must not still be in the list"
     );
 
-    let turn_count: i64 =
-        sqlx::query_scalar("select count(*) from session_turns where session_id = $1")
+    let entry_count: i64 =
+        sqlx::query_scalar("select count(*) from session_entries where session_id = $1")
             .bind(session_id)
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert_eq!(turn_count, 0);
+    assert_eq!(entry_count, 0);
 }
 
 /// Deleting an id that names no Session is a 404, not a 204 — so a client
@@ -656,95 +775,4 @@ async fn percent_is_treated_literally(pool: PgPool) {
     let sessions = body.as_array().unwrap();
     assert_eq!(sessions.len(), 1);
     assert_eq!(sessions[0]["id"], matching_id.to_string());
-}
-
-/// Issue #91's acceptance criterion, proven end to end: "Every existing
-/// stored Conversation converts to entries and still reads correctly
-/// through the API." `sqlx::test` already applies every migration
-/// (`sqlx::migrate!()`), including `0006_sessions_become_entry_trees.sql`,
-/// before this test body ever runs — but at that moment `session_turns` is
-/// empty, so its backfill converted nothing. `insert_legacy_turn` seeds two
-/// Turns the way a Session written before this ticket actually looked:
-/// `session_turns` rows with no matching tree entries at all. Re-executing
-/// the migration file's own text against this same database (via
-/// `sqlx::raw_sql` over `include_str!`, not a hand-written reimplementation
-/// of the backfill) is what proves the SQL that will run exactly once
-/// against a real upgrade does the right thing — every statement in that
-/// file is written to tolerate being re-run (its own header explains why),
-/// so this only touches the two rows just seeded.
-#[sqlx::test]
-async fn existing_turns_convert_to_entries_and_still_read_via_the_api(pool: PgPool) {
-    let session_id = Uuid::new_v4();
-    insert_session(&pool, session_id, "How has my knee been?").await;
-    insert_legacy_turn(
-        &pool,
-        session_id,
-        "How has my knee been?",
-        "It's been a recurring issue since February.",
-    )
-    .await;
-    insert_legacy_turn(
-        &pool,
-        session_id,
-        "Did it start with physical therapy?",
-        "Yes, it started in March.",
-    )
-    .await;
-
-    sqlx::raw_sql(include_str!(
-        "../migrations/0006_sessions_become_entry_trees.sql"
-    ))
-    .execute(&pool)
-    .await
-    .unwrap();
-
-    let (status, body) = get_session(&pool, Some(reflect_state()), session_id).await;
-
-    assert_eq!(status, StatusCode::OK);
-    let turns = body["turns"].as_array().unwrap();
-    assert_eq!(turns.len(), 2);
-    assert_eq!(turns[0]["question"], "How has my knee been?");
-    assert_eq!(
-        turns[0]["answer"],
-        "It's been a recurring issue since February."
-    );
-    assert_eq!(turns[1]["question"], "Did it start with physical therapy?");
-    assert_eq!(turns[1]["answer"], "Yes, it started in March.");
-}
-
-/// A Session that already existed before this migration and *also* gets a
-/// brand-new Turn after it (through the ordinary tree-writing `insert_turn`
-/// helper, standing in for `record_turn`) must chain the new Turn onto the
-/// backfilled ones rather than starting a second, disconnected root — the
-/// migration's `next_seq`/`main_leaf_id` update is what a live append reads
-/// to know where "the end of this Session" currently is.
-#[sqlx::test]
-async fn a_migrated_session_accepts_a_new_turn_chained_after_the_backfilled_ones(pool: PgPool) {
-    let session_id = Uuid::new_v4();
-    insert_session(&pool, session_id, "How has my knee been?").await;
-    insert_legacy_turn(
-        &pool,
-        session_id,
-        "How has my knee been?",
-        "It's been a recurring issue since February.",
-    )
-    .await;
-
-    sqlx::raw_sql(include_str!(
-        "../migrations/0006_sessions_become_entry_trees.sql"
-    ))
-    .execute(&pool)
-    .await
-    .unwrap();
-
-    insert_turn(&pool, session_id, "Still bothering you?", "A little.").await;
-
-    let (status, body) = get_session(&pool, Some(reflect_state()), session_id).await;
-
-    assert_eq!(status, StatusCode::OK);
-    let turns = body["turns"].as_array().unwrap();
-    assert_eq!(turns.len(), 2);
-    assert_eq!(turns[0]["question"], "How has my knee been?");
-    assert_eq!(turns[1]["question"], "Still bothering you?");
-    assert_eq!(turns[1]["answer"], "A little.");
 }

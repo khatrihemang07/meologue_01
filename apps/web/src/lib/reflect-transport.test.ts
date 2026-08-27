@@ -45,8 +45,6 @@ function agentEndOk(overrides: Partial<Record<string, unknown>> = {}) {
     title: "How has my knee been this year?",
     answer: "Your knee has improved since February.",
     grounding_entry_ids: ["entry-1"],
-    grounded: true,
-    fallback_used: false,
     ...overrides,
   });
 }
@@ -76,8 +74,6 @@ describe("reflectTransport", () => {
         title: "How has my knee been this year?",
         answer: "Your knee has improved since February.",
         grounding_entry_ids: ["entry-1"],
-        grounded: true,
-        fallback_used: false,
       },
     });
   });

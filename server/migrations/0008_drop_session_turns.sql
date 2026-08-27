@@ -1,0 +1,27 @@
+-- Issue #99: the contract half of the expand-and-contract migration `0006`
+-- began. `0006` kept `session_turns` (the one-row-per-Question/Answer-pair
+-- table `0003` created) alongside the new `session_entries` tree, backfilled
+-- every existing row into the tree, and had `record_turn` write both shapes
+-- from that point on. That was necessary at the time: `reflect.rs`'s own
+-- tests seeded a Conversation by inserting into `session_turns` directly,
+-- without going through `record_turn`, so the tree alone wasn't yet a
+-- reliable enough source to read Sessions written that way. Issue #99 fixed
+-- the test seeding to append tree entries instead (see
+-- `server/src/sessions.rs`'s own module doc comment), which is what makes
+-- dropping this table safe: every Session in a database this migration ever
+-- runs against already has its tree — either written directly by
+-- `record_turn`/`record_turn_from_steps` since `0006` landed, or backfilled
+-- into one by `0006`'s own migration the one time it ran. There is nothing
+-- left anywhere that still needs a `session_turns` row to read a Session
+-- correctly.
+--
+-- `grounded` and `fallback_used` — the columns this table carried alongside
+-- `question`/`answer`/`grounding_entry_ids` — go with it rather than
+-- surviving as vocabulary elsewhere: they were the fixed pipeline's own
+-- verdict, extracted from the model's own wording (`docs/adr/0024`), and the
+-- tool-calling loop that replaced that pipeline has no equivalent judgment
+-- to store. `grounding_entry_ids` itself is not lost — it lives on in
+-- `session_entries`' own `assistant` message payloads, exactly as `0006`
+-- already wrote it, and `server/src/sessions.rs::entries_to_turns` reads it
+-- back from there.
+drop table session_turns;

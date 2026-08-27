@@ -29,24 +29,14 @@ export interface ConversationTurn {
   question: string;
   answer: string;
   /**
-   * The Entry ids the Answer was actually built from, in the order the server returned them. When
-   * `fallbackUsed` is true these are the last few days of Entries (see `fallbackUsed`), not
-   * Grounding the server judged relevant.
+   * The Entry ids that appeared in a tool result during this turn's run, in the order the server
+   * returned them — see `WireSessionTurn.grounding_entry_ids`'s own doc comment (server/src/sessions.rs).
+   * Never a merged, ranked list computed in advance (issue #99 removed the pipeline that used to
+   * build one): simply what the tools returned, which can include an Entry that turned out not to
+   * matter — `groundingOutcome` is what a caller should key off to render an outcome, not the
+   * length of this array alone.
    */
   groundingEntryIds: string[];
-  /**
-   * Whether the server judged that the Grounding it found actually answers the Question — see
-   * `WireReflectResponse.grounded`. `false` covers both "nothing recent to show either" and
-   * "here's what you wrote lately instead" (`fallbackUsed` tells those two apart).
-   */
-  grounded: boolean;
-  /**
-   * Whether the server's disclosed fallback ran for this turn: it judged its Grounding didn't
-   * answer the Question and showed the last few days of Entries instead, rather than an Answer
-   * built on Entries that only shared a mood or a phrase with the Question — see
-   * `WireReflectResponse.fallback_used` and CONTEXT.md's Grounding entry.
-   */
-  fallbackUsed: boolean;
   /**
    * Whether this turn's run called a tool at all — see `WireReflectResponse.tool_called`'s own
    * doc comment (server/src/reflect.rs) for why this is not derivable from `groundingEntryIds`
@@ -57,16 +47,19 @@ export interface ConversationTurn {
    */
   toolCalled: boolean;
   /**
-   * Set only for a turn just answered in this browser session (never for one restored from a
-   * fetched Session — `GET /v1/sessions/:id`'s own `SessionTurnRow` carries no per-tool detail at
-   * all, only the four fields above) whose harness run read a real Digest
-   * (`server/src/harness/tools/read_digest.rs`). `read_digest` deliberately populates no
-   * `entry_ids` — a Digest's Grounding belongs to the Digest, not to this one tool call — which
-   * otherwise leaves `groundingEntryIds` empty and `grounded` false for a Digest-only Answer,
+   * A `read_digest` tool call surfaced a real Digest this run. `read_digest` deliberately
+   * populates no `entry_ids` — a Digest's Grounding belongs to the Digest, not to this one tool
+   * call — which otherwise leaves `groundingEntryIds` empty for a Digest-only Answer,
    * indistinguishable from "nothing matched at all." This is what `grounding-disclosure.tsx`
-   * reads instead, driven from the live `tool_execution_end` event's own `details`
-   * (`reflect-live-run.ts`'s `applyReflectEvent`), to make "an Answer drawn from a Digest" an
-   * honest, distinct thing the interface says, not silence.
+   * reads instead, to make "an Answer drawn from a Digest" an honest, distinct thing the
+   * interface says, not silence.
+   *
+   * Available for both a turn just answered in this browser session (from the live
+   * `tool_execution_end` event's own `details` — `reflect-live-run.ts`'s `applyReflectEvent`) and
+   * one restored from a fetched Session (`WireSessionTurn.digest_source`, derived from the tree —
+   * `sessions::SessionTurnRow::digest_source`'s own doc comment on `server/src/sessions.rs`
+   * explains why that field exists at all: before it did, a Digest-sourced Turn read back after a
+   * page reload with no way to tell it apart from an ordinary one).
    */
   digestSource?: DigestGroundingSource;
   /**
@@ -88,16 +81,17 @@ export interface ConversationTurn {
  * a caller mapping a fresh Answer builds this object as `{ question,
  * ...response }` rather than this function reading `question` off the
  * response itself.
+ *
+ * `digest_source` is picked from `WireSessionTurn` alone — `WireReflectResponse`
+ * carries no field by that name (see `conversationTurnFromWire`'s own doc
+ * comment on why that asymmetry is fine) — but it stays optional here (`?`
+ * on the source schema field itself), so a `{ question, ...response }`
+ * object built from a `WireReflectResponse` still satisfies this type
+ * without needing one.
  */
 type WireConversationTurn = Pick<
   WireSessionTurn,
-  | "question"
-  | "answer"
-  | "grounding_entry_ids"
-  | "grounded"
-  | "fallback_used"
-  | "tool_called"
-  | "model"
+  "question" | "answer" | "grounding_entry_ids" | "tool_called" | "model" | "digest_source"
 >;
 
 /**
@@ -107,14 +101,18 @@ type WireConversationTurn = Pick<
  * fetched Session and for the turn a just-answered ask produces, so the two
  * paths can't drift into disagreeing about the mapping.
  *
- * `live` is only ever passed for the second case — a turn this browser
- * session just watched happen, event by event (`reflect-live-run.ts`). A
- * turn restored from `GET /v1/sessions/:id` carries no such thing; the wire
- * (`SessionTurnRow`) simply has nowhere to put it, so `digestSource` is
- * `undefined` for every restored turn regardless of whether a Digest
- * actually answered it. See `ConversationTurn.digestSource`'s own doc
- * comment for what that means the interface can and can't tell apart after
- * a reload.
+ * `live.digestSource`, when passed, is only ever for the second case — a
+ * turn this browser session just watched happen, event by event
+ * (`reflect-live-run.ts`), which is how a freshly-answered turn learns its
+ * `digestSource` before the tree write behind it has even committed
+ * (`ReflectResponse` itself carries no `digest_source` — the live event
+ * stream already delivers the same information faster). `wire.digest_source`
+ * is checked first regardless: it is the authoritative, server-derived
+ * answer (`WireSessionTurn.digest_source`, present on every restored turn
+ * since issue #99 — see `SessionTurnRow::digest_source`'s own doc comment),
+ * so it wins whenever both are available, and `live?.digestSource` is only
+ * ever the one still available for a turn the wire shape can't carry it on
+ * (`WireReflectResponse` has no such field).
  */
 export function conversationTurnFromWire(
   wire: WireConversationTurn,
@@ -124,44 +122,47 @@ export function conversationTurnFromWire(
     question: wire.question,
     answer: wire.answer,
     groundingEntryIds: wire.grounding_entry_ids,
-    grounded: wire.grounded,
-    fallbackUsed: wire.fallback_used,
     toolCalled: wire.tool_called,
-    digestSource: live?.digestSource,
+    digestSource: wireDigestSource(wire.digest_source) ?? live?.digestSource,
     model: wire.model,
   };
 }
 
+function wireDigestSource(
+  source: WireSessionTurn["digest_source"],
+): DigestGroundingSource | undefined {
+  if (source === null || source === undefined) {
+    return undefined;
+  }
+  return {
+    period: source.period,
+    periodStart: source.period_start,
+    periodEnd: source.period_end,
+  };
+}
+
 /**
- * The outcome a turn's `(grounded, fallbackUsed, toolCalled, digestSource)` quadruple
- * resolves to — named in CONTEXT.md's own vocabulary (Grounding) and ADR
- * 0024's ("real Grounding", "disclosed fallback", "nothing was found or
- * shown either way"), plus issue #96's own addition (`"digest"`).
- * `GroundingNote` (reflection-page.tsx) and `summaryLabel`
- * (grounding-disclosure.tsx) both used to branch on the raw fields
- * independently; two cascades over the same fields drift, and drifting
- * here means the caption and the expander label disagree about what
- * happened. Deriving the outcome once, here, is what keeps them agreeing
- * by construction.
+ * The outcome a turn's `(groundingEntryIds, toolCalled, digestSource)` triple
+ * resolves to — named in CONTEXT.md's own vocabulary (Grounding), plus
+ * issue #96's own addition (`"digest"`). `GroundingNote` (reflection-page.tsx)
+ * and `summaryLabel` (grounding-disclosure.tsx) both used to branch on the
+ * raw fields independently; two cascades over the same fields drift, and
+ * drifting here means the caption and the expander label disagree about
+ * what happened. Deriving the outcome once, here, is what keeps them
+ * agreeing by construction.
  *
- * `fallbackUsed`/`grounded` still exist on the wire (`WireReflectResponse`
- * — issue #99 removes them later), but under the loop-based `/v1/reflect`
- * (issue #93 pass 2 onward) `fallback_used` is always `false` — the loop
- * has no disclosed-fallback mechanism of its own (`server/src/reflect.rs`'s
- * own doc comment on `ReflectResponse.fallback_used`) — so
- * `"disclosedFallback"` can no longer actually be produced by a freshly
- * answered turn. It stays reachable here, and is not dead code: a Session
- * turn stored before this change shipped can still carry `fallback_used:
- * true` from the pipeline that used to set it, and reloading that
- * Conversation must still render it the way ADR 0024 always described.
+ * Issue #99 removed `grounded`/`fallback_used` from the wire (and, with
+ * them, `"disclosedFallback"` from this type): both were a verdict the
+ * Server extracted from the fixed pipeline's own answering call, which the
+ * tool-calling loop that replaced it has no equivalent for — see
+ * `server/src/reflect.rs`'s own module doc comment. There is no longer a
+ * disclosed-fallback mechanism anywhere behind this wire shape for a turn
+ * to have run, so there is no shape left for this type to represent it
+ * with.
  */
 export type GroundingOutcome =
-  /** A `read_digest` tool call surfaced a real Digest this run — see `digestSource`. Checked before `grounded`/`fallbackUsed`: a Digest is not Entries, so it is never described as either. */
+  /** A `read_digest` tool call surfaced a real Digest this run — see `digestSource`. Checked before the Entry-count cases below: a Digest is not Entries, so it is never described as either. */
   | "digest"
-  /** The server judged its Grounding actually answers the Question. */
-  | "grounded"
-  /** The server judged its Grounding didn't answer the Question and disclosed the last few days of Entries instead — see `fallbackUsed`. Only reachable for a turn stored before issue #96 — see this type's own doc comment. */
-  | "disclosedFallback"
   /**
    * Issue #103: the run never called a tool at all — `toolCalled` is `false`, so nothing was
    * ever searched, as opposed to `"nothingFound"` below where something genuinely was. This is
@@ -172,32 +173,31 @@ export type GroundingOutcome =
    */
   | "neverLooked"
   /** A tool ran and genuinely found nothing — `toolCalled` is `true`, `groundingEntryIds` is empty. */
-  | "nothingFound";
+  | "nothingFound"
+  /** At least one Entry appeared in a tool result this run — simply what the tools returned, not a verdict that it actually answers the Question (see this type's own doc comment). */
+  | "grounded";
 
 /**
  * Derives a turn's outcome. `digestSource` wins outright — a Digest-sourced
- * Answer is never described as Grounding or as a fallback, whatever
- * `grounded`/`fallbackUsed` happen to carry. Otherwise `grounded: true`
- * always wins regardless of `fallbackUsed` — ADR 0024's fallback only ever
- * fired on a `GROUNDED: no` verdict, so the two were never both true in
- * practice, but `grounded` is what the summary label keys off either way
- * (see grounding-disclosure.tsx's original comment, preserved on this
- * derivation now).
+ * Answer is never described as Grounding, whatever `groundingEntryIds`
+ * happens to carry (`read_digest` populates no `entry_ids` of its own, but a
+ * Digest-answered Turn's run can still have called another tool first).
+ * Otherwise: no tool ever called is `"neverLooked"`; a tool called but
+ * `groundingEntryIds` empty is `"nothingFound"`; anything else is
+ * `"grounded"` — simply "the tools returned at least one Entry," not a
+ * relevance judgment (this type's own doc comment).
  */
 export function groundingOutcome(
-  turn: Pick<ConversationTurn, "grounded" | "fallbackUsed" | "toolCalled" | "digestSource">,
+  turn: Pick<ConversationTurn, "groundingEntryIds" | "toolCalled" | "digestSource">,
 ): GroundingOutcome {
   if (turn.digestSource !== undefined) {
     return "digest";
   }
-  if (turn.grounded) {
-    return "grounded";
-  }
-  if (turn.fallbackUsed) {
-    return "disclosedFallback";
-  }
   if (!turn.toolCalled) {
     return "neverLooked";
   }
-  return "nothingFound";
+  if (turn.groundingEntryIds.length === 0) {
+    return "nothingFound";
+  }
+  return "grounded";
 }
