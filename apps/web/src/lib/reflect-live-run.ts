@@ -78,8 +78,19 @@ function parseDigestSource(details: unknown): DigestGroundingSource | undefined 
   return { period, periodStart, periodEnd };
 }
 
-function pluralize(count: number, noun: string): string {
-  return `${count} ${count === 1 ? noun : `${noun}s`}`;
+/**
+ * "1 Entry" / "20 Entries" — the domain's own plural, not a naive `+ "s"`.
+ *
+ * The generic helper this replaced rendered **"20 Entrys"** in a live step
+ * label, caught by driving the real app rather than by any test: `Entry` is
+ * a CONTEXT.md term whose plural is irregular, and every call site here
+ * passed that one noun, so a general-purpose pluralizer was carrying no
+ * weight and getting the only case it had wrong. The wording matches
+ * `grounding-disclosure.tsx`'s summary label deliberately, so a running
+ * step and the finished disclosure say the same word for the same thing.
+ */
+function entryCount(count: number): string {
+  return `${count} ${count === 1 ? "Entry" : "Entries"}`;
 }
 
 /** What to show while a tool call is still running — named after what it's actually doing, per this ticket's own acceptance criterion. */
@@ -119,12 +130,12 @@ function finishedLabel(
     case "entries_in_range": {
       const from = asString(record.from) ?? "?";
       const to = asString(record.to) ?? "?";
-      return `Looked through Entries from ${from} to ${to} — ${pluralize(event.entryCount, "Entry")} found.`;
+      return `Looked through Entries from ${from} to ${to} — ${entryCount(event.entryCount)} found.`;
     }
     case "search_entries":
-      return `Searched your Entries for "${asString(record.query) ?? ""}" — ${pluralize(event.entryCount, "Entry")} found.`;
+      return `Searched your Entries for "${asString(record.query) ?? ""}" — ${entryCount(event.entryCount)} found.`;
     case "similar_entries":
-      return `Searched your Entries by meaning for "${asString(record.query) ?? ""}" — ${pluralize(event.entryCount, "Entry")} found.`;
+      return `Searched your Entries by meaning for "${asString(record.query) ?? ""}" — ${entryCount(event.entryCount)} found.`;
     case "read_digest": {
       const period = asString(record.period) ?? "";
       const date = asString(record.date) ?? "";
@@ -138,7 +149,7 @@ function finishedLabel(
           }.`;
     }
     default:
-      return `${toolName} finished — ${pluralize(event.entryCount, "Entry")} found.`;
+      return `${toolName} finished — ${entryCount(event.entryCount)} found.`;
   }
 }
 

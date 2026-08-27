@@ -700,6 +700,62 @@ describe("ReflectionPage", () => {
   // and a multi-step Question (several tool calls before the Answer) shows
   // each one, not just the last.
   describe("live steps", () => {
+    // Regression, #96: the step label pluralized with a naive `+ "s"`, so a
+    // real run rendered "20 Entrys". Every test above this one happened to
+    // use a count of 1 — the single value where a naive pluralizer and the
+    // correct one agree — which is exactly why 502 passing tests did not
+    // catch it, and why this asserts a count greater than one on purpose.
+    // Found by driving the real app, not by a test.
+    it("says Entries, not Entrys, when a tool call returns more than one", async () => {
+      useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+      let push!: (event: [string, unknown]) => void;
+      const encoder = new TextEncoder();
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          push = (event) => controller.enqueue(encoder.encode(sseFrame(event[0], event[1])));
+        },
+      });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((url: string) => {
+          if (url.endsWith("/v1/reflect")) {
+            return Promise.resolve({ ok: true, status: 200, body });
+          }
+          return new Promise(() => {});
+        }),
+      );
+
+      renderReflectionPage();
+      ask("How did the flat move go?");
+
+      push(["turn_start", {}]);
+      push(["message_start", {}]);
+      push(["message_end", { text: "", stop_reason: "tool_use" }]);
+      push([
+        "tool_execution_start",
+        {
+          tool_call_id: "call-1",
+          tool_name: "similar_entries",
+          arguments: { query: "moving flat" },
+        },
+      ]);
+      push([
+        "tool_execution_end",
+        {
+          tool_call_id: "call-1",
+          tool_name: "similar_entries",
+          is_error: false,
+          details: {},
+          entry_ids: ["entry-1", "entry-2"],
+          entry_count: 20,
+        },
+      ]);
+
+      await screen.findByText(
+        'Searched your Entries by meaning for "moving flat" — 20 Entries found.',
+      );
+    });
+
     it("shows each of a multi-step Question's tool calls, in order, then the Answer", async () => {
       useSettingsStore.getState().setServerUrl("https://phone.example:41207");
       let push!: (event: [string, unknown]) => void;
