@@ -67,6 +67,43 @@ describe("conversationTurnFromWire", () => {
       fallbackUsed: false,
     });
   });
+
+  // Issue #96: the live event stream (`reflect-live-run.ts`) can learn a
+  // just-answered turn drew on a real Digest — something the wire's own
+  // `WireReflectResponse`/`WireSessionTurn` shape has no field for at all.
+  // `conversationTurnFromWire`'s optional second argument is how that
+  // carries onto the `ConversationTurn` the components render, without the
+  // wire mapping itself needing to know anything about it.
+  it("carries a live digestSource onto the mapped turn when one is passed", () => {
+    const turn = conversationTurnFromWire(
+      {
+        question: "How was last week?",
+        answer: "A quiet week, mostly focused on the move.",
+        grounding_entry_ids: [],
+        grounded: false,
+        fallback_used: false,
+      },
+      { digestSource: { period: "week", periodStart: "2026-08-17", periodEnd: "2026-08-23" } },
+    );
+
+    expect(turn.digestSource).toEqual({
+      period: "week",
+      periodStart: "2026-08-17",
+      periodEnd: "2026-08-23",
+    });
+  });
+
+  it("leaves digestSource undefined for a turn restored from a fetched Session, with no live argument", () => {
+    const turn = conversationTurnFromWire({
+      question: "How was last week?",
+      answer: "A quiet week, mostly focused on the move.",
+      grounding_entry_ids: [],
+      grounded: false,
+      fallback_used: false,
+    });
+
+    expect(turn.digestSource).toBeUndefined();
+  });
 });
 
 // ADR 0024's three-way outcome, derived once so GroundingNote
@@ -87,5 +124,15 @@ describe("groundingOutcome", () => {
 
   it("prefers 'grounded' even if fallbackUsed were somehow also true", () => {
     expect(groundingOutcome({ grounded: true, fallbackUsed: true })).toBe("grounded");
+  });
+
+  // Issue #96: a Digest-sourced Answer leaves grounded/fallbackUsed both
+  // false (read_digest populates no entry_ids — server/src/reflect.rs's
+  // own doc comment) — digestSource is what tells that case apart from
+  // "nothing matched at all," and it must win outright.
+  it("is 'digest' whenever digestSource is set, regardless of grounded/fallbackUsed", () => {
+    const digestSource = { period: "day", periodStart: "2026-08-20", periodEnd: "2026-08-20" };
+    expect(groundingOutcome({ grounded: false, fallbackUsed: false, digestSource })).toBe("digest");
+    expect(groundingOutcome({ grounded: true, fallbackUsed: false, digestSource })).toBe("digest");
   });
 });

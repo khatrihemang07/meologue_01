@@ -88,6 +88,30 @@ function ask(question: string) {
   fireEvent.click(askButton());
 }
 
+/** One SSE frame — `event: <name>\ndata: <json>\n\n` — matching what `server/src/reflect.rs`'s `sse_event` actually puts on the wire. */
+function sseFrame(event: string, data: unknown): string {
+  return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+}
+
+/** A streamed `fetch` `Response`-alike for `/v1/reflect` — `events` in order, each `[eventName, data]`. */
+function reflectStream(events: Array<[string, unknown]>) {
+  const encoder = new TextEncoder();
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const [event, data] of events) {
+        controller.enqueue(encoder.encode(sseFrame(event, data)));
+      }
+      controller.close();
+    },
+  });
+  return { ok: true, status: 200, body };
+}
+
+/** The common case: a single `agent_end {"status": "ok", ...}` frame, no intermediate steps — every test that only cares about the final Answer uses this. */
+function reflectAnswer(response: Record<string, unknown>) {
+  return reflectStream([["agent_end", { status: "ok", ...response }]]);
+}
+
 /**
  * A `fetch` stub that branches on the request URL, the same shape both
  * `/v1/reflect` (POST, via reflectTransport) and `/v1/sessions/:id` (GET,
@@ -97,12 +121,12 @@ function ask(question: string) {
  * from the optimistic cache write and not from that refetch resolving.
  */
 function stubFetch(options: {
-  reflect: (init: RequestInit | undefined) => unknown;
+  reflect: (init: RequestInit | undefined) => Record<string, unknown>;
   session?: (sessionId: string) => unknown;
 }) {
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     if (url.endsWith("/v1/reflect")) {
-      return { ok: true, status: 200, json: async () => options.reflect(init) };
+      return reflectAnswer(options.reflect(init));
     }
     const sessionId = url.match(/\/v1\/sessions\/(.+)$/)?.[1];
     const { session } = options;
@@ -201,17 +225,20 @@ describe("ReflectionPage", () => {
     expect(askQuestionField()).toBeInTheDocument();
   });
 
-  it("shows a staged in-flight indicator while a Question is being answered, then renders the Answer", async () => {
+  it("shows a live in-flight indicator while a Question is being answered, then renders the Answer", async () => {
     useSettingsStore.getState().setServerUrl("https://phone.example:41207");
-    let resolveReflectFetch!: (value: unknown) => void;
-    const reflectFetchPromise = new Promise((resolve) => {
-      resolveReflectFetch = resolve;
+    let enqueueTurnStart!: () => void;
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        enqueueTurnStart = () => controller.enqueue(encoder.encode(sseFrame("turn_start", {})));
+      },
     });
     vi.stubGlobal(
       "fetch",
       vi.fn((url: string) => {
         if (url.endsWith("/v1/reflect")) {
-          return reflectFetchPromise;
+          return Promise.resolve({ ok: true, status: 200, body });
         }
         // GET /v1/sessions/:id — hangs; irrelevant to this test.
         return new Promise(() => {});
@@ -220,28 +247,13 @@ describe("ReflectionPage", () => {
 
     renderReflectionPage();
     ask("How has my knee been?");
+    enqueueTurnStart();
 
     expect(await screen.findByText("How has my knee been?")).toBeInTheDocument();
-    expect(screen.getByText(/searching your entries/i)).toBeInTheDocument();
+    expect(await screen.findByText("Thinking…")).toBeInTheDocument();
     // No turn renders until the Answer actually comes back — an in-flight
     // Question isn't a Conversation turn yet.
     expect(screen.queryByText(/it's improved since february/i)).not.toBeInTheDocument();
-
-    resolveReflectFetch({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        answer: "It's improved since February.",
-        grounding_entry_ids: ["entry-1"],
-        grounded: true,
-        fallback_used: false,
-        session_id: "session-new",
-        title: "How has my knee been?",
-      }),
-    });
-
-    expect(await screen.findByText("It's improved since February.")).toBeInTheDocument();
-    expect(screen.queryByText(/searching your entries/i)).not.toBeInTheDocument();
   });
 
   it("navigates to the new Session's URL after asking with no Session, with replace so Back doesn't return to an empty /reflect", async () => {
@@ -430,6 +442,19 @@ describe("ReflectionPage", () => {
     expect(screen.getByTestId("location-path")).toHaveTextContent("/reflect");
   });
 
+  it("shows a distinct hint when the Device's protocol_version is stale (426), the same as a 404", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false, status: 426, json: async () => ({}) })),
+    );
+
+    renderReflectionPage();
+    ask("Anything?");
+
+    expect(await screen.findByText(/doesn't support reflection yet/i)).toBeInTheDocument();
+  });
+
   it("shows an error toast on a network failure, starting no Session", async () => {
     useSettingsStore.getState().setServerUrl("https://phone.example:41207");
     vi.stubGlobal(
@@ -444,6 +469,43 @@ describe("ReflectionPage", () => {
     ask("Anything?");
 
     await waitFor(() => expect(errorToast).toHaveBeenCalled());
+    expect(screen.getByTestId("location-path")).toHaveTextContent("/reflect");
+  });
+
+  // Issue #96's subtlest change: a failed run is now agent_end
+  // {"status": "error"} on a 200 response, not a 500 — the stream itself
+  // succeeded; the run inside it didn't. It must still render as a
+  // failure and restore the Question, exactly like any other failure —
+  // and issue #102 guarantees the server persisted nothing for this run,
+  // so no Turn must appear for it either.
+  it("treats agent_end {status: error} as a failure — restores the Question, shows no Turn, starts no Session", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.endsWith("/v1/reflect")) {
+          return reflectStream([
+            ["agent_end", { status: "error", error: "the chat endpoint failed" }],
+          ]);
+        }
+        return new Promise(() => {});
+      }),
+    );
+    const errorToast = vi.spyOn(toast, "error");
+
+    renderReflectionPage();
+    ask("How did the flat move go?");
+
+    await waitFor(() => expect(errorToast).toHaveBeenCalled());
+    expect(askQuestionField()).toHaveValue("How did the flat move go?");
+    // No Turn ever rendered for this run — issue #102's guarantee (nothing
+    // was persisted) means there's nothing to show, only the Question back
+    // in the composer's own input (a <textarea>, asserted above), never as
+    // a rendered <p> bubble in the thread the way a real Turn's
+    // AskedQuestion would show it.
+    expect(
+      screen.queryByText("How did the flat move go?", { selector: "p" }),
+    ).not.toBeInTheDocument();
     expect(screen.getByTestId("location-path")).toHaveTextContent("/reflect");
   });
 
@@ -632,6 +694,189 @@ describe("ReflectionPage", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("1 recent Entry")).toBeInTheDocument();
     expect(screen.queryByText(/^Grounded/)).not.toBeInTheDocument();
+  });
+
+  // Issue #96: steps appear live, in order, as the harness reports them —
+  // and a multi-step Question (several tool calls before the Answer) shows
+  // each one, not just the last.
+  describe("live steps", () => {
+    it("shows each of a multi-step Question's tool calls, in order, then the Answer", async () => {
+      useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+      let push!: (event: [string, unknown]) => void;
+      let close!: () => void;
+      const encoder = new TextEncoder();
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          push = (event) => controller.enqueue(encoder.encode(sseFrame(event[0], event[1])));
+          close = () => controller.close();
+        },
+      });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((url: string) => {
+          if (url.endsWith("/v1/reflect")) {
+            return Promise.resolve({ ok: true, status: 200, body });
+          }
+          return new Promise(() => {});
+        }),
+      );
+
+      renderReflectionPage();
+      ask("How does this knee compare to last year?");
+
+      // First loop turn: the model calls search_entries.
+      push(["turn_start", {}]);
+      push(["message_start", {}]);
+      push(["message_end", { text: "", stop_reason: "tool_use" }]);
+      push([
+        "tool_execution_start",
+        { tool_call_id: "call-1", tool_name: "search_entries", arguments: { query: "knee" } },
+      ]);
+      await screen.findByText('Searching your Entries for "knee"…');
+      push([
+        "tool_execution_end",
+        {
+          tool_call_id: "call-1",
+          tool_name: "search_entries",
+          is_error: false,
+          details: {},
+          entry_ids: ["entry-1"],
+          entry_count: 1,
+        },
+      ]);
+      await screen.findByText('Searched your Entries for "knee" — 1 Entry found.');
+
+      // Second loop turn: the model calls entries_in_range too.
+      push(["turn_start", {}]);
+      push(["message_start", {}]);
+      push(["message_end", { text: "", stop_reason: "tool_use" }]);
+      push([
+        "tool_execution_start",
+        {
+          tool_call_id: "call-2",
+          tool_name: "entries_in_range",
+          arguments: { from: "2025-08-01", to: "2025-08-31" },
+        },
+      ]);
+      await screen.findByText("Looking through Entries from 2025-08-01 to 2025-08-31…");
+      push([
+        "tool_execution_end",
+        {
+          tool_call_id: "call-2",
+          tool_name: "entries_in_range",
+          is_error: false,
+          details: {},
+          entry_ids: ["entry-2"],
+          entry_count: 1,
+        },
+      ]);
+      await screen.findByText(
+        "Looked through Entries from 2025-08-01 to 2025-08-31 — 1 Entry found.",
+      );
+
+      // Both finished steps are still on screen together, in the order
+      // they happened — not just the most recent one.
+      expect(
+        screen.getByText('Searched your Entries for "knee" — 1 Entry found.'),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText("Looked through Entries from 2025-08-01 to 2025-08-31 — 1 Entry found."),
+      ).toBeInTheDocument();
+
+      // Third loop turn: the final Answer.
+      push(["turn_start", {}]);
+      push(["message_start", {}]);
+      push(["message_end", { text: "It's improved since last year.", stop_reason: "stop" }]);
+      push([
+        "agent_end",
+        {
+          status: "ok",
+          session_id: "session-multi",
+          title: "How does this knee compare to last year?",
+          answer: "It's improved since last year.",
+          grounding_entry_ids: ["entry-1", "entry-2"],
+          grounded: true,
+          fallback_used: false,
+        },
+      ]);
+      close();
+
+      expect(await screen.findByText("It's improved since last year.")).toBeInTheDocument();
+    });
+
+    it("shows the streamed Answer growing from message_update deltas before agent_end arrives", async () => {
+      useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+      let push!: (event: [string, unknown]) => void;
+      const encoder = new TextEncoder();
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          push = (event) => controller.enqueue(encoder.encode(sseFrame(event[0], event[1])));
+        },
+      });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((url: string) => {
+          if (url.endsWith("/v1/reflect")) {
+            return Promise.resolve({ ok: true, status: 200, body });
+          }
+          return new Promise(() => {});
+        }),
+      );
+
+      renderReflectionPage();
+      ask("How has my knee been?");
+
+      push(["turn_start", {}]);
+      push(["message_start", {}]);
+      push(["message_update", { delta: "It's " }]);
+      push(["message_update", { delta: "improved." }]);
+
+      expect(await screen.findByText("It's improved.")).toBeInTheDocument();
+    });
+
+    // Accessibility (issue #96's own acceptance criterion): steps are
+    // announced to assistive technology, but the streamed Answer must not
+    // be narrated character by character — the two need different
+    // aria-live treatment, not the same region.
+    it("marks the steps list aria-live, but the streaming Answer carries no aria-live at all", async () => {
+      useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+      let push!: (event: [string, unknown]) => void;
+      const encoder = new TextEncoder();
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          push = (event) => controller.enqueue(encoder.encode(sseFrame(event[0], event[1])));
+        },
+      });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((url: string) => {
+          if (url.endsWith("/v1/reflect")) {
+            return Promise.resolve({ ok: true, status: 200, body });
+          }
+          return new Promise(() => {});
+        }),
+      );
+
+      renderReflectionPage();
+      ask("How has my knee been?");
+      push(["turn_start", {}]);
+
+      const thinking = await screen.findByText("Thinking…");
+      const stepsRegion = thinking.closest("ul");
+      expect(stepsRegion).not.toBeNull();
+      expect(stepsRegion).toHaveAttribute("aria-live", "polite");
+
+      push(["message_start", {}]);
+      push(["message_update", { delta: "It's " }]);
+      push(["message_update", { delta: "improved." }]);
+
+      const answerParagraph = await screen.findByText("It's improved.");
+      expect(answerParagraph).not.toHaveAttribute("aria-live");
+      // Nor does any ancestor up to the steps region's own parent — the
+      // Answer paragraph is a plain, non-live sibling of the steps list,
+      // not nested inside its live region.
+      expect(answerParagraph.closest("[aria-live]")).toBeNull();
+    });
   });
 
   // Issue #80: leaving Reflect for Composer and coming back must land on

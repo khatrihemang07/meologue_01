@@ -1,7 +1,7 @@
 import type { Entry } from "@meologue/core";
 import { PROTOCOL_VERSION } from "@meologue/core";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import { GroundingDisclosure } from "@/components/grounding-disclosure";
@@ -11,24 +11,17 @@ import { Shell } from "@/components/shell";
 import {
   type ConversationTurn,
   conversationTurnFromWire,
+  type DigestGroundingSource,
   groundingOutcome,
 } from "@/lib/conversation";
 import { deviceUtcOffsetMinutes } from "@/lib/entry-day";
 import { clearLastSessionId, readLastSessionId, writeLastSessionId } from "@/lib/last-session";
 import { groundingEntriesQueryKey } from "@/lib/query-keys";
+import { applyReflectEvent, initialLiveRunState, type LiveRunState } from "@/lib/reflect-live-run";
 import { reflectTransport } from "@/lib/reflect-transport";
 import { type SessionResult, sessionsTransport } from "@/lib/sessions-transport";
 import { useSyncEnabled } from "@/lib/settings";
 import { useEntryStore } from "@/pages/entry-store-layout";
-
-/**
- * How long the in-flight indicator shows "searching" copy before switching
- * to "thinking" copy. A real call is ~7-15s (the chat wrapper's own system
- * prompt costs ~7s before it's even seen the Question — see the ticket
- * brief), so a bare spinner reads as stuck; staging the copy is what tells
- * the reader something is still moving without promising a specific time.
- */
-const THINKING_AFTER_MS = 3000;
 
 /**
  * What this page keeps of a fetched Session, once mapped off the wire — the
@@ -56,7 +49,15 @@ async function fetchSession(sessionId: string): Promise<SessionQueryData> {
     ok: true,
     snapshot: {
       title: result.session.title,
-      turns: result.session.turns.map(conversationTurnFromWire),
+      // Wrapped rather than passed as a bare callback: `Array.prototype.map`
+      // calls its callback with `(value, index, array)`, and
+      // `conversationTurnFromWire`'s own optional second parameter
+      // (`live`) would otherwise get `index` (a `number`) handed to it —
+      // caught only by `tsc`, not by any test, since a restored Session
+      // never actually has a live digestSource to lose. A turn restored
+      // from a fetched Session always takes the no-`live` path (see
+      // `conversationTurnFromWire`'s own doc comment).
+      turns: result.session.turns.map((turn) => conversationTurnFromWire(turn)),
     },
   };
 }
@@ -85,7 +86,12 @@ function GivenAnswer({ text }: { text: string }) {
 // and the expander label below it can never disagree about what happened.
 function GroundingNote({ turn }: { turn: ConversationTurn }) {
   const outcome = groundingOutcome(turn);
-  if (outcome === "grounded") {
+  // "digest" (issue #96) gets no note here either: GroundingDisclosure's
+  // own line already says the Answer came from a Digest, and this note's
+  // wording ("Nothing in your History matched...") would flatly contradict
+  // that — it exists for the two outcomes where nothing usable was found,
+  // not for one where something was, just not raw Entries.
+  if (outcome === "grounded" || outcome === "digest") {
     return null;
   }
   return (
@@ -124,6 +130,42 @@ function ConversationTurnRow({
         loading={groundingEntriesLoading}
         syncEnabled={syncEnabled}
       />
+    </div>
+  );
+}
+
+// Issue #96: replaces the old bare "Searching your Entries…"/"Thinking…"
+// staged copy with the harness's actual progress — each step names what
+// was searched and how much came back (`reflect-live-run.ts`'s own
+// labels), in the order the events arrived in, and the Answer grows live
+// underneath once the model starts producing it.
+//
+// Accessibility: only the steps list is `aria-live` — a screen reader
+// announces each step as it's added (at most a handful per Question, one
+// per tool call, plus the odd "Thinking…"), which is the progress this
+// ticket asks to be announced. The Answer paragraph below it carries no
+// `aria-live` at all, deliberately: `message_update` can fire many times a
+// second on a streaming model, and a live region re-announcing on every
+// delta would read the Answer out character by character — exactly what
+// this ticket asks *not* to happen. A screen reader still reaches the
+// finished Answer normally once the turn commits into the Conversation
+// below (`GivenAnswer`, an ordinary static paragraph, not a live region
+// either) — this component only covers the in-flight moment before that.
+function LiveRunView({ liveRun }: { liveRun: LiveRunState }) {
+  const { steps, answer, answering, thinking } = liveRun;
+  return (
+    <div className="flex flex-col gap-1">
+      <ul className="flex flex-col gap-1" aria-live="polite">
+        {steps.map((step) => (
+          <li key={step.id} className="text-sm text-muted-foreground">
+            {step.label}
+          </li>
+        ))}
+        {thinking && !answering && <li className="text-sm text-muted-foreground">Thinking…</li>}
+      </ul>
+      {answering && (
+        <p className="mr-auto max-w-[85%] whitespace-pre-wrap text-sm text-foreground">{answer}</p>
+      )}
     </div>
   );
 }
@@ -262,22 +304,33 @@ export function ReflectionPage() {
   // Conversation is Questions *and Answers*), and navigating away mid-ask
   // is Reflection's page-level concern, not the Conversation's own data.
   const [pending, setPending] = useState<string | null>(null);
-  const [thinking, setThinking] = useState(false);
+  // Issue #96: replaces the old two-phase "Searching your Entries…" /
+  // "Thinking…" copy staged on a bare timer — the harness now reports real
+  // progress as it happens (`reflect-live-run.ts`), so there is no longer
+  // a guessed delay to stage anything against. Reset to
+  // `initialLiveRunState` at the start of every ask (`handleAsk`).
+  const [liveRun, setLiveRun] = useState<LiveRunState>(initialLiveRunState);
   const [notSupported, setNotSupported] = useState(false);
   const [restore, setRestore] = useState({ question: "", signal: 0 });
-  // Bumped on every ask, mirroring composer-page.tsx's sendSignal: the
-  // pinned thread jumps to the newest end unconditionally on Ask, the same
-  // rule Send already gets there.
-  const [askSignal, setAskSignal] = useState(0);
-
+  // Issue #85: seeded `undefined`, not `0` — `use-pinned-scroll.ts` guards
+  // its own forced-jump effect with `forceToNewest === undefined`, so a
+  // seed of `0` (a real, distinct value) defeated that guard and forced an
+  // extra synchronous layout pass on every mount, on top of the `watch`
+  // effect already doing the same jump. `composer-page.tsx`'s `sendSignal`
+  // carries the identical fix (issue #81) for the identical defect; this is
+  // that same shape, not a new approach — see issue #85's own writeup for
+  // why `(count ?? 0) + 1`, not `count + 1`, is the trap: seeding
+  // `undefined` means a plain `count + 1` on the very next ask is `NaN`,
+  // and `Object.is(NaN, NaN)` is `true`, so React's dependency check would
+  // treat that second ask as unchanged and silently stop scrolling.
+  const [askSignal, setAskSignal] = useState<number | undefined>(undefined);
+  // Aborts the in-flight `/v1/reflect` stream on unmount — navigating away
+  // mid-Answer must not leave a connection open, or call `setState` on a
+  // component that's no longer mounted.
+  const activeAbortRef = useRef<AbortController | null>(null);
   useEffect(() => {
-    if (pending === null) {
-      setThinking(false);
-      return;
-    }
-    const timer = setTimeout(() => setThinking(true), THINKING_AFTER_MS);
-    return () => clearTimeout(timer);
-  }, [pending]);
+    return () => activeAbortRef.current?.abort();
+  }, []);
 
   // Issue #80's resume: a bare `/reflect` mount (no `sessionId`) redirects
   // to the remembered Session instead of staying empty, unless this
@@ -343,22 +396,51 @@ export function ReflectionPage() {
   async function handleAsk(question: string) {
     setNotSupported(false);
     setPending(question);
-    setAskSignal((count) => count + 1);
+    setLiveRun(initialLiveRunState);
+    // Issue #85's fix, applied to the increment too: `(count ?? 0) + 1`,
+    // never a bare `count + 1` — see `askSignal`'s own doc comment above
+    // for why a plain increment off an `undefined` seed breaks the second
+    // ask, not the first.
+    setAskSignal((count) => (count ?? 0) + 1);
 
-    const result = await reflectTransport({
-      protocol_version: PROTOCOL_VERSION,
-      question,
-      session_id: sessionId ?? null,
-      // Ticket 5's extraction call resolves phrases like "last week"
-      // against this Device's own local day, never the server's clock —
-      // see ADR 0016's precedent (Export's per-day grouping) and ADR 0023.
-      utc_offset_minutes: deviceUtcOffsetMinutes(),
-    });
+    // A read_digest tool call that actually found a Digest, captured as
+    // its own event arrives rather than re-derived from `liveRun` after
+    // the fact — `liveRun`'s own `digestSource` field is what the render
+    // below reads live, but this run's *final* value is what the
+    // just-answered turn needs once `agent_end` resolves, and `setState`
+    // updates aren't synchronously readable the moment they're queued.
+    let digestSource: DigestGroundingSource | undefined;
 
+    const controller = new AbortController();
+    activeAbortRef.current = controller;
+
+    const result = await reflectTransport(
+      {
+        protocol_version: PROTOCOL_VERSION,
+        question,
+        session_id: sessionId ?? null,
+        // Ticket 5's extraction call resolves phrases like "last week"
+        // against this Device's own local day, never the server's clock —
+        // see ADR 0016's precedent (Export's per-day grouping) and ADR 0023.
+        utc_offset_minutes: deviceUtcOffsetMinutes(),
+      },
+      {
+        signal: controller.signal,
+        onEvent: (event) => {
+          setLiveRun((state) => {
+            const next = applyReflectEvent(state, event);
+            digestSource = next.digestSource;
+            return next;
+          });
+        },
+      },
+    );
+
+    activeAbortRef.current = null;
     setPending(null);
 
     if (result.ok) {
-      const turn = conversationTurnFromWire({ question, ...result.response });
+      const turn = conversationTurnFromWire({ question, ...result.response }, { digestSource });
       const key = sessionQueryKey(result.response.session_id);
       // Append straight into the cache rather than waiting for a refetch —
       // the turn the user just got an Answer to must render on this render,
@@ -388,9 +470,19 @@ export function ReflectionPage() {
       // vanishing. Losing what someone wrote is the wrong failure mode
       // anywhere, and especially here: the Question is the user's own words,
       // and unlike an Entry it was never written down anywhere else.
+      //
+      // Issue #96: a run that streams open and then fails
+      // (`agent_end {"status": "error"}`, `reason: "agent-error"`) reaches
+      // this same branch as a plain network failure — the stream reached
+      // the Server fine; the run itself didn't finish one. Either way
+      // issue #102's guarantee holds: nothing was persisted, so
+      // `liveRun`'s reset above (and never writing into the query cache
+      // here) is what keeps this from ever rendering a Turn for it.
       setRestore((previous) => ({ question, signal: previous.signal + 1 }));
       if (result.reason === "not-supported") {
         setNotSupported(true);
+      } else if (result.reason === "agent-error") {
+        toast.error("Reflection couldn't answer that. Try again.");
       } else {
         toast.error("Couldn't reach Reflection. Check your Server and try again.");
       }
@@ -477,9 +569,7 @@ export function ReflectionPage() {
       {syncEnabled && pending !== null && (
         <div className="flex flex-col gap-2">
           <AskedQuestion text={pending} />
-          <p className="mr-auto text-sm text-muted-foreground" aria-live="polite">
-            {thinking ? "Thinking…" : "Searching your Entries…"}
-          </p>
+          <LiveRunView liveRun={liveRun} />
         </div>
       )}
 

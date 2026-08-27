@@ -24,6 +24,20 @@
  * this backwards would label a fallback as Grounding, which is exactly the
  * falsehood CONTEXT.md's Grounding entry forbids ("a Reflection that
  * invents a past the user did not live").
+ *
+ * Issue #96: `groundingOutcome` can also come back `"digest"` now, read off
+ * `turn.digestSource` — set only for a turn this browser session just
+ * watched a `read_digest` tool call surface a real Digest for, from the
+ * live `tool_execution_end` event's own `details`
+ * (`reflect-live-run.ts::applyReflectEvent`), not from a separate batched
+ * `getEntries` lookup the way the Entries case below still is. Before this,
+ * a Digest-only Answer left `groundingEntryIds` empty (`read_digest`
+ * deliberately populates no `entry_ids` — a Digest's Grounding belongs to
+ * the Digest, not to this one tool call) and this component returned
+ * `null`: the user saw an Answer with no disclosure at all, indistinguishable
+ * from one this component had nothing to say about. This is what makes "an
+ * Answer drawn from a Digest" a distinct, honest thing the interface says,
+ * rather than silence — see the digest branch in the render below.
  */
 import type { Entry } from "@meologue/core";
 import { EntryRow } from "@/components/entry-row";
@@ -53,15 +67,23 @@ function summaryLabel(count: number, outcome: ReturnType<typeof groundingOutcome
   if (outcome === "grounded") {
     return `Grounded in ${count} ${noun}`;
   }
-  // Both remaining outcomes ("disclosedFallback" and the defensive
-  // "nothingFound" below) share this wording: ADR 0024's fallback ids are
-  // the last few days of Entries, not Grounding the server judged
-  // relevant, and this must never say "Grounded" once `grounded` is false.
-  // "nothingFound" can't actually reach this function — the empty-ids guard
-  // below returns before `summaryLabel` is ever called for it — but the
-  // wording stays correct regardless, since a defensive branch that lies
-  // about what it would say is worse than a redundant one.
+  // Every remaining outcome that reaches this function ("disclosedFallback"
+  // and the defensive "nothingFound"/"digest" below) shares this wording:
+  // ADR 0024's fallback ids are the last few days of Entries, not Grounding
+  // the server judged relevant, and this must never say "Grounded" once
+  // `grounded` is false. "nothingFound" and "digest" can't actually reach
+  // this function in practice — the guards in the render below return
+  // before it's ever called for either — but the wording stays correct
+  // regardless, since a defensive branch that lies about what it would say
+  // is worse than a redundant one.
   return `${count} recent ${noun}`;
+}
+
+/** The period label a Digest-sourced disclosure shows — "day"/"week"/"month" plus its date range, collapsed to one date when the Digest is a single day. */
+function digestRangeLabel(source: NonNullable<ConversationTurn["digestSource"]>): string {
+  return source.periodStart === source.periodEnd
+    ? source.periodStart
+    : `${source.periodStart} to ${source.periodEnd}`;
 }
 
 export function GroundingDisclosure({
@@ -70,7 +92,22 @@ export function GroundingDisclosure({
   loading,
   syncEnabled,
 }: GroundingDisclosureProps) {
-  const { groundingEntryIds } = turn;
+  const { groundingEntryIds, digestSource } = turn;
+  const outcome = groundingOutcome(turn);
+
+  // A Digest is a written summary, not a set of Entries — there is nothing
+  // to expand into a list of rows, so this renders as a plain caption
+  // (matching GroundingNote's own styling just above it in
+  // reflection-page.tsx) rather than a <details>/<summary> with nothing
+  // underneath it. `groundingEntryIds` is irrelevant here: a Digest-only
+  // Answer usually has none at all (see this module's own doc comment).
+  if (outcome === "digest" && digestSource !== undefined) {
+    return (
+      <p className="mr-auto max-w-[85%] text-xs text-muted-foreground">
+        Answered from the {digestSource.period} Digest for {digestRangeLabel(digestSource)}.
+      </p>
+    );
+  }
 
   if (groundingEntryIds.length === 0) {
     return null;
@@ -79,7 +116,7 @@ export function GroundingDisclosure({
   return (
     <details className="mr-auto max-w-[85%] text-xs text-muted-foreground">
       <summary className="cursor-pointer select-none">
-        {summaryLabel(groundingEntryIds.length, groundingOutcome(turn))}
+        {summaryLabel(groundingEntryIds.length, outcome)}
       </summary>
       <div className="mt-1 divide-y divide-border rounded-md border border-border px-2">
         {groundingEntryIds.map((id) => {

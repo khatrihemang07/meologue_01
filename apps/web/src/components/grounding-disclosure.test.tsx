@@ -204,4 +204,67 @@ describe("GroundingDisclosure", () => {
 
     expect(screen.getByText("Grounded in 3 Entries")).toBeInTheDocument();
   });
+
+  // Issue #96: a Digest-sourced Answer is driven from the live
+  // tool_execution_end event's own `details` (`turn.digestSource`), not
+  // from `groundingEntryIds` — `read_digest` deliberately populates none.
+  // Before this ticket the component returned null here, so the user saw
+  // no disclosure at all for a Digest-only Answer.
+  it("says the Answer came from a Digest, distinctly from Entries, when digestSource is set", () => {
+    render(
+      <GroundingDisclosure
+        turn={turn({
+          groundingEntryIds: [],
+          grounded: false,
+          fallbackUsed: false,
+          digestSource: { period: "week", periodStart: "2026-08-17", periodEnd: "2026-08-23" },
+        })}
+        entries={[]}
+        loading={false}
+        syncEnabled={false}
+      />,
+    );
+
+    expect(
+      screen.getByText("Answered from the week Digest for 2026-08-17 to 2026-08-23."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/^Grounded/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/recent Entr/)).not.toBeInTheDocument();
+  });
+
+  it("collapses a single-day Digest's range to one date rather than 'X to X'", () => {
+    render(
+      <GroundingDisclosure
+        turn={turn({
+          groundingEntryIds: [],
+          grounded: false,
+          fallbackUsed: false,
+          digestSource: { period: "day", periodStart: "2026-08-20", periodEnd: "2026-08-20" },
+        })}
+        entries={[]}
+        loading={false}
+        syncEnabled={false}
+      />,
+    );
+
+    expect(screen.getByText("Answered from the day Digest for 2026-08-20.")).toBeInTheDocument();
+  });
+
+  it("renders no expandable Entries list for a Digest-sourced turn — a Digest is prose, not a set of rows", () => {
+    const { container } = render(
+      <GroundingDisclosure
+        turn={turn({
+          groundingEntryIds: [],
+          grounded: false,
+          fallbackUsed: false,
+          digestSource: { period: "day", periodStart: "2026-08-20", periodEnd: "2026-08-20" },
+        })}
+        entries={[]}
+        loading={false}
+        syncEnabled={false}
+      />,
+    );
+
+    expect(container.querySelector("details")).toBeNull();
+  });
 });
