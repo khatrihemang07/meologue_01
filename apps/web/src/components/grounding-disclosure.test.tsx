@@ -24,6 +24,13 @@ function turn(overrides: Partial<ConversationTurn>): ConversationTurn {
     groundingEntryIds: [],
     grounded: true,
     fallbackUsed: false,
+    // Issue #103: every fixture in this file is about a tool that *did*
+    // run (grounded, disclosed-fallback, or found-nothing) — none of this
+    // component's own behaviour differs for `neverLooked` vs `nothingFound`
+    // (both hit the same `groundingEntryIds.length === 0` early return, see
+    // grounding-disclosure.tsx's own doc comment), so a fixed `true` here
+    // keeps every existing case exactly what it always tested.
+    toolCalled: true,
     ...overrides,
   };
 }

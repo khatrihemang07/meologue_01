@@ -114,6 +114,20 @@ pub struct SessionTurnRow {
     pub grounding_entry_ids: Vec<Uuid>,
     pub grounded: bool,
     pub fallback_used: bool,
+    /// Issue #103: whether this Turn's run called a tool at all, kept apart
+    /// from `grounded` for the same reason `reflect::ReflectResponse::tool_called`
+    /// is (see that field's own doc comment) — `grounding_entry_ids` alone
+    /// cannot tell "a tool ran and found nothing" from "no tool ever ran."
+    /// No column backs this on `session_turns`: it's derived, not stored —
+    /// `entries_to_turns` computes it from whether a `tool_result` entry
+    /// appears anywhere in the Turn's own run through the tree, the same
+    /// tree `session_entries` already holds every tool call in
+    /// (`harness::agent_loop::Step::ToolResult`, via
+    /// `reflect.rs::build_tree_payloads`), rather than adding a second,
+    /// independently-writable flag that a future write path could forget to
+    /// set — the derivation precedent `docs/adr/0024` already set for
+    /// `grounded` itself.
+    pub tool_called: bool,
     pub created_at: DateTime<Utc>,
 }
 
@@ -550,14 +564,43 @@ pub(crate) async fn latest_compaction_summary(
     }
 }
 
+/// The exact columns `session_turns` itself carries — kept as its own row
+/// type, rather than decoding straight into `SessionTurnRow` the way this
+/// query did before issue #103, because `SessionTurnRow::tool_called` has
+/// no column here to decode from (see that field's own doc comment: it's
+/// derived from the tree, not stored). This struct exists only to give
+/// `sqlx::query_as` something whose fields match the query one for one;
+/// `load_turns_from_session_turns` immediately turns each row into a real
+/// `SessionTurnRow` below.
+#[derive(Debug, FromRow)]
+struct LegacySessionTurnRow {
+    question: String,
+    answer: String,
+    grounding_entry_ids: Vec<Uuid>,
+    grounded: bool,
+    fallback_used: bool,
+    created_at: DateTime<Utc>,
+}
+
 /// The pre-#91 read `load_turns` always did — kept verbatim as the
 /// fallback for a Session with no tree entries yet. See `load_turns`'s own
 /// doc comment for when this path is taken and why.
+///
+/// `tool_called` is hardcoded `true` for every row this reads, not left to
+/// default or guessed at: a Session still being read off `session_turns`
+/// alone has no tree (`load_turns`'s own doc comment — this is the
+/// fallback for exactly that case), which means it predates issue #91's
+/// entry tree and, with it, issue #93 pass 2's tool-calling loop. The fixed
+/// pipeline that wrote it always ran all three retrievals directly
+/// (`docs/adr/0023`) — there was no model-issued call it could ever decline
+/// to make, so issue #103's failure mode is structurally impossible on data
+/// this old. Reporting `false` here would be a plausible-looking guess
+/// about something this function actually knows.
 async fn load_turns_from_session_turns(
     pool: &PgPool,
     session_id: Uuid,
 ) -> anyhow::Result<Vec<SessionTurnRow>> {
-    let turns = sqlx::query_as::<_, SessionTurnRow>(
+    let turns = sqlx::query_as::<_, LegacySessionTurnRow>(
         "select question, answer, grounding_entry_ids, grounded, fallback_used, created_at
          from session_turns
          where session_id = $1
@@ -566,7 +609,18 @@ async fn load_turns_from_session_turns(
     .bind(session_id)
     .fetch_all(pool)
     .await?;
-    Ok(turns)
+    Ok(turns
+        .into_iter()
+        .map(|row| SessionTurnRow {
+            question: row.question,
+            answer: row.answer,
+            grounding_entry_ids: row.grounding_entry_ids,
+            grounded: row.grounded,
+            fallback_used: row.fallback_used,
+            tool_called: true,
+            created_at: row.created_at,
+        })
+        .collect())
 }
 
 /// `session_id`'s current `main_leaf_id` — `None` both when no Session has
@@ -1102,7 +1156,12 @@ fn decode_message(entry: &EntryRow) -> anyhow::Result<Option<MessagePayload>> {
 /// before ever answering) contributes no Turn: a Conversation with a gap in
 /// it is still a Conversation, just one with fewer Turns than entries.
 /// `tool_result` entries, and any other non-`message` entry type, are
-/// walked over without changing which `assistant` entry is "last."
+/// walked over without changing which `assistant` entry is "last" — but
+/// issue #103 gives `tool_result` one effect here that "walked over"
+/// undersells: seeing even one anywhere in the run sets the reconstructed
+/// `SessionTurnRow::tool_called`, which is how that field stays derived
+/// from the tree rather than a second value someone has to remember to
+/// write — see that field's own doc comment.
 fn entries_to_turns(path: &[&EntryRow]) -> anyhow::Result<Vec<SessionTurnRow>> {
     let mut turns = Vec::new();
     let mut index = 0;
@@ -1115,6 +1174,16 @@ fn entries_to_turns(path: &[&EntryRow]) -> anyhow::Result<Vec<SessionTurnRow>> {
 
         let mut cursor = index + 1;
         let mut answer: Option<SessionTurnRow> = None;
+        // Issue #103: tracks whether any `tool_result` entry has been seen
+        // yet in this Turn's own run, from the `user` entry above down to
+        // whichever `assistant` entry ends up "last" (below). Read, not
+        // reset, every time a new `assistant` entry overwrites `answer` —
+        // a run can call a tool, then write intermediate prose with another
+        // tool call attached, then answer for real; whether *any* of those
+        // steps touched a tool is what distinguishes the run from one that
+        // never did, not only what happened immediately before the final
+        // reply.
+        let mut tool_called = false;
         while cursor < path.len() {
             match decode_message(path[cursor])? {
                 Some(MessagePayload::User { .. }) => break,
@@ -1130,10 +1199,14 @@ fn entries_to_turns(path: &[&EntryRow]) -> anyhow::Result<Vec<SessionTurnRow>> {
                         grounding_entry_ids,
                         grounded,
                         fallback_used,
+                        tool_called,
                         created_at: path[cursor].created_at,
                     });
                 }
-                Some(MessagePayload::ToolResult { .. }) | None => {}
+                Some(MessagePayload::ToolResult { .. }) => {
+                    tool_called = true;
+                }
+                None => {}
             }
             cursor += 1;
         }
@@ -1680,6 +1753,43 @@ mod tests {
         assert_eq!(turns[1].answer, "Yes.");
     }
 
+    /// Issue #103: a Session with a `session_turns` row but no tree at all
+    /// — the state a pre-#91 Session is still in (`load_turns_from_session_turns`'s
+    /// own doc comment) — reads back `tool_called: true`, not `false`. This
+    /// is not the derived-from-the-tree answer (there is no tree here to
+    /// derive it from); it is the honest one, because the fixed pipeline
+    /// that wrote every row shaped like this always ran its three
+    /// retrievals directly, with no model-issued call it could ever decline
+    /// to make. Data this old cannot exhibit issue #103's failure, so
+    /// reporting `false` for it would be a guess dressed up as a reading.
+    #[sqlx::test]
+    async fn a_session_turns_only_row_with_no_tree_reads_back_as_tool_called(pool: PgPool) {
+        let session_id = Uuid::new_v4();
+        sqlx::query("insert into sessions (id, title) values ($1, 'Pre-tree session')")
+            .bind(session_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "insert into session_turns
+                (id, session_id, question, answer, grounding_entry_ids, grounded, fallback_used)
+             values ($1, $2, 'Anything?', 'Nothing recorded.', '{}', false, false)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(session_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let turns = load_turns(&pool, session_id).await.unwrap();
+        assert_eq!(turns.len(), 1);
+        assert!(
+            turns[0].tool_called,
+            "a Turn with no tree at all predates the loop's tool-calling protocol entirely, so \
+             it must never read back as the no-tool-call shape issue #103 is about"
+        );
+    }
+
     // -- issue #93 pass 2: a loop-driven Turn's run can hold more than one
     // Assistant entry -----------------------------------------------------
 
@@ -1729,6 +1839,13 @@ mod tests {
     /// Two consecutive loop-driven Turns in the same Session — the run
     /// boundary (the *next* `user` entry) must correctly separate them, not
     /// just the presence of an `assistant` entry.
+    ///
+    /// Issue #103: this fixture already has exactly the shape that ticket's
+    /// acceptance criterion needs pinned, on both sides — the first Turn's
+    /// run never has a `tool_result` entry in it at all, the second's does
+    /// — so it also proves `SessionTurnRow::tool_called` reads back `false`
+    /// for the one and `true` for the other, reconstructed from the tree
+    /// alone, with no separate flag written anywhere to keep in sync.
     #[test]
     fn two_consecutive_loop_turns_are_read_back_separately() {
         let q1_id = Uuid::new_v4();
@@ -1751,6 +1868,15 @@ mod tests {
         assert_eq!(turns.len(), 2);
         assert_eq!(turns[0].answer, "First answer.");
         assert_eq!(turns[1].answer, "Second answer.");
+        assert!(
+            !turns[0].tool_called,
+            "the first Turn's run never called a tool and must read back as such"
+        );
+        assert!(
+            turns[1].tool_called,
+            "the second Turn's run called a tool and must read back as such, distinguishable \
+             from the first Turn above"
+        );
     }
 
     /// A run that never produces an `assistant` entry at all — the loop

@@ -618,7 +618,7 @@ describe("ReflectionPage", () => {
     ).toBeInTheDocument();
   });
 
-  it("shows an ungrounded note (no fallback) when nothing matched and nothing recent existed either", async () => {
+  it("shows an ungrounded note (no fallback) when a tool ran and genuinely found nothing", async () => {
     useSettingsStore.getState().setServerUrl("https://phone.example:41207");
     stubFetch({
       reflect: () => ({
@@ -626,6 +626,11 @@ describe("ReflectionPage", () => {
         grounding_entry_ids: [],
         grounded: false,
         fallback_used: false,
+        // Issue #103: explicit, not this fixture's usual omission — this
+        // test is specifically about the "a tool ran and found nothing"
+        // outcome, distinct from `tool_called: false` below, which is a
+        // different situation with its own caption now.
+        tool_called: true,
         session_id: "session-note-3",
         title: "Anything about scuba diving?",
       }),
@@ -638,6 +643,42 @@ describe("ReflectionPage", () => {
     const note = screen.getByText(/nothing in your history matched this question/i);
     expect(note).toBeInTheDocument();
     expect(note.textContent).not.toMatch(/last few days/i);
+    expect(note.textContent).not.toMatch(/without checking/i);
+  });
+
+  // Issue #103: the case that used to be indistinguishable from the one
+  // just above — before `tool_called` existed on the wire, a run that
+  // never looked and a run that looked and found nothing both rendered the
+  // exact same "Nothing in your History matched this Question." caption.
+  // This is the live bug's own report, replayed as a client test: a
+  // confident denial of access must not read like an ordinary empty
+  // search.
+  it("shows a distinct note when the run never called a tool at all", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    stubFetch({
+      reflect: () => ({
+        answer: "I can't access any journal entries from here.",
+        grounding_entry_ids: [],
+        grounded: false,
+        fallback_used: false,
+        tool_called: false,
+        session_id: "session-note-4",
+        title: "How is my knee doing?",
+      }),
+    });
+
+    renderReflectionPage();
+    ask("How is my knee doing?");
+
+    expect(
+      await screen.findByText("I can't access any journal entries from here."),
+    ).toBeInTheDocument();
+    const note = screen.getByText(/answered without checking your history/i);
+    expect(note).toBeInTheDocument();
+    // Must not be findable via the "nothingFound" caption's own wording —
+    // the two outcomes render different sentences now, not the same one
+    // with an extra word.
+    expect(screen.queryByText(/nothing in your history matched this question/i)).toBeNull();
   });
 
   // Ticket 7: the disclosure beneath each turn is the only way to tell a

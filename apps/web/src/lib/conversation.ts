@@ -48,6 +48,15 @@ export interface ConversationTurn {
    */
   fallbackUsed: boolean;
   /**
+   * Whether this turn's run called a tool at all — see `WireReflectResponse.tool_called`'s own
+   * doc comment (server/src/reflect.rs) for why this is not derivable from `groundingEntryIds`
+   * alone: an empty array means either "a tool ran and found nothing" or "no tool ever ran", and
+   * those read very differently to a user (issue #103 — a run that never looked once answered as
+   * though it had, with no way for this page to tell the two apart, because this field didn't
+   * exist). `groundingOutcome` is where that distinction actually gets used.
+   */
+  toolCalled: boolean;
+  /**
    * Set only for a turn just answered in this browser session (never for one restored from a
    * fetched Session — `GET /v1/sessions/:id`'s own `SessionTurnRow` carries no per-tool detail at
    * all, only the four fields above) whose harness run read a real Digest
@@ -73,7 +82,7 @@ export interface ConversationTurn {
  */
 type WireConversationTurn = Pick<
   WireSessionTurn,
-  "question" | "answer" | "grounding_entry_ids" | "grounded" | "fallback_used"
+  "question" | "answer" | "grounding_entry_ids" | "grounded" | "fallback_used" | "tool_called"
 >;
 
 /**
@@ -102,12 +111,13 @@ export function conversationTurnFromWire(
     groundingEntryIds: wire.grounding_entry_ids,
     grounded: wire.grounded,
     fallbackUsed: wire.fallback_used,
+    toolCalled: wire.tool_called,
     digestSource: live?.digestSource,
   };
 }
 
 /**
- * The outcome a turn's `(grounded, fallbackUsed, digestSource)` triple
+ * The outcome a turn's `(grounded, fallbackUsed, toolCalled, digestSource)` quadruple
  * resolves to — named in CONTEXT.md's own vocabulary (Grounding) and ADR
  * 0024's ("real Grounding", "disclosed fallback", "nothing was found or
  * shown either way"), plus issue #96's own addition (`"digest"`).
@@ -136,7 +146,16 @@ export type GroundingOutcome =
   | "grounded"
   /** The server judged its Grounding didn't answer the Question and disclosed the last few days of Entries instead — see `fallbackUsed`. Only reachable for a turn stored before issue #96 — see this type's own doc comment. */
   | "disclosedFallback"
-  /** Nothing matched and there was nothing recent to show either — `groundingEntryIds` is empty. */
+  /**
+   * Issue #103: the run never called a tool at all — `toolCalled` is `false`, so nothing was
+   * ever searched, as opposed to `"nothingFound"` below where something genuinely was. This is
+   * the outcome the live bug this ticket fixes used to render identically to `"nothingFound"`:
+   * a confident Answer that never looked, shown with the same "nothing matched" caption a real
+   * empty search gets. Checked before `"nothingFound"` for exactly that reason — the two must
+   * not collapse back into one outcome the way they did before this field existed.
+   */
+  | "neverLooked"
+  /** A tool ran and genuinely found nothing — `toolCalled` is `true`, `groundingEntryIds` is empty. */
   | "nothingFound";
 
 /**
@@ -150,7 +169,7 @@ export type GroundingOutcome =
  * derivation now).
  */
 export function groundingOutcome(
-  turn: Pick<ConversationTurn, "grounded" | "fallbackUsed" | "digestSource">,
+  turn: Pick<ConversationTurn, "grounded" | "fallbackUsed" | "toolCalled" | "digestSource">,
 ): GroundingOutcome {
   if (turn.digestSource !== undefined) {
     return "digest";
@@ -160,6 +179,9 @@ export function groundingOutcome(
   }
   if (turn.fallbackUsed) {
     return "disclosedFallback";
+  }
+  if (!turn.toolCalled) {
+    return "neverLooked";
   }
   return "nothingFound";
 }

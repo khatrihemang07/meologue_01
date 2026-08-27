@@ -68,14 +68,18 @@ function summaryLabel(count: number, outcome: ReturnType<typeof groundingOutcome
     return `Grounded in ${count} ${noun}`;
   }
   // Every remaining outcome that reaches this function ("disclosedFallback"
-  // and the defensive "nothingFound"/"digest" below) shares this wording:
-  // ADR 0024's fallback ids are the last few days of Entries, not Grounding
-  // the server judged relevant, and this must never say "Grounded" once
-  // `grounded` is false. "nothingFound" and "digest" can't actually reach
-  // this function in practice — the guards in the render below return
-  // before it's ever called for either — but the wording stays correct
-  // regardless, since a defensive branch that lies about what it would say
-  // is worse than a redundant one.
+  // and the defensive "nothingFound"/"neverLooked"/"digest" below) shares
+  // this wording: ADR 0024's fallback ids are the last few days of
+  // Entries, not Grounding the server judged relevant, and this must never
+  // say "Grounded" once `grounded` is false. "nothingFound", "neverLooked"
+  // and "digest" can't actually reach this function in practice — the
+  // guards in the render below return before it's ever called for any of
+  // them (`neverLooked` always has an empty `groundingEntryIds`, same as
+  // `nothingFound` — issue #103's own field distinguishes them for
+  // `GroundingNote`'s caption, not for whether there's anything here to
+  // expand) — but the wording stays correct regardless, since a defensive
+  // branch that lies about what it would say is worse than a redundant
+  // one.
   return `${count} recent ${noun}`;
 }
 

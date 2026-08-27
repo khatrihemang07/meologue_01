@@ -227,6 +227,25 @@ pub struct ReflectResponse {
     /// dropped, for the same reason `grounded` is — the wire shape itself
     /// is issue #96's to change, not this one's.
     pub fallback_used: bool,
+    /// Whether this run called a tool at all — `true` the moment any
+    /// `harness::agent_loop::Step::ToolResult` appears in `outcome.steps`,
+    /// regardless of whether that call (or any other) found anything.
+    /// Issue #103's own acceptance criterion: `grounded: false` alone
+    /// cannot tell a client, or a person reading a log, which of two very
+    /// different runs actually happened — one that called `search_entries`
+    /// and it came back empty, or one that never called anything and wrote
+    /// a reply anyway (the bug this issue was filed against: the model
+    /// answered "I can't access any journal entries from here" having
+    /// tried nothing). Both reach this struct with an identical
+    /// `grounding_entry_ids: []`/`grounded: false`, and both used to render
+    /// identically to the user ("Nothing in your History matched this
+    /// Question") for exactly that reason. This field is the one place
+    /// that distinction survives past `run_reflect_stream_inner` into
+    /// whatever reads the record next. Server-side only for now: no
+    /// existing client reads it, and changing what a client shows for
+    /// `tool_called: false` versus a genuine empty search is left to
+    /// whichever ticket touches the client next.
+    pub tool_called: bool,
 }
 
 /// `pub` (rather than crate-private, its original visibility) so
@@ -486,16 +505,60 @@ async fn resolve_session(
 /// drove, belong to the fixed pipeline this ticket stopped calling
 /// (`run_reflect`) — a later ticket decides what, if anything, replaces it
 /// for the loop.
+///
+/// **Issue #103: says outright that the tools are the *only* way to see the
+/// journal, and forbids claiming otherwise.** The version before this ticket
+/// only ever said "you have tools to look things up... before you answer" —
+/// true, but never ruling out the reading a general-purpose chat model
+/// already carries into every conversation, that it has no real access to
+/// anything outside the message it's replying to. Observed live: asked "how
+/// is my knee doing" against a Sandbox corpus where `search_entries(query:
+/// "knee")` returns 16 real Entries, the model answered "I can't access any
+/// journal entries from here" — a confident, well-formed sentence, and
+/// wrong, having called no tool at all. That is CONTEXT.md's don't-invent
+/// rule failing in the direction this prompt never addressed: the old text
+/// warned against inventing a past ("a Reflection that invents a past the
+/// user did not live"), which stops the model from making up Entries, but
+/// said nothing that would stop it from making up the *absence* of a
+/// connection to any Entries at all. Two clauses close that gap: the tools
+/// are named as the only access this model has (not "a way to help
+/// answer" but the literal only way it can see anything), and the "if
+/// nothing in the journal answers" exit is now conditioned on having
+/// actually looked — a Question can be declared unanswerable only after a
+/// tool was tried, never as a first move.
+///
+/// **Not fixed by reordering.** ADR 0026 established that a trailing
+/// instruction can be pushed out of a growing prompt and stop being read;
+/// `harness::prompted::PROTOCOL_INSTRUCTION` already applies that ordering
+/// to this same system message (it is appended last, after the `<tools>`
+/// block — see `harness::prompted::render_system_prompt`'s own doc
+/// comment). This constant's own position was checked too: it is folded
+/// into `harness::types::Context::system_prompt`, which
+/// `harness::prompted::PromptedToolClient::stream` always sends as message
+/// index 0, *before* every replayed prior Turn and the live Question — the
+/// opposite end from where ADR 0026's risk lives, so a long Conversation
+/// (or issue #97's compaction summary, itself just another message in that
+/// same replayed sequence) cannot push this text away from the point of
+/// generation the way a trailing instruction could. And the live failure
+/// this issue was filed against cannot be an ordering problem regardless:
+/// it was reported as the first Question of its Conversation, where the
+/// wire array the model actually saw was exactly two messages long
+/// (`[system, user]`) — there is no growth for anything to be pushed away
+/// from. The gap was in what the instruction said, not where it sat.
 const LOOP_SYSTEM_INSTRUCTION: &str = "You are Reflection, part of meologue, a personal journal. \
-A user is asking a Question about their own journal Entries. You have tools to look things up in \
-their journal before you answer. Call a tool whenever you need to see actual Entries to answer \
+A user is asking a Question about their own journal Entries. The tools described below are the \
+only way you can see any of it — you carry no memory of this user's journal and have no access to \
+it except by calling one, so never tell the user you can't access, see, or search their journal: \
+that claim is never true on this Server, and until you have actually called a tool you do not yet \
+know whether it holds an answer. Call a tool whenever you need to see actual Entries to answer \
 accurately, and call it again if what came back isn't enough — narrowing, widening, or looking at \
-a different stretch of time as needed. When you have enough to answer — or if nothing in the \
-journal answers the Question — reply in plain prose with no further tool call: that reply is shown \
-to the user exactly as written, so only write it once you are done gathering what you need. If the \
-journal doesn't contain enough to answer, say so plainly instead of guessing or inventing anything \
-— a Reflection that invents a past the user did not live is worse than one that admits it found \
-nothing. Speak directly to the user in the second person, in plain prose.";
+a different stretch of time as needed. When you have enough to answer — or once you have looked \
+and the journal genuinely has nothing that answers the Question — reply in plain prose with no \
+further tool call: that reply is shown to the user exactly as written, so only write it once you \
+are done gathering what you need. If the journal doesn't contain enough to answer, say so plainly \
+instead of guessing or inventing anything — a Reflection that invents a past the user did not live \
+is worse than one that admits it found nothing, but admitting nothing was found is only honest \
+after you have actually looked. Speak directly to the user in the second person, in plain prose.";
 
 /// One extra turn given to the loop when its final reply comes back empty
 /// (`is_empty_final_reply`) — issue #102. `agent_loop::run_one_tool_call`'s
@@ -525,6 +588,94 @@ nothing. Speak directly to the user in the second person, in plain prose.";
 const EMPTY_REPLY_CORRECTION: &str = "Your last reply had no text in it — nothing was written, and \
 no tool was called either. Look again at the Question above: either call a tool to look something \
 up, or write your Answer to the user in plain prose. Do not send an empty reply again.";
+
+/// Issue #103's own corrective turn — round 2. The first version of this
+/// gated on `claims_no_journal_access`, a keyword match over the reply's
+/// wording; live verification kept finding new phrasings the list hadn't
+/// seen yet ("I'm unable to tell from the information available here" was
+/// the one that survived a widened list entirely untouched), which is
+/// exactly the failure mode a phrase list always has against open-ended
+/// prose. This version drops wording from the trigger and fires on the
+/// structural fact `tool_called` already exists to name: the run produced
+/// an Answer and never called a tool. That's phrase-independent — no
+/// wording can dodge it — and it's exactly the condition the acceptance
+/// criterion cares about (a run that never looked), not a proxy for it.
+///
+/// Because the trigger no longer knows *why* the model didn't call a tool,
+/// this message can't assert it denied access — sometimes it will be a
+/// perfectly good prose-only reply (a follow-up answerable from the
+/// Conversation already in context, "no tools needed for that"), and
+/// accusing the model of something it didn't do is its own failure mode.
+/// So it states the fact, names what the tools are for, and gives a
+/// legitimate way to stand by an answer that never needed one.
+const NO_TOOL_CALL_CORRECTION: &str = "Your last reply answered without calling any tool. If this \
+Question is about the user's journal, the tools described in your instructions are the only way \
+you can see it — call one now before answering again. If your last answer genuinely didn't need \
+the journal, you may give the same answer again.";
+
+/// No longer the corrective-turn trigger (see `NO_TOOL_CALL_CORRECTION`'s
+/// own doc comment for why a keyword match over free-form prose stopped
+/// being load-bearing for behaviour) — kept as **observability only**: it
+/// still tags `tracing::warn!` output near the end of
+/// `run_reflect_stream_inner` so the specific "denied access" shape stays
+/// greppable in logs and distinguishable from an ordinary no-tool-call
+/// reply the corrective turn didn't change. Nothing downstream of that log
+/// line reads its result; a caller who starts relying on this for
+/// correctness has misread what it's for.
+///
+/// `pub` (rather than crate-private, its original visibility) for the same
+/// reason `run_reflect` elsewhere in this module is: `tests/reflect.rs` needs to assert a
+/// phrasing does *not* match this function's own list, as the negative
+/// control that proves the corrective turn no longer depends on matching
+/// it.
+pub fn claims_no_journal_access(text: &str) -> bool {
+    // Live-verified against the real Sandbox while building this ticket's
+    // fix (`docs/adr` doesn't cover this — it's recorded here instead,
+    // where the bug it fixes actually lives): the configured model writes
+    // typographic curly apostrophes (U+2019 `'`) in its own prose, not the
+    // ASCII `'` every phrase below is written with. "I can't access..."
+    // (curly) silently failed to match a phrase list written as "can't
+    // access" (straight) — a real run, `tool_called: false`, was missed
+    // entirely by an earlier version of this function for exactly that
+    // reason, on the Server this ticket is fixing, using the very phrase
+    // issue #103's own report quotes. Normalizing both curly-quote
+    // characters to straight ones before matching is what closes that gap,
+    // rather than doubling every apostrophe-bearing phrase below.
+    let lower = text.to_lowercase().replace(['\u{2018}', '\u{2019}'], "'");
+    // The first sixteen were written from issue #103's own report and the
+    // first live-verification round; the last five were added after a
+    // second round turned up three further phrasings ("I don't have any
+    // journal entries available in this chat...", "...I couldn't retrieve
+    // any journal entries...") the first list missed outright — the same
+    // model, the same underlying failure, different words. This function's
+    // own doc comment already names that as expected, not a defect to
+    // eliminate: the list widens as real phrasings turn up, it does not
+    // chase every one in advance.
+    const DENIAL_PHRASES: &[&str] = &[
+        "can't access",
+        "cannot access",
+        "can't retrieve",
+        "cannot retrieve",
+        "couldn't retrieve",
+        "could not retrieve",
+        "can't see your journal",
+        "cannot see your journal",
+        "don't have access",
+        "do not have access",
+        "unable to access",
+        "unable to retrieve",
+        "no access to your journal",
+        "no way to access",
+        "no way to see your journal",
+        "not connected to your journal",
+        "don't have enough journal context",
+        "do not have enough journal context",
+        "don't have any journal",
+        "do not have any journal",
+        "no journal entries available",
+    ];
+    DENIAL_PHRASES.iter().any(|phrase| lower.contains(phrase))
+}
 
 /// Every shape of "nothing to say" `is_empty_final_reply` recognises, given
 /// what `harness::prompted::PromptedToolClient` can actually hand back as a
@@ -944,12 +1095,16 @@ async fn run_reflect_stream_inner(
             session_id = ?req.session_id,
             "reflect loop's final reply was empty; giving it one corrective turn"
         );
-        let mut retry_messages = messages;
+        // Cloned, not moved: issue #103's own corrective turn below needs
+        // `messages` too, for the same reason (the original Conversation
+        // prefix `agent_loop::steps_to_messages` doesn't itself carry), and
+        // may still be needed even when this branch already ran.
+        let mut retry_messages = messages.clone();
         retry_messages.extend(agent_loop::steps_to_messages(&outcome.steps));
         retry_messages.push(Message::User(EMPTY_REPLY_CORRECTION.to_string()));
         let retry_outcome = agent_loop::run_with_events(
             &chat_client,
-            system_prompt,
+            system_prompt.clone(),
             &tools,
             retry_messages,
             None,
@@ -976,6 +1131,93 @@ async fn run_reflect_stream_inner(
             steps,
             answer: retry_outcome.answer,
             error: retry_outcome.error,
+        };
+    }
+
+    // Issue #103, round 2: live verification against the Sandbox kept
+    // finding phrasings a keyword-matched trigger hadn't seen yet — see
+    // `NO_TOOL_CALL_CORRECTION`'s own doc comment for the wording that
+    // finally defeated the old gate. This version fires on the structural
+    // fact alone, the same one `tool_called` below already names: a run
+    // produced an Answer and called no tool at all. No wording can dodge
+    // that. `claims_no_journal_access` is still computed, but only to tag
+    // the log line below — it plays no part in whether this block runs.
+    //
+    // `!retried` is the mutual-exclusivity guard with the empty-reply block
+    // above, and it has to be an explicit flag, not just "does the current
+    // outcome still look bad" — a structural trigger made that the hard way
+    // to learn: the empty-reply retry's own reply can itself be a real,
+    // non-empty, zero-tool-call answer (`an_empty_final_reply_gets_one_corrective_turn_and_then_answers`
+    // in `tests/reflect.rs` is exactly this shape), which satisfies this
+    // block's condition just as well as a first-attempt denial does. Without
+    // `!retried` that would spend a *second* corrective turn on a Question
+    // that already used its one, which is exactly the compounding this
+    // comment block warned about under the old, heuristic-gated version —
+    // the heuristic rarely matched an ordinary retried answer, which is
+    // what hid the gap; the structural condition matches it every time, so
+    // the guard has to be explicit instead of incidental.
+    if !retried
+        && outcome
+            .answer
+            .as_deref()
+            .and_then(NonEmptyAnswer::new)
+            .is_some()
+        && !outcome
+            .steps
+            .iter()
+            .any(|step| matches!(step, Step::ToolResult { .. }))
+    {
+        // Re-reads `outcome.answer`, already proven `Some` and non-empty by
+        // the `is_some()` check above — this is purely to classify it for
+        // the log line below, not to decide whether to retry.
+        let looked_like_denial = outcome
+            .answer
+            .as_deref()
+            .is_some_and(claims_no_journal_access);
+        tracing::warn!(
+            question = %req.question,
+            session_id = ?req.session_id,
+            looked_like_denial,
+            "reflect loop answered with no tool call at all; giving it one corrective turn"
+        );
+        let mut retry_messages = messages;
+        retry_messages.extend(agent_loop::steps_to_messages(&outcome.steps));
+        retry_messages.push(Message::User(NO_TOOL_CALL_CORRECTION.to_string()));
+        let retry_outcome = agent_loop::run_with_events(
+            &chat_client,
+            system_prompt,
+            &tools,
+            retry_messages,
+            None,
+            Some(reflect.context_window),
+            &sink,
+        )
+        .await;
+
+        let mut steps = outcome.steps;
+        let original_answer = outcome.answer;
+        steps.extend(retry_outcome.steps);
+        // Unlike the empty-reply block above, a corrective turn that itself
+        // comes back empty (or errors) must not turn an already-valid,
+        // if wrong, Answer into a failed Question — the user is owed
+        // *something* for this Question either way, and the pre-correction
+        // denial, while wrong, is still real text that was already safe to
+        // show (CONTEXT.md's don't-invent rule is about fabricating journal
+        // content, not about this). Only a genuinely non-empty retry reply
+        // replaces it; anything else falls back to the original.
+        let answer = if retry_outcome
+            .answer
+            .as_deref()
+            .is_some_and(|text| !is_empty_final_reply(text))
+        {
+            retry_outcome.answer
+        } else {
+            original_answer
+        };
+        outcome = agent_loop::LoopOutcome {
+            steps,
+            answer,
+            error: None,
         };
     }
 
@@ -1022,6 +1264,43 @@ async fn run_reflect_stream_inner(
     let grounded = !grounding_entry_ids.is_empty();
     let fallback_used = false;
 
+    // Issue #103: distinct from `grounded` above — `grounded` asks whether
+    // any Entry surfaced, `tool_called` asks whether the model ever tried.
+    // `grounding_entry_ids` alone conflates "tried and found nothing" with
+    // "never tried at all"; this is the flag that keeps them apart in the
+    // record (`ReflectResponse::tool_called`'s own doc comment covers why
+    // that distinction matters and what still reads only `grounded`).
+    let tool_called = outcome
+        .steps
+        .iter()
+        .any(|step| matches!(step, Step::ToolResult { .. }));
+
+    // The exact shape issue #103 was filed against: a non-empty, confident
+    // Answer with no Grounding *and* no tool ever attempted — as opposed to
+    // the ordinary and unremarkable case of a tool genuinely finding
+    // nothing (`tool_called: true`, `grounded: false`), which needs no
+    // warning at all. `is_empty_final_reply`'s own retry path already logs
+    // the empty-reply shape (issue #102); this is the other way a
+    // Question can end with no real Grounding and nothing seen. By the
+    // time this line can fire, the structural corrective turn above has
+    // already had its one chance to fix it (`NO_TOOL_CALL_CORRECTION`'s own
+    // doc comment) — reaching here means either the retry legitimately
+    // confirmed no tool was needed, or the model still didn't call one.
+    // `claims_no_journal_access` no longer decides anything by this point
+    // (see its own doc comment on being observability-only); it's read here
+    // purely to keep the specific "this reads like a denial" shape
+    // greppable in the log, distinguishable from an ordinary — and
+    // legitimate — no-tool-call reply that also has no Grounding.
+    if !grounded && !tool_called {
+        tracing::warn!(
+            question = %req.question,
+            session_id = ?req.session_id,
+            answer_preview = %answer.chars().take(120).collect::<String>(),
+            looked_like_denial = claims_no_journal_access(&answer),
+            "reflect loop's final answer had no tool call and no Grounding at all"
+        );
+    }
+
     let payloads = build_tree_payloads(
         &req.question,
         &outcome.steps,
@@ -1050,6 +1329,7 @@ async fn run_reflect_stream_inner(
         grounding_entry_ids,
         grounded,
         fallback_used,
+        tool_called,
     })
 }
 
@@ -1565,6 +1845,15 @@ async fn run_reflect(
         grounding_entry_ids,
         grounded,
         fallback_used,
+        // The fixed three-source pipeline has no tool-calling concept at
+        // all (`docs/adr/0023`) — every Question here always ran all three
+        // retrievals directly, never through a model-issued call it could
+        // decline to make. `true` is the honest answer for "did this run
+        // look," not a placeholder: issue #103's failure mode (a confident
+        // reply that never looked) cannot happen on this dead path, which
+        // is exactly why the loop replaced it as `/v1/reflect`'s live
+        // implementation (`run_reflect_stream_inner`, above) rather than this one.
+        tool_called: true,
     })
 }
 
@@ -2307,9 +2596,9 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        NonEmptyAnswer, TITLE_MAX_CHARS, derive_title, extract_json_object, is_empty_final_reply,
-        keyword_query, local_date_range_to_utc, local_today, parse_and_strip_verdict,
-        parse_extraction, search_words, strip_code_fences,
+        NonEmptyAnswer, TITLE_MAX_CHARS, claims_no_journal_access, derive_title,
+        extract_json_object, is_empty_final_reply, keyword_query, local_date_range_to_utc,
+        local_today, parse_and_strip_verdict, parse_extraction, search_words, strip_code_fences,
     };
 
     #[test]
@@ -2571,6 +2860,78 @@ mod tests {
         assert!(!is_empty_final_reply(
             "Your knee has improved since February."
         ));
+    }
+
+    /// Every wording issue #103 actually observed live is caught: the
+    /// exact sentence from the issue report itself, plus the two further
+    /// phrasings the same live model produced across the extra
+    /// live-verification attempts this ticket ran against the real
+    /// Sandbox.
+    #[test]
+    fn claims_no_journal_access_catches_every_wording_observed_live() {
+        assert!(claims_no_journal_access(
+            "I can't access any journal entries from here, so I can't tell how your knee has \
+             been doing without guessing."
+        ));
+        assert!(claims_no_journal_access(
+            "I'm unable to retrieve your journal entries in this chat, so I can't tell how your \
+             knee is doing."
+        ));
+        assert!(claims_no_journal_access(
+            "I'm sorry, but I don't have enough journal context here to tell how your knee is \
+             doing."
+        ));
+        // Turned up by a second live-verification round, after the first
+        // three phrasings above were already covered — the same failure,
+        // worded two more ways the first pass of this list didn't catch.
+        assert!(claims_no_journal_access(
+            "I don't have any journal entries available in this chat to assess how your knee \
+             has been doing."
+        ));
+        assert!(claims_no_journal_access(
+            "I'm sorry, but I couldn't retrieve any journal entries about your knee to assess \
+             how it's doing."
+        ));
+    }
+
+    /// The exact bug a live-verification run against the real Sandbox
+    /// found while building this fix: the configured model's own prose
+    /// uses typographic curly apostrophes, and an earlier version of
+    /// `claims_no_journal_access` — written and tested with the ASCII
+    /// apostrophe every ticket-authored phrase in this file happens to
+    /// use — silently failed to recognise "I can\u{2019}t access your \
+    /// journal entries in this chat" for exactly that reason, on a live
+    /// run whose `tool_called` was already `false`. This pins the fix
+    /// (normalizing both curly-quote characters before matching) against
+    /// the literal text that live run returned.
+    #[test]
+    fn claims_no_journal_access_normalizes_the_curly_apostrophes_the_live_model_actually_writes() {
+        assert!(claims_no_journal_access(
+            "I can\u{2019}t access your journal entries in this chat, so I can\u{2019}t tell \
+             how your knee has been doing."
+        ));
+        assert!(claims_no_journal_access(
+            "I\u{2019}m unable to retrieve your journal entries in this chat."
+        ));
+    }
+
+    /// The other side of the same heuristic: an ordinary Answer, grounded or
+    /// not, and a reply that correctly decided no tool was needed at all,
+    /// must never be mistaken for the denial above — `run_reflect_stream_inner`'s
+    /// own corrective-turn gate would otherwise pay an extra chat call for a
+    /// reply that was never wrong (see that gate's own doc comment on why
+    /// this distinction has to hold, and `a_prose_only_reply_is_the_answer_with_no_grounding`
+    /// in `tests/reflect.rs` for the end-to-end version of this same
+    /// property).
+    #[test]
+    fn claims_no_journal_access_leaves_ordinary_replies_alone() {
+        assert!(!claims_no_journal_access(
+            "Your knee has improved since February."
+        ));
+        assert!(!claims_no_journal_access(
+            "You haven't written about that yet."
+        ));
+        assert!(!claims_no_journal_access("No tools needed for that."));
     }
 
     /// The structural half of issue #102's acceptance criteria: the single

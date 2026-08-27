@@ -9,7 +9,7 @@ use axum::http::{Request, StatusCode};
 use chrono::{DateTime, NaiveDate, Utc};
 use http_body_util::BodyExt;
 use meologue_server::llm::{ChatMessage, ChatReply, LlmClient};
-use meologue_server::reflect::ReflectState;
+use meologue_server::reflect::{ReflectState, claims_no_journal_access};
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use tower::ServiceExt;
@@ -495,7 +495,19 @@ async fn an_unknown_session_id_is_a_404(pool: PgPool) {
 
 #[sqlx::test]
 async fn an_absent_utc_offset_defaults_to_zero_and_still_answers(pool: PgPool) {
-    let chat = Arc::new(FakeChatClient::new(["An answer, no offset given."]));
+    // Two identical replies: issue #103's structural corrective turn
+    // (`reflect.rs::run_reflect_stream_inner`'s own doc comment on the
+    // no-tool-call block) gives every zero-tool-call Answer one extra
+    // chance to look before it's accepted — this Question doesn't need a
+    // tool, so the model is expected to stand by the same Answer the
+    // second time, exactly as `NO_TOOL_CALL_CORRECTION` permits ("you may
+    // give the same answer again"). Nothing about this test is *about*
+    // that mechanism; it just has to survive it to test what it actually
+    // tests.
+    let chat = Arc::new(FakeChatClient::new([
+        "An answer, no offset given.",
+        "An answer, no offset given.",
+    ]));
     let reflect = reflect_state(chat);
 
     // No `utc_offset_minutes` field at all — a Device that predates this
@@ -516,7 +528,19 @@ async fn an_absent_utc_offset_defaults_to_zero_and_still_answers(pool: PgPool) {
 
 #[sqlx::test]
 async fn a_prose_only_reply_is_the_answer_with_no_grounding(pool: PgPool) {
-    let chat = Arc::new(FakeChatClient::new(["You haven't written about that yet."]));
+    // Issue #103, round 2: a reply with no tool call at all now always
+    // gets one corrective turn (`run_reflect_stream_inner`'s own doc
+    // comment on the no-tool-call block) — structural, not keyed to
+    // wording, so it fires here too even though this reply was never a
+    // denial. The model is told it may give the same Answer again if the
+    // journal genuinely wasn't needed, and does; the *first* time is what
+    // this test used to name as final, but the loop always sends this
+    // Question's Answer through the same one-more-look gate now,
+    // regardless of what the Answer says.
+    let chat = Arc::new(FakeChatClient::new([
+        "You haven't written about that yet.",
+        "You haven't written about that yet.",
+    ]));
     let reflect = reflect_state(chat.clone());
 
     let (status, body) = post_reflect(
@@ -531,11 +555,250 @@ async fn a_prose_only_reply_is_the_answer_with_no_grounding(pool: PgPool) {
     assert_eq!(grounding_ids(&body), Vec::<Uuid>::new());
     assert_eq!(body["grounded"], false);
     assert_eq!(body["fallback_used"], false);
+    // Issue #103: `grounded: false` alone doesn't say whether the model
+    // ever tried a tool. This exact shape — a reply with no tool call and
+    // no Grounding — is what the live bug looked like on the wire before
+    // `tool_called` existed, indistinguishable here from a tool genuinely
+    // finding nothing (see `a_tool_call_that_finds_nothing_still_reports_it_was_tried`
+    // below for that contrasting case).
+    assert_eq!(body["tool_called"], false);
     assert_eq!(
         chat.call_count(),
-        1,
-        "a reply with no tool call ends the loop after a single turn"
+        2,
+        "a reply with no tool call always gets one corrective turn now, even one that was \
+         never a denial — see this test's own doc comment"
     );
+}
+
+/// The other half of issue #103's acceptance criterion: a run that *did*
+/// call a tool, and that tool genuinely found nothing, must still read
+/// `tool_called: true` — reaching `grounded: false` by a completely
+/// different route than the test above (`a_prose_only_reply_is_the_answer_with_no_grounding`),
+/// which never called anything at all. Before `tool_called` existed these
+/// two runs were wire-identical (`grounded: false`, `grounding_entry_ids:
+/// []`), which is exactly what let the no-tool-call bug go unnoticed: a
+/// Server operator, or a client, had no field to tell them apart.
+#[sqlx::test]
+async fn a_tool_call_that_finds_nothing_still_reports_it_was_tried(pool: PgPool) {
+    // No Entries inserted at all — `search_entries` is guaranteed to come
+    // back empty against an empty corpus, no fixture data needed to prove
+    // the point.
+    let chat = Arc::new(FakeChatClient::new([
+        tool_call_tag("search_entries", json!({"query": "kayaking"})),
+        "You haven't written about that yet.".to_string(),
+    ]));
+    let reflect = reflect_state(chat.clone());
+
+    let (status, body) = post_reflect(
+        &pool,
+        Some(reflect),
+        json!({ "protocol_version": 3, "question": "Anything about kayaking?" }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["answer"], "You haven't written about that yet.");
+    assert_eq!(grounding_ids(&body), Vec::<Uuid>::new());
+    assert_eq!(
+        body["grounded"], false,
+        "an empty search carries no Grounding"
+    );
+    assert_eq!(
+        body["tool_called"], true,
+        "a tool that ran and found nothing is still a tool that ran — must read back distinctly \
+         from a reply that never called anything at all"
+    );
+    assert_eq!(chat.call_count(), 2);
+}
+
+/// Issue #103's own live evidence, still true after the corrective turn's
+/// trigger became structural: `LOOP_SYSTEM_INSTRUCTION` and
+/// `harness::prompted::PROTOCOL_INSTRUCTION` alone narrow the failure, they
+/// don't structurally prevent it, so the exact live-bug phrasing this test
+/// scripts still has to get one more chance to look before its Answer is
+/// accepted — see `NO_TOOL_CALL_CORRECTION`'s own doc comment for why the
+/// trigger no longer keys on this wording at all (a zero-tool-call reply
+/// with *no* denial in it — `a_no_tool_call_reply_with_ordinary_wording_still_gets_a_corrective_turn`
+/// below — pins the case that change actually exists for).
+#[sqlx::test]
+async fn a_false_no_access_denial_gets_one_corrective_turn_and_then_answers(pool: PgPool) {
+    let entry_id = Uuid::new_v4();
+    insert_entry_at(
+        &pool,
+        entry_id,
+        "Knee still sore after the run, but improving.",
+        DateTime::parse_from_rfc3339("2026-07-05T08:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc),
+    )
+    .await;
+
+    let chat = Arc::new(FakeChatClient::new([
+        // First attempt: no tool call at all, and a false claim of no
+        // access — exactly the live bug's own wording.
+        "I can't access any journal entries from here, so I can't tell how your knee has been \
+         doing without guessing."
+            .to_string(),
+        // The corrective turn: this time it actually looks.
+        tool_call_tag("search_entries", json!({"query": "knee"})),
+        "You wrote about your knee still being sore after a run, but improving.".to_string(),
+    ]));
+    let reflect = reflect_state(chat.clone());
+
+    let (status, body) = post_reflect(
+        &pool,
+        Some(reflect),
+        json!({ "protocol_version": 3, "question": "how is my knee doing" }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["answer"],
+        "You wrote about your knee still being sore after a run, but improving."
+    );
+    assert_eq!(body["grounded"], true);
+    assert_eq!(body["tool_called"], true);
+    assert_eq!(grounding_ids(&body), vec![entry_id]);
+    assert_eq!(
+        chat.call_count(),
+        3,
+        "the denial costs one corrective turn, which itself takes a tool call and a final reply"
+    );
+
+    // The corrective turn must actually tell the model what happened, the
+    // same way `an_empty_final_reply_gets_one_corrective_turn_and_then_answers`
+    // already pins for the empty-reply case above. Deliberately not
+    // asserting the correction *names* the denial — `NO_TOOL_CALL_CORRECTION`
+    // no longer does, since the same message now also reaches a reply that
+    // was never a denial at all (see the test named in this test's own doc
+    // comment).
+    let second_call = chat.nth_call(1);
+    assert!(
+        second_call
+            .iter()
+            .any(|m| m.content.contains("answered without calling any tool")),
+        "the correction should have reached the retried turn: {second_call:?}"
+    );
+}
+
+/// The case round 1 of this fix missed, live: a reply with no tool call at
+/// all whose wording has nothing in common with a denial —
+/// `claims_no_journal_access` (still used only to tag the log now, never to
+/// decide) would say no just as confidently as it would for an ordinary,
+/// legitimate "no tool needed" reply. The corrective turn still has to fire
+/// here, because the trigger issue #103 round 2 uses is structural: an
+/// Answer with zero tool calls, nothing about what it says. This is the
+/// exact live phrasing ("I'm unable to tell from the information available
+/// here.") a widened keyword list still didn't catch during this ticket's
+/// own live verification — pinning it here is what proves the fix no
+/// longer depends on ever having seen a phrasing before.
+#[sqlx::test]
+async fn a_no_tool_call_reply_with_ordinary_wording_still_gets_a_corrective_turn(pool: PgPool) {
+    let vague_reply = "I'm unable to tell from the information available here.";
+    assert!(
+        !claims_no_journal_access(vague_reply),
+        "this phrasing must NOT match the old keyword gate — that's the whole point of this test"
+    );
+
+    let chat = Arc::new(FakeChatClient::new([vague_reply, vague_reply]));
+    let reflect = reflect_state(chat.clone());
+
+    let (status, body) = post_reflect(
+        &pool,
+        Some(reflect),
+        json!({ "protocol_version": 3, "question": "how is my knee doing" }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["answer"], vague_reply);
+    assert_eq!(body["grounded"], false);
+    assert_eq!(body["tool_called"], false);
+    assert_eq!(
+        chat.call_count(),
+        2,
+        "a zero-tool-call reply gets one corrective turn regardless of what it says"
+    );
+}
+
+/// Issue #103's own bound, restated: one Question can never spend more than
+/// one corrective turn, no matter which of the two problems (an empty
+/// reply, issue #102; a zero-tool-call reply, issue #103) it hits, or in
+/// what order. Scripted so the empty-reply retry's *own* reply is itself a
+/// real, non-empty, zero-tool-call Answer — exactly the shape that would
+/// satisfy the no-tool-call block's condition too if `!retried` in
+/// `run_reflect_stream_inner` weren't there. Before that guard existed
+/// (still true under the old, heuristic-gated trigger, which just rarely
+/// matched an ordinary retried answer) this would have spent a second
+/// corrective turn on top of the first; with three replies queued but only
+/// two ever consumed, `FakeChatClient::chat` would have nothing to
+/// complain about — this test's `call_count()` assertion is what would
+/// actually have caught the regression.
+#[sqlx::test]
+async fn the_two_corrective_turns_cannot_both_fire_for_one_question(pool: PgPool) {
+    let chat = Arc::new(FakeChatClient::new([
+        "".to_string(),
+        "A real answer, and no tool was ever called.".to_string(),
+    ]));
+    let reflect = reflect_state(chat.clone());
+
+    let (status, body) = post_reflect(
+        &pool,
+        Some(reflect),
+        json!({ "protocol_version": 3, "question": "How did the flat move go?" }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["answer"],
+        "A real answer, and no tool was ever called."
+    );
+    assert_eq!(body["tool_called"], false);
+    assert_eq!(
+        chat.call_count(),
+        2,
+        "the empty-reply retry already spent this Question's one corrective turn; the \
+         no-tool-call block must not spend a second one on the retry's own reply"
+    );
+}
+
+/// The other side of the corrective turn: if the retry itself doesn't
+/// produce a usable reply (empty, here — a chat-client failure would behave
+/// the same way, since `LoopOutcome::answer` is `None` either way), the
+/// request must not fail outright. The user is still owed *something* for
+/// this Question, and the original denial — wrong, but real, already-safe
+/// text — is what `run_reflect_stream_inner` falls back to rather than
+/// losing the Turn entirely.
+#[sqlx::test]
+async fn a_denial_whose_corrective_retry_also_fails_falls_back_to_the_original_denial(
+    pool: PgPool,
+) {
+    let chat = Arc::new(FakeChatClient::new([
+        "I can't access any journal entries from here.".to_string(),
+        "".to_string(),
+    ]));
+    let reflect = reflect_state(chat.clone());
+
+    let (status, body) = post_reflect(
+        &pool,
+        Some(reflect),
+        json!({ "protocol_version": 3, "question": "how is my knee doing" }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["answer"],
+        "I can't access any journal entries from here."
+    );
+    assert_eq!(body["grounded"], false);
+    assert_eq!(
+        body["tool_called"], false,
+        "neither attempt ever called a tool"
+    );
+    assert_eq!(chat.call_count(), 2);
 }
 
 #[sqlx::test]
@@ -1341,11 +1604,58 @@ async fn the_active_tool_set_is_named_in_the_system_prompt(pool: PgPool) {
     }
 }
 
+/// Issue #103's own acceptance criterion: "the model is told, in terms it
+/// acts on, that the tools are available and are the way to see the
+/// journal." Pinned as a property — two short, stable phrases the loop's
+/// own persona instruction (`reflect::LOOP_SYSTEM_INSTRUCTION`) must
+/// contain — rather than an equality check against the whole constant, so
+/// a future rewording of the surrounding prose doesn't make this test the
+/// thing that breaks; what has to survive is the *claim* (tools are the
+/// only access this model has, and it may not say otherwise), not any
+/// particular sentence carrying it. Before this ticket neither phrase
+/// existed at all: the old instruction only ever said "you have tools to
+/// look things up... before you answer," which never ruled out the model
+/// falling back on a generic chat assistant's usual "I don't have access
+/// to that" — exactly what the live bug this issue was filed against said,
+/// having called no tool at all.
+#[sqlx::test]
+async fn the_system_prompt_states_the_tools_are_the_only_way_to_see_the_journal(pool: PgPool) {
+    let chat = Arc::new(FakeChatClient::new(["No tools needed for that."]));
+    let reflect = reflect_state(chat.clone());
+
+    let (status, _) = post_reflect(
+        &pool,
+        Some(reflect),
+        json!({ "protocol_version": 3, "question": "Anything?" }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let system_message = &chat.last_call()[0];
+    assert!(
+        system_message.content.contains("only way you can see"),
+        "the prompt must say plainly that the tools are the only access this model has: {}",
+        system_message.content
+    );
+    assert!(
+        system_message
+            .content
+            .contains("never tell the user you can't access"),
+        "the prompt must forbid claiming no access, the exact false claim the live bug made: {}",
+        system_message.content
+    );
+}
+
 // -- Session persistence: create, append, 404, entry-tree order -----------
 
 #[sqlx::test]
 async fn a_null_session_id_mints_a_new_session(pool: PgPool) {
-    let chat = Arc::new(FakeChatClient::new(["An answer."]));
+    // Two identical replies: issue #103's structural corrective turn fires
+    // on any zero-tool-call Answer now, this one included, and the model
+    // is expected to stand by it the second time — see
+    // `a_prose_only_reply_is_the_answer_with_no_grounding`'s own doc
+    // comment for why this is now true of every test like this one.
+    let chat = Arc::new(FakeChatClient::new(["An answer.", "An answer."]));
     let reflect = reflect_state(chat);
 
     let (status, body) = post_reflect(
@@ -1367,7 +1677,10 @@ async fn a_null_session_id_mints_a_new_session(pool: PgPool) {
 
 #[sqlx::test]
 async fn a_successful_answer_persists_its_turn(pool: PgPool) {
+    // Two identical replies — see `a_null_session_id_mints_a_new_session`'s
+    // own comment just above for why.
     let chat = Arc::new(FakeChatClient::new([
+        "Your knee has improved since February.",
         "Your knee has improved since February.",
     ]));
     let reflect = reflect_state(chat);
@@ -1424,7 +1737,9 @@ async fn an_unknown_session_id_persists_no_session_and_no_turn(pool: PgPool) {
 
 #[sqlx::test]
 async fn a_second_ask_on_the_same_session_appends_and_bumps_updated_at(pool: PgPool) {
-    let chat = Arc::new(FakeChatClient::new(["First answer."]));
+    // Two identical replies per `/v1/reflect` call, for both Questions
+    // below — see `a_null_session_id_mints_a_new_session`'s own comment.
+    let chat = Arc::new(FakeChatClient::new(["First answer.", "First answer."]));
     let reflect = reflect_state(chat);
 
     let (status, body) = post_reflect(
@@ -1449,7 +1764,7 @@ async fn a_second_ask_on_the_same_session_appends_and_bumps_updated_at(pool: PgP
     // "updated_at happened to already be later."
     tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 
-    let chat2 = Arc::new(FakeChatClient::new(["Second answer."]));
+    let chat2 = Arc::new(FakeChatClient::new(["Second answer.", "Second answer."]));
     let reflect2 = reflect_state(chat2);
     let (status2, body2) = post_reflect(
         &pool,
@@ -1830,8 +2145,12 @@ async fn get_session(pool: &PgPool, reflect: ReflectState, id: Uuid) -> Value {
 /// `reflect::maybe_compact_prior_turns` is written around that constraint.
 #[sqlx::test]
 async fn a_session_nearing_its_context_window_gets_compacted_between_turns(pool: PgPool) {
+    // Every script below repeats its loop-facing reply once — issue #103's
+    // structural corrective turn fires on any zero-tool-call Answer now
+    // (`a_null_session_id_mints_a_new_session`'s own comment covers why),
+    // and none of these Questions need a tool.
     let generous = ReflectState {
-        chat_client: Arc::new(FakeChatClient::new(["a first answer"])),
+        chat_client: Arc::new(FakeChatClient::new(["a first answer", "a first answer"])),
         embed_client: Arc::new(UnusedEmbedClient),
         context_window: 200_000,
         chat_base_url: UNUSED_CHAT_BASE_URL.to_string(),
@@ -1847,7 +2166,7 @@ async fn a_session_nearing_its_context_window_gets_compacted_between_turns(pool:
     let id = session_id(&body);
 
     let generous = ReflectState {
-        chat_client: Arc::new(FakeChatClient::new(["a second answer"])),
+        chat_client: Arc::new(FakeChatClient::new(["a second answer", "a second answer"])),
         embed_client: Arc::new(UnusedEmbedClient),
         context_window: 200_000,
         chat_base_url: UNUSED_CHAT_BASE_URL.to_string(),
@@ -1869,6 +2188,7 @@ async fn a_session_nearing_its_context_window_gets_compacted_between_turns(pool:
     let tight = ReflectState {
         chat_client: Arc::new(FakeChatClient::new([
             "condensed: running and the wedding were both discussed",
+            "a third answer",
             "a third answer",
         ])),
         embed_client: Arc::new(UnusedEmbedClient),
@@ -1922,8 +2242,12 @@ async fn a_session_nearing_its_context_window_gets_compacted_between_turns(pool:
 /// after it, with no idea a summary exists at all.
 #[sqlx::test]
 async fn a_summary_reaches_every_question_after_it_not_only_the_one_that_wrote_it(pool: PgPool) {
+    // Every script below repeats its loop-facing reply once — issue #103's
+    // structural corrective turn fires on any zero-tool-call Answer now
+    // (`a_null_session_id_mints_a_new_session`'s own comment covers why),
+    // and none of these Questions need a tool.
     let seed = ReflectState {
-        chat_client: Arc::new(FakeChatClient::new(["a first answer"])),
+        chat_client: Arc::new(FakeChatClient::new(["a first answer", "a first answer"])),
         embed_client: Arc::new(UnusedEmbedClient),
         context_window: 200_000,
         chat_base_url: UNUSED_CHAT_BASE_URL.to_string(),
@@ -1941,6 +2265,7 @@ async fn a_summary_reaches_every_question_after_it_not_only_the_one_that_wrote_i
     let compacting = ReflectState {
         chat_client: Arc::new(FakeChatClient::new([
             "condensed: running was discussed",
+            "a second answer",
             "a second answer",
         ])),
         embed_client: Arc::new(UnusedEmbedClient),
@@ -1964,6 +2289,7 @@ async fn a_summary_reaches_every_question_after_it_not_only_the_one_that_wrote_i
     let later = ReflectState {
         chat_client: Arc::new(FakeChatClient::new([
             "condensed: running and the wedding, further condensed",
+            "a third answer",
             "a third answer",
         ])),
         embed_client: Arc::new(UnusedEmbedClient),

@@ -52,6 +52,23 @@ const CLOSE_TAG: &str = "</tool_call>";
 /// Told to the model last, after the `<tools>` block — see
 /// `render_system_prompt`'s doc comment for why, which is ADR 0026's
 /// ordering applied to a new place.
+///
+/// The final sentence is issue #103's addition, kept deliberately generic
+/// (no mention of a journal, or of meologue at all — this module's own doc
+/// comment insists on staying ignorant of what any particular caller's
+/// tools are *for*) even though the bug it answers was domain-specific: a
+/// model that answered "I can't access any journal entries from here"
+/// without ever calling a tool, on a Server where the described tools were
+/// present and working. This is the one sentence in the whole system
+/// message guaranteed to be the very last thing the model reads before it
+/// starts writing — `render_system_prompt` appends `PROTOCOL_INSTRUCTION`
+/// after everything else, always — which makes it the cheapest place to put
+/// a reminder that leaning on it matters for: `reflect::LOOP_SYSTEM_INSTRUCTION`
+/// already says the domain-specific half of this (the tools are the only
+/// way to see the journal) earlier in the same message, and this sentence
+/// backs it up in the position ADR 0026 already established reads most
+/// reliably, rather than trusting one mention wherever in the prompt it
+/// happens to fall.
 const PROTOCOL_INSTRUCTION: &str = "To call a tool, write exactly this form, with no markdown \
 fence and no other syntax around it:\n\
 <tool_call>{\"name\": \"tool_name\", \"arguments\": { ... }}</tool_call>\n\
@@ -61,7 +78,9 @@ right now; each one runs, in order, and every result comes back to you before yo
 Anything you write outside a <tool_call> tag is read as your answer to the user. A reply with no \
 <tool_call> tag in it at all ends this exchange — that reply is shown to the user exactly as \
 written, so only write it once you are done gathering what you need, not while you still intend \
-to call another tool.";
+to call another tool. These tools are real and already connected — never reply as though you have \
+no way to check something before trying one; if you are unsure whether a tool will find anything, \
+call it and see, rather than assuming in your reply that it wouldn't.";
 
 /// The `chat::ChatClient` this ticket builds. Wraps an ordinary
 /// `llm::LlmClient` — today, always `llm::OpenAiCompatibleClient`, whose
@@ -1107,6 +1126,43 @@ mod tests {
             "protocol instruction must come after the <tools> block"
         );
         assert!(system_message.content.contains("entries_in_range"));
+    }
+
+    /// Issue #103: the reminder that a described tool is real and should be
+    /// tried, not assumed unavailable, must land in the position ADR 0026
+    /// already established reads most reliably — the literal end of the
+    /// system message, after everything else `render_system_prompt`
+    /// assembles, not somewhere in the middle where a longer `<tools>`
+    /// block (more tools registered) could bury it. Checking the property
+    /// ("this text is what the prompt ends with"), not the exact wording,
+    /// so a future rewording of the sentence doesn't make this test the
+    /// thing that has to change.
+    #[tokio::test]
+    async fn the_no_assumed_unavailability_reminder_is_the_very_last_thing_in_the_prompt() {
+        let client = Arc::new(RecordingLlmClient::new("done"));
+        let harness_client = PromptedToolClient::new(client.clone());
+        let ctx = Context {
+            system_prompt: "Base prompt.".to_string(),
+            messages: vec![Message::User("hi".to_string())],
+            tools: vec![sample_tool()],
+        };
+
+        let _ = harness_client.stream(&ctx).await.collect().await;
+
+        let captured = client.captured.lock().unwrap();
+        let system_message = &captured[0][0];
+        assert!(
+            system_message.content.ends_with("wouldn't."),
+            "the reminder not to assume a tool has nothing to find must be the last thing in \
+             the prompt: {}",
+            system_message.content
+        );
+        let format_pos = system_message.content.find("To call a tool").unwrap();
+        let reminder_pos = system_message.content.find("These tools are real").unwrap();
+        assert!(
+            reminder_pos > format_pos,
+            "the reminder must come after the tag-format instruction, not before it"
+        );
     }
 
     #[tokio::test]

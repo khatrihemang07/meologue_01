@@ -532,7 +532,8 @@
           "answer",
           "grounding_entry_ids",
           "grounded",
-          "fallback_used"
+          "fallback_used",
+          "tool_called"
         ],
         "properties": {
           "answer": {
@@ -562,6 +563,10 @@
           "title": {
             "type": "string",
             "description": "The Session's title: the existing title for a Session the request\nalready named, or the newly-derived one (`derive_title`) for a\nfreshly minted Session. Always present so a client never has to ask\nagain just to know what to show for a Session it just started."
+          },
+          "tool_called": {
+            "type": "boolean",
+            "description": "Whether this run called a tool at all — `true` the moment any\n`harness::agent_loop::Step::ToolResult` appears in `outcome.steps`,\nregardless of whether that call (or any other) found anything.\nIssue #103's own acceptance criterion: `grounded: false` alone\ncannot tell a client, or a person reading a log, which of two very\ndifferent runs actually happened — one that called `search_entries`\nand it came back empty, or one that never called anything and wrote\na reply anyway (the bug this issue was filed against: the model\nanswered \"I can't access any journal entries from here\" having\ntried nothing). Both reach this struct with an identical\n`grounding_entry_ids: []`/`grounded: false`, and both used to render\nidentically to the user (\"Nothing in your History matched this\nQuestion\") for exactly that reason. This field is the one place\nthat distinction survives past `run_reflect_stream_inner` into\nwhatever reads the record next. Server-side only for now: no\nexisting client reads it, and changing what a client shows for\n`tool_called: false` versus a genuine empty search is left to\nwhichever ticket touches the client next."
           }
         }
       },
@@ -635,6 +640,7 @@
           "grounding_entry_ids",
           "grounded",
           "fallback_used",
+          "tool_called",
           "created_at"
         ],
         "properties": {
@@ -660,6 +666,10 @@
           },
           "question": {
             "type": "string"
+          },
+          "tool_called": {
+            "type": "boolean",
+            "description": "Issue #103: whether this Turn's run called a tool at all, kept apart\nfrom `grounded` for the same reason `reflect::ReflectResponse::tool_called`\nis (see that field's own doc comment) — `grounding_entry_ids` alone\ncannot tell \"a tool ran and found nothing\" from \"no tool ever ran.\"\nNo column backs this on `session_turns`: it's derived, not stored —\n`entries_to_turns` computes it from whether a `tool_result` entry\nappears anywhere in the Turn's own run through the tree, the same\ntree `session_entries` already holds every tool call in\n(`harness::agent_loop::Step::ToolResult`, via\n`reflect.rs::build_tree_payloads`), rather than adding a second,\nindependently-writable flag that a future write path could forget to\nset — the derivation precedent `docs/adr/0024` already set for\n`grounded` itself."
           }
         }
       },

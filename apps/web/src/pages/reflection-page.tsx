@@ -78,19 +78,27 @@ function GivenAnswer({ text }: { text: string }) {
 // point of ticket 6 (docs/adr/0024) is that the user can tell a real Answer
 // from a confident wrong one without trusting how the model phrased itself.
 // "grounded" (the server judged its Grounding actually answered the
-// Question) renders no note at all; the other two outcomes render a short
+// Question) renders no note at all; the other outcomes each render a short
 // caption in CONTEXT.md's own vocabulary (History, Question, Entries),
 // matching the muted-caption styling already used elsewhere on this page.
 // The outcome itself comes from `groundingOutcome` (lib/conversation.ts) —
 // shared with grounding-disclosure.tsx's `summaryLabel` so the caption here
 // and the expander label below it can never disagree about what happened.
+//
+// Issue #103: "neverLooked" gets its own caption, distinct from
+// "nothingFound" — before `toolCalled` existed on the wire, a run that
+// answered without ever checking the History rendered exactly the same as
+// one that checked and genuinely found nothing, which is what let a
+// confidently wrong "I can't access your journal" hide behind an ordinary,
+// unremarkable-looking caption. The two are different situations and now
+// read as different sentences.
 function GroundingNote({ turn }: { turn: ConversationTurn }) {
   const outcome = groundingOutcome(turn);
   // "digest" (issue #96) gets no note here either: GroundingDisclosure's
   // own line already says the Answer came from a Digest, and this note's
   // wording ("Nothing in your History matched...") would flatly contradict
-  // that — it exists for the two outcomes where nothing usable was found,
-  // not for one where something was, just not raw Entries.
+  // that — it exists for the outcomes where nothing usable was found or
+  // never checked, not for one where something was, just not raw Entries.
   if (outcome === "grounded" || outcome === "digest") {
     return null;
   }
@@ -98,7 +106,9 @@ function GroundingNote({ turn }: { turn: ConversationTurn }) {
     <p className="mr-auto text-xs text-muted-foreground">
       {outcome === "disclosedFallback"
         ? "Nothing in your History matched this Question — this is what you wrote in the last few days."
-        : "Nothing in your History matched this Question."}
+        : outcome === "neverLooked"
+          ? "This Question was answered without checking your History."
+          : "Nothing in your History matched this Question."}
     </p>
   );
 }
