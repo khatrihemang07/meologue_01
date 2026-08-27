@@ -94,10 +94,29 @@ pub enum StopReason {
 }
 
 /// Coarse token accounting, when the underlying endpoint reports it. Kept
-/// as a real field (matching `pi`) even though nothing populates it with a
-/// non-default value yet — the configured endpoint (`llm::OpenAiCompatibleClient`)
-/// doesn't surface usage today — so a later ticket that wires it up
-/// changes a value, not this type's shape.
+/// as a real field from the start (matching `pi`), for exactly the reason
+/// this comment used to point at: issue #97 is the "later ticket" that
+/// wires it up, and it changed a value, not this type's shape.
+///
+/// Populated for real as of issue #97:
+/// `harness::prompted::PromptedToolClient::stream` builds this from
+/// `llm::ChatReply::usage`, which `llm::OpenAiCompatibleClient::chat`
+/// itself reads off the configured endpoint's own response (`llm::parse_usage`).
+/// `input_tokens`/`output_tokens` here are that same call's
+/// `prompt_tokens`/`completion_tokens` under `harness`'s own naming — see
+/// `PromptedToolClient::stream`'s doc comment for why the rename happens at
+/// that one seam rather than either module adopting the other's vocabulary.
+///
+/// **`Some(Usage)` is only ever a real measurement.** `llm::parse_usage`
+/// already treats an endpoint's `usage` field being absent, all-zero, or
+/// malformed as "unknown" and returns `None` for all three — never
+/// `Some(Usage { 0, 0 })` — so `compaction::estimate_tokens`'s anchor search
+/// (`Message::Assistant` usage) can trust any `Some` it finds at face
+/// value without re-checking it for zero itself. A test double is still
+/// free to construct `Usage::default()` directly (nothing prevents it, and
+/// existing tests unrelated to token accounting do) — that's a fixture
+/// choice, not something this type or `parse_usage` can see or guard
+/// against; it just isn't how a real `Some(Usage)` ever reaches here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Usage {
     pub input_tokens: u32,

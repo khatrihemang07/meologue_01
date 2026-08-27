@@ -124,9 +124,20 @@ async fn main() -> anyhow::Result<()> {
     // An unset chat base URL/model (or an unresolvable embed config —
     // Reflection needs both, see `LlmConfig::reflect_config`) means
     // `/v1/reflect` is never registered at all — ticket 4.
-    let reflect = llm_config
-        .reflect_config()
-        .map(|(chat_client, embed_client)| meologue_server::reflect::ReflectState { chat_client, embed_client });
+    let reflect = match llm_config.reflect_config() {
+        Some((chat_client, embed_client)) => {
+            // Issue #97: resolved once, at startup, rather than per
+            // request — `LlmConfig::resolve_context_window`'s own doc
+            // comment covers why.
+            let context_window = llm_config.resolve_context_window().await;
+            Some(meologue_server::reflect::ReflectState {
+                chat_client,
+                embed_client,
+                context_window,
+            })
+        }
+        None => None,
+    };
 
     let static_dir = env::var("STATIC_DIR").unwrap_or_else(|_| DEFAULT_STATIC_DIR.to_string());
     let app =

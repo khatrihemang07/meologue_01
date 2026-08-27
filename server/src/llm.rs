@@ -10,7 +10,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{Value, json};
 
 /// One turn in a Conversation, in the shape a chat-completions endpoint
 /// expects. Defined now so `LlmClient`'s full shape is settled before
@@ -19,6 +19,50 @@ use serde_json::json;
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
+}
+
+/// Coarse token accounting off one `chat` call's own response — issue #97:
+/// "the wrapper returns `{prompt_tokens, completion_tokens, total_tokens}`,
+/// trust the last good assistant usage." Named for the wire vocabulary the
+/// endpoint actually reports (`prompt_tokens`/`completion_tokens`), not
+/// `harness::types::Usage`'s `input_tokens`/`output_tokens` — this module
+/// has no dependency on `harness` for its *types* (only `LlmConfig::resolve_context_window`
+/// reaches into `harness::compaction` for one constant), and re-using the
+/// harness name here would suggest a coupling that doesn't exist.
+/// `harness::prompted::PromptedToolClient` — the one caller that needs
+/// `harness::types::Usage` at all — converts between the two at the one
+/// seam that actually has to know both vocabularies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Usage {
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+}
+
+/// What `LlmClient::chat` actually returns: the model's reply text, plus
+/// whatever token usage the endpoint reported for that call, when it did.
+/// Before issue #97 this was a bare `String` — every caller that only ever
+/// wanted the text (`digest.rs`, three of `reflect.rs`'s four call sites)
+/// still does, via `.content`; `ChatReply::text` exists so those callers'
+/// own test doubles don't have to spell out `usage: None` at every fixture.
+/// `harness::prompted::PromptedToolClient::stream` is the one call site
+/// `usage` is actually *for* — see that module for where it lands.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChatReply {
+    pub content: String,
+    pub usage: Option<Usage>,
+}
+
+impl ChatReply {
+    /// A reply with no usage reported — what every test double that
+    /// doesn't care about token accounting should build, and what a real
+    /// endpoint's response degrades to when its own `usage` is absent,
+    /// zero, or malformed (`parse_usage`'s own doc comment).
+    pub fn text(content: impl Into<String>) -> Self {
+        Self {
+            content: content.into(),
+            usage: None,
+        }
+    }
 }
 
 /// The task instruction Harrier's model card documents for query
@@ -38,7 +82,7 @@ pub trait LlmClient {
     /// Not called anywhere in this ticket — ticket 4 (Reflection) is the
     /// first caller. Defined now so the trait doesn't need a breaking
     /// change when that ticket lands.
-    async fn chat(&self, messages: &[ChatMessage]) -> Result<String>;
+    async fn chat(&self, messages: &[ChatMessage]) -> Result<ChatReply>;
 
     /// Embeds an Entry's body for storage, so it can later be compared
     /// against a query embedding. Harrier is instruction-tuned and expects
@@ -127,10 +171,21 @@ impl OpenAiCompatibleClient {
 
 #[async_trait]
 impl LlmClient for OpenAiCompatibleClient {
-    async fn chat(&self, messages: &[ChatMessage]) -> Result<String> {
+    async fn chat(&self, messages: &[ChatMessage]) -> Result<ChatReply> {
         #[derive(Deserialize)]
         struct ChatResponse {
             choices: Vec<ChatChoice>,
+            // Untyped, and `#[serde(default)]` rather than a typed, required
+            // `Usage` sub-struct: `localAIWrapper`'s non-streaming response
+            // (ADR 0003 there — "always emit ... usage") does carry a real
+            // `usage: {prompt_tokens, completion_tokens, total_tokens}`
+            // object, but nothing about this endpoint's own OpenAI-compatible
+            // contract *requires* one, and a stray non-numeric field inside
+            // it must degrade this call to "usage unknown," never fail the
+            // whole chat call outright over a field this caller doesn't
+            // strictly need. `parse_usage` is what actually reads it.
+            #[serde(default)]
+            usage: Option<Value>,
         }
         #[derive(Deserialize)]
         struct ChatChoice {
@@ -165,7 +220,10 @@ impl LlmClient for OpenAiCompatibleClient {
         if parsed.choices.is_empty() {
             bail!("chat response contained no choices");
         }
-        Ok(parsed.choices.remove(0).message.content)
+        Ok(ChatReply {
+            content: parsed.choices.remove(0).message.content,
+            usage: parse_usage(parsed.usage.as_ref()),
+        })
     }
 
     async fn embed_document(&self, text: &str) -> Result<Vec<f32>> {
@@ -279,6 +337,44 @@ impl LlmConfig {
         Some((chat_client, embed_client))
     }
 
+    /// Issue #97: how much context the configured chat model actually has,
+    /// read once from `GET {chat_base_url}/models/{chat_model}` — the
+    /// `local_ai_wrapper`-namespaced `contextWindow` (or `maxTokens`) field
+    /// ADR 0004 in `localAIWrapper` created that key for
+    /// (`discovery.ts::OpenAIModel`). Called once, here, rather than per
+    /// request: this is exactly the "model list ... already given" issue
+    /// #97 names, not something a live `/v1/reflect` call should be paying
+    /// an extra round trip for on every Question.
+    ///
+    /// Falls back to `harness::compaction::DEFAULT_CONTEXT_WINDOW` — the
+    /// "conservative configured value" issue #97 asks for — on *any*
+    /// failure to learn a real number: no chat config at all, the request
+    /// itself failing, a non-2xx, an unparseable body, or a `local_ai_wrapper`
+    /// object present but missing both fields. Every one of those is
+    /// "unknown," and issue #97 is explicit about which way to round an
+    /// unknown: summarise earlier than strictly necessary rather than risk
+    /// a Question failing because the guessed window was too generous.
+    pub async fn resolve_context_window(&self) -> u32 {
+        let (Some(base_url), Some(model)) =
+            (self.chat_base_url.as_deref(), self.chat_model.as_deref())
+        else {
+            return crate::harness::compaction::DEFAULT_CONTEXT_WINDOW;
+        };
+
+        match fetch_context_window(base_url, model, self.chat_api_key.as_deref()).await {
+            Some(window) => window,
+            None => {
+                tracing::warn!(
+                    base_url,
+                    model,
+                    "could not learn a context window for the configured chat model; \
+                     falling back to the conservative default"
+                );
+                crate::harness::compaction::DEFAULT_CONTEXT_WINDOW
+            }
+        }
+    }
+
     /// Builds the chat client the Digest worker (`digest::run`, ADR 0027)
     /// needs, or `None` if the worker must not start. Gated on
     /// `MEOLOGUE_CHAT_BASE_URL`/`MEOLOGUE_CHAT_MODEL` alone — per ADR 0021,
@@ -304,9 +400,101 @@ impl LlmConfig {
     }
 }
 
+/// The network half of `LlmConfig::resolve_context_window` — split out so
+/// the parsing half (`parse_context_window`) can be unit-tested against
+/// canned JSON without a live `localAIWrapper` to ask, matching this
+/// ticket's own constraint against starting either configured service.
+/// `GET /v1/models/{id}` — ADR 0004 in `localAIWrapper`, the "retrieve"
+/// half of the two model endpoints that ADR completed — over
+/// `GET /v1/models` (list): this caller already knows exactly which one
+/// Model it wants, so there is no reason to fetch and filter the whole
+/// list.
+async fn fetch_context_window(base_url: &str, model: &str, api_key: Option<&str>) -> Option<u32> {
+    let client = reqwest::Client::new();
+    let mut request = client.get(format!("{base_url}/models/{model}"));
+    if let Some(key) = api_key {
+        request = request.bearer_auth(key);
+    }
+    let response = request.send().await.ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let body: Value = response.json().await.ok()?;
+    parse_context_window(&body)
+}
+
+/// Reads `local_ai_wrapper.contextWindow` (or, if absent, `.maxTokens` —
+/// issue #97's own "a `contextWindow` (and/or `maxTokens`) field") off one
+/// `GET /v1/models/{id}` response body. `contextWindow` wins when a model
+/// object somehow carries both, on the theory that a field named for
+/// exactly this purpose is more trustworthy than one that merely happens to
+/// also describe it. `None` for anything else — no `local_ai_wrapper` key
+/// at all (every Model in `localAIWrapper`'s `models.json` before this
+/// ticket), a key present but neither field set to a positive integer, or a
+/// body that isn't even the expected shape — `resolve_context_window` reads
+/// every one of those the same way: fall back to the conservative default.
+fn parse_context_window(body: &Value) -> Option<u32> {
+    let extras = body.get("local_ai_wrapper")?;
+    for field in ["contextWindow", "maxTokens"] {
+        if let Some(window) = extras.get(field).and_then(Value::as_u64) {
+            if window > 0 {
+                return u32::try_from(window).ok();
+            }
+        }
+    }
+    None
+}
+
+/// Reads `prompt_tokens`/`completion_tokens` off one chat response's own
+/// `usage` object (issue #97: "the wrapper returns `{prompt_tokens,
+/// completion_tokens, total_tokens}`") — `total_tokens` is never read
+/// separately; every caller of `Usage` treats it as `prompt_tokens +
+/// completion_tokens`, and a wrapper that reports one honestly reports the
+/// other two consistent with it, so there is nothing a third field would
+/// let this function catch that the two it does read wouldn't already show.
+///
+/// `usage` being absent entirely returns `None` — the ordinary case for any
+/// endpoint that doesn't report it, which must read as "unknown," never as
+/// "zero were used." **A `usage` object present but reporting `0` for both
+/// fields is treated exactly the same way, `None`, not `Some(Usage{0, 0})`**:
+/// a real chat call that produced a real reply cannot have genuinely cost
+/// zero tokens, so `0`/`0` here means the field was there but not honestly
+/// populated (or, at minimum, that this caller cannot tell the difference
+/// between "must not use, no cost" and "value not filled in") — either way,
+/// the honest answer is "unknown," and `compaction::estimate_tokens`'s own
+/// contract already says what to do with an unknown anchor: fall back to
+/// the chars/4 estimate, never trust a stated 0.
+///
+/// A non-numeric or missing sub-field degrades to `0` for that one field
+/// (`Value::as_u64`'s own `None` case, read as `.unwrap_or(0)`) rather than
+/// failing this whole call — `usage` is a courtesy this caller cannot
+/// require of every endpoint, and a malformed one field should not cost the
+/// content this call otherwise successfully got back. If *both* fields
+/// degrade this way, the result folds into the same "treated as absent"
+/// case above.
+fn parse_usage(usage: Option<&Value>) -> Option<Usage> {
+    let usage = usage?;
+    let prompt_tokens = usage
+        .get("prompt_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(0) as u32;
+    let completion_tokens = usage
+        .get("completion_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(0) as u32;
+    if prompt_tokens == 0 && completion_tokens == 0 {
+        return None;
+    }
+    Some(Usage {
+        prompt_tokens,
+        completion_tokens,
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::end_with_sentence_punctuation;
+    use super::{Usage, end_with_sentence_punctuation, parse_context_window, parse_usage};
+    use serde_json::json;
 
     #[test]
     fn a_question_without_punctuation_gains_a_question_mark() {
@@ -329,5 +517,115 @@ mod tests {
         // ending in a space and pick up a second, spurious "?".
         assert_eq!(end_with_sentence_punctuation("How did it go?  "), "How did it go?");
         assert_eq!(end_with_sentence_punctuation("How did it go  "), "How did it go?");
+    }
+
+    // -- parse_context_window (issue #97) -----------------------------------
+
+    #[test]
+    fn parse_context_window_reads_the_local_ai_wrapper_field() {
+        let body = json!({
+            "id": "codex-terra",
+            "object": "model",
+            "local_ai_wrapper": {"backend": "codex", "contextWindow": 128_000},
+        });
+        assert_eq!(parse_context_window(&body), Some(128_000));
+    }
+
+    #[test]
+    fn parse_context_window_falls_back_to_max_tokens_when_context_window_is_absent() {
+        let body = json!({"local_ai_wrapper": {"maxTokens": 32_000}});
+        assert_eq!(parse_context_window(&body), Some(32_000));
+    }
+
+    #[test]
+    fn parse_context_window_prefers_context_window_over_max_tokens() {
+        let body = json!({"local_ai_wrapper": {"contextWindow": 200_000, "maxTokens": 8_000}});
+        assert_eq!(parse_context_window(&body), Some(200_000));
+    }
+
+    #[test]
+    fn parse_context_window_is_none_without_a_local_ai_wrapper_key() {
+        // Every Model in `localAIWrapper`'s `models.json` before issue #97's
+        // own config change — this is `resolve_context_window`'s real
+        // fallback trigger today for any Model that hasn't been given a
+        // `contextWindow` yet.
+        let body = json!({"id": "codex-terra", "object": "model"});
+        assert_eq!(parse_context_window(&body), None);
+    }
+
+    #[test]
+    fn parse_context_window_is_none_for_a_zero_or_malformed_value() {
+        assert_eq!(
+            parse_context_window(&json!({"local_ai_wrapper": {"contextWindow": 0}})),
+            None
+        );
+        assert_eq!(
+            parse_context_window(&json!({"local_ai_wrapper": {"contextWindow": "a lot"}})),
+            None
+        );
+        assert_eq!(parse_context_window(&json!({"local_ai_wrapper": {}})), None);
+    }
+
+    // -- parse_usage (issue #97) ---------------------------------------------
+
+    #[test]
+    fn parse_usage_reads_prompt_and_completion_tokens() {
+        let usage =
+            json!({"prompt_tokens": 17_432, "completion_tokens": 214, "total_tokens": 17_646});
+        assert_eq!(
+            parse_usage(Some(&usage)),
+            Some(Usage {
+                prompt_tokens: 17_432,
+                completion_tokens: 214
+            })
+        );
+    }
+
+    #[test]
+    fn parse_usage_is_none_when_the_response_carries_no_usage_at_all() {
+        // Absent must not read as zero — `should_compact`'s own callers
+        // treat `None` as "estimate it," not as "this call was free."
+        assert_eq!(parse_usage(None), None);
+    }
+
+    #[test]
+    fn parse_usage_zero_on_both_fields_is_treated_as_absent_not_as_a_real_zero() {
+        // A response that carries a `usage` object but reports 0/0 cannot be
+        // an honest measurement of a real chat call that returned content —
+        // this is "the field wasn't actually filled in," not "nothing was
+        // spent," and must degrade the same way an absent `usage` does.
+        let zero = json!({"prompt_tokens": 0, "completion_tokens": 0});
+        assert_eq!(parse_usage(Some(&zero)), None);
+    }
+
+    #[test]
+    fn parse_usage_one_nonzero_field_is_still_a_real_measurement() {
+        // Only one side reporting non-zero (an endpoint that only fills in
+        // `completion_tokens`, say) is still meaningfully different from
+        // "nothing was reported at all" and must not be discarded the same
+        // way a genuine 0/0 is.
+        let one_sided = json!({"prompt_tokens": 0, "completion_tokens": 42});
+        assert_eq!(
+            parse_usage(Some(&one_sided)),
+            Some(Usage {
+                prompt_tokens: 0,
+                completion_tokens: 42
+            })
+        );
+    }
+
+    #[test]
+    fn parse_usage_malformed_fields_degrade_rather_than_panic() {
+        let malformed = json!({"prompt_tokens": "a lot", "completion_tokens": null});
+        assert_eq!(parse_usage(Some(&malformed)), None);
+
+        let missing_completion = json!({"prompt_tokens": 500});
+        assert_eq!(
+            parse_usage(Some(&missing_completion)),
+            Some(Usage {
+                prompt_tokens: 500,
+                completion_tokens: 0
+            })
+        );
     }
 }

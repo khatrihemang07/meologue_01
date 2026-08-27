@@ -512,6 +512,44 @@ pub(crate) async fn load_turns(
     entries_to_turns(&projected)
 }
 
+/// The summary text of the *last* compaction on `session_id`'s current
+/// path, or `None` if it has never been compacted. Issue #97: without this,
+/// a compaction's summary would only ever reach the one Question that
+/// happened to trigger it (`reflect.rs::run_reflect_loop` prepends it as a
+/// synthetic message that call alone) — every *later* Question would read
+/// `load_turns`'s already-correctly-trimmed `prior_turns` (starting right
+/// after the compaction) with no idea *why* the Conversation starts there,
+/// silently losing everything the summary stood in for. Calling this on
+/// every `/v1/reflect` request, not just the one where compaction fires, is
+/// what keeps "reading a summarised Conversation starts from the summary"
+/// true for every read, not just the first one after it happened.
+///
+/// Shares `load_turns`'s own walk-and-project logic (`project_from_last_compaction`
+/// — literally the same call, since `entries_to_turns` and this function are
+/// two different things to extract from the identical projected path)
+/// rather than re-deriving it, and its own `None`-for-no-tree behaviour: a
+/// Session with no entries yet has never been compacted, by construction.
+pub(crate) async fn latest_compaction_summary(
+    pool: &PgPool,
+    session_id: Uuid,
+) -> anyhow::Result<Option<String>> {
+    let Some(leaf_id) = session_main_leaf_id(pool, session_id).await? else {
+        return Ok(None);
+    };
+    let entries = load_entries(pool, session_id).await?;
+    let path = walk_to_root(&entries, leaf_id)?;
+    let projected = project_from_last_compaction(&path);
+
+    match projected.first() {
+        Some(entry) if entry.entry_type == EntryType::Compaction.as_str() => Ok(entry
+            .payload
+            .get("summary")
+            .and_then(Value::as_str)
+            .map(str::to_string)),
+        _ => Ok(None),
+    }
+}
+
 /// The pre-#91 read `load_turns` always did — kept verbatim as the
 /// fallback for a Session with no tree entries yet. See `load_turns`'s own
 /// doc comment for when this path is taken and why.
@@ -740,6 +778,93 @@ pub(crate) async fn record_turn_from_steps(
 
     tx.commit().await?;
     Ok(session_id)
+}
+
+/// Issue #97: the *first* thing that ever writes an `EntryType::Compaction`
+/// entry — `EntryType`'s own doc comment, and `project_from_last_compaction`'s,
+/// both name this as issue #97's job, not issue #91's, which only had to
+/// build the read side and prove it against a hand-built entry. Called by
+/// `reflect.rs::maybe_compact_prior_turns`, strictly *before* the Turn that
+/// triggered it appends anything of its own — see that function's own doc
+/// comment for why this ordering is what keeps a compaction from ever
+/// landing inside a Turn's own step chain rather than cleanly between two
+/// Turns.
+///
+/// `payload` is `{"summary": summary}` — a plain, ad hoc shape rather than
+/// a typed struct alongside `MessagePayload`, matching how loosely
+/// `EntryType::Compaction`'s own test (`project_from_last_compaction_drops_everything_before_it`)
+/// already treats it: nothing decodes a `Compaction` payload back into a
+/// Rust type today (`decode_message` only ever looks at `Message` entries),
+/// so there is nothing yet for a typed shape to buy.
+///
+/// Returns `Ok(false)`, writing nothing, for a Session with no
+/// `main_leaf_id` yet — the same real, pre-#91 state `load_turns`'s own
+/// `session_turns` fallback exists for (that function's own doc comment):
+/// chaining a fresh tree entry onto a Session that has none would make this
+/// entry the tree's *root*, which would flip `load_turns` from its
+/// `session_turns` fallback over to reading a tree holding only this one
+/// node — silently hiding every Turn that Session already had rather than
+/// summarising them. `Ok(true)` for the ordinary case: the entry was
+/// written and `sessions.main_leaf_id` now points at it.
+///
+/// **Always chains onto the *current* leaf — there is no partial-keep
+/// variant, and there cannot be one.** `session_entries` is append-only
+/// (this module's own header); a Turn already appended before this call has
+/// a `parent_id` fixed at the moment it was written, so a compaction cannot
+/// retroactively insert itself *between* two already-persisted Turns to
+/// keep the newer one out of `project_from_last_compaction`'s cut —
+/// whatever is currently the leaf is, by construction, everything this call
+/// can still choose to summarise away. `reflect.rs::maybe_compact_prior_turns`
+/// is written around exactly this constraint: when it compacts, it
+/// summarises *every* not-yet-compacted Turn, never a suffix of them.
+pub(crate) async fn append_compaction(
+    pool: &PgPool,
+    session_id: Uuid,
+    summary: &str,
+) -> anyhow::Result<bool> {
+    let mut tx = pool.begin().await?;
+
+    let Some(leaf) = session_main_leaf_id_tx(&mut tx, session_id).await? else {
+        return Ok(false);
+    };
+
+    let id = Uuid::new_v4();
+    let payload = serde_json::json!({ "summary": summary });
+    append_entry(
+        &mut tx,
+        session_id,
+        id,
+        Some(leaf),
+        EntryType::Compaction,
+        payload,
+    )
+    .await?;
+
+    sqlx::query("update sessions set main_leaf_id = $1 where id = $2")
+        .bind(id)
+        .bind(session_id)
+        .execute(&mut *tx)
+        .await?;
+
+    tx.commit().await?;
+    Ok(true)
+}
+
+/// `session_main_leaf_id`'s twin for a caller that already has an open
+/// transaction (`append_compaction`) — reading `main_leaf_id` through the
+/// same transaction the write happens in, rather than a separate
+/// pre-transaction `PgPool` read, is what keeps a concurrent append to the
+/// same Session from racing this one to decide what "current leaf" means.
+async fn session_main_leaf_id_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    session_id: Uuid,
+) -> anyhow::Result<Option<Uuid>> {
+    let leaf: Option<Option<Uuid>> =
+        sqlx::query_scalar("select main_leaf_id from sessions where id = $1")
+            .bind(session_id)
+            .fetch_optional(&mut **tx)
+            .await?;
+    Ok(leaf.flatten())
 }
 
 /// Hands out the next value in `session_id`'s single shared ordering —

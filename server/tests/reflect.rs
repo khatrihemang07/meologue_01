@@ -8,7 +8,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use chrono::{DateTime, Utc};
 use http_body_util::BodyExt;
-use meologue_server::llm::{ChatMessage, LlmClient};
+use meologue_server::llm::{ChatMessage, ChatReply, LlmClient};
 use meologue_server::reflect::ReflectState;
 use serde_json::{Value, json};
 use sqlx::PgPool;
@@ -94,10 +94,18 @@ impl FakeChatClient {
 
 #[async_trait]
 impl LlmClient for FakeChatClient {
-    async fn chat(&self, messages: &[ChatMessage]) -> Result<String> {
+    async fn chat(&self, messages: &[ChatMessage]) -> Result<ChatReply> {
         self.calls.lock().unwrap().push(messages.to_vec());
         match self.replies.lock().unwrap().pop_front() {
-            Some(Ok(reply)) => Ok(reply),
+            // `ChatReply::text` — no usage scripted. Real usage wiring
+            // (`llm::ChatReply.usage` -> `harness::types::Usage`) is
+            // proven at `harness::prompted`'s own level
+            // (`real_usage_reaches_the_assistant_message_with_the_harness_names`),
+            // not duplicated here — this fake's whole contract is a queue
+            // of plain reply text, and widening it to also script usage
+            // would touch every existing call site for no test here that
+            // needs it.
+            Some(Ok(reply)) => Ok(ChatReply::text(reply)),
             Some(Err(message)) => bail!("{message}"),
             None => panic!("FakeChatClient's script ran out of replies"),
         }
@@ -123,7 +131,7 @@ struct UnusedEmbedClient;
 
 #[async_trait]
 impl LlmClient for UnusedEmbedClient {
-    async fn chat(&self, _messages: &[ChatMessage]) -> Result<String> {
+    async fn chat(&self, _messages: &[ChatMessage]) -> Result<ChatReply> {
         unimplemented!("UnusedEmbedClient only ever plays the embed role, and nothing embeds")
     }
 
@@ -189,6 +197,7 @@ fn reflect_state(chat: Arc<FakeChatClient>) -> ReflectState {
     ReflectState {
         chat_client: chat,
         embed_client: Arc::new(UnusedEmbedClient),
+        context_window: 200_000,
     }
 }
 
@@ -202,7 +211,7 @@ struct FakeEmbedClient;
 
 #[async_trait]
 impl LlmClient for FakeEmbedClient {
-    async fn chat(&self, _messages: &[ChatMessage]) -> Result<String> {
+    async fn chat(&self, _messages: &[ChatMessage]) -> Result<ChatReply> {
         unimplemented!("FakeEmbedClient only ever plays the embed role")
     }
 
@@ -219,6 +228,7 @@ fn reflect_state_with_embedding(chat: Arc<FakeChatClient>) -> ReflectState {
     ReflectState {
         chat_client: chat,
         embed_client: Arc::new(FakeEmbedClient),
+        context_window: 200_000,
     }
 }
 
@@ -561,7 +571,7 @@ async fn an_embedding_failure_recovers_and_still_answers(pool: PgPool) {
 
     #[async_trait]
     impl LlmClient for AlwaysFailingEmbedClient {
-        async fn chat(&self, _messages: &[ChatMessage]) -> Result<String> {
+        async fn chat(&self, _messages: &[ChatMessage]) -> Result<ChatReply> {
             unimplemented!("only embed_query is exercised here")
         }
         async fn embed_document(&self, _text: &str) -> Result<Vec<f32>> {
@@ -579,6 +589,7 @@ async fn an_embedding_failure_recovers_and_still_answers(pool: PgPool) {
     let reflect = ReflectState {
         chat_client: chat.clone(),
         embed_client: Arc::new(AlwaysFailingEmbedClient),
+        context_window: 200_000,
     };
 
     let (status, body) = post_reflect(
@@ -1410,4 +1421,181 @@ async fn get_session_still_returns_every_turn_of_an_over_cap_session(pool: PgPoo
         "GET /v1/sessions/{{id}} must return every Turn, not just the CONVERSATION_WINDOW replay \
          cap: {turns:?}"
     );
+}
+
+async fn get_session(pool: &PgPool, reflect: ReflectState, id: Uuid) -> Value {
+    let app = meologue_server::router_with_reflection(
+        pool.clone(),
+        empty_static_dir(),
+        None,
+        Some(reflect),
+    );
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/v1/sessions/{id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+/// Issue #97's between-Turns compaction (`reflect::maybe_compact_prior_turns`),
+/// proven end to end through the real `/v1/reflect` and `GET /v1/sessions/{id}`
+/// routes — `harness::compaction`'s own tests already cover the intra-run
+/// half (the transform `agent_loop::run` applies turn by turn) in isolation,
+/// so this is the wiring `sessions::append_compaction` needed a live proof
+/// for: a real Session, built the same way `/v1/reflect` always builds one
+/// (`record_turn_from_steps`, so it has a real entry tree — the one
+/// precondition `append_compaction` checks), actually gets a `Compaction`
+/// entry written onto it, and `GET /v1/sessions/{id}` — which shares
+/// `sessions::load_turns` with `run_reflect_loop`'s own prior-Turns read —
+/// stops showing every Turn that summary now stands in for.
+///
+/// Compacts *every* prior Turn, not a suffix of them —
+/// `sessions::append_compaction`'s own doc comment covers why a partial
+/// keep is impossible against an append-only tree, and
+/// `reflect::maybe_compact_prior_turns` is written around that constraint.
+#[sqlx::test]
+async fn a_session_nearing_its_context_window_gets_compacted_between_turns(pool: PgPool) {
+    let generous = ReflectState {
+        chat_client: Arc::new(FakeChatClient::new(["a first answer"])),
+        embed_client: Arc::new(UnusedEmbedClient),
+        context_window: 200_000,
+    };
+    let (status, body) = post_reflect(
+        &pool,
+        Some(generous),
+        json!({ "protocol_version": 2, "question": "What did I write about running?" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let id = session_id(&body);
+
+    let generous = ReflectState {
+        chat_client: Arc::new(FakeChatClient::new(["a second answer"])),
+        embed_client: Arc::new(UnusedEmbedClient),
+        context_window: 200_000,
+    };
+    let (status, _) = post_reflect(
+        &pool,
+        Some(generous),
+        json!({ "protocol_version": 2, "session_id": id, "question": "And the wedding?" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // A small `context_window` — `harness::compaction::FIXED_OVERHEAD_TOKENS`
+    // alone already exceeds it, so the two Turns above are enough to fire
+    // `should_compact` with no padding needed. The chat script needs one
+    // extra reply at the front for `maybe_compact_prior_turns`'s own
+    // summarisation call, ahead of the harness loop's usual one.
+    let tight = ReflectState {
+        chat_client: Arc::new(FakeChatClient::new([
+            "condensed: running and the wedding were both discussed",
+            "a third answer",
+        ])),
+        embed_client: Arc::new(UnusedEmbedClient),
+        context_window: 20_000,
+    };
+    let (status, body) = post_reflect(
+        &pool,
+        Some(tight),
+        json!({ "protocol_version": 2, "session_id": id, "question": "What about my knee?" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["answer"], "a third answer");
+
+    // Read the Session back the same way a client (or the next Question)
+    // would — `GET /v1/sessions/{id}` shares `sessions::load_turns` with
+    // `run_reflect_loop`, so this is exactly "reading a summarised
+    // Conversation starts from the summary and continues with what was
+    // kept": Turns 1 and 2 (summarised away together — the only shape a
+    // between-Turns compaction can take) must both be gone; Turn 3 (just
+    // answered) must still be there.
+    let unused = ReflectState {
+        chat_client: Arc::new(FakeChatClient::new(["unused"])),
+        embed_client: Arc::new(UnusedEmbedClient),
+        context_window: 200_000,
+    };
+    let session = get_session(&pool, unused, id).await;
+    let turns = session["turns"]
+        .as_array()
+        .expect("SessionResponse::turns should be a JSON array");
+    let questions: Vec<&str> = turns
+        .iter()
+        .map(|t| t["question"].as_str().unwrap())
+        .collect();
+
+    assert_eq!(
+        questions,
+        vec!["What about my knee?"],
+        "Turns 1 and 2 must both be gone once compaction summarised them away: {questions:?}"
+    );
+}
+
+/// A compaction summary is not a one-time flash — `sessions::latest_compaction_summary`'s
+/// own doc comment names the bug this guards against: without it, only the
+/// Question that happened to trigger compaction would ever see the summary;
+/// every later Question would just see `prior_turns` starting abruptly
+/// after it, with no idea a summary exists at all.
+#[sqlx::test]
+async fn a_summary_reaches_every_question_after_it_not_only_the_one_that_wrote_it(pool: PgPool) {
+    let seed = ReflectState {
+        chat_client: Arc::new(FakeChatClient::new(["a first answer"])),
+        embed_client: Arc::new(UnusedEmbedClient),
+        context_window: 200_000,
+    };
+    let (_, body) = post_reflect(
+        &pool,
+        Some(seed),
+        json!({ "protocol_version": 2, "question": "What did I write about running?" }),
+    )
+    .await;
+    let id = session_id(&body);
+
+    // This call's tight window makes it the one that actually compacts.
+    let compacting = ReflectState {
+        chat_client: Arc::new(FakeChatClient::new([
+            "condensed: running was discussed",
+            "a second answer",
+        ])),
+        embed_client: Arc::new(UnusedEmbedClient),
+        context_window: 20_000,
+    };
+    let (status, _) = post_reflect(
+        &pool,
+        Some(compacting),
+        json!({ "protocol_version": 2, "session_id": id, "question": "And the wedding?" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // A *later* Question, still under the same tight window but with
+    // nothing new large enough to trigger a second compaction on its own —
+    // `should_compact` still fires here purely off `FIXED_OVERHEAD_TOKENS`,
+    // but the summary already on the tree must still be the one folded in,
+    // not silently dropped for lack of a *new* one to write.
+    let later = ReflectState {
+        chat_client: Arc::new(FakeChatClient::new([
+            "condensed: running and the wedding, further condensed",
+            "a third answer",
+        ])),
+        embed_client: Arc::new(UnusedEmbedClient),
+        context_window: 20_000,
+    };
+    let (status, body) = post_reflect(
+        &pool,
+        Some(later),
+        json!({ "protocol_version": 2, "session_id": id, "question": "What about my knee?" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["answer"], "a third answer");
 }

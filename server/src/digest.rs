@@ -274,7 +274,7 @@ async fn write_digest_for(
 
     let messages = build_messages(period, start, &entries, tz);
     let body = match client.chat(&messages).await {
-        Ok(body) => body,
+        Ok(reply) => reply.content,
         Err(err) => {
             let count = attempts.entry(key).or_insert(0);
             *count += 1;

@@ -9,7 +9,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use meologue_server::embedding;
-use meologue_server::llm::{ChatMessage, LlmClient};
+use meologue_server::llm::{ChatMessage, ChatReply, LlmClient};
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use tokio::sync::mpsc;
@@ -56,7 +56,7 @@ impl FakeLlmClient {
 
 #[async_trait]
 impl LlmClient for FakeLlmClient {
-    async fn chat(&self, _messages: &[ChatMessage]) -> Result<String> {
+    async fn chat(&self, _messages: &[ChatMessage]) -> Result<ChatReply> {
         unimplemented!("chat is not exercised by ticket 3's tests")
     }
 

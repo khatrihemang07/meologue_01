@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Datelike, NaiveDate, Utc};
 use chrono_tz::Tz;
 use meologue_server::digest;
-use meologue_server::llm::{ChatMessage, LlmClient};
+use meologue_server::llm::{ChatMessage, ChatReply, LlmClient};
 use meologue_server::period::{self, Period};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -55,11 +55,13 @@ impl FakeChatClient {
 
 #[async_trait]
 impl LlmClient for FakeChatClient {
-    async fn chat(&self, messages: &[ChatMessage]) -> Result<String> {
+    async fn chat(&self, messages: &[ChatMessage]) -> Result<ChatReply> {
         self.call_count.fetch_add(1, Ordering::SeqCst);
         self.calls.lock().unwrap().push(messages.to_vec());
         match self.behavior {
-            FakeBehavior::AlwaysSucceed => Ok("You wrote about a handful of things.".to_string()),
+            FakeBehavior::AlwaysSucceed => {
+                Ok(ChatReply::text("You wrote about a handful of things."))
+            }
             FakeBehavior::AlwaysFail => bail!("fake chat client always errors"),
         }
     }

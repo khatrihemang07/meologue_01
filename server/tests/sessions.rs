@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
-use meologue_server::llm::{ChatMessage, LlmClient};
+use meologue_server::llm::{ChatMessage, ChatReply, LlmClient};
 use meologue_server::reflect::ReflectState;
 use serde_json::Value;
 use sqlx::PgPool;
@@ -28,7 +28,7 @@ struct UnusedLlmClient;
 
 #[async_trait]
 impl LlmClient for UnusedLlmClient {
-    async fn chat(&self, _messages: &[ChatMessage]) -> Result<String> {
+    async fn chat(&self, _messages: &[ChatMessage]) -> Result<ChatReply> {
         unimplemented!("GET /v1/sessions/{{id}} never talks to an LlmClient")
     }
 
@@ -45,6 +45,7 @@ fn reflect_state() -> ReflectState {
     ReflectState {
         chat_client: Arc::new(UnusedLlmClient),
         embed_client: Arc::new(UnusedLlmClient),
+        context_window: 200_000,
     }
 }
 

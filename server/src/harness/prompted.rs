@@ -40,7 +40,7 @@ use crate::llm::{ChatMessage, LlmClient};
 use crate::reflect::{extract_json_object, strip_code_fences};
 
 use super::chat::{AssistantMessageStream, ChatClient, StreamEvent};
-use super::types::{AssistantMessage, ContentBlock, Context, Message, StopReason, Tool};
+use super::types::{AssistantMessage, ContentBlock, Context, Message, StopReason, Tool, Usage};
 
 /// The literal tag pair the wire format above uses. Named constants,
 /// rather than string literals scattered through `ToolCallScanner` and
@@ -94,9 +94,9 @@ impl ChatClient for PromptedToolClient {
         messages.extend(ctx.messages.iter().map(render_message));
 
         let message = match self.chat_client.chat(&messages).await {
-            Ok(raw) => {
+            Ok(reply) => {
                 let mut scanner = ToolCallScanner::new();
-                scanner.feed(&raw);
+                scanner.feed(&reply.content);
                 let content = scanner.finish();
                 let stop_reason = if content
                     .iter()
@@ -110,7 +110,17 @@ impl ChatClient for PromptedToolClient {
                     content,
                     stop_reason,
                     error_message: None,
-                    usage: None,
+                    // Issue #97: the one place `llm::Usage` (the wire
+                    // vocabulary — `prompt_tokens`/`completion_tokens`) and
+                    // `harness::types::Usage` (`compaction::estimate_tokens`'s
+                    // own vocabulary — `input_tokens`/`output_tokens`) meet.
+                    // Both name the same two numbers; the rename exists
+                    // because each module speaks its own domain's language,
+                    // not because the values mean anything different.
+                    usage: reply.usage.map(|usage| Usage {
+                        input_tokens: usage.prompt_tokens,
+                        output_tokens: usage.completion_tokens,
+                    }),
                 }
             }
             // The never-`Err` contract `chat::ChatClient` documents: a
@@ -916,6 +926,11 @@ mod tests {
     struct RecordingLlmClient {
         captured: Mutex<Vec<Vec<ChatMessage>>>,
         reply: String,
+        // Issue #97: `None` (every existing test) reproduces `llm::ChatReply::text`'s
+        // own "no usage reported" default exactly — `with_usage` is the one
+        // opt-in a test takes to prove `AssistantMessage.usage` is actually
+        // wired to what `LlmClient::chat` returned, not just defaulted.
+        usage: Option<crate::llm::Usage>,
     }
 
     impl RecordingLlmClient {
@@ -923,15 +938,24 @@ mod tests {
             Self {
                 captured: Mutex::new(Vec::new()),
                 reply: reply.into(),
+                usage: None,
             }
+        }
+
+        fn with_usage(mut self, usage: crate::llm::Usage) -> Self {
+            self.usage = Some(usage);
+            self
         }
     }
 
     #[async_trait]
     impl LlmClient for RecordingLlmClient {
-        async fn chat(&self, messages: &[ChatMessage]) -> anyhow::Result<String> {
+        async fn chat(&self, messages: &[ChatMessage]) -> anyhow::Result<crate::llm::ChatReply> {
             self.captured.lock().unwrap().push(messages.to_vec());
-            Ok(self.reply.clone())
+            Ok(crate::llm::ChatReply {
+                content: self.reply.clone(),
+                usage: self.usage,
+            })
         }
 
         async fn embed_document(&self, _text: &str) -> anyhow::Result<Vec<f32>> {
@@ -947,7 +971,7 @@ mod tests {
 
     #[async_trait]
     impl LlmClient for FailingLlmClient {
-        async fn chat(&self, _messages: &[ChatMessage]) -> anyhow::Result<String> {
+        async fn chat(&self, _messages: &[ChatMessage]) -> anyhow::Result<crate::llm::ChatReply> {
             anyhow::bail!("connection reset by peer")
         }
 
@@ -1026,6 +1050,38 @@ mod tests {
         assert!(message.error_message.is_some());
         assert!(message.content.is_empty());
         assert_eq!(message.usage, None);
+    }
+
+    /// Issue #97: `llm::ChatReply::usage` — the wire vocabulary
+    /// (`prompt_tokens`/`completion_tokens`) — must reach `AssistantMessage::usage`
+    /// (`harness::types::Usage`'s own `input_tokens`/`output_tokens`) intact.
+    /// This is the one seam that actually renames the two numbers
+    /// (`PromptedToolClient::stream`'s own doc comment on why); everything
+    /// downstream of this — `compaction::estimate_tokens`'s anchoring — only
+    /// ever reads `AssistantMessage::usage`, so this conversion landing
+    /// correctly is what makes real usage reach compaction at all.
+    #[tokio::test]
+    async fn real_usage_reaches_the_assistant_message_with_the_harness_names() {
+        let client = PromptedToolClient::new(Arc::new(RecordingLlmClient::new("done").with_usage(
+            crate::llm::Usage {
+                prompt_tokens: 17_432,
+                completion_tokens: 214,
+            },
+        )));
+        let ctx = Context {
+            system_prompt: "You are Reflection.".to_string(),
+            messages: vec![Message::User("hello".to_string())],
+            tools: vec![],
+        };
+
+        let message = client.stream(&ctx).await.collect().await;
+        assert_eq!(
+            message.usage,
+            Some(Usage {
+                input_tokens: 17_432,
+                output_tokens: 214,
+            })
+        );
     }
 
     #[tokio::test]

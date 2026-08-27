@@ -140,17 +140,34 @@ pub type ShouldStopAfterTurn<'a> = dyn Fn(&[Step]) -> bool + Send + Sync + 'a;
 /// Otherwise the loop continues: every tool call in the reply executes, in
 /// order, and their results are appended to `messages` before the next
 /// `stream` call.
+///
+/// `context_window` is issue #97's own addition: `Some(window)` runs
+/// `compaction::transform_context` against `messages` at the top of every
+/// turn, before it's cloned into that turn's `Context` — pi's own
+/// pre-flight context-editing step, and the one place this loop knows
+/// anything about token budgets at all (`compaction.rs` itself stays
+/// ignorant of `run`'s control flow, and `run`'s control flow stays
+/// ignorant of everything compaction does beyond "here are the messages to
+/// send this turn"). `None` — every call site before this ticket, and every
+/// test below that doesn't say otherwise — reproduces the exact behaviour
+/// `run` always had: `transform_context` is never even reached, so nothing
+/// already passing can observe this parameter existing at all.
 pub async fn run(
     client: &dyn ChatClient,
     system_prompt: String,
     tools: &[Arc<dyn AgentTool>],
     mut messages: Vec<Message>,
     should_stop_after_turn: Option<&ShouldStopAfterTurn<'_>>,
+    context_window: Option<u32>,
 ) -> LoopOutcome {
     let wire_tools = super::tools::to_wire_tools(tools);
     let mut steps = Vec::new();
 
     loop {
+        if let Some(window) = context_window {
+            messages = super::compaction::transform_context(client, window, messages).await;
+        }
+
         let ctx = Context {
             system_prompt: system_prompt.clone(),
             messages: messages.clone(),
@@ -332,7 +349,12 @@ fn tool_names(tools: &[Arc<dyn AgentTool>]) -> String {
 /// exactly one, since nothing splits plain text around a tag that was never
 /// there — see `prompted::ToolCallScanner`) with a newline, so this is
 /// still correct in the degenerate case of several adjacent `Text` blocks.
-fn render_text(content: &[ContentBlock]) -> String {
+///
+/// `pub(crate)`, not private: issue #97's `compaction::summarize` reads a
+/// summarisation reply's prose back out the exact same way this loop reads
+/// an ordinary Answer's — a compaction call is, from the model's point of
+/// view, just another tool-call-free reply.
+pub(crate) fn render_text(content: &[ContentBlock]) -> String {
     content
         .iter()
         .filter_map(|block| match block {
@@ -542,7 +564,7 @@ mod tests {
     #[tokio::test]
     async fn prose_only_terminates_immediately() {
         let client = ScriptedChatClient::new(vec![prose("Nothing to report.")]);
-        let outcome = run(&client, "sys".into(), &[], starting_messages(), None).await;
+        let outcome = run(&client, "sys".into(), &[], starting_messages(), None, None).await;
 
         assert_eq!(outcome.answer.as_deref(), Some("Nothing to report."));
         assert_eq!(outcome.error, None);
@@ -558,7 +580,15 @@ mod tests {
             prose("done"),
         ]);
 
-        let outcome = run(&client, "sys".into(), &tools, starting_messages(), None).await;
+        let outcome = run(
+            &client,
+            "sys".into(),
+            &tools,
+            starting_messages(),
+            None,
+            None,
+        )
+        .await;
 
         assert_eq!(outcome.answer.as_deref(), Some("done"));
         // assistant(tool call), tool result, assistant(prose)
@@ -576,7 +606,15 @@ mod tests {
             prose("done"),
         ]);
 
-        let outcome = run(&client, "sys".into(), &tools, starting_messages(), None).await;
+        let outcome = run(
+            &client,
+            "sys".into(),
+            &tools,
+            starting_messages(),
+            None,
+            None,
+        )
+        .await;
 
         assert_eq!(outcome.answer.as_deref(), Some("done"));
         assert_eq!(
@@ -609,7 +647,15 @@ mod tests {
         };
         let client = ScriptedChatClient::new(vec![reply, prose("done")]);
 
-        let outcome = run(&client, "sys".into(), &tools, starting_messages(), None).await;
+        let outcome = run(
+            &client,
+            "sys".into(),
+            &tools,
+            starting_messages(),
+            None,
+            None,
+        )
+        .await;
 
         assert_eq!(client.contexts().len(), 2, "both calls resolve in one turn");
         let tool_result_ids: Vec<&str> = outcome
@@ -640,7 +686,15 @@ mod tests {
         };
         let client = ScriptedChatClient::new(vec![reply, prose("done")]);
 
-        let outcome = run(&client, "sys".into(), &tools, starting_messages(), None).await;
+        let outcome = run(
+            &client,
+            "sys".into(),
+            &tools,
+            starting_messages(),
+            None,
+            None,
+        )
+        .await;
 
         assert_eq!(
             outcome.answer.as_deref(),
@@ -656,7 +710,15 @@ mod tests {
         let reply = one_tool_call("call_0", "a", json!({}));
         let client = ScriptedChatClient::new(vec![reply]);
 
-        let outcome = run(&client, "sys".into(), &tools, starting_messages(), None).await;
+        let outcome = run(
+            &client,
+            "sys".into(),
+            &tools,
+            starting_messages(),
+            None,
+            None,
+        )
+        .await;
 
         assert_eq!(outcome.answer, None);
         assert_eq!(outcome.error, None);
@@ -680,6 +742,7 @@ mod tests {
             &tools,
             starting_messages(),
             Some(hook),
+            None,
         )
         .await;
 
@@ -700,7 +763,7 @@ mod tests {
             prose("done"),
         ]);
 
-        let outcome = run(&client, "sys".into(), &[], starting_messages(), None).await;
+        let outcome = run(&client, "sys".into(), &[], starting_messages(), None, None).await;
 
         let Step::ToolResult {
             is_error,
@@ -738,7 +801,7 @@ mod tests {
         };
         let client = ScriptedChatClient::new(vec![malformed, prose("done")]);
 
-        let outcome = run(&client, "sys".into(), &[], starting_messages(), None).await;
+        let outcome = run(&client, "sys".into(), &[], starting_messages(), None, None).await;
 
         let Step::ToolResult {
             is_error, content, ..
@@ -759,7 +822,15 @@ mod tests {
             prose("done"),
         ]);
 
-        let outcome = run(&client, "sys".into(), &tools, starting_messages(), None).await;
+        let outcome = run(
+            &client,
+            "sys".into(),
+            &tools,
+            starting_messages(),
+            None,
+            None,
+        )
+        .await;
 
         let Step::ToolResult {
             is_error, content, ..
@@ -781,7 +852,7 @@ mod tests {
         };
         let client = ScriptedChatClient::new(vec![errored]);
 
-        let outcome = run(&client, "sys".into(), &[], starting_messages(), None).await;
+        let outcome = run(&client, "sys".into(), &[], starting_messages(), None, None).await;
 
         assert_eq!(outcome.answer, None);
         assert_eq!(outcome.error.as_deref(), Some("connection reset"));
@@ -800,7 +871,15 @@ mod tests {
         let client =
             ScriptedChatClient::new(vec![one_tool_call("call_0", "echo", json!({})), aborted]);
 
-        let outcome = run(&client, "sys".into(), &tools, starting_messages(), None).await;
+        let outcome = run(
+            &client,
+            "sys".into(),
+            &tools,
+            starting_messages(),
+            None,
+            None,
+        )
+        .await;
 
         assert_eq!(outcome.answer, None);
         assert_eq!(outcome.error, None);
@@ -831,7 +910,7 @@ mod tests {
         messages.insert(0, Message::User("earlier question".to_string()));
         messages.insert(1, Message::Assistant(prose("earlier answer")));
 
-        let _ = run(&client, "sys prompt".into(), &tools, messages, None).await;
+        let _ = run(&client, "sys prompt".into(), &tools, messages, None, None).await;
 
         let contexts = client.contexts();
         assert_eq!(contexts.len(), 2);
@@ -922,5 +1001,93 @@ mod tests {
         assert_eq!(tool_name, "echo");
         assert_eq!(content, "echoed {\"n\":1}");
         assert!(matches!(messages[2], Message::Assistant(_)));
+    }
+
+    // -- issue #97: compaction wired into the loop's own pre-flight ------
+
+    /// Proves `context_window` is actually reached from `run`'s own loop,
+    /// not just callable in isolation (`compaction.rs`'s own tests already
+    /// cover the transform itself in detail — this is the wiring, not the
+    /// logic). A tool result padded well past `compaction::KEEP_RECENT_TOKENS`
+    /// forces `should_compact` to fire between the first tool-calling turn
+    /// and the second — `ScriptedChatClient`'s script has to include the
+    /// extra summarisation call in the middle for exactly that reason, and
+    /// `client.contexts().len() == 3` (not 2) is what proves it actually
+    /// happened rather than the run silently skipping it.
+    #[tokio::test]
+    async fn compaction_fires_mid_run_and_the_loop_still_produces_an_answer() {
+        let tools = vec![tool(EchoTool::new("search"))];
+        let huge_arg = json!({"found": "x".repeat(300_000)});
+        let client = ScriptedChatClient::new(vec![
+            one_tool_call("call_0", "search", huge_arg),
+            prose("condensed: nothing but padding was found"), // the compaction's own summarisation reply
+            prose("done"),
+        ]);
+
+        let outcome = run(
+            &client,
+            "sys".into(),
+            &tools,
+            starting_messages(),
+            None,
+            Some(40_000), // small enough that the padded tool result alone trips should_compact
+        )
+        .await;
+
+        assert_eq!(outcome.answer.as_deref(), Some("done"));
+        // The persisted record is untouched by compaction — every Step that
+        // actually happened is still there, full-size padding included.
+        // (this module's own doc comment, and compaction.rs's own doc
+        // comment on "nothing already recorded is altered or removed.")
+        assert_eq!(outcome.steps.len(), 3);
+
+        let contexts = client.contexts();
+        assert_eq!(
+            contexts.len(),
+            3,
+            "turn 1, the compaction's own summarisation call, then turn 2 — three stream() calls, not two"
+        );
+        // The final turn's own Context is what compaction actually
+        // protected: it must carry the summary marker, and must not still
+        // be carrying the padded tool result verbatim.
+        let final_ctx = &contexts[2];
+        assert!(
+            final_ctx
+                .messages
+                .iter()
+                .any(|m| matches!(m, Message::User(t) if t.starts_with(crate::harness::compaction::SUMMARY_MARKER)))
+        );
+        assert!(
+            !final_ctx
+                .messages
+                .iter()
+                .any(|m| matches!(m, Message::ToolResult { content, .. } if content.len() > 1_000)),
+            "the padded tool result must not still be present verbatim after compaction"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_generous_context_window_never_triggers_compaction() {
+        let tools = vec![tool(EchoTool::new("echo"))];
+        let client = ScriptedChatClient::new(vec![
+            one_tool_call("call_0", "echo", json!({"n": 1})),
+            prose("done"),
+        ]);
+
+        let outcome = run(
+            &client,
+            "sys".into(),
+            &tools,
+            starting_messages(),
+            None,
+            Some(200_000),
+        )
+        .await;
+
+        assert_eq!(outcome.answer.as_deref(), Some("done"));
+        // Exactly the two calls the loop itself needed — no extra
+        // summarisation call snuck in for a Conversation nowhere near the
+        // trigger.
+        assert_eq!(client.contexts().len(), 2);
     }
 }

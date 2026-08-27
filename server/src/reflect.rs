@@ -49,6 +49,7 @@ use uuid::Uuid;
 
 use crate::embedding::vector_literal;
 use crate::harness::agent_loop::{self, Step};
+use crate::harness::compaction;
 use crate::harness::prompted::PromptedToolClient;
 use crate::harness::tools::{
     self, AgentTool, EntriesInRangeTool, ReadDigestTool, SearchEntriesTool, SimilarEntriesTool,
@@ -236,6 +237,13 @@ struct Extraction {
 pub struct ReflectState {
     pub chat_client: Arc<dyn LlmClient + Send + Sync>,
     pub embed_client: Arc<dyn LlmClient + Send + Sync>,
+    /// Issue #97: how much room the configured chat model has, read once at
+    /// startup from its `GET /v1/models/{id}` entry
+    /// (`llm::resolve_context_window`) — never `harness::compaction`'s
+    /// `DEFAULT_CONTEXT_WINDOW` fallback constant directly, so a test can
+    /// see exactly what a Session's `run_reflect_loop` will treat as the
+    /// trigger threshold without needing a live wrapper to ask.
+    pub context_window: u32,
 }
 
 /// The answering call's system prompt (chat call 2). `docs/adr/0024`: this
@@ -538,6 +546,35 @@ async fn run_reflect_loop(
         turns.split_off(start)
     };
 
+    // Issue #97's between-Turns compaction — `maybe_compact_prior_turns`'s
+    // own doc comment covers why this, not a change inside
+    // `agent_loop::run`, is where a Session's cross-Question growth gets
+    // trimmed, and why it is safe to write straight to the tree here.
+    // `CONVERSATION_WINDOW` above already caps *how many* Turns get this
+    // far; this is the token-aware pass underneath it, and can still fire
+    // well before ten Turns ever accumulate.
+    //
+    // `existing_summary` is read unconditionally, on every request with a
+    // Session — not only the one that happens to trigger a *new*
+    // compaction — because `sessions::latest_compaction_summary`'s own doc
+    // comment names exactly the bug that skipping this would reintroduce:
+    // a summary that only ever reached the one Question that wrote it.
+    let (prior_summary, prior_turns) = match req.session_id {
+        Some(session_id) => {
+            let existing_summary = sessions::latest_compaction_summary(pool, session_id).await?;
+            maybe_compact_prior_turns(
+                pool,
+                session_id,
+                prior_turns,
+                existing_summary,
+                &reflect.chat_client,
+                reflect.context_window,
+            )
+            .await?
+        }
+        None => (None, prior_turns),
+    };
+
     // Four tools now: `entries_in_range` (issue #93, by date),
     // `search_entries` (issue #94, by word), `similar_entries` (issue #94,
     // by meaning) and `read_digest` (issue #95, a written summary rather
@@ -559,16 +596,19 @@ async fn run_reflect_loop(
     ];
     let system_prompt = tools::render_tool_guidance(LOOP_SYSTEM_INSTRUCTION, &tools);
 
-    let mut messages = Vec::with_capacity(prior_turns.len() * 2 + 1);
-    for turn in &prior_turns {
-        messages.push(Message::User(turn.question.clone()));
-        messages.push(Message::Assistant(AssistantMessage {
-            content: vec![ContentBlock::Text(turn.answer.clone())],
-            stop_reason: StopReason::Stop,
-            error_message: None,
-            usage: None,
-        }));
+    // `prior_summary` is `Some` only when `maybe_compact_prior_turns` just
+    // wrote one — prepended here as the same kind of synthetic
+    // `Message::User` `harness::compaction::transform_context` prepends
+    // intra-run, so a model reading this Question's `Context` cannot tell
+    // which half of compaction produced it.
+    let mut messages = Vec::with_capacity(prior_turns.len() * 2 + 2);
+    if let Some(summary) = prior_summary {
+        messages.push(Message::User(format!(
+            "{}{summary}",
+            compaction::SUMMARY_MARKER
+        )));
     }
+    messages.extend(turns_to_messages(&prior_turns));
     messages.push(Message::User(req.question.clone()));
 
     let chat_client = PromptedToolClient::new(reflect.chat_client.clone());
@@ -587,6 +627,7 @@ async fn run_reflect_loop(
         &tools,
         messages.clone(),
         None,
+        Some(reflect.context_window),
     )
     .await;
 
@@ -610,8 +651,15 @@ async fn run_reflect_loop(
         let mut retry_messages = messages;
         retry_messages.extend(agent_loop::steps_to_messages(&outcome.steps));
         retry_messages.push(Message::User(EMPTY_REPLY_CORRECTION.to_string()));
-        let retry_outcome =
-            agent_loop::run(&chat_client, system_prompt, &tools, retry_messages, None).await;
+        let retry_outcome = agent_loop::run(
+            &chat_client,
+            system_prompt,
+            &tools,
+            retry_messages,
+            None,
+            Some(reflect.context_window),
+        )
+        .await;
 
         // Every `Step` from *both* attempts is kept, not just the retry's
         // own — the first attempt's tool calls are real Grounding (the bug
@@ -706,6 +754,150 @@ async fn run_reflect_loop(
         grounded,
         fallback_used,
     })
+}
+
+/// `prior_turns`, as the `[User, Assistant]` message pairs
+/// `run_reflect_loop` replays into the loop's own `Context` — factored out
+/// of that function so `maybe_compact_prior_turns` can build the same
+/// `Vec<Message>` `harness::compaction::should_compact`/`find_cut_point`
+/// actually judge, rather than a second, only-approximately-the-same
+/// rendering. Each Turn always contributes exactly two messages, in that
+/// order, and never a `Message::ToolResult` — `SessionTurnRow` only ever
+/// carries a Turn's own Question and (already-collapsed) final Answer, not
+/// the tool calls that produced it — which is what makes every even index
+/// into the result a safe Turn boundary: nothing here can ever trip the
+/// tool-call/tool-result rule `harness::compaction::is_valid_cut_point`
+/// enforces, because nothing here is a tool call or a tool result at all.
+fn turns_to_messages(turns: &[SessionTurnRow]) -> Vec<Message> {
+    let mut messages = Vec::with_capacity(turns.len() * 2);
+    for turn in turns {
+        messages.push(Message::User(turn.question.clone()));
+        messages.push(Message::Assistant(AssistantMessage {
+            content: vec![ContentBlock::Text(turn.answer.clone())],
+            stop_reason: StopReason::Stop,
+            error_message: None,
+            usage: None,
+        }));
+    }
+    messages
+}
+
+/// Issue #97's *between*-Turns compaction. `harness::compaction`'s own doc
+/// comment names this function as the reason a compaction is never written
+/// from inside a running `agent_loop::run` call: doing it there would land
+/// the `sessions::EntryType::Compaction` entry *inside* the current Turn's
+/// own step chain, severing that Turn's leading `user` entry from the tree
+/// `sessions::entries_to_turns` walks and silently erasing the very Turn
+/// that triggered it from every future read. Called here, before
+/// `run_reflect_loop` has appended anything for the *current* Question at
+/// all, the entry this writes always lands cleanly on the boundary between
+/// the last already-persisted Turn and whatever Turn is about to happen —
+/// never inside one.
+///
+/// **Always summarises every Turn in `prior_turns`, never a suffix of
+/// them** — `sessions::append_compaction`'s own doc comment covers why a
+/// partial keep is not just undesirable but impossible: `session_entries`
+/// is append-only, so a compaction written now can only ever describe
+/// "everything up to the current leaf," and the current leaf, at this
+/// point in `run_reflect_loop`, is the *last* already-persisted Turn.
+/// `harness::compaction::KEEP_RECENT_TOKENS`/`find_cut_point` — the
+/// "keep some of the tail verbatim" logic — has no equivalent here for
+/// exactly that reason; it belongs to `agent_loop::run`'s ephemeral
+/// `messages`, which has no such constraint, not to this persisted
+/// checkpoint.
+///
+/// `existing_summary` is whatever `sessions::latest_compaction_summary`
+/// already found for this Session (`run_reflect_loop`'s own call, made
+/// unconditionally, every request — see that function's own doc comment
+/// for why). When compaction fires here, it is threaded into the new
+/// summarisation call (`summarize_prior_turns`) so the new summary still
+/// carries whatever the *previous* one held, rather than losing it the
+/// moment a fresh Compaction entry becomes the path's new last one
+/// (`sessions::project_from_last_compaction` only ever looks at the *last*
+/// compaction — this is what keeps that from silently discarding the
+/// first). This is a deliberate, narrow exception to "skip iterative
+/// summary update" (issue #97's own scope note): a *between*-Turns
+/// compaction has no pinned-message trick available to it the way
+/// `harness::compaction::transform_context`'s does (there is no persisted
+/// wire `Message` for a summary to live in — only Turns), so folding the
+/// old summary into the new one exactly once, rather than losing it, is
+/// the only option this shape of storage leaves. It differs from pi's own
+/// iterative update in the way that matters: this still fires at most once
+/// per compaction event, never a background refinement pass.
+///
+/// Returns `(existing_summary, prior_turns)` unchanged whenever nothing new
+/// needs to happen — no prior Turns, comfortably under budget, or a Session
+/// with no entry tree yet to safely write onto (`sessions::append_compaction`'s
+/// own `Ok(false)`, mirroring the same conservative choice
+/// `sessions::load_turns`'s `session_turns` fallback already makes for that
+/// case) — so a caller always gets back *some* summary to show the model
+/// when one exists, whether or not this particular call is the one that
+/// just wrote it.
+async fn maybe_compact_prior_turns(
+    pool: &PgPool,
+    session_id: Uuid,
+    prior_turns: Vec<SessionTurnRow>,
+    existing_summary: Option<String>,
+    chat_client: &Arc<dyn LlmClient + Send + Sync>,
+    context_window: u32,
+) -> anyhow::Result<(Option<String>, Vec<SessionTurnRow>)> {
+    if prior_turns.is_empty() {
+        return Ok((existing_summary, prior_turns));
+    }
+
+    let as_messages = turns_to_messages(&prior_turns);
+    if !compaction::should_compact(&as_messages, context_window) {
+        return Ok((existing_summary, prior_turns));
+    }
+
+    let summary =
+        summarize_prior_turns(chat_client, existing_summary.as_deref(), &prior_turns).await?;
+    if !sessions::append_compaction(pool, session_id, &summary).await? {
+        return Ok((existing_summary, prior_turns));
+    }
+
+    Ok((Some(summary), Vec::new()))
+}
+
+/// What `maybe_compact_prior_turns` sends the model to actually produce a
+/// summary — a separate, one-off chat call against `llm::LlmClient`
+/// directly (not `harness::chat::ChatClient` — this runs before
+/// `agent_loop::run` even starts, and has no tool-calling protocol to speak
+/// in the first place), the same interface `reflect.rs`'s own extraction
+/// call (`try_extract`) already uses this way. `existing_summary`, when
+/// given, is rendered first, ahead of every Turn — see
+/// `maybe_compact_prior_turns`'s own doc comment for why folding it in here
+/// is the one place this ticket doesn't avoid re-reading already-condensed
+/// text through the model.
+const CONVERSATION_SUMMARY_SYSTEM_PROMPT: &str = "You summarise conversations. Be concise and \
+factual. Keep anything a later turn might still need: names, dates, specific facts, and what was \
+already found or ruled out. Do not answer any question in the conversation — only describe it.";
+
+async fn summarize_prior_turns(
+    chat_client: &Arc<dyn LlmClient + Send + Sync>,
+    existing_summary: Option<&str>,
+    turns: &[SessionTurnRow],
+) -> anyhow::Result<String> {
+    let mut transcript = String::new();
+    if let Some(existing) = existing_summary {
+        transcript.push_str("Summary of the conversation so far:\n");
+        transcript.push_str(existing);
+        transcript.push_str("\n\n");
+    }
+    for turn in turns {
+        transcript.push_str(&format!("Q: {}\nA: {}\n\n", turn.question, turn.answer));
+    }
+    let messages = vec![
+        ChatMessage {
+            role: "system".to_string(),
+            content: CONVERSATION_SUMMARY_SYSTEM_PROMPT.to_string(),
+        },
+        ChatMessage {
+            role: "user".to_string(),
+            content: format!("{transcript}Summarize the conversation above concisely."),
+        },
+    ];
+    Ok(chat_client.chat(&messages).await?.content)
 }
 
 /// Turns one loop run's `Question` plus its `Step`s into the ordered
@@ -967,7 +1159,8 @@ async fn run_reflect(
         .chat_client
         .chat(&messages)
         .await
-        .context("chat call failed")?;
+        .context("chat call failed")?
+        .content;
     let (verdict, answer) = parse_and_strip_verdict(&raw_answer);
     let grounded = match verdict {
         Some(verdict) => verdict,
@@ -1041,7 +1234,8 @@ async fn run_reflect(
                 .chat_client
                 .chat(&fallback_messages)
                 .await
-                .context("fallback chat call failed")?;
+                .context("fallback chat call failed")?
+                .content;
             (fallback_answer, fallback_ids, false, true)
         }
     };
@@ -1569,7 +1763,8 @@ async fn try_extract(
         .chat_client
         .chat(&messages)
         .await
-        .context("extraction chat call failed")?;
+        .context("extraction chat call failed")?
+        .content;
     parse_extraction(&raw)
 }
 

@@ -264,7 +264,7 @@ mod tests {
 
     #[async_trait]
     impl LlmClient for FakeEmbedClient {
-        async fn chat(&self, _messages: &[ChatMessage]) -> anyhow::Result<String> {
+        async fn chat(&self, _messages: &[ChatMessage]) -> anyhow::Result<crate::llm::ChatReply> {
             unimplemented!("similar_entries never calls chat")
         }
 
