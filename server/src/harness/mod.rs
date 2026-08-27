@@ -1,17 +1,19 @@
-//! Issue #93, pass 1: the protocol layer for turning Reflection into a
-//! tool-calling loop, and nothing past it. `types` fixes the message model
-//! (modeled on `earendil-works/pi`'s `packages/ai/src/types.ts`, the shape
-//! the issue names as its reference), `chat` is the seam pass 2's agent
-//! loop is written against, and `prompted` is the one implementation of
-//! that seam this ticket builds — the prompt-and-parse compromise the
-//! configured chat endpoint forces (see `prompted`'s doc comment for why).
+//! Issue #93: turning Reflection into a tool-calling loop. Pass 1 built the
+//! protocol layer — `types` fixes the message model (modeled on
+//! `earendil-works/pi`'s `packages/ai/src/types.ts`, the shape the issue
+//! names as its reference), `chat` is the seam the loop is written against,
+//! and `prompted` is the prompt-and-parse compromise the configured chat
+//! endpoint forces (see `prompted`'s doc comment for why).
 //!
-//! Deliberately *not* here: the agent loop itself, any tool
-//! (`entries_in_range` is the first, per the issue), and any change to
-//! `reflect.rs`'s existing pipeline. Those are pass 2's — this module only
-//! has to give pass 2 something that produces prose or tool calls without
-//! ever revealing which mechanism produced them.
+//! Pass 2 builds everything above that seam: `tools` is the `AgentTool`
+//! trait and the first tool (`entries_in_range`), and `agent_loop` is the
+//! loop itself — ported from pi's `packages/agent/src/agent-loop.ts`, the
+//! same reference `types` already named. `reflect.rs` is what actually
+//! wires the loop into `/v1/reflect`; nothing here knows about HTTP,
+//! Sessions, or Postgres.
 
+pub mod agent_loop;
 pub mod chat;
 pub mod prompted;
+pub mod tools;
 pub mod types;

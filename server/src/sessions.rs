@@ -237,11 +237,17 @@ pub(crate) struct RecordRow {
 
 /// The type-specific shape a `message` entry's `payload` holds — tagged on
 /// `role` so `serde_json` reads `{"role": "user", ...}` back into exactly
-/// the variant that wrote it. `entries_to_turns` only ever constructs a
-/// `SessionTurnRow` from a `User` entry immediately followed by an
-/// `Assistant` entry; `ToolResult` exists because CONTEXT.md's Conversation
-/// entry admits it (a harness reads a tool's result the same way it reads
-/// what the model or the user said) even though nothing writes one yet.
+/// the variant that wrote it. `entries_to_turns` walks a run of these
+/// looking for the *last* `Assistant` entry between one `User` entry and
+/// the next (see that function's own doc comment for why "last", not
+/// "immediately following" — issue #93 pass 2's loop can write several);
+/// `ToolResult` was reserved for exactly the harness that now writes it
+/// (`reflect.rs::build_tree_payloads`) — `tool_name`, `is_error` and
+/// `details` are this ticket's own addition to what CONTEXT.md's
+/// Conversation entry already admitted a harness could store: `details` in
+/// particular is the structured half `harness::tools::ToolOutcome` carries,
+/// which issue #93 is explicit the Conversation stores even though the
+/// model itself never sees it.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "role", rename_all = "snake_case")]
 pub(crate) enum MessagePayload {
@@ -259,6 +265,12 @@ pub(crate) enum MessagePayload {
     },
     ToolResult {
         text: String,
+        #[serde(default)]
+        tool_name: String,
+        #[serde(default)]
+        is_error: bool,
+        #[serde(default)]
+        details: Value,
     },
 }
 
@@ -569,28 +581,7 @@ pub(crate) async fn record_turn(
     title: &str,
     turn: NewTurn,
 ) -> anyhow::Result<Uuid> {
-    let mut tx = pool.begin().await?;
-
-    let (session_id, parent_leaf) = match session_id {
-        Some(id) => {
-            let leaf: Option<Uuid> = sqlx::query_scalar(
-                "update sessions set updated_at = now() where id = $1 returning main_leaf_id",
-            )
-            .bind(id)
-            .fetch_one(&mut *tx)
-            .await?;
-            (id, leaf)
-        }
-        None => {
-            let id = Uuid::new_v4();
-            sqlx::query("insert into sessions (id, title) values ($1, $2)")
-                .bind(id)
-                .bind(title)
-                .execute(&mut *tx)
-                .await?;
-            (id, None)
-        }
-    };
+    let (mut tx, session_id, parent_leaf) = begin_turn(pool, session_id, title).await?;
 
     sqlx::query(
         "insert into session_turns
@@ -642,6 +633,107 @@ pub(crate) async fn record_turn(
 
     sqlx::query("update sessions set main_leaf_id = $1 where id = $2")
         .bind(assistant_entry_id)
+        .bind(session_id)
+        .execute(&mut *tx)
+        .await?;
+
+    tx.commit().await?;
+    Ok(session_id)
+}
+
+/// Opens a transaction and resolves the Session a new Turn is about to be
+/// appended to — an existing Session's `main_leaf_id` (its current leaf,
+/// about to be extended) for `Some(session_id)`, or a freshly minted
+/// Session with no leaf yet for `None`. Factored out of `record_turn` so a
+/// harness-driven persistence path (`reflect.rs::run_reflect_loop`, issue
+/// #93 pass 2) that appends more than the one User/Assistant pair
+/// `record_turn` itself writes — a loop can call a tool, or several, before
+/// it answers — can share the same session-upsert logic rather than
+/// duplicating it. Returns the still-open transaction: every caller has
+/// more to do inside it (an insert, one or more `append_entry` calls, a
+/// `main_leaf_id` update) before committing.
+async fn begin_turn<'a>(
+    pool: &'a PgPool,
+    session_id: Option<Uuid>,
+    title: &str,
+) -> anyhow::Result<(Transaction<'a, Postgres>, Uuid, Option<Uuid>)> {
+    let mut tx = pool.begin().await?;
+
+    let (session_id, parent_leaf) = match session_id {
+        Some(id) => {
+            let leaf: Option<Uuid> = sqlx::query_scalar(
+                "update sessions set updated_at = now() where id = $1 returning main_leaf_id",
+            )
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await?;
+            (id, leaf)
+        }
+        None => {
+            let id = Uuid::new_v4();
+            sqlx::query("insert into sessions (id, title) values ($1, $2)")
+                .bind(id)
+                .bind(title)
+                .execute(&mut *tx)
+                .await?;
+            (id, None)
+        }
+    };
+
+    Ok((tx, session_id, parent_leaf))
+}
+
+/// The harness-driven twin of `record_turn` (issue #93 pass 2): still
+/// exactly one `session_turns` row per request — `NewTurn` is unchanged,
+/// and Search (issue #64) still only ever needs one Question/Answer pair
+/// per Turn to index — but the tree underneath it can hold more than the
+/// one User/Assistant pair `record_turn` itself appends, because a loop can
+/// call a tool (or several) before it answers. `payloads` is every entry
+/// this Turn adds to the tree, in the order they happened, already encoded
+/// as `(EntryType, Value)` pairs by the caller — `reflect.rs`'s
+/// `build_tree_payloads`, which is what actually knows the shape of a
+/// loop's steps; this function only chains them onto the Session's existing
+/// leaf and commits, exactly like `record_turn` does for its own two.
+/// `payloads` must not be empty — a Turn with no entries at all is not a
+/// Turn, the same invariant `record_turn` upholds by construction (it always
+/// writes exactly two).
+pub(crate) async fn record_turn_from_steps(
+    pool: &PgPool,
+    session_id: Option<Uuid>,
+    title: &str,
+    turn: NewTurn,
+    payloads: Vec<(EntryType, Value)>,
+) -> anyhow::Result<Uuid> {
+    anyhow::ensure!(
+        !payloads.is_empty(),
+        "record_turn_from_steps requires at least one entry to append"
+    );
+
+    let (mut tx, session_id, mut leaf) = begin_turn(pool, session_id, title).await?;
+
+    sqlx::query(
+        "insert into session_turns
+            (id, session_id, question, answer, grounding_entry_ids, grounded, fallback_used)
+         values ($1, $2, $3, $4, $5, $6, $7)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(session_id)
+    .bind(&turn.question)
+    .bind(&turn.answer)
+    .bind(&turn.grounding_entry_ids)
+    .bind(turn.grounded)
+    .bind(turn.fallback_used)
+    .execute(&mut *tx)
+    .await?;
+
+    for (entry_type, payload) in payloads {
+        let id = Uuid::new_v4();
+        append_entry(&mut tx, session_id, id, leaf, entry_type, payload).await?;
+        leaf = Some(id);
+    }
+
+    sqlx::query("update sessions set main_leaf_id = $1 where id = $2")
+        .bind(leaf.expect("checked non-empty above"))
         .bind(session_id)
         .execute(&mut *tx)
         .await?;
@@ -865,15 +957,27 @@ fn decode_message(entry: &EntryRow) -> anyhow::Result<Option<MessagePayload>> {
 }
 
 /// Rebuilds `SessionTurnRow`s from a root-first path of entries — the
-/// inverse of what `record_turn` writes: a `user` `message` immediately
-/// followed by an `assistant` `message` becomes one Turn, with the Turn's
-/// `created_at` taken from the `assistant` entry (matching what
-/// `session_turns.created_at` always meant: when the Answer, not the
-/// Question, was recorded). Anything else on the path — a non-`message`
-/// entry, a `user` entry with no `assistant` entry right after it (an
-/// interrupted Turn a future harness might leave behind) — is skipped
-/// rather than treated as an error: a Conversation with a gap in it is
-/// still a Conversation, just one with fewer Turns than entries.
+/// inverse of what `record_turn`/`record_turn_from_steps` write. A `user`
+/// `message` starts a Turn; everything after it up to (not including) the
+/// *next* `user` `message`, or the end of the path, belongs to that same
+/// Turn's own run — which, since issue #93 pass 2, can hold more than the
+/// single `assistant` entry `record_turn` itself ever wrote: a loop can
+/// call a tool (or several `assistant`/`tool_result` entries deep) before
+/// it actually answers. The Turn's answer is the *last* `assistant` entry
+/// in that run, not the first — the first one right after a `user` entry
+/// may only be "I'm going to look that up," with the tool call attached;
+/// the last one is what the loop's own stopping rule
+/// (`harness::agent_loop::run`) guarantees has no tool call left in it,
+/// which is what makes it the real Answer. `created_at` is taken from that
+/// same entry, matching what `session_turns.created_at` always meant: when
+/// the Answer, not the Question, was recorded.
+///
+/// A `user` entry whose run never contains an `assistant` entry at all (an
+/// interrupted Turn — the loop errored, aborted, or unanimously terminated
+/// before ever answering) contributes no Turn: a Conversation with a gap in
+/// it is still a Conversation, just one with fewer Turns than entries.
+/// `tool_result` entries, and any other non-`message` entry type, are
+/// walked over without changing which `assistant` entry is "last."
 fn entries_to_turns(path: &[&EntryRow]) -> anyhow::Result<Vec<SessionTurnRow>> {
     let mut turns = Vec::new();
     let mut index = 0;
@@ -884,28 +988,35 @@ fn entries_to_turns(path: &[&EntryRow]) -> anyhow::Result<Vec<SessionTurnRow>> {
             continue;
         };
 
-        let Some(next) = path.get(index + 1) else {
-            break;
-        };
-        if let Some(MessagePayload::Assistant {
-            text: answer,
-            grounding_entry_ids,
-            grounded,
-            fallback_used,
-        }) = decode_message(next)?
-        {
-            turns.push(SessionTurnRow {
-                question,
-                answer,
-                grounding_entry_ids,
-                grounded,
-                fallback_used,
-                created_at: next.created_at,
-            });
-            index += 2;
-        } else {
-            index += 1;
+        let mut cursor = index + 1;
+        let mut answer: Option<SessionTurnRow> = None;
+        while cursor < path.len() {
+            match decode_message(path[cursor])? {
+                Some(MessagePayload::User { .. }) => break,
+                Some(MessagePayload::Assistant {
+                    text,
+                    grounding_entry_ids,
+                    grounded,
+                    fallback_used,
+                }) => {
+                    answer = Some(SessionTurnRow {
+                        question: question.clone(),
+                        answer: text,
+                        grounding_entry_ids,
+                        grounded,
+                        fallback_used,
+                        created_at: path[cursor].created_at,
+                    });
+                }
+                Some(MessagePayload::ToolResult { .. }) | None => {}
+            }
+            cursor += 1;
         }
+
+        if let Some(turn) = answer {
+            turns.push(turn);
+        }
+        index = cursor;
     }
 
     Ok(turns)
@@ -1034,6 +1145,21 @@ mod tests {
                 grounding_entry_ids: Vec::new(),
                 grounded: true,
                 fallback_used: false,
+            })
+            .unwrap(),
+        )
+    }
+
+    fn tool_result_message(id: Uuid, parent_id: Option<Uuid>, text: &str) -> EntryRow {
+        entry(
+            id,
+            parent_id,
+            EntryType::Message,
+            serde_json::to_value(MessagePayload::ToolResult {
+                text: text.to_string(),
+                tool_name: "entries_in_range".to_string(),
+                is_error: false,
+                details: serde_json::json!({}),
             })
             .unwrap(),
         )
@@ -1427,5 +1553,191 @@ mod tests {
         assert_eq!(turns[0].answer, "Recurring since February.");
         assert_eq!(turns[1].question, "Did PT help?");
         assert_eq!(turns[1].answer, "Yes.");
+    }
+
+    // -- issue #93 pass 2: a loop-driven Turn's run can hold more than one
+    // Assistant entry -----------------------------------------------------
+
+    /// The correctness property `run_reflect_loop`'s own persistence
+    /// depends on: a Turn whose run is `user -> assistant (tool call) ->
+    /// tool_result -> assistant (the real answer)` must read back as one
+    /// Turn whose answer is the *last* assistant entry, not the first — the
+    /// first is only "I'm going to look that up," not the Answer. Before
+    /// issue #93 pass 2's fix, `entries_to_turns` paired a `user` entry with
+    /// whatever `assistant` entry immediately followed it, which for a run
+    /// like this would have surfaced the tool-call announcement as the
+    /// Turn's answer instead.
+    #[test]
+    fn a_loop_turns_run_reads_back_with_the_last_assistant_entry_as_the_answer() {
+        let question_id = Uuid::new_v4();
+        let question = user_message(question_id, None, "What did I write about running?");
+
+        let first_assistant_id = Uuid::new_v4();
+        let first_assistant = assistant_message(
+            first_assistant_id,
+            Some(question_id),
+            "[called entries_in_range({\"from\":\"2026-07-01\",\"to\":\"2026-07-31\"})]",
+        );
+
+        let tool_result_id = Uuid::new_v4();
+        let tool_result = tool_result_message(
+            tool_result_id,
+            Some(first_assistant_id),
+            "[2026-07-05] Ran 5k this morning.",
+        );
+
+        let final_assistant_id = Uuid::new_v4();
+        let final_assistant = assistant_message(
+            final_assistant_id,
+            Some(tool_result_id),
+            "You ran a 5k on July 5th.",
+        );
+
+        let path = vec![&question, &first_assistant, &tool_result, &final_assistant];
+        let turns = entries_to_turns(&path).unwrap();
+
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].question, "What did I write about running?");
+        assert_eq!(turns[0].answer, "You ran a 5k on July 5th.");
+    }
+
+    /// Two consecutive loop-driven Turns in the same Session — the run
+    /// boundary (the *next* `user` entry) must correctly separate them, not
+    /// just the presence of an `assistant` entry.
+    #[test]
+    fn two_consecutive_loop_turns_are_read_back_separately() {
+        let q1_id = Uuid::new_v4();
+        let q1 = user_message(q1_id, None, "First question?");
+        let a1_id = Uuid::new_v4();
+        let a1 = assistant_message(a1_id, Some(q1_id), "First answer.");
+
+        let q2_id = Uuid::new_v4();
+        let q2 = user_message(q2_id, Some(a1_id), "Second question?");
+        let tool_id = Uuid::new_v4();
+        let tool_call = assistant_message(tool_id, Some(q2_id), "[calling a tool]");
+        let result_id = Uuid::new_v4();
+        let result = tool_result_message(result_id, Some(tool_id), "found something");
+        let a2_id = Uuid::new_v4();
+        let a2 = assistant_message(a2_id, Some(result_id), "Second answer.");
+
+        let path = vec![&q1, &a1, &q2, &tool_call, &result, &a2];
+        let turns = entries_to_turns(&path).unwrap();
+
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].answer, "First answer.");
+        assert_eq!(turns[1].answer, "Second answer.");
+    }
+
+    /// A run that never produces an `assistant` entry at all — the loop
+    /// errored, aborted, or unanimously terminated before ever answering —
+    /// contributes no Turn, not a Turn with an empty answer.
+    #[test]
+    fn a_user_entry_with_no_assistant_answer_contributes_no_turn() {
+        let q_id = Uuid::new_v4();
+        let question = user_message(q_id, None, "Unanswered?");
+        let tool_id = Uuid::new_v4();
+        let tool_call = assistant_message(tool_id, Some(q_id), "[calling a tool]");
+        let result_id = Uuid::new_v4();
+        let result = tool_result_message(result_id, Some(tool_id), "found something");
+
+        let path = vec![&question, &tool_call, &result];
+        // The last "assistant" entry here has a tool call in it and no real
+        // answer text followed — this fixture is only exercising "no
+        // trailing assistant reply exists at all"; a still-more-realistic
+        // fixture (an aborted run with no assistant entries whatsoever)
+        // behaves identically since `entries_to_turns` only ever looks for
+        // *some* assistant entry in the run, not one with particular
+        // content.
+        let no_assistant_path = vec![&question, &result];
+        let turns = entries_to_turns(&no_assistant_path).unwrap();
+        assert_eq!(turns.len(), 0);
+
+        // Sanity: the tool-call-bearing fixture above still finds an
+        // assistant entry (it has one), proving the empty case above is
+        // really about absence, not some other defect.
+        let turns_with_assistant = entries_to_turns(&path).unwrap();
+        assert_eq!(turns_with_assistant.len(), 1);
+    }
+
+    /// `sessions::record_turn_from_steps` (issue #93 pass 2): every payload
+    /// lands in the tree in order, chained onto the Session's leaf, and
+    /// `load_turns` reads the Turn back using the *last* Assistant payload
+    /// as the answer.
+    #[sqlx::test]
+    async fn record_turn_from_steps_chains_every_payload_in_order(pool: PgPool) {
+        let payloads = vec![
+            (
+                EntryType::Message,
+                serde_json::to_value(MessagePayload::User {
+                    text: "What did I write about running?".to_string(),
+                })
+                .unwrap(),
+            ),
+            (
+                EntryType::Message,
+                serde_json::to_value(MessagePayload::Assistant {
+                    text: "[calling entries_in_range]".to_string(),
+                    grounding_entry_ids: Vec::new(),
+                    grounded: false,
+                    fallback_used: false,
+                })
+                .unwrap(),
+            ),
+            (
+                EntryType::Message,
+                serde_json::to_value(MessagePayload::ToolResult {
+                    text: "[2026-07-05] Ran 5k this morning.".to_string(),
+                    tool_name: "entries_in_range".to_string(),
+                    is_error: false,
+                    details: serde_json::json!({"total": 1}),
+                })
+                .unwrap(),
+            ),
+            (
+                EntryType::Message,
+                serde_json::to_value(MessagePayload::Assistant {
+                    text: "You ran a 5k on July 5th.".to_string(),
+                    grounding_entry_ids: Vec::new(),
+                    grounded: true,
+                    fallback_used: false,
+                })
+                .unwrap(),
+            ),
+        ];
+
+        let turn = NewTurn {
+            question: "What did I write about running?".to_string(),
+            answer: "You ran a 5k on July 5th.".to_string(),
+            grounding_entry_ids: Vec::new(),
+            grounded: true,
+            fallback_used: false,
+        };
+
+        let session_id = record_turn_from_steps(&pool, None, "Running", turn, payloads)
+            .await
+            .unwrap();
+
+        let entries = load_entries(&pool, session_id).await.unwrap();
+        assert_eq!(entries.len(), 4);
+        assert_eq!(entries[0].parent_id, None);
+        for i in 1..entries.len() {
+            assert_eq!(
+                entries[i].parent_id,
+                Some(entries[i - 1].id),
+                "every entry must chain onto the previous one in order"
+            );
+        }
+
+        let leaf: Option<Uuid> =
+            sqlx::query_scalar("select main_leaf_id from sessions where id = $1")
+                .bind(session_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(leaf, Some(entries[3].id));
+
+        let turns = load_turns(&pool, session_id).await.unwrap();
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].answer, "You ran a 5k on July 5th.");
     }
 }

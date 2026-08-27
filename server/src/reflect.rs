@@ -1,32 +1,39 @@
-//! `POST /v1/reflect` — ticket 4 made a Question become an Answer with a
-//! single vector search; ticket 5 widened retrieval into the fixed
-//! three-source fan-out `docs/adr/0023` settles: an extraction chat call
-//! finds a date range and/or a keyword hiding in the Question, three
-//! retrievals run concurrently, and the results are merged, deduped, capped
-//! and reordered before the second chat call turns them into an Answer.
-//! Ticket 6 (`docs/adr/0024`) made that second chat call *judge* whether
-//! the Grounding it was given actually answers the Question, and added the
-//! disclosed fallback (the last few days of Entries, shown but not claimed
-//! as an Answer) for when it doesn't.
+//! `POST /v1/reflect` — issue #93 pass 2: a Question is now answered by
+//! `harness::agent_loop`, a tool-calling loop that decides for itself how
+//! many times to look before it answers, with one tool so far
+//! (`harness::tools::EntriesInRangeTool`). `run_reflect_loop` is what
+//! `reflect_handler` actually calls.
+//!
+//! Tickets 4 through 8 built a different thing: a *fixed* pipeline that got
+//! exactly one look — an extraction chat call found a date range and/or a
+//! keyword hiding in the Question, three retrievals ran concurrently, the
+//! results were merged, deduped, capped and reordered, and a second chat
+//! call turned them into an Answer, judging its own Grounding and falling
+//! back to a disclosed "here's what you've written lately" when it judged
+//! that Grounding didn't answer the Question. `run_reflect` is that
+//! pipeline, kept exactly as it was — working, tested, `#[allow(dead_code)]`
+//! — because issue #93 pass 2's instructions are explicit that removing it
+//! is issue #99's job, not this one's. Nothing below `run_reflect`'s own
+//! doc comment describes the *current* behaviour of `/v1/reflect`.
 //!
 //! The Server holds the Conversation now (`docs/adr/0025`), superseding ADR
 //! 0020's "a Conversation ... belongs to the Device it happened on and does
 //! not Sync." A request names the Session it belongs to with `session_id`
 //! — `None` starts a new one — instead of round-tripping every prior
-//! Question and Answer on every call. `run_reflect` loads that Session's
-//! Turns (`sessions::load_turns`) before asking, and persists the new one
-//! (`sessions::record_turn`) only once an Answer has actually succeeded, so
-//! a failed ask leaves neither a Session nor a Turn behind.
-//!
-//! Issue #66: the extraction chat call now reads that same windowed
-//! Conversation too, not just the bare new Question — a follow-up like
-//! "and the week before that?" has no antecedent for "that" without it. See
-//! `extraction_system_prompt` for how the Conversation is folded in without
-//! risking the JSON-only contract that call depends on.
+//! Question and Answer on every call. `run_reflect_loop` loads that
+//! Session's Turns (`sessions::load_turns`) before asking, and persists the
+//! new one (`sessions::record_turn_from_steps`) only once an Answer has
+//! actually succeeded, so a failed ask leaves neither a Session nor a Turn
+//! behind — the same guarantee `run_reflect`'s own doc comment describes,
+//! carried over unchanged.
 //!
 //! See CONTEXT.md's Grounding entry for the rule this route exists to
 //! honour: an Answer with nothing behind it says so, rather than inventing
-//! a past the user didn't live.
+//! a past the user didn't live. The loop's own system prompt
+//! (`LOOP_SYSTEM_INSTRUCTION`) says this directly; nothing enforces it the
+//! way `run_reflect`'s "GROUNDED: yes/no" verdict marker did — that
+//! mechanism belongs to the pipeline this ticket stopped calling, and a
+//! later ticket decides what, if anything, replaces it for the loop.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -41,8 +48,12 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::embedding::vector_literal;
+use crate::harness::agent_loop::{self, Step};
+use crate::harness::prompted::PromptedToolClient;
+use crate::harness::tools::{self, AgentTool, EntriesInRangeTool};
+use crate::harness::types::{AssistantMessage, ContentBlock, Message, StopReason};
 use crate::llm::{ChatMessage, LlmClient};
-use crate::sessions::{self, NewTurn, SessionTurnRow};
+use crate::sessions::{self, EntryType, MessagePayload, NewTurn, SessionTurnRow};
 use crate::sync::PROTOCOL_VERSION;
 
 /// How many nearest Entries retrieval pulls before handing them to the chat
@@ -160,44 +171,30 @@ pub struct ReflectResponse {
     /// again just to know what to show for a Session it just started.
     pub title: String,
     pub answer: String,
-    /// The ids of the Entries the Answer was actually built from, in the
-    /// order they were shown to the chat call (chronological — see
-    /// `run_reflect`'s `merged.sort_by_key`).
-    ///
-    /// In the normal case these are Grounding: the merged three-source
-    /// fan-out (`docs/adr/0023`), judged (`grounded`, below) to actually
-    /// answer the Question. In the disclosed-fallback case
-    /// (`fallback_used: true`) these are instead the last few days of
-    /// Entries (`docs/adr/0024`) — shown despite *not* answering the
-    /// Question, because CONTEXT.md's Grounding entry holds that admitting
-    /// nothing was found beats inventing an Answer from somewhere else.
-    /// `grounded: false` is what tells a reader — ticket 7's disclosure UI
-    /// included — that these ids are not relevant matches; this field alone
-    /// (non-empty or not) cannot tell the two cases apart.
+    /// The Entry ids that appeared in a tool result during this run, in the
+    /// order they first appeared — `run_reflect_loop`'s own dedup, over
+    /// every `harness::agent_loop::Step::ToolResult` the loop produced, not
+    /// retrieval's merge-and-sort (that description, and everything below
+    /// through `docs/adr/0023`/`0024`, is what these fields meant under
+    /// `run_reflect`, the fixed pipeline `/v1/reflect` no longer calls —
+    /// see this module's own doc comment). Empty when the loop never called
+    /// a tool at all — a prose-only reply is not unusual, and carries no
+    /// Grounding by construction, not by omission.
     pub grounding_entry_ids: Vec<Uuid>,
-    /// Whether Reflection judged that the Grounding it found actually
-    /// answers the Question — read off the "GROUNDED: yes"/"GROUNDED: no"
-    /// marker the answering chat call is now instructed to begin its reply
-    /// with (`SYSTEM_INSTRUCTION`, `parse_and_strip_verdict`), not from
-    /// retrieval.
-    ///
-    /// Through ticket 5 this meant something else entirely: "the merged
-    /// fan-out retrieval set (see `run_reflect`) is non-empty." `docs/adr/
-    /// 0023` measured why that stopped being a meaningful signal on a
-    /// realistic History — on the live 572-Entry corpus, an absent topic
-    /// ("my cat", cosine 0.691) can outscore a present one ("the wedding",
-    /// 0.638), so the merged set is non-empty for essentially every
-    /// Question and the old `grounded` was true almost unconditionally.
-    /// `docs/adr/0024` is what moved the judgment onto the chat call
-    /// itself, which actually reads what it was given, instead of a cosine
-    /// floor that can't tell "relevant" from "large corpus."
+    /// Whether at least one Entry appeared in a tool result this run —
+    /// `!grounding_entry_ids.is_empty()`, nothing more judged about it.
+    /// Under the old pipeline this was a real verdict, read off a
+    /// "GROUNDED: yes/no" marker the answering chat call was instructed to
+    /// produce; the loop has no equivalent judgment yet, so this field
+    /// keeps its old *name* on the wire (`PROTOCOL_VERSION` is unchanged)
+    /// while meaning something simpler until a later ticket decides whether
+    /// it needs to mean more again.
     pub grounded: bool,
-    /// Whether the disclosed fallback (`docs/adr/0024`) ran: Reflection
-    /// judged its Grounding didn't answer the Question (`grounded: false`)
-    /// *and* Entries existed in the last few days to show instead. `false`
-    /// covers both "the Grounding answered the Question" (`grounded: true`)
-    /// and "it didn't, and there was nothing recent to show either" —
-    /// `grounded` is what tells those two `false` cases apart.
+    /// Always `false`. The disclosed fallback (`docs/adr/0024`) belongs to
+    /// the fixed pipeline this ticket stopped calling; the loop has no
+    /// fallback mechanism of its own. Kept on the wire, rather than
+    /// dropped, for the same reason `grounded` is — the wire shape itself
+    /// is issue #96's to change, not this one's.
     pub fallback_used: bool,
 }
 
@@ -329,7 +326,7 @@ pub async fn reflect_handler(
         return Err(StatusCode::NOT_FOUND);
     };
 
-    match run_reflect(&pool, &reflect, req).await {
+    match run_reflect_loop(&pool, &reflect, req).await {
         Ok(response) => Ok(Json(response)),
         Err(ReflectError::SessionNotFound) => Err(StatusCode::NOT_FOUND),
         Err(ReflectError::Internal(err)) => {
@@ -339,6 +336,239 @@ pub async fn reflect_handler(
     }
 }
 
+/// The loop's own persona instruction (issue #93 pass 2) — `reflect.rs`'s
+/// live entry point now, via `run_reflect_loop`.
+///
+/// `harness::tools::render_tool_guidance` appends every active tool's own
+/// `snippet`/`guidelines` after this before it's sent as
+/// `harness::types::Context::system_prompt` — see that function's doc
+/// comment for why the *tool set*, not this constant, owns describing what
+/// each tool does.
+///
+/// Deliberately carries no "GROUNDED: yes/no" verdict instruction, unlike
+/// `SYSTEM_INSTRUCTION` above: that judgment, and the disclosed fallback it
+/// drove, belong to the fixed pipeline this ticket stopped calling
+/// (`run_reflect`) — a later ticket decides what, if anything, replaces it
+/// for the loop.
+const LOOP_SYSTEM_INSTRUCTION: &str = "You are Reflection, part of meologue, a personal journal. \
+A user is asking a Question about their own journal Entries. You have tools to look things up in \
+their journal before you answer. Call a tool whenever you need to see actual Entries to answer \
+accurately, and call it again if what came back isn't enough — narrowing, widening, or looking at \
+a different stretch of time as needed. When you have enough to answer — or if nothing in the \
+journal answers the Question — reply in plain prose with no further tool call: that reply is shown \
+to the user exactly as written, so only write it once you are done gathering what you need. If the \
+journal doesn't contain enough to answer, say so plainly instead of guessing or inventing anything \
+— a Reflection that invents a past the user did not live is worse than one that admits it found \
+nothing. Speak directly to the user in the second person, in plain prose.";
+
+/// `/v1/reflect`'s live implementation (issue #93 pass 2): loads the
+/// Session's prior Turns exactly as `run_reflect` always did, builds a
+/// `harness::types::Context` from them plus the active tool set, runs
+/// `harness::agent_loop::run` against a `PromptedToolClient` wrapping
+/// `reflect.chat_client`, and — only once the loop actually produced an
+/// Answer — persists every step it took into the Session entry tree
+/// (`sessions::record_turn_from_steps`) in one transaction, the same
+/// "persist only after success" guarantee `record_turn` always gave.
+///
+/// `grounded`/`fallback_used` mean something narrower here than they did
+/// under the old pipeline (`ReflectResponse`'s own doc comments describe
+/// what they used to mean): `grounded` is simply "at least one Entry
+/// appeared in a tool result this run", and `fallback_used` is always
+/// `false` — the loop has no disclosed-fallback mechanism yet. The wire
+/// shape itself is unchanged (`PROTOCOL_VERSION` stays 1) because that
+/// wire change is issue #96's, not this one's; these two fields keep their
+/// old *names* while this function gives them the simplest honest meaning
+/// available today.
+async fn run_reflect_loop(
+    pool: &PgPool,
+    reflect: &ReflectState,
+    req: ReflectRequest,
+) -> Result<ReflectResponse, ReflectError> {
+    let offset_minutes = req
+        .utc_offset_minutes
+        .clamp(MIN_UTC_OFFSET_MINUTES, MAX_UTC_OFFSET_MINUTES);
+
+    let (prior_turns, title): (Vec<SessionTurnRow>, String) = match req.session_id {
+        Some(id) => {
+            let session = sessions::find_session(pool, id)
+                .await?
+                .ok_or(ReflectError::SessionNotFound)?;
+            let turns = sessions::load_turns(pool, id).await?;
+            (turns, session.title)
+        }
+        None => (Vec::new(), derive_title(&req.question)),
+    };
+
+    // Same windowing `run_reflect` applies — `CONVERSATION_WINDOW`'s own
+    // doc comment covers why, and it applies identically here: what's
+    // replayed into the loop's own `Context.messages` is bounded the same
+    // way what used to be replayed into the two fixed chat calls was.
+    let prior_turns = {
+        let mut turns = prior_turns;
+        let start = turns.len().saturating_sub(CONVERSATION_WINDOW);
+        turns.split_off(start)
+    };
+
+    let tools: Vec<Arc<dyn AgentTool>> = vec![Arc::new(EntriesInRangeTool::new(
+        pool.clone(),
+        offset_minutes,
+    ))];
+    let system_prompt = tools::render_tool_guidance(LOOP_SYSTEM_INSTRUCTION, &tools);
+
+    let mut messages = Vec::with_capacity(prior_turns.len() * 2 + 1);
+    for turn in &prior_turns {
+        messages.push(Message::User(turn.question.clone()));
+        messages.push(Message::Assistant(AssistantMessage {
+            content: vec![ContentBlock::Text(turn.answer.clone())],
+            stop_reason: StopReason::Stop,
+            error_message: None,
+            usage: None,
+        }));
+    }
+    messages.push(Message::User(req.question.clone()));
+
+    let chat_client = PromptedToolClient::new(reflect.chat_client.clone());
+    // `should_stop_after_turn` is `agent_loop::run`'s own unused hook
+    // (`ShouldStopAfterTurn`'s doc comment) — issue #93 pass 2 ships no
+    // step budget, deliberately, so `None` every time.
+    let outcome = agent_loop::run(&chat_client, system_prompt, &tools, messages, None).await;
+
+    let Some(answer) = outcome.answer else {
+        let reason = outcome.error.unwrap_or_else(|| {
+            "the model stopped without ever producing a reply with no tool \
+                                 call left in it"
+                .to_string()
+        });
+        return Err(ReflectError::Internal(anyhow::anyhow!(
+            "reflect loop did not produce an Answer: {reason}"
+        )));
+    };
+
+    // Every Entry id any tool result surfaced, deduped keeping first
+    // occurrence — the loop-based counterpart of `run_reflect`'s own
+    // `merged`/`seen` dedup, generic across whatever tool produced it
+    // rather than specific to the fixed pipeline's three named sources.
+    let mut seen_entry_ids = HashSet::new();
+    let mut grounding_entry_ids = Vec::new();
+    for step in &outcome.steps {
+        if let Step::ToolResult { entry_ids, .. } = step {
+            for id in entry_ids {
+                if seen_entry_ids.insert(*id) {
+                    grounding_entry_ids.push(*id);
+                }
+            }
+        }
+    }
+    let grounded = !grounding_entry_ids.is_empty();
+    let fallback_used = false;
+
+    let payloads = build_tree_payloads(
+        &req.question,
+        &outcome.steps,
+        &grounding_entry_ids,
+        grounded,
+    );
+    let session_id = sessions::record_turn_from_steps(
+        pool,
+        req.session_id,
+        &title,
+        NewTurn {
+            question: req.question.clone(),
+            answer: answer.clone(),
+            grounding_entry_ids: grounding_entry_ids.clone(),
+            grounded,
+            fallback_used,
+        },
+        payloads,
+    )
+    .await?;
+
+    Ok(ReflectResponse {
+        session_id,
+        title,
+        answer,
+        grounding_entry_ids,
+        grounded,
+        fallback_used,
+    })
+}
+
+/// Turns one loop run's `Question` plus its `Step`s into the ordered
+/// `(EntryType, Value)` payload list `sessions::record_turn_from_steps`
+/// chains onto the Session's tree — the User entry first (the tree has no
+/// separate concept of "the request that started this Turn" the way
+/// `Context.messages` does), then one entry per `Step`, in the order they
+/// happened.
+///
+/// Only the *last* `Assistant` step carries `grounding_entry_ids`/
+/// `grounded` in its persisted payload — it is the only one
+/// `sessions::entries_to_turns` will ever read back as a Turn's answer (its
+/// own doc comment covers why: the *last* Assistant entry in a Turn's run
+/// is the one that actually answered, not the first). An earlier Assistant
+/// step exists only because it made a tool call; giving it the same
+/// Grounding as the real answer would be misleading if anything ever read
+/// it directly, and `entries_to_turns` never will.
+fn build_tree_payloads(
+    question: &str,
+    steps: &[Step],
+    grounding_entry_ids: &[Uuid],
+    grounded: bool,
+) -> Vec<(EntryType, Value)> {
+    let mut payloads = Vec::with_capacity(steps.len() + 1);
+    payloads.push((
+        EntryType::Message,
+        serde_json::to_value(MessagePayload::User {
+            text: question.to_string(),
+        })
+        .expect("serializing a user message payload can't fail"),
+    ));
+
+    let last_index = steps.len().saturating_sub(1);
+    for (index, step) in steps.iter().enumerate() {
+        let payload = match step {
+            Step::Assistant(assistant) => {
+                let is_final_answer = index == last_index;
+                serde_json::to_value(MessagePayload::Assistant {
+                    text: agent_loop::render_content_for_display(&assistant.content),
+                    grounding_entry_ids: if is_final_answer {
+                        grounding_entry_ids.to_vec()
+                    } else {
+                        Vec::new()
+                    },
+                    grounded: is_final_answer && grounded,
+                    fallback_used: false,
+                })
+            }
+            Step::ToolResult {
+                tool_name,
+                content,
+                is_error,
+                details,
+                ..
+            } => serde_json::to_value(MessagePayload::ToolResult {
+                text: content.clone(),
+                tool_name: tool_name.clone(),
+                is_error: *is_error,
+                details: details.clone(),
+            }),
+        }
+        .expect("serializing a message payload can't fail");
+        payloads.push((EntryType::Message, payload));
+    }
+
+    payloads
+}
+
+/// The fixed three-source pipeline tickets 4 through 8 built
+/// (`docs/adr/0023`, `docs/adr/0024`) — an extraction chat call, three
+/// concurrent retrievals merged and capped, an answering call that judges
+/// its own Grounding via a "GROUNDED: yes/no" marker, and a disclosed
+/// fallback when it judges "no". Issue #93 pass 2 stopped calling this from
+/// `reflect_handler` (see `run_reflect_loop`, the loop-based replacement,
+/// above) but was instructed *not* to delete it — issue #99 is the ticket
+/// that formally retires this function and everything only it still calls.
+/// Kept exactly as it was, working and tested, rather than removed early.
+#[allow(dead_code)]
 async fn run_reflect(
     pool: &PgPool,
     reflect: &ReflectState,
@@ -758,7 +988,14 @@ pub async fn retrieve_range(
 /// to_utc)` covers every instant of every local day from `from` through
 /// `to` inclusive, and a single-day range (`from == to`) covers exactly
 /// that one whole local day.
-fn local_date_range_to_utc(
+///
+/// `pub(crate)` (rather than the private visibility every other date helper
+/// here keeps) so `harness::tools::entries_in_range` can resolve its own
+/// `from`/`to` arguments the same way the old extraction pipeline resolved
+/// its extracted range — a tool call's dates are local calendar dates from
+/// the same asking Device, and there is exactly one correct way to turn
+/// those into a UTC instant range, already written here.
+pub(crate) fn local_date_range_to_utc(
     from: NaiveDate,
     to: NaiveDate,
     offset_minutes: i32,
