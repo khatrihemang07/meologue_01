@@ -207,11 +207,16 @@ pub struct ReflectResponse {
     pub fallback_used: bool,
 }
 
+/// `pub` (rather than crate-private, its original visibility) so
+/// `tests/eval_retrieval.rs` — issue #90's retrieval eval harness — can
+/// call `retrieve_nearest`/`retrieve_range` directly and read back what
+/// they found, without the eval reimplementing this row shape or the SQL
+/// itself. No field changed; only visibility.
 #[derive(Debug, Clone, FromRow)]
-struct GroundingEntry {
-    id: Uuid,
-    body: String,
-    created_at: DateTime<Utc>,
+pub struct GroundingEntry {
+    pub id: Uuid,
+    pub body: String,
+    pub created_at: DateTime<Utc>,
 }
 
 /// What the extraction chat call (`extract_date_range_and_keyword`) found in
@@ -667,7 +672,10 @@ fn keyword_query(keyword: &str) -> String {
     format!("What did I write about {keyword}?")
 }
 
-async fn retrieve_nearest(
+/// `pub` for the same reason as `GroundingEntry` above — issue #90's
+/// `tests/eval_retrieval.rs` measures this arm directly against the
+/// Sandbox corpus, floor included. No behaviour changed.
+pub async fn retrieve_nearest(
     pool: &PgPool,
     query_vector: &[f32],
     limit: i64,
@@ -716,7 +724,9 @@ async fn retrieve_nearest(
 /// still falls in-range (that column never changes on a delete, see
 /// `sync.rs::insert_entries`), but its body is a tombstone's, not content,
 /// and must not surface as Grounding just because the date matches.
-async fn retrieve_range(
+/// `pub` for the same reason as `retrieve_nearest` above — issue #90's
+/// eval harness measures this arm directly. No behaviour changed.
+pub async fn retrieve_range(
     pool: &PgPool,
     from: DateTime<Utc>,
     to: DateTime<Utc>,
