@@ -556,6 +556,35 @@ async fn entry_count_for(pool: &PgPool, session_id: Uuid) -> i64 {
         .unwrap()
 }
 
+/// Issue #108: every `session_records` row's `kind` for one Session, oldest
+/// first — read directly with SQL rather than through `sessions::load_records`
+/// (`pub(crate)`, unreachable from this crate) since this test binary only
+/// ever sees the library's own `pub` surface.
+async fn record_kinds(pool: &PgPool, session_id: Uuid) -> Vec<String> {
+    sqlx::query_scalar("select kind from session_records where session_id = $1 order by seq asc")
+        .bind(session_id)
+        .fetch_all(pool)
+        .await
+        .unwrap()
+}
+
+/// Every `session_records.id` whose `kind` is `tool_started`, for one
+/// Session, in the order they were written — issue #108's own identity-
+/// reservation criterion: this `id` is what a `tool_result` entry with the
+/// same `id` (or its absence) answers "did this tool's result land?"
+/// against.
+async fn tool_started_ids(pool: &PgPool, session_id: Uuid) -> Vec<Uuid> {
+    sqlx::query_scalar(
+        "select id from session_records
+         where session_id = $1 and kind = 'tool_started'
+         order by seq asc",
+    )
+    .bind(session_id)
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
 // -- wiring / rejection paths, unaffected by the loop vs. the old pipeline --
 
 #[sqlx::test]
@@ -2127,10 +2156,18 @@ async fn a_tool_call_inside_a_rejected_no_tool_call_retry_does_not_ground_the_ke
 // comment). What these two now prove is issue #96's actual replacement
 // contract: the stream still ends, with exactly one `agent_end` event
 // carrying `"status": "error"`, rather than hanging or the connection just
-// dropping with nothing a client can distinguish from a lost network. Every
-// other consequence of failure is unchanged and still asserted here: no
-// Session or Turn is ever persisted for a Question that never produced an
-// Answer.
+// dropping with nothing a client can distinguish from a lost network. A
+// Turn is still never persisted for a Question that never produced an
+// Answer — `turn_count` stays 0 below, exactly as it always has.
+//
+// `session_count` no longer does, though: issue #108's own
+// `resolve_session` mints a Session's `sessions` row up front, before the
+// run it belongs to even starts (needed so the operation log has a real
+// `session_id` to key its first record against before the run starts) — so
+// a request naming no existing Session that then fails still leaves that
+// bare row behind. `docs/adr/0025`'s actual guarantee — no client ever sees
+// a Session holding an empty Conversation — is proven instead by
+// `sessions::list_sessions`'s own tests (`tests/sessions.rs`).
 
 #[sqlx::test]
 async fn a_final_reply_still_empty_after_a_corrective_turn_ends_the_stream_with_an_agent_end_error_event(
@@ -2161,7 +2198,10 @@ async fn a_final_reply_still_empty_after_a_corrective_turn_ends_the_stream_with_
         last.data
     );
 
-    assert_eq!(session_count(&pool).await, 0);
+    // Issue #108: `resolve_session` still minted a bare Session row for
+    // this brand-new request before the run started — see this section's
+    // own comment just above.
+    assert_eq!(session_count(&pool).await, 1);
     assert_eq!(turn_count(&pool).await, 0);
     assert_eq!(
         chat.call_count(),
@@ -2199,7 +2239,9 @@ async fn a_chat_client_error_ends_the_stream_with_an_agent_end_error_event(pool:
         last.data
     );
 
-    assert_eq!(session_count(&pool).await, 0);
+    // Issue #108: a bare Session row, minted up front — see this section's
+    // own comment above the previous test.
+    assert_eq!(session_count(&pool).await, 1);
     assert_eq!(turn_count(&pool).await, 0);
 }
 
@@ -2498,6 +2540,164 @@ async fn steps_land_in_the_session_entry_tree_in_order(pool: PgPool) {
     let turns = session_body["turns"].as_array().unwrap();
     assert_eq!(turns.len(), 1);
     assert_eq!(turns[0]["answer"], "You went for a run in April.");
+}
+
+// -- Issue #108: the operation log is actually written ---------------------
+
+/// The ticket's first acceptance criterion: "a real run writes operation-log
+/// records as it goes." `operation_started`/`operation_finished` bracket the
+/// whole request (`reflect.rs::run_reflect_stream`); `step_attempt` and
+/// `tool_started` come from inside the loop itself
+/// (`harness::agent_loop::run_inner`, through `harness::run_log::RunLog`) —
+/// one `step_attempt` per turn the loop actually asks for, and a
+/// `tool_started` for the one tool call this run makes, all sharing the
+/// Session's one `seq` counter with the tree itself (`sessions.rs`'s own
+/// `seq_is_strictly_consecutive_across_entries_and_records` proves that
+/// sharing holds; this test only proves the log is non-empty and ordered).
+#[sqlx::test]
+async fn a_real_run_writes_operation_log_records_in_order(pool: PgPool) {
+    let entry_id = Uuid::new_v4();
+    insert_entry_at(
+        &pool,
+        entry_id,
+        "Went for a run.",
+        DateTime::parse_from_rfc3339("2026-04-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc),
+    )
+    .await;
+
+    let chat = Arc::new(FakeChatClient::new([
+        tool_call_tag(
+            "entries_in_range",
+            json!({"from": "2026-04-01", "to": "2026-04-30"}),
+        ),
+        "You went for a run in April.".to_string(),
+    ]));
+    let reflect = reflect_state(chat);
+
+    let (status, body) = post_reflect(
+        &pool,
+        Some(reflect),
+        json!({ "protocol_version": 3, "question": "Did I run in April?" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let id = session_id(&body);
+
+    let kinds = record_kinds(&pool, id).await;
+    assert_eq!(
+        kinds,
+        vec![
+            "operation_started",
+            "step_attempt",
+            "tool_started",
+            "step_attempt",
+            "operation_finished",
+        ],
+        "the log must show this run's own shape, in order: {kinds:?}"
+    );
+}
+
+/// The ticket's own headline criterion: after an interrupted run, the log
+/// shows which tools started, and a started tool whose result never landed
+/// is distinguishable from one that never started at all. A real process
+/// kill can't be simulated in-process, so this reproduces the shape a kill
+/// mid-run leaves behind the only way this test binary can: a tool call
+/// that genuinely starts and finishes, followed by a chat failure
+/// (`FakeChatClient`'s scripted `Err`, the same "simulated 500" shape
+/// `a_chat_client_error_ends_the_stream_with_an_agent_end_error_event`
+/// already uses) before the loop ever produces an Answer. Because entries
+/// only ever commit at the very end, in one transaction, once an Answer
+/// exists (`sessions::record_turn_from_steps`), *any* run that fails before
+/// that point leaves every `tool_started` record it wrote with no matching
+/// `session_entries` row — exactly the "started but never landed" state
+/// this ticket exists to make answerable.
+#[sqlx::test]
+async fn an_interrupted_run_leaves_a_tool_started_record_with_no_matching_entry(pool: PgPool) {
+    let id = Uuid::new_v4();
+    insert_session(&pool, id, "Did I run in April?").await;
+
+    let entry_id = Uuid::new_v4();
+    insert_entry_at(
+        &pool,
+        entry_id,
+        "Went for a run.",
+        DateTime::parse_from_rfc3339("2026-04-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc),
+    )
+    .await;
+
+    let chat = Arc::new(FakeChatClient::from_results(vec![
+        Ok(tool_call_tag(
+            "entries_in_range",
+            json!({"from": "2026-04-01", "to": "2026-04-30"}),
+        )),
+        Err("simulated crash mid-run".to_string()),
+    ]));
+    let reflect = reflect_state(chat);
+
+    let (status, events) = post_reflect_events(
+        &pool,
+        Some(reflect),
+        json!({
+            "protocol_version": 3,
+            "question": "Did I run in April?",
+            "session_id": id,
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "the stream still opens as a 200");
+    let last = events.last().expect("the stream must end with some event");
+    assert_eq!(last.event, "agent_end");
+    assert_eq!(
+        last.data["status"], "error",
+        "the run never produced an Answer, so it must end as agent_end error"
+    );
+
+    // The tool genuinely started — its record is there.
+    let starts = tool_started_ids(&pool, id).await;
+    assert_eq!(starts.len(), 1, "exactly one tool call was ever started");
+    let started_id = starts[0];
+
+    // But the run never reached record_turn_from_steps at all (it failed
+    // before an Answer existed), so *no* entry was ever written for this
+    // Session — not the reserved id, not the Question, nothing.
+    assert_eq!(
+        entry_count_for(&pool, id).await,
+        0,
+        "a failed run must leave no entries at all, not just a missing one"
+    );
+    let landed: bool = sqlx::query_scalar(
+        "select exists(select 1 from session_entries where session_id = $1 and id = $2)",
+    )
+    .bind(id)
+    .bind(started_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(
+        !landed,
+        "the tool_started record's own id must not exist as a session_entries row — \
+         that absence is what makes \"started but never landed\" answerable"
+    );
+
+    // And the operation log still shows the run started and finished (as a
+    // failure) around the tool call it did manage to start.
+    let kinds = record_kinds(&pool, id).await;
+    assert_eq!(
+        kinds,
+        vec![
+            "operation_started",
+            "step_attempt",
+            "tool_started",
+            "step_attempt",
+            "operation_finished",
+        ],
+        "the log itself is unaffected by the run failing: {kinds:?}"
+    );
 }
 
 // -- Conversation replay: prior Turns reach the loop's own Context ---------

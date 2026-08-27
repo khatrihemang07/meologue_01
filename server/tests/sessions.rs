@@ -526,6 +526,13 @@ async fn list_sessions_orders_by_updated_at_not_created_at(pool: PgPool) {
         now - Duration::hours(1),
     )
     .await;
+    // Issue #108: `list_sessions`'s unfiltered branch now excludes a
+    // Session with no entries at all — neither of the two above would
+    // appear in the list without this, which would make this test prove
+    // nothing about ordering. `insert_turn` never touches `updated_at`
+    // itself, so the pinned times above are unaffected.
+    insert_turn(&pool, older_id, "Q", "A").await;
+    insert_turn(&pool, newer_id, "Q", "A").await;
 
     let (status, body) = list_sessions(&pool, Some(reflect_state()), None).await;
 
@@ -543,6 +550,58 @@ async fn an_empty_session_table_is_200_empty_list(pool: PgPool) {
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body.as_array().unwrap().len(), 0);
+}
+
+/// Issue #108: `reflect.rs::resolve_session` now mints a Session's `sessions`
+/// row up front, before the run it belongs to even starts — so a request
+/// that resolves a Session and then fails before ever producing an Answer
+/// can leave a real, committed Session with no entries at all behind
+/// (`sessions.rs`'s own doc comment on `create_session`). `docs/adr/0025`'s
+/// guarantee — "a Session holding an empty Conversation is unrepresentable"
+/// — is kept exactly where a client would actually observe it breaking:
+/// neither list shape may ever show such a Session, even though the row
+/// itself is real. The unfiltered branch needs an explicit guard for this
+/// (`list_sessions`'s own doc comment); the search branch already joins
+/// `session_entries` to match at all, so a Session with none can never
+/// produce a matching row to begin with — proven here too, rather than
+/// assumed.
+#[sqlx::test]
+async fn a_session_with_no_entries_is_absent_from_both_list_shapes(pool: PgPool) {
+    let empty_id = Uuid::new_v4();
+    insert_session(&pool, empty_id, "Never answered").await;
+
+    let real_id = Uuid::new_v4();
+    insert_session(&pool, real_id, "How has my knee been?").await;
+    insert_turn(
+        &pool,
+        real_id,
+        "How has my knee been?",
+        "It's been a recurring issue since February.",
+    )
+    .await;
+
+    let (status, body) = list_sessions(&pool, Some(reflect_state()), None).await;
+    assert_eq!(status, StatusCode::OK);
+    let ids: Vec<String> = body
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|session| session["id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        ids,
+        vec![real_id.to_string()],
+        "the entry-less Session must never appear in the unfiltered list: {body:?}"
+    );
+
+    let (status, body) = list_sessions(&pool, Some(reflect_state()), Some("Never")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body.as_array().unwrap().len(),
+        0,
+        "the search branch already joins session_entries, so it excludes an entry-less \
+         Session even though its own title matches the term: {body:?}"
+    );
 }
 
 /// `/v1/sessions` is gated on Reflection being configured, exactly like

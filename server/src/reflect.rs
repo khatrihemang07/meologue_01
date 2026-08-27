@@ -33,9 +33,17 @@
 //! tree — the only representation a Session has, since issue #99 removed
 //! the older `session_turns` table `sessions.rs`'s own doc comment
 //! describes) before asking, and `run_reflect_stream_inner` persists the
-//! new one (`sessions::record_turn_from_steps`) only once an Answer has
-//! actually succeeded, so a failed ask leaves neither a Session nor a Turn
-//! behind (`docs/adr/0025`).
+//! new Turn (`sessions::record_turn_from_steps`) only once an Answer has
+//! actually succeeded, so a failed ask never leaves an orphaned Turn
+//! behind. Issue #108 narrows what was once a stronger claim here — "leaves
+//! neither a Session nor a Turn behind" — because `resolve_session` now
+//! mints a Session's own row up front, before the run it belongs to even
+//! starts (`resolve_session`'s own doc comment covers why: the operation
+//! log needs a real `session_id` to key its first record against). A
+//! failed first Question can now leave a real, entry-less Session row
+//! behind; `docs/adr/0025`'s actual guarantee — no client ever sees a
+//! Session holding an empty Conversation — is kept by `sessions::list_sessions`
+//! instead of by never creating the row.
 //!
 //! See CONTEXT.md's Grounding entry for the rule this route exists to
 //! honour: an Answer with nothing behind it says so, rather than inventing
@@ -76,12 +84,15 @@ use crate::embedding::vector_literal;
 use crate::harness::agent_loop::{self, LoopEvent, Step};
 use crate::harness::compaction;
 use crate::harness::prompted::PromptedToolClient;
+use crate::harness::run_log::RunLog;
 use crate::harness::tools::{
     self, AgentTool, EntriesInRangeTool, ReadDigestTool, SearchEntriesTool, SimilarEntriesTool,
 };
 use crate::harness::types::{AssistantMessage, ContentBlock, Message, StopReason};
 use crate::llm::{ChatMessage, LlmClient};
-use crate::sessions::{self, EntryType, MessagePayload, ModelChangePayload, SessionTurnRow};
+use crate::sessions::{
+    self, EntryType, MessagePayload, ModelChangePayload, RecordKind, SessionTurnRow,
+};
 use crate::sync::PROTOCOL_VERSION;
 
 /// One SSE frame, already built and ready to send — what every branch of
@@ -411,7 +422,14 @@ pub async fn reflect_handler(
     // stream that opens and then has to explain the same failure through an
     // event instead (this function's own doc comment covers why that
     // distinction matters: once headers go out, the status can't change).
-    let (prior_turns, title) =
+    //
+    // Issue #108: `resolve_session` now always returns a real `session_id`
+    // — minted up front (`sessions::create_session`) for a request naming
+    // no existing Session, rather than left for `record_turn_from_steps` to
+    // mint only once a Turn succeeds. This is what gives the operation log
+    // something to key its very first record against before the run it
+    // describes even starts — see `resolve_session`'s own doc comment.
+    let (session_id, prior_turns, title) =
         match resolve_session(&pool, req.session_id, &req.question, &reflect.chat_model).await {
             Ok(resolved) => resolved,
             Err(ReflectError::SessionNotFound) => return StatusCode::NOT_FOUND.into_response(),
@@ -432,6 +450,7 @@ pub async fn reflect_handler(
         pool,
         reflect,
         req,
+        session_id,
         prior_turns,
         title,
         tx,
@@ -444,26 +463,45 @@ pub async fn reflect_handler(
 
 /// The one thing `reflect_handler` must decide *before* it can commit to a
 /// 200 and start streaming: which Session this Question belongs to (or that
-/// it names one that doesn't exist, `ReflectError::SessionNotFound`) and
-/// what title to answer under. Split out of what used to be
+/// it names one that doesn't exist, `ReflectError::SessionNotFound`), what
+/// title to answer under, and — issue #108 — a real `session_id` the whole
+/// run can carry from its very first moment. Split out of what used to be
 /// `run_reflect_loop`'s own opening lines for exactly that reason — this
 /// runs synchronously in the handler; everything after it runs inside the
 /// spawned, streaming `run_reflect_stream`.
+///
+/// **Issue #108: this is where a Session's `sessions` row is now created**
+/// for a request naming no existing Session (`session_id: None`) —
+/// `sessions::create_session`, called here rather than left for
+/// `sessions::record_turn_from_steps` to mint only once a Turn has actually
+/// succeeded, the way it worked before this ticket. The reason is the
+/// operation log: `harness::run_log::RunLog`'s very first record for this
+/// run (`operation_started`, written by `run_reflect_stream` just below)
+/// needs a real `session_id` to key against — `session_records.session_id
+/// references sessions(id)` — and that has to exist before the run starts,
+/// not only once it succeeds. This runs synchronously in the handler and
+/// can fail as a clean 500 like everything else here, so a database error
+/// minting the row is no different from any other failure this function
+/// already surfaces.
 async fn resolve_session(
     pool: &PgPool,
     session_id: Option<Uuid>,
     question: &str,
     default_model: &str,
-) -> Result<(Vec<SessionTurnRow>, String), ReflectError> {
+) -> Result<(Uuid, Vec<SessionTurnRow>, String), ReflectError> {
     match session_id {
         Some(id) => {
             let session = sessions::find_session(pool, id)
                 .await?
                 .ok_or(ReflectError::SessionNotFound)?;
             let turns = sessions::load_turns(pool, id, default_model).await?;
-            Ok((turns, session.title))
+            Ok((id, turns, session.title))
         }
-        None => Ok((Vec::new(), derive_title(question))),
+        None => {
+            let title = derive_title(question);
+            let id = sessions::create_session(pool, &title).await?;
+            Ok((id, Vec::new(), title))
+        }
     }
 }
 
@@ -849,6 +887,100 @@ fn loop_event_to_sse(event: LoopEvent) -> Event {
     }
 }
 
+/// Opens, uses, and commits its own short transaction around exactly one
+/// `sessions::append_record` call — the shape every `session_records` write
+/// this ticket makes takes, on purpose: see `sessions::append_record`'s own
+/// doc comment for why a record has to commit on its own rather than inside
+/// whatever longer-lived transaction the Turn it describes eventually
+/// commits through. Errors are logged and swallowed, never propagated —
+/// this table is an audit trail, not something a Question's own success
+/// depends on (`harness::run_log`'s own doc comment makes the same choice
+/// for the loop's own writes).
+async fn write_record(pool: &PgPool, session_id: Uuid, id: Uuid, kind: RecordKind, payload: Value) {
+    let result: anyhow::Result<()> = async {
+        let mut tx = pool.begin().await?;
+        sessions::append_record(&mut tx, session_id, id, kind, payload).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+    .await;
+    if let Err(err) = result {
+        tracing::error!(error = ?err, session_id = %session_id, kind = kind.as_str(), "failed to write an operation-log record");
+    }
+}
+
+/// The `harness::run_log::RunLog` `reflect.rs` actually gives the loop —
+/// every method is exactly `write_record` (or, for `tool_started`, a
+/// reserved id plus `write_record`) under a fixed `session_id`. This is the
+/// one place in the crate that turns the loop's wire-agnostic, Postgres-
+/// agnostic port into real writes against `session_records` — see
+/// `run_log`'s own module doc comment for why the trait itself can't do
+/// this.
+struct SessionRunLog<'a> {
+    pool: &'a PgPool,
+    session_id: Uuid,
+}
+
+#[async_trait::async_trait]
+impl RunLog for SessionRunLog<'_> {
+    async fn step_attempt(&self, turn: u32) {
+        write_record(
+            self.pool,
+            self.session_id,
+            Uuid::new_v4(),
+            RecordKind::StepAttempt,
+            json!({ "turn": turn }),
+        )
+        .await;
+    }
+
+    async fn tool_started(&self, tool_call_id: &str, tool_name: &str, arguments: &Value) -> Uuid {
+        // Issue #108's own criterion: this id is minted *before* the tool
+        // it names ever runs, and is the record's own `id` — not a field
+        // inside its payload — so "did this tool's result land?" is later
+        // answered by checking whether a `session_entries` row with this
+        // same id exists (migration `0006`'s own comment on
+        // `session_records`; `sessions::record_turn_from_steps` is what
+        // reuses it for that row, via `build_tree_payloads` below).
+        let id = Uuid::new_v4();
+        write_record(
+            self.pool,
+            self.session_id,
+            id,
+            RecordKind::ToolStarted,
+            json!({
+                "tool_call_id": tool_call_id,
+                "tool_name": tool_name,
+                "arguments": arguments,
+            }),
+        )
+        .await;
+        id
+    }
+
+    async fn usage(&self, input_tokens: u32, output_tokens: u32) {
+        write_record(
+            self.pool,
+            self.session_id,
+            Uuid::new_v4(),
+            RecordKind::Usage,
+            json!({ "input_tokens": input_tokens, "output_tokens": output_tokens }),
+        )
+        .await;
+    }
+
+    async fn abort_requested(&self) {
+        write_record(
+            self.pool,
+            self.session_id,
+            Uuid::new_v4(),
+            RecordKind::AbortRequested,
+            json!({}),
+        )
+        .await;
+    }
+}
+
 /// The spawned task `reflect_handler` hands its SSE sender to — runs the
 /// loop, translating every `LoopEvent` it reports into a frame on `tx` as
 /// it happens, and always ends the stream with exactly one `agent_end`
@@ -863,33 +995,64 @@ fn loop_event_to_sse(event: LoopEvent) -> Event {
 /// `chat::PromptedToolClient::stream`'s is: a client that has already
 /// disconnected has simply dropped its receiver, which is not a failure
 /// this task needs to report anywhere — there is no one left to tell.
+///
+/// Issue #108: this function is also the operation log's bracket —
+/// `operation_started` before `run_reflect_stream_inner` runs,
+/// `operation_finished` once it's done, regardless of outcome. Placed here
+/// rather than inside `run_reflect_stream_inner` deliberately: that
+/// function's own loop calls (the initial run, plus up to two corrective
+/// retries — issue #102, #103) are all *one* operation from the operation
+/// log's point of view, not one apiece, and this is the one place called
+/// exactly once per `/v1/reflect` request regardless of how many of those
+/// `run_inner` invocations it takes.
 async fn run_reflect_stream(
     pool: PgPool,
     reflect: ReflectState,
     req: ReflectRequest,
+    session_id: Uuid,
     prior_turns: Vec<SessionTurnRow>,
     title: String,
     tx: SseSender,
 ) {
-    let final_event =
-        match run_reflect_stream_inner(&pool, &reflect, &req, prior_turns, &title, &tx).await {
-            Ok(response) => {
-                // `ReflectResponse` still carries exactly the shape a pre-#96
-                // client's whole response body used to be — flattened onto
-                // `agent_end` rather than replaced, so everything that shape
-                // already meant (session_id/title/answer/grounding_entry_ids/
-                // tool_called/model) survives the move from "the response
-                // body" to "the terminal event's data" unchanged.
-                let mut payload = serde_json::to_value(&response)
-                    .expect("serializing a ReflectResponse can't fail");
-                payload["status"] = json!("ok");
-                sse_event("agent_end", payload)
-            }
-            Err(err) => sse_event(
-                "agent_end",
-                json!({ "status": "error", "error": err.to_string() }),
-            ),
-        };
+    write_record(
+        &pool,
+        session_id,
+        Uuid::new_v4(),
+        RecordKind::OperationStarted,
+        json!({ "question": req.question }),
+    )
+    .await;
+
+    let result =
+        run_reflect_stream_inner(&pool, &reflect, &req, session_id, prior_turns, &title, &tx).await;
+
+    write_record(
+        &pool,
+        session_id,
+        Uuid::new_v4(),
+        RecordKind::OperationFinished,
+        json!({ "status": if result.is_ok() { "ok" } else { "error" } }),
+    )
+    .await;
+
+    let final_event = match result {
+        Ok(response) => {
+            // `ReflectResponse` still carries exactly the shape a pre-#96
+            // client's whole response body used to be — flattened onto
+            // `agent_end` rather than replaced, so everything that shape
+            // already meant (session_id/title/answer/grounding_entry_ids/
+            // tool_called/model) survives the move from "the response
+            // body" to "the terminal event's data" unchanged.
+            let mut payload =
+                serde_json::to_value(&response).expect("serializing a ReflectResponse can't fail");
+            payload["status"] = json!("ok");
+            sse_event("agent_end", payload)
+        }
+        Err(err) => sse_event(
+            "agent_end",
+            json!({ "status": "error", "error": err.to_string() }),
+        ),
+    };
     let _ = tx.send(Ok(final_event));
 }
 
@@ -992,6 +1155,7 @@ async fn run_reflect_stream_inner(
     pool: &PgPool,
     reflect: &ReflectState,
     req: &ReflectRequest,
+    session_id: Uuid,
     prior_turns: Vec<SessionTurnRow>,
     title: &str,
     tx: &SseSender,
@@ -1040,26 +1204,31 @@ async fn run_reflect_stream_inner(
     // far; this is the token-aware pass underneath it, and can still fire
     // well before ten Turns ever accumulate.
     //
-    // `existing_summary` is read unconditionally, on every request with a
-    // Session — not only the one that happens to trigger a *new*
-    // compaction — because `sessions::latest_compaction_summary`'s own doc
-    // comment names exactly the bug that skipping this would reintroduce:
-    // a summary that only ever reached the one Question that wrote it.
-    let (prior_summary, prior_turns) = match req.session_id {
-        Some(session_id) => {
-            let existing_summary = sessions::latest_compaction_summary(pool, session_id).await?;
-            maybe_compact_prior_turns(
-                pool,
-                session_id,
-                prior_turns,
-                existing_summary,
-                &resolved.client,
-                resolved.context_window,
-            )
-            .await?
-        }
-        None => (None, prior_turns),
-    };
+    // `existing_summary` is read unconditionally, on every request — not
+    // only the one that happens to trigger a *new* compaction — because
+    // `sessions::latest_compaction_summary`'s own doc comment names exactly
+    // the bug that skipping this would reintroduce: a summary that only
+    // ever reached the one Question that wrote it. Issue #108: this used to
+    // be conditioned on `req.session_id.is_some()`, back when a brand-new
+    // Session had no `session_id` at all until `record_turn_from_steps`
+    // minted one at the very end — `session_id` above is always real now
+    // (`resolve_session` mints one up front), so this runs unconditionally.
+    // For a genuinely new Session (`prior_turns` empty) both calls below are
+    // a cheap no-op: `latest_compaction_summary` reads `None` off a Session
+    // with no entries yet, and `maybe_compact_prior_turns` returns
+    // `(existing_summary, prior_turns)` unchanged the moment it sees an
+    // empty `prior_turns` — one extra, inexpensive query on a brand-new
+    // Session's first Question, not a behaviour change.
+    let existing_summary = sessions::latest_compaction_summary(pool, session_id).await?;
+    let (prior_summary, prior_turns) = maybe_compact_prior_turns(
+        pool,
+        session_id,
+        prior_turns,
+        existing_summary,
+        &resolved.client,
+        resolved.context_window,
+    )
+    .await?;
 
     // Four tools now: `entries_in_range` (issue #93, by date),
     // `search_entries` (issue #94, by word), `similar_entries` (issue #94,
@@ -1109,6 +1278,10 @@ async fn run_reflect_stream_inner(
     let sink = |event: LoopEvent| {
         let _ = tx.send(Ok(loop_event_to_sse(event)));
     };
+    // Issue #108: the operation log's own port into the loop — shared
+    // across the initial call and both corrective retries below, all under
+    // the same `session_id`, the same as `sink` just above.
+    let run_log = SessionRunLog { pool, session_id };
 
     // `should_stop_after_turn` is `agent_loop::run`'s own unused hook
     // (`ShouldStopAfterTurn`'s doc comment) — issue #93 pass 2 ships no
@@ -1127,6 +1300,7 @@ async fn run_reflect_stream_inner(
         None,
         Some(resolved.context_window),
         &sink,
+        Some(&run_log),
     )
     .await;
 
@@ -1157,7 +1331,7 @@ async fn run_reflect_stream_inner(
         retried = true;
         tracing::warn!(
             question = %req.question,
-            session_id = ?req.session_id,
+            session_id = %session_id,
             "reflect loop's final reply was empty; giving it one corrective turn"
         );
         // Cloned, not moved: issue #103's own corrective turn below needs
@@ -1175,6 +1349,7 @@ async fn run_reflect_stream_inner(
             None,
             Some(resolved.context_window),
             &sink,
+            Some(&run_log),
         )
         .await;
 
@@ -1247,7 +1422,7 @@ async fn run_reflect_stream_inner(
             .is_some_and(claims_no_journal_access);
         tracing::warn!(
             question = %req.question,
-            session_id = ?req.session_id,
+            session_id = %session_id,
             looked_like_denial,
             "reflect loop answered with no tool call at all; giving it one corrective turn"
         );
@@ -1262,6 +1437,7 @@ async fn run_reflect_stream_inner(
             None,
             Some(resolved.context_window),
             &sink,
+            Some(&run_log),
         )
         .await;
 
@@ -1319,7 +1495,7 @@ async fn run_reflect_stream_inner(
         if retried {
             tracing::warn!(
                 question = %req.question,
-                session_id = ?req.session_id,
+                session_id = %session_id,
                 "reflect loop's final reply was still empty after a corrective turn; \
                  failing the request"
             );
@@ -1416,7 +1592,7 @@ async fn run_reflect_stream_inner(
     if grounding_entry_ids.is_empty() && !tool_called {
         tracing::warn!(
             question = %req.question,
-            session_id = ?req.session_id,
+            session_id = %session_id,
             answer_preview = %answer.chars().take(120).collect::<String>(),
             looked_like_denial = claims_no_journal_access(&answer),
             "reflect loop's final answer had no tool call and no Grounding at all"
@@ -1430,8 +1606,7 @@ async fn run_reflect_stream_inner(
         &grounding_entry_ids,
         model_change.as_deref(),
     );
-    let session_id =
-        sessions::record_turn_from_steps(pool, req.session_id, title, payloads).await?;
+    sessions::record_turn_from_steps(pool, session_id, payloads).await?;
 
     Ok(ReflectResponse {
         session_id,
@@ -1588,11 +1763,16 @@ async fn summarize_prior_turns(
 }
 
 /// Turns one loop run's `Question` plus its `Step`s into the ordered
-/// `(EntryType, Value)` payload list `sessions::record_turn_from_steps`
+/// `(EntryType, Value, Option<Uuid>)` payload list `sessions::record_turn_from_steps`
 /// chains onto the Session's tree — the User entry first (the tree has no
 /// separate concept of "the request that started this Turn" the way
 /// `Context.messages` does), then one entry per `Step`, in the order they
-/// happened.
+/// happened. The third field is an id already reserved before the work it
+/// describes started, when there is one (issue #108) — only ever `Some` for
+/// a `Step::ToolResult`, whose `entry_id` was minted by
+/// `harness::run_log::RunLog::tool_started` before that tool call ran;
+/// every other payload leaves it `None` and lets `record_turn_from_steps`
+/// mint a fresh id, exactly as every entry did before this ticket.
 ///
 /// Only the `Assistant` step at `answer_step_index` — the accepted
 /// Answer, computed by `run_reflect_stream_inner` above — carries
@@ -1624,7 +1804,7 @@ fn build_tree_payloads(
     answer_step_index: usize,
     grounding_entry_ids: &[Uuid],
     model_change: Option<&str>,
-) -> Vec<(EntryType, Value)> {
+) -> Vec<(EntryType, Value, Option<Uuid>)> {
     let mut payloads = Vec::with_capacity(steps.len() + 2);
     if let Some(model) = model_change {
         payloads.push((
@@ -1633,6 +1813,7 @@ fn build_tree_payloads(
                 model: model.to_string(),
             })
             .expect("serializing a model_change payload can't fail"),
+            None,
         ));
     }
     payloads.push((
@@ -1641,13 +1822,14 @@ fn build_tree_payloads(
             text: question.to_string(),
         })
         .expect("serializing a user message payload can't fail"),
+        None,
     ));
 
     for (index, step) in steps.iter().enumerate() {
-        let payload = match step {
+        let (payload, reserved_id) = match step {
             Step::Assistant(assistant) => {
                 let is_final_answer = index == answer_step_index;
-                serde_json::to_value(MessagePayload::Assistant {
+                let payload = serde_json::to_value(MessagePayload::Assistant {
                     text: agent_loop::render_content_for_display(&assistant.content),
                     grounding_entry_ids: if is_final_answer {
                         grounding_entry_ids.to_vec()
@@ -1656,6 +1838,8 @@ fn build_tree_payloads(
                     },
                     is_answer: is_final_answer,
                 })
+                .expect("serializing a message payload can't fail");
+                (payload, None)
             }
             Step::ToolResult {
                 tool_name,
@@ -1663,21 +1847,32 @@ fn build_tree_payloads(
                 is_error,
                 details,
                 entry_ids,
+                entry_id,
                 ..
-            } => serde_json::to_value(MessagePayload::ToolResult {
-                text: content.clone(),
-                tool_name: tool_name.clone(),
-                is_error: *is_error,
-                details: details.clone(),
-                // Issue #105: persisted so a reload can re-derive
-                // `digest_source` with `sessions::DigestSourceTracker`
-                // exactly as this run computed it live — see that type's
-                // own doc comment.
-                entry_ids: entry_ids.clone(),
-            }),
-        }
-        .expect("serializing a message payload can't fail");
-        payloads.push((EntryType::Message, payload));
+            } => {
+                let payload = serde_json::to_value(MessagePayload::ToolResult {
+                    text: content.clone(),
+                    tool_name: tool_name.clone(),
+                    is_error: *is_error,
+                    details: details.clone(),
+                    // Issue #105: persisted so a reload can re-derive
+                    // `digest_source` with `sessions::DigestSourceTracker`
+                    // exactly as this run computed it live — see that
+                    // type's own doc comment.
+                    entry_ids: entry_ids.clone(),
+                })
+                .expect("serializing a message payload can't fail");
+                // Issue #108: reuse the id `harness::run_log::RunLog::tool_started`
+                // already reserved and committed to `session_records`
+                // *before* this tool ever ran — never a fresh
+                // `Uuid::new_v4()` — so `sessions::append_entry` writes this
+                // `tool_result` entry under the exact id its own
+                // `tool_started` record already named. See that trait's own
+                // doc comment for why this is the whole point.
+                (payload, Some(*entry_id))
+            }
+        };
+        payloads.push((EntryType::Message, payload, reserved_id));
     }
 
     payloads

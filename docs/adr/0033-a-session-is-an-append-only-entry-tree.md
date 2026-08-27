@@ -5,7 +5,9 @@
 Accepted. Amends [0025](0025-sessions-are-held-by-the-server.md): everything 0025 decided about
 *where* a Session lives (the Server, exclusively — no local mirror, no `localStorage`, the Session
 id in the URL as the only client-side state, asking with no `session_id` as the only way to create
-one) stands unchanged and is still load-bearing. What this ADR replaces is 0025's assumption about
+one) stands unchanged and is still load-bearing — except for *when* the `sessions` row is written,
+which issue #108 moved to the start of the run (see 0025's own "Amendment (issue #108)" and this
+ADR's, both at the end). What this ADR replaces is 0025's assumption about
 *what a Session is made of* — a sequence of Question/Answer pairs — which [0031](0031-reflection-is-a-loop-over-tools.md)
 made false the moment Reflection stopped answering a Question in one shot. Built in two passes:
 issue #91 (`ade832a`) expanded storage to the tree described below while keeping the old table
@@ -174,3 +176,35 @@ A malformed or unexpected payload shape for a given `type` is a bug `entries_to_
 encounter at read time, not something the database itself can catch at write time — the same trade
 every jsonb-payload design makes, accepted here for the same reason issue #91 accepted it: a
 column-per-kind schema would need a new migration every time a new entry kind's fields were added.
+
+## Amendment (issue #108): the operation log is written, and what that costs
+
+This ADR built `session_records` alongside the entry tree and described it as "written and readable."
+Issue #108 found that only the second half was true: `append_record` had no production caller, and
+the table was empty in every running instance. The storage, the API and the tests were all correct;
+the wiring was simply absent. It is now wired, through a narrow async `RunLog` port
+(`harness/run_log.rs`) that `agent_loop` writes through — the loop still names nothing from HTTP,
+Sessions or Postgres, which this ADR's own boundary requires; `reflect.rs` supplies the
+implementation over a `PgPool`, the same seam `ChatClient` already draws.
+
+Two consequences are worth recording rather than leaving to be rediscovered.
+
+**Within one Turn, every record sorts before every entry.** Entries and records share one strictly
+consecutive `seq` per Session, which this ADR treats as "the order things happened." That reading is
+now approximate. A record commits the moment the loop reaches it, in its own short transaction,
+because a record that waits for the end is worthless to a run that crashes; entries still commit
+together at the end, once an Answer exists. So a `tool_started` record always carries a lower `seq`
+than the `session_entries` row it reserved the id for, even though the two describe the same moment.
+Anything replaying a Session in `seq` order has to know this. The alternative — writing entries
+incrementally too — was rejected because it would put half-written Turns in the tree on every failed
+run, which is the guarantee [0025](0025-sessions-are-held-by-the-server.md) is right to keep.
+
+**Reserving the identity before the work is the part that carries the payoff.** `tool_started` mints
+the `Uuid` that the tool's eventual `tool_result` entry will carry and hands it back, so the loop
+threads it through to the write. "Did this tool's result ever land?" is then answered by asking
+whether a `session_entries` row with that id exists — which is what migration `0006` said this table
+was for, and what could not be asked while ids were minted at write time.
+
+One record kind is inert: `abort_requested` is wired faithfully but no `ChatClient` in production
+produces `StopReason::Aborted`, so nothing triggers it until a real cancellation path exists. Said
+here rather than left as a puzzle for whoever greps for its writer.

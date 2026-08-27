@@ -47,6 +47,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use super::chat::{ChatClient, StreamEvent};
+use super::run_log::RunLog;
 use super::tools::AgentTool;
 use super::types::{AssistantMessage, ContentBlock, Context, Message, StopReason};
 
@@ -77,6 +78,17 @@ pub enum Step {
         details: Value,
         /// Every Entry id this call surfaced (`tools::ToolOutcome::entry_ids`).
         entry_ids: Vec<Uuid>,
+        /// Issue #108: the id this call's own `tool_started` operation-log
+        /// record reserved (`run_log::RunLog::tool_started`) — minted
+        /// *before* the tool actually ran, before its success or failure
+        /// was known. `reflect.rs::build_tree_payloads` writes this exact
+        /// id onto the `session_entries` row this step becomes, which is
+        /// what makes a crash mid-run answerable later: does an entry with
+        /// this id exist? A fresh `Uuid::new_v4()` when no `RunLog` was
+        /// given at all (`run`/`run_with_events` called with `run_log:
+        /// None`) — nothing about a `Step`'s own shape should depend on
+        /// whether anything is watching.
+        entry_id: Uuid,
     },
 }
 
@@ -238,6 +250,7 @@ pub async fn run(
         should_stop_after_turn,
         context_window,
         None,
+        None,
     )
     .await
 }
@@ -250,6 +263,13 @@ pub async fn run(
 /// in `reflect.rs` before issue #96 — keeps compiling and behaving exactly
 /// as it did; the two share one implementation (`run_inner`) so there is
 /// exactly one loop to keep correct, never two copies that can drift apart.
+///
+/// `run_log` (issue #108) is `run_inner`'s own optional operation-log port
+/// (`run_log::RunLog`'s own doc comment covers what it writes and why) —
+/// `None` reproduces exactly the behaviour this function always had, which
+/// is what every test in this module that doesn't care about the log
+/// passes. `reflect.rs` — the only production caller — always passes
+/// `Some`.
 pub async fn run_with_events(
     client: &dyn ChatClient,
     system_prompt: String,
@@ -258,6 +278,7 @@ pub async fn run_with_events(
     should_stop_after_turn: Option<&ShouldStopAfterTurn<'_>>,
     context_window: Option<u32>,
     events: &EventSink<'_>,
+    run_log: Option<&dyn RunLog>,
 ) -> LoopOutcome {
     run_inner(
         client,
@@ -267,6 +288,7 @@ pub async fn run_with_events(
         should_stop_after_turn,
         context_window,
         Some(events),
+        run_log,
     )
     .await
 }
@@ -289,9 +311,17 @@ async fn run_inner(
     should_stop_after_turn: Option<&ShouldStopAfterTurn<'_>>,
     context_window: Option<u32>,
     events: Option<&EventSink<'_>>,
+    run_log: Option<&dyn RunLog>,
 ) -> LoopOutcome {
     let wire_tools = super::tools::to_wire_tools(tools);
     let mut steps = Vec::new();
+    // Issue #108: a 0-based count of how many turns this run has already
+    // asked the model for — `run_log::RunLog::step_attempt`'s own doc
+    // comment on what it means. Incremented once per loop iteration,
+    // regardless of whether `run_log` is `None` — the counter itself is
+    // cheap to keep and this is the one place the loop knows which turn
+    // it's on.
+    let mut turn: u32 = 0;
 
     loop {
         if let Some(window) = context_window {
@@ -303,6 +333,11 @@ async fn run_inner(
             messages: messages.clone(),
             tools: wire_tools.clone(),
         };
+
+        if let Some(log) = run_log {
+            log.step_attempt(turn).await;
+        }
+        turn += 1;
 
         emit(events, LoopEvent::TurnStart);
         emit(events, LoopEvent::MessageStart);
@@ -334,6 +369,14 @@ async fn run_inner(
             },
         );
 
+        // Issue #108: only ever `Some` for a real measurement
+        // (`types::Usage`'s own doc comment) — nothing scripted by a test
+        // double that doesn't care about token accounting ever reaches
+        // this.
+        if let (Some(log), Some(usage)) = (run_log, assistant.usage) {
+            log.usage(usage.input_tokens, usage.output_tokens).await;
+        }
+
         messages.push(Message::Assistant(assistant.clone()));
         steps.push(Step::Assistant(assistant.clone()));
 
@@ -341,6 +384,17 @@ async fn run_inner(
             assistant.stop_reason,
             StopReason::Error | StopReason::Aborted
         ) {
+            // Issue #108: `Error` and `Aborted` are different failures —
+            // only a genuine cancellation is `abort_requested`. No
+            // `ChatClient` wired into production today ever produces
+            // `Aborted` (see `run_log::RunLog::abort_requested`'s own doc
+            // comment), so this is unreached outside this module's own
+            // tests until a cancellation path exists to trigger it.
+            if matches!(assistant.stop_reason, StopReason::Aborted) {
+                if let Some(log) = run_log {
+                    log.abort_requested().await;
+                }
+            }
             return LoopOutcome {
                 steps,
                 answer: None,
@@ -381,6 +435,20 @@ async fn run_inner(
                     arguments: arguments.clone(),
                 },
             );
+
+            // Issue #108: the identity this call's own `tool_result` entry
+            // will carry is reserved *before* the tool actually runs — see
+            // `run_log::RunLog::tool_started`'s own doc comment for why
+            // that ordering, not just the write itself, is the point. No
+            // `RunLog` at all (`run`, and every test in this module that
+            // doesn't care about the operation log) mints a fresh id here
+            // instead — a `Step`'s own shape never depends on whether
+            // anything is watching.
+            let entry_id = match run_log {
+                Some(log) => log.tool_started(id, name, arguments).await,
+                None => Uuid::new_v4(),
+            };
+
             let outcome = run_one_tool_call(tools, name, arguments.clone()).await;
             all_terminate &= outcome.terminate;
             emit(
@@ -407,6 +475,7 @@ async fn run_inner(
                 is_error: outcome.is_error,
                 details: outcome.details,
                 entry_ids: outcome.entry_ids,
+                entry_id,
             });
         }
 
@@ -612,6 +681,7 @@ mod tests {
     use super::*;
     use crate::harness::chat::{AssistantMessageStream, StreamEvent};
     use crate::harness::tools::ToolOutcome;
+    use crate::harness::types::Usage;
 
     /// A scripted `ChatClient`: a queue of canned `AssistantMessage`s
     /// (constructed directly, at the harness level — these tests exercise
@@ -1147,6 +1217,7 @@ mod tests {
                 is_error: false,
                 details: Value::Null,
                 entry_ids: vec![Uuid::nil()],
+                entry_id: Uuid::new_v4(),
             },
             Step::Assistant(prose("")),
         ];
@@ -1239,6 +1310,7 @@ mod tests {
             None,
             None,
             &sink,
+            None,
         )
         .await;
 
@@ -1292,6 +1364,7 @@ mod tests {
             None,
             None,
             &sink,
+            None,
         )
         .await;
 
@@ -1345,6 +1418,7 @@ mod tests {
             None,
             None,
             &sink,
+            None,
         )
         .await;
 
@@ -1473,5 +1547,244 @@ mod tests {
         // summarisation call snuck in for a Conversation nowhere near the
         // trigger.
         assert_eq!(client.contexts().len(), 2);
+    }
+
+    // -- issue #108: the operation log's RunLog port ----------------------
+
+    /// A `RunLog` spy — records every call it receives so a test can assert
+    /// on what the loop actually reported, the same role `recording_sink`
+    /// plays for `EventSink`. `tool_started` mints a fresh id per call, the
+    /// same contract a real implementation (`reflect.rs`'s, over
+    /// `sessions::append_record`) has to honour.
+    #[derive(Default)]
+    struct RecordingRunLog {
+        step_attempts: Mutex<Vec<u32>>,
+        tool_starts: Mutex<Vec<(String, String, Value, Uuid)>>,
+        usages: Mutex<Vec<(u32, u32)>>,
+        aborts: Mutex<u32>,
+    }
+
+    #[async_trait]
+    impl RunLog for RecordingRunLog {
+        async fn step_attempt(&self, turn: u32) {
+            self.step_attempts.lock().unwrap().push(turn);
+        }
+
+        async fn tool_started(
+            &self,
+            tool_call_id: &str,
+            tool_name: &str,
+            arguments: &Value,
+        ) -> Uuid {
+            let id = Uuid::new_v4();
+            self.tool_starts.lock().unwrap().push((
+                tool_call_id.to_string(),
+                tool_name.to_string(),
+                arguments.clone(),
+                id,
+            ));
+            id
+        }
+
+        async fn usage(&self, input_tokens: u32, output_tokens: u32) {
+            self.usages
+                .lock()
+                .unwrap()
+                .push((input_tokens, output_tokens));
+        }
+
+        async fn abort_requested(&self) {
+            *self.aborts.lock().unwrap() += 1;
+        }
+    }
+
+    /// The identity `RunLog::tool_started` reserves — before the tool call
+    /// it names ever runs — must be exactly the id the resulting
+    /// `Step::ToolResult::entry_id` carries. This is the property issue
+    /// #108 actually cares about: it's what lets `sessions::append_entry`
+    /// (via `reflect.rs::build_tree_payloads`) write the tool result under
+    /// the same id the operation log already committed, so a crash between
+    /// the two is answerable later — see `run_log::RunLog`'s own doc
+    /// comment.
+    #[tokio::test]
+    async fn tool_started_reserves_the_id_its_own_tool_result_step_carries() {
+        let tools = vec![tool(EchoTool::new("echo"))];
+        let client = ScriptedChatClient::new(vec![
+            one_tool_call("call_0", "echo", json!({"x": 1})),
+            prose("done"),
+        ]);
+        let run_log = RecordingRunLog::default();
+        let (_recorded, sink) = recording_sink();
+
+        let outcome = run_with_events(
+            &client,
+            "sys".into(),
+            &tools,
+            starting_messages(),
+            None,
+            None,
+            &sink,
+            Some(&run_log),
+        )
+        .await;
+
+        let Step::ToolResult { entry_id, .. } = &outcome.steps[1] else {
+            panic!("expected a ToolResult step");
+        };
+        let starts = run_log.tool_starts.lock().unwrap();
+        assert_eq!(starts.len(), 1, "exactly one tool call, one reservation");
+        assert_eq!(starts[0].0, "call_0");
+        assert_eq!(starts[0].1, "echo");
+        assert_eq!(
+            starts[0].3, *entry_id,
+            "the id tool_started reserved must be the one the ToolResult step carries"
+        );
+    }
+
+    /// One `step_attempt` per turn the loop actually asks the model for, in
+    /// order — the same turns `client.contexts()` already counts, from the
+    /// operation log's own point of view.
+    #[tokio::test]
+    async fn step_attempt_is_logged_once_per_turn_in_order() {
+        let tools = vec![tool(EchoTool::new("echo"))];
+        let client = ScriptedChatClient::new(vec![
+            one_tool_call("call_0", "echo", json!({})),
+            prose("done"),
+        ]);
+        let run_log = RecordingRunLog::default();
+        let (_recorded, sink) = recording_sink();
+
+        let _ = run_with_events(
+            &client,
+            "sys".into(),
+            &tools,
+            starting_messages(),
+            None,
+            None,
+            &sink,
+            Some(&run_log),
+        )
+        .await;
+
+        assert_eq!(*run_log.step_attempts.lock().unwrap(), vec![0, 1]);
+    }
+
+    /// `abort_requested` fires exactly on `StopReason::Aborted` — not on an
+    /// ordinary `Error`, which is a different failure the operation log
+    /// tells apart (see `run_log::RunLog::abort_requested`'s own doc
+    /// comment on why nothing wired into production reaches this today).
+    #[tokio::test]
+    async fn abort_requested_is_logged_only_for_an_aborted_stop_reason() {
+        let aborted = AssistantMessage {
+            content: vec![],
+            stop_reason: StopReason::Aborted,
+            error_message: None,
+            usage: None,
+        };
+        let client = ScriptedChatClient::new(vec![aborted]);
+        let run_log = RecordingRunLog::default();
+        let (_recorded, sink) = recording_sink();
+
+        let _ = run_with_events(
+            &client,
+            "sys".into(),
+            &[],
+            starting_messages(),
+            None,
+            None,
+            &sink,
+            Some(&run_log),
+        )
+        .await;
+
+        assert_eq!(*run_log.aborts.lock().unwrap(), 1);
+    }
+
+    /// An ordinary chat failure (`StopReason::Error`) must never be
+    /// misreported as an abort.
+    #[tokio::test]
+    async fn an_error_stop_reason_does_not_log_an_abort() {
+        let errored = AssistantMessage {
+            content: vec![],
+            stop_reason: StopReason::Error,
+            error_message: Some("connection reset".to_string()),
+            usage: None,
+        };
+        let client = ScriptedChatClient::new(vec![errored]);
+        let run_log = RecordingRunLog::default();
+        let (_recorded, sink) = recording_sink();
+
+        let _ = run_with_events(
+            &client,
+            "sys".into(),
+            &[],
+            starting_messages(),
+            None,
+            None,
+            &sink,
+            Some(&run_log),
+        )
+        .await;
+
+        assert_eq!(*run_log.aborts.lock().unwrap(), 0);
+    }
+
+    /// Real token usage, when a turn's reply reports it, is logged — the
+    /// same `input_tokens`/`output_tokens` `Usage` already carries.
+    #[tokio::test]
+    async fn usage_is_logged_when_the_reply_reports_it() {
+        let with_usage = AssistantMessage {
+            content: vec![ContentBlock::Text("done".to_string())],
+            stop_reason: StopReason::Stop,
+            error_message: None,
+            usage: Some(Usage {
+                input_tokens: 12,
+                output_tokens: 34,
+            }),
+        };
+        let client = ScriptedChatClient::new(vec![with_usage]);
+        let run_log = RecordingRunLog::default();
+        let (_recorded, sink) = recording_sink();
+
+        let _ = run_with_events(
+            &client,
+            "sys".into(),
+            &[],
+            starting_messages(),
+            None,
+            None,
+            &sink,
+            Some(&run_log),
+        )
+        .await;
+
+        assert_eq!(*run_log.usages.lock().unwrap(), vec![(12, 34)]);
+    }
+
+    /// `run_log: None` — every test above this one in this module — must
+    /// still produce a well-formed `Step::ToolResult` with *some* id, never
+    /// panic for lack of a `RunLog` to ask.
+    #[tokio::test]
+    async fn no_run_log_still_produces_a_tool_result_with_an_id() {
+        let tools = vec![tool(EchoTool::new("echo"))];
+        let client = ScriptedChatClient::new(vec![
+            one_tool_call("call_0", "echo", json!({})),
+            prose("done"),
+        ]);
+
+        let outcome = run(
+            &client,
+            "sys".into(),
+            &tools,
+            starting_messages(),
+            None,
+            None,
+        )
+        .await;
+
+        let Step::ToolResult { entry_id, .. } = &outcome.steps[1] else {
+            panic!("expected a ToolResult step");
+        };
+        assert_ne!(*entry_id, Uuid::nil());
     }
 }

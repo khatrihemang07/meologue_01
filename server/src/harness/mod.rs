@@ -16,5 +16,6 @@ pub mod agent_loop;
 pub mod chat;
 pub mod compaction;
 pub mod prompted;
+pub mod run_log;
 pub mod tools;
 pub mod types;

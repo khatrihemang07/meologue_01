@@ -9,6 +9,9 @@ table*. 0020's placement of Reflection as a third nav destination, its `/reflect
 `EntryStoreLayout`, its Sync-off gate and its reasoning for keeping Settings an app-bar action all
 stand unchanged and are still load-bearing. 0020 is amended in place to record this.
 
+Amended by issue #108, which reverses this ADR's "nothing is written until an Answer succeeds"
+clause for the `sessions` row itself — see the "Amendment (issue #108)" section at the end.
+
 Partially reversed, in one narrow direction, by [0030](0030-the-shell-gets-a-root-screen.md): the
 Device now remembers exactly one Session id, in `sessionStorage`, as a fallback for a bare
 `/reflect` — leaving Reflect for the Composer and returning used to open a fresh Session and
@@ -169,3 +172,46 @@ append-only and ordered by a server-assigned sequence, so nothing is lost and no
 the Conversation simply reads as though one person asked two things at once, which is what happened.
 This is accepted rather than solved — the alternative is locking a Session to one Device, which
 would undo the property this ADR exists to provide.
+
+## Amendment (issue #108): the Session row is written on receipt after all
+
+This ADR rejected one alternative by name:
+
+> The alternative — writing the Session on receipt and the turn on success — would put empty
+> Sessions back into the list by the back door, through exactly the failure paths ADRs 0023 and
+> 0024 went to some trouble to make survivable.
+
+Issue #108 takes that alternative. It is worth being plain that this is a reversal of a decision
+this document argued, not a detail it left open.
+
+**What forced it.** Issue #91 built `session_records`, the operation log, whose entire purpose is
+that after an interrupted run it is answerable which tools started and which results landed. Issue
+#108 found that nothing ever wrote to it — the table was always empty, so #91's own acceptance
+criterion was unmet. Wiring it up runs straight into this ADR: `session_records` has a foreign key
+to `sessions`, and under "nothing is written until an Answer succeeds" there is no `sessions` row to
+key against while the run is still going. Buffering the records and writing them at the end with
+everything else is not a smaller version of the feature; it is the absence of it, because a run that
+crashes never reaches the end. A log that only survives runs that didn't need logging is not a log.
+
+So `resolve_session` now mints the `sessions` row up front, before the first SSE frame, and a failed
+Question leaves that row behind with no entries under it.
+
+**Why the reason for the original decision still holds.** The property this ADR actually wanted was
+never "the row cannot exist" — it was "the list can never accumulate empty rows a user has to reason
+about." That property is intact, moved to where it is observed: `list_sessions` now requires a
+Session to have at least one entry before it is listed. The search branch already joined
+`session_entries` and needed no change, which is itself a small piece of evidence that the guarantee
+was always really about the list.
+
+An orphaned row is also unreachable rather than merely unlisted. A Device only ever learns a
+`session_id` from a successful `agent_end`; the failure frame carries none, so there is no id to
+navigate to. What remains is a row in a table that nothing displays, and — recorded honestly rather
+than discovered later — those rows accumulate. Nothing reaps them today. That is a real cost of this
+amendment, accepted because the alternative is an audit log that cannot audit the only case it
+exists for.
+
+**What did not change.** Turns are still written in one transaction at the end, once an Answer
+exists, so a failed ask still leaves no Turn and no half-written Conversation — the half of "nothing
+is written until an Answer succeeds" that was protecting against a corrupt Conversation, as opposed
+to an untidy list, is untouched. See [0033](0033-a-session-is-an-append-only-entry-tree.md), which
+this amendment also touches.

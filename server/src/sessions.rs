@@ -228,13 +228,16 @@ impl EntryType {
 
 /// The six kinds a row in the operation log (`session_records`, migration
 /// `0006`) can be — what the Server was *doing*, as distinct from what was
-/// said. This ticket writes and reads this log as an audit trail only
-/// (issue #91: "nothing resumes from it yet"), so nothing here does
-/// anything with a record's `kind` beyond storing and returning it. No
-/// production caller writes any record yet either — that's the harness
-/// this ticket lays the storage for, not this ticket's own job — so this
-/// whole type is exercised only by `append_record`'s own tests today.
-#[allow(dead_code)]
+/// said. Issue #91 built this table as an audit trail only ("nothing
+/// resumes from it yet") and issue #108 is what actually writes it in
+/// production: `reflect.rs` writes `OperationStarted`/`OperationFinished`
+/// itself, bracketing the whole `/v1/reflect` request (both loop calls a
+/// retry can make, not each one separately); `harness::agent_loop::run_inner`
+/// writes `StepAttempt`/`ToolStarted`/`Usage`/`AbortRequested` through the
+/// narrow `harness::run_log::RunLog` port, over the same `sessions::append_record`
+/// this module always offered. Nothing here does anything with a record's
+/// `kind` beyond storing and returning it — reading this log back for more
+/// than an audit trail (a resume path) is still not this ticket's job.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RecordKind {
     OperationStarted,
@@ -246,8 +249,7 @@ pub(crate) enum RecordKind {
 }
 
 impl RecordKind {
-    #[allow(dead_code)]
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             RecordKind::OperationStarted => "operation_started",
             RecordKind::OperationFinished => "operation_finished",
@@ -525,6 +527,20 @@ pub async fn list_sessions_handler(
 /// an empty `Vec`, not an error — there is no such thing as "no Sessions
 /// yet" as a failure.
 ///
+/// Issue #108: the unfiltered branch below excludes a Session with no
+/// entries at all — a real, committed state since `resolve_session`
+/// (`reflect.rs`) started minting a Session's `sessions` row up front,
+/// before the run it belongs to even starts, rather than only once a Turn
+/// has actually succeeded. That row can now outlive a request that never
+/// produces an Answer. ADR 0025's "a Session holding an empty Conversation
+/// is unrepresentable" is kept exactly where it's actually observed —
+/// nowhere a client can see one — rather than by refusing to create the row
+/// at all, which would leave `harness::run_log::RunLog`'s operation-log
+/// records with nothing to key against for a run's very first Question.
+/// The search branch just below needs no equivalent guard: it already joins
+/// `session_entries`, so a Session with none can never produce a matching
+/// row to begin with.
+///
 /// `q` narrows the list to Sessions with at least one `user`/`assistant`
 /// `message` entry matching, case-insensitively (issue #64) — a Question or
 /// an Answer, never a `tool_result` entry, which is raw tool output (Entry
@@ -544,29 +560,33 @@ pub async fn list_sessions_handler(
 /// a plain column read.
 async fn list_sessions(pool: &PgPool, q: Option<&str>) -> anyhow::Result<Vec<SessionRow>> {
     let term = q.map(str::trim).filter(|term| !term.is_empty());
-    let sessions =
-        match term {
-            None => sqlx::query_as::<_, SessionRow>(
-                "select id, title, created_at, updated_at from sessions order by updated_at desc",
+    let sessions = match term {
+        None => {
+            sqlx::query_as::<_, SessionRow>(
+                "select s.id, s.title, s.created_at, s.updated_at
+                 from sessions s
+                 where exists (select 1 from session_entries e where e.session_id = s.id)
+                 order by s.updated_at desc",
             )
             .fetch_all(pool)
-            .await?,
-            Some(term) => {
-                let pattern = format!("%{}%", escape_like_pattern(term));
-                sqlx::query_as::<_, SessionRow>(
-                    "select distinct s.id, s.title, s.created_at, s.updated_at
+            .await?
+        }
+        Some(term) => {
+            let pattern = format!("%{}%", escape_like_pattern(term));
+            sqlx::query_as::<_, SessionRow>(
+                "select distinct s.id, s.title, s.created_at, s.updated_at
                  from sessions s
                  join session_entries e on e.session_id = s.id
                  where e.type = 'message'
                    and e.payload->>'role' in ('user', 'assistant')
                    and e.payload->>'text' ilike $1
                  order by s.updated_at desc",
-                )
-                .bind(pattern)
-                .fetch_all(pool)
-                .await?
-            }
-        };
+            )
+            .bind(pattern)
+            .fetch_all(pool)
+            .await?
+        }
+    };
     Ok(sessions)
 }
 
@@ -725,87 +745,102 @@ async fn session_main_leaf_id(pool: &PgPool, session_id: Uuid) -> anyhow::Result
     Ok(leaf.flatten())
 }
 
-/// Opens a transaction and resolves the Session a new Turn is about to be
-/// appended to — an existing Session's `main_leaf_id` (its current leaf,
-/// about to be extended) for `Some(session_id)`, or a freshly minted
-/// Session with no leaf yet for `None`. Factored out of
-/// `record_turn_from_steps` (its one caller) purely to keep that function's
-/// own body focused on the shape only it needs — the session-upsert logic
-/// itself has nothing loop-specific about it. Returns the still-open
-/// transaction: the caller has more to do inside it (one or more
-/// `append_entry` calls, a `main_leaf_id` update) before committing.
-async fn begin_turn<'a>(
-    pool: &'a PgPool,
-    session_id: Option<Uuid>,
-    title: &str,
-) -> anyhow::Result<(Transaction<'a, Postgres>, Uuid, Option<Uuid>)> {
-    let mut tx = pool.begin().await?;
-
-    let (session_id, parent_leaf) = match session_id {
-        Some(id) => {
-            let leaf: Option<Uuid> = sqlx::query_scalar(
-                "update sessions set updated_at = now() where id = $1 returning main_leaf_id",
-            )
-            .bind(id)
-            .fetch_one(&mut *tx)
-            .await?;
-            (id, leaf)
-        }
-        None => {
-            let id = Uuid::new_v4();
-            sqlx::query("insert into sessions (id, title) values ($1, $2)")
-                .bind(id)
-                .bind(title)
-                .execute(&mut *tx)
-                .await?;
-            (id, None)
-        }
-    };
-
-    Ok((tx, session_id, parent_leaf))
+/// Mints a Session up front — before any Turn has ever been asked, let
+/// alone answered. Issue #108: `reflect.rs::resolve_session` calls this
+/// (for a request naming no existing Session) synchronously, before the
+/// run it belongs to even starts, so the whole run has a real `session_id`
+/// from the start — the operation log (`harness::run_log::RunLog`, over
+/// `append_record`) needs one to key its very first record against, and
+/// `session_records.session_id references sessions(id)` means a record
+/// written mid-run has nothing to key against otherwise.
+///
+/// Before this ticket, only `record_turn_from_steps` ever created a
+/// `sessions` row, and only once a Turn had actually succeeded — see
+/// `docs/adr/0025`, "a Session holding an empty Conversation is
+/// unrepresentable." This function is deliberately the exception now: a
+/// real, committed Session with no entries at all is a reachable state as
+/// of this ticket (a request that resolves a Session and then never
+/// produces an Answer). The guarantee ADR 0025 names is kept where it's
+/// actually observed instead — nowhere a client can see such a Session —
+/// rather than by refusing to create the row; see `list_sessions`'s own
+/// doc comment for where that's enforced.
+pub(crate) async fn create_session(pool: &PgPool, title: &str) -> anyhow::Result<Uuid> {
+    let id = Uuid::new_v4();
+    sqlx::query("insert into sessions (id, title) values ($1, $2)")
+        .bind(id)
+        .bind(title)
+        .execute(pool)
+        .await?;
+    Ok(id)
 }
 
-/// Persists one Turn — the *only* place a Session or a Turn is ever
-/// written, called by `reflect.rs::run_reflect_stream_inner` once a loop
-/// run has actually produced an Answer, never before: any failure before
-/// this call (a chat call erroring, the loop never producing a reply) never
-/// reaches here, so a failed ask can never leave a half-written Session or
-/// an orphaned Turn behind — see `docs/adr/0025`, which is where "a Session
-/// holding an empty Conversation is unrepresentable" is decided. (CONTEXT.md
-/// defines what a Session *is*; it deliberately carries no implementation
-/// guarantees.)
+/// Opens a transaction and reads the Session a new Turn is about to be
+/// appended to — its current `main_leaf_id`, and a bumped `updated_at`.
+/// Factored out of `record_turn_from_steps` (its one caller) purely to keep
+/// that function's own body focused on the shape only it needs. Returns
+/// the still-open transaction: the caller has more to do inside it (one or
+/// more `append_entry` calls, a `main_leaf_id` update) before committing.
 ///
-/// `title` is used only when minting a new Session — an existing Session's
-/// title is immutable once set (CONTEXT.md: "a title taken from its first
-/// Question"), so a follow-up Question never overwrites it.
+/// Issue #108 moved *creating* a Session out of this function entirely
+/// (see `create_session`): by the time this runs, `session_id` always
+/// already names a real row — `reflect.rs::resolve_session` guarantees
+/// that for every caller, so there is no "mint a new one" branch left
+/// here.
+async fn begin_turn<'a>(
+    pool: &'a PgPool,
+    session_id: Uuid,
+) -> anyhow::Result<(Transaction<'a, Postgres>, Option<Uuid>)> {
+    let mut tx = pool.begin().await?;
+    let leaf: Option<Uuid> = sqlx::query_scalar(
+        "update sessions set updated_at = now() where id = $1 returning main_leaf_id",
+    )
+    .bind(session_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    Ok((tx, leaf))
+}
+
+/// Persists one Turn — the *only* place a Turn is ever written, called by
+/// `reflect.rs::run_reflect_stream_inner` once a loop run has actually
+/// produced an Answer, never before: any failure before this call (a chat
+/// call erroring, the loop never producing a reply) never reaches here, so
+/// a failed ask can never leave an orphaned Turn behind. `session_id`
+/// itself, since issue #108, was already minted before this Turn's run
+/// even started (`resolve_session`/`create_session`) — see this module's
+/// own doc comment on `list_sessions` for the consequence: a Session can
+/// now outlive a request that fails before reaching this call, holding no
+/// entries at all.
 ///
 /// `payloads` is every tree entry this Turn adds, in the order they
-/// happened, already encoded as `(EntryType, Value)` pairs by the caller —
-/// `reflect.rs`'s `build_tree_payloads`, which is what actually knows the
-/// shape of a loop's steps; this function only chains them onto the
-/// Session's existing leaf and commits. Before issue #99 this also took a
-/// `NewTurn` and wrote a matching `session_turns` row alongside the tree —
-/// that row's own columns (`question`, `answer`, `grounding_entry_ids`)
-/// were always a plain re-derivation of the same `payloads` this function
-/// was already given, never a second source of truth, so once nothing read
-/// `session_turns` any more (this module's own doc comment) carrying it was
-/// pure duplication with no reader left to justify it. `payloads` must not
-/// be empty — a Turn with no entries at all is not a Turn.
+/// happened, encoded by the caller — `reflect.rs::build_tree_payloads`,
+/// which is what actually knows the shape of a loop's steps; this function
+/// only chains them onto the Session's existing leaf and commits. Each
+/// tuple's third field is the id to reuse for that entry, when one was
+/// already reserved before the work it describes started — issue #108:
+/// a `Step::ToolResult`'s `entry_id`, reserved by
+/// `harness::run_log::RunLog::tool_started` before the tool ever ran, is
+/// what a `session_records` `tool_started` row already committed under, so
+/// reusing it here (rather than minting a fresh one) is what makes "did
+/// this tool's result land?" answerable by checking whether a
+/// `session_entries` row with that id exists. Every other payload — the
+/// Question, an Assistant reply, a `model_change` entry — was never
+/// reserved ahead of time and mints a fresh id here, exactly as every entry
+/// did before this ticket. `payloads` must not be empty — a Turn with no
+/// entries at all is not a Turn.
 pub(crate) async fn record_turn_from_steps(
     pool: &PgPool,
-    session_id: Option<Uuid>,
-    title: &str,
-    payloads: Vec<(EntryType, Value)>,
+    session_id: Uuid,
+    payloads: Vec<(EntryType, Value, Option<Uuid>)>,
 ) -> anyhow::Result<Uuid> {
     anyhow::ensure!(
         !payloads.is_empty(),
         "record_turn_from_steps requires at least one entry to append"
     );
 
-    let (mut tx, session_id, mut leaf) = begin_turn(pool, session_id, title).await?;
+    let (mut tx, mut leaf) = begin_turn(pool, session_id).await?;
 
-    for (entry_type, payload) in payloads {
-        let id = Uuid::new_v4();
+    for (entry_type, payload, reserved_id) in payloads {
+        let id = reserved_id.unwrap_or_else(Uuid::new_v4);
         append_entry(&mut tx, session_id, id, leaf, entry_type, payload).await?;
         leaf = Some(id);
     }
@@ -969,11 +1004,23 @@ pub(crate) async fn append_entry(
 /// record's id *before* doing the work it describes, not when this
 /// function is called to log that the work happened.
 ///
-/// No production caller writes a record yet (see `RecordKind`'s doc
-/// comment) — `#[allow(dead_code)]` records that this is the storage a
-/// future harness will call, proven correct now by its own tests, rather
-/// than dead weight.
-#[allow(dead_code)]
+/// Issue #108's production callers each open, use, and commit their own
+/// short-lived transaction around exactly one call to this function — never
+/// a longer-lived one shared across several records, and never the same
+/// transaction a Turn's entries commit through
+/// (`record_turn_from_steps`'s own doc comment covers why that one *is*
+/// long-lived). That is deliberate: a record has to actually commit the
+/// moment the work it describes starts, so a crash later in the same run
+/// still leaves it behind — batching records into the eventual Turn's own
+/// transaction would lose exactly the crash-survives-it property issue #91
+/// designed this table for.
+///
+/// **Consequence, not a bug:** because of that, within one Turn every
+/// record commits (and is assigned its `seq`) strictly before that Turn's
+/// entries do, even though the two describe interleaved moments — a
+/// `tool_started` record's `seq` is always lower than the `session_entries`
+/// row it reserved the id for. See `harness::run_log`'s own doc comment for
+/// the full reasoning; this is the write-side half of it.
 pub(crate) async fn append_record(
     tx: &mut Transaction<'_, Postgres>,
     session_id: Uuid,
@@ -2183,6 +2230,17 @@ mod tests {
     /// as the answer.
     #[sqlx::test]
     async fn record_turn_from_steps_chains_every_payload_in_order(pool: PgPool) {
+        // Issue #108: `record_turn_from_steps` no longer mints a Session
+        // itself — a caller (`reflect.rs::resolve_session`, `create_session`
+        // in production) always already has one.
+        let session_id = create_session(&pool, "Running").await.unwrap();
+
+        // Issue #108: a `ToolResult` payload can carry an id already
+        // reserved before the tool ran (`harness::run_log::RunLog::tool_started`)
+        // — proven here directly, since `reflect.rs::build_tree_payloads` is
+        // the only other place that ever supplies one.
+        let reserved_tool_result_id = Uuid::new_v4();
+
         let payloads = vec![
             (
                 EntryType::Message,
@@ -2190,6 +2248,7 @@ mod tests {
                     text: "What did I write about running?".to_string(),
                 })
                 .unwrap(),
+                None,
             ),
             (
                 EntryType::Message,
@@ -2199,6 +2258,7 @@ mod tests {
                     is_answer: false,
                 })
                 .unwrap(),
+                None,
             ),
             (
                 EntryType::Message,
@@ -2210,6 +2270,7 @@ mod tests {
                     entry_ids: Vec::new(),
                 })
                 .unwrap(),
+                Some(reserved_tool_result_id),
             ),
             (
                 EntryType::Message,
@@ -2219,12 +2280,17 @@ mod tests {
                     is_answer: true,
                 })
                 .unwrap(),
+                None,
             ),
         ];
 
-        let session_id = record_turn_from_steps(&pool, None, "Running", payloads)
+        let returned_session_id = record_turn_from_steps(&pool, session_id, payloads)
             .await
             .unwrap();
+        assert_eq!(
+            returned_session_id, session_id,
+            "the same session_id it was given, never a minted one"
+        );
 
         let entries = load_entries(&pool, session_id).await.unwrap();
         assert_eq!(entries.len(), 4);
@@ -2236,6 +2302,10 @@ mod tests {
                 "every entry must chain onto the previous one in order"
             );
         }
+        assert_eq!(
+            entries[2].id, reserved_tool_result_id,
+            "a reserved id must be reused, not overwritten by a fresh one"
+        );
 
         let leaf: Option<Uuid> =
             sqlx::query_scalar("select main_leaf_id from sessions where id = $1")
