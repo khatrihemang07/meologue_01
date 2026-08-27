@@ -176,7 +176,14 @@ async fn insert_session_with_times(
         .unwrap();
 }
 
-async fn insert_turn(pool: &PgPool, session_id: Uuid, question: &str, answer: &str) {
+/// Writes only a `session_turns` row, with no matching tree entries — the
+/// shape a Session written before issue #91 actually has. Every other test
+/// in this file wants a Session that already looks the way `record_turn`
+/// leaves one today (both shapes, see `insert_turn` below); this one is
+/// reserved for `existing_turns_convert_to_entries_and_still_read_via_the_api`,
+/// which needs data the migration's backfill has never touched so it can
+/// prove that backfill actually does something.
+async fn insert_legacy_turn(pool: &PgPool, session_id: Uuid, question: &str, answer: &str) {
     sqlx::query(
         "insert into session_turns
             (id, session_id, question, answer, grounding_entry_ids, grounded, fallback_used)
@@ -189,6 +196,81 @@ async fn insert_turn(pool: &PgPool, session_id: Uuid, question: &str, answer: &s
     .execute(pool)
     .await
     .unwrap();
+}
+
+/// Writes a `session_turns` row *and* the matching pair of chained tree
+/// entries `sessions::record_turn` would append for the same Turn (issue
+/// #91: both shapes are always written together from this point on). This
+/// test crate has no access to `record_turn`'s `pub(crate)` internals, so
+/// it replicates the shape directly in SQL rather than reimplementing
+/// `record_turn` itself — `session_entries_append_and_read_back` and
+/// friends in `server/src/sessions.rs`'s own `#[cfg(test)]` module are what
+/// actually exercise `append_entry`. What matters here is only that
+/// `GET /v1/sessions/{id}` — which now reads the tree, not `session_turns`
+/// — sees exactly the Turns these tests seed.
+async fn insert_turn(pool: &PgPool, session_id: Uuid, question: &str, answer: &str) {
+    insert_legacy_turn(pool, session_id, question, answer).await;
+
+    let leaf: Option<Uuid> = sqlx::query_scalar("select main_leaf_id from sessions where id = $1")
+        .bind(session_id)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+
+    let user_seq: i64 = sqlx::query_scalar(
+        "update sessions set next_seq = next_seq + 1 where id = $1 returning next_seq - 1",
+    )
+    .bind(session_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let user_entry_id = Uuid::new_v4();
+    sqlx::query(
+        "insert into session_entries (session_id, id, parent_id, seq, type, payload)
+         values ($1, $2, $3, $4, 'message', $5)",
+    )
+    .bind(session_id)
+    .bind(user_entry_id)
+    .bind(leaf)
+    .bind(user_seq)
+    .bind(serde_json::json!({"role": "user", "text": question}))
+    .execute(pool)
+    .await
+    .unwrap();
+
+    let assistant_seq: i64 = sqlx::query_scalar(
+        "update sessions set next_seq = next_seq + 1 where id = $1 returning next_seq - 1",
+    )
+    .bind(session_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let assistant_entry_id = Uuid::new_v4();
+    sqlx::query(
+        "insert into session_entries (session_id, id, parent_id, seq, type, payload)
+         values ($1, $2, $3, $4, 'message', $5)",
+    )
+    .bind(session_id)
+    .bind(assistant_entry_id)
+    .bind(user_entry_id)
+    .bind(assistant_seq)
+    .bind(serde_json::json!({
+        "role": "assistant",
+        "text": answer,
+        "grounding_entry_ids": Vec::<Uuid>::new(),
+        "grounded": true,
+        "fallback_used": false,
+    }))
+    .execute(pool)
+    .await
+    .unwrap();
+
+    sqlx::query("update sessions set main_leaf_id = $1 where id = $2")
+        .bind(assistant_entry_id)
+        .bind(session_id)
+        .execute(pool)
+        .await
+        .unwrap();
 }
 
 /// The whole point of a server-held Conversation (`docs/adr/0025`): a
@@ -562,4 +644,95 @@ async fn percent_is_treated_literally(pool: PgPool) {
     let sessions = body.as_array().unwrap();
     assert_eq!(sessions.len(), 1);
     assert_eq!(sessions[0]["id"], matching_id.to_string());
+}
+
+/// Issue #91's acceptance criterion, proven end to end: "Every existing
+/// stored Conversation converts to entries and still reads correctly
+/// through the API." `sqlx::test` already applies every migration
+/// (`sqlx::migrate!()`), including `0006_sessions_become_entry_trees.sql`,
+/// before this test body ever runs — but at that moment `session_turns` is
+/// empty, so its backfill converted nothing. `insert_legacy_turn` seeds two
+/// Turns the way a Session written before this ticket actually looked:
+/// `session_turns` rows with no matching tree entries at all. Re-executing
+/// the migration file's own text against this same database (via
+/// `sqlx::raw_sql` over `include_str!`, not a hand-written reimplementation
+/// of the backfill) is what proves the SQL that will run exactly once
+/// against a real upgrade does the right thing — every statement in that
+/// file is written to tolerate being re-run (its own header explains why),
+/// so this only touches the two rows just seeded.
+#[sqlx::test]
+async fn existing_turns_convert_to_entries_and_still_read_via_the_api(pool: PgPool) {
+    let session_id = Uuid::new_v4();
+    insert_session(&pool, session_id, "How has my knee been?").await;
+    insert_legacy_turn(
+        &pool,
+        session_id,
+        "How has my knee been?",
+        "It's been a recurring issue since February.",
+    )
+    .await;
+    insert_legacy_turn(
+        &pool,
+        session_id,
+        "Did it start with physical therapy?",
+        "Yes, it started in March.",
+    )
+    .await;
+
+    sqlx::raw_sql(include_str!(
+        "../migrations/0006_sessions_become_entry_trees.sql"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let (status, body) = get_session(&pool, Some(reflect_state()), session_id).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let turns = body["turns"].as_array().unwrap();
+    assert_eq!(turns.len(), 2);
+    assert_eq!(turns[0]["question"], "How has my knee been?");
+    assert_eq!(
+        turns[0]["answer"],
+        "It's been a recurring issue since February."
+    );
+    assert_eq!(turns[1]["question"], "Did it start with physical therapy?");
+    assert_eq!(turns[1]["answer"], "Yes, it started in March.");
+}
+
+/// A Session that already existed before this migration and *also* gets a
+/// brand-new Turn after it (through the ordinary tree-writing `insert_turn`
+/// helper, standing in for `record_turn`) must chain the new Turn onto the
+/// backfilled ones rather than starting a second, disconnected root — the
+/// migration's `next_seq`/`main_leaf_id` update is what a live append reads
+/// to know where "the end of this Session" currently is.
+#[sqlx::test]
+async fn a_migrated_session_accepts_a_new_turn_chained_after_the_backfilled_ones(pool: PgPool) {
+    let session_id = Uuid::new_v4();
+    insert_session(&pool, session_id, "How has my knee been?").await;
+    insert_legacy_turn(
+        &pool,
+        session_id,
+        "How has my knee been?",
+        "It's been a recurring issue since February.",
+    )
+    .await;
+
+    sqlx::raw_sql(include_str!(
+        "../migrations/0006_sessions_become_entry_trees.sql"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    insert_turn(&pool, session_id, "Still bothering you?", "A little.").await;
+
+    let (status, body) = get_session(&pool, Some(reflect_state()), session_id).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let turns = body["turns"].as_array().unwrap();
+    assert_eq!(turns.len(), 2);
+    assert_eq!(turns[0]["question"], "How has my knee been?");
+    assert_eq!(turns[1]["question"], "Still bothering you?");
+    assert_eq!(turns[1]["answer"], "A little.");
 }
