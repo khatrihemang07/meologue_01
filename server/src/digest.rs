@@ -18,6 +18,13 @@
 //! place that knows what a `digests` row looks like, the same reasoning
 //! `sessions.rs` gives for holding both `reflect.rs`'s persistence helpers
 //! and its own handlers.
+//!
+//! Issue #95 gives the harness a second reader: `harness::tools::read_digest`
+//! calls `select_digest_at` directly rather than going over HTTP to its own
+//! Server, so `DigestRecord` and `select_digest_at` are `pub(crate)` — the
+//! query and the row shape are unchanged; only what can see them is wider,
+//! the same minimal widening `entries_in_range.rs` made of
+//! `reflect::local_date_range_to_utc`.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -504,11 +511,20 @@ fn render_entry(entry: &DigestEntry, tz: Tz) -> String {
 /// queried, and `period_end` because it is always a pure function of
 /// `period_start` (`period::period_end`), never a second, parallel value
 /// worth persisting or selecting.
+///
+/// `pub(crate)` (issue #95, both the struct and `select_digest_at` below)
+/// for the same reason `reflect::local_date_range_to_utc` was widened to
+/// `pub(crate)` for `entries_in_range.rs`: `harness::tools::read_digest`
+/// needs the exact row this HTTP handler already selects, and duplicating
+/// the query — or the row shape — in the tools module would be a second
+/// place that knows what a `digests` row looks like, exactly what this
+/// module's own doc comment says to avoid. Nothing about the query or the
+/// row itself changes; only what can see it.
 #[derive(Debug, Clone, sqlx::FromRow)]
-struct DigestRecord {
-    period_start: NaiveDate,
-    body: String,
-    grounding_entry_ids: Vec<Uuid>,
+pub(crate) struct DigestRecord {
+    pub(crate) period_start: NaiveDate,
+    pub(crate) body: String,
+    pub(crate) grounding_entry_ids: Vec<Uuid>,
 }
 
 /// The wire shape of one Digest — everything a client needs to render it
@@ -687,7 +703,7 @@ async fn select_latest_digest(pool: &PgPool, period: Period) -> sqlx::Result<Opt
     .await
 }
 
-async fn select_digest_at(
+pub(crate) async fn select_digest_at(
     pool: &PgPool,
     period: Period,
     date: NaiveDate,

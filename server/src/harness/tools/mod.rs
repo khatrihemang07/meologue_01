@@ -30,8 +30,15 @@
 //! than one function, all three carried the same date-boundary bug. See
 //! `render_entry`'s own doc comment for what that bug was and why one
 //! function fixes it everywhere at once.
+//!
+//! `read_digest` (`read_digest.rs`, issue #95) is the fourth tool, and the
+//! first over a Digest rather than an Entry — see its own doc comment for
+//! what that ticket was actually testing (whether a new *kind* of data
+//! costs only a new `AgentTool` impl, or forces a change here or in
+//! `agent_loop`) and what it found.
 
 pub mod entries_in_range;
+pub mod read_digest;
 pub mod search_entries;
 pub mod similar_entries;
 
@@ -43,6 +50,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 pub use entries_in_range::EntriesInRangeTool;
+pub use read_digest::ReadDigestTool;
 pub use search_entries::SearchEntriesTool;
 pub use similar_entries::SimilarEntriesTool;
 

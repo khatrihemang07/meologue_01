@@ -51,7 +51,7 @@ use crate::embedding::vector_literal;
 use crate::harness::agent_loop::{self, Step};
 use crate::harness::prompted::PromptedToolClient;
 use crate::harness::tools::{
-    self, AgentTool, EntriesInRangeTool, SearchEntriesTool, SimilarEntriesTool,
+    self, AgentTool, EntriesInRangeTool, ReadDigestTool, SearchEntriesTool, SimilarEntriesTool,
 };
 use crate::harness::types::{AssistantMessage, ContentBlock, Message, StopReason};
 use crate::llm::{ChatMessage, LlmClient};
@@ -538,11 +538,12 @@ async fn run_reflect_loop(
         turns.split_off(start)
     };
 
-    // Three tools now: `entries_in_range` (issue #93, by date),
-    // `search_entries` (issue #94, by word) and `similar_entries` (issue
-    // #94, by meaning) — each independently constructible, so a future
-    // caller (issue #100's evaluation) can build its own subset of this
-    // same `Vec` to compare arms without touching `run_reflect_loop`
+    // Four tools now: `entries_in_range` (issue #93, by date),
+    // `search_entries` (issue #94, by word), `similar_entries` (issue #94,
+    // by meaning) and `read_digest` (issue #95, a written summary rather
+    // than raw Entries at all) — each independently constructible, so a
+    // future caller (issue #100's evaluation) can build its own subset of
+    // this same `Vec` to compare arms without touching `run_reflect_loop`
     // itself. `search_entries` and `similar_entries` stay two tools rather
     // than one merged one deliberately — see `harness::tools`'s own doc
     // comment for why.
@@ -554,6 +555,7 @@ async fn run_reflect_loop(
             reflect.embed_client.clone(),
             offset_minutes,
         )),
+        Arc::new(ReadDigestTool::new(pool.clone())),
     ];
     let system_prompt = tools::render_tool_guidance(LOOP_SYSTEM_INSTRUCTION, &tools);
 
