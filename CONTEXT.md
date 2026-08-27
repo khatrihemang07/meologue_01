@@ -95,6 +95,17 @@ the thoughts they already captured.
 What Reflection gives back in response to a Question, drawn from the Grounding it found. An
 Answer is not an Entry either — it is not the user's own words, and it never enters History.
 
+### Turn
+
+One iteration of Reflection's own work while it answers a Question: the model produces one reply,
+and if that reply asks to use a tool, the tool's result is read before the model replies again. A
+Question can take several Turns — the model may look, decide it hasn't seen enough, and look
+again — before it has what it needs to write the Answer. This is not the same thing as a
+Question-and-Answer pair; a single Question can span many Turns, and nothing about how many it
+takes changes what the user sees, which stays a Question followed by its Answer regardless. Turn
+names the machinery Reflection uses to get there, not a second unit sitting next to Question and
+Answer.
+
 ### Conversation
 
 The running sequence of Questions and Answers inside one Session. Each Question is read in the

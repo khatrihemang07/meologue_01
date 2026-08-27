@@ -21,6 +21,15 @@ remembered id is only ever consulted when the URL itself carries none. Every oth
 ADR made — the Server as sole holder, no local mirror of Session content, no create endpoint, LWW
 by server arrival — stands unchanged and is still load-bearing.
 
+**Amended by [0033](0033-a-session-is-an-append-only-entry-tree.md): this ADR's assumption about
+what a Session is *made of* — a sequence of Question/Answer pairs, one row per Turn — no longer
+holds, once [0031](0031-reflection-is-a-loop-over-tools.md) made answering a Question take an
+unpredictable number of model replies and tool calls rather than exactly one round trip. 0033's
+append-only entry tree replaces the per-pair storage this ADR's Decision and Consequences sections
+describe (`session_turns`, dropped by migration `0008`). Everything else this ADR decided —
+*where* a Session lives, that it's addressed by an id in the URL, that the Device stores nothing —
+is untouched by 0033 and stands exactly as written below.
+
 ## Context
 
 0020 decided a Conversation lives only in memory, and was explicit that this was a deferral rather

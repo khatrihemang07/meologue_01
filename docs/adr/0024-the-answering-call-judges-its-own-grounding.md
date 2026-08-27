@@ -2,6 +2,17 @@
 
 ## Status
 
+**Superseded by [0031](0031-reflection-is-a-loop-over-tools.md): the `GROUNDED: yes/no` marker and
+the disclosed 3-day fallback this ADR built no longer exist.** Issue #99 (`6bed6b5`) removed both
+along with the fixed pipeline they were part of ([0023](0023-reflection-is-a-fixed-three-source-fan-out.md)'s
+own Status). `grounded` and `fallback_used` leave the vocabulary entirely rather than being
+reimplemented against the loop — see 0031's Decision for why the concept itself, not merely this
+ADR's mechanism for computing it, stopped having a referent once the model can stop searching
+whenever it judges itself satisfied rather than being handed one fixed pile of Entries to grade.
+Kept in full below as the record of a real relevance-judgment problem, correctly diagnosed and
+fixed within the shape it was built for — the shape itself is what changed. Everything below this
+line describes code that no longer exists.
+
 Accepted. Extends [0023](0023-reflection-is-a-fixed-three-source-fan-out.md) — the fan-out, the
 merge rule, the extraction call, and (at the time this ADR was written) `MIN_SIMILARITY` as a cheap
 noise filter all stood exactly as that ADR left them. What this ADR changes is the one line 0023

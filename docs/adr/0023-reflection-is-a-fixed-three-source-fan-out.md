@@ -2,6 +2,23 @@
 
 ## Status
 
+**Superseded by [0031](0031-reflection-is-a-loop-over-tools.md): the fixed pipeline this ADR
+describes — one extraction call, three concurrent retrievals, merge/dedupe/cap at 40, one
+answering call — no longer exists in the code.** Issue #99 (`6bed6b5`) removed it outright,
+replacing it with the agent loop 0031 records: the model asks for a tool, reads the result, and
+asks again until satisfied, rather than being handed one fixed, pre-computed retrieval set. This
+ADR's own "Why no floor was chosen instead" section and its `MIN_SIMILARITY` deletion (issue #92)
+are unaffected by the supersession — that reasoning stood on its own and is not undone by the
+pipeline it lived inside going away. Nor is this ADR's "client injects its own UTC offset, the
+Server never guesses the timezone" rule: `ReflectRequest::utc_offset_minutes` and
+`local_date_range_to_utc` both survive unchanged, now read by the loop's `entries_in_range` tool
+([0031](0031-reflection-is-a-loop-over-tools.md)) and by the system prompt's own injected local
+date, rather than by the extraction call this ADR built them for. Kept in full below as the record
+of a design that was tried, measured, and found wanting on evidence — not merely replaced by
+preference. Everything below this line describing the extraction call, the fan-out, and the merge
+rule describes code that no longer exists; the timezone-handling rule is the one piece of this
+ADR's Decision that outlived the pipeline it was written inside.
+
 Accepted. Extends [0021](0021-the-server-calls-an-openai-compatible-llm.md) (the chat/embedding
 egress this ticket's second chat call and two extra embedding calls spend) and
 [0022](0022-entry-embeddings-are-filled-by-a-background-worker.md) (the vectors this ticket

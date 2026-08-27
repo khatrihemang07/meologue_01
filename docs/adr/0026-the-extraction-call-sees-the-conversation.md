@@ -2,6 +2,18 @@
 
 ## Status
 
+**Superseded by [0031](0031-reflection-is-a-loop-over-tools.md): the extraction call this ADR
+amends no longer exists.** Issue #99 (`6bed6b5`) removed it along with the rest of the fixed
+pipeline ([0023](0023-reflection-is-a-fixed-three-source-fan-out.md)'s own Status) — the loop's
+tools each carry their own arguments the model chooses per call, so there is no longer a separate
+pre-search step whose job was to guess a date range and a keyword ahead of time, and therefore
+nothing left for that step to need a Conversation window for. The problem this ADR solved — a
+follow-up Question whose referent lives in the Conversation before it — is instead solved by the
+loop reading the whole replayed Conversation directly when it decides what to search for on each
+turn, which is a structural fix rather than a widened window on a call that no longer exists. Kept
+in full below as the record of a real gap, correctly diagnosed. Everything below this line
+describes code that no longer exists.
+
 Accepted. Extends [0023](0023-reflection-is-a-fixed-three-source-fan-out.md) — the fixed
 three-source fan-out, the merge rule, the priority order, the cap, and `MIN_SIMILARITY` as a cheap
 noise filter all stand exactly as that ADR left them, as does its floor that any extraction failure
