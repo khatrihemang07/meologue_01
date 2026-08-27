@@ -39,18 +39,28 @@
  * returned.
  *
  * Issue #96: `groundingOutcome` can also come back `"digest"`, read off
- * `turn.digestSource` — set only for a turn this browser session just
- * watched a `read_digest` tool call surface a real Digest for, from the
- * live `tool_execution_end` event's own `details`
- * (`reflect-live-run.ts::applyReflectEvent`), not from a separate batched
- * `getEntries` lookup the way the Entries case below still is. Before this,
- * a Digest-only Answer left `groundingEntryIds` empty (`read_digest`
+ * `turn.digestSource` — computed once, server-side, by
+ * `sessions::DigestSourceTracker` (`server/src/reflect.rs::run_reflect_stream_inner`)
+ * and carried on the wire the same way for both a turn this browser session
+ * just watched answered (`ReflectResponse.digest_source`) and one restored
+ * from a fetched Session (`WireSessionTurn.digest_source`) — see
+ * `conversation.ts::conversationTurnFromWire`. Before issue #96, a
+ * Digest-only Answer left `groundingEntryIds` empty (`read_digest`
  * deliberately populates no `entry_ids` — a Digest's Grounding belongs to
  * the Digest, not to this one tool call) and this component returned
  * `null`: the user saw an Answer with no disclosure at all, indistinguishable
  * from one this component had nothing to say about. This is what makes "an
  * Answer drawn from a Digest" a distinct, honest thing the interface says,
  * rather than silence — see the digest branch in the render below.
+ *
+ * Issue #105: `digestSource` itself used to be looser than this — set the
+ * moment *any* `read_digest` call in a run found something, even if the
+ * Answer that followed was actually built from an unrelated tool's Entries
+ * instead. This component trusts `digestSource` outright (the check below
+ * is only ever "is it set," never a re-derivation), which is exactly why
+ * that laxness was a bug: the fix is entirely upstream, in what the Server
+ * puts on the wire in the first place — see `DigestSourceTracker`'s own
+ * doc comment for the rule.
  */
 import type { Entry } from "@meologue/core";
 import { EntryRow } from "@/components/entry-row";

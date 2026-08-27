@@ -1210,6 +1210,103 @@ async fn a_read_digest_tool_event_still_reports_a_correct_entry_count(pool: PgPo
     assert_eq!(end.data["entry_count"], 1);
 }
 
+/// Issue #105's own reproduction: a run that reads a Digest, then *pivots*
+/// to raw Entries of a different period entirely and answers from those —
+/// `grounding_entry_ids` ends up carrying only the August Entry, wholly
+/// disjoint from the July Digest's own Grounding. `digest_source` must be
+/// absent: the Answer did not rest on the Digest, whatever `read_digest`
+/// found along the way. Mirrors the reported session (`read_digest` for
+/// July, then `entries_in_range` for August, then an August-shaped reply).
+#[sqlx::test]
+async fn a_digest_read_then_abandoned_for_a_different_periods_entries_carries_no_digest_source(
+    pool: PgPool,
+) {
+    sqlx::query(
+        "insert into digests (id, period, period_start, body, grounding_entry_ids) \
+         values ($1, $2, $3, $4, $5)",
+    )
+    .bind(Uuid::new_v4())
+    .bind("month")
+    .bind(NaiveDate::from_ymd_opt(2026, 7, 1).unwrap())
+    .bind("Your knee recovery was slow and frustrating.")
+    .bind(Vec::<Uuid>::new().as_slice())
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let august_entry_id = Uuid::new_v4();
+    insert_entry_at(
+        &pool,
+        august_entry_id,
+        "Knee felt fine on today's walk.",
+        DateTime::parse_from_rfc3339("2026-08-10T08:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc),
+    )
+    .await;
+
+    let chat = Arc::new(FakeChatClient::new([
+        tool_call_tag(
+            "read_digest",
+            json!({"period": "month", "date": "2026-07-15"}),
+        ),
+        tool_call_tag(
+            "entries_in_range",
+            json!({"from": "2026-08-01", "to": "2026-08-31"}),
+        ),
+        "Your knee recovery in August went well.".to_string(),
+    ]));
+    let reflect = reflect_state(chat);
+
+    let (status, body) = post_reflect(
+        &pool,
+        Some(reflect),
+        json!({ "protocol_version": 3, "question": "And what about the month before?" }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(grounding_ids(&body), vec![august_entry_id]);
+    assert_eq!(
+        body["digest_source"],
+        Value::Null,
+        "a later tool result surfaced Entry ids from a different period, so the Answer must not be attributed to the Digest read earlier in the same run"
+    );
+
+    // Must also survive a reload — `GET /v1/sessions/{id}` reads
+    // `SessionTurnRow::digest_source` off the same tree, derived
+    // independently by `sessions::entries_to_turns`, and must agree with
+    // the live `agent_end` frame above rather than only getting this right
+    // while the browser tab that asked is still open.
+    let id = session_id(&body);
+    let get_app = meologue_server::router_with_reflection(
+        pool.clone(),
+        empty_static_dir(),
+        None,
+        Some(reflect_state(Arc::new(FakeChatClient::new(["unused"])))),
+    );
+    let response = get_app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/v1/sessions/{id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let session_body: Value = serde_json::from_slice(&bytes).unwrap();
+    let turns = session_body["turns"].as_array().unwrap();
+    assert_eq!(turns.len(), 1);
+    assert_eq!(
+        turns[0]["digest_source"],
+        Value::Null,
+        "the reloaded Turn must not attribute to the Digest either"
+    );
+}
+
 /// Issue #93 (updated for issue #98): `PromptedToolClient` only produces
 /// `TextDelta`s when the Turn's own resolved model streams
 /// (`PromptedToolClient::streaming`) — the configured default,

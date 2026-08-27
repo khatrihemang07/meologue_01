@@ -52,23 +52,24 @@ describe("conversationTurnFromWire", () => {
     });
   });
 
-  // Issue #96: the live event stream (`reflect-live-run.ts`) can learn a
-  // just-answered turn drew on a real Digest before the tree write behind
-  // it has committed — `WireReflectResponse` carries no `digest_source`
-  // field of its own (only `WireSessionTurn` does, since issue #99).
-  // `conversationTurnFromWire`'s optional second argument is how the live
-  // value still reaches the mapped `ConversationTurn` in that case.
-  it("carries a live digestSource onto the mapped turn when the wire itself has none", () => {
-    const turn = conversationTurnFromWire(
-      {
-        question: "How was last week?",
-        answer: "A quiet week, mostly focused on the move.",
-        grounding_entry_ids: [],
-        tool_called: true,
-        model: "codex-terra",
-      },
-      { digestSource: { period: "week", periodStart: "2026-08-17", periodEnd: "2026-08-23" } },
-    );
+  // Issue #105: `WireReflectResponse` now carries `digest_source` itself —
+  // computed once, server-side, by `sessions::DigestSourceTracker`
+  // (`server/src/reflect.rs::run_reflect_stream_inner`) — so this is the
+  // *only* path a just-answered turn's `digestSource` reaches this mapper
+  // through any more. Before this ticket, the live event stream
+  // (`reflect-live-run.ts`) re-derived its own copy of the same rule and
+  // handed it in through a second `live` argument this function no longer
+  // takes at all — the two copies could (and did — issue #105's own
+  // reported bug) disagree.
+  it("carries digestSource straight off the wire for a turn just answered", () => {
+    const turn = conversationTurnFromWire({
+      question: "How was last week?",
+      answer: "A quiet week, mostly focused on the move.",
+      grounding_entry_ids: [],
+      tool_called: true,
+      model: "codex-terra",
+      digest_source: { period: "week", period_start: "2026-08-17", period_end: "2026-08-23" },
+    });
 
     expect(turn.digestSource).toEqual({
       period: "week",
@@ -80,7 +81,8 @@ describe("conversationTurnFromWire", () => {
   // Issue #99's carry-over from #96 pass 2: `GET /v1/sessions/:id` now
   // derives `digest_source` from the tree (`SessionTurnRow::digest_source`,
   // server/src/sessions.rs), so a turn restored after a page reload still
-  // reports where its Answer came from — no `live` argument needed at all.
+  // reports where its Answer came from — the exact same wire field the
+  // test above reads, since issue #105 put both paths on one shape.
   it("carries digestSource straight off the wire for a turn restored from a fetched Session", () => {
     const turn = conversationTurnFromWire({
       question: "How was last week?",
@@ -98,7 +100,7 @@ describe("conversationTurnFromWire", () => {
     });
   });
 
-  it("leaves digestSource undefined when neither the wire nor a live argument has one", () => {
+  it("leaves digestSource undefined when the wire has none", () => {
     const turn = conversationTurnFromWire({
       question: "How was last week?",
       answer: "A quiet week, mostly focused on the move.",
@@ -108,26 +110,6 @@ describe("conversationTurnFromWire", () => {
     });
 
     expect(turn.digestSource).toBeUndefined();
-  });
-
-  it("prefers the wire's own digestSource over a live one when, implausibly, both are present", () => {
-    const turn = conversationTurnFromWire(
-      {
-        question: "How was last week?",
-        answer: "A quiet week, mostly focused on the move.",
-        grounding_entry_ids: [],
-        tool_called: true,
-        model: "codex-terra",
-        digest_source: { period: "week", period_start: "2026-08-17", period_end: "2026-08-23" },
-      },
-      { digestSource: { period: "day", periodStart: "2026-08-23", periodEnd: "2026-08-23" } },
-    );
-
-    expect(turn.digestSource).toEqual({
-      period: "week",
-      periodStart: "2026-08-17",
-      periodEnd: "2026-08-23",
-    });
   });
 });
 
@@ -161,9 +143,22 @@ describe("groundingOutcome", () => {
   // Issue #96: a Digest-sourced Answer usually leaves `groundingEntryIds`
   // empty (`read_digest` populates no `entry_ids` — server/src/harness/tools/read_digest.rs's
   // own doc comment) — `digestSource` is what tells that case apart from
-  // "nothing matched at all," and it must win outright regardless of what
-  // `groundingEntryIds`/`toolCalled` happen to carry (a Digest-answered
-  // Turn's run can still have called another tool first).
+  // "nothing matched at all," and it wins outright over
+  // `groundingEntryIds`/`toolCalled` whenever it's set.
+  //
+  // Issue #105: this is now safe to do unconditionally, which it was not
+  // before. `digestSource` used to be set whenever *any* `read_digest` call
+  // in the run found something, even if the Answer went on to be built from
+  // an unrelated tool's Entries instead (#105's own reported bug — a
+  // Digest read for July, then an Answer built from raw August Entries,
+  // still labelled "the July Digest"). The fix lives entirely upstream,
+  // server-side (`sessions::DigestSourceTracker`): `digestSource` here is
+  // only ever set once the Server has already confirmed nothing *after*
+  // it surfaced Entry ids of its own, so this function can keep trusting it
+  // outright rather than re-checking `groundingEntryIds` itself — the
+  // second `groundingEntryIds: ["entry-1"]` case below is issue #95's
+  // legitimate shape (a search *before* the winning `read_digest`), not
+  // #105's bug, and must still say "digest".
   it("is 'digest' whenever digestSource is set, regardless of groundingEntryIds/toolCalled", () => {
     const digestSource = { period: "day", periodStart: "2026-08-20", periodEnd: "2026-08-20" };
     expect(groundingOutcome({ groundingEntryIds: [], toolCalled: false, digestSource })).toBe(

@@ -157,13 +157,15 @@ pub struct SessionTurnRow {
     /// Grounding were an ordinary list of Entries (whichever ids the same
     /// run's *other* tool calls happened to surface, or none), not as
     /// having come from a Digest. `entries_to_turns` walks the same
-    /// `tool_result` entries `tool_called` above reads and keeps the last
-    /// one tagged `"source": "digest"`, mirroring the live reducer's own
-    /// "last one wins" rule (`apps/web/src/lib/reflect-live-run.ts`'s
-    /// `digestSource ?? state.digestSource`) — a Turn with more than one
-    /// `read_digest` call attributes to whichever it asked about most
-    /// recently before answering. `None` for every other Turn, including
-    /// every one that predates issue #95.
+    /// `tool_result` entries `tool_called` above reads, folding each one
+    /// into a `DigestSourceTracker` — see that type's own doc comment for
+    /// the rule issue #105 tightened this to: the most recent
+    /// `"source": "digest"` tag still wins, but only when nothing seen
+    /// after it (before this Turn's own Answer) surfaced Entry ids of its
+    /// own. `None` for every other Turn, including every one that predates
+    /// issue #95, and for one where a Digest was read but then abandoned in
+    /// favour of raw Entries from elsewhere (issue #105's own reported
+    /// bug).
     pub digest_source: Option<DigestSourcePayload>,
     /// Issue #98: the model that produced this Turn's Answer — never
     /// stored on the Turn itself (there is no `model` column anywhere in
@@ -352,6 +354,24 @@ pub(crate) enum MessagePayload {
         is_error: bool,
         #[serde(default)]
         details: Value,
+        /// Issue #105: the Entry ids this call surfaced
+        /// (`harness::agent_loop::Step::ToolResult::entry_ids`, unchanged
+        /// since #99) — now carried onto the tree itself rather than only
+        /// living in the live run's own in-memory `Step`. What lets
+        /// `DigestSourceTracker` below apply the exact same "no later tool
+        /// result surfaced Entry ids" rule while re-walking a persisted
+        /// Turn (`entries_to_turns`) as `run_reflect_stream_inner` applies
+        /// live over `Step`s directly: without this field, a reload had no
+        /// way to tell "this tool result found nothing" apart from "this
+        /// tool result found Entries the wire response never persisted."
+        /// `#[serde(default)]` for the same reason every other field here
+        /// has it — every `tool_result` entry written before this field
+        /// existed decodes with an empty `Vec`, which is the only honest
+        /// reading: nothing recorded whether it carried Entry ids, so it's
+        /// treated as though it carried none, and the digest-voiding rule
+        /// can never fire retroactively against a row that predates it.
+        #[serde(default)]
+        entry_ids: Vec<Uuid>,
     },
 }
 
@@ -1169,10 +1189,12 @@ fn model_before_projection(path: &[&EntryRow], default_model: &str) -> anyhow::R
 /// `SessionTurnRow::tool_called`, which is how that field stays derived
 /// from the tree rather than a second value someone has to remember to
 /// write — see that field's own doc comment. Issue #99 gives it a second
-/// effect: a `tool_result` tagged `"source": "digest"` in its own `details`
-/// (`digest_source_from_details`) sets `digest_source` too, last one in the
-/// run winning if there's more than one — see `SessionTurnRow::digest_source`'s
-/// own doc comment. Both a `tool_result` can never appear after the run's
+/// effect, tightened by issue #105: a `tool_result` tagged `"source":
+/// "digest"` in its own `details` feeds `DigestSourceTracker`, which sets
+/// `digest_source` to the Digest it names — unless a later `tool_result`
+/// (before this Turn's own Answer) carried Entry ids of its own, which
+/// voids it — see that type's own doc comment and
+/// `SessionTurnRow::digest_source`'s. Both a `tool_result` can never appear after the run's
 /// final `assistant` entry (the loop's stopping rule guarantees the last
 /// step is an answer with no further tool call), so by the time that final
 /// entry is reached, every `tool_result` this Turn will ever have has
@@ -1227,11 +1249,13 @@ fn entries_to_turns(path: &[&EntryRow], seed_model: &str) -> anyhow::Result<Vec<
         // never did, not only what happened immediately before the final
         // reply.
         let mut tool_called = false;
-        // Issue #99: the most recent digest-sourced `tool_result` seen so
-        // far in this Turn's own run — see this function's own doc comment
-        // for why "most recent" (last one wins) and why nothing after the
-        // final `assistant` entry can ever change it again.
-        let mut digest_source: Option<DigestSourcePayload> = None;
+        // Issue #99, tightened by issue #105: `DigestSourceTracker`'s own
+        // doc comment covers the rule this now applies (last digest-tagged
+        // `tool_result` wins, voided by a later one carrying its own Entry
+        // ids) — this is the same tracker `reflect::run_reflect_stream_inner`
+        // folds its own `Step::ToolResult`s into live, applied here to this
+        // Turn's own `tool_result` entries in tree order instead.
+        let mut digest_source = DigestSourceTracker::default();
         while cursor < path.len() {
             if let Some(model) = decode_model_change(path[cursor])? {
                 current_model = model;
@@ -1250,7 +1274,7 @@ fn entries_to_turns(path: &[&EntryRow], seed_model: &str) -> anyhow::Result<Vec<
                         answer: text,
                         grounding_entry_ids,
                         tool_called,
-                        digest_source: digest_source.clone(),
+                        digest_source: digest_source.resolve(),
                         model: current_model.clone(),
                         created_at: path[cursor].created_at,
                     };
@@ -1259,11 +1283,11 @@ fn entries_to_turns(path: &[&EntryRow], seed_model: &str) -> anyhow::Result<Vec<
                     }
                     answer = Some(row);
                 }
-                Some(MessagePayload::ToolResult { details, .. }) => {
+                Some(MessagePayload::ToolResult {
+                    details, entry_ids, ..
+                }) => {
                     tool_called = true;
-                    if let Some(source) = digest_source_from_details(&details) {
-                        digest_source = Some(source);
-                    }
+                    digest_source.observe(&details, &entry_ids);
                 }
                 None => {}
             }
@@ -1284,10 +1308,15 @@ fn entries_to_turns(path: &[&EntryRow], seed_model: &str) -> anyhow::Result<Vec<
 /// returns the Digest it names when present — `None` for any other tool's
 /// `details`, for a `read_digest` call that found no Digest for the Period
 /// asked about (`details` carries no `source` field at all in that case),
-/// or for a malformed/partial match. Mirrors the client's own
-/// `parseDigestSource` (`apps/web/src/lib/reflect-live-run.ts`) field for
-/// field, so a server-derived `digest_source` and a live-streamed one agree
-/// about what counts.
+/// or for a malformed/partial match.
+///
+/// Issue #105 removed the client's own independent copy of this rule
+/// (`parseDigestSource`, `apps/web/src/lib/reflect-live-run.ts`) — the
+/// client now only ever reads `digest_source` off the wire, computed here
+/// and nowhere else. This function stays `sessions.rs`-private on purpose:
+/// `DigestSourceTracker` below is the only thing that should ever call it,
+/// so the *voiding* rule (see that type's own doc comment) can't
+/// accidentally be bypassed by a caller that reads this tag directly.
 fn digest_source_from_details(details: &Value) -> Option<DigestSourcePayload> {
     if details.get("source")?.as_str()? != "digest" {
         return None;
@@ -1297,6 +1326,59 @@ fn digest_source_from_details(details: &Value) -> Option<DigestSourcePayload> {
         period_start: details.get("period_start")?.as_str()?.to_string(),
         period_end: details.get("period_end")?.as_str()?.to_string(),
     })
+}
+
+/// Issue #105's own fix, stated exactly once and shared by both the tree
+/// read path (`entries_to_turns` below, fed one `tool_result` entry at a
+/// time as it walks a Turn's run) and the live path
+/// (`reflect::run_reflect_stream_inner`, fed one `harness::agent_loop::
+/// Step::ToolResult` at a time over the same `..=answer_step_index` bound
+/// issue #106 established for Grounding) — a `struct` rather than a
+/// one-shot function specifically so both call sites can fold their own
+/// steps into it incrementally, in whatever shape each already walks them
+/// in, rather than first collecting a `Vec` neither call site otherwise
+/// needs.
+///
+/// The rule: the most recent digest-tagged `tool_result` still wins
+/// (issue #99's original "last one wins," unchanged) — *unless* some
+/// `tool_result` seen after it (before the Answer) carried its own,
+/// non-empty Entry ids, in which case the whole attribution is voided.
+/// That is the honest reading of "did the Answer plausibly rest on this
+/// Digest": #105's reported bug is `read_digest` finding July, then
+/// `entries_in_range` pivoting to August's raw Entries and answering from
+/// those — the Digest was read, but nothing about the Answer rests on it
+/// any more. A `tool_result` with Entry ids *before* the winning digest
+/// tag doesn't void anything (issue #95's anticipated shape: a search
+/// first, then `read_digest`, still attributes to the Digest) — only what
+/// comes after is disqualifying, which is why this only ever looks
+/// forward from whichever digest tag it last saw.
+#[derive(Debug, Default)]
+pub(crate) struct DigestSourceTracker {
+    digest_source: Option<DigestSourcePayload>,
+    voided_by_later_entries: bool,
+}
+
+impl DigestSourceTracker {
+    /// Folds in one more `tool_result`'s own `details`/`entry_ids`, in the
+    /// order the run actually saw them.
+    pub(crate) fn observe(&mut self, details: &Value, entry_ids: &[Uuid]) {
+        if let Some(source) = digest_source_from_details(details) {
+            self.digest_source = Some(source);
+            self.voided_by_later_entries = false;
+        } else if !entry_ids.is_empty() {
+            self.voided_by_later_entries = true;
+        }
+    }
+
+    /// What `SessionTurnRow::digest_source`/`ReflectResponse::digest_source`
+    /// should read, given every `tool_result` observed so far.
+    pub(crate) fn resolve(&self) -> Option<DigestSourcePayload> {
+        if self.voided_by_later_entries {
+            None
+        } else {
+            self.digest_source.clone()
+        }
+    }
 }
 
 /// Copies the root-to-`at_entry_id` path of `source_session_id`'s tree into
@@ -1453,6 +1535,7 @@ mod tests {
                 tool_name: "entries_in_range".to_string(),
                 is_error: false,
                 details: serde_json::json!({}),
+                entry_ids: Vec::new(),
             })
             .unwrap(),
         )
@@ -2124,6 +2207,7 @@ mod tests {
                     tool_name: "entries_in_range".to_string(),
                     is_error: false,
                     details: serde_json::json!({"total": 1}),
+                    entry_ids: Vec::new(),
                 })
                 .unwrap(),
             ),

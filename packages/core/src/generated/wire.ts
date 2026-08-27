@@ -398,6 +398,7 @@ export interface components {
         };
         ReflectResponse: {
             answer: string;
+            digest_source?: null | components["schemas"]["DigestSourcePayload"];
             /**
              * @description The Entry ids that appeared in a tool result during this run, in the
              *     order they first appeared — `run_reflect_stream_inner`'s own dedup,

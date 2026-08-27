@@ -251,6 +251,17 @@ pub struct ReflectResponse {
     /// `SessionTurnRow::model`, but only after the tree write this
     /// response is itself the result of has already committed).
     pub model: String,
+    /// Issue #105: the same field as `sessions::SessionTurnRow::digest_source`,
+    /// computed the same way — `sessions::DigestSourceTracker` folded over
+    /// this run's own `grounded_steps` (the `..=answer_step_index` bound
+    /// issue #106 already scopes Grounding to) — and put directly on this
+    /// struct rather than left for the client to derive on its own from
+    /// `tool_execution_end` events. Flattened onto `agent_end` the same way
+    /// every other field here already is (`run_reflect_stream`'s own doc
+    /// comment), which is what makes this reach the client with no new
+    /// plumbing: the live path and a page reload's `GET /v1/sessions/{id}`
+    /// now read from the identical computation, just at different times.
+    pub digest_source: Option<sessions::DigestSourcePayload>,
 }
 
 /// `pub` (rather than crate-private, its original visibility) so
@@ -1368,6 +1379,24 @@ async fn run_reflect_stream_inner(
         .iter()
         .any(|step| matches!(step, Step::ToolResult { .. }));
 
+    // Issue #105: whether this Answer is attributable to a Digest — the
+    // same `sessions::DigestSourceTracker` rule `entries_to_turns` applies
+    // while re-walking the persisted tree, folded here over the identical
+    // `grounded_steps` bound `grounding_entry_ids`/`tool_called` above
+    // already use. Computed once, here, rather than left for the client to
+    // infer from `tool_execution_end` events as it used to — see
+    // `ReflectResponse::digest_source`'s own doc comment.
+    let mut digest_source_tracker = sessions::DigestSourceTracker::default();
+    for step in grounded_steps {
+        if let Step::ToolResult {
+            details, entry_ids, ..
+        } = step
+        {
+            digest_source_tracker.observe(details, entry_ids);
+        }
+    }
+    let digest_source = digest_source_tracker.resolve();
+
     // The exact shape issue #103 was filed against: a non-empty, confident
     // Answer with no Grounding *and* no tool ever attempted — as opposed to
     // the ordinary and unremarkable case of a tool genuinely finding
@@ -1411,6 +1440,7 @@ async fn run_reflect_stream_inner(
         grounding_entry_ids,
         tool_called,
         model: resolved_model_id,
+        digest_source,
     })
 }
 
@@ -1632,12 +1662,18 @@ fn build_tree_payloads(
                 content,
                 is_error,
                 details,
+                entry_ids,
                 ..
             } => serde_json::to_value(MessagePayload::ToolResult {
                 text: content.clone(),
                 tool_name: tool_name.clone(),
                 is_error: *is_error,
                 details: details.clone(),
+                // Issue #105: persisted so a reload can re-derive
+                // `digest_source` with `sessions::DigestSourceTracker`
+                // exactly as this run computed it live — see that type's
+                // own doc comment.
+                entry_ids: entry_ids.clone(),
             }),
         }
         .expect("serializing a message payload can't fail");

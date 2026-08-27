@@ -43,8 +43,6 @@ export interface LiveRunState {
   answering: boolean;
   /** A model call is in flight with nothing new to show for it yet — the moment a bare "Thinking…" is still the honest, whole truth. */
   thinking: boolean;
-  /** Set once a `read_digest` call surfaces a real Digest — carried onto the finished turn (`conversation.ts`'s `conversationTurnFromWire`) so `GroundingDisclosure` can say the Answer came from a Digest, not from Entries silently reporting none. */
-  digestSource: DigestGroundingSource | undefined;
 }
 
 export const initialLiveRunState: LiveRunState = {
@@ -52,7 +50,6 @@ export const initialLiveRunState: LiveRunState = {
   answer: "",
   answering: false,
   thinking: true,
-  digestSource: undefined,
 };
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -63,7 +60,25 @@ function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-/** Reads `read_digest`'s own `details` shape (`server/src/harness/tools/read_digest.rs`'s `source`/`period`/`period_start`/`period_end`) — `undefined` for "no Digest existed for that Period" (`details` is `null`) or anything malformed. */
+/**
+ * Reads `read_digest`'s own `details` shape (`server/src/harness/tools/read_digest.rs`'s
+ * `source`/`period`/`period_start`/`period_end`) — `undefined` for "no
+ * Digest existed for that Period" (`details` is `null`) or anything
+ * malformed.
+ *
+ * Issue #105 narrowed this function's only remaining job to `finishedLabel`
+ * below: describing what *this one* `read_digest` call itself found, for
+ * the live step's own label — never the Answer's overall attribution.
+ * `LiveRunState` used to also carry a `digestSource` field this same
+ * parse fed, sticky across the whole run (`digestSource ?? state.digestSource`)
+ * and never cleared once set — which is what let an unrelated, later tool
+ * call's real Entries get answered from while the interface still credited
+ * a Digest read earlier in the same run (#105's own reported bug). That
+ * field is gone: `digestSource` for a finished turn now comes from
+ * `ReflectResponse.digest_source` alone, computed once, server-side, by
+ * `sessions::DigestSourceTracker` — see `conversation.ts`'s
+ * `conversationTurnFromWire`.
+ */
 function parseDigestSource(details: unknown): DigestGroundingSource | undefined {
   const record = asRecord(details);
   if (record.source !== "digest") {
@@ -201,14 +216,11 @@ export function applyReflectEvent(state: LiveRunState, event: ReflectStreamEvent
       };
 
     case "tool_execution_end": {
-      const digestSource =
-        event.toolName === "read_digest" ? parseDigestSource(event.details) : undefined;
       return {
         ...state,
         // Back to "thinking" until the next message_start/message_end —
         // the loop always calls the model again after a tool result.
         thinking: true,
-        digestSource: digestSource ?? state.digestSource,
         steps: state.steps.map((step) =>
           step.id === event.toolCallId
             ? {

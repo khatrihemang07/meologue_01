@@ -565,6 +565,17 @@
           "answer": {
             "type": "string"
           },
+          "digest_source": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DigestSourcePayload",
+                "description": "Issue #105: the same field as `sessions::SessionTurnRow::digest_source`,\ncomputed the same way — `sessions::DigestSourceTracker` folded over\nthis run's own `grounded_steps` (the `..=answer_step_index` bound\nissue #106 already scopes Grounding to) — and put directly on this\nstruct rather than left for the client to derive on its own from\n`tool_execution_end` events. Flattened onto `agent_end` the same way\nevery other field here already is (`run_reflect_stream`'s own doc\ncomment), which is what makes this reach the client with no new\nplumbing: the live path and a page reload's `GET /v1/sessions/{id}`\nnow read from the identical computation, just at different times."
+              }
+            ]
+          },
           "grounding_entry_ids": {
             "type": "array",
             "items": {
@@ -679,7 +690,7 @@
               },
               {
                 "$ref": "#/components/schemas/DigestSourcePayload",
-                "description": "Issue #99's carry-over from #96 pass 2: a `read_digest` tool result\nfound a real Digest for this Turn, and this is what it was — the\nsame `period`/`period_start`/`period_end` the *live* `tool_execution_end`\nevent's `details` carries (`harness/tools/read_digest.rs`'s own\n`source: \"digest\"` tagging), now derived from the tree instead of\nonly ever available while the browser tab that asked the Question is\nstill open. Before this field existed, `GET /v1/sessions/{id}`\nreturned `SessionTurnRow` with no per-tool detail at all, so a\nDigest-sourced Turn read back — after a page reload — as though its\nGrounding were an ordinary list of Entries (whichever ids the same\nrun's *other* tool calls happened to surface, or none), not as\nhaving come from a Digest. `entries_to_turns` walks the same\n`tool_result` entries `tool_called` above reads and keeps the last\none tagged `\"source\": \"digest\"`, mirroring the live reducer's own\n\"last one wins\" rule (`apps/web/src/lib/reflect-live-run.ts`'s\n`digestSource ?? state.digestSource`) — a Turn with more than one\n`read_digest` call attributes to whichever it asked about most\nrecently before answering. `None` for every other Turn, including\nevery one that predates issue #95."
+                "description": "Issue #99's carry-over from #96 pass 2: a `read_digest` tool result\nfound a real Digest for this Turn, and this is what it was — the\nsame `period`/`period_start`/`period_end` the *live* `tool_execution_end`\nevent's `details` carries (`harness/tools/read_digest.rs`'s own\n`source: \"digest\"` tagging), now derived from the tree instead of\nonly ever available while the browser tab that asked the Question is\nstill open. Before this field existed, `GET /v1/sessions/{id}`\nreturned `SessionTurnRow` with no per-tool detail at all, so a\nDigest-sourced Turn read back — after a page reload — as though its\nGrounding were an ordinary list of Entries (whichever ids the same\nrun's *other* tool calls happened to surface, or none), not as\nhaving come from a Digest. `entries_to_turns` walks the same\n`tool_result` entries `tool_called` above reads, folding each one\ninto a `DigestSourceTracker` — see that type's own doc comment for\nthe rule issue #105 tightened this to: the most recent\n`\"source\": \"digest\"` tag still wins, but only when nothing seen\nafter it (before this Turn's own Answer) surfaced Entry ids of its\nown. `None` for every other Turn, including every one that predates\nissue #95, and for one where a Digest was read but then abandoned in\nfavour of raw Entries from elsewhere (issue #105's own reported\nbug)."
               }
             ]
           },

@@ -11,7 +11,6 @@ import { Shell } from "@/components/shell";
 import {
   type ConversationTurn,
   conversationTurnFromWire,
-  type DigestGroundingSource,
   groundingOutcome,
 } from "@/lib/conversation";
 import { deviceUtcOffsetMinutes } from "@/lib/entry-day";
@@ -50,16 +49,9 @@ async function fetchSession(sessionId: string): Promise<SessionQueryData> {
     ok: true,
     snapshot: {
       title: result.session.title,
-      // Wrapped rather than passed as a bare callback: `Array.prototype.map`
-      // calls its callback with `(value, index, array)`, and
-      // `conversationTurnFromWire`'s own optional second parameter
-      // (`live`) would otherwise get `index` (a `number`) handed to it —
-      // caught only by `tsc`, not by any test. A turn restored from a
-      // fetched Session always takes the no-`live` path — it has nothing
-      // live to contribute, but since issue #99 that's no longer a loss:
       // `digestSource` for a restored turn comes straight off the wire
-      // (`WireSessionTurn.digest_source`), not from `live` at all — see
-      // `conversationTurnFromWire`'s own doc comment.
+      // (`WireSessionTurn.digest_source`) — see `conversationTurnFromWire`'s
+      // own doc comment.
       turns: result.session.turns.map((turn) => conversationTurnFromWire(turn)),
     },
   };
@@ -451,14 +443,6 @@ export function ReflectionPage() {
     // ask, not the first.
     setAskSignal((count) => (count ?? 0) + 1);
 
-    // A read_digest tool call that actually found a Digest, captured as
-    // its own event arrives rather than re-derived from `liveRun` after
-    // the fact — `liveRun`'s own `digestSource` field is what the render
-    // below reads live, but this run's *final* value is what the
-    // just-answered turn needs once `agent_end` resolves, and `setState`
-    // updates aren't synchronously readable the moment they're queued.
-    let digestSource: DigestGroundingSource | undefined;
-
     const controller = new AbortController();
     activeAbortRef.current = controller;
 
@@ -481,11 +465,7 @@ export function ReflectionPage() {
       {
         signal: controller.signal,
         onEvent: (event) => {
-          setLiveRun((state) => {
-            const next = applyReflectEvent(state, event);
-            digestSource = next.digestSource;
-            return next;
-          });
+          setLiveRun((state) => applyReflectEvent(state, event));
         },
       },
     );
@@ -494,7 +474,14 @@ export function ReflectionPage() {
     setPending(null);
 
     if (result.ok) {
-      const turn = conversationTurnFromWire({ question, ...result.response }, { digestSource });
+      // Issue #105: `digestSource`, like every other field here, now comes
+      // straight off `result.response` — `ReflectResponse` itself carries
+      // `digest_source`, computed once server-side
+      // (`sessions::DigestSourceTracker`), so there is no longer a live,
+      // client-derived value to thread through separately (see
+      // `conversationTurnFromWire`'s own doc comment on why that used to
+      // exist and why it doesn't any more).
+      const turn = conversationTurnFromWire({ question, ...result.response });
       const key = sessionQueryKey(result.response.session_id);
       // Append straight into the cache rather than waiting for a refetch —
       // the turn the user just got an Answer to must render on this render,

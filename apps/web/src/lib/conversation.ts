@@ -82,12 +82,13 @@ export interface ConversationTurn {
  * ...response }` rather than this function reading `question` off the
  * response itself.
  *
- * `digest_source` is picked from `WireSessionTurn` alone — `WireReflectResponse`
- * carries no field by that name (see `conversationTurnFromWire`'s own doc
- * comment on why that asymmetry is fine) — but it stays optional here (`?`
- * on the source schema field itself), so a `{ question, ...response }`
- * object built from a `WireReflectResponse` still satisfies this type
- * without needing one.
+ * Issue #105: `digest_source` is now on *both* wire shapes — the same
+ * `sessions::DigestSourceTracker` computation
+ * `server/src/reflect.rs::run_reflect_stream_inner` folds over the run's
+ * own steps and puts directly on `ReflectResponse`, flattened onto
+ * `agent_end` (`run_reflect_stream`'s own doc comment) — so it needed no
+ * separate `Pick` here even before this ticket: `WireSessionTurn` and
+ * `WireReflectResponse` already agreed on the field's shape structurally.
  */
 type WireConversationTurn = Pick<
   WireSessionTurn,
@@ -101,29 +102,24 @@ type WireConversationTurn = Pick<
  * fetched Session and for the turn a just-answered ask produces, so the two
  * paths can't drift into disagreeing about the mapping.
  *
- * `live.digestSource`, when passed, is only ever for the second case — a
- * turn this browser session just watched happen, event by event
- * (`reflect-live-run.ts`), which is how a freshly-answered turn learns its
- * `digestSource` before the tree write behind it has even committed
- * (`ReflectResponse` itself carries no `digest_source` — the live event
- * stream already delivers the same information faster). `wire.digest_source`
- * is checked first regardless: it is the authoritative, server-derived
- * answer (`WireSessionTurn.digest_source`, present on every restored turn
- * since issue #99 — see `SessionTurnRow::digest_source`'s own doc comment),
- * so it wins whenever both are available, and `live?.digestSource` is only
- * ever the one still available for a turn the wire shape can't carry it on
- * (`WireReflectResponse` has no such field).
+ * Issue #105 removed this function's own second, `live` parameter: before
+ * that ticket, `digestSource` for a turn just answered in this browser
+ * session came from the *client* re-deriving it from `tool_execution_end`
+ * events as they streamed by (`reflect-live-run.ts`) — a second, ad hoc
+ * copy of a rule `server/src/sessions.rs`'s `digest_source_from_details`
+ * already stated once, and the two could (and did — issue #105's own
+ * reported bug) disagree. `wire.digest_source` is now the *only* source,
+ * on both paths: the live path gets it because `ReflectResponse` itself
+ * now carries the field, server-derived, and a restored Session already
+ * did (`WireSessionTurn.digest_source`, since issue #99).
  */
-export function conversationTurnFromWire(
-  wire: WireConversationTurn,
-  live?: { digestSource?: DigestGroundingSource },
-): ConversationTurn {
+export function conversationTurnFromWire(wire: WireConversationTurn): ConversationTurn {
   return {
     question: wire.question,
     answer: wire.answer,
     groundingEntryIds: wire.grounding_entry_ids,
     toolCalled: wire.tool_called,
-    digestSource: wireDigestSource(wire.digest_source) ?? live?.digestSource,
+    digestSource: wireDigestSource(wire.digest_source),
     model: wire.model,
   };
 }
