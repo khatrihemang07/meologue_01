@@ -437,3 +437,232 @@ absent-japan             absent     word_search         0         5     0      n
 absent-football          absent     semantic            0        40     0      n/a
 absent-football          absent     word_search         0         5     0      n/a
 ```
+
+## After #100 — the recall@k curve, the combined arm, and the decision
+
+Recorded **2026-08-27**, same day, same seeded Sandbox corpus (119 live Entries) as every section
+above — not re-seeded, so this section's numbers are directly comparable to the "After #94" section's.
+Reproduce with:
+
+```sh
+cd server && cargo test --test eval_retrieval -- --ignored --nocapture --test-threads=1
+```
+
+### What was measured
+
+The "After #94" section named exactly what was missing: a recall@k curve for `semantic`, evaluated
+at the row counts `word_search` actually returns (mean 21.3, not 40), because comparing both arms at
+a shared `RETRIEVAL_LIMIT` = 40 cap lets `semantic` use roughly twice the rows `word_search` typically
+does and calling that a fair fight.
+
+The curve is built **without a single extra Ollama or Postgres call**. Both `retrieve_nearest` and
+`search_words` are deterministically ordered (cosine distance ascending; `ts_rank_cd` descending), and
+every rung of `search_words` picks which rung fires by whether it matched *any* rows, never by
+`limit` — so the first `k` ids of the run already made at `limit = RETRIEVAL_LIMIT` (40) are exactly
+what a fresh call with `limit = k` would have returned. The eval therefore makes the same 25
+embedding calls and same three-arm queries it always has, caches every arm's ordered top-40 ids per
+Question, and computes every number below by slicing that cache in Rust. This mattered operationally,
+not just for tidiness: Ollama has previously degraded badly under repeated embedding load, and a
+naive implementation that re-ran `SemanticArm` once per `k` in `[5, 10, 20, 21, 30, 40]` would have
+multiplied the embedding calls by 6× for a number the existing run already contains.
+
+`k = 21` is not a round number — it is `word_search`'s own measured mean row count from the "After
+#94" run. `k = 40` reproduces the already-recorded recall@40 numbers exactly, which is included
+deliberately as a check on this new code rather than as a new finding (see the table below: the
+`k = 40` row matches the "After #94" section's numbers to three decimal places).
+
+### Result — the curve
+
+Mean recall (per-Question average), pooled recall (hits over every graded Entry, the shape that
+doesn't let a 1-Entry Question and a 14-Entry Question count equally), pooled precision, the mean
+rows each arm actually returned at that cap (word search is rank-limited by real matches, so capping
+it at `k` does not force it to return `k` rows the way `semantic`'s unconditional top-k does), and
+the chance baseline (`k` Entries picked at random out of 119):
+
+| k | arm | mean recall | pooled recall | precision | mean rows | chance |
+|---|---|---|---|---|---|---|
+| 5 | `semantic` | 0.313 | 0.292 | 0.318 | 5.0 | 0.042 |
+| 5 | `word_search` | **0.480** | **0.408** | **0.480** | 4.6 | 0.042 |
+| 10 | `semantic` | 0.485 | 0.475 | 0.259 | 10.0 | 0.084 |
+| 10 | `word_search` | **0.542** | **0.500** | **0.314** | 8.7 | 0.084 |
+| 20 | `semantic` | **0.747** | **0.725** | 0.198 | 20.0 | 0.168 |
+| 20 | `word_search` | 0.630 | 0.617 | **0.233** | 14.4 | 0.168 |
+| **21** | `semantic` | **0.747** | 0.725 | 0.188 | 21.0 | 0.176 |
+| **21** | `word_search` | 0.633 | **0.625** | **0.229** | 14.9 | 0.176 |
+| 30 | `semantic` | **0.821** | **0.792** | 0.144 | 30.0 | 0.252 |
+| 30 | `word_search` | 0.723 | 0.700 | **0.203** | 18.8 | 0.252 |
+| 40 | `semantic` | **0.859** | **0.833** | 0.114 | 40.0 | 0.336 |
+| 40 | `word_search` | 0.748 | 0.742 | **0.190** | 21.3 | 0.336 |
+
+(`k = 40` row for each arm matches the "After #94" section's mean/pooled/precision numbers exactly —
+this is the same run, just reported alongside the curve rather than the recorded prior number.)
+
+**Two things this table says that the flat recall@40 comparison could not:**
+
+1. **The lead crosses over.** At `k = 5` and `k = 10`, `word_search` leads `semantic` on every column
+   — recall, pooled recall, and precision. `semantic` only overtakes at `k ≈ 20` and pulls ahead more
+   as `k` grows toward 40. "Which arm is better" is not a fixed property of the two arms; it depends
+   on how many rows you're willing to pay for.
+2. **At `word_search`'s own natural row count, the two arms are not meaningfully different.**
+   `word_search`'s "natural" output — what it actually returns once its own internal ranking runs out
+   of real matches, which is the `k = 40` row above (mean 21.3 rows, since it is never forced to pad
+   out to 40) — scores mean recall 0.748, pooled 0.742, precision 0.190. `semantic` capped to the same
+   ~21-row budget (the `k = 21` row) scores mean recall 0.747, pooled 0.725, precision 0.188. Those are
+   the same number inside rounding on mean recall and precision, and `word_search` is **ahead** on
+   pooled recall (0.742 vs 0.725) and precision (0.190 vs 0.188) at that shared budget.
+
+### Answering the ticket's first question directly
+
+**"At the row count word search actually uses (~21), does semantic still lead on recall?" — no, not
+meaningfully.** The 0.859-vs-0.748 gap that made `semantic` look like the clear winner at `k = 40` is
+mostly a row-budget effect: `semantic` was being handed roughly twice the candidates `word_search`
+typically returns. Equalize the budget and the gap collapses to within a rounding error on mean
+recall, and inverts in `word_search`'s favor on pooled recall and precision. This is the finding the
+"After #94" section flagged as unsettled, now settled: **word search alone is not worse than semantic
+alone at comparable cost.**
+
+### Per-Question detail at k = 21 — where embeddings still win, and where they don't
+
+```
+question                 thread       semantic       word winner
+knee-arc                 knee             0.75       0.42 semantic
+knee-onset               knee             0.50       0.00 semantic
+knee-physio              knee             0.80       0.60 semantic
+knee-back-running        knee             0.33       0.67 word
+aurora-overview          aurora           0.64       0.79 word
+aurora-cutover-success   aurora           0.67       1.00 word
+aurora-devika            aurora           1.00       0.12 semantic
+wedding-overview         wedding          0.86       0.86 tie
+wedding-hen-do           wedding          0.67       1.00 word
+wedding-day              wedding          1.00       0.33 semantic
+caffeine-experiment      caffeine         0.86       0.57 semantic
+caffeine-slip            caffeine         1.00       0.50 semantic
+books-reading            books            0.67       0.50 semantic
+books-piranesi-finished  books            1.00       1.00 tie
+flat-move-reason         flat-move        1.00       0.50 semantic
+flat-move-search         flat-move        0.60       0.60 tie
+flat-move-day            flat-move        0.60       0.80 word
+mum-health-overview      mum-health       0.83       1.00 word
+mum-health-results       mum-health       1.00       1.00 tie
+mum-health-worry         mum-health       1.00       1.00 tie
+aurora-cutover-days      aurora           0.50       0.33 semantic
+knee-physio-week         knee             0.17       0.33 word
+```
+
+At a shared, comparable-cost `k`: `semantic` wins 10 Questions, `word_search` wins 7, 5 tie. That is
+a different tally from the "After #94" section's `k = 40` winners table (which used a ≥0.15-gap
+threshold on the uncapped numbers) — both are honest reads of the same underlying data at different
+`k`, not a contradiction.
+
+**The Questions embeddings carry that word search cannot**, ranked by the size of the gap at `k = 21`
+(the ticket's own acceptance criterion — "if embeddings are kept, the record says which Questions
+justify them" — this is that list):
+
+| Question | semantic | word | gap | why |
+|---|---|---|---|---|
+| `aurora-devika` | 1.00 | 0.12 | **0.88** | Names a person ("Devika") the relevant Entries mostly refer to obliquely — the clearest case for embeddings in the whole corpus, unchanged from the "After #94" section's own finding at k=40. |
+| `wedding-day` | 1.00 | 0.33 | 0.67 | Asks about "the wedding day itself" without repeating any of the vocabulary ("ceremony", "reception") the matching Entries actually use. |
+| `knee-onset` | 0.50 | 0.00 | 0.50 | "When did I first notice something wrong" paraphrases what the Entries describe as a "twinge," never sharing a lexical stem with the Question. |
+| `caffeine-slip` | 1.00 | 0.50 | 0.50 | "Slip up and break the rule" vs. Entries describing a specific 4pm coffee — same gap shape as `knee-onset`. |
+| `flat-move-reason` | 1.00 | 0.50 | 0.50 | "Why did I have to move" vs. Entries stating the landlord's reason in different words. |
+
+Everything past this top five is a smaller, more marginal `semantic` win (`knee-arc` +0.33 down to
+`aurora-cutover-days`/`books-reading` +0.17) — real, but not the kind of gap that on its own would
+justify the dependency. The five above are.
+
+**Where `word_search` wins by a comparable margin** (unchanged in kind from the "After #94" section,
+now re-confirmed at the comparable `k`): `knee-back-running`, `aurora-cutover-success`,
+`wedding-hen-do` (all +0.33 for word search), `flat-move-day` (+0.20), `mum-health-overview` and
+`knee-physio-week` (+0.17 each). These are Questions whose vocabulary already matches the Entries
+closely — word search's structural advantage — and where `semantic`'s neighbourhood-based ranking
+loses ground to the OR-rung's lexical coverage.
+
+### What a combined arm does
+
+Not a new `RetrievalArm` — a union of the two caches already built above, computed the same way the
+curve is (slicing, no new calls). Two budgets:
+
+| budget | mean recall | pooled recall | precision | mean rows | chance |
+|---|---|---|---|---|---|
+| 11+11 (≈ `word_search`'s natural ~21 rows) | 0.747 | 0.717 | **0.249** | 15.7 | 0.132 |
+| 20+20 (each arm at half `RETRIEVAL_LIMIT`) | **0.878** | **0.875** | 0.177 | 27.0 | 0.227 |
+
+Two readings:
+
+- **At a comparable total budget (11+11), the union matches either single arm's own recall using
+  fewer rows.** 15.7 rows on average (not 21) reaches mean recall 0.747 — the same figure `semantic`
+  alone needs a full 21 rows for, and `word_search`'s own natural output (21.3 rows) needs to reach
+  0.748. Precision is meaningfully better than either arm alone at that budget (0.249 vs `semantic`'s
+  0.188 or `word_search`'s 0.190 at `k=21`).
+- **Given more budget (20+20), the union beats both arms' own top-40 numbers outright.** 27 rows
+  reaches mean recall 0.878 / pooled 0.875 — higher than `semantic`'s own top-40 (0.859 / 0.833, using
+  40 rows) and far above `word_search`'s top-40 (0.748 / 0.742). This is not an artifact of the two
+  arms agreeing with each other: if they mostly retrieved the same Entries, the union would look like
+  either arm alone. It looks better than both, which is only possible because the two arms are wrong
+  on different Questions — the same complementarity the "After #94" section's two "wins" tables
+  showed qualitatively, now showing up as a quantitative lift when the two are actually combined.
+
+Cost for this arm in the harness (which already gives the model both tools, unlike this eval's
+separate-arm measurement) would be 3 steps — one embed call, one `semantic` query, one `word_search`
+query — reported here, never folded into either recall number above.
+
+### The corpus caveat still applies, more so here
+
+Every number in this section inherits the "After #92" section's caveat: ADR 0023 measured the
+0.60-similarity floor separating topics cleanly at ~80 Entries and failing at 572, and this corpus
+holds ~120. The comparable-k race between `semantic` and `word_search` came out close on this corpus;
+a larger, more topically crowded History gives `semantic`'s nearest-neighbour ranking more confusable
+neighbours to rank among, which is exactly the mechanism ADR 0023 already measured degrading. There is
+no reason to expect that pressure to fall on `word_search` the same way — lexical matching does not
+get noisier just because the corpus has more Entries about other things. If anything, a larger corpus
+is more likely to widen `word_search`'s position at comparable `k`, not narrow it.
+
+### One caveat this section inherits, unresolved
+
+The "After #94" section's own caveat still holds unchanged here: this eval feeds the **raw Question
+text** to `search_words`, not the self-chosen keywords the harness's model actually issues (its own
+live example: asked about Priya's wedding, the model called `search_entries(query: "Priya wedding")`
+and got all 5 correct Entries on a Question that scored 0 under the old floor). `word_search`'s
+numbers throughout this section, including its lead at low `k`, are a **floor**, not an estimate —
+the real harness gives it a more favorable input than this eval ever does. `semantic` has no
+equivalent headroom; a longer, more natural-language query is not a handicap for an embedding.
+
+### Decision
+
+**Keep embeddings — not because `semantic` beats `word_search` head-to-head at comparable cost, it
+does not, but because of two things this measurement found that a single recall number could not
+show:**
+
+1. **A specific, named list of Questions where embeddings carry real signal words cannot reach** —
+   `aurora-devika` above all (0.88 gap, a Question naming a person the Entries only refer to
+   obliquely), and four more at a 0.50 gap each. This is exactly the bar issue #100 set: "if
+   embeddings are kept, the record says which Questions justify them." The table above is that
+   record.
+2. **A combined arm shows genuine complementary lift that neither arm alone provides**, at a budget
+   at or below either arm's own cost (0.878 mean recall from a 27-row union vs. 0.859 from
+   `semantic`'s own 40-row top-k). This is the strongest single result in this section: it means the
+   two arms are not redundant, which is the actual question issue #94 asked when it kept them as
+   separate tools rather than merging them, now answered with a number rather than an intuition.
+
+**Confidence is moderate, not high, and that needs saying plainly rather than rounded up:**
+
+- The comparable-k race is genuinely close — close enough that `word_search` leads outright at low
+  `k` and edges `semantic` on pooled recall and precision at `k = 21`. The "After #94" section's
+  0.859-vs-0.748 gap, read on its own, overstated how much `semantic` alone is worth; that overstatement
+  is now corrected; the correction cuts against embeddings, not for them.
+- The corpus is ~120 Entries against a documented degradation point of 572 (ADR 0023) — this is the
+  optimistic end of the range for `semantic`, and the close comparable-k race measured here is itself
+  measured on that optimistic end. A real History could plausibly erase the gap entirely rather than
+  hold it.
+- The case for keeping embeddings rests on a short, specific list (five Questions with a clear gap,
+  one of them — `aurora-devika` — carrying nearly all the weight) and one combined-arm number, not on
+  a broad recall advantage. That is a real basis for a decision, not a strong one.
+
+**This measurement does not by itself justify the current shape of the dependency** — a background
+worker, a vector column on every Entry, and a Server that refuses to start Reflection at all without
+an embedding model configured. The comparable-k finding above (`word_search` alone is not meaningfully
+worse) means an embedding-less deployment losing `semantic` entirely would still retrieve reasonably
+well, not fail badly — which is a different, and weaker, dependency than "Reflection requires this
+model to exist." That is an observation this measurement supports, not a change this ticket makes:
+per its own scope, nothing here is removed, and the worker, the column, and the startup dependency are
+left exactly as they are for whoever reviews this record next.

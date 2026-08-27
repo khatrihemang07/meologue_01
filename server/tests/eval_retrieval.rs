@@ -70,7 +70,7 @@
 //! file's own job stays what it always was — the harness, the Questions,
 //! the expected Entries, and today's number for whichever arms exist.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -93,6 +93,17 @@ const SANDBOX_DATABASE_URL: &str = "postgres://meologue:meologue@localhost:5442/
 /// so `1 - (a <=> b)` is cosine similarity (`docs/adr/0022`).
 const EMBED_BASE_URL: &str = "http://localhost:11434/v1";
 const EMBED_MODEL: &str = "harrier-270m";
+
+/// Row counts the issue #100 recall@k curve is evaluated at. `21` is not a
+/// round number chosen for symmetry — it is `word_search`'s own measured
+/// mean row count against this corpus (21.3, recorded in
+/// `eval-retrieval-baseline.md`'s "After #94" section), included precisely
+/// so the curve passes through the one `k` that answers "at the row count
+/// word search actually uses, does semantic still lead?" without
+/// interpolating between two other points. `40` is `RETRIEVAL_LIMIT`
+/// itself, included so the curve's top end reproduces the already-recorded
+/// recall@40 numbers as a sanity check on this new code, not a new number.
+const K_VALUES: [i64; 6] = [5, 10, 20, 21, 30, 40];
 
 // ---------------------------------------------------------------------
 // Questions
@@ -773,12 +784,31 @@ async fn eval_retrieval_baseline() {
     let mut recall_rows = Vec::new();
     let mut cost_by_arm: Vec<(&'static str, Duration, u32, usize)> = Vec::new(); // (name, total_wall_clock, total_steps, question_count)
 
+    // Captures each arm's *ordered* top-40 retrieved ids per Question, keyed
+    // by (question id, arm name) — the raw material for everything below
+    // `print_report`. `retrieve_nearest` and `search_words` are both
+    // deterministically ordered (cosine distance ascending; `ts_rank_cd`
+    // descending) and every rung of `search_words` decides which rung fires
+    // by whether it matched *any* rows, never by `limit` — so the first `k`
+    // ids of a `limit = RETRIEVAL_LIMIT` (40) call are exactly what a fresh
+    // call with `limit = k` would have returned. That equivalence is what
+    // lets the recall@k curve and the combined arm below be computed
+    // entirely by slicing this cache in Rust — zero extra Ollama calls, zero
+    // extra Postgres round trips, on top of the run the existing arms above
+    // already make. That matters here specifically: Ollama has previously
+    // degraded badly under repeated embedding load (see this ticket's own
+    // handoff), and a naive recall@k implementation that re-ran `SemanticArm`
+    // once per k value would multiply the embedding calls by `K_VALUES.len()`
+    // for no reason — the ranking at k=40 already contains every smaller k.
+    let mut retrieved_by_arm: HashMap<(&'static str, &'static str), Vec<Uuid>> = HashMap::new();
+
     for question in &questions() {
         let expected = parse_ids(question.expected);
         for arm in &arms {
             let Some(run) = arm.run(&ctx, question).await else {
                 continue;
             };
+            retrieved_by_arm.insert((question.id, arm.name()), run.retrieved.clone());
             let retrieved: HashSet<Uuid> = run.retrieved.iter().copied().collect();
             let hits = retrieved.intersection(&expected).count();
             let recall = if expected.is_empty() {
@@ -821,6 +851,15 @@ async fn eval_retrieval_baseline() {
     }
 
     print_report(&recall_rows, &cost_by_arm);
+
+    // --- issue #100: the recall@k curve, per-Question detail at word
+    // search's natural k, and a combined arm — additions on top of the
+    // baseline report above, not a replacement for it. See each function's
+    // own doc comment for what it measures and why.
+    let questions = questions();
+    print_recall_at_k(&questions, &retrieved_by_arm, live_entries as f64);
+    print_per_question_at_k(&questions, &retrieved_by_arm, 21);
+    print_combined_arm(&questions, &retrieved_by_arm, live_entries as f64);
 }
 
 fn print_report(rows: &[RecallRow], cost_by_arm: &[(&'static str, Duration, u32, usize)]) {
@@ -895,5 +934,218 @@ fn print_report(rows: &[RecallRow], cost_by_arm: &[(&'static str, Duration, u32,
          count is available from this client without widening it beyond what this ticket's file-ownership \
          permits (only `pub` visibility changes to reflect.rs, no llm.rs edits). Step counts (one embed \
          call + one query per semantic run; one query per date_range run) stand in for it above."
+    );
+}
+
+// ---------------------------------------------------------------------
+// Issue #100: recall@k curve, comparable-k per-Question detail, combined arm
+// ---------------------------------------------------------------------
+
+/// The 22 Questions with a non-empty `expected` set — the ones every recall
+/// figure in this file (and in `eval-retrieval-baseline.md`) is computed
+/// over. The three absent-topic controls are deliberately excluded here,
+/// same as `print_report`'s "Recall summary" section: recall is undefined
+/// for an empty expected set, not zero.
+fn scored_questions(questions: &[Question]) -> Vec<&Question> {
+    questions
+        .iter()
+        .filter(|q| !q.expected.is_empty())
+        .collect()
+}
+
+/// The first `k` ids of `retrieved_by_arm[(question_id, arm_name)]`, or the
+/// whole thing if it has fewer than `k` — this is what a fresh call to
+/// `retrieve_nearest`/`search_words` with `limit = k` would have returned;
+/// see the doc comment where `retrieved_by_arm` is built in
+/// `eval_retrieval_baseline` for why that equivalence holds.
+fn prefix_at_k<'a>(
+    retrieved_by_arm: &'a HashMap<(&'static str, &'static str), Vec<Uuid>>,
+    question_id: &'static str,
+    arm: &'static str,
+    k: i64,
+) -> &'a [Uuid] {
+    let full = retrieved_by_arm
+        .get(&(question_id, arm))
+        .unwrap_or_else(|| panic!("no cached retrieval for ({question_id}, {arm})"));
+    &full[..(k as usize).min(full.len())]
+}
+
+/// Recall@k for `semantic` and `word_search`, at every `k` in `K_VALUES`,
+/// both as a per-Question mean (the shape `print_report`'s "Recall summary"
+/// already uses) and pooled across every graded Entry (the shape the
+/// baseline doc's "After #94" section added because mean-of-means treats a
+/// 1-Entry Question the same as a 14-Entry one). Answers the ticket's first
+/// question directly: "at the row count word search actually uses (~21),
+/// does semantic still lead on recall?" is this table's `k = 21` row.
+///
+/// `date_range` has no `k` to sweep — it is not capped at `RETRIEVAL_LIMIT`
+/// for correctness reasons (`retrieve_range`'s own doc comment), and every
+/// one of its four Questions already scores 1.000 at whatever it returns —
+/// so it is not part of this curve.
+fn print_recall_at_k(
+    questions: &[Question],
+    retrieved_by_arm: &HashMap<(&'static str, &'static str), Vec<Uuid>>,
+    corpus_size: f64,
+) {
+    println!("\n=== Recall@k curve — semantic vs word_search at equal row counts (issue #100) ===");
+    println!(
+        "{:<4} {:<12} {:>12} {:>14} {:>11} {:>10} {:>8}",
+        "k", "arm", "mean recall", "pooled recall", "precision", "mean rows", "chance"
+    );
+
+    let scored = scored_questions(questions);
+    for &k in &K_VALUES {
+        for arm in ["semantic", "word_search"] {
+            let mut per_q_recalls = Vec::new();
+            let mut total_hits = 0usize;
+            let mut total_expected = 0usize;
+            let mut total_retrieved = 0usize;
+
+            for question in &scored {
+                let expected = parse_ids(question.expected);
+                let prefix = prefix_at_k(retrieved_by_arm, question.id, arm, k);
+                let hits = prefix.iter().filter(|id| expected.contains(*id)).count();
+                per_q_recalls.push(hits as f64 / expected.len() as f64);
+                total_hits += hits;
+                total_expected += expected.len();
+                total_retrieved += prefix.len();
+            }
+
+            let mean_recall = per_q_recalls.iter().sum::<f64>() / per_q_recalls.len() as f64;
+            let pooled_recall = total_hits as f64 / total_expected as f64;
+            let precision = if total_retrieved == 0 {
+                0.0
+            } else {
+                total_hits as f64 / total_retrieved as f64
+            };
+            let mean_rows = total_retrieved as f64 / scored.len() as f64;
+            let chance = (k as f64 / corpus_size).min(1.0);
+
+            println!(
+                "{:<4} {:<12} {:>12.3} {:>14.3} {:>11.3} {:>10.1} {:>8.3}",
+                k, arm, mean_recall, pooled_recall, precision, mean_rows, chance
+            );
+        }
+    }
+    println!(
+        "\n`chance` is k / {corpus_size:.0} live Entries — the recall a strategy that picked `k` \
+         Entries at random would score in expectation, the same reference `eval-retrieval-baseline.md` \
+         already applies to recall@40 (≈0.336) and word_search's pooled precision (≈0.046)."
+    );
+}
+
+/// The same 22 Questions, `semantic` against `word_search`, both capped at
+/// `k` — the per-Question breakdown the ticket's second question needs
+/// ("which specific Questions do embeddings carry that word search
+/// cannot?"), read at the row count word search actually uses rather than
+/// at `RETRIEVAL_LIMIT` (40), where every Question gets far more rows than
+/// either arm would ever hand the answering call in practice.
+fn print_per_question_at_k(
+    questions: &[Question],
+    retrieved_by_arm: &HashMap<(&'static str, &'static str), Vec<Uuid>>,
+    k: i64,
+) {
+    println!(
+        "\n=== Per-Question recall@{k} — semantic vs word_search, comparable-k (issue #100) ==="
+    );
+    println!(
+        "{:<24} {:<10} {:>10} {:>10} {:<8}",
+        "question", "thread", "semantic", "word", "winner"
+    );
+    for question in scored_questions(questions) {
+        let expected = parse_ids(question.expected);
+        let sem = prefix_at_k(retrieved_by_arm, question.id, "semantic", k);
+        let word = prefix_at_k(retrieved_by_arm, question.id, "word_search", k);
+        let sem_recall =
+            sem.iter().filter(|id| expected.contains(*id)).count() as f64 / expected.len() as f64;
+        let word_recall =
+            word.iter().filter(|id| expected.contains(*id)).count() as f64 / expected.len() as f64;
+        let winner = if (sem_recall - word_recall).abs() < 1e-9 {
+            "tie"
+        } else if sem_recall > word_recall {
+            "semantic"
+        } else {
+            "word"
+        };
+        println!(
+            "{:<24} {:<10} {:>10.2} {:>10.2} {:<8}",
+            question.id, question.thread, sem_recall, word_recall, winner
+        );
+    }
+}
+
+/// A third arm this file never defines as a `RetrievalArm`: the union of
+/// `semantic`'s and `word_search`'s own top-`k_each` results, at a total row
+/// budget comparable to what a single arm already costs — not a new
+/// retrieval primitive, just a set union over the two caches already built
+/// above, computed the same way the curve functions above are (slicing the
+/// cached top-40 lists, no new Ollama or Postgres calls). Reports the
+/// *actual* achieved row count after de-duplication, which is always
+/// `<= 2 * k_each` and usually less, since the two arms agree on plenty of
+/// rows — the two "wins" tables in `eval-retrieval-baseline.md`'s "After
+/// #94" section already show them disagreeing on which Questions they're
+/// strong on, which is exactly the situation a union can capture and a
+/// single arm cannot.
+fn print_combined_arm(
+    questions: &[Question],
+    retrieved_by_arm: &HashMap<(&'static str, &'static str), Vec<Uuid>>,
+    corpus_size: f64,
+) {
+    println!(
+        "\n=== Combined arm — semantic ∪ word_search, union at a shared row budget (issue #100) ==="
+    );
+    println!(
+        "{:<28} {:>12} {:>14} {:>11} {:>10} {:>8}",
+        "budget", "mean recall", "pooled recall", "precision", "mean rows", "chance"
+    );
+
+    let scored = scored_questions(questions);
+    // (k_each, label) — 11+11 targets word_search's own natural mean row
+    // count (~21.3, `eval-retrieval-baseline.md`'s "After #94" section) as
+    // the comparable-cost budget the ticket asks for; 20+20 is a reference
+    // point at each arm's own full RETRIEVAL_LIMIT/2, showing what the union
+    // does when it isn't budget-constrained at all.
+    let configs: [(i64, &str); 2] = [
+        (11, "11+11 (~word_search's natural ~21 rows)"),
+        (20, "20+20 (each arm at half RETRIEVAL_LIMIT)"),
+    ];
+
+    for (k_each, label) in configs {
+        let mut per_q_recalls = Vec::new();
+        let mut total_hits = 0usize;
+        let mut total_expected = 0usize;
+        let mut total_retrieved = 0usize;
+
+        for question in &scored {
+            let expected = parse_ids(question.expected);
+            let sem = prefix_at_k(retrieved_by_arm, question.id, "semantic", k_each);
+            let word = prefix_at_k(retrieved_by_arm, question.id, "word_search", k_each);
+            let union: HashSet<Uuid> = sem.iter().chain(word.iter()).copied().collect();
+            let hits = union.intersection(&expected).count();
+            per_q_recalls.push(hits as f64 / expected.len() as f64);
+            total_hits += hits;
+            total_expected += expected.len();
+            total_retrieved += union.len();
+        }
+
+        let mean_recall = per_q_recalls.iter().sum::<f64>() / per_q_recalls.len() as f64;
+        let pooled_recall = total_hits as f64 / total_expected as f64;
+        let precision = if total_retrieved == 0 {
+            0.0
+        } else {
+            total_hits as f64 / total_retrieved as f64
+        };
+        let mean_rows = total_retrieved as f64 / scored.len() as f64;
+        let chance = (mean_rows / corpus_size).min(1.0);
+
+        println!(
+            "{:<28} {:>12.3} {:>14.3} {:>11.3} {:>10.1} {:>8.3}",
+            label, mean_recall, pooled_recall, precision, mean_rows, chance
+        );
+    }
+    println!(
+        "\nSteps for this arm in the harness would be 3 (one embed call, one semantic query, one \
+         word_search query) — cost is not folded into either recall or precision above, same \
+         discipline `print_report`'s cost section keeps for the other three arms."
     );
 }
