@@ -15,10 +15,18 @@
 //! neither should mean hand-editing a paragraph of prose in `reflect.rs`
 //! every time.
 //!
-//! `entries_in_range` (`entries_in_range.rs`) is the only tool this ticket
-//! implements.
+//! `entries_in_range` (`entries_in_range.rs`, issue #93) was the first
+//! tool; issue #94 adds two more, both against journal content rather than
+//! a date: `search_entries` (`search_entries.rs`) finds Entries by word,
+//! and `similar_entries` (`similar_entries.rs`) finds them by meaning. The
+//! issue is explicit that these stay two separate tools rather than one
+//! merged one, because they fail on different kinds of Question and a
+//! merged tool would hide exactly that difference — see each file's own
+//! doc comment for what it wraps and why.
 
 pub mod entries_in_range;
+pub mod search_entries;
+pub mod similar_entries;
 
 use std::sync::Arc;
 
@@ -27,6 +35,8 @@ use serde_json::Value;
 use uuid::Uuid;
 
 pub use entries_in_range::EntriesInRangeTool;
+pub use search_entries::SearchEntriesTool;
+pub use similar_entries::SimilarEntriesTool;
 
 use super::types::Tool;
 

@@ -6,16 +6,17 @@
 //! Entry ids, run independently against each retrieval arm that exists
 //! today — `semantic` (`retrieve_nearest`, top-k only — issue #92 deleted
 //! the `MIN_SIMILARITY` floor this baseline was originally measured with;
-//! see `docs/adr/0023`'s amendment) and `date_range` (`retrieve_range`) —
-//! reporting recall per arm, and cost (wall-clock, call counts)
-//! *separately* from the score. See `docs/adr/0023` for why those two
-//! functions exist and what the floor did and didn't guarantee before it
-//! was removed; this harness measures that ADR's claims
-//! against a much smaller corpus than the 572-Entry one it was written
-//! against (see `docs/adr/0029`'s "Consequences" — retrieval looks better
-//! on ~120 Entries than it will on a real History, and that gap is exactly
-//! why this baseline needs re-measuring, not re-guessing, whenever the
-//! corpus or the retrieval code changes).
+//! see `docs/adr/0023`'s amendment), `date_range` (`retrieve_range`), and
+//! `word_search` (`search_words`, issue #94) — reporting recall per arm,
+//! and cost (wall-clock, call counts) *separately* from the score. See
+//! `docs/adr/0023` for why the first two functions exist and what the
+//! floor did and didn't guarantee before it was removed; this harness
+//! measures that ADR's claims against a much smaller corpus than the
+//! 572-Entry one it was written against (see `docs/adr/0029`'s
+//! "Consequences" — retrieval looks better on ~120 Entries than it will on
+//! a real History, and that gap is exactly why this baseline needs
+//! re-measuring, not re-guessing, whenever the corpus or the retrieval
+//! code changes).
 //!
 //! ## Why this talks to the Sandbox directly, not `#[sqlx::test]`
 //!
@@ -59,14 +60,15 @@
 //! pattern-matches on which arm it's running; a third arm is a new
 //! `RetrievalArm` impl pushed onto that list, nothing else.
 //!
-//! **Word search is deliberately not built here.** Issue #94 gives the
-//! Server a full-text search endpoint that doesn't exist yet; issue #100 is
-//! where the three-way arm comparison that decides embeddings' fate
-//! happens once it does. This file's job is narrower: the harness, the
-//! Questions, the expected Entries, and today's number for the two arms
-//! that already exist. `WORD_SEARCH_ARM_GOES_HERE` below marks the seam
-//! `#94`'s arm plugs into — one more `RetrievalArm` impl, one more line in
-//! `ARMS`.
+//! **Word search (`word_search`, issue #94) is the third arm, added once
+//! `reflect::search_words` existed to call.** It runs `search_words`
+//! directly, the same way `SemanticArm`/`DateRangeArm` call their own
+//! `reflect.rs` primitives rather than going through the harness's tool
+//! layer — this file measures the retrieval primitive itself, not the
+//! agent loop wrapped around it. Issue #100 is where the three-way
+//! comparison this makes possible is actually read and acted on; this
+//! file's own job stays what it always was — the harness, the Questions,
+//! the expected Entries, and today's number for whichever arms exist.
 
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
@@ -74,7 +76,9 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use meologue_server::llm::{LlmClient, OpenAiCompatibleClient};
-use meologue_server::reflect::{GroundingEntry, RETRIEVAL_LIMIT, retrieve_nearest, retrieve_range};
+use meologue_server::reflect::{
+    GroundingEntry, RETRIEVAL_LIMIT, retrieve_nearest, retrieve_range, search_words,
+};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -638,12 +642,41 @@ impl RetrievalArm for DateRangeArm {
     }
 }
 
-// WORD_SEARCH_ARM_GOES_HERE — issue #94 adds full-text search to the
-// Server; when it lands, its arm is a `struct WordSearchArm;` with a
-// `RetrievalArm` impl here (calling whatever `word_search`-shaped function
-// #94 introduces) and one more line in `ARMS` below. The three-way
-// comparison that decides embeddings' fate against it is #100's job, not
-// this file's.
+/// `search_words` (`reflect.rs`, issue #94), against the Question's raw
+/// text — the same text every other arm gets, unmodified, so the
+/// comparison this enables (#100) is apples to apples: no arm gets a
+/// question rewritten or shortened in its favour. Capped at
+/// `RETRIEVAL_LIMIT`, the same cap `SemanticArm` uses, deliberately — the
+/// baseline's own "compare arms at a comparable k" instruction only holds
+/// if every arm competing for the same k actually asks for it; `semantic`
+/// returning its full top-40 unconditionally (issue #92) while
+/// `word_search` returned everything a `LIMIT`-less query happened to find
+/// would not be a comparable measurement at all.
+///
+/// Applies to every Question (unlike `DateRangeArm`) — a topical Question
+/// is exactly what word search is for, and the three absent-topic controls
+/// are exactly where it should (and, per the seeded corpus, does) come back
+/// with nothing rather than a false positive.
+struct WordSearchArm;
+
+#[async_trait]
+impl RetrievalArm for WordSearchArm {
+    fn name(&self) -> &'static str {
+        "word_search"
+    }
+
+    async fn run(&self, ctx: &EvalContext<'_>, question: &Question) -> Option<ArmRun> {
+        let start = Instant::now();
+        let rows = search_words(ctx.pool, question.text, RETRIEVAL_LIMIT)
+            .await
+            .unwrap_or_else(|err| panic!("search_words failed for {:?}: {err:#}", question.id));
+        Some(ArmRun {
+            retrieved: ids_of(&rows),
+            wall_clock: start.elapsed(),
+            steps: 1,
+        })
+    }
+}
 
 async fn resolve_window(pool: &PgPool, window: &DateWindowSpec) -> (DateTime<Utc>, DateTime<Utc>) {
     let marker_id =
@@ -731,7 +764,11 @@ async fn eval_retrieval_baseline() {
         embed_client: &embed_client,
     };
 
-    let arms: Vec<Box<dyn RetrievalArm>> = vec![Box::new(SemanticArm), Box::new(DateRangeArm)];
+    let arms: Vec<Box<dyn RetrievalArm>> = vec![
+        Box::new(SemanticArm),
+        Box::new(DateRangeArm),
+        Box::new(WordSearchArm),
+    ];
 
     let mut recall_rows = Vec::new();
     let mut cost_by_arm: Vec<(&'static str, Duration, u32, usize)> = Vec::new(); // (name, total_wall_clock, total_steps, question_count)
@@ -812,7 +849,7 @@ fn print_report(rows: &[RecallRow], cost_by_arm: &[(&'static str, Duration, u32,
     println!(
         "\n=== Recall summary, by arm (mean over Questions with a non-empty expected set) ==="
     );
-    for arm_name in ["semantic", "date_range"] {
+    for arm_name in ["semantic", "date_range", "word_search"] {
         let scored: Vec<f64> = rows
             .iter()
             .filter(|r| r.arm == arm_name)

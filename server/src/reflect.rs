@@ -50,7 +50,9 @@ use uuid::Uuid;
 use crate::embedding::vector_literal;
 use crate::harness::agent_loop::{self, Step};
 use crate::harness::prompted::PromptedToolClient;
-use crate::harness::tools::{self, AgentTool, EntriesInRangeTool};
+use crate::harness::tools::{
+    self, AgentTool, EntriesInRangeTool, SearchEntriesTool, SimilarEntriesTool,
+};
 use crate::harness::types::{AssistantMessage, ContentBlock, Message, StopReason};
 use crate::llm::{ChatMessage, LlmClient};
 use crate::sessions::{self, EntryType, MessagePayload, NewTurn, SessionTurnRow};
@@ -409,10 +411,22 @@ async fn run_reflect_loop(
         turns.split_off(start)
     };
 
-    let tools: Vec<Arc<dyn AgentTool>> = vec![Arc::new(EntriesInRangeTool::new(
-        pool.clone(),
-        offset_minutes,
-    ))];
+    // Three tools now: `entries_in_range` (issue #93, by date),
+    // `search_entries` (issue #94, by word) and `similar_entries` (issue
+    // #94, by meaning) — each independently constructible, so a future
+    // caller (issue #100's evaluation) can build its own subset of this
+    // same `Vec` to compare arms without touching `run_reflect_loop`
+    // itself. `search_entries` and `similar_entries` stay two tools rather
+    // than one merged one deliberately — see `harness::tools`'s own doc
+    // comment for why.
+    let tools: Vec<Arc<dyn AgentTool>> = vec![
+        Arc::new(EntriesInRangeTool::new(pool.clone(), offset_minutes)),
+        Arc::new(SearchEntriesTool::new(pool.clone())),
+        Arc::new(SimilarEntriesTool::new(
+            pool.clone(),
+            reflect.embed_client.clone(),
+        )),
+    ];
     let system_prompt = tools::render_tool_guidance(LOOP_SYSTEM_INSTRUCTION, &tools);
 
     let mut messages = Vec::with_capacity(prior_turns.len() * 2 + 1);
@@ -981,6 +995,207 @@ pub async fn retrieve_range(
     Ok(rows)
 }
 
+/// How well a query's trigrams must resemble some substring of an Entry's
+/// body before `search_words`'s misspelling-tolerant fallback counts it as
+/// a match. Lower than `pg_trgm`'s own `word_similarity_threshold` GUC
+/// default (0.6) — that default is tuned for matching a query against a
+/// short field of comparable length, but an Entry's body is a whole
+/// paragraph of prose: `word_similarity`'s "best-matching substring" still
+/// picks up plenty of noise from the surrounding sentence even for a
+/// genuine, only-slightly-misspelled match, which pulls the achievable
+/// score down relative to the short-field case the default was tuned for.
+/// Calibrated empirically against this crate's own tests (see
+/// `search_words`'s test module) rather than derived from the GUC's
+/// default — the two aren't measuring the same thing.
+const TRIGRAM_MATCH_THRESHOLD: f32 = 0.3;
+
+/// The third retrieval primitive issue #94 adds, alongside
+/// `retrieve_nearest` and `retrieve_range` above: finds Entries whose body
+/// contains `query`'s words, tolerant of a word typed in a different form
+/// than it was written in (English stemming) and, failing that, a small
+/// misspelling (a `pg_trgm` fallback). See migration
+/// `0007_add_entries_word_search.sql`'s own doc comment for why the
+/// underlying index is a generated `tsvector` column plus two GIN indexes
+/// rather than a hand-maintained one — ADR 0014 had to hand-maintain
+/// SQLite's FTS5 index for a reason Postgres's generated columns don't
+/// share.
+///
+/// Three rungs, tried in order, each only when every rung before it matched
+/// *zero* rows (not merely scored low):
+///
+/// **Rung 1, AND**, is unchanged from this function's original shape:
+/// `websearch_to_tsquery('english', $1)` (rather than plain `to_tsquery` or
+/// `plainto_tsquery`, because it accepts ordinary prose — quotes,
+/// `-exclude`, `OR` — without ever raising a syntax error the way
+/// `to_tsquery` would on a query containing a bare `&` or `:`; the same
+/// "take the query text literally no matter what it contains" requirement
+/// ADR 0014 named for FTS5's own quoted-phrase escaping, met here by
+/// Postgres's own query parser instead of hand escaping), ranked by
+/// `ts_rank_cd` (its "cover density" variant rewards a body where the
+/// query's words appear close together, which plain `ts_rank` ignores),
+/// most-relevant first, then most-recent first as a stable tiebreak. But
+/// `websearch_to_tsquery` **ANDs every term of the query together**, which
+/// is exactly right for a tight phrase and useless for an actual question:
+/// measured against this crate's own seeded Sandbox corpus (119 Entries,
+/// the same one issue #100's eval harness scores against), "How has my knee
+/// injury been progressing over time — is it better or worse than when it
+/// started?" (95 characters) reduces to `'knee' & 'injuri' & 'progress' &
+/// 'time' & 'better' | 'wors' & 'start'` and matches **zero** rows, though
+/// the single term `knee` alone matches 16 and the graded expected set for
+/// that question is 12 Entries. "What have I been reading lately?" fares
+/// the same — zero rows via AND — which directly fails issue #94's own
+/// acceptance criterion that this exact question be answerable from word
+/// search. Rung 3's trigram fallback does not rescue either case: it
+/// compares the *whole* question against each body via `word_similarity`,
+/// and a 95-character sentence isn't textually close enough to any single
+/// Entry's prose to clear `TRIGRAM_MATCH_THRESHOLD`.
+///
+/// **Rung 2, OR (added by issue #94), is what actually answers a
+/// natural-language question:** every lexeme `query` reduces to, OR-ed
+/// together instead of ANDed, tried only when rung 1 matched nothing. It
+/// sits strictly *between* AND and trigram rather than replacing either —
+/// replacing AND would throw away AND's precision on the tight-phrase case
+/// where every term genuinely is expected together (AND already ranks that
+/// case correctly and cheaply; OR would just be a noisier way to reach the
+/// same top result), and replacing trigram would throw away the one thing
+/// OR still cannot do: match a word that was never actually written in any
+/// stemmable form at all — a real misspelling, where no stem is shared with
+/// the query no matter how the terms are combined. Verified against the
+/// same corpus: the OR form of the knee question matches 38 rows, the OR
+/// form of the reading question matches 13. `ts_rank_cd` — the same ranker
+/// rung 1 already uses — is what makes that breadth safe rather than a bag
+/// of loosely related prose: an Entry matching more of the query's terms,
+/// and rarer ones, scores higher than an Entry that merely shares one
+/// common word, so the top-`limit` rows stay meaningful even though the
+/// underlying match set is broad by construction.
+///
+/// The lexemes OR-ed together in rung 2 come from `to_tsquery('english',
+/// array_to_string(tsvector_to_array(to_tsvector('english', $1)), ' |
+/// '))` — built *inside* the SQL, not by splitting `query` into words in
+/// Rust and joining them with `|` by hand. Two reasons. First, running
+/// `query` through `to_tsvector` applies the exact same English stemming
+/// and stop-word removal `body_tsv` (the indexed column) was generated
+/// with, so the OR'd lexemes are guaranteed to match the vocabulary the
+/// index actually contains; a Rust-side tokenizer would have to
+/// reimplement Postgres's stemmer to keep that guarantee, and any drift
+/// between the two would silently miss matches. Second, `tsvector_to_array`
+/// yields lexemes that are already normalised — lowercased, stemmed, free
+/// of punctuation and stop words — and therefore safe to fold into a
+/// `to_tsquery` string with `|`; building that string from raw,
+/// un-tokenized user text in Rust and handing it to `to_tsquery` would be
+/// both a syntax-error hazard (arbitrary text can contain `&`, `|`, `:`,
+/// unbalanced parens — exactly what `websearch_to_tsquery` exists to avoid
+/// in rung 1) and, since it would have to be spliced into the query string
+/// instead of passed as an ordinary bound parameter, a query-injection
+/// hazard. A query that reduces to zero lexemes (stop words only, or
+/// punctuation only — `"the of and"`, `"!!! ???"`) makes this
+/// `to_tsquery('english', '')`, which Postgres accepts: it emits a
+/// `NOTICE` and evaluates to an empty tsquery that matches nothing via
+/// `@@`, not an error, so this rung falls straight through to trigram the
+/// same way an ordinary no-match does, with no special-casing needed here.
+///
+/// **Rung 3, trigram**, is otherwise unchanged from this function's
+/// original shape: when rungs 1 and 2 both match nothing, a third query
+/// runs, ranked by `word_similarity` against `body` (the "does the query
+/// resemble *some substring* of this body" trigram operator, not
+/// `similarity`'s "resemble the whole body," which would penalize a short
+/// misspelled query against a long paragraph for no useful reason) and
+/// filtered at `TRIGRAM_MATCH_THRESHOLD`. It stays a last resort, not a
+/// blend with the earlier rungs: trigram similarity is a much noisier
+/// signal than a stemmed match; running it unconditionally would let a
+/// loosely-related paragraph that merely shares a lot of 3-character
+/// substrings with the query outrank a real stemmed hit, or clutter every
+/// already-answered search with lower-quality matches it didn't need.
+///
+/// It gained one guard, also from issue #94: rung 3's query additionally
+/// requires `to_tsvector('english', $1) != ''::tsvector` — `query` must
+/// reduce to at least one lexeme — before `word_similarity` runs at all.
+/// Trigram similarity is meant to rescue a word that was *written down but
+/// mistyped* ("phyiso" for "physio" still stems to a lexeme, `phyiso`,
+/// even though it isn't a real word, so that case is untouched by this
+/// guard and still reaches rung 3). A query that reduces to zero lexemes —
+/// stop words only, or punctuation only, the same shapes rung 2 already
+/// tolerates cleanly by matching nothing — contains no word to have
+/// mistyped in the first place, so there is nothing for trigram similarity
+/// to be tolerant *of*: without this guard, `word_similarity('the of and',
+/// body)` clears `TRIGRAM_MATCH_THRESHOLD` (0.3) at up to 0.727 against
+/// this crate's own seeded Sandbox corpus, on Entries that share nothing
+/// with the query except those three common words, and a query with no
+/// searchable words at all would come back reporting a page of unrelated
+/// Entries as matches.
+///
+/// This function makes no network call and has no failure mode
+/// `harness::tools::SearchEntriesTool` needs to translate specially — any
+/// `Err` here is an ordinary database error, handled the same way
+/// `EntriesInRangeTool` already handles one from `retrieve_range`.
+///
+/// `pub` for the same reason `retrieve_nearest`/`retrieve_range` are:
+/// `server/tests/eval_retrieval.rs`'s three-arm comparison (issue #100)
+/// calls this directly, exactly the way it already calls the other two.
+pub async fn search_words(
+    pool: &PgPool,
+    query: &str,
+    limit: i64,
+) -> anyhow::Result<Vec<GroundingEntry>> {
+    let rows = sqlx::query_as::<_, GroundingEntry>(
+        "select id, body, created_at from entries
+         where deleted_at is null
+           and body_tsv @@ websearch_to_tsquery('english', $1)
+         order by ts_rank_cd(body_tsv, websearch_to_tsquery('english', $1)) desc, created_at desc
+         limit $2",
+    )
+    .bind(query)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    if !rows.is_empty() {
+        return Ok(rows);
+    }
+
+    // Rung 2 (issue #94): every lexeme of `query`, OR-ed together instead
+    // of ANDed, ranked the same way rung 1 is. See this function's own doc
+    // comment for the measured AND-only failure this exists to fix, why it
+    // sits between AND and trigram rather than replacing either, and why
+    // the lexemes are derived from `to_tsvector` in SQL rather than by
+    // splitting `query` in Rust.
+    let rows = sqlx::query_as::<_, GroundingEntry>(
+        "select id, body, created_at from entries
+         where deleted_at is null
+           and body_tsv @@ to_tsquery('english', array_to_string(tsvector_to_array(to_tsvector('english', $1)), ' | '))
+         order by ts_rank_cd(body_tsv, to_tsquery('english', array_to_string(tsvector_to_array(to_tsvector('english', $1)), ' | '))) desc, created_at desc
+         limit $2",
+    )
+    .bind(query)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    if !rows.is_empty() {
+        return Ok(rows);
+    }
+
+    // Rung 3 (issue #94): gated on `query` having at least one lexeme,
+    // alongside its existing threshold — `word_similarity` operates on raw
+    // trigrams, not `body_tsv`, so nothing about its own predicate would
+    // otherwise exclude a zero-lexeme query the way rung 2's `@@` does. See
+    // this function's own doc comment for why trigram similarity on a
+    // stop-words/punctuation-only query is not misspelling tolerance, and
+    // the measured false-positive rate that motivated this guard.
+    let rows = sqlx::query_as::<_, GroundingEntry>(
+        "select id, body, created_at from entries
+         where deleted_at is null
+           and to_tsvector('english', $1) != ''::tsvector
+           and word_similarity($1, body) >= $2
+         order by word_similarity($1, body) desc, created_at desc
+         limit $3",
+    )
+    .bind(query)
+    .bind(TRIGRAM_MATCH_THRESHOLD)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 /// Converts an inclusive local `[from, to]` calendar-date range into the
 /// half-open UTC instant range `retrieve_range` needs: `from` local
 /// midnight becomes `from_utc` by subtracting the offset, and `to`'s local
@@ -1394,11 +1609,13 @@ fn derive_title(question: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use chrono::NaiveDate;
+    use chrono::{DateTime, NaiveDate, Utc};
+    use sqlx::PgPool;
+    use uuid::Uuid;
 
     use super::{
         TITLE_MAX_CHARS, derive_title, extract_json_object, keyword_query, local_date_range_to_utc,
-        local_today, parse_and_strip_verdict, parse_extraction, strip_code_fences,
+        local_today, parse_and_strip_verdict, parse_extraction, search_words, strip_code_fences,
     };
 
     #[test]
@@ -1645,5 +1862,204 @@ mod tests {
     fn empty_or_whitespace_input_degrades_to_a_placeholder_title() {
         assert_eq!(derive_title(""), "Untitled Session");
         assert_eq!(derive_title("   \n\t  "), "Untitled Session");
+    }
+
+    // -------------------------------------------------------------------
+    // Issue #94 (pass 2) — search_words's new OR rung, between the
+    // existing AND (websearch_to_tsquery) and trigram (word_similarity)
+    // rungs. See search_words's own doc comment for the measured numbers
+    // motivating this rung; these tests exercise the same three-rung
+    // ladder against a real Postgres connection.
+    // -------------------------------------------------------------------
+
+    async fn insert_entry(pool: &PgPool, body: &str, created_at: DateTime<Utc>) {
+        sqlx::query(
+            "insert into entries (id, device_id, body, created_at) values ($1, $2, $3, $4)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(Uuid::new_v4())
+        .bind(body)
+        .bind(created_at)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    fn day(y: i32, m: u32, d: u32) -> DateTime<Utc> {
+        NaiveDate::from_ymd_opt(y, m, d)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc()
+    }
+
+    /// The AND→OR fall-through this rung exists for: no single Entry's body
+    /// contains every one of the query's stems (`websearch_to_tsquery`
+    /// therefore matches nothing, exactly the failure mode measured in
+    /// `search_words`'s doc comment), but each Entry shares a distinct term
+    /// with the query, and the OR rung finds both.
+    #[sqlx::test]
+    async fn an_and_only_query_that_matches_no_single_entry_still_matches_via_or(pool: PgPool) {
+        insert_entry(&pool, "Knee physio was tough today.", day(2026, 3, 10)).await;
+        insert_entry(
+            &pool,
+            "Finished reading a great novel last night.",
+            day(2026, 3, 11),
+        )
+        .await;
+
+        // "knee" and "reading" (stem "read") never co-occur in either
+        // Entry, so rung 1's AND matches zero rows.
+        let rows = search_words(&pool, "knee reading", 10).await.unwrap();
+
+        assert_eq!(
+            rows.len(),
+            2,
+            "the OR rung should have found both Entries via their distinct shared terms: {rows:?}"
+        );
+    }
+
+    /// A query whose terms *do* all appear in one Entry must still be
+    /// answered by rung 1 alone — the OR rung must not run at all, let
+    /// alone displace AND. Proven here by a decoy Entry that would only
+    /// match through OR (it shares just one of the two terms): if OR ran
+    /// unconditionally, the decoy would leak into the result too.
+    #[sqlx::test]
+    async fn a_query_whose_terms_all_appear_in_one_entry_still_matches_via_and(pool: PgPool) {
+        insert_entry(
+            &pool,
+            "My knee pain flared up again while I was reading in bed.",
+            day(2026, 3, 10),
+        )
+        .await;
+        insert_entry(
+            &pool,
+            "Reflecting quietly on my knee brace fitting today.",
+            day(2026, 3, 11),
+        )
+        .await;
+
+        let rows = search_words(&pool, "knee reading", 10).await.unwrap();
+
+        assert_eq!(
+            rows.len(),
+            1,
+            "only the Entry matching both terms conjunctively should come back — the OR-only \
+             decoy leaking in would mean OR ran even though AND already matched: {rows:?}"
+        );
+        assert!(rows[0].body.contains("flared up"));
+    }
+
+    /// Within the OR rung itself: an Entry matching more of the query's
+    /// terms must outrank an Entry matching only one, because `ts_rank_cd`
+    /// (not mere presence in the OR'd set) is what orders the rows.
+    #[sqlx::test]
+    async fn within_the_or_rung_more_matching_terms_ranks_higher(pool: PgPool) {
+        insert_entry(
+            &pool,
+            "Just a quiet day, nothing much to report about the knee.",
+            day(2026, 3, 10),
+        )
+        .await;
+        insert_entry(
+            &pool,
+            "The knee doctor mentioned running gently is fine for recovery.",
+            day(2026, 3, 11),
+        )
+        .await;
+
+        // No Entry contains all three stems ("knee", "run", "read"), so
+        // this falls through AND into the OR rung; the second Entry shares
+        // two of the three query terms ("knee" and "running"), the first
+        // only one ("knee").
+        let rows = search_words(&pool, "knee running reading", 10)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            rows.len(),
+            2,
+            "both Entries share at least one term: {rows:?}"
+        );
+        assert!(
+            rows[0].body.contains("running gently"),
+            "the two-term match should rank above the one-term match: {rows:?}"
+        );
+    }
+
+    /// A query that reduces to zero lexemes — punctuation only — must not
+    /// raise a SQL error from `to_tsquery('english', '')` in the OR rung;
+    /// it should simply match no rows and fall through to rung 3, which a
+    /// zero-lexeme query cannot reach either (see the stop-words test
+    /// below for why rung 3 needs its own guard, not just an empty
+    /// tsquery, to stay out of this case).
+    #[sqlx::test]
+    async fn a_punctuation_only_query_returns_no_rows_without_erroring(pool: PgPool) {
+        insert_entry(
+            &pool,
+            "Uneventful evening, tea and a book.",
+            day(2026, 3, 10),
+        )
+        .await;
+
+        let rows = search_words(&pool, "!!! ??? ...", 10).await.unwrap();
+
+        assert!(
+            rows.is_empty(),
+            "a punctuation-only query should match nothing, not error: {rows:?}"
+        );
+    }
+
+    /// The regression this ticket's second pass exists to close: a
+    /// stop-words-only query reduces to zero lexemes just like the
+    /// punctuation case above, but `to_tsvector`/`to_tsquery` emptiness
+    /// doesn't save rung 3 the way it saves rungs 1 and 2 — rung 3's
+    /// `word_similarity` predicate has nothing to do with `body_tsv` or
+    /// lexemes at all, it compares raw trigrams. Before rung 3 gained its
+    /// own `to_tsvector('english', $1) != ''::tsvector` guard, this exact
+    /// query matched ordinary prose Entries at up to 0.727 similarity —
+    /// comfortably over `TRIGRAM_MATCH_THRESHOLD` (0.3) — purely because
+    /// "the", "of" and "and" are common substrings of common English
+    /// sentences, not because the Entry had anything to do with the query.
+    /// The Entry body here is deliberately unremarkable prose containing
+    /// "and" (one of the query's own words) as a check that the guard, not
+    /// some coincidental low similarity score, is what keeps this empty.
+    #[sqlx::test]
+    async fn a_stop_word_only_query_returns_no_rows_without_erroring(pool: PgPool) {
+        insert_entry(
+            &pool,
+            "Uneventful evening, tea and a book.",
+            day(2026, 3, 10),
+        )
+        .await;
+
+        let rows = search_words(&pool, "the of and", 10).await.unwrap();
+
+        assert!(
+            rows.is_empty(),
+            "a stop-words-only query has no word to have mistyped, so trigram similarity to              ordinary prose must not count as a match: {rows:?}"
+        );
+    }
+
+    /// A genuine misspelling — no stem shared with the body in any
+    /// combination — must still reach rung 3 and match via trigram
+    /// similarity, exactly as it did before this rung was added.
+    #[sqlx::test]
+    async fn a_misspelling_with_no_shared_stem_still_reaches_the_trigram_rung(pool: PgPool) {
+        insert_entry(
+            &pool,
+            "First physio appointment today, went well.",
+            day(2026, 3, 10),
+        )
+        .await;
+
+        let rows = search_words(&pool, "phyiso", 10).await.unwrap();
+
+        assert_eq!(
+            rows.len(),
+            1,
+            "the trigram fallback should have matched \"phyiso\" against \"physio\": {rows:?}"
+        );
+        assert!(rows[0].body.contains("physio appointment"));
     }
 }

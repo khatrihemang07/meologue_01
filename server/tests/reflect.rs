@@ -192,6 +192,36 @@ fn reflect_state(chat: Arc<FakeChatClient>) -> ReflectState {
     }
 }
 
+/// A deterministic `LlmClient` double for `embed_query` alone — every
+/// `similar_entries` test needs *some* vector back from `embed_query`
+/// before `retrieve_nearest` has anything to rank, and the actual value
+/// doesn't matter (nothing here asserts on similarity ordering). `chat` is
+/// never called through this fake — a test using it always supplies its
+/// own `FakeChatClient` for that half.
+struct FakeEmbedClient;
+
+#[async_trait]
+impl LlmClient for FakeEmbedClient {
+    async fn chat(&self, _messages: &[ChatMessage]) -> Result<String> {
+        unimplemented!("FakeEmbedClient only ever plays the embed role")
+    }
+
+    async fn embed_document(&self, _text: &str) -> Result<Vec<f32>> {
+        unimplemented!("nothing in these tests writes an Entry through this client")
+    }
+
+    async fn embed_query(&self, _text: &str) -> Result<Vec<f32>> {
+        Ok(vec![0.1_f32; 640])
+    }
+}
+
+fn reflect_state_with_embedding(chat: Arc<FakeChatClient>) -> ReflectState {
+    ReflectState {
+        chat_client: chat,
+        embed_client: Arc::new(FakeEmbedClient),
+    }
+}
+
 fn grounding_ids(body: &Value) -> Vec<Uuid> {
     serde_json::from_value(body["grounding_entry_ids"].clone()).unwrap()
 }
@@ -436,6 +466,142 @@ async fn a_tool_call_then_prose_grounds_the_answer_in_the_entry_it_found(pool: P
     );
 }
 
+/// Issue #94: proves `search_entries` is actually wired into the live
+/// loop, not just unit-tested in isolation — the model calls it by name
+/// through `/v1/reflect`, and its result grounds the Answer exactly the
+/// way `entries_in_range`'s own equivalent test proves above.
+#[sqlx::test]
+async fn a_search_entries_call_then_prose_grounds_the_answer(pool: PgPool) {
+    let entry_id = Uuid::new_v4();
+    insert_entry_at(
+        &pool,
+        entry_id,
+        "Started reading Piranesi tonight.",
+        DateTime::parse_from_rfc3339("2026-07-05T08:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc),
+    )
+    .await;
+
+    let chat = Arc::new(FakeChatClient::new([
+        tool_call_tag("search_entries", json!({"query": "Piranesi"})),
+        "You started reading Piranesi.".to_string(),
+    ]));
+    let reflect = reflect_state(chat.clone());
+
+    let (status, body) = post_reflect(
+        &pool,
+        Some(reflect),
+        json!({ "protocol_version": 2, "question": "What have I been reading?" }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["answer"], "You started reading Piranesi.");
+    assert_eq!(grounding_ids(&body), vec![entry_id]);
+    assert_eq!(body["grounded"], true);
+}
+
+/// Issue #94's counterpart for `similar_entries` — the same proof, through
+/// the tool that embeds its query rather than running plain SQL. Uses
+/// `reflect_state_with_embedding` since, unlike every `entries_in_range`
+/// or `search_entries` test, this one actually reaches `embed_query`.
+#[sqlx::test]
+async fn a_similar_entries_call_then_prose_grounds_the_answer(pool: PgPool) {
+    let entry_id = Uuid::new_v4();
+    sqlx::query(
+        "insert into entries (id, device_id, body, created_at, embedding, embedding_model)
+         values ($1, $2, $3, $4, $5::vector, 'test-model')",
+    )
+    .bind(entry_id)
+    .bind(Uuid::new_v4())
+    .bind("Thinking a lot about the move to the new flat lately.")
+    .bind(
+        DateTime::parse_from_rfc3339("2026-07-05T08:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc),
+    )
+    .bind(format!(
+        "[{}]",
+        std::iter::repeat_n("0.1", 640)
+            .collect::<Vec<_>>()
+            .join(",")
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let chat = Arc::new(FakeChatClient::new([
+        tool_call_tag("similar_entries", json!({"query": "how did the move go"})),
+        "You've been settling into the new flat.".to_string(),
+    ]));
+    let reflect = reflect_state_with_embedding(chat.clone());
+
+    let (status, body) = post_reflect(
+        &pool,
+        Some(reflect),
+        json!({ "protocol_version": 2, "question": "How did the move go?" }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["answer"], "You've been settling into the new flat.");
+    assert_eq!(grounding_ids(&body), vec![entry_id]);
+    assert_eq!(body["grounded"], true);
+}
+
+/// Issue #94's own words: an embedding failure "must become an
+/// `is_error` tool result the model can recover from, never a failed
+/// Question" — proved end to end here, through the live loop rather than
+/// the tool in isolation (`similar_entries.rs`'s own unit test already
+/// covers `execute` returning `Err` directly).
+#[sqlx::test]
+async fn an_embedding_failure_recovers_and_still_answers(pool: PgPool) {
+    struct AlwaysFailingEmbedClient;
+
+    #[async_trait]
+    impl LlmClient for AlwaysFailingEmbedClient {
+        async fn chat(&self, _messages: &[ChatMessage]) -> Result<String> {
+            unimplemented!("only embed_query is exercised here")
+        }
+        async fn embed_document(&self, _text: &str) -> Result<Vec<f32>> {
+            unimplemented!("only embed_query is exercised here")
+        }
+        async fn embed_query(&self, _text: &str) -> Result<Vec<f32>> {
+            bail!("simulated connection refused talking to Ollama")
+        }
+    }
+
+    let chat = Arc::new(FakeChatClient::new([
+        tool_call_tag("similar_entries", json!({"query": "how did the move go"})),
+        "I couldn't search by meaning, but here's what I know.".to_string(),
+    ]));
+    let reflect = ReflectState {
+        chat_client: chat.clone(),
+        embed_client: Arc::new(AlwaysFailingEmbedClient),
+    };
+
+    let (status, body) = post_reflect(
+        &pool,
+        Some(reflect),
+        json!({ "protocol_version": 2, "question": "How did the move go?" }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["answer"],
+        "I couldn't search by meaning, but here's what I know."
+    );
+
+    let second_call = chat.nth_call(1);
+    assert!(
+        second_call.iter().any(|m| m.content.contains("embedding")),
+        "the embedding failure should have reached the next turn as a \
+         recoverable tool result: {second_call:?}"
+    );
+}
+
 #[sqlx::test]
 async fn two_tool_calls_in_one_reply_both_ground_the_answer(pool: PgPool) {
     let entry_a = Uuid::new_v4();
@@ -625,11 +791,16 @@ async fn the_active_tool_set_is_named_in_the_system_prompt(pool: PgPool) {
     assert_eq!(status, StatusCode::OK);
     let system_message = &chat.last_call()[0];
     assert_eq!(system_message.role, "system");
-    assert!(
-        system_message.content.contains("entries_in_range"),
-        "the active tool set should be described in the system prompt: {}",
-        system_message.content
-    );
+    // Issue #94's own acceptance criterion: "each tool contributes its own
+    // description to the model's instructions" — all three of the loop's
+    // tools must appear, not just the one issue #93 shipped first.
+    for tool_name in ["entries_in_range", "search_entries", "similar_entries"] {
+        assert!(
+            system_message.content.contains(tool_name),
+            "the active tool set should be described in the system prompt: {}",
+            system_message.content
+        );
+    }
 }
 
 // -- Session persistence: create, append, 404, entry-tree order -----------
