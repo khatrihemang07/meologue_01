@@ -1,19 +1,25 @@
 import { randomUUID } from "node:crypto";
-import { expect, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 import { deleteEntryViaMenu, sendEntry, uniqueEntryBody } from "./helpers";
 
-// Reflection covered end to end (issue #67): ask a Question, see the
-// Answer come back, reload and prove the Conversation survives — the one
-// thing a unit test can't tell you (docs/adr/0025 moved the Conversation
-// onto the Server precisely so a reload wouldn't lose it) — then find the
-// Session in the Sessions list, search for it, and delete it.
+// Reflection covered end to end against the tool-calling loop issue #96
+// built (`harness::agent_loop` over `harness::prompted::PromptedToolClient`
+// — server/src/harness/prompted.rs), not the fixed extraction-then-answer
+// pipeline issue #99 deleted. `/v1/reflect` only runs at all against
+// apps/e2e/llm-stub.ts's fixed double (wired into server A by
+// scripts/e2e-server.sh's MEOLOGUE_CHAT_*/MEOLOGUE_EMBED_* variables),
+// which plays a small set of scripts keyed off a marker embedded in each
+// Question's own text (see llm-stub.ts's own doc comment for how and
+// why) — one tool call then the fixed Answer below by default, and three
+// more deliberate scripts the tests further down each ask for by name:
+// two tool calls in order, one that finds nothing, and one that fails
+// after the first tool result is already in.
 //
-// `/v1/reflect` only runs at all against apps/e2e/llm-stub.ts's fixed
-// double (wired into server A by scripts/e2e-server.sh's MEOLOGUE_CHAT_*/
-// MEOLOGUE_EMBED_* variables): the extraction call always resolves to no
-// date range and no keyword, and the answering call always returns
-// "GROUNDED: yes" plus the same fixed Answer, so nothing here asserts on
-// generated prose beyond that fixed text.
+// Five scenarios in total, across this file: a single-step Question and a
+// Session surviving reload (both in the first test below, incidentally —
+// asking is what creates the reload-worthy Session in the first place), a
+// multi-step Question whose steps render live and in order, the no-match
+// path, and a mid-stream failure that leaves Reflection usable afterwards.
 const STUB_ANSWER = "Your journal has an Entry from testing meologue.";
 
 test("ask a Question, reload, find it in Sessions, search for it, delete it", async ({ page }) => {
@@ -127,11 +133,173 @@ test("a deleted Entry does not come back through Reflection's Grounding", async 
 
   // Expand the Grounding disclosure (a collapsed <details>/<summary> —
   // grounding-disclosure.tsx) and check its contents directly, rather than
-  // trusting the summary's count alone.
-  const summary = page.getByText(/Grounded in \d+ Entr|\d+ recent Entr/);
+  // trusting the summary's count alone. "N Entries returned" is
+  // `summaryLabel`'s own current wording (issue #99's carry-over #2
+  // deliberately dropped "Grounded in N Entries" — that phrasing claimed a
+  // relationship between the Answer and those Entries the Server has no
+  // way to verify under the tool-calling loop; see that function's own doc
+  // comment).
+  const summary = page.getByText(/\d+ Entr(y|ies) returned/);
   await expect(summary).toBeVisible({ timeout: 15_000 });
   await summary.click();
 
   await expect(page.getByText(keptBody)).toBeVisible();
   await expect(page.getByText(deletedBody)).toHaveCount(0);
+});
+
+/**
+ * Navigates to /reflect and waits until it's genuinely settled, not just
+ * until the URL changed. Confirmed by driving a real browser directly:
+ * ReflectionPage's first mount in a session is followed, well under a
+ * second later, by an unrelated internal remount (a second `GET
+ * /v1/models` fires shortly after the first, with no test action in
+ * between) — and that remount's own cleanup aborts whatever
+ * `/v1/reflect` fetch happens to already be in flight when it lands,
+ * since `activeAbortRef`'s cleanup (reflection-page.tsx) runs on any
+ * unmount, not only a real navigation away. The two tests above never hit
+ * this: both reach Reflect only after real work on the Composer page
+ * first (sending an Entry, waiting on assertions), which happens to
+ * outlast the window by accident. The three tests below ask their first
+ * Question as their very next action after arriving, so they need that
+ * settling made explicit rather than borrowed.
+ */
+async function openReflectAndSettle(page: Page): Promise<void> {
+  await page.getByRole("link", { name: "Reflect" }).click();
+  await expect(page).toHaveURL("/reflect");
+  await page.waitForLoadState("networkidle");
+}
+
+// llm-stub.ts's multi-step script (keyed off the "multistep-" marker below)
+// makes two tool calls, in order — similar_entries naming
+// MULTI_STEP_QUERY_ONE, then search_entries naming MULTI_STEP_QUERY_TWO —
+// before answering, and deliberately holds its final reply back long
+// enough (MULTI_STEP_FINAL_DELAY_MS) that both steps are still on screen,
+// both finished, before the Answer replaces this live view
+// (`LiveRunView`, reflection-page.tsx, only renders while a Question is
+// still pending). These two literals must keep matching llm-stub.ts's own
+// constants of the same name — nothing enforces that beyond this comment,
+// since the spec can't import from a file that starts an HTTP server on
+// load.
+const MULTI_STEP_QUERY_ONE = "step-one-of-two";
+const MULTI_STEP_QUERY_TWO = "step-two-of-two";
+
+test("a multi-step run renders its steps live, in the order they actually ran", async ({
+  page,
+}) => {
+  const marker = randomUUID().slice(0, 8);
+  const question = `What did I write about multistep-${marker}?`;
+
+  await page.goto("/");
+  await openReflectAndSettle(page);
+  await page.getByPlaceholder("Ask a Question about your History").fill(question);
+  await page.getByRole("button", { name: "Ask" }).click();
+
+  // Both steps' *finished* labels, not merely their running ones —
+  // `reflect-live-run.ts`'s `finishedLabel` is what a tool call's own
+  // <li> reads once its `tool_execution_end` has arrived, which is also
+  // exactly the state llm-stub.ts's delay is holding open below.
+  const stepOneDone = page.getByText(
+    new RegExp(`Searched your Entries by meaning for "${MULTI_STEP_QUERY_ONE}" — \\d+ Entr`),
+  );
+  const stepTwoDone = page.getByText(
+    new RegExp(`Searched your Entries for "${MULTI_STEP_QUERY_TWO}" — \\d+ Entr`),
+  );
+  await expect(stepOneDone).toBeVisible();
+  await expect(stepTwoDone).toBeVisible();
+
+  // The order assertion this scenario actually exists for: a test that
+  // only checked both labels were present somewhere on the page would
+  // pass identically whether the two steps rendered in this order or the
+  // reverse — `reflect-live-run.ts`'s `steps` array only ever appends, so
+  // reading it back off the DOM's own order is what tells the two cases
+  // apart.
+  const stepTexts = await page.locator('ul[aria-live="polite"] li').allTextContents();
+  const indexOne = stepTexts.findIndex((text) => text.includes(MULTI_STEP_QUERY_ONE));
+  const indexTwo = stepTexts.findIndex((text) => text.includes(MULTI_STEP_QUERY_TWO));
+  expect(indexOne).toBeGreaterThanOrEqual(0);
+  expect(indexTwo).toBeGreaterThan(indexOne);
+
+  // The run still finishes normally once llm-stub.ts's delay elapses.
+  await expect(page).toHaveURL(/\/reflect\/[0-9a-f-]{36}$/);
+  await expect(page.getByText(STUB_ANSWER)).toBeVisible();
+});
+
+// llm-stub.ts's no-match script (keyed off the "nomatch-" marker) calls
+// entries_in_range over a date range no Entry this suite ever writes can
+// fall inside, rather than trying to starve `similar_entries` of a match —
+// every Entry and every query embed identically in this suite
+// (`STUB_EMBEDDING`'s own doc comment in llm-stub.ts), so `similar_entries`
+// can never genuinely come back empty here. Only a tool whose result
+// actually depends on the data exercises this path honestly.
+test("a run that genuinely finds nothing says so, not a fabricated Answer", async ({ page }) => {
+  const marker = randomUUID().slice(0, 8);
+  const question = `What did I write about nomatch-${marker}?`;
+
+  await page.goto("/");
+  await openReflectAndSettle(page);
+  await page.getByPlaceholder("Ask a Question about your History").fill(question);
+  await page.getByRole("button", { name: "Ask" }).click();
+
+  await expect(page).toHaveURL(/\/reflect\/[0-9a-f-]{36}$/);
+  await expect(page.getByText(STUB_ANSWER)).toBeVisible();
+
+  // `groundingOutcome` (lib/conversation.ts) reads a tool call that ran and
+  // came back with no Entries as "nothingFound" — distinct from
+  // "neverLooked" (issue #103: a run that never checked at all) — and this
+  // is the caption `GroundingNote` (reflection-page.tsx) renders for it.
+  await expect(page.getByText("Nothing in your History matched this Question.")).toBeVisible();
+});
+
+// llm-stub.ts's mid-stream-error script (keyed off the "midstreamerror-"
+// marker) answers its first tool call normally — so this failure happens
+// strictly after a `tool_execution_end` has already reached the client,
+// not before the run ever gets going — and then fails the very next chat
+// call outright (a non-2xx response, standing in for the chat endpoint
+// itself going down mid-run). Server-side that becomes the stream's own
+// `agent_end {"status": "error"}` frame (`run_reflect_stream`,
+// server/src/reflect.rs); `reflectTransport`'s `agent-error` branch
+// (lib/reflect-transport.ts) is what turns it into `handleAsk`'s failure
+// path (reflection-page.tsx).
+test("a mid-stream failure leaves Reflection usable afterwards", async ({ page }) => {
+  const marker = randomUUID().slice(0, 8);
+  const question = `What did I write about midstreamerror-${marker}?`;
+
+  await page.goto("/");
+  await openReflectAndSettle(page);
+  const composer = page.getByPlaceholder("Ask a Question about your History");
+  await composer.fill(question);
+  await page.getByRole("button", { name: "Ask" }).click();
+
+  await expect(page.getByText("Reflection couldn't answer that. Try again.")).toBeVisible();
+
+  // Recoverable means more than "an error appeared": the failed Question
+  // is handed straight back into the composer rather than lost
+  // (`handleAsk`'s `setRestore`), and nothing was persisted — issue #102's
+  // guarantee — so this is still a bare, Session-less /reflect with no
+  // Turn ever rendered.
+  await expect(composer).toHaveValue(question);
+  await expect(page).toHaveURL("/reflect");
+
+  // sonner's own toast sits over the Ask button (both bottom-anchored) and
+  // intercepts pointer events until it dismisses itself. It also pauses
+  // its own dismiss timer while the pointer rests over it — exactly where
+  // clicking Ask just left the cursor — so a real user's next move here
+  // (reading the message, then looking back at the composer to retype)
+  // is also what releases sonner's own pause; this moves the mouse there
+  // for the same reason. Waiting it out from there, rather than forcing a
+  // click through it, is closer to the actual recovery this scenario is about.
+  await composer.hover();
+  await expect(page.locator("[data-sonner-toast]")).toHaveCount(0, { timeout: 10_000 });
+
+  // The strongest form of "recoverable": asking again actually works. A
+  // fresh Question rather than a resubmit of the restored one — llm-stub.ts's
+  // script fails the "midstreamerror-" marker deterministically every time,
+  // so resending the identical Question would only prove it fails twice,
+  // not that the composer still works.
+  const followUp = `What did I write about reflect-${marker}?`;
+  await composer.fill(followUp);
+  await page.getByRole("button", { name: "Ask" }).click();
+
+  await expect(page).toHaveURL(/\/reflect\/[0-9a-f-]{36}$/);
+  await expect(page.getByText(STUB_ANSWER)).toBeVisible();
 });
