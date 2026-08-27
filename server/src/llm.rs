@@ -9,8 +9,9 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use utoipa::ToSchema;
 
 /// One turn in a Conversation, in the shape a chat-completions endpoint
 /// expects. Defined now so `LlmClient`'s full shape is settled before
@@ -400,6 +401,29 @@ impl LlmConfig {
     }
 }
 
+/// The one HTTP GET both `fetch_context_window` (`GET /v1/models/{id}`,
+/// ADR 0004 in `localAIWrapper`'s "retrieve" half) and `fetch_models`
+/// (issue #96, the "list" half of that same ADR) need against the
+/// configured wrapper: an optional bearer token, a non-2xx or a transport
+/// failure both degrading to `None` rather than propagating an error either
+/// caller would just have to unwrap the same way. Factored out so issue
+/// #96 reuses this fetch rather than hand-rolling a second `reqwest::Client`
+/// call side by side with the one `resolve_context_window` already made —
+/// the two now differ only in which URL they ask and how they read the
+/// body back out.
+async fn get_json(url: &str, api_key: Option<&str>) -> Option<Value> {
+    let client = reqwest::Client::new();
+    let mut request = client.get(url);
+    if let Some(key) = api_key {
+        request = request.bearer_auth(key);
+    }
+    let response = request.send().await.ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    response.json().await.ok()
+}
+
 /// The network half of `LlmConfig::resolve_context_window` — split out so
 /// the parsing half (`parse_context_window`) can be unit-tested against
 /// canned JSON without a live `localAIWrapper` to ask, matching this
@@ -408,19 +432,92 @@ impl LlmConfig {
 /// half of the two model endpoints that ADR completed — over
 /// `GET /v1/models` (list): this caller already knows exactly which one
 /// Model it wants, so there is no reason to fetch and filter the whole
-/// list.
+/// list. (`fetch_models`, below, is the caller that actually wants the
+/// whole list — issue #96.)
 async fn fetch_context_window(base_url: &str, model: &str, api_key: Option<&str>) -> Option<u32> {
-    let client = reqwest::Client::new();
-    let mut request = client.get(format!("{base_url}/models/{model}"));
-    if let Some(key) = api_key {
-        request = request.bearer_auth(key);
-    }
-    let response = request.send().await.ok()?;
-    if !response.status().is_success() {
-        return None;
-    }
-    let body: Value = response.json().await.ok()?;
+    let body = get_json(&format!("{base_url}/models/{model}"), api_key).await?;
     parse_context_window(&body)
+}
+
+/// One Model the configured wrapper can serve — the subset of
+/// `localAIWrapper`'s own `OpenAIModel.local_ai_wrapper`
+/// (`discovery.ts::toOpenAIModel`) issue #96's `GET /v1/models` actually
+/// needs to hand a client choosing a per-Session model (issue #98's own
+/// feature; this ticket only wires the endpoint): which model to ask for,
+/// whether it can stream — `streaming` is how a client tells "answer-token
+/// deltas ride the same stream" apart from "on codex-terra they simply
+/// don't arrive" (this module's own `ChatReply`, and
+/// `harness::prompted::PromptedToolClient`'s doc comment, are the server
+/// side of that same split) — and how much context it holds, the same
+/// field `resolve_context_window` already reads for the *configured* model
+/// alone (`parse_context_window`, reused here for every Model the wrapper
+/// lists, not just that one).
+#[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
+pub struct ModelInfo {
+    pub id: String,
+    pub streaming: bool,
+    pub context_window: Option<u32>,
+}
+
+/// The network half of `list_models`, split out the same way
+/// `fetch_context_window` is — see that function's own doc comment, and
+/// `parse_models_list`'s for the parsing half this hands canned JSON to in
+/// tests.
+async fn fetch_models(base_url: &str, api_key: Option<&str>) -> Option<Vec<ModelInfo>> {
+    let body = get_json(&format!("{base_url}/models"), api_key).await?;
+    Some(parse_models_list(&body))
+}
+
+/// Reads `localAIWrapper`'s `{"object": "list", "data": [OpenAIModel, ...]}`
+/// (`discovery.ts::listOpenAIModels`) into `ModelInfo`s. Reuses
+/// `parse_context_window` per-element — each entry of `data` is shaped
+/// exactly like the single-Model body that function already reads off
+/// `GET /v1/models/{id}`, so there is no second `contextWindow`/`maxTokens`
+/// reader to keep in sync with the first. A `data` entry missing `id`
+/// entirely, or not even a JSON object, is skipped rather than failing the
+/// whole list — the same "one bad element must not cost every good one"
+/// posture `parse_usage`'s own malformed-field handling already takes,
+/// applied here to a list instead of a single object's fields.
+fn parse_models_list(body: &Value) -> Vec<ModelInfo> {
+    body.get("data")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|model| {
+            let id = model.get("id")?.as_str()?.to_string();
+            let streaming = model
+                .get("local_ai_wrapper")
+                .and_then(|extras| extras.get("streaming"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let context_window = parse_context_window(model);
+            Some(ModelInfo {
+                id,
+                streaming,
+                context_window,
+            })
+        })
+        .collect()
+}
+
+/// Issue #96: `GET /v1/models` (`models::models_handler`) proxies this.
+/// Degrades to an empty `Vec` on any failure to reach the wrapper — a
+/// non-2xx, a connection refused (the documented state of the wrapper as of
+/// this ticket), an unparseable body — the same "unknown becomes the
+/// conservative default" posture `resolve_context_window` already takes for
+/// the single-Model case, applied here to the whole list: a client sees "no
+/// models offered" rather than a hung or panicking request.
+pub async fn list_models(base_url: &str, api_key: Option<&str>) -> Vec<ModelInfo> {
+    match fetch_models(base_url, api_key).await {
+        Some(models) => models,
+        None => {
+            tracing::warn!(
+                base_url,
+                "could not reach the configured chat wrapper to list its models"
+            );
+            Vec::new()
+        }
+    }
 }
 
 /// Reads `local_ai_wrapper.contextWindow` (or, if absent, `.maxTokens` —
@@ -493,7 +590,10 @@ fn parse_usage(usage: Option<&Value>) -> Option<Usage> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Usage, end_with_sentence_punctuation, parse_context_window, parse_usage};
+    use super::{
+        ModelInfo, Usage, end_with_sentence_punctuation, parse_context_window,
+        parse_models_list, parse_usage,
+    };
     use serde_json::json;
 
     #[test]
@@ -564,6 +664,98 @@ mod tests {
             None
         );
         assert_eq!(parse_context_window(&json!({"local_ai_wrapper": {}})), None);
+    }
+
+    // -- parse_models_list (issue #96) ---------------------------------------
+    //
+    // Matches this ticket's own constraint against starting either
+    // configured service (`fetch_context_window`'s own doc comment already
+    // established the precedent for this module): tested against a canned
+    // body shaped exactly like `localAIWrapper`'s real
+    // `GET /v1/models` — `discovery.ts::listOpenAIModels` — never a live
+    // wrapper.
+
+    #[test]
+    fn parse_models_list_reads_id_streaming_and_context_window() {
+        let body = json!({
+            "object": "list",
+            "data": [
+                {
+                    "id": "codex-terra",
+                    "object": "model",
+                    "created": 1_700_000_000,
+                    "owned_by": "codex",
+                    "local_ai_wrapper": {
+                        "backend": "codex",
+                        "llm": "gpt-5-codex",
+                        "transport": "cli",
+                        "streaming": false,
+                        "tools": false,
+                        "options": ["model", "messages", "stream", "reasoning_effort"],
+                        "contextWindow": 128_000,
+                    },
+                },
+                {
+                    "id": "claude-sonnet",
+                    "object": "model",
+                    "created": 1_700_000_000,
+                    "owned_by": "claude",
+                    "local_ai_wrapper": {
+                        "backend": "claude",
+                        "llm": "claude-sonnet-5",
+                        "transport": "sdk",
+                        "streaming": true,
+                        "tools": false,
+                        "options": ["model", "messages", "stream", "reasoning_effort"],
+                    },
+                },
+            ],
+        });
+
+        assert_eq!(
+            parse_models_list(&body),
+            vec![
+                ModelInfo {
+                    id: "codex-terra".to_string(),
+                    streaming: false,
+                    context_window: Some(128_000),
+                },
+                ModelInfo {
+                    id: "claude-sonnet".to_string(),
+                    streaming: true,
+                    // No `contextWindow`/`maxTokens` in this entry's own
+                    // `local_ai_wrapper` — `None`, not a guessed default;
+                    // that fallback belongs to `resolve_context_window`'s
+                    // caller, not to this parse.
+                    context_window: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_models_list_is_empty_for_a_missing_or_malformed_data_field() {
+        assert_eq!(parse_models_list(&json!({"object": "list"})), Vec::new());
+        assert_eq!(parse_models_list(&json!({"data": "not an array"})), Vec::new());
+        assert_eq!(parse_models_list(&json!(null)), Vec::new());
+    }
+
+    #[test]
+    fn parse_models_list_skips_an_entry_missing_an_id_without_failing_the_rest() {
+        let body = json!({
+            "data": [
+                {"object": "model"},
+                {"id": "codex-terra", "local_ai_wrapper": {"streaming": false}},
+            ],
+        });
+        assert_eq!(
+            parse_models_list(&body),
+            vec![ModelInfo {
+                id: "codex-terra".to_string(),
+                streaming: false,
+                context_window: None,
+            }]
+        );
     }
 
     // -- parse_usage (issue #97) ---------------------------------------------

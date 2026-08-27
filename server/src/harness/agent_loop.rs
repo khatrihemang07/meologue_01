@@ -46,7 +46,7 @@ use std::sync::Arc;
 use serde_json::Value;
 use uuid::Uuid;
 
-use super::chat::ChatClient;
+use super::chat::{ChatClient, StreamEvent};
 use super::tools::AgentTool;
 use super::types::{AssistantMessage, ContentBlock, Context, Message, StopReason};
 
@@ -79,6 +79,76 @@ pub enum Step {
         entry_ids: Vec<Uuid>,
     },
 }
+
+/// One piece of live progress `run_with_events` reports as a `run` call
+/// makes it — issue #96's "the interface reports what it is doing ... as
+/// the harness runs." Named for *when something happened* during the loop,
+/// never for what an outbound wire frame for it looks like: `agent_loop`
+/// stays exactly as wire-agnostic as `render_content_for_display`'s own doc
+/// comment already insists the rest of this module is — turning one of
+/// these into a Server-Sent Event (an `event:` name, a JSON `data:` payload)
+/// is `reflect.rs`'s job, the one place that already owns every other
+/// wire-shape decision `/v1/reflect` makes.
+///
+/// One `TurnStart`/`MessageStart`/`MessageEnd` triplet brackets every call
+/// to `client.stream`, in that order, with zero or more `MessageUpdate`s in
+/// between (`chat::StreamEvent::TextDelta`, forwarded verbatim — see that
+/// variant's own doc comment for why nothing today ever produces one:
+/// `prompted::PromptedToolClient` only ever sends a whole reply at once).
+/// Every tool call that turn's reply contained follows as one
+/// `ToolExecutionStart`/`ToolExecutionEnd` pair, in the same source order
+/// `run`'s own loop already executes them in. This is exactly `Step`'s own
+/// shape, split into a "starting" and "finished" half of each — `Step` is
+/// what a finished `run` looked back on; this is the same events live, as
+/// they happen, which is the only thing issue #96 adds that `Step` alone
+/// could never give a caller watching in real time.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LoopEvent {
+    /// One loop turn is starting — `run`'s own `loop` body has just begun
+    /// another iteration and is about to ask the model for a reply.
+    TurnStart,
+    /// The model has started producing this turn's reply.
+    MessageStart,
+    /// One chunk of this turn's reply text, in reply order — see this
+    /// enum's own doc comment for why nothing wired into production emits
+    /// one of these today.
+    MessageUpdate { delta: String },
+    /// This turn's reply is complete, whatever it turned out to contain —
+    /// prose, one or more tool calls, or both mixed together. The same
+    /// `AssistantMessage` `run`'s own `steps` records as this turn's
+    /// `Step::Assistant`.
+    MessageEnd { assistant: AssistantMessage },
+    /// One tool call from this turn's reply is about to run — mirrors the
+    /// fields `Step::ToolResult` itself carries, minus everything only the
+    /// *finished* call can know.
+    ToolExecutionStart {
+        tool_call_id: String,
+        tool_name: String,
+        arguments: Value,
+    },
+    /// One tool call finished — the same fields `Step::ToolResult` records,
+    /// reported the moment they're known rather than only once the whole
+    /// run is over.
+    ToolExecutionEnd {
+        tool_call_id: String,
+        tool_name: String,
+        is_error: bool,
+        details: Value,
+        entry_ids: Vec<Uuid>,
+    },
+}
+
+/// A live progress sink for `run_with_events` — pi's own `shouldStopAfterTurn`
+/// hook (`ShouldStopAfterTurn`, just below) is the precedent this is
+/// modeled on: a plain `Fn` reference rather than a trait object with its
+/// own name and impls, since `reflect.rs` has exactly one thing to do with
+/// each `LoopEvent` (translate it to an SSE frame and send it) and a
+/// closure says that directly. Called synchronously, from inside `run`'s
+/// own loop — never `.await`ed — which is what a caller gets to rely on:
+/// `reflect.rs`'s own sink only ever calls `mpsc::UnboundedSender::send`,
+/// itself synchronous and non-blocking (an unbounded channel never backs
+/// up), so nothing here needs `async fn` machinery just to report progress.
+pub type EventSink<'a> = dyn Fn(LoopEvent) + Send + Sync + 'a;
 
 /// What a `run` call produced.
 #[derive(Debug, Clone, PartialEq)]
@@ -156,9 +226,69 @@ pub async fn run(
     client: &dyn ChatClient,
     system_prompt: String,
     tools: &[Arc<dyn AgentTool>],
+    messages: Vec<Message>,
+    should_stop_after_turn: Option<&ShouldStopAfterTurn<'_>>,
+    context_window: Option<u32>,
+) -> LoopOutcome {
+    run_inner(
+        client,
+        system_prompt,
+        tools,
+        messages,
+        should_stop_after_turn,
+        context_window,
+        None,
+    )
+    .await
+}
+
+/// Same as `run`, but reports live progress through `events` as the loop
+/// makes it (`LoopEvent`'s own doc comment covers what each one means and
+/// when it fires) — issue #96, `reflect.rs`'s streaming `/v1/reflect`. A
+/// second entry point rather than a new parameter on `run` itself, so every
+/// existing call to `run` — every test in this module, and both call sites
+/// in `reflect.rs` before issue #96 — keeps compiling and behaving exactly
+/// as it did; the two share one implementation (`run_inner`) so there is
+/// exactly one loop to keep correct, never two copies that can drift apart.
+pub async fn run_with_events(
+    client: &dyn ChatClient,
+    system_prompt: String,
+    tools: &[Arc<dyn AgentTool>],
+    messages: Vec<Message>,
+    should_stop_after_turn: Option<&ShouldStopAfterTurn<'_>>,
+    context_window: Option<u32>,
+    events: &EventSink<'_>,
+) -> LoopOutcome {
+    run_inner(
+        client,
+        system_prompt,
+        tools,
+        messages,
+        should_stop_after_turn,
+        context_window,
+        Some(events),
+    )
+    .await
+}
+
+/// Sends `event` through `sink` when a caller actually asked for progress
+/// (`run_with_events`) and is a no-op otherwise (`run`) — the one place
+/// `run_inner`'s loop body has to know whether it's being watched at all,
+/// so every `emit(events, ...)` call site below reads the same either way.
+fn emit(sink: Option<&EventSink<'_>>, event: LoopEvent) {
+    if let Some(sink) = sink {
+        sink(event);
+    }
+}
+
+async fn run_inner(
+    client: &dyn ChatClient,
+    system_prompt: String,
+    tools: &[Arc<dyn AgentTool>],
     mut messages: Vec<Message>,
     should_stop_after_turn: Option<&ShouldStopAfterTurn<'_>>,
     context_window: Option<u32>,
+    events: Option<&EventSink<'_>>,
 ) -> LoopOutcome {
     let wire_tools = super::tools::to_wire_tools(tools);
     let mut steps = Vec::new();
@@ -174,7 +304,36 @@ pub async fn run(
             tools: wire_tools.clone(),
         };
 
-        let assistant = client.stream(&ctx).await.collect().await;
+        emit(events, LoopEvent::TurnStart);
+        emit(events, LoopEvent::MessageStart);
+
+        // Drains `client.stream`'s events one at a time, rather than
+        // `AssistantMessageStream::collect`'s all-at-once convenience,
+        // purely so a `TextDelta` can be forwarded (`MessageUpdate`) the
+        // moment it arrives instead of being discarded on the way to the
+        // terminal `Done` — the live-progress half of issue #96.
+        // `collect`'s own contract (exactly one `Done` before the sender
+        // closes) is still what `expect` below relies on; this is the same
+        // guarantee, read one event at a time instead of drained in bulk.
+        let mut stream = client.stream(&ctx).await;
+        let mut done: Option<AssistantMessage> = None;
+        while let Some(event) = stream.next_event().await {
+            match event {
+                StreamEvent::TextDelta(delta) => {
+                    emit(events, LoopEvent::MessageUpdate { delta });
+                }
+                StreamEvent::Done(message) => done = Some(message),
+            }
+        }
+        let assistant =
+            done.expect("a ChatClient must send exactly one Done event before closing its stream");
+        emit(
+            events,
+            LoopEvent::MessageEnd {
+                assistant: assistant.clone(),
+            },
+        );
+
         messages.push(Message::Assistant(assistant.clone()));
         steps.push(Step::Assistant(assistant.clone()));
 
@@ -214,8 +373,26 @@ pub async fn run(
                 unreachable!("filtered to ToolCall blocks above")
             };
 
+            emit(
+                events,
+                LoopEvent::ToolExecutionStart {
+                    tool_call_id: id.clone(),
+                    tool_name: name.clone(),
+                    arguments: arguments.clone(),
+                },
+            );
             let outcome = run_one_tool_call(tools, name, arguments.clone()).await;
             all_terminate &= outcome.terminate;
+            emit(
+                events,
+                LoopEvent::ToolExecutionEnd {
+                    tool_call_id: id.clone(),
+                    tool_name: name.clone(),
+                    is_error: outcome.is_error,
+                    details: outcome.details.clone(),
+                    entry_ids: outcome.entry_ids.clone(),
+                },
+            );
 
             messages.push(Message::ToolResult {
                 tool_call_id: id.clone(),
@@ -1001,6 +1178,213 @@ mod tests {
         assert_eq!(tool_name, "echo");
         assert_eq!(content, "echoed {\"n\":1}");
         assert!(matches!(messages[2], Message::Assistant(_)));
+    }
+
+    // -- issue #96: run_with_events reports live progress ----------------
+
+    /// A `ChatClient` whose one scripted reply arrives as several
+    /// `TextDelta` chunks before the terminal `Done` — proving
+    /// `run_with_events` forwards `StreamEvent::TextDelta` as
+    /// `LoopEvent::MessageUpdate` is the "answer-token deltas ride the same
+    /// stream" half of issue #96. `prompted::PromptedToolClient` — the only
+    /// `ChatClient` actually wired into production — never produces one of
+    /// these (its own doc comment explains why: the configured endpoint
+    /// isn't streaming), so this fake is the only place that half of the
+    /// contract is exercised at all; "nothing else differs" is exactly what
+    /// the sequence test below, `run_with_events_reports_the_full_event_sequence_for_a_two_step_run`,
+    /// proves for the non-streaming case.
+    struct StreamingChatClient {
+        deltas: Vec<&'static str>,
+        done: AssistantMessage,
+    }
+
+    #[async_trait]
+    impl ChatClient for StreamingChatClient {
+        async fn stream(&self, _ctx: &Context) -> AssistantMessageStream {
+            let (tx, rx) = mpsc::unbounded_channel();
+            for delta in &self.deltas {
+                let _ = tx.send(StreamEvent::TextDelta((*delta).to_string()));
+            }
+            let _ = tx.send(StreamEvent::Done(self.done.clone()));
+            AssistantMessageStream::new(rx)
+        }
+    }
+
+    /// Records every `LoopEvent` a sink receives, in order — the plain data
+    /// double these tests assert against, standing in for `reflect.rs`'s
+    /// real sink (which turns each one into an SSE frame instead of a
+    /// `Vec` entry).
+    fn recording_sink() -> (Arc<Mutex<Vec<LoopEvent>>>, Box<EventSink<'static>>) {
+        let recorded = Arc::new(Mutex::new(Vec::new()));
+        let recorded_for_sink = recorded.clone();
+        let sink: Box<EventSink<'static>> = Box::new(move |event: LoopEvent| {
+            recorded_for_sink.lock().unwrap().push(event);
+        });
+        (recorded, sink)
+    }
+
+    #[tokio::test]
+    async fn run_with_events_forwards_text_deltas_as_message_updates_in_order() {
+        let client = StreamingChatClient {
+            deltas: vec!["You ", "wrote ", "about running."],
+            done: prose("You wrote about running."),
+        };
+        let (recorded, sink) = recording_sink();
+
+        let outcome = run_with_events(
+            &client,
+            "sys".into(),
+            &[],
+            starting_messages(),
+            None,
+            None,
+            &sink,
+        )
+        .await;
+
+        assert_eq!(outcome.answer.as_deref(), Some("You wrote about running."));
+        let deltas: Vec<String> = recorded
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|event| match event {
+                LoopEvent::MessageUpdate { delta } => Some(delta.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(deltas, vec!["You ", "wrote ", "about running."]);
+    }
+
+    /// `run` itself (no sink) must behave identically whether or not
+    /// `run_with_events` exists at all — this is what actually proves
+    /// `run_inner`'s refactor didn't change `run`'s own observable
+    /// behaviour, on top of every pre-existing test above that already
+    /// calls `run` and keeps passing unchanged.
+    #[tokio::test]
+    async fn run_without_a_sink_behaves_exactly_as_before() {
+        let client = ScriptedChatClient::new(vec![prose("Nothing to report.")]);
+        let outcome = run(&client, "sys".into(), &[], starting_messages(), None, None).await;
+        assert_eq!(outcome.answer.as_deref(), Some("Nothing to report."));
+    }
+
+    /// The exact ordered event sequence a two-step Question produces
+    /// (`reflect.rs`'s own SSE tests assert the same shape end to end, one
+    /// layer up, through real HTTP `event:`/`data:` frames) — one tool call,
+    /// then a prose Answer. Order matters here, not just presence: a
+    /// `turn_start` must precede its own `message_start`/`message_end`, the
+    /// tool events must fall strictly between the turn that requested them
+    /// and the next `turn_start`, and there must be exactly two turns, not
+    /// three or one.
+    #[tokio::test]
+    async fn run_with_events_reports_the_full_event_sequence_for_a_two_step_run() {
+        let tools = vec![tool(EchoTool::new("echo"))];
+        let client = ScriptedChatClient::new(vec![
+            one_tool_call("call_0", "echo", json!({"n": 1})),
+            prose("done"),
+        ]);
+        let (recorded, sink) = recording_sink();
+
+        let outcome = run_with_events(
+            &client,
+            "sys".into(),
+            &tools,
+            starting_messages(),
+            None,
+            None,
+            &sink,
+        )
+        .await;
+
+        assert_eq!(outcome.answer.as_deref(), Some("done"));
+
+        fn label(event: &LoopEvent) -> &'static str {
+            match event {
+                LoopEvent::TurnStart => "turn_start",
+                LoopEvent::MessageStart => "message_start",
+                LoopEvent::MessageUpdate { .. } => "message_update",
+                LoopEvent::MessageEnd { .. } => "message_end",
+                LoopEvent::ToolExecutionStart { .. } => "tool_execution_start",
+                LoopEvent::ToolExecutionEnd { .. } => "tool_execution_end",
+            }
+        }
+        let sequence: Vec<&'static str> = recorded.lock().unwrap().iter().map(label).collect();
+        assert_eq!(
+            sequence,
+            vec![
+                "turn_start",
+                "message_start",
+                "message_end",
+                "tool_execution_start",
+                "tool_execution_end",
+                "turn_start",
+                "message_start",
+                "message_end",
+            ]
+        );
+    }
+
+    /// A tool event must carry what the interface needs to say what
+    /// happened: which tool ran, the arguments it ran with, and — on the
+    /// `ToolExecutionEnd` half — how many Entries came back. Proved here at
+    /// the event-payload level (`reflect.rs`'s own tests prove the same
+    /// thing survives translation into an SSE frame's JSON `data`).
+    #[tokio::test]
+    async fn a_tool_execution_event_pair_carries_the_tool_name_arguments_and_result() {
+        let tools = vec![tool(EchoTool::new("echo"))];
+        let client = ScriptedChatClient::new(vec![
+            one_tool_call("call_0", "echo", json!({"query": "wedding"})),
+            prose("done"),
+        ]);
+        let (recorded, sink) = recording_sink();
+
+        let _ = run_with_events(
+            &client,
+            "sys".into(),
+            &tools,
+            starting_messages(),
+            None,
+            None,
+            &sink,
+        )
+        .await;
+
+        let recorded = recorded.lock().unwrap();
+        let start = recorded
+            .iter()
+            .find(|event| matches!(event, LoopEvent::ToolExecutionStart { .. }))
+            .expect("a ToolExecutionStart must have been reported");
+        match start {
+            LoopEvent::ToolExecutionStart {
+                tool_name,
+                arguments,
+                ..
+            } => {
+                assert_eq!(tool_name, "echo");
+                assert_eq!(arguments, &json!({"query": "wedding"}));
+            }
+            _ => unreachable!(),
+        }
+
+        let end = recorded
+            .iter()
+            .find(|event| matches!(event, LoopEvent::ToolExecutionEnd { .. }))
+            .expect("a ToolExecutionEnd must have been reported");
+        match end {
+            LoopEvent::ToolExecutionEnd {
+                tool_name,
+                is_error,
+                entry_ids,
+                ..
+            } => {
+                assert_eq!(tool_name, "echo");
+                assert!(!is_error);
+                // EchoTool.execute always reports one Entry id
+                // (`ToolOutcome::with_entry_ids(vec![Uuid::nil()])`) — this
+                // is "how many Entries came back" for that call.
+                assert_eq!(entry_ids.len(), 1);
+            }
+            _ => unreachable!(),
+        }
     }
 
     // -- issue #97: compaction wired into the loop's own pre-flight ------

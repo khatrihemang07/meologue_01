@@ -130,10 +130,21 @@ async fn main() -> anyhow::Result<()> {
             // request — `LlmConfig::resolve_context_window`'s own doc
             // comment covers why.
             let context_window = llm_config.resolve_context_window().await;
+            // Issue #96: `GET /v1/models` (`models::models_handler`) needs
+            // the raw base URL/API key alongside the two `LlmClient`s above
+            // — `reflect_config()` already proved `chat_base_url` is `Some`
+            // (it's what built `chat_client`), so this `.expect` documents
+            // that invariant rather than guessing past it silently.
+            let chat_base_url = llm_config
+                .chat_base_url
+                .clone()
+                .expect("reflect_config() only returns Some when chat_base_url is set");
             Some(meologue_server::reflect::ReflectState {
                 chat_client,
                 embed_client,
                 context_window,
+                chat_base_url,
+                chat_api_key: llm_config.chat_api_key.clone(),
             })
         }
         None => None,

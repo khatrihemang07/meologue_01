@@ -108,11 +108,36 @@
         }
       }
     },
+    "/v1/models": {
+      "get": {
+        "tags": [
+          "crate::models"
+        ],
+        "operationId": "models_handler",
+        "responses": {
+          "200": {
+            "description": "The configured chat wrapper's own model list — empty, not an error, when the wrapper cannot be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Reflection (and so this route) is unconfigured"
+          }
+        }
+      }
+    },
     "/v1/reflect": {
       "post": {
         "tags": [
           "crate::reflect"
         ],
+        "summary": "Issue #96: `/v1/reflect` answers over `text/event-stream` now, not a\nsingle JSON body — pi's own event vocabulary (`turn_start`,\n`tool_execution_start`, `tool_execution_end`, `message_start`,\n`message_update`, `message_end`, `agent_end`), emitted as\n`harness::agent_loop::run_with_events` actually makes progress, so the\nclient can render \"searching ... -> N Entries\" while it happens instead\nof a single \"searching\" spinner for however long the whole Question\ntakes. `utoipa` has no first-class way to describe a stream of\ndifferently-shaped named SSE frames as one response `body`, so this is\ndocumented as `text/event-stream` with no schema — `openapi.rs` still\nregisters every event payload's own Rust type (`MessageEndEventData`,\n`ToolExecutionStartEventData`, `ToolExecutionEndEventData`,\n`ReflectAgentEndEventData`) under `components.schemas` so a client\ngenerating types from `packages/core/src/generated/wire.ts` still gets\nthem, even though nothing here can point utoipa at \"frame N of this\nstream has this shape.\"",
+        "description": "The three status codes that predate this ticket keep meaning exactly\nwhat they did — 404 (Reflection unconfigured, or a `session_id` naming\nno Session) and 426 (a stale `protocol_version`) are still real HTTP\nstatuses, not folded into the event stream, because both are decided\n*before* this handler commits to a 200 and starts streaming (see\n`resolve_session`, called synchronously below): once the stream opens,\nthe status line has already gone out, so nothing after that point can\nchange it. A failure *inside* the streamed run — the chat endpoint\nerroring, the loop never producing an Answer — cannot become a 500 for\nthe same reason; it ends the stream instead, via an `agent_end` event\ncarrying `\"status\": \"error\"` (`run_reflect_stream`) rather than hanging\nor dropping the connection silently.",
         "operationId": "reflect_handler",
         "requestBody": {
           "content": {
@@ -126,17 +151,17 @@
         },
         "responses": {
           "200": {
-            "description": "An Answer grounded in the Entries retrieval found",
+            "description": "A stream of pi-vocabulary SSE events, ending in agent_end — see this handler's own doc comment",
             "content": {
-              "application/json": {
+              "text/event-stream": {
                 "schema": {
-                  "$ref": "#/components/schemas/ReflectResponse"
+                  "type": "string"
                 }
               }
             }
           },
           "404": {
-            "description": "session_id names a Session that does not exist"
+            "description": "Reflection is unconfigured, or session_id names a Session that does not exist"
           },
           "426": {
             "description": "protocol_version is not one this server understands"
@@ -431,6 +456,45 @@
           }
         }
       },
+      "ModelInfo": {
+        "type": "object",
+        "description": "One Model the configured wrapper can serve — the subset of\n`localAIWrapper`'s own `OpenAIModel.local_ai_wrapper`\n(`discovery.ts::toOpenAIModel`) issue #96's `GET /v1/models` actually\nneeds to hand a client choosing a per-Session model (issue #98's own\nfeature; this ticket only wires the endpoint): which model to ask for,\nwhether it can stream — `streaming` is how a client tells \"answer-token\ndeltas ride the same stream\" apart from \"on codex-terra they simply\ndon't arrive\" (this module's own `ChatReply`, and\n`harness::prompted::PromptedToolClient`'s doc comment, are the server\nside of that same split) — and how much context it holds, the same\nfield `resolve_context_window` already reads for the *configured* model\nalone (`parse_context_window`, reused here for every Model the wrapper\nlists, not just that one).",
+        "required": [
+          "id",
+          "streaming"
+        ],
+        "properties": {
+          "context_window": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "id": {
+            "type": "string"
+          },
+          "streaming": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ModelsResponse": {
+        "type": "object",
+        "required": [
+          "models"
+        ],
+        "properties": {
+          "models": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ModelInfo"
+            },
+            "description": "The wrapper's own list, verbatim — empty, not an error or a missing\nfield, when the wrapper cannot be reached (`llm::list_models`'s own\ndoc comment covers every way that can happen). A client sees \"no\nmodels offered\" rather than a failed request."
+          }
+        }
+      },
       "ReflectRequest": {
         "type": "object",
         "required": [
@@ -456,7 +520,7 @@
           "utc_offset_minutes": {
             "type": "integer",
             "format": "int32",
-            "description": "Minutes east of UTC for the asking Device, right now — the same sign\nconvention `apps/web/src/lib/entry-day.ts::deviceUtcOffsetMinutes`\nand ADR 0016's `toLocalParts` already use for Export's day grouping.\nThe extraction call (`extract_date_range_and_keyword`) uses this to\nresolve phrases like \"last week\" against the user's own local day,\nnever the server's clock.\n\n`#[serde(default)]` rather than required: `PROTOCOL_VERSION` stays 1\nfor this ticket (the sync contract's shape is unchanged, and bumping\nit would make every existing Device report the Server unreachable\nover an unrelated feature), so a Device that predates this ticket\nand posts with no `utc_offset_minutes` field must still get an\nAnswer — it just gets date phrases resolved against UTC instead of\nits own local day, which is a graceful degrade (defaults to `0`),\nnot a rejected Question."
+            "description": "Minutes east of UTC for the asking Device, right now — the same sign\nconvention `apps/web/src/lib/entry-day.ts::deviceUtcOffsetMinutes`\nand ADR 0016's `toLocalParts` already use for Export's day grouping.\nThe extraction call (`extract_date_range_and_keyword`) uses this to\nresolve phrases like \"last week\" against the user's own local day,\nnever the server's clock.\n\n`#[serde(default)]` rather than required, independent of whatever\n`PROTOCOL_VERSION` happens to be: a mismatched `protocol_version`\nalready rejects a stale Device outright (`reflect_handler`, 426), so\nthis field's own default exists to keep a *current* Device's request\nwell-formed even if some future caller ever omits it, not to soften\na version bump. Falling back to `0` (UTC) rather than rejecting the\nrequest is a graceful degrade either way: date phrases resolve\nagainst UTC instead of the asking Device's own local day, not a\nrejected Question."
           }
         }
       },
@@ -476,11 +540,11 @@
           },
           "fallback_used": {
             "type": "boolean",
-            "description": "Whether the disclosed fallback (`docs/adr/0024`) ran: Reflection\njudged its Grounding didn't answer the Question (`grounded: false`)\n*and* Entries existed in the last few days to show instead. `false`\ncovers both \"the Grounding answered the Question\" (`grounded: true`)\nand \"it didn't, and there was nothing recent to show either\" —\n`grounded` is what tells those two `false` cases apart."
+            "description": "Always `false`. The disclosed fallback (`docs/adr/0024`) belongs to\nthe fixed pipeline this ticket stopped calling; the loop has no\nfallback mechanism of its own. Kept on the wire, rather than\ndropped, for the same reason `grounded` is — the wire shape itself\nis issue #96's to change, not this one's."
           },
           "grounded": {
             "type": "boolean",
-            "description": "Whether Reflection judged that the Grounding it found actually\nanswers the Question — read off the \"GROUNDED: yes\"/\"GROUNDED: no\"\nmarker the answering chat call is now instructed to begin its reply\nwith (`SYSTEM_INSTRUCTION`, `parse_and_strip_verdict`), not from\nretrieval.\n\nThrough ticket 5 this meant something else entirely: \"the merged\nfan-out retrieval set (see `run_reflect`) is non-empty.\" `docs/adr/\n0023` measured why that stopped being a meaningful signal on a\nrealistic History — on the live 572-Entry corpus, an absent topic\n(\"my cat\", cosine 0.691) can outscore a present one (\"the wedding\",\n0.638), so the merged set is non-empty for essentially every\nQuestion and the old `grounded` was true almost unconditionally.\n`docs/adr/0024` is what moved the judgment onto the chat call\nitself, which actually reads what it was given, instead of a cosine\nfloor that can't tell \"relevant\" from \"large corpus.\""
+            "description": "Whether at least one Entry appeared in a tool result this run —\n`!grounding_entry_ids.is_empty()`, nothing more judged about it.\nUnder the old pipeline this was a real verdict, read off a\n\"GROUNDED: yes/no\" marker the answering chat call was instructed to\nproduce; the loop has no equivalent judgment yet, so this field\nkeeps its old *name* on the wire (`PROTOCOL_VERSION` is unchanged)\nwhile meaning something simpler until a later ticket decides whether\nit needs to mean more again."
           },
           "grounding_entry_ids": {
             "type": "array",
@@ -488,7 +552,7 @@
               "type": "string",
               "format": "uuid"
             },
-            "description": "The ids of the Entries the Answer was actually built from, in the\norder they were shown to the chat call (chronological — see\n`run_reflect`'s `merged.sort_by_key`).\n\nIn the normal case these are Grounding: the merged three-source\nfan-out (`docs/adr/0023`), judged (`grounded`, below) to actually\nanswer the Question. In the disclosed-fallback case\n(`fallback_used: true`) these are instead the last few days of\nEntries (`docs/adr/0024`) — shown despite *not* answering the\nQuestion, because CONTEXT.md's Grounding entry holds that admitting\nnothing was found beats inventing an Answer from somewhere else.\n`grounded: false` is what tells a reader — ticket 7's disclosure UI\nincluded — that these ids are not relevant matches; this field alone\n(non-empty or not) cannot tell the two cases apart."
+            "description": "The Entry ids that appeared in a tool result during this run, in the\norder they first appeared — `run_reflect_stream_inner`'s own dedup, over\nevery `harness::agent_loop::Step::ToolResult` the loop produced, not\nretrieval's merge-and-sort (that description, and everything below\nthrough `docs/adr/0023`/`0024`, is what these fields meant under\n`run_reflect`, the fixed pipeline `/v1/reflect` no longer calls —\nsee this module's own doc comment). Empty when the loop never called\na tool at all — a prose-only reply is not unusual, and carries no\nGrounding by construction, not by omission."
           },
           "session_id": {
             "type": "string",

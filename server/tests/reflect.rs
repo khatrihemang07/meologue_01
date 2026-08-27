@@ -6,7 +6,7 @@ use anyhow::{Result, bail};
 use async_trait::async_trait;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use http_body_util::BodyExt;
 use meologue_server::llm::{ChatMessage, ChatReply, LlmClient};
 use meologue_server::reflect::ReflectState;
@@ -14,6 +14,15 @@ use serde_json::{Value, json};
 use sqlx::PgPool;
 use tower::ServiceExt;
 use uuid::Uuid;
+
+// Issue #96: `ReflectState` grew `chat_base_url`/`chat_api_key` for
+// `GET /v1/models` (`models::models_handler`) — no test in this file
+// exercises that route (see `tests/models.rs` for those), so every
+// `ReflectState` built here points at an address nothing should ever
+// actually connect to, on the theory that a real-looking but wrong value
+// is more honest than a valid-looking placeholder a future test could
+// accidentally start depending on.
+const UNUSED_CHAT_BASE_URL: &str = "http://127.0.0.1:1";
 
 // These tests only ever hit /v1/reflect (or /v1/sessions), never a static
 // asset — any directory that exists is fine as the (otherwise unused)
@@ -164,11 +173,57 @@ async fn insert_entry_at(pool: &PgPool, id: Uuid, body: &str, created_at: DateTi
         .unwrap();
 }
 
-async fn post_reflect(
+/// One parsed SSE frame — `event: <name>`, `data: <json>` — from
+/// `/v1/reflect`'s streamed response body.
+#[derive(Debug, Clone)]
+struct SseEvent {
+    event: String,
+    data: Value,
+}
+
+/// Splits a full SSE response body into its frames (blank-line separated,
+/// per the SSE spec) and parses each one's `event:`/`data:` lines. Real
+/// `axum::response::sse::Event` output always uses `\n` between fields and
+/// `\n\n` between frames — the server under test controls both ends of this
+/// wire, so this doesn't need to handle anything more exotic than that. A
+/// frame with no `event:`/`data:` pair at all (axum's own keep-alive
+/// comment ping, `Sse::keep_alive` — never actually seen in these tests,
+/// which run far under its default interval) is silently skipped rather
+/// than treated as malformed.
+fn parse_sse_events(body: &str) -> Vec<SseEvent> {
+    body.split("\n\n")
+        .filter_map(|frame| {
+            let mut event = None;
+            let mut data = None;
+            for line in frame.lines() {
+                if let Some(rest) = line.strip_prefix("event:") {
+                    event = Some(rest.trim().to_string());
+                } else if let Some(rest) = line.strip_prefix("data:") {
+                    data = Some(rest.trim().to_string());
+                }
+            }
+            let (event, data) = (event?, data?);
+            Some(SseEvent {
+                event,
+                data: serde_json::from_str(&data).unwrap_or(Value::Null),
+            })
+        })
+        .collect()
+}
+
+/// Posts to `/v1/reflect` and drains its whole SSE response, returning
+/// every frame in order — what the "full event sequence" tests assert
+/// against directly. `oneshot`'s own `.await` only resolves once the
+/// response body is fully read (`response.into_body().collect()`), which
+/// only happens once `run_reflect_stream`'s spawned task has dropped its
+/// sender — i.e. once the whole run is over — so by the time this returns,
+/// every chat call the run made has already happened and every assertion
+/// against a `FakeChatClient`'s own recorded calls is safe to make.
+async fn post_reflect_events(
     pool: &PgPool,
     reflect: Option<ReflectState>,
     body: Value,
-) -> (StatusCode, Value) {
+) -> (StatusCode, Vec<SseEvent>) {
     let app =
         meologue_server::router_with_reflection(pool.clone(), empty_static_dir(), None, reflect);
     let response = app
@@ -185,12 +240,31 @@ async fn post_reflect(
 
     let status = response.status();
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
-    let json = if bytes.is_empty() {
-        Value::Null
-    } else {
-        serde_json::from_slice(&bytes).unwrap()
-    };
-    (status, json)
+    let text = String::from_utf8(bytes.to_vec()).expect("an SSE body must be valid UTF-8");
+    (status, parse_sse_events(&text))
+}
+
+/// The pre-#96 convenience most existing tests in this file still use:
+/// `body["answer"]`, `body["grounding_entry_ids"]`, and so on read off the
+/// terminal `agent_end` event's own `data`, exactly the shape
+/// `ReflectResponse` used to be the *entire* response body
+/// (`run_reflect_stream`'s own doc comment covers why that shape itself
+/// didn't change, only where it now lives on the wire). `Value::Null` when
+/// the request never reached an SSE stream at all (404/426 — an empty body,
+/// same as before issue #96) or `agent_end` is somehow missing.
+async fn post_reflect(
+    pool: &PgPool,
+    reflect: Option<ReflectState>,
+    body: Value,
+) -> (StatusCode, Value) {
+    let (status, events) = post_reflect_events(pool, reflect, body).await;
+    let data = events
+        .iter()
+        .rev()
+        .find(|event| event.event == "agent_end")
+        .map(|event| event.data.clone())
+        .unwrap_or(Value::Null);
+    (status, data)
 }
 
 fn reflect_state(chat: Arc<FakeChatClient>) -> ReflectState {
@@ -198,6 +272,8 @@ fn reflect_state(chat: Arc<FakeChatClient>) -> ReflectState {
         chat_client: chat,
         embed_client: Arc::new(UnusedEmbedClient),
         context_window: 200_000,
+        chat_base_url: UNUSED_CHAT_BASE_URL.to_string(),
+        chat_api_key: None,
     }
 }
 
@@ -229,6 +305,8 @@ fn reflect_state_with_embedding(chat: Arc<FakeChatClient>) -> ReflectState {
         chat_client: chat,
         embed_client: Arc::new(FakeEmbedClient),
         context_window: 200_000,
+        chat_base_url: UNUSED_CHAT_BASE_URL.to_string(),
+        chat_api_key: None,
     }
 }
 
@@ -327,7 +405,7 @@ async fn the_route_is_absent_when_chat_is_unconfigured(pool: PgPool) {
         &pool,
         None,
         json!({
-            "protocol_version": 2,
+            "protocol_version": 3,
             "question": "Anything?",
         }),
     )
@@ -357,6 +435,40 @@ async fn an_unrecognised_protocol_version_is_rejected(pool: PgPool) {
     assert_eq!(status, StatusCode::UPGRADE_REQUIRED);
 }
 
+/// Issue #96 bumped `PROTOCOL_VERSION` from 2 to 3 for the SSE wire change
+/// (`sync::PROTOCOL_VERSION`'s own doc comment covers why). This is the
+/// sharper version of `an_unrecognised_protocol_version_is_rejected` above:
+/// not an arbitrary invalid number, but the *real* version every Device
+/// spoke before this ticket — proving the bump actually took effect, not
+/// just that 426 still fires for garbage input. The mid-stream-failure
+/// tests below (`a_chat_client_error_ends_the_stream_with_an_agent_end_error_event`
+/// and its neighbour) prove the SSE stream itself terminates recognisably
+/// on a failure *inside* a run; this proves a stale Device never even gets
+/// that far — no stream opens at all.
+#[sqlx::test]
+async fn a_device_speaking_the_pre_bump_protocol_version_is_rejected(pool: PgPool) {
+    let chat = Arc::new(FakeChatClient::new(["unused"]));
+    let reflect = reflect_state(chat.clone());
+
+    let (status, _) = post_reflect(
+        &pool,
+        Some(reflect),
+        json!({
+            "protocol_version": 2,
+            "question": "Anything?",
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::UPGRADE_REQUIRED);
+    assert_eq!(
+        chat.call_count(),
+        0,
+        "a stale protocol_version must short-circuit before any chat call, and before any \
+         stream is ever opened"
+    );
+}
+
 #[sqlx::test]
 async fn an_unknown_session_id_is_a_404(pool: PgPool) {
     let chat = Arc::new(FakeChatClient::new(["unused"]));
@@ -366,7 +478,7 @@ async fn an_unknown_session_id_is_a_404(pool: PgPool) {
         &pool,
         Some(reflect),
         json!({
-            "protocol_version": 2,
+            "protocol_version": 3,
             "question": "Anything?",
             "session_id": Uuid::new_v4(),
         }),
@@ -392,7 +504,7 @@ async fn an_absent_utc_offset_defaults_to_zero_and_still_answers(pool: PgPool) {
     let (status, body) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 2, "question": "Anything?" }),
+        json!({ "protocol_version": 3, "question": "Anything?" }),
     )
     .await;
 
@@ -410,7 +522,7 @@ async fn a_prose_only_reply_is_the_answer_with_no_grounding(pool: PgPool) {
     let (status, body) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 2, "question": "Anything about scuba diving?" }),
+        json!({ "protocol_version": 3, "question": "Anything about scuba diving?" }),
     )
     .await;
 
@@ -451,7 +563,7 @@ async fn a_tool_call_then_prose_grounds_the_answer_in_the_entry_it_found(pool: P
     let (status, body) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 2, "question": "Did I run in July?" }),
+        json!({ "protocol_version": 3, "question": "Did I run in July?" }),
     )
     .await;
 
@@ -473,6 +585,215 @@ async fn a_tool_call_then_prose_grounds_the_answer_in_the_entry_it_found(pool: P
             .iter()
             .any(|m| m.role == "user" && m.content.contains("Ran a 5k this morning.")),
         "the tool result should have reached the second turn: {second_call:?}"
+    );
+}
+
+// -- issue #96: the SSE event sequence itself -------------------------------
+
+/// The full ordered SSE event sequence a two-step Question produces, end to
+/// end through real HTTP `event:`/`data:` frames — the acceptance criterion
+/// issue #96 states directly: "steps appear as they happen ... in order."
+/// Order matters here, not just presence: a `turn_start` must precede its
+/// own turn's `message_start`/`message_end`, the tool events must fall
+/// strictly between the turn that requested them and the next `turn_start`,
+/// and the whole stream must end in exactly one `agent_end`.
+/// `agent_loop`'s own equivalent test
+/// (`run_with_events_reports_the_full_event_sequence_for_a_two_step_run`)
+/// proves the same shape one layer down, at the `LoopEvent` level; this is
+/// the same proof carried all the way through `loop_event_to_sse` and real
+/// HTTP framing.
+#[sqlx::test]
+async fn the_full_event_sequence_for_a_two_step_question(pool: PgPool) {
+    let entry_id = Uuid::new_v4();
+    insert_entry_at(
+        &pool,
+        entry_id,
+        "Ran a 5k this morning.",
+        DateTime::parse_from_rfc3339("2026-07-05T08:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc),
+    )
+    .await;
+
+    let chat = Arc::new(FakeChatClient::new([
+        tool_call_tag(
+            "entries_in_range",
+            json!({"from": "2026-07-01", "to": "2026-07-31"}),
+        ),
+        "You ran a 5k on July 5th.".to_string(),
+    ]));
+    let reflect = reflect_state(chat);
+
+    let (status, events) = post_reflect_events(
+        &pool,
+        Some(reflect),
+        json!({ "protocol_version": 3, "question": "Did I run in July?" }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let names: Vec<&str> = events.iter().map(|e| e.event.as_str()).collect();
+    assert_eq!(
+        names,
+        vec![
+            "turn_start",
+            "message_start",
+            "message_end",
+            "tool_execution_start",
+            "tool_execution_end",
+            "turn_start",
+            "message_start",
+            "message_end",
+            "agent_end",
+        ],
+        "the full event sequence must match exactly, in order: {events:?}"
+    );
+
+    let agent_end = events.last().unwrap();
+    assert_eq!(agent_end.data["status"], "ok");
+    assert_eq!(agent_end.data["answer"], "You ran a 5k on July 5th.");
+    assert_eq!(agent_end.data["grounded"], true);
+    assert_eq!(grounding_ids(&agent_end.data), vec![entry_id]);
+}
+
+/// A tool event must carry what the interface needs to say what happened:
+/// which tool ran, the query or range it ran with, and how many Entries
+/// came back — issue #96's own acceptance criterion, spelled out on the
+/// wire. `details` on `tool_execution_end` is `tools::ToolOutcome::details`
+/// verbatim (the same sidecar issue #95 already put `"source": "digest"`
+/// in), reused rather than a parallel channel — the range this tool ran
+/// with (`details.from`/`details.to`) travels there, not duplicated into
+/// `arguments`'s own JSON a second time in a different shape.
+#[sqlx::test]
+async fn a_tool_event_pair_names_what_was_searched_and_how_much_came_back(pool: PgPool) {
+    let entry_id = Uuid::new_v4();
+    insert_entry_at(
+        &pool,
+        entry_id,
+        "Ran a 5k this morning.",
+        DateTime::parse_from_rfc3339("2026-07-05T08:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc),
+    )
+    .await;
+
+    let chat = Arc::new(FakeChatClient::new([
+        tool_call_tag(
+            "entries_in_range",
+            json!({"from": "2026-07-01", "to": "2026-07-31"}),
+        ),
+        "You ran a 5k on July 5th.".to_string(),
+    ]));
+    let reflect = reflect_state(chat);
+
+    let (_, events) = post_reflect_events(
+        &pool,
+        Some(reflect),
+        json!({ "protocol_version": 3, "question": "Did I run in July?" }),
+    )
+    .await;
+
+    let start = events
+        .iter()
+        .find(|e| e.event == "tool_execution_start")
+        .expect("a tool_execution_start event must have been sent");
+    assert_eq!(start.data["tool_name"], "entries_in_range");
+    assert_eq!(start.data["arguments"]["from"], "2026-07-01");
+    assert_eq!(start.data["arguments"]["to"], "2026-07-31");
+
+    let end = events
+        .iter()
+        .find(|e| e.event == "tool_execution_end")
+        .expect("a tool_execution_end event must have been sent");
+    assert_eq!(end.data["tool_name"], "entries_in_range");
+    assert_eq!(end.data["is_error"], false);
+    assert_eq!(end.data["entry_count"], 1);
+    assert_eq!(end.data["entry_ids"], json!([entry_id]));
+    // `details` is `ToolOutcome::details` verbatim — the range it ran with
+    // must be there too, not just a bare count.
+    assert_eq!(end.data["details"]["from"], "2026-07-01");
+    assert_eq!(end.data["details"]["to"], "2026-07-31");
+}
+
+/// `read_digest` is the one tool that reports its Grounding through
+/// `details.grounding_entry_ids` rather than `ToolOutcome::entry_ids`
+/// (`harness::tools::ReadDigestTool`'s own doc comment explains why: a
+/// Digest's Grounding belongs to the Digest, not to this one call). This
+/// proves `tool_entry_count` still reports the right number for that case
+/// — "how many Entries came back" must not silently read 0 for the one
+/// tool whose Grounding lives somewhere else.
+#[sqlx::test]
+async fn a_read_digest_tool_event_still_reports_a_correct_entry_count(pool: PgPool) {
+    let grounding_id = Uuid::new_v4();
+    // Matches `harness::tools::read_digest`'s own test fixture shape
+    // (`insert_digest` in that module's test module) — `digests` has no
+    // `period_end` column (it's derived, not stored), and
+    // `grounding_entry_ids` is a real `uuid[]`, not a JSON array.
+    sqlx::query(
+        "insert into digests (id, period, period_start, body, grounding_entry_ids) \
+         values ($1, $2, $3, $4, $5)",
+    )
+    .bind(Uuid::new_v4())
+    .bind("day")
+    .bind(NaiveDate::from_ymd_opt(2026, 3, 15).unwrap())
+    .bind("A short day summary.")
+    .bind([grounding_id].as_slice())
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let chat = Arc::new(FakeChatClient::new([
+        tool_call_tag(
+            "read_digest",
+            json!({"period": "day", "date": "2026-03-15"}),
+        ),
+        "Here's the day's Digest.".to_string(),
+    ]));
+    let reflect = reflect_state(chat);
+
+    let (_, events) = post_reflect_events(
+        &pool,
+        Some(reflect),
+        json!({ "protocol_version": 3, "question": "What happened on March 15th?" }),
+    )
+    .await;
+
+    let end = events
+        .iter()
+        .find(|e| e.event == "tool_execution_end")
+        .expect("a tool_execution_end event must have been sent");
+    assert_eq!(end.data["tool_name"], "read_digest");
+    // `ToolOutcome::entry_ids` is deliberately empty for this tool — the
+    // count must still come from `details.grounding_entry_ids`.
+    assert_eq!(end.data["entry_ids"], json!([]));
+    assert_eq!(end.data["entry_count"], 1);
+}
+
+/// Issue #93: the loop's model never streamed answer-token deltas because
+/// `PromptedToolClient` only ever produces a single `Done` — this pins that
+/// exact behaviour on the live route, so a future change to `prompted.rs`
+/// that starts emitting `TextDelta` (or doesn't) is caught here rather than
+/// only in `agent_loop`'s own unit test
+/// (`run_with_events_forwards_text_deltas_as_message_updates_in_order`).
+/// "On codex-terra ... nothing else differs" (issue #96) means exactly this:
+/// zero `message_update` events, but the rest of the sequence unaffected.
+#[sqlx::test]
+async fn the_configured_model_never_produces_message_update_events(pool: PgPool) {
+    let chat = Arc::new(FakeChatClient::new(["An answer with no deltas."]));
+    let reflect = reflect_state(chat);
+
+    let (_, events) = post_reflect_events(
+        &pool,
+        Some(reflect),
+        json!({ "protocol_version": 3, "question": "Anything?" }),
+    )
+    .await;
+
+    assert!(
+        !events.iter().any(|e| e.event == "message_update"),
+        "PromptedToolClient never streams deltas today; a message_update here would mean \
+         something upstream started producing StreamEvent::TextDelta without this test \
+         having been updated to expect it: {events:?}"
     );
 }
 
@@ -502,7 +823,7 @@ async fn a_search_entries_call_then_prose_grounds_the_answer(pool: PgPool) {
     let (status, body) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 2, "question": "What have I been reading?" }),
+        json!({ "protocol_version": 3, "question": "What have I been reading?" }),
     )
     .await;
 
@@ -550,7 +871,7 @@ async fn a_similar_entries_call_then_prose_grounds_the_answer(pool: PgPool) {
     let (status, body) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 2, "question": "How did the move go?" }),
+        json!({ "protocol_version": 3, "question": "How did the move go?" }),
     )
     .await;
 
@@ -590,12 +911,14 @@ async fn an_embedding_failure_recovers_and_still_answers(pool: PgPool) {
         chat_client: chat.clone(),
         embed_client: Arc::new(AlwaysFailingEmbedClient),
         context_window: 200_000,
+        chat_base_url: UNUSED_CHAT_BASE_URL.to_string(),
+        chat_api_key: None,
     };
 
     let (status, body) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 2, "question": "How did the move go?" }),
+        json!({ "protocol_version": 3, "question": "How did the move go?" }),
     )
     .await;
 
@@ -656,7 +979,7 @@ async fn two_tool_calls_in_one_reply_both_ground_the_answer(pool: PgPool) {
     let (status, body) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 2, "question": "Did I keep my resolution?" }),
+        json!({ "protocol_version": 3, "question": "Did I keep my resolution?" }),
     )
     .await;
 
@@ -701,7 +1024,7 @@ async fn an_entry_found_by_two_tool_calls_appears_once_in_grounding_ids(pool: Pg
     let (status, body) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 2, "question": "What did I write in May?" }),
+        json!({ "protocol_version": 3, "question": "What did I write in May?" }),
     )
     .await;
 
@@ -720,7 +1043,7 @@ async fn an_unknown_tool_name_recovers_and_still_answers(pool: PgPool) {
     let (status, body) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 2, "question": "Anything?" }),
+        json!({ "protocol_version": 3, "question": "Anything?" }),
     )
     .await;
 
@@ -752,7 +1075,7 @@ async fn a_malformed_tool_call_recovers_and_still_answers(pool: PgPool) {
     let (status, body) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 2, "question": "Anything?" }),
+        json!({ "protocol_version": 3, "question": "Anything?" }),
     )
     .await;
 
@@ -793,7 +1116,7 @@ async fn an_empty_final_reply_gets_one_corrective_turn_and_then_answers(pool: Pg
     let (status, body) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 2, "question": "How did the flat move go?" }),
+        json!({ "protocol_version": 3, "question": "How did the flat move go?" }),
     )
     .await;
 
@@ -827,7 +1150,7 @@ async fn a_whitespace_only_final_reply_counts_as_empty_and_is_retried(pool: PgPo
     let (status, body) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 2, "question": "Anything?" }),
+        json!({ "protocol_version": 3, "question": "Anything?" }),
     )
     .await;
 
@@ -851,7 +1174,7 @@ async fn a_grounded_marker_only_final_reply_counts_as_empty_and_is_retried(pool:
     let (status, body) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 2, "question": "Anything?" }),
+        json!({ "protocol_version": 3, "question": "Anything?" }),
     )
     .await;
 
@@ -893,7 +1216,7 @@ async fn an_empty_reply_after_a_real_tool_call_still_carries_that_grounding_once
     let (status, body) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 2, "question": "How did the flat move go?" }),
+        json!({ "protocol_version": 3, "question": "How did the flat move go?" }),
     )
     .await;
 
@@ -904,21 +1227,51 @@ async fn an_empty_reply_after_a_real_tool_call_still_carries_that_grounding_once
     assert_eq!(chat.call_count(), 3);
 }
 
+// -- issue #96: a run that fails mid-stream terminates recognisably --------
+//
+// Before issue #96, either failure below was a plain HTTP 500 — the
+// contract these two tests originally pinned. Once `/v1/reflect` commits to
+// a 200 and starts streaming, that's no longer possible: the status line
+// has already gone out by the time either failure is known (both happen
+// inside the loop, only reachable once `resolve_session`'s own synchronous
+// preflight has already succeeded — see `reflect_handler`'s own doc
+// comment). What these two now prove is issue #96's actual replacement
+// contract: the stream still ends, with exactly one `agent_end` event
+// carrying `"status": "error"`, rather than hanging or the connection just
+// dropping with nothing a client can distinguish from a lost network. Every
+// other consequence of failure is unchanged and still asserted here: no
+// Session or Turn is ever persisted for a Question that never produced an
+// Answer.
+
 #[sqlx::test]
-async fn a_final_reply_still_empty_after_a_corrective_turn_fails_the_request_and_persists_nothing(
+async fn a_final_reply_still_empty_after_a_corrective_turn_ends_the_stream_with_an_agent_end_error_event(
     pool: PgPool,
 ) {
     let chat = Arc::new(FakeChatClient::new(["".to_string(), "   ".to_string()]));
     let reflect = reflect_state(chat.clone());
 
-    let (status, _) = post_reflect(
+    let (status, events) = post_reflect_events(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 2, "question": "How did the flat move go?" }),
+        json!({ "protocol_version": 3, "question": "How did the flat move go?" }),
     )
     .await;
 
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    // The stream still opens as an ordinary 200 — the failure is only
+    // known once the loop is already running, well after headers went out.
+    assert_eq!(status, StatusCode::OK);
+    let last = events.last().expect("the stream must end with some event");
+    assert_eq!(
+        last.event, "agent_end",
+        "the stream must end with agent_end, not hang or close silently: {events:?}"
+    );
+    assert_eq!(last.data["status"], "error");
+    assert!(
+        last.data["error"].as_str().is_some(),
+        "an error agent_end must explain what happened: {:?}",
+        last.data
+    );
+
     assert_eq!(session_count(&pool).await, 0);
     assert_eq!(turn_count(&pool).await, 0);
     assert_eq!(
@@ -929,20 +1282,34 @@ async fn a_final_reply_still_empty_after_a_corrective_turn_fails_the_request_and
 }
 
 #[sqlx::test]
-async fn a_chat_client_error_fails_the_request_and_persists_nothing(pool: PgPool) {
+async fn a_chat_client_error_ends_the_stream_with_an_agent_end_error_event(pool: PgPool) {
     let chat = Arc::new(FakeChatClient::failing(
         "simulated 500 from the chat endpoint",
     ));
     let reflect = reflect_state(chat);
 
-    let (status, _) = post_reflect(
+    let (status, events) = post_reflect_events(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 2, "question": "Anything?" }),
+        json!({ "protocol_version": 3, "question": "Anything?" }),
     )
     .await;
 
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(status, StatusCode::OK);
+    let last = events.last().expect("the stream must end with some event");
+    assert_eq!(
+        last.event, "agent_end",
+        "the stream must end with agent_end, not hang or close silently: {events:?}"
+    );
+    assert_eq!(last.data["status"], "error");
+    assert!(
+        last.data["error"]
+            .as_str()
+            .is_some_and(|msg| msg.contains("simulated 500 from the chat endpoint")),
+        "the underlying chat failure should be named in the error: {:?}",
+        last.data
+    );
+
     assert_eq!(session_count(&pool).await, 0);
     assert_eq!(turn_count(&pool).await, 0);
 }
@@ -955,7 +1322,7 @@ async fn the_active_tool_set_is_named_in_the_system_prompt(pool: PgPool) {
     let (status, _) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 2, "question": "Anything?" }),
+        json!({ "protocol_version": 3, "question": "Anything?" }),
     )
     .await;
 
@@ -985,7 +1352,7 @@ async fn a_null_session_id_mints_a_new_session(pool: PgPool) {
         &pool,
         Some(reflect),
         json!({
-            "protocol_version": 2,
+            "protocol_version": 3,
             "question": "How has my knee been this year?",
             "session_id": null,
         }),
@@ -1008,7 +1375,7 @@ async fn a_successful_answer_persists_its_turn(pool: PgPool) {
     let (status, body) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 2, "question": "How's my knee?" }),
+        json!({ "protocol_version": 3, "question": "How's my knee?" }),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -1043,7 +1410,7 @@ async fn an_unknown_session_id_persists_no_session_and_no_turn(pool: PgPool) {
         &pool,
         Some(reflect),
         json!({
-            "protocol_version": 2,
+            "protocol_version": 3,
             "question": "Anything?",
             "session_id": Uuid::new_v4(),
         }),
@@ -1063,7 +1430,7 @@ async fn a_second_ask_on_the_same_session_appends_and_bumps_updated_at(pool: PgP
     let (status, body) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 2, "question": "First question?" }),
+        json!({ "protocol_version": 3, "question": "First question?" }),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -1088,7 +1455,7 @@ async fn a_second_ask_on_the_same_session_appends_and_bumps_updated_at(pool: PgP
         &pool,
         Some(reflect2),
         json!({
-            "protocol_version": 2,
+            "protocol_version": 3,
             "question": "Second question?",
             "session_id": id,
         }),
@@ -1140,7 +1507,7 @@ async fn steps_land_in_the_session_entry_tree_in_order(pool: PgPool) {
     let (status, body) = post_reflect(
         &pool,
         Some(reflect),
-        json!({ "protocol_version": 2, "question": "Did I run in April?" }),
+        json!({ "protocol_version": 3, "question": "Did I run in April?" }),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -1217,7 +1584,7 @@ async fn a_sessions_conversation_reaches_the_chat_call(pool: PgPool) {
         &pool,
         Some(reflect),
         json!({
-            "protocol_version": 2,
+            "protocol_version": 3,
             "question": "Did it start with physical therapy?",
             "session_id": session_id,
         }),
@@ -1269,7 +1636,7 @@ async fn a_session_with_more_than_ten_turns_replays_only_the_ten_most_recent(poo
         &pool,
         Some(reflect_state(chat.clone())),
         json!({
-            "protocol_version": 2,
+            "protocol_version": 3,
             "question": "Anything new to add?",
             "session_id": session_id,
         }),
@@ -1324,7 +1691,7 @@ async fn replayed_turns_stay_oldest_first_after_the_window_is_applied(pool: PgPo
         &pool,
         Some(reflect_state(chat.clone())),
         json!({
-            "protocol_version": 2,
+            "protocol_version": 3,
             "question": "Anything new to add?",
             "session_id": session_id,
         }),
@@ -1363,7 +1730,7 @@ async fn a_session_with_ten_or_fewer_turns_replays_all_of_them(pool: PgPool) {
         &pool,
         Some(reflect_state(chat.clone())),
         json!({
-            "protocol_version": 2,
+            "protocol_version": 3,
             "question": "Anything new to add?",
             "session_id": session_id,
         }),
@@ -1467,11 +1834,13 @@ async fn a_session_nearing_its_context_window_gets_compacted_between_turns(pool:
         chat_client: Arc::new(FakeChatClient::new(["a first answer"])),
         embed_client: Arc::new(UnusedEmbedClient),
         context_window: 200_000,
+        chat_base_url: UNUSED_CHAT_BASE_URL.to_string(),
+        chat_api_key: None,
     };
     let (status, body) = post_reflect(
         &pool,
         Some(generous),
-        json!({ "protocol_version": 2, "question": "What did I write about running?" }),
+        json!({ "protocol_version": 3, "question": "What did I write about running?" }),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -1481,11 +1850,13 @@ async fn a_session_nearing_its_context_window_gets_compacted_between_turns(pool:
         chat_client: Arc::new(FakeChatClient::new(["a second answer"])),
         embed_client: Arc::new(UnusedEmbedClient),
         context_window: 200_000,
+        chat_base_url: UNUSED_CHAT_BASE_URL.to_string(),
+        chat_api_key: None,
     };
     let (status, _) = post_reflect(
         &pool,
         Some(generous),
-        json!({ "protocol_version": 2, "session_id": id, "question": "And the wedding?" }),
+        json!({ "protocol_version": 3, "session_id": id, "question": "And the wedding?" }),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -1502,11 +1873,13 @@ async fn a_session_nearing_its_context_window_gets_compacted_between_turns(pool:
         ])),
         embed_client: Arc::new(UnusedEmbedClient),
         context_window: 20_000,
+        chat_base_url: UNUSED_CHAT_BASE_URL.to_string(),
+        chat_api_key: None,
     };
     let (status, body) = post_reflect(
         &pool,
         Some(tight),
-        json!({ "protocol_version": 2, "session_id": id, "question": "What about my knee?" }),
+        json!({ "protocol_version": 3, "session_id": id, "question": "What about my knee?" }),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -1523,6 +1896,8 @@ async fn a_session_nearing_its_context_window_gets_compacted_between_turns(pool:
         chat_client: Arc::new(FakeChatClient::new(["unused"])),
         embed_client: Arc::new(UnusedEmbedClient),
         context_window: 200_000,
+        chat_base_url: UNUSED_CHAT_BASE_URL.to_string(),
+        chat_api_key: None,
     };
     let session = get_session(&pool, unused, id).await;
     let turns = session["turns"]
@@ -1551,11 +1926,13 @@ async fn a_summary_reaches_every_question_after_it_not_only_the_one_that_wrote_i
         chat_client: Arc::new(FakeChatClient::new(["a first answer"])),
         embed_client: Arc::new(UnusedEmbedClient),
         context_window: 200_000,
+        chat_base_url: UNUSED_CHAT_BASE_URL.to_string(),
+        chat_api_key: None,
     };
     let (_, body) = post_reflect(
         &pool,
         Some(seed),
-        json!({ "protocol_version": 2, "question": "What did I write about running?" }),
+        json!({ "protocol_version": 3, "question": "What did I write about running?" }),
     )
     .await;
     let id = session_id(&body);
@@ -1568,11 +1945,13 @@ async fn a_summary_reaches_every_question_after_it_not_only_the_one_that_wrote_i
         ])),
         embed_client: Arc::new(UnusedEmbedClient),
         context_window: 20_000,
+        chat_base_url: UNUSED_CHAT_BASE_URL.to_string(),
+        chat_api_key: None,
     };
     let (status, _) = post_reflect(
         &pool,
         Some(compacting),
-        json!({ "protocol_version": 2, "session_id": id, "question": "And the wedding?" }),
+        json!({ "protocol_version": 3, "session_id": id, "question": "And the wedding?" }),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -1589,11 +1968,13 @@ async fn a_summary_reaches_every_question_after_it_not_only_the_one_that_wrote_i
         ])),
         embed_client: Arc::new(UnusedEmbedClient),
         context_window: 20_000,
+        chat_base_url: UNUSED_CHAT_BASE_URL.to_string(),
+        chat_api_key: None,
     };
     let (status, body) = post_reflect(
         &pool,
         Some(later),
-        json!({ "protocol_version": 2, "session_id": id, "question": "What about my knee?" }),
+        json!({ "protocol_version": 3, "session_id": id, "question": "What about my knee?" }),
     )
     .await;
     assert_eq!(status, StatusCode::OK);

@@ -1,8 +1,12 @@
 //! `POST /v1/reflect` — issue #93 pass 2: a Question is now answered by
 //! `harness::agent_loop`, a tool-calling loop that decides for itself how
 //! many times to look before it answers, with one tool so far
-//! (`harness::tools::EntriesInRangeTool`). `run_reflect_loop` is what
-//! `reflect_handler` actually calls.
+//! (`harness::tools::EntriesInRangeTool`). Issue #96 turned the route from a
+//! single request/response call into a `text/event-stream`: `reflect_handler`
+//! resolves the Session synchronously (`resolve_session`) and then spawns
+//! `run_reflect_stream`, which runs `run_reflect_stream_inner` — the loop
+//! itself — reporting every step onto the stream as it happens, live,
+//! rather than only once the whole Question is answered.
 //!
 //! Tickets 4 through 8 built a different thing: a *fixed* pipeline that got
 //! exactly one look — an extraction chat call found a date range and/or a
@@ -20,12 +24,13 @@
 //! 0020's "a Conversation ... belongs to the Device it happened on and does
 //! not Sync." A request names the Session it belongs to with `session_id`
 //! — `None` starts a new one — instead of round-tripping every prior
-//! Question and Answer on every call. `run_reflect_loop` loads that
-//! Session's Turns (`sessions::load_turns`) before asking, and persists the
-//! new one (`sessions::record_turn_from_steps`) only once an Answer has
-//! actually succeeded, so a failed ask leaves neither a Session nor a Turn
-//! behind — the same guarantee `run_reflect`'s own doc comment describes,
-//! carried over unchanged.
+//! Question and Answer on every call. `resolve_session` loads that
+//! Session's Turns (`sessions::load_turns`) before asking, and
+//! `run_reflect_stream_inner` persists the new one
+//! (`sessions::record_turn_from_steps`) only once an Answer has actually
+//! succeeded, so a failed ask leaves neither a Session nor a Turn behind —
+//! the same guarantee `run_reflect`'s own doc comment describes, carried
+//! over unchanged.
 //!
 //! See CONTEXT.md's Grounding entry for the rule this route exists to
 //! honour: an Answer with nothing behind it says so, rather than inventing
@@ -36,19 +41,30 @@
 //! later ticket decides what, if anything, replaces it for the loop.
 
 use std::collections::HashSet;
+use std::convert::Infallible;
 use std::sync::Arc;
 
 use anyhow::Context as _;
-use axum::{Json, extract::State, http::StatusCode};
+use axum::{
+    Json,
+    extract::State,
+    http::StatusCode,
+    response::{
+        IntoResponse, Response,
+        sse::{Event, KeepAlive, Sse},
+    },
+};
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 use sqlx::{FromRow, PgPool};
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::UnboundedReceiverStream;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::embedding::vector_literal;
-use crate::harness::agent_loop::{self, Step};
+use crate::harness::agent_loop::{self, LoopEvent, Step};
 use crate::harness::compaction;
 use crate::harness::prompted::PromptedToolClient;
 use crate::harness::tools::{
@@ -58,6 +74,17 @@ use crate::harness::types::{AssistantMessage, ContentBlock, Message, StopReason}
 use crate::llm::{ChatMessage, LlmClient};
 use crate::sessions::{self, EntryType, MessagePayload, NewTurn, SessionTurnRow};
 use crate::sync::PROTOCOL_VERSION;
+
+/// One SSE frame, already built and ready to send — what every branch of
+/// `reflect_handler`'s streamed half funnels through. `Infallible`, not a
+/// real error type: `chat::ChatClient`'s own never-`Err` contract means
+/// nothing downstream of a chat call ever needs to fail *the stream itself*
+/// (a failed Question still ends the stream cleanly, via an `agent_end`
+/// event carrying `"status": "error"` — see `run_reflect_stream`), so
+/// there is no second variant this channel's `Result` ever needs to carry.
+/// `axum::response::sse::Sse` requires exactly this shape
+/// (`TryStream<Ok = Event>`) of whatever `Stream` it wraps.
+type SseSender = mpsc::UnboundedSender<Result<Event, Infallible>>;
 
 /// How many nearest Entries retrieval pulls before handing them to the chat
 /// call, mirroring the shape `docs/adr/0022` already settled for writes:
@@ -150,14 +177,15 @@ pub struct ReflectRequest {
     /// resolve phrases like "last week" against the user's own local day,
     /// never the server's clock.
     ///
-    /// `#[serde(default)]` rather than required: `PROTOCOL_VERSION` stays 1
-    /// for this ticket (the sync contract's shape is unchanged, and bumping
-    /// it would make every existing Device report the Server unreachable
-    /// over an unrelated feature), so a Device that predates this ticket
-    /// and posts with no `utc_offset_minutes` field must still get an
-    /// Answer — it just gets date phrases resolved against UTC instead of
-    /// its own local day, which is a graceful degrade (defaults to `0`),
-    /// not a rejected Question.
+    /// `#[serde(default)]` rather than required, independent of whatever
+    /// `PROTOCOL_VERSION` happens to be: a mismatched `protocol_version`
+    /// already rejects a stale Device outright (`reflect_handler`, 426), so
+    /// this field's own default exists to keep a *current* Device's request
+    /// well-formed even if some future caller ever omits it, not to soften
+    /// a version bump. Falling back to `0` (UTC) rather than rejecting the
+    /// request is a graceful degrade either way: date phrases resolve
+    /// against UTC instead of the asking Device's own local day, not a
+    /// rejected Question.
     #[serde(default)]
     pub utc_offset_minutes: i32,
 }
@@ -175,7 +203,7 @@ pub struct ReflectResponse {
     pub title: String,
     pub answer: String,
     /// The Entry ids that appeared in a tool result during this run, in the
-    /// order they first appeared — `run_reflect_loop`'s own dedup, over
+    /// order they first appeared — `run_reflect_stream_inner`'s own dedup, over
     /// every `harness::agent_loop::Step::ToolResult` the loop produced, not
     /// retrieval's merge-and-sort (that description, and everything below
     /// through `docs/adr/0023`/`0024`, is what these fields meant under
@@ -241,9 +269,20 @@ pub struct ReflectState {
     /// startup from its `GET /v1/models/{id}` entry
     /// (`llm::resolve_context_window`) — never `harness::compaction`'s
     /// `DEFAULT_CONTEXT_WINDOW` fallback constant directly, so a test can
-    /// see exactly what a Session's `run_reflect_loop` will treat as the
+    /// see exactly what a Session's `run_reflect_stream_inner` will treat as the
     /// trigger threshold without needing a live wrapper to ask.
     pub context_window: u32,
+    /// Issue #96: the configured wrapper's own base URL and API key, kept
+    /// alongside `chat_client`/`embed_client` rather than folded into
+    /// either. `GET /v1/models` (`models::models_handler`) needs the raw
+    /// HTTP endpoint itself (`llm::list_models`) — `llm::LlmClient` has no
+    /// "list what's available" method, and shouldn't grow one just for
+    /// this: that trait exists to abstract chatting and embedding, the two
+    /// things every implementation (including every test double in this
+    /// crate) already has to support, and a fifth method only one caller
+    /// needs would widen that contract for no benefit to the other four.
+    pub chat_base_url: String,
+    pub chat_api_key: Option<String>,
 }
 
 /// The answering call's system prompt (chat call 2). `docs/adr/0024`: this
@@ -289,12 +328,19 @@ their journal, then describe what they have been writing about in the last few d
 only these Entries. Do not imply these Entries answer the Question. Speak directly to the user \
 in the second person, in plain prose.";
 
-/// The two ways `run_reflect` can end other than success. `SessionNotFound`
-/// is the one case that must reach the client as a clean 404 rather than
-/// the catch-all 500 every other failure gets — see `ReflectRequest::session_id`.
-/// `From<anyhow::Error>` is what lets every existing `?` on an
-/// `anyhow::Result` inside `run_reflect` keep working unchanged: it's the
-/// conversion Rust's `?` reaches for automatically.
+/// The two ways `run_reflect` (the retired fixed pipeline) or
+/// `resolve_session` (issue #96's own synchronous preflight, run before
+/// `reflect_handler` ever commits to a 200 and starts streaming) can end
+/// other than success. `SessionNotFound` is the one case that must reach
+/// the client as a clean 404 rather than the catch-all 500 every other
+/// failure gets — see `ReflectRequest::session_id`. `From<anyhow::Error>`
+/// is what lets every existing `?` on an `anyhow::Result` inside either of
+/// them keep working unchanged: it's the conversion Rust's `?` reaches for
+/// automatically. `run_reflect_stream_inner`, by contrast, returns a plain
+/// `anyhow::Result` — once session resolution has already happened, nothing
+/// left inside the streamed run can turn into a distinct HTTP status (the
+/// headers already went out as 200), so there is no reason for it to carry
+/// this extra variant.
 enum ReflectError {
     SessionNotFound,
     Internal(anyhow::Error),
@@ -306,13 +352,44 @@ impl From<anyhow::Error> for ReflectError {
     }
 }
 
+/// Issue #96: `/v1/reflect` answers over `text/event-stream` now, not a
+/// single JSON body — pi's own event vocabulary (`turn_start`,
+/// `tool_execution_start`, `tool_execution_end`, `message_start`,
+/// `message_update`, `message_end`, `agent_end`), emitted as
+/// `harness::agent_loop::run_with_events` actually makes progress, so the
+/// client can render "searching ... -> N Entries" while it happens instead
+/// of a single "searching" spinner for however long the whole Question
+/// takes. `utoipa` has no first-class way to describe a stream of
+/// differently-shaped named SSE frames as one response `body`, so this is
+/// documented as `text/event-stream` with no schema — `openapi.rs` still
+/// registers every event payload's own Rust type (`MessageEndEventData`,
+/// `ToolExecutionStartEventData`, `ToolExecutionEndEventData`,
+/// `ReflectAgentEndEventData`) under `components.schemas` so a client
+/// generating types from `packages/core/src/generated/wire.ts` still gets
+/// them, even though nothing here can point utoipa at "frame N of this
+/// stream has this shape."
+///
+/// The three status codes that predate this ticket keep meaning exactly
+/// what they did — 404 (Reflection unconfigured, or a `session_id` naming
+/// no Session) and 426 (a stale `protocol_version`) are still real HTTP
+/// statuses, not folded into the event stream, because both are decided
+/// *before* this handler commits to a 200 and starts streaming (see
+/// `resolve_session`, called synchronously below): once the stream opens,
+/// the status line has already gone out, so nothing after that point can
+/// change it. A failure *inside* the streamed run — the chat endpoint
+/// erroring, the loop never producing an Answer — cannot become a 500 for
+/// the same reason; it ends the stream instead, via an `agent_end` event
+/// carrying `"status": "error"` (`run_reflect_stream`) rather than hanging
+/// or dropping the connection silently.
 #[utoipa::path(
     post,
     path = "/v1/reflect",
     request_body = ReflectRequest,
     responses(
-        (status = 200, description = "An Answer grounded in the Entries retrieval found", body = ReflectResponse),
-        (status = 404, description = "session_id names a Session that does not exist"),
+        (status = 200, description = "A stream of pi-vocabulary SSE events, ending in \
+            agent_end — see this handler's own doc comment", content_type = "text/event-stream", body = String),
+        (status = 404, description = "Reflection is unconfigured, or session_id names a Session \
+            that does not exist"),
         (status = 426, description = "protocol_version is not one this server understands"),
     )
 )]
@@ -320,9 +397,9 @@ pub async fn reflect_handler(
     State(pool): State<PgPool>,
     State(reflect): State<Option<ReflectState>>,
     Json(req): Json<ReflectRequest>,
-) -> Result<Json<ReflectResponse>, StatusCode> {
+) -> Response {
     if req.protocol_version != PROTOCOL_VERSION {
-        return Err(StatusCode::UPGRADE_REQUIRED);
+        return StatusCode::UPGRADE_REQUIRED.into_response();
     }
 
     // Only reachable if this state's absence somehow slipped past the
@@ -333,21 +410,70 @@ pub async fn reflect_handler(
         tracing::error!(
             "reflect_handler invoked with no ReflectState — route should not be registered"
         );
-        return Err(StatusCode::NOT_FOUND);
+        return StatusCode::NOT_FOUND.into_response();
     };
 
-    match run_reflect_loop(&pool, &reflect, req).await {
-        Ok(response) => Ok(Json(response)),
-        Err(ReflectError::SessionNotFound) => Err(StatusCode::NOT_FOUND),
+    // Resolved synchronously, before any SSE frame is ever sent — this is
+    // what keeps `session_id` naming no Session a genuine 404 rather than a
+    // stream that opens and then has to explain the same failure through an
+    // event instead (this function's own doc comment covers why that
+    // distinction matters: once headers go out, the status can't change).
+    let (prior_turns, title) = match resolve_session(&pool, req.session_id, &req.question).await {
+        Ok(resolved) => resolved,
+        Err(ReflectError::SessionNotFound) => return StatusCode::NOT_FOUND.into_response(),
         Err(ReflectError::Internal(err)) => {
-            tracing::error!(error = ?err, "reflect failed");
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
+            tracing::error!(error = ?err, "reflect failed while resolving the Session");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
+    };
+
+    // Unbounded: every sender here (`run_reflect_stream`'s own event sink,
+    // plus its final `agent_end`) is synchronous and never awaits back-
+    // pressure from this channel — the same reasoning `chat::StreamEvent`'s
+    // own `mpsc::unbounded_channel` already relies on. A Question generates
+    // at most a few dozen frames even for a many-tool-call run, so nothing
+    // about "unbounded" risks unbounded memory in practice.
+    let (tx, rx) = mpsc::unbounded_channel::<Result<Event, Infallible>>();
+    tokio::spawn(run_reflect_stream(
+        pool,
+        reflect,
+        req,
+        prior_turns,
+        title,
+        tx,
+    ));
+
+    Sse::new(UnboundedReceiverStream::new(rx))
+        .keep_alive(KeepAlive::default())
+        .into_response()
+}
+
+/// The one thing `reflect_handler` must decide *before* it can commit to a
+/// 200 and start streaming: which Session this Question belongs to (or that
+/// it names one that doesn't exist, `ReflectError::SessionNotFound`) and
+/// what title to answer under. Split out of what used to be
+/// `run_reflect_loop`'s own opening lines for exactly that reason — this
+/// runs synchronously in the handler; everything after it runs inside the
+/// spawned, streaming `run_reflect_stream`.
+async fn resolve_session(
+    pool: &PgPool,
+    session_id: Option<Uuid>,
+    question: &str,
+) -> Result<(Vec<SessionTurnRow>, String), ReflectError> {
+    match session_id {
+        Some(id) => {
+            let session = sessions::find_session(pool, id)
+                .await?
+                .ok_or(ReflectError::SessionNotFound)?;
+            let turns = sessions::load_turns(pool, id).await?;
+            Ok((turns, session.title))
+        }
+        None => Ok((Vec::new(), derive_title(question))),
     }
 }
 
 /// The loop's own persona instruction (issue #93 pass 2) — `reflect.rs`'s
-/// live entry point now, via `run_reflect_loop`.
+/// live entry point now, via `run_reflect_stream_inner`.
 ///
 /// `harness::tools::render_tool_guidance` appends every active tool's own
 /// `snippet`/`guidelines` after this before it's sent as
@@ -385,7 +511,7 @@ nothing. Speak directly to the user in the second person, in plain prose.";
 /// try again.
 ///
 /// Bounded to exactly one extra call to `agent_loop::run` —
-/// `run_reflect_loop` only ever sends this once. Unlike `agent_loop::run`'s
+/// `run_reflect_stream_inner` only ever sends this once. Unlike `agent_loop::run`'s
 /// own "no step budget" (deliberate, per that module's doc comment, for a
 /// Question that genuinely needs several tool calls), an empty reply isn't
 /// evidence the Question needs more looking; it's evidence the model wrote
@@ -395,7 +521,7 @@ nothing. Speak directly to the user in the second person, in plain prose.";
 /// telling it forever would turn a single bad turn into an unbounded loop
 /// with no evidence a third or fourth attempt would behave any
 /// differently, so a second empty reply fails the request instead
-/// (`run_reflect_loop`).
+/// (`run_reflect_stream_inner`).
 const EMPTY_REPLY_CORRECTION: &str = "Your last reply had no text in it — nothing was written, and \
 no tool was called either. Look again at the Question above: either call a tool to look something \
 up, or write your Answer to the user in plain prose. Do not send an empty reply again.";
@@ -461,7 +587,7 @@ fn is_empty_final_reply(text: &str) -> bool {
 /// genuinely independent facts. What *is* available, and is the same idea
 /// applied to what's actually true here, is a single gate every route from
 /// "a raw model reply" to "the `answer: String` stored in `ReflectResponse`
-/// and `NewTurn`" has to pass through: `run_reflect_loop` never reads
+/// and `NewTurn`" has to pass through: `run_reflect_stream_inner` never reads
 /// `outcome.answer` directly into either of those — it only ever reads
 /// `NonEmptyAnswer::into_inner()`'s output, and that function does not
 /// exist unless `new` already accepted the text. A future caller who
@@ -498,43 +624,200 @@ impl NonEmptyAnswer {
     }
 }
 
-/// `/v1/reflect`'s live implementation (issue #93 pass 2): loads the
-/// Session's prior Turns exactly as `run_reflect` always did, builds a
-/// `harness::types::Context` from them plus the active tool set, runs
-/// `harness::agent_loop::run` against a `PromptedToolClient` wrapping
-/// `reflect.chat_client`, and — only once the loop actually produced an
-/// Answer — persists every step it took into the Session entry tree
-/// (`sessions::record_turn_from_steps`) in one transaction, the same
-/// "persist only after success" guarantee `record_turn` always gave.
+/// Builds one SSE frame — `event: name`, `data: <json>` — from a plain
+/// `serde_json::Value`. Every payload this module ever hands `json_data`
+/// is built the same way `build_tree_payloads` already builds a message
+/// payload a few functions below (`json!`/`serde_json::to_value` over
+/// plain, always-serializable data), so the same `.expect(...)` posture
+/// applies: nothing here can actually fail to serialize, and treating that
+/// as reachable would only hide a real bug behind a swallowed `Result`.
+fn sse_event(name: &'static str, data: Value) -> Event {
+    Event::default().event(name).json_data(data).expect(
+        "an SSE event's data here is always a plain serde_json::Value built from this \
+         module's own types, which cannot fail to serialize",
+    )
+}
+
+/// The wire spelling for one `harness::types::StopReason` — deliberately
+/// not a `Serialize` impl on `StopReason` itself: every doc comment in
+/// `harness` insists that module stay ignorant of any wire format
+/// (`agent_loop::render_content_for_display`'s own comment draws exactly
+/// this line), and `reflect.rs` is where that translation is already
+/// supposed to happen. `snake_case`, matching every other field name this
+/// module puts on the wire.
+fn stop_reason_str(reason: StopReason) -> &'static str {
+    match reason {
+        StopReason::Stop => "stop",
+        StopReason::Length => "length",
+        StopReason::ToolUse => "tool_use",
+        StopReason::Error => "error",
+        StopReason::Aborted => "aborted",
+    }
+}
+
+/// "How many Entries came back" for a `tool_execution_end` event — the
+/// acceptance criterion issue #96 names directly, alongside which tool ran
+/// and what it ran with. `entry_ids.len()` already answers this for three
+/// of the loop's four tools (`entries_in_range`, `search_entries` and
+/// `similar_entries` all populate `ToolOutcome::entry_ids` —
+/// `harness::tools`'s own doc comment). `read_digest` is the one exception:
+/// its own doc comment explains why a Digest's Grounding travels in
+/// `details.grounding_entry_ids` instead — a Digest's Grounding belongs to
+/// the *Digest*, not to this one tool call, the same distinction
+/// `run_reflect_stream_inner`'s own `grounding_entry_ids` dedup already
+/// respects (`read_digest.rs`'s deliberate "no `.with_entry_ids(...)`").
+/// Falling back to counting that array when `entry_ids` itself is empty is
+/// what keeps a Digest lookup that actually found something from reporting
+/// 0 here regardless.
+fn tool_entry_count(entry_ids: &[Uuid], details: &Value) -> usize {
+    if !entry_ids.is_empty() {
+        return entry_ids.len();
+    }
+    details
+        .get("grounding_entry_ids")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len)
+}
+
+/// Translates one `harness::agent_loop::LoopEvent` into the SSE frame
+/// `reflect_handler`'s stream actually sends — the one place this module
+/// decides what each of pi's event names carries on the wire. Every
+/// `LoopEvent` variant becomes exactly one `Event`; there is no case that
+/// fans out into several or is dropped, so ordering on the wire is
+/// identical to the order `agent_loop::run_with_events` reported them in.
+fn loop_event_to_sse(event: LoopEvent) -> Event {
+    match event {
+        LoopEvent::TurnStart => sse_event("turn_start", json!({})),
+        LoopEvent::MessageStart => sse_event("message_start", json!({})),
+        LoopEvent::MessageUpdate { delta } => {
+            sse_event("message_update", json!({ "delta": delta }))
+        }
+        LoopEvent::MessageEnd { assistant } => sse_event(
+            "message_end",
+            json!({
+                // Only the prose half — `agent_loop::render_text`, the same
+                // reading `run`'s own stopping rule uses for the Answer
+                // itself — never the literal `<tool_call>` tag
+                // `prompted::PromptedToolClient` puts on the wire to the
+                // model: that syntax means nothing to a person, and a
+                // `tool_execution_start` event already carries the same
+                // tool name/arguments in a shape meant to be rendered.
+                "text": agent_loop::render_text(&assistant.content),
+                "stop_reason": stop_reason_str(assistant.stop_reason),
+            }),
+        ),
+        LoopEvent::ToolExecutionStart {
+            tool_call_id,
+            tool_name,
+            arguments,
+        } => sse_event(
+            "tool_execution_start",
+            json!({
+                "tool_call_id": tool_call_id,
+                "tool_name": tool_name,
+                "arguments": arguments,
+            }),
+        ),
+        LoopEvent::ToolExecutionEnd {
+            tool_call_id,
+            tool_name,
+            is_error,
+            details,
+            entry_ids,
+        } => {
+            let entry_count = tool_entry_count(&entry_ids, &details);
+            sse_event(
+                "tool_execution_end",
+                json!({
+                    "tool_call_id": tool_call_id,
+                    "tool_name": tool_name,
+                    "is_error": is_error,
+                    "details": details,
+                    "entry_ids": entry_ids,
+                    "entry_count": entry_count,
+                }),
+            )
+        }
+    }
+}
+
+/// The spawned task `reflect_handler` hands its SSE sender to — runs the
+/// loop, translating every `LoopEvent` it reports into a frame on `tx` as
+/// it happens, and always ends the stream with exactly one `agent_end`
+/// frame: `{"status": "ok", ...ReflectResponse}` on success, or
+/// `{"status": "error", "error": "..."}` on any failure
+/// `run_reflect_stream_inner` returns. This is issue #96's answer to "a Server
+/// interrupted mid-Answer leaves the interface recoverable": the stream
+/// always ends with a frame a client can recognise as failure, rather than
+/// the connection just closing (which a client cannot tell apart from a
+/// dropped network) or hanging forever waiting for an `agent_end` that
+/// never comes. Every `tx.send` here is `let _ = ...` for the same reason
+/// `chat::PromptedToolClient::stream`'s is: a client that has already
+/// disconnected has simply dropped its receiver, which is not a failure
+/// this task needs to report anywhere — there is no one left to tell.
+async fn run_reflect_stream(
+    pool: PgPool,
+    reflect: ReflectState,
+    req: ReflectRequest,
+    prior_turns: Vec<SessionTurnRow>,
+    title: String,
+    tx: SseSender,
+) {
+    let final_event =
+        match run_reflect_stream_inner(&pool, &reflect, &req, prior_turns, &title, &tx).await {
+            Ok(response) => {
+                // `ReflectResponse` still carries exactly the shape a pre-#96
+                // client's whole response body used to be — flattened onto
+                // `agent_end` rather than replaced, so everything that shape
+                // already meant (session_id/title/answer/grounding_entry_ids/
+                // grounded/fallback_used) survives the move from "the response
+                // body" to "the terminal event's data" unchanged.
+                let mut payload = serde_json::to_value(&response)
+                    .expect("serializing a ReflectResponse can't fail");
+                payload["status"] = json!("ok");
+                sse_event("agent_end", payload)
+            }
+            Err(err) => sse_event(
+                "agent_end",
+                json!({ "status": "error", "error": err.to_string() }),
+            ),
+        };
+    let _ = tx.send(Ok(final_event));
+}
+
+/// `/v1/reflect`'s live implementation (issue #93 pass 2; issue #96 turned
+/// it into the body of a spawned, streaming task rather than a request/
+/// response function): builds a `harness::types::Context` from
+/// `prior_turns` plus the active tool set, runs
+/// `harness::agent_loop::run_with_events` against a `PromptedToolClient`
+/// wrapping `reflect.chat_client` — reporting every `LoopEvent` it produces
+/// onto `tx` as an SSE frame, live, via `loop_event_to_sse` — and, only once
+/// the loop actually produced an Answer, persists every step it took into
+/// the Session entry tree (`sessions::record_turn_from_steps`) in one
+/// transaction, the same "persist only after success" guarantee
+/// `record_turn` always gave. Session resolution itself
+/// (`resolve_session`) already happened in `reflect_handler`, synchronously,
+/// before this function's caller (`run_reflect_stream`) was ever spawned —
+/// see that handler's own doc comment for why.
 ///
 /// `grounded`/`fallback_used` mean something narrower here than they did
 /// under the old pipeline (`ReflectResponse`'s own doc comments describe
 /// what they used to mean): `grounded` is simply "at least one Entry
 /// appeared in a tool result this run", and `fallback_used` is always
-/// `false` — the loop has no disclosed-fallback mechanism yet. The wire
-/// shape itself is unchanged (`PROTOCOL_VERSION` stays 1) because that
-/// wire change is issue #96's, not this one's; these two fields keep their
-/// old *names* while this function gives them the simplest honest meaning
-/// available today.
-async fn run_reflect_loop(
+/// `false` — the loop has no disclosed-fallback mechanism yet. These two
+/// fields keep their old *names* on the wire while this function gives them
+/// the simplest honest meaning available today.
+async fn run_reflect_stream_inner(
     pool: &PgPool,
     reflect: &ReflectState,
-    req: ReflectRequest,
-) -> Result<ReflectResponse, ReflectError> {
+    req: &ReflectRequest,
+    prior_turns: Vec<SessionTurnRow>,
+    title: &str,
+    tx: &SseSender,
+) -> anyhow::Result<ReflectResponse> {
     let offset_minutes = req
         .utc_offset_minutes
         .clamp(MIN_UTC_OFFSET_MINUTES, MAX_UTC_OFFSET_MINUTES);
-
-    let (prior_turns, title): (Vec<SessionTurnRow>, String) = match req.session_id {
-        Some(id) => {
-            let session = sessions::find_session(pool, id)
-                .await?
-                .ok_or(ReflectError::SessionNotFound)?;
-            let turns = sessions::load_turns(pool, id).await?;
-            (turns, session.title)
-        }
-        None => (Vec::new(), derive_title(&req.question)),
-    };
 
     // Same windowing `run_reflect` applies — `CONVERSATION_WINDOW`'s own
     // doc comment covers why, and it applies identically here: what's
@@ -580,7 +863,7 @@ async fn run_reflect_loop(
     // by meaning) and `read_digest` (issue #95, a written summary rather
     // than raw Entries at all) — each independently constructible, so a
     // future caller (issue #100's evaluation) can build its own subset of
-    // this same `Vec` to compare arms without touching `run_reflect_loop`
+    // this same `Vec` to compare arms without touching `run_reflect_stream_inner`
     // itself. `search_entries` and `similar_entries` stay two tools rather
     // than one merged one deliberately — see `harness::tools`'s own doc
     // comment for why.
@@ -612,22 +895,35 @@ async fn run_reflect_loop(
     messages.push(Message::User(req.question.clone()));
 
     let chat_client = PromptedToolClient::new(reflect.chat_client.clone());
+    // The one place `agent_loop::LoopEvent`s become SSE frames as the loop
+    // actually produces them, rather than after the fact — `tx.send` is
+    // synchronous and non-blocking (`SseSender`'s own doc comment), which is
+    // exactly what `agent_loop::EventSink`'s contract requires of whatever
+    // it's handed (see that type's own doc comment). Reused for both the
+    // initial call and the empty-reply retry below, so a client watching
+    // the stream sees one continuous sequence of turns rather than two
+    // runs it has to stitch together itself.
+    let sink = |event: LoopEvent| {
+        let _ = tx.send(Ok(loop_event_to_sse(event)));
+    };
+
     // `should_stop_after_turn` is `agent_loop::run`'s own unused hook
     // (`ShouldStopAfterTurn`'s doc comment) — issue #93 pass 2 ships no
     // step budget, deliberately, so `None` every time.
     //
     // `messages`/`system_prompt` are cloned here, rather than moved
-    // straight into `run`, so both are still around to build a retry below
-    // if this first call's final reply turns out to be empty — the
-    // ordinary case never needs them again, so the clone is spent only
+    // straight into `run_with_events`, so both are still around to build a
+    // retry below if this first call's final reply turns out to be empty —
+    // the ordinary case never needs them again, so the clone is spent only
     // once, ahead of a chat call that already costs several seconds.
-    let mut outcome = agent_loop::run(
+    let mut outcome = agent_loop::run_with_events(
         &chat_client,
         system_prompt.clone(),
         &tools,
         messages.clone(),
         None,
         Some(reflect.context_window),
+        &sink,
     )
     .await;
 
@@ -651,13 +947,14 @@ async fn run_reflect_loop(
         let mut retry_messages = messages;
         retry_messages.extend(agent_loop::steps_to_messages(&outcome.steps));
         retry_messages.push(Message::User(EMPTY_REPLY_CORRECTION.to_string()));
-        let retry_outcome = agent_loop::run(
+        let retry_outcome = agent_loop::run_with_events(
             &chat_client,
             system_prompt,
             &tools,
             retry_messages,
             None,
             Some(reflect.context_window),
+            &sink,
         )
         .await;
 
@@ -701,9 +998,9 @@ async fn run_reflect_loop(
                                  call left in it"
                 .to_string()
         });
-        return Err(ReflectError::Internal(anyhow::anyhow!(
+        return Err(anyhow::anyhow!(
             "reflect loop did not produce an Answer: {reason}"
-        )));
+        ));
     };
     let answer = answer.into_inner();
 
@@ -734,7 +1031,7 @@ async fn run_reflect_loop(
     let session_id = sessions::record_turn_from_steps(
         pool,
         req.session_id,
-        &title,
+        title,
         NewTurn {
             question: req.question.clone(),
             answer: answer.clone(),
@@ -748,7 +1045,7 @@ async fn run_reflect_loop(
 
     Ok(ReflectResponse {
         session_id,
-        title,
+        title: title.to_string(),
         answer,
         grounding_entry_ids,
         grounded,
@@ -757,7 +1054,7 @@ async fn run_reflect_loop(
 }
 
 /// `prior_turns`, as the `[User, Assistant]` message pairs
-/// `run_reflect_loop` replays into the loop's own `Context` — factored out
+/// `run_reflect_stream_inner` replays into the loop's own `Context` — factored out
 /// of that function so `maybe_compact_prior_turns` can build the same
 /// `Vec<Message>` `harness::compaction::should_compact`/`find_cut_point`
 /// actually judge, rather than a second, only-approximately-the-same
@@ -789,7 +1086,7 @@ fn turns_to_messages(turns: &[SessionTurnRow]) -> Vec<Message> {
 /// own step chain, severing that Turn's leading `user` entry from the tree
 /// `sessions::entries_to_turns` walks and silently erasing the very Turn
 /// that triggered it from every future read. Called here, before
-/// `run_reflect_loop` has appended anything for the *current* Question at
+/// `run_reflect_stream_inner` has appended anything for the *current* Question at
 /// all, the entry this writes always lands cleanly on the boundary between
 /// the last already-persisted Turn and whatever Turn is about to happen —
 /// never inside one.
@@ -799,7 +1096,7 @@ fn turns_to_messages(turns: &[SessionTurnRow]) -> Vec<Message> {
 /// partial keep is not just undesirable but impossible: `session_entries`
 /// is append-only, so a compaction written now can only ever describe
 /// "everything up to the current leaf," and the current leaf, at this
-/// point in `run_reflect_loop`, is the *last* already-persisted Turn.
+/// point in `run_reflect_stream_inner`, is the *last* already-persisted Turn.
 /// `harness::compaction::KEEP_RECENT_TOKENS`/`find_cut_point` — the
 /// "keep some of the tail verbatim" logic — has no equivalent here for
 /// exactly that reason; it belongs to `agent_loop::run`'s ephemeral
@@ -807,7 +1104,7 @@ fn turns_to_messages(turns: &[SessionTurnRow]) -> Vec<Message> {
 /// checkpoint.
 ///
 /// `existing_summary` is whatever `sessions::latest_compaction_summary`
-/// already found for this Session (`run_reflect_loop`'s own call, made
+/// already found for this Session (`run_reflect_stream_inner`'s own call, made
 /// unconditionally, every request — see that function's own doc comment
 /// for why). When compaction fires here, it is threaded into the new
 /// summarisation call (`summarize_prior_turns`) so the new summary still
@@ -971,7 +1268,7 @@ fn build_tree_payloads(
 /// concurrent retrievals merged and capped, an answering call that judges
 /// its own Grounding via a "GROUNDED: yes/no" marker, and a disclosed
 /// fallback when it judges "no". Issue #93 pass 2 stopped calling this from
-/// `reflect_handler` (see `run_reflect_loop`, the loop-based replacement,
+/// `reflect_handler` (see `run_reflect_stream_inner`, the loop-based replacement,
 /// above) but was instructed *not* to delete it — issue #99 is the ticket
 /// that formally retires this function and everything only it still calls.
 /// Kept exactly as it was, working and tested, rather than removed early.
@@ -2277,7 +2574,7 @@ mod tests {
     }
 
     /// The structural half of issue #102's acceptance criteria: the single
-    /// constructor `run_reflect_loop` routes every model reply through
+    /// constructor `run_reflect_stream_inner` routes every model reply through
     /// before it can become `ReflectResponse::answer`/`NewTurn::answer`
     /// rejects every shape `is_empty_final_reply` recognises as nothing to
     /// say, and accepts everything else. There is no second path to a

@@ -46,6 +46,11 @@ fn reflect_state() -> ReflectState {
         chat_client: Arc::new(UnusedLlmClient),
         embed_client: Arc::new(UnusedLlmClient),
         context_window: 200_000,
+        // Issue #96: `GET /v1/models` needs these, but nothing in this file
+        // exercises that route — an address nothing should ever connect to,
+        // matching tests/reflect.rs's own `UNUSED_CHAT_BASE_URL` convention.
+        chat_base_url: "http://127.0.0.1:1".to_string(),
+        chat_api_key: None,
     }
 }
 
