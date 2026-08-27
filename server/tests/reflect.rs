@@ -959,6 +959,26 @@ async fn a_denial_whose_corrective_retry_also_fails_falls_back_to_the_original_d
         "neither attempt ever called a tool"
     );
     assert_eq!(chat.call_count(), 2);
+
+    // Issue #106: the HTTP response already carries the right Answer — the
+    // regression is in what gets *persisted*. A reload must show the same
+    // accepted denial, not the corrective retry's empty reply that
+    // `build_tree_payloads` used to treat as "the last Assistant entry, so
+    // it must be the Answer."
+    let id = session_id(&body);
+    let session = get_session(&pool, reflect_state(chat), id).await;
+    let turns = session["turns"]
+        .as_array()
+        .expect("SessionResponse::turns should be a JSON array");
+    assert_eq!(
+        turns.len(),
+        1,
+        "exactly one Turn should be persisted: {turns:?}"
+    );
+    assert_eq!(
+        turns[0]["answer"], "I can't access any journal entries from here.",
+        "a reload must show the accepted denial, not the corrective retry's empty reply: {turns:?}"
+    );
 }
 
 #[sqlx::test]
@@ -1903,6 +1923,100 @@ async fn an_empty_reply_after_a_real_tool_call_still_carries_that_grounding_once
     assert_eq!(body["answer"], "The flat move went well, it sounds like.");
     assert_eq!(grounding_ids(&body), vec![entry_id]);
     assert_eq!(chat.call_count(), 3);
+}
+
+/// Issue #106, follow-up: the no-tool-call corrective turn (issue #103)
+/// runs a *full* loop, not a single completion — it can call a real tool,
+/// see a real Entry, and still end with an empty final reply. When that
+/// happens, the retry is rejected and the *original* denial is kept as the
+/// Answer (this file's own
+/// `a_denial_whose_corrective_retry_also_fails_falls_back_to_the_original_denial`
+/// pins that). But that denial was produced before any tool ever ran — the
+/// rejected retry's tool call happened on a path whose own reply never
+/// reached the user. Crediting the kept denial with Grounding it never saw,
+/// or reporting `tool_called: true` for an Answer that demonstrably never
+/// had a tool result in front of it, would be the same class of bug as
+/// #99's carry-over and #105's misattribution: the record disagreeing with
+/// what actually produced the Answer. Both the live response and a reload
+/// must show `tool_called: false` and no Grounding.
+#[sqlx::test]
+async fn a_tool_call_inside_a_rejected_no_tool_call_retry_does_not_ground_the_kept_denial(
+    pool: PgPool,
+) {
+    let entry_id = Uuid::new_v4();
+    insert_entry_at(
+        &pool,
+        entry_id,
+        "Ran a 5k this morning.",
+        DateTime::parse_from_rfc3339("2026-07-05T08:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc),
+    )
+    .await;
+
+    let chat = Arc::new(FakeChatClient::new([
+        // First attempt: an ordinary no-tool-call reply, which #103's own
+        // corrective turn always gets one shot at.
+        "I can't access any journal entries from here.".to_string(),
+        // The corrective retry's own run: it calls a real tool and finds a
+        // real Entry...
+        tool_call_tag(
+            "entries_in_range",
+            json!({"from": "2026-07-01", "to": "2026-07-31"}),
+        ),
+        // ...but its own final reply, after seeing that tool result, comes
+        // back empty — rejected, so the original denial above is kept.
+        "".to_string(),
+    ]));
+    let reflect = reflect_state(chat.clone());
+
+    let (status, body) = post_reflect(
+        &pool,
+        Some(reflect),
+        json!({ "protocol_version": 3, "question": "how is my knee doing" }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["answer"],
+        "I can't access any journal entries from here."
+    );
+    assert_eq!(chat.call_count(), 3);
+    assert_eq!(
+        grounding_ids(&body),
+        Vec::<Uuid>::new(),
+        "the kept denial never saw the rejected retry's tool result, live: {body:?}"
+    );
+    assert_eq!(
+        body["tool_called"], false,
+        "the kept denial's own attempt never called a tool, live: {body:?}"
+    );
+
+    let id = session_id(&body);
+    let session = get_session(&pool, reflect_state(chat), id).await;
+    let turns = session["turns"]
+        .as_array()
+        .expect("SessionResponse::turns should be a JSON array");
+    assert_eq!(
+        turns.len(),
+        1,
+        "exactly one Turn should be persisted: {turns:?}"
+    );
+    assert_eq!(
+        turns[0]["answer"],
+        "I can't access any journal entries from here."
+    );
+    assert_eq!(
+        turns[0]["grounding_entry_ids"],
+        json!([]),
+        "a reload must not credit the kept denial with the rejected retry's Grounding: {turns:?}"
+    );
+    assert_eq!(
+        turns[0]["tool_called"], false,
+        "a reload must not disagree with the live response about whether the kept denial's own \
+         attempt called a tool: {turns:?}"
+    );
 }
 
 // -- issue #96: a run that fails mid-stream terminates recognisably --------

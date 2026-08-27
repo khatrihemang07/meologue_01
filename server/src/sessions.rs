@@ -318,15 +318,31 @@ pub(crate) enum MessagePayload {
     },
     Assistant {
         text: String,
-        /// Only the *last* `Assistant` entry in a Turn's own run ever
-        /// carries a non-empty `Vec` here — the Entry ids the tools this
-        /// Turn called returned, in the order they first appeared. Never a
-        /// merged, deduped, relevance-ranked list computed in advance (that
-        /// belonged to the fixed pipeline issue #99 removed): simply what
-        /// the tools returned. See `build_tree_payloads`'s own doc comment
-        /// on `server/src/reflect.rs` for why only the last entry gets it.
+        /// Only the accepted Answer's `Assistant` entry ever carries a
+        /// non-empty `Vec` here — the Entry ids the tools this Turn called
+        /// returned, in the order they first appeared. Never a merged,
+        /// deduped, relevance-ranked list computed in advance (that belonged
+        /// to the fixed pipeline issue #99 removed): simply what the tools
+        /// returned. See `build_tree_payloads`'s own doc comment on
+        /// `server/src/reflect.rs` for why only that entry gets it.
         #[serde(default)]
         grounding_entry_ids: Vec<Uuid>,
+        /// Issue #106: marks the `Assistant` entry `entries_to_turns` should
+        /// read back as the Turn's Answer — set on exactly one entry per
+        /// Turn by `build_tree_payloads`, the accepted Answer's own index,
+        /// rather than inferred positionally as "whichever one is last."
+        /// #103's corrective turn can append a further `Assistant` entry
+        /// *after* the accepted one (an empty or rejected retry reply, kept
+        /// for an honest record — see `run_reflect_stream_inner`'s own
+        /// no-tool-call fallback branch), which is exactly the shape that
+        /// made "last" wrong: the accepted Answer is no longer guaranteed to
+        /// be the last entry in the run. `#[serde(default)]` is load-bearing
+        /// for every row `record_turn_from_steps` wrote before this field
+        /// existed — those decode with `is_answer: false` on every entry,
+        /// which is what `entries_to_turns`'s own last-wins fallback exists
+        /// to still handle correctly.
+        #[serde(default)]
+        is_answer: bool,
     },
     ToolResult {
         text: String,
@@ -1190,6 +1206,17 @@ fn entries_to_turns(path: &[&EntryRow], seed_model: &str) -> anyhow::Result<Vec<
 
         let mut cursor = index + 1;
         let mut answer: Option<SessionTurnRow> = None;
+        // Issue #106: the `Assistant` entry `build_tree_payloads` marked
+        // `is_answer: true`, if any — a snapshot taken at the moment it's
+        // walked, the same way `answer` below always has been, so
+        // `tool_called`/`digest_source` still reflect the state as of that
+        // entry rather than whatever the rest of the run does afterward.
+        // Preferred over `answer`'s own last-wins snapshot once the loop
+        // below finishes; see this function's own doc comment for why
+        // "last" alone stopped being reliable, and why a Turn with no
+        // marked entry (every row `record_turn_from_steps` wrote before
+        // this field existed) must still fall back to it.
+        let mut marked_answer: Option<SessionTurnRow> = None;
         // Issue #103: tracks whether any `tool_result` entry has been seen
         // yet in this Turn's own run, from the `user` entry above down to
         // whichever `assistant` entry ends up "last" (below). Read, not
@@ -1216,8 +1243,9 @@ fn entries_to_turns(path: &[&EntryRow], seed_model: &str) -> anyhow::Result<Vec<
                 Some(MessagePayload::Assistant {
                     text,
                     grounding_entry_ids,
+                    is_answer,
                 }) => {
-                    answer = Some(SessionTurnRow {
+                    let row = SessionTurnRow {
                         question: question.clone(),
                         answer: text,
                         grounding_entry_ids,
@@ -1225,7 +1253,11 @@ fn entries_to_turns(path: &[&EntryRow], seed_model: &str) -> anyhow::Result<Vec<
                         digest_source: digest_source.clone(),
                         model: current_model.clone(),
                         created_at: path[cursor].created_at,
-                    });
+                    };
+                    if is_answer {
+                        marked_answer = Some(row.clone());
+                    }
+                    answer = Some(row);
                 }
                 Some(MessagePayload::ToolResult { details, .. }) => {
                     tool_called = true;
@@ -1238,7 +1270,7 @@ fn entries_to_turns(path: &[&EntryRow], seed_model: &str) -> anyhow::Result<Vec<
             cursor += 1;
         }
 
-        if let Some(turn) = answer {
+        if let Some(turn) = marked_answer.or(answer) {
             turns.push(turn);
         }
         index = cursor;
@@ -1386,6 +1418,26 @@ mod tests {
             serde_json::to_value(MessagePayload::Assistant {
                 text: text.to_string(),
                 grounding_entry_ids: Vec::new(),
+                is_answer: false,
+            })
+            .unwrap(),
+        )
+    }
+
+    /// Issue #106: an `Assistant` entry marked `is_answer: true`, the shape
+    /// `build_tree_payloads` now writes for whichever entry is the accepted
+    /// Answer — see `entries_to_turns`'s own doc comment on why this stops
+    /// being reliably "the last entry" once a corrective turn's own reply
+    /// can be rejected and fallen back from.
+    fn marked_assistant_message(id: Uuid, parent_id: Option<Uuid>, text: &str) -> EntryRow {
+        entry(
+            id,
+            parent_id,
+            EntryType::Message,
+            serde_json::to_value(MessagePayload::Assistant {
+                text: text.to_string(),
+                grounding_entry_ids: Vec::new(),
+                is_answer: true,
             })
             .unwrap(),
         )
@@ -1463,6 +1515,7 @@ mod tests {
             serde_json::to_value(MessagePayload::Assistant {
                 text: "Recurring since February.".to_string(),
                 grounding_entry_ids: Vec::new(),
+                is_answer: false,
             })
             .unwrap(),
         )
@@ -1599,6 +1652,7 @@ mod tests {
             serde_json::to_value(MessagePayload::Assistant {
                 text: "A".to_string(),
                 grounding_entry_ids: Vec::new(),
+                is_answer: false,
             })
             .unwrap(),
         )
@@ -1652,6 +1706,7 @@ mod tests {
             serde_json::to_value(MessagePayload::Assistant {
                 text: "Recurring since February.".to_string(),
                 grounding_entry_ids: Vec::new(),
+                is_answer: false,
             })
             .unwrap(),
         )
@@ -1872,6 +1927,47 @@ mod tests {
         assert_eq!(turns[0].answer, "You ran a 5k on July 5th.");
     }
 
+    /// Issue #106: once a corrective turn can append a further `Assistant`
+    /// entry *after* the one that was actually accepted (the no-tool-call
+    /// fallback in `run_reflect_stream_inner` keeps the original Answer when the
+    /// retry's own reply is rejected, but still appends the rejected reply's
+    /// steps for an honest record — `reflect.rs::build_tree_payloads`'s own
+    /// doc comment covers why), "the last `Assistant` entry is the Answer"
+    /// stops being true. A Turn built with an *earlier* entry marked
+    /// `is_answer: true` and a later, blank, unmarked one must read back
+    /// with the earlier, marked entry as the Answer — the opposite of what
+    /// `a_loop_turns_run_reads_back_with_the_last_assistant_entry_as_the_answer`
+    /// above pins for the old, unmarked shape.
+    #[test]
+    fn a_marked_assistant_entry_wins_over_a_later_unmarked_one() {
+        let question_id = Uuid::new_v4();
+        let question = user_message(question_id, None, "how is my knee doing");
+
+        let accepted_id = Uuid::new_v4();
+        let accepted = marked_assistant_message(
+            accepted_id,
+            Some(question_id),
+            "I can't access any journal entries from here.",
+        );
+
+        // The rejected corrective retry's own (empty) reply — appended
+        // after the accepted Answer, unmarked, exactly as
+        // `build_tree_payloads` writes it.
+        let rejected_retry_id = Uuid::new_v4();
+        let rejected_retry = assistant_message(rejected_retry_id, Some(accepted_id), "");
+
+        let path = vec![&question, &accepted, &rejected_retry];
+        let turns = entries_to_turns(&path, DEFAULT_MODEL).unwrap();
+
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].question, "how is my knee doing");
+        assert_eq!(
+            turns[0].answer, "I can't access any journal entries from here.",
+            "the marked entry must win even though it isn't last: {:?}",
+            turns[0]
+        );
+    }
+
     /// Two consecutive loop-driven Turns in the same Session — the run
     /// boundary (the *next* `user` entry) must correctly separate them, not
     /// just the presence of an `assistant` entry.
@@ -2017,6 +2113,7 @@ mod tests {
                 serde_json::to_value(MessagePayload::Assistant {
                     text: "[calling entries_in_range]".to_string(),
                     grounding_entry_ids: Vec::new(),
+                    is_answer: false,
                 })
                 .unwrap(),
             ),
@@ -2035,6 +2132,7 @@ mod tests {
                 serde_json::to_value(MessagePayload::Assistant {
                     text: "You ran a 5k on July 5th.".to_string(),
                     grounding_entry_ids: Vec::new(),
+                    is_answer: true,
                 })
                 .unwrap(),
             ),

@@ -1119,6 +1119,19 @@ async fn run_reflect_stream_inner(
     )
     .await;
 
+    // Issue #106: the index, into whatever `outcome.steps` ends up being by
+    // the time `build_tree_payloads` runs below, of the `Step::Assistant`
+    // that is the *accepted* Answer — not necessarily the last step once
+    // either corrective turn below has run. Starts out as the initial run's
+    // own last step, which is correct whenever neither corrective block
+    // fires: `outcome.answer`, when `Some`, is always that call's own last
+    // pushed step (`agent_loop::run`'s own doc comment on exit point 2).
+    // Each block below that keeps its retry's reply updates this the same
+    // way; the no-tool-call block, which can instead keep the *original*
+    // reply, is the one place this stops tracking "last" (see its own
+    // comment).
+    let mut answer_step_index = outcome.steps.len().saturating_sub(1);
+
     // issue #102: "no tool call left in the reply" is the loop's normal
     // stopping condition (`agent_loop::LoopOutcome::answer`'s own doc
     // comment), and an *empty* reply satisfies that condition exactly as
@@ -1168,6 +1181,12 @@ async fn run_reflect_stream_inner(
         // the way to the real Answer, not the Answer itself.
         let mut steps = outcome.steps;
         steps.extend(retry_outcome.steps);
+        // This retry's answer, whenever it ends up non-empty, is always
+        // this block's own last pushed step — there is no "keep the
+        // original" fallback here (a still-empty reply falls straight
+        // through to the `NonEmptyAnswer` gate below and fails the
+        // request), so "last" stays correct.
+        answer_step_index = steps.len().saturating_sub(1);
         outcome = agent_loop::LoopOutcome {
             steps,
             answer: retry_outcome.answer,
@@ -1237,6 +1256,12 @@ async fn run_reflect_stream_inner(
 
         let mut steps = outcome.steps;
         let original_answer = outcome.answer;
+        // Issue #106: captured *before* the retry's own steps are appended
+        // below — the accepted Answer, if the retry ends up rejected, is
+        // the last `Step::Assistant` `outcome.steps` already held going
+        // into this block, not whatever ends up last in the combined list
+        // once the retry's (possibly empty) reply is appended after it.
+        let original_answer_index = steps.len().saturating_sub(1);
         steps.extend(retry_outcome.steps);
         // Unlike the empty-reply block above, a corrective turn that itself
         // comes back empty (or errors) must not turn an already-valid,
@@ -1246,14 +1271,26 @@ async fn run_reflect_stream_inner(
         // show (CONTEXT.md's don't-invent rule is about fabricating journal
         // content, not about this). Only a genuinely non-empty retry reply
         // replaces it; anything else falls back to the original.
-        let answer = if retry_outcome
+        let retry_accepted = retry_outcome
             .answer
             .as_deref()
-            .is_some_and(|text| !is_empty_final_reply(text))
-        {
+            .is_some_and(|text| !is_empty_final_reply(text));
+        let answer = if retry_accepted {
             retry_outcome.answer
         } else {
             original_answer
+        };
+        // Mirrors `answer` above exactly: the retry's own last step when
+        // its reply was accepted (`steps.len() - 1`, since its steps were
+        // just appended), otherwise the original answer's own index,
+        // captured above before the append — this is the one place in this
+        // function where the accepted Answer is not simply "the last step,"
+        // which is why #106's fix marks it explicitly rather than inferring
+        // it positionally in `build_tree_payloads`.
+        answer_step_index = if retry_accepted {
+            steps.len().saturating_sub(1)
+        } else {
+            original_answer_index
         };
         outcome = agent_loop::LoopOutcome {
             steps,
@@ -1291,9 +1328,27 @@ async fn run_reflect_stream_inner(
     // occurrence — generic across whatever tool produced it, not a merged,
     // ranked list computed in advance (issue #99 removed the pipeline that
     // used to build one): simply the Entry ids the tools returned.
+    //
+    // Issue #106 follow-up: scoped to `..=answer_step_index`, not all of
+    // `outcome.steps` — Grounding is what the tools returned *before* the
+    // accepted Answer, not anything any tool call anywhere in this request
+    // ever surfaced. The no-tool-call fallback branch above is exactly why
+    // this distinction is live: its rejected retry runs a full loop of its
+    // own, which can call a real tool and see a real Entry before its own
+    // final reply comes back empty and gets rejected — those steps land in
+    // `outcome.steps` *after* `answer_step_index` for an honest record (see
+    // that branch's own comment), but the kept Answer they're appended
+    // after was produced before any of them happened. Crediting it with
+    // that Grounding, or reporting `tool_called: true` for it, would be the
+    // same class of bug as #99's carry-over and #105's misattribution: the
+    // record disagreeing with what actually produced the Answer. Using the
+    // same bound `build_tree_payloads` already keys the marked entry's own
+    // payload on keeps the live response and the persisted, reloaded Turn
+    // in agreement — both read from this one computation.
+    let grounded_steps = &outcome.steps[..=answer_step_index];
     let mut seen_entry_ids = HashSet::new();
     let mut grounding_entry_ids = Vec::new();
-    for step in &outcome.steps {
+    for step in grounded_steps {
         if let Step::ToolResult { entry_ids, .. } = step {
             for id in entry_ids {
                 if seen_entry_ids.insert(*id) {
@@ -1307,9 +1362,9 @@ async fn run_reflect_stream_inner(
     // `grounding_entry_ids` alone conflates "tried and found nothing" with
     // "never tried at all"; this is the flag that keeps them apart in the
     // record (`ReflectResponse::tool_called`'s own doc comment covers why
-    // that distinction matters).
-    let tool_called = outcome
-        .steps
+    // that distinction matters). Scoped to the same `grounded_steps` bound
+    // as `grounding_entry_ids` above, for the same #106 follow-up reason.
+    let tool_called = grounded_steps
         .iter()
         .any(|step| matches!(step, Step::ToolResult { .. }));
 
@@ -1342,6 +1397,7 @@ async fn run_reflect_stream_inner(
     let payloads = build_tree_payloads(
         &req.question,
         &outcome.steps,
+        answer_step_index,
         &grounding_entry_ids,
         model_change.as_deref(),
     );
@@ -1508,14 +1564,19 @@ async fn summarize_prior_turns(
 /// `Context.messages` does), then one entry per `Step`, in the order they
 /// happened.
 ///
-/// Only the *last* `Assistant` step carries `grounding_entry_ids` in its
-/// persisted payload — it is the only one `sessions::entries_to_turns` will
-/// ever read back as a Turn's answer (its own doc comment covers why: the
-/// *last* Assistant entry in a Turn's run is the one that actually
-/// answered, not the first). An earlier Assistant step exists only because
-/// it made a tool call; giving it the same Grounding as the real answer
-/// would be misleading if anything ever read it directly, and
-/// `entries_to_turns` never will.
+/// Only the `Assistant` step at `answer_step_index` — the accepted
+/// Answer, computed by `run_reflect_stream_inner` above — carries
+/// `grounding_entry_ids` in its persisted payload, and is the one
+/// `MessagePayload::Assistant` entry marked `is_answer: true`.
+/// `sessions::entries_to_turns` prefers whichever entry in a Turn's run
+/// carries that flag (its own doc comment covers why: issue #106 found that
+/// "the last Assistant entry" stops being the accepted Answer once a
+/// corrective turn's own reply can be rejected and fallen back from). Every
+/// other Assistant step — including one *after* `answer_step_index`, e.g. a
+/// rejected corrective retry's own reply, kept as an honest record of what
+/// actually happened — is written with `is_answer: false` and no Grounding;
+/// giving either to a step that isn't the accepted Answer would be
+/// misleading if anything ever read it directly.
 ///
 /// `model_change` (issue #98) is `Some(model)` exactly when this Turn's own
 /// `resolve_model` call found the Conversation moving onto a different
@@ -1530,6 +1591,7 @@ async fn summarize_prior_turns(
 fn build_tree_payloads(
     question: &str,
     steps: &[Step],
+    answer_step_index: usize,
     grounding_entry_ids: &[Uuid],
     model_change: Option<&str>,
 ) -> Vec<(EntryType, Value)> {
@@ -1551,11 +1613,10 @@ fn build_tree_payloads(
         .expect("serializing a user message payload can't fail"),
     ));
 
-    let last_index = steps.len().saturating_sub(1);
     for (index, step) in steps.iter().enumerate() {
         let payload = match step {
             Step::Assistant(assistant) => {
-                let is_final_answer = index == last_index;
+                let is_final_answer = index == answer_step_index;
                 serde_json::to_value(MessagePayload::Assistant {
                     text: agent_loop::render_content_for_display(&assistant.content),
                     grounding_entry_ids: if is_final_answer {
@@ -1563,6 +1624,7 @@ fn build_tree_payloads(
                     } else {
                         Vec::new()
                     },
+                    is_answer: is_final_answer,
                 })
             }
             Step::ToolResult {
