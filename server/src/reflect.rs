@@ -979,7 +979,13 @@ fn parse_date_range(value: &Value) -> Option<(NaiveDate, NaiveDate)> {
 /// finds the outermost `{...}` regardless of what surrounds it, but a
 /// fenced response is common enough from chat models that stripping it
 /// explicitly first is worth the few lines.
-fn strip_code_fences(text: &str) -> &str {
+///
+/// `pub(crate)`, not private: `harness::prompted` reuses this verbatim for
+/// a `<tool_call>` tag's interior, which the same configured model wraps
+/// in exactly the same markdown noise. Reusing it (rather than a second
+/// copy) is what keeps the two defensive-parsing behaviours from drifting
+/// apart.
+pub(crate) fn strip_code_fences(text: &str) -> &str {
     let trimmed = text.trim();
     let Some(after_open) = trimmed.strip_prefix("```") else {
         return trimmed;
@@ -995,7 +1001,10 @@ fn strip_code_fences(text: &str) -> &str {
 /// missing or they're out of order. This is what makes parsing tolerant of
 /// a model that wraps its JSON in a sentence ("Sure, here's the JSON:
 /// {...}") even without a code fence around it.
-fn extract_json_object(text: &str) -> Option<&str> {
+///
+/// `pub(crate)` for the same reason as `strip_code_fences` above:
+/// `harness::prompted` reuses it for a `<tool_call>` tag's interior.
+pub(crate) fn extract_json_object(text: &str) -> Option<&str> {
     let start = text.find('{')?;
     let end = text.rfind('}')?;
     if end < start {

@@ -1,5 +1,6 @@
 pub mod digest;
 pub mod embedding;
+pub mod harness;
 pub mod health;
 pub mod llm;
 pub mod metrics;
