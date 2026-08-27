@@ -23,6 +23,13 @@
 //! merged one, because they fail on different kinds of Question and a
 //! merged tool would hide exactly that difference — see each file's own
 //! doc comment for what it wraps and why.
+//!
+//! All three render an Entry into a tool result the same way, through
+//! `render_entry` below (issue #101) — previously each file carried its
+//! own copy of the same `format!`, and because they were copies rather
+//! than one function, all three carried the same date-boundary bug. See
+//! `render_entry`'s own doc comment for what that bug was and why one
+//! function fixes it everywhere at once.
 
 pub mod entries_in_range;
 pub mod search_entries;
@@ -31,6 +38,7 @@ pub mod similar_entries;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use chrono::{DateTime, Duration, Utc};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -39,6 +47,51 @@ pub use search_entries::SearchEntriesTool;
 pub use similar_entries::SimilarEntriesTool;
 
 use super::types::Tool;
+
+/// Renders one Entry as `[local-date] body` — the single implementation
+/// every harness tool calls to show the model an Entry, replacing three
+/// copies of the same `format!` that used to live one per tool
+/// (`entries_in_range.rs`, `search_entries.rs`, `similar_entries.rs`).
+/// Because they were copies rather than one function, all three carried
+/// the same bug (issue #101): `created_at` is stored, and was rendered,
+/// in UTC, but a date range asked of `entries_in_range` is resolved
+/// against the asking Device's *local* day
+/// (`reflect::local_date_range_to_utc`, per ADR 0023, itself following ADR
+/// 0016's rule that a local day is what a Device's own offset says it is,
+/// never the UTC calendar date). The two disagreed at every local-day
+/// boundary. Observed live at `utc_offset_minutes: 330` (IST): a Question
+/// asking to compare July against August called
+/// `entries_in_range({from: "2026-07-01", to: "2026-08-31"})`, and an
+/// Entry stored as `created_at = 2026-06-30 19:45+00` — `2026-07-01
+/// 01:15` in Asia/Kolkata, correctly inside the requested range — came
+/// back labelled `[2026-06-30]`, a date outside the very range that had
+/// just been asked for. The retrieval was right; only the label lied
+/// about it, which is exactly the kind of thing that invites a model to
+/// distrust a tool it should trust, or to quote the wrong date back to
+/// the user.
+///
+/// **There are two different sources of "local" in this codebase, and
+/// this function is only one of them — the two must not be conflated.**
+/// Every harness tool acts on behalf of an asking Device, which supplies
+/// its own `utc_offset_minutes` on every Question (ADR 0023); that is the
+/// same value `reflect::local_date_range_to_utc` already uses to resolve
+/// a range into UTC, so using it here too is what makes a rendered label
+/// agree with the range that produced it. `digest.rs`'s Digest worker has
+/// no Device in its loop at all (ADR 0027) — there is no request to read
+/// an offset from — and instead reads the Server's own configured
+/// `MEOLOGUE_TZ` via `period::server_timezone`, a full IANA `chrono_tz::Tz`
+/// rather than a fixed offset, because a `Tz` (unlike a Device's
+/// snapshot-in-time offset) knows how to account for a DST transition
+/// across the Period it's bucketing. Handing this function an offset
+/// derived from that `Tz`, or having the Digest worker call this instead
+/// of converting through its own `Tz`, would erase the distinction ADR
+/// 0027 draws between an explicit per-request Device offset and an
+/// explicit process-wide operator setting — so `digest.rs` keeps its own
+/// analogous renderer rather than sharing this one.
+pub fn render_entry(created_at: DateTime<Utc>, body: &str, utc_offset_minutes: i32) -> String {
+    let local = created_at + Duration::minutes(i64::from(utc_offset_minutes));
+    format!("[{}] {}", local.format("%Y-%m-%d"), body)
+}
 
 /// What running one tool call produced — pi's own `content`/`details` split
 /// (`AgentToolResult`), issue #93's own words: "a compact rendering the
@@ -184,6 +237,45 @@ pub fn render_tool_guidance(base: &str, tools: &[Arc<dyn AgentTool>]) -> String 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::NaiveDate;
+
+    fn at(y: i32, m: u32, d: u32, h: u32, min: u32) -> DateTime<Utc> {
+        NaiveDate::from_ymd_opt(y, m, d)
+            .unwrap()
+            .and_hms_opt(h, min, 0)
+            .unwrap()
+            .and_utc()
+    }
+
+    /// At offset 0, the local date is just the UTC date — the "nothing
+    /// changed for the common case" baseline the rest of these tests lean
+    /// on.
+    #[test]
+    fn zero_offset_renders_the_utc_date_unchanged() {
+        let rendered = render_entry(at(2026, 6, 30, 19, 45), "body", 0);
+        assert_eq!(rendered, "[2026-06-30] body");
+    }
+
+    /// The exact case from issue #101's live report: `2026-06-30 19:45
+    /// UTC` at `utc_offset_minutes: 330` (IST, east of UTC) is
+    /// `2026-07-01 01:15` locally — already the next day. Rendering the
+    /// UTC date here is the bug; rendering `2026-07-01` is the fix.
+    #[test]
+    fn east_of_utc_a_late_evening_entry_rolls_forward_to_the_next_local_day() {
+        let rendered = render_entry(at(2026, 6, 30, 19, 45), "body", 330);
+        assert_eq!(rendered, "[2026-07-01] body");
+    }
+
+    /// The direction issue #101 explicitly calls out as the one that gets
+    /// forgotten: west of UTC, an early-morning UTC Entry is still
+    /// *yesterday* locally. `2026-07-01 03:00 UTC` at offset `-480`
+    /// (Pacific, UTC-8) is `2026-06-30 19:00` locally — a genuine day
+    /// rollback, not just "no change" or "roll forward".
+    #[test]
+    fn west_of_utc_an_early_morning_entry_rolls_back_to_the_previous_local_day() {
+        let rendered = render_entry(at(2026, 7, 1, 3, 0), "body", -480);
+        assert_eq!(rendered, "[2026-06-30] body");
+    }
 
     struct FixedTool {
         name: &'static str,

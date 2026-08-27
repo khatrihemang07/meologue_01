@@ -36,7 +36,7 @@ use crate::llm::LlmClient;
 use crate::reflect::{GroundingEntry, retrieve_nearest};
 use sqlx::PgPool;
 
-use super::{AgentTool, ToolOutcome};
+use super::{AgentTool, ToolOutcome, render_entry};
 
 /// See `entries_in_range.rs::DEFAULT_PAGE_SIZE` — same value, same
 /// reasoning, kept as this tool's own constant for the same reason
@@ -50,17 +50,29 @@ pub const MAX_PAGE_SIZE: i64 = 100;
 pub const CONTENT_CHAR_BUDGET: usize = 8_000;
 
 /// `similar_entries(query, limit?, offset?)` — the tool itself. Holds a
-/// `PgPool` and the embedding client `ReflectState.embed_client` already
-/// carries, both fixed for the lifetime of one `/v1/reflect` request, the
-/// same shape `EntriesInRangeTool` holds its own fixed dependencies in.
+/// `PgPool`, the embedding client `ReflectState.embed_client` already
+/// carries, and the asking Device's `utc_offset_minutes` (issue #101 —
+/// see `render_entry`'s doc comment for why every tool needs it now, not
+/// just `entries_in_range`) — all three fixed for the lifetime of one
+/// `/v1/reflect` request, the same shape `EntriesInRangeTool` holds its
+/// own fixed dependencies in.
 pub struct SimilarEntriesTool {
     pool: PgPool,
     embed_client: Arc<dyn LlmClient + Send + Sync>,
+    utc_offset_minutes: i32,
 }
 
 impl SimilarEntriesTool {
-    pub fn new(pool: PgPool, embed_client: Arc<dyn LlmClient + Send + Sync>) -> Self {
-        Self { pool, embed_client }
+    pub fn new(
+        pool: PgPool,
+        embed_client: Arc<dyn LlmClient + Send + Sync>,
+        utc_offset_minutes: i32,
+    ) -> Self {
+        Self {
+            pool,
+            embed_client,
+            utc_offset_minutes,
+        }
     }
 }
 
@@ -153,7 +165,7 @@ impl AgentTool for SimilarEntriesTool {
         let mut shown: Vec<(&GroundingEntry, String)> = Vec::new();
         let mut char_count = 0usize;
         for entry in window.iter().take(limit as usize) {
-            let rendered = format!("[{}] {}", entry.created_at.format("%Y-%m-%d"), entry.body);
+            let rendered = render_entry(entry.created_at, &entry.body, self.utc_offset_minutes);
             let next_count = char_count + rendered.chars().count();
             if !shown.is_empty() && next_count > CONTENT_CHAR_BUDGET {
                 break;
@@ -228,7 +240,7 @@ fn parse_optional_i64(arguments: &Value, field: &str) -> Option<i64> {
 mod tests {
     use anyhow::bail;
     use async_trait::async_trait;
-    use chrono::{DateTime, Utc};
+    use chrono::{DateTime, NaiveDate, Utc};
     use sqlx::PgPool;
     use uuid::Uuid;
 
@@ -314,7 +326,7 @@ mod tests {
     /// returns `Err`, not panic or a misleading `Ok`.
     #[sqlx::test]
     async fn an_embedding_failure_is_a_recoverable_error_result(pool: PgPool) {
-        let tool = SimilarEntriesTool::new(pool, failing_client());
+        let tool = SimilarEntriesTool::new(pool, failing_client(), 0);
         let err = tool
             .execute(json!({"query": "how was my trip to Japan"}))
             .await
@@ -327,7 +339,7 @@ mod tests {
 
     #[sqlx::test]
     async fn no_embedded_entries_gets_plain_empty_wording(pool: PgPool) {
-        let tool = SimilarEntriesTool::new(pool, succeeding_client());
+        let tool = SimilarEntriesTool::new(pool, succeeding_client(), 0);
         let outcome = tool.execute(json!({"query": "anything"})).await.unwrap();
         assert!(outcome.content.contains("No Entries have been embedded"));
         assert!(outcome.entry_ids.is_empty());
@@ -339,7 +351,7 @@ mod tests {
         insert_embedded_entry(&pool, "one", day(2026, 3, 10)).await;
         insert_embedded_entry(&pool, "two", day(2026, 3, 11)).await;
 
-        let tool = SimilarEntriesTool::new(pool, succeeding_client());
+        let tool = SimilarEntriesTool::new(pool, succeeding_client(), 0);
         let outcome = tool.execute(json!({"query": "anything"})).await.unwrap();
 
         assert!(
@@ -356,7 +368,7 @@ mod tests {
             insert_embedded_entry(&pool, &format!("entry {i}"), day(2026, 3, 1 + i as u32)).await;
         }
 
-        let tool = SimilarEntriesTool::new(pool, succeeding_client());
+        let tool = SimilarEntriesTool::new(pool, succeeding_client(), 0);
         let outcome = tool.execute(json!({"query": "anything"})).await.unwrap();
 
         assert!(
@@ -375,7 +387,7 @@ mod tests {
             insert_embedded_entry(&pool, &format!("entry {i}"), day(2026, 3, 1 + i as u32)).await;
         }
 
-        let tool = SimilarEntriesTool::new(pool, succeeding_client());
+        let tool = SimilarEntriesTool::new(pool, succeeding_client(), 0);
         let outcome = tool
             .execute(json!({"query": "anything", "offset": 20}))
             .await
@@ -393,7 +405,7 @@ mod tests {
     async fn an_offset_past_the_end_is_reported_plainly(pool: PgPool) {
         insert_embedded_entry(&pool, "only one", day(2026, 3, 10)).await;
 
-        let tool = SimilarEntriesTool::new(pool, succeeding_client());
+        let tool = SimilarEntriesTool::new(pool, succeeding_client(), 0);
         let outcome = tool
             .execute(json!({"query": "anything", "offset": 5}))
             .await
@@ -415,7 +427,7 @@ mod tests {
             .await;
         }
 
-        let tool = SimilarEntriesTool::new(pool, succeeding_client());
+        let tool = SimilarEntriesTool::new(pool, succeeding_client(), 0);
         let outcome = tool
             .execute(json!({"query": "anything", "limit": 500}))
             .await
@@ -426,8 +438,65 @@ mod tests {
 
     #[sqlx::test]
     async fn a_missing_query_is_an_error_result(pool: PgPool) {
-        let tool = SimilarEntriesTool::new(pool, succeeding_client());
+        let tool = SimilarEntriesTool::new(pool, succeeding_client(), 0);
         let err = tool.execute(json!({})).await.unwrap_err();
         assert!(err.contains("query"));
+    }
+
+    /// Issue #101: an Entry this tool renders must carry the asking
+    /// Device's local day, not the UTC day `created_at` is stored in —
+    /// see `entries_in_range.rs`'s own boundary test for the exact live
+    /// case this reproduces the same shape of. East of UTC:
+    /// `2026-06-30 19:45 UTC` at offset `330` (IST) is `2026-07-01`
+    /// locally.
+    #[sqlx::test]
+    async fn a_boundary_entry_east_of_utc_is_labelled_with_its_local_day_not_utc(pool: PgPool) {
+        let created_at = NaiveDate::from_ymd_opt(2026, 6, 30)
+            .unwrap()
+            .and_hms_opt(19, 45, 0)
+            .unwrap()
+            .and_utc();
+        insert_embedded_entry(&pool, "physio today", created_at).await;
+
+        let tool = SimilarEntriesTool::new(pool, succeeding_client(), 330);
+        let outcome = tool.execute(json!({"query": "physio"})).await.unwrap();
+
+        assert!(
+            outcome.content.contains("[2026-07-01]"),
+            "expected the local day 2026-07-01, got: {}",
+            outcome.content
+        );
+        assert!(
+            !outcome.content.contains("[2026-06-30]"),
+            "must not render the UTC day: {}",
+            outcome.content
+        );
+    }
+
+    /// The direction that gets forgotten: west of UTC, an early-morning
+    /// UTC Entry is still *yesterday* locally. At offset `-480` (UTC-8),
+    /// `2026-07-01 03:00 UTC` is `2026-06-30` locally.
+    #[sqlx::test]
+    async fn a_boundary_entry_west_of_utc_is_labelled_with_its_local_day_not_utc(pool: PgPool) {
+        let created_at = NaiveDate::from_ymd_opt(2026, 7, 1)
+            .unwrap()
+            .and_hms_opt(3, 0, 0)
+            .unwrap()
+            .and_utc();
+        insert_embedded_entry(&pool, "late night physio thoughts", created_at).await;
+
+        let tool = SimilarEntriesTool::new(pool, succeeding_client(), -480);
+        let outcome = tool.execute(json!({"query": "physio"})).await.unwrap();
+
+        assert!(
+            outcome.content.contains("[2026-06-30]"),
+            "expected the local day 2026-06-30, got: {}",
+            outcome.content
+        );
+        assert!(
+            !outcome.content.contains("[2026-07-01]"),
+            "must not render the UTC day: {}",
+            outcome.content
+        );
     }
 }

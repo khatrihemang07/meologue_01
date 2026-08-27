@@ -265,7 +265,7 @@ async fn write_digest_for(
         return false;
     }
 
-    let messages = build_messages(period, start, &entries);
+    let messages = build_messages(period, start, &entries, tz);
     let body = match client.chat(&messages).await {
         Ok(body) => body,
         Err(err) => {
@@ -416,11 +416,21 @@ fn digest_system_prompt() -> &'static str {
 
 /// The user message naming the Period and its inclusive local date range,
 /// followed by its Entries rendered as `[YYYY-MM-DD] body`, blank-line
-/// separated — the same shape `reflect.rs::build_messages` renders its
-/// Grounding block in, reused deliberately so there is one recognisable
-/// Entry rendering across the codebase rather than two subtly different
-/// ones.
-fn build_messages(period: Period, start: NaiveDate, entries: &[DigestEntry]) -> Vec<ChatMessage> {
+/// separated, via `render_entry` below.
+///
+/// `tz` is the same `Tz` `write_digest_for` already resolved `start`'s
+/// Period bounds against (`period::period_bounds`) — reusing it here,
+/// rather than letting this function read `MEOLOGUE_TZ` a second time on
+/// its own, is what keeps "which Period an Entry was bucketed into" and
+/// "what date it's labelled with when shown to the model" answers to the
+/// same timezone, by construction, rather than by two call sites happening
+/// to agree.
+fn build_messages(
+    period: Period,
+    start: NaiveDate,
+    entries: &[DigestEntry],
+    tz: Tz,
+) -> Vec<ChatMessage> {
     let end = period::period_end(period, start);
     let range = if start == end {
         format!("{} ({})", start.format("%Y-%m-%d"), period.as_str())
@@ -435,7 +445,7 @@ fn build_messages(period: Period, start: NaiveDate, entries: &[DigestEntry]) -> 
 
     let entries_block = entries
         .iter()
-        .map(|entry| format!("[{}] {}", entry.created_at.format("%Y-%m-%d"), entry.body))
+        .map(|entry| render_entry(entry, tz))
         .collect::<Vec<_>>()
         .join("\n\n");
 
@@ -449,6 +459,36 @@ fn build_messages(period: Period, start: NaiveDate, entries: &[DigestEntry]) -> 
             content: format!("Here is everything the user wrote from {range}:\n\n{entries_block}"),
         },
     ]
+}
+
+/// Renders one `DigestEntry` as `[local-date] body` — this worker's own
+/// analogue of `harness::tools::render_entry` (issue #101), and
+/// deliberately not the same function despite doing the same job for the
+/// same reason: the "local" each one resolves comes from a different
+/// place. A harness tool acts for an asking Device and uses the
+/// `utc_offset_minutes` it supplies on every Question (ADR 0023); this
+/// worker has no Device in its loop at all (ADR 0027) and instead uses
+/// the Server's own configured `MEOLOGUE_TZ`, read once at startup
+/// (`period::server_timezone`) as a full IANA `chrono_tz::Tz` rather than
+/// a fixed offset — a `Tz` is what lets `period_bounds` (and this
+/// rendering, which must agree with it) account for a DST transition
+/// inside the Period being summarised, something a snapshot offset
+/// cannot do. Sharing one function between the two would mean converting
+/// a `Tz` down to a fixed offset at some arbitrary instant to satisfy the
+/// other's signature, which quietly reintroduces the DST case a `Tz`
+/// exists to handle correctly — see `harness::tools::render_entry`'s doc
+/// comment for the fuller "two sources of local, do not conflate them"
+/// reasoning this mirrors.
+///
+/// Before this fix, `build_messages` formatted `entry.created_at` (UTC)
+/// directly, while `write_digest_for` had already bucketed that same
+/// Entry into a Period using `tz` — the identical shape of bug issue #101
+/// reports for the harness tools, just with `MEOLOGUE_TZ` standing in for
+/// a Device's offset: an Entry correctly bucketed into a local day could
+/// be shown to the model labelled with the UTC day before or after it.
+fn render_entry(entry: &DigestEntry, tz: Tz) -> String {
+    let local_date = entry.created_at.with_timezone(&tz).date_naive();
+    format!("[{}] {}", local_date.format("%Y-%m-%d"), entry.body)
 }
 
 // ---------------------------------------------------------------------

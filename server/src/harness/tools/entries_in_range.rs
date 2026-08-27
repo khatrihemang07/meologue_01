@@ -25,7 +25,7 @@ use serde_json::{Value, json};
 use crate::reflect::{GroundingEntry, local_date_range_to_utc, retrieve_range};
 use sqlx::PgPool;
 
-use super::{AgentTool, ToolOutcome};
+use super::{AgentTool, ToolOutcome, render_entry};
 
 /// How many Entries a page holds unless the model asks for more —
 /// `reflect.rs`'s own retrieval limits (`RETRIEVAL_LIMIT`) are a comparable
@@ -169,7 +169,7 @@ impl AgentTool for EntriesInRangeTool {
         let mut shown: Vec<(&GroundingEntry, String)> = Vec::new();
         let mut char_count = 0usize;
         for entry in window.iter().take(limit as usize) {
-            let rendered = format!("[{}] {}", entry.created_at.format("%Y-%m-%d"), entry.body);
+            let rendered = render_entry(entry.created_at, &entry.body, self.utc_offset_minutes);
             let next_count = char_count + rendered.chars().count();
             if !shown.is_empty() && next_count > CONTENT_CHAR_BUDGET {
                 break;
@@ -426,5 +426,80 @@ mod tests {
         let first_index = outcome.content.find("first").unwrap();
         let second_index = outcome.content.find("second").unwrap();
         assert!(first_index < second_index);
+    }
+
+    /// The acceptance criterion that actually pins issue #101's bug: a
+    /// range Question must return no Entry labelled outside the range it
+    /// asked for. This reproduces the exact case from the issue's live
+    /// report — `created_at = 2026-06-30 19:45 UTC` at
+    /// `utc_offset_minutes: 330` (IST, east of UTC) is `2026-07-01 01:15`
+    /// locally, correctly inside a `2026-07-01..2026-08-31` range asked in
+    /// that same local day, and correctly retrieved by
+    /// `local_date_range_to_utc`'s window either way — the retrieval was
+    /// never the bug. Rendering it must say `[2026-07-01]`, not the UTC
+    /// `[2026-06-30]`, which is a date outside the very range that was
+    /// asked for and is exactly what a model reading this result would
+    /// have grounds to distrust.
+    #[sqlx::test]
+    async fn a_boundary_entry_east_of_utc_is_labelled_with_its_local_day_not_utc(pool: PgPool) {
+        insert_entry_at(
+            &pool,
+            "physio today",
+            day(2026, 6, 30) + Duration::hours(19) + Duration::minutes(45),
+        )
+        .await;
+
+        let tool = EntriesInRangeTool::new(pool, 330);
+        let outcome = tool
+            .execute(json!({"from": "2026-07-01", "to": "2026-08-31"}))
+            .await
+            .unwrap();
+
+        assert!(
+            outcome.content.contains("[2026-07-01] physio today"),
+            "expected the local day 2026-07-01, got: {}",
+            outcome.content
+        );
+        assert!(
+            !outcome.content.contains("[2026-06-30]"),
+            "must not render the UTC day, which falls outside the requested range: {}",
+            outcome.content
+        );
+        assert_eq!(outcome.entry_ids.len(), 1);
+    }
+
+    /// The direction issue #101 explicitly calls out as the one that gets
+    /// forgotten: west of UTC, where an early-morning UTC Entry is still
+    /// *yesterday* locally — a genuine day rollback, not merely "no
+    /// change" (which offset 0 already covers) or "roll forward" (which
+    /// the IST case above covers). At offset `-480` (UTC-8),
+    /// `2026-07-01 03:00 UTC` is `2026-06-30 19:00` locally, inside a
+    /// `2026-06-01..2026-06-30` range asked in that local day.
+    #[sqlx::test]
+    async fn a_boundary_entry_west_of_utc_is_labelled_with_its_local_day_not_utc(pool: PgPool) {
+        insert_entry_at(
+            &pool,
+            "late night thoughts",
+            day(2026, 7, 1) + Duration::hours(3),
+        )
+        .await;
+
+        let tool = EntriesInRangeTool::new(pool, -480);
+        let outcome = tool
+            .execute(json!({"from": "2026-06-01", "to": "2026-06-30"}))
+            .await
+            .unwrap();
+
+        assert!(
+            outcome.content.contains("[2026-06-30] late night thoughts"),
+            "expected the local day 2026-06-30, got: {}",
+            outcome.content
+        );
+        assert!(
+            !outcome.content.contains("[2026-07-01]"),
+            "must not render the UTC day, which falls outside the requested range: {}",
+            outcome.content
+        );
+        assert_eq!(outcome.entry_ids.len(), 1);
     }
 }

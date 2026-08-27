@@ -421,10 +421,11 @@ async fn run_reflect_loop(
     // comment for why.
     let tools: Vec<Arc<dyn AgentTool>> = vec![
         Arc::new(EntriesInRangeTool::new(pool.clone(), offset_minutes)),
-        Arc::new(SearchEntriesTool::new(pool.clone())),
+        Arc::new(SearchEntriesTool::new(pool.clone(), offset_minutes)),
         Arc::new(SimilarEntriesTool::new(
             pool.clone(),
             reflect.embed_client.clone(),
+            offset_minutes,
         )),
     ];
     let system_prompt = tools::render_tool_guidance(LOOP_SYSTEM_INSTRUCTION, &tools);

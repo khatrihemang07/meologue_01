@@ -27,7 +27,7 @@ use serde_json::{Value, json};
 use crate::reflect::{GroundingEntry, search_words};
 use sqlx::PgPool;
 
-use super::{AgentTool, ToolOutcome};
+use super::{AgentTool, ToolOutcome, render_entry};
 
 /// See `entries_in_range.rs::DEFAULT_PAGE_SIZE` — same value, same
 /// reasoning (a small default page keeps one turn cheap; the model can
@@ -43,15 +43,21 @@ pub const MAX_PAGE_SIZE: i64 = 100;
 pub const CONTENT_CHAR_BUDGET: usize = 8_000;
 
 /// `search_entries(query, limit?, offset?)` — the tool itself. Holds a
-/// `PgPool` only; unlike `SimilarEntriesTool`, word search makes no
-/// network call and needs no embedding client at all.
+/// `PgPool` and the asking Device's `utc_offset_minutes` (issue #101 —
+/// see `render_entry`'s doc comment for why every tool needs it now, not
+/// just `entries_in_range`); unlike `SimilarEntriesTool`, word search
+/// makes no network call and needs no embedding client at all.
 pub struct SearchEntriesTool {
     pool: PgPool,
+    utc_offset_minutes: i32,
 }
 
 impl SearchEntriesTool {
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+    pub fn new(pool: PgPool, utc_offset_minutes: i32) -> Self {
+        Self {
+            pool,
+            utc_offset_minutes,
+        }
     }
 }
 
@@ -133,7 +139,7 @@ impl AgentTool for SearchEntriesTool {
         let mut shown: Vec<(&GroundingEntry, String)> = Vec::new();
         let mut char_count = 0usize;
         for entry in window.iter().take(limit as usize) {
-            let rendered = format!("[{}] {}", entry.created_at.format("%Y-%m-%d"), entry.body);
+            let rendered = render_entry(entry.created_at, &entry.body, self.utc_offset_minutes);
             let next_count = char_count + rendered.chars().count();
             if !shown.is_empty() && next_count > CONTENT_CHAR_BUDGET {
                 break;
@@ -241,7 +247,7 @@ mod tests {
         )
         .await;
 
-        let tool = SearchEntriesTool::new(pool);
+        let tool = SearchEntriesTool::new(pool, 0);
         let outcome = tool.execute(json!({"query": "aardvark"})).await.unwrap();
         assert!(outcome.content.contains("No Entries matched"));
         assert!(outcome.entry_ids.is_empty());
@@ -261,7 +267,7 @@ mod tests {
         )
         .await;
 
-        let tool = SearchEntriesTool::new(pool);
+        let tool = SearchEntriesTool::new(pool, 0);
         let outcome = tool.execute(json!({"query": "run"})).await.unwrap();
 
         assert!(
@@ -284,7 +290,7 @@ mod tests {
         )
         .await;
 
-        let tool = SearchEntriesTool::new(pool);
+        let tool = SearchEntriesTool::new(pool, 0);
         let outcome = tool.execute(json!({"query": "phyiso"})).await.unwrap();
 
         assert!(
@@ -306,7 +312,7 @@ mod tests {
         )
         .await;
 
-        let tool = SearchEntriesTool::new(pool);
+        let tool = SearchEntriesTool::new(pool, 0);
         let outcome = tool
             .execute(json!({"query": "xenotransplantation"}))
             .await
@@ -326,7 +332,7 @@ mod tests {
         )
         .await;
 
-        let tool = SearchEntriesTool::new(pool);
+        let tool = SearchEntriesTool::new(pool, 0);
         let outcome = tool.execute(json!({"query": "wedding"})).await.unwrap();
 
         assert!(
@@ -349,7 +355,7 @@ mod tests {
             .await;
         }
 
-        let tool = SearchEntriesTool::new(pool);
+        let tool = SearchEntriesTool::new(pool, 0);
         let outcome = tool.execute(json!({"query": "wedding"})).await.unwrap();
 
         assert!(
@@ -374,7 +380,7 @@ mod tests {
             .await;
         }
 
-        let tool = SearchEntriesTool::new(pool);
+        let tool = SearchEntriesTool::new(pool, 0);
         let outcome = tool
             .execute(json!({"query": "wedding", "offset": 20}))
             .await
@@ -392,7 +398,7 @@ mod tests {
     async fn an_offset_past_the_end_is_reported_plainly(pool: PgPool) {
         insert_entry_at(&pool, "Only one wedding entry.", day(2026, 3, 10)).await;
 
-        let tool = SearchEntriesTool::new(pool);
+        let tool = SearchEntriesTool::new(pool, 0);
         let outcome = tool
             .execute(json!({"query": "wedding", "offset": 5}))
             .await
@@ -414,7 +420,7 @@ mod tests {
             .await;
         }
 
-        let tool = SearchEntriesTool::new(pool);
+        let tool = SearchEntriesTool::new(pool, 0);
         let outcome = tool
             .execute(json!({"query": "wedding", "limit": 500}))
             .await
@@ -425,15 +431,72 @@ mod tests {
 
     #[sqlx::test]
     async fn a_missing_query_is_an_error_result(pool: PgPool) {
-        let tool = SearchEntriesTool::new(pool);
+        let tool = SearchEntriesTool::new(pool, 0);
         let err = tool.execute(json!({})).await.unwrap_err();
         assert!(err.contains("query"));
     }
 
     #[sqlx::test]
     async fn a_blank_query_is_an_error_result(pool: PgPool) {
-        let tool = SearchEntriesTool::new(pool);
+        let tool = SearchEntriesTool::new(pool, 0);
         let err = tool.execute(json!({"query": "   "})).await.unwrap_err();
         assert!(err.contains("query"));
+    }
+
+    /// Issue #101: an Entry this tool renders must carry the asking
+    /// Device's local day, not the UTC day `created_at` is stored in —
+    /// see `entries_in_range.rs`'s own boundary test for the exact live
+    /// case this reproduces the same shape of. East of UTC:
+    /// `2026-06-30 19:45 UTC` at offset `330` (IST) is `2026-07-01`
+    /// locally.
+    #[sqlx::test]
+    async fn a_boundary_entry_east_of_utc_is_labelled_with_its_local_day_not_utc(pool: PgPool) {
+        insert_entry_at(
+            &pool,
+            "wedding planning continues",
+            day(2026, 6, 30) + Duration::hours(19) + Duration::minutes(45),
+        )
+        .await;
+
+        let tool = SearchEntriesTool::new(pool, 330);
+        let outcome = tool.execute(json!({"query": "wedding"})).await.unwrap();
+
+        assert!(
+            outcome.content.contains("[2026-07-01]"),
+            "expected the local day 2026-07-01, got: {}",
+            outcome.content
+        );
+        assert!(
+            !outcome.content.contains("[2026-06-30]"),
+            "must not render the UTC day: {}",
+            outcome.content
+        );
+    }
+
+    /// The direction that gets forgotten: west of UTC, an early-morning
+    /// UTC Entry is still *yesterday* locally. At offset `-480` (UTC-8),
+    /// `2026-07-01 03:00 UTC` is `2026-06-30` locally.
+    #[sqlx::test]
+    async fn a_boundary_entry_west_of_utc_is_labelled_with_its_local_day_not_utc(pool: PgPool) {
+        insert_entry_at(
+            &pool,
+            "wedding dress fitting",
+            day(2026, 7, 1) + Duration::hours(3),
+        )
+        .await;
+
+        let tool = SearchEntriesTool::new(pool, -480);
+        let outcome = tool.execute(json!({"query": "wedding"})).await.unwrap();
+
+        assert!(
+            outcome.content.contains("[2026-06-30]"),
+            "expected the local day 2026-06-30, got: {}",
+            outcome.content
+        );
+        assert!(
+            !outcome.content.contains("[2026-07-01]"),
+            "must not render the UTC day: {}",
+            outcome.content
+        );
     }
 }
