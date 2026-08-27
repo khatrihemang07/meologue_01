@@ -260,12 +260,24 @@ export async function reflectTransport(
         }
       }
     }
-  } catch {
+  } catch (error) {
     // Covers both an ordinary network failure mid-stream and this call's
     // own `signal` firing — `reader.read()` rejects with `AbortError` the
     // same way a dropped connection rejects with a network error, and a
     // caller that aborted because it unmounted has nothing useful to do
     // with either outcome beyond "this run is over, uneventfully."
+    //
+    // A deliberate abort (`signal.aborted`) is the one case that isn't
+    // worth logging: every genuine failure here used to vanish into this
+    // same bare `catch`, so nothing short of instrumenting the reader by
+    // hand (over CDP, on a real device) could ever show *why* a run
+    // failed. Logging unconditionally would have buried that signal in
+    // noise from the routine unmount-abort this function already expects
+    // (the doc comment above), so only the unexpected case — a real
+    // error, not this call's own signal firing — reaches the console.
+    if (signal?.aborted !== true) {
+      console.error("reflectTransport: stream read failed", error);
+    }
     return { ok: false, reason: "unreachable" };
   } finally {
     try {
@@ -281,6 +293,11 @@ export async function reflectTransport(
   // own doc comment — so reaching here means the connection broke, not
   // that the server chose to end the run this way. Reported the same as
   // any other broken connection, not as a distinct case the caller has to
-  // handle separately.
+  // handle separately. Logged for the same reason the read loop's own
+  // `catch` above logs: this is the Server's contract being broken, not a
+  // caller-initiated abort (an abort rejects `reader.read()` and is caught
+  // above instead of ever reaching this line), so it is always worth
+  // knowing about.
+  console.error("reflectTransport: stream closed without an agent_end frame");
   return { ok: false, reason: "unreachable" };
 }

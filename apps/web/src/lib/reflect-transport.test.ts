@@ -214,6 +214,77 @@ describe("reflectTransport", () => {
     expect(result).toEqual({ ok: false, reason: "unreachable" });
   });
 
+  // Every genuine mid-stream failure used to vanish into a bare `catch {}`
+  // with no trace at all — indistinguishable, without live device
+  // instrumentation, from the same function's *routine* abort path (a
+  // caller unmounting). This pins the fix: an unexpected read failure is
+  // loud (this is the one thing a caller can't already infer from the
+  // returned `ReflectResult`, which collapses every "unreachable" cause
+  // into one reason on purpose — see the type's own doc comment).
+  it("logs a mid-stream read failure that was not this call's own abort", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const fakeBody = {
+      getReader: () => ({
+        read: () => Promise.reject(new Error("connection reset")),
+        cancel: vi.fn(async () => undefined),
+      }),
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: true, status: 200, body: fakeBody })),
+    );
+
+    const result = await reflectTransport(request);
+
+    expect(result).toEqual({ ok: false, reason: "unreachable" });
+    expect(consoleError).toHaveBeenCalledWith(
+      "reflectTransport: stream read failed",
+      expect.any(Error),
+    );
+    consoleError.mockRestore();
+  });
+
+  // The routine counterpart to the test above: a caller-initiated abort
+  // (unmounting mid-Answer, `reflection-page.tsx`'s own cleanup effect)
+  // must stay silent — it is not a failure, and logging it on every
+  // ordinary navigate-away would bury the genuine signal the test above
+  // pins down.
+  it("does not log when the read failure is this call's own signal aborting", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const controller = new AbortController();
+    let rejectRead: ((reason: unknown) => void) | null = null;
+    const fakeBody = {
+      getReader: () => ({
+        read: () =>
+          new Promise((_resolve, reject) => {
+            rejectRead = reject;
+          }),
+        cancel: vi.fn(async () => undefined),
+      }),
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string, init?: RequestInit) => {
+        init?.signal?.addEventListener("abort", () => {
+          rejectRead?.(new DOMException("This operation was aborted", "AbortError"));
+        });
+        return Promise.resolve({ ok: true, status: 200, body: fakeBody });
+      }),
+    );
+
+    const resultPromise = reflectTransport(request, { signal: controller.signal });
+    await vi.waitFor(() => {
+      if (rejectRead === null) {
+        throw new Error("reader.read() has not been called yet");
+      }
+    });
+    controller.abort();
+    await resultPromise;
+
+    expect(consoleError).not.toHaveBeenCalled();
+    consoleError.mockRestore();
+  });
+
   // A real `fetch`'s body reads reject once `init.signal` aborts — this
   // stand-in reproduces exactly that (a `reader.read()` that never
   // resolves on its own, only rejects when the signal fires) with a hand-

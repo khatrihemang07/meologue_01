@@ -29,7 +29,15 @@ export async function serverRequest(path: string, init?: RequestInit): Promise<R
     // sits in the way — which is the opposite of what extracting this was
     // for.
     return init ? await fetch(target, init) : await fetch(target);
-  } catch {
+  } catch (error) {
+    // Same reasoning as `reflect-transport.ts`'s own read-loop `catch`: a
+    // caller-initiated abort is routine and not worth logging, but
+    // anything else here — DNS failure, connection refused, TLS error —
+    // used to vanish with no trace at all, indistinguishable from a
+    // deliberate unmount without live device instrumentation.
+    if (init?.signal?.aborted !== true) {
+      console.error("serverRequest: fetch failed", target, error);
+    }
     return null;
   }
 }
