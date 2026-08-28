@@ -73,9 +73,13 @@ test("the theme is on the document before the app bundle runs", async ({ page })
   });
 
   await page.goto("/settings", { waitUntil: "commit" });
-  await page.waitForTimeout(300);
-
-  expect(await page.locator("html").getAttribute("class")).toContain("dark");
+  // Polls rather than a fixed 300ms sleep-then-check: the class is applied
+  // synchronously by an inline script well before the deliberately delayed
+  // bundle above ever resolves, so this should settle almost immediately —
+  // the 900ms ceiling (under the route handler's 1_000ms delay) is what
+  // keeps this proving "before the bundle runs" rather than just "true
+  // eventually."
+  await expect(page.locator("html")).toHaveClass(/dark/, { timeout: 900 });
 });
 
 // The store is memoized at module scope so a second open can't race the
@@ -125,10 +129,14 @@ test("the sync loop keeps making requests while the user is on Settings", async 
   };
   page.on("request", onRequest);
 
-  // Longer than one poll interval (SYNC_INTERVAL_MS is 5s) so a loop still
-  // running fires at least once more while this page sits on Settings.
-  await page.waitForTimeout(6_000);
+  // Polls for the actual condition (at least one more request) instead of
+  // sleeping a fixed multiple of the poll interval (SYNC_TICK_MS,
+  // helpers.ts) and checking once — same pattern opt-in-sync.spec.ts
+  // already uses for the same kind of request-count assertion. Resolves as
+  // soon as the loop's next tick fires rather than always paying the full
+  // wait, and the generous ceiling covers a loaded machine delaying that
+  // tick past one interval.
+  await expect.poll(() => syncRequestsWhileOnSettings, { timeout: 20_000 }).toBeGreaterThan(0);
 
   page.off("request", onRequest);
-  expect(syncRequestsWhileOnSettings).toBeGreaterThan(0);
 });

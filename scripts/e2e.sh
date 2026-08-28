@@ -21,13 +21,22 @@
 # database it wanted to rename.
 #
 # One caveat that replaces it, and it is about the machine rather than the
-# data: the Sandbox server (scripts/sandbox-server.sh) runs an embedding
-# worker and a Digest worker that drive local LLM endpoints, and leaving it up
-# during a run is enough load to push the slowest multi-Device specs past
-# their timeouts. Measured on this repo: 46/46 with only the production server
-# up, 44/46 with the Sandbox server up too, the failures being timeouts in
-# edit-delete and reflection rather than anything about isolation. Stop the
-# Sandbox server before a full run if the suite starts flaking.
+# data. An earlier version of this comment blamed the Sandbox server
+# (scripts/sandbox-server.sh) specifically — its embedding worker and Digest
+# worker driving local LLM endpoints, left running during a suite run — for
+# pushing the slowest multi-Device specs past their timeouts. Issue #112
+# found that framing too narrow: every failing run it recorded had the
+# Sandbox server *stopped* the whole time, and clean `main` with nothing
+# else changed still failed at load average ~11.7 while it passed clean at
+# ~4. The actual variable is machine load in general, from anything
+# competing for CPU — this suite boots two real Rust servers, a Postgres
+# container and a Node stub, and several of its specs used to guess a fixed
+# number of milliseconds for Server-side background work (an embedding, a
+# synced tombstone) that has no fixed duration once the machine is busy.
+# Issue #112 replaced the worst of those guesses with polls for the actual
+# condition and raised the suite's default assertion timeout, but a red run
+# is still only informative next to the load average printed beside it
+# below — compare it against a run at load ~4 before trusting it.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -43,4 +52,23 @@ for db in meologue_e2e_a meologue_e2e_b; do
 done
 echo "--- e2e databases recreated empty: meologue_e2e_a, meologue_e2e_b ---"
 
+# Issue #112: a red run on its own doesn't say whether the code regressed or
+# the machine was just busy. Recording load average before and after, and
+# printing it beside the result, is what lets a reader tell those apart
+# without re-running the suite on a quiet machine to compare.
+load_average() {
+  uptime | sed -E 's/.*load averages?: */load average: /'
+}
+
+load_before="$(load_average)"
+
+set +e
 pnpm --filter @meologue/e2e test:e2e "$@"
+result=$?
+set -e
+
+load_after="$(load_average)"
+
+echo "--- e2e $([ "$result" -eq 0 ] && echo PASSED || echo FAILED) — ${load_before} (before) / ${load_after} (after) ---"
+
+exit "$result"

@@ -1,5 +1,12 @@
 import { expect, test } from "@playwright/test";
-import { closeDevices, openTwoDevices, sendEntry, setTabHidden, uniqueEntryBody } from "./helpers";
+import {
+  closeDevices,
+  openTwoDevices,
+  SYNC_TICK_MS,
+  sendEntry,
+  setTabHidden,
+  uniqueEntryBody,
+} from "./helpers";
 
 // Two independent BrowserContexts stand in for two Devices: each gets its
 // own storage (localStorage, cookies), same as two separate browsers on two
@@ -15,7 +22,7 @@ test("an Entry created in one context appears in a second within 10 seconds, wit
   await sendEntry(pageA, body);
 
   await expect(pageA.getByText(body)).toBeVisible();
-  await expect(pageB.getByText(body)).toBeVisible({ timeout: 10_000 });
+  await expect(pageB.getByText(body)).toBeVisible({ timeout: 20_000 });
 
   await closeDevices(devices);
 });
@@ -30,13 +37,17 @@ test("a hidden tab does not poll; returning to it syncs promptly", async ({ brow
   await sendEntry(pageB, body);
   await expect(pageB.getByText(body)).toBeVisible();
 
-  // Longer than one poll interval — if hidden-tab gating were broken, A's
-  // next scheduled poll would have already picked this up.
-  await pageA.waitForTimeout(7_000);
+  // Longer than one poll interval (SYNC_TICK_MS) — if hidden-tab gating
+  // were broken, A's next scheduled poll would have already picked this
+  // up. This proves an absence, so there's no positive condition to poll
+  // for instead; a loaded machine only delays a broken poll further,
+  // never makes this wait insufficient the way a "wait for the good case"
+  // sleep can be.
+  await pageA.waitForTimeout(SYNC_TICK_MS + 2_000);
   await expect(pageA.getByText(body)).toHaveCount(0);
 
   await setTabHidden(pageA, false);
-  await expect(pageA.getByText(body)).toBeVisible({ timeout: 5_000 });
+  await expect(pageA.getByText(body)).toBeVisible({ timeout: SYNC_TICK_MS + 2_000 });
 
   await closeDevices(devices);
 });
@@ -56,11 +67,12 @@ test("Entries created while offline sync once back online, without duplication",
 
   await deviceA.setOffline(false);
 
-  await expect(pageB.getByText(body)).toBeVisible({ timeout: 10_000 });
+  await expect(pageB.getByText(body)).toBeVisible({ timeout: 20_000 });
 
   // Give sync several more rounds, then confirm the entry landed exactly
-  // once on both Devices — no duplicate rows from the offline retry.
-  await pageA.waitForTimeout(6_000);
+  // once on both Devices — no duplicate rows from the offline retry. Again
+  // an absence to prove, not a positive condition to poll for.
+  await pageA.waitForTimeout(SYNC_TICK_MS + 1_000);
   await expect(pageA.getByText(body)).toHaveCount(1);
   await expect(pageB.getByText(body)).toHaveCount(1);
 

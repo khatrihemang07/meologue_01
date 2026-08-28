@@ -51,4 +51,15 @@ export MEOLOGUE_EMBED_MODEL="${MEOLOGUE_EMBED_MODEL:-llm-stub-embed}"
 # happens to run it. This matters more now that server/.env is loaded: the
 # developer's own is MEOLOGUE_TZ=Asia/Kolkata.
 export MEOLOGUE_TZ="${MEOLOGUE_TZ:-UTC}"
-exec cargo run
+# Issue #112: `--release`, not a debug build. Two `cargo run` servers (this
+# one and e2e-server-b.sh's) doing real JSON/SQL/pgvector work for the whole
+# suite, on top of Playwright's own 4 parallel Chromium+SQLite-Worker
+# stacks and a Postgres container, was the largest single contributor to
+# the suite's own self-induced CPU load — a debug-profile server is several
+# times the CPU of a release one for the same request. The one-off cost is
+# the first release compile on a given machine (in the tens of seconds, not
+# minutes, from an already-warm `target/` — cargo caches it same as debug),
+# so only the very first run after this change, or after a source change,
+# pays it; every run after that reuses the cached `target/release` binary
+# same as debug builds already do.
+exec cargo run --release

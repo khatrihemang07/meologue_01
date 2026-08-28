@@ -1,10 +1,148 @@
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import type { Browser, BrowserContext, Locator, Page } from "@playwright/test";
-import { SERVER_A_URL } from "../servers";
+import { POSTGRES_CONTAINER, SERVER_A_URL } from "../servers";
 
 /** A body unique to this test run, so leftover rows from a prior local run never collide. */
 export function uniqueEntryBody(label: string): string {
   return `${label} ${randomUUID()}`;
+}
+
+// Mirrors packages/core/src/protocol.ts's `SYNC_INTERVAL_MS` (5000).
+// Duplicated rather than imported — apps/e2e has no dependency on
+// `@meologue/core` today, and digest.spec.ts's own header comment records
+// this suite's preference for zero new dependencies over the convenience of
+// one. Several specs size a "prove nothing happened" wait off a multiple of
+// this; keep it in step by hand if the real constant ever changes.
+export const SYNC_TICK_MS = 5_000;
+
+/**
+ * Doubles an embedded single quote — the one escape a plain SQL string
+ * literal needs. Every caller here passes a `uniqueEntryBody` value or a
+ * UUID, neither of which contains anything else worth escaping; this is
+ * defensive rather than load-bearing, the same posture digest.spec.ts's own
+ * `sqlLiteral` takes.
+ */
+function sqlLiteral(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+/**
+ * Runs `sql` (expected to return at most one row, one column) against
+ * `database` inside the Sandbox Postgres container and returns that value,
+ * or `undefined` if the query returned no rows. `docker exec`/`psql`, not a
+ * client library — the same zero-new-dependency route digest.spec.ts's own
+ * header comment already chose for seeding into this same container; this
+ * is the read-side of that idea.
+ */
+function sqlScalar(database: string, sql: string): string | undefined {
+  const out = execFileSync("docker", [
+    "exec",
+    POSTGRES_CONTAINER,
+    "psql",
+    "-U",
+    "meologue",
+    "-d",
+    database,
+    "-t",
+    "-A",
+    "-c",
+    sql,
+  ])
+    .toString()
+    .trim();
+  return out === "" ? undefined : out;
+}
+
+/**
+ * Polls `probe` until it returns a value or `timeoutMs` elapses, then
+ * throws — the replacement for a `page.waitForTimeout` guess at how long
+ * some Server-side background job (the embedding worker, a synced
+ * tombstone) takes to finish. Neither has an HTTP surface this suite can
+ * watch directly (server/tests/embedding.rs's own `wait_for_embedding`
+ * polls the same database one layer down, for the same reason), so this
+ * polls the database scripts/e2e.sh already hands the suite a clean copy
+ * of. `pollMs` is short on purpose: on a working machine the condition is
+ * usually true on the first or second check, so the poll cadence should
+ * not be what makes this slow — only a loaded machine should ever spend
+ * close to `timeoutMs`.
+ */
+async function pollSql(
+  database: string,
+  sql: string,
+  timeoutMs: number,
+  pollMs = 250,
+): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const value = sqlScalar(database, sql);
+    if (value !== undefined) {
+      return value;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`pollSql: no row within ${timeoutMs}ms for: ${sql}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+}
+
+/**
+ * Waits until `body`'s Entry has a non-null `embedding` — the condition
+ * reflection.spec.ts's Grounding disclosure actually depends on
+ * (`retrieve_nearest`'s `embedding is not null` guard, server/src/reflect.rs).
+ * Covers both legs of the real latency: the Entry reaching the Server at
+ * all (sync's own poll interval, `SYNC_TICK_MS`) and the embedding worker
+ * picking it up, which is normally near-instant off the non-blocking hint
+ * `/v1/sync` drops (server/src/sync.rs, server/src/embedding.rs) rather
+ * than the 30s fallback scan — but neither leg has a fixed duration, and a
+ * loaded machine can stretch both well past what a fixed sleep assumed.
+ */
+export async function waitForEmbedding(
+  body: string,
+  database: string,
+  timeoutMs = 60_000,
+): Promise<void> {
+  await pollSql(
+    database,
+    `select 1 from entries where body = ${sqlLiteral(body)} and embedding is not null;`,
+    timeoutMs,
+  );
+}
+
+/**
+ * Returns `body`'s Entry id once it exists on the Server, polling the same
+ * way `waitForEmbedding` does. Needed before deleting an Entry a test later
+ * wants to confirm the tombstone of: a delete blanks `body` server-side
+ * (server/src/sync.rs's `insert_entries` sets it to the client's own
+ * already-blanked value — see edit-delete.spec.ts's "delete is terminal"
+ * test), so `body` stops being a usable handle the moment the tombstone
+ * lands. The id is the only handle that survives that.
+ */
+export async function waitForEntryId(
+  body: string,
+  database: string,
+  timeoutMs = 20_000,
+): Promise<string> {
+  return pollSql(database, `select id from entries where body = ${sqlLiteral(body)};`, timeoutMs);
+}
+
+/**
+ * Waits until the Entry with this id has a non-null `deleted_at` — the
+ * condition a delete's tombstone has actually reached the Server, rather
+ * than assuming a fixed sleep gave it enough time. `id` (not `body`) since
+ * `waitForEntryId`'s own doc comment explains why body stops identifying
+ * the row once it is tombstoned.
+ */
+export async function waitForTombstone(
+  id: string,
+  database: string,
+  timeoutMs = 20_000,
+): Promise<void> {
+  await pollSql(
+    database,
+    `select 1 from entries where id = ${sqlLiteral(id)} and deleted_at is not null;`,
+    timeoutMs,
+  );
 }
 
 /**

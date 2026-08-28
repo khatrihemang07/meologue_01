@@ -1,13 +1,17 @@
 import type { Page } from "@playwright/test";
 import { expect, test } from "@playwright/test";
+import { SERVER_A_DATABASE } from "../servers";
 import {
   closeDevices,
   deleteEntryViaMenu,
   editEntryViaMenu,
   entryRow,
   openTwoDevices,
+  SYNC_TICK_MS,
   sendEntry,
   uniqueEntryBody,
+  waitForEntryId,
+  waitForTombstone,
 } from "./helpers";
 
 /**
@@ -40,7 +44,11 @@ test("an edit made on one Device reaches a second with no reload — the propert
 
   const original = uniqueEntryBody("edit-propagate-original");
   await sendEntry(pageA, original);
-  await expect(pageB.getByText(original)).toBeVisible({ timeout: 10_000 });
+  // 20s, not the 10s these cross-Device waits used to carry (issue #112):
+  // that margin held on a quiet machine but not under real load, and this
+  // is an `expect(...)` — already a poll, resolving as soon as B's next
+  // sync tick lands rather than always paying the full timeout.
+  await expect(pageB.getByText(original)).toBeVisible({ timeout: 20_000 });
 
   // A plain `update` would leave `seq` where it was — below B's Cursor,
   // permanently unreachable (ADR 0028's Context). Reassigning `seq` on
@@ -50,7 +58,7 @@ test("an edit made on one Device reaches a second with no reload — the propert
   await editEntryViaMenu(pageA, original, edited);
   await expect(pageA.getByText(edited)).toBeVisible();
 
-  await expect(pageB.getByText(edited)).toBeVisible({ timeout: 10_000 });
+  await expect(pageB.getByText(edited)).toBeVisible({ timeout: 20_000 });
   await expect(pageB.getByText(original)).toHaveCount(0);
 
   await closeDevices(devices);
@@ -64,7 +72,7 @@ test("a delete made on one Device removes it from a second, with no reload", asy
 
   const body = uniqueEntryBody("delete-propagate");
   await sendEntry(pageA, body);
-  await expect(pageB.getByText(body)).toBeVisible({ timeout: 10_000 });
+  await expect(pageB.getByText(body)).toBeVisible({ timeout: 20_000 });
 
   // A -> nothing travels as a tombstone (deleted_at set, body blanked),
   // reassigned into the log the same as an edit — this is what lets B's
@@ -73,7 +81,7 @@ test("a delete made on one Device removes it from a second, with no reload", asy
   await deleteEntryViaMenu(pageA, body);
   await expect(pageA.getByText(body)).toHaveCount(0);
 
-  await expect(pageB.getByText(body)).toHaveCount(0, { timeout: 10_000 });
+  await expect(pageB.getByText(body)).toHaveCount(0, { timeout: 20_000 });
 
   await closeDevices(devices);
 });
@@ -178,7 +186,13 @@ test("delete is terminal — a straggler edit from an offline Device cannot resu
 
   const original = uniqueEntryBody("terminal-original");
   await sendEntry(pageA, original);
-  await expect(pageB.getByText(original)).toBeVisible({ timeout: 10_000 });
+  await expect(pageB.getByText(original)).toBeVisible({ timeout: 20_000 });
+
+  // B already has it via sync, so it's on the Server by now — capture its
+  // id while `original` still identifies it (a delete blanks `body`
+  // server-side, waitForEntryId's own doc comment) so the tombstone below
+  // can be confirmed by id instead of guessed at with a fixed sleep.
+  const originalId = await waitForEntryId(original, SERVER_A_DATABASE);
 
   await deviceA.setOffline(true);
 
@@ -187,26 +201,30 @@ test("delete is terminal — a straggler edit from an offline Device cannot resu
   await editEntryViaMenu(pageA, original, staleEdit);
   await expect(pageA.getByText(staleEdit)).toBeVisible();
 
-  // B deletes the same Entry while A is unreachable, and that delete gets
-  // real time to actually commit and be the Server's only truth about this
-  // Entry before A ever gets a chance to push against it.
+  // B deletes the same Entry while A is unreachable, and that delete needs
+  // to actually commit and be the Server's only truth about this Entry
+  // before A ever gets a chance to push against it — polled for directly
+  // (issue #112) rather than assumed after a fixed sleep.
   await deleteEntryViaMenu(pageB, original);
   await expect(pageB.getByText(original)).toHaveCount(0);
-  await pageB.waitForTimeout(3_000);
+  await waitForTombstone(originalId, SERVER_A_DATABASE);
 
   await deviceA.setOffline(false);
 
   // A's queued edit matches no row once it reaches the Server (the guard
   // excludes the tombstoned row), so it no-ops; A's next pull then returns
   // the tombstone under the ordinary sync path, same as any other change.
-  await expect(pageA.getByText(staleEdit)).toHaveCount(0, { timeout: 10_000 });
+  await expect(pageA.getByText(staleEdit)).toHaveCount(0, { timeout: 20_000 });
   await expect(pageA.getByText(original)).toHaveCount(0);
   await expect(pageB.getByText(original)).toHaveCount(0);
   await expect(pageB.getByText(staleEdit)).toHaveCount(0);
 
   // Several more sync rounds — this must be a stable, converged state, not
-  // one that flickers back if this were flaky.
-  await pageA.waitForTimeout(8_000);
+  // one that flickers back if this were flaky. There's no positive
+  // condition to poll for here (the point is that nothing changes), so
+  // this stays a fixed wait, sized off the real poll interval rather than
+  // a bare guess.
+  await pageA.waitForTimeout(SYNC_TICK_MS + 3_000);
   await expect(pageA.getByText(staleEdit)).toHaveCount(0);
   await expect(pageA.getByText(original)).toHaveCount(0);
   await expect(pageB.getByText(staleEdit)).toHaveCount(0);
@@ -233,6 +251,16 @@ test("Search reflects an edited body — the new text is found, the old text is 
   await page.getByRole("button", { name: "Search History" }).click();
   const search = page.getByRole("searchbox", { name: "Search History" });
 
+  // Issue #112: this briefly carried a 30s override and a theory that it
+  // was queued behind the ambient sync loop's tick in the single SQLite Web
+  // Worker every page shares (sqlite-worker.web.ts). That theory didn't
+  // survive the actual fix: scripts/e2e-server.sh/-b.sh were running debug
+  // builds, and two debug-profile Rust servers under this suite's own
+  // 4-way parallel load were enough CPU pressure to occasionally starve
+  // this page's own event loop past 15s. Switched to `--release` there
+  // instead of raising this timeout further, and four consecutive runs
+  // (one under deliberate extra load) never saw this assertion take more
+  // than ~2.5s — back to the suite's ordinary default.
   await search.fill("search-edit-edited");
   await expect(page.getByText(edited)).toBeVisible();
 

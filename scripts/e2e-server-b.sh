@@ -23,4 +23,10 @@ docker compose up -d --wait postgres-sandbox
 
 cd server
 export DATABASE_URL="postgres://meologue:meologue@localhost:5442/meologue_e2e_b"
-exec cargo run
+# Issue #112: `--release`, matching scripts/e2e-server.sh's own change and
+# its comment there — two debug-profile Rust servers running for the whole
+# suite was the largest single contributor to the suite's self-induced CPU
+# load. Same one-off cost: the first release compile on a machine takes
+# tens of seconds; `cargo` caches the result under `target/release` after
+# that, same as it already does for the debug build.
+exec cargo run --release

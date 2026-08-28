@@ -1,6 +1,6 @@
 import { expect, type Request, test } from "@playwright/test";
 import { SERVER_A_URL } from "../servers";
-import { sendEntry, uniqueEntryBody } from "./helpers";
+import { SYNC_TICK_MS, sendEntry, uniqueEntryBody } from "./helpers";
 
 // ADR 0011: an unset Server URL means sync is off, not "attempt and fail" —
 // verifiable as no network traffic. Every other spec in this suite runs
@@ -33,9 +33,10 @@ test("no /v1/sync request is made while no Server URL is configured", async ({ p
   await sendEntry(page, body);
   await expect(page.getByText(body)).toBeVisible();
 
-  // Longer than one poll interval (SYNC_INTERVAL_MS is 5s), so a loop that
-  // ignored the empty Server URL would have already made a request.
-  await page.waitForTimeout(6_000);
+  // Longer than one poll interval (SYNC_TICK_MS), so a loop that ignored
+  // the empty Server URL would have already made a request. Proving an
+  // absence, so there's nothing to poll for instead.
+  await page.waitForTimeout(SYNC_TICK_MS + 1_000);
 
   expect(syncRequests).toBe(0);
 });
@@ -83,6 +84,8 @@ test("clearing a Server URL stops sync", async ({ page }) => {
   await expect(page.getByTestId("server-status")).toContainText(/no server/i);
 
   const requestsAtClear = syncRequests;
-  await page.waitForTimeout(6_000);
+  // Another absence to prove — longer than one poll interval, nothing to
+  // poll for instead.
+  await page.waitForTimeout(SYNC_TICK_MS + 1_000);
   expect(syncRequests).toBe(requestsAtClear);
 });

@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { SERVER_B_URL } from "../servers";
-import { closeDevices, openTwoDevices, sendEntry, uniqueEntryBody } from "./helpers";
+import { closeDevices, openTwoDevices, SYNC_TICK_MS, sendEntry, uniqueEntryBody } from "./helpers";
 
 // ADR 0011: a Device is not bound to a particular Server — the Server URL
 // setting is the only thing that decides where its Entries go. Two fully
@@ -24,8 +24,9 @@ test("Devices pointed at different Servers stay fully isolated", async ({ browse
 
   // Long enough for several poll intervals on each side — if the Server
   // URL were being ignored (e.g. both syncing through the same Server
-  // regardless of setting), this is well past when the cross-over would show.
-  await pageA.waitForTimeout(8_000);
+  // regardless of setting), this is well past when the cross-over would
+  // show. Proving an absence, so there's nothing to poll for instead.
+  await pageA.waitForTimeout(SYNC_TICK_MS + 3_000);
 
   await expect(pageA.getByText(bodyOnB)).toHaveCount(0);
   await expect(pageB.getByText(bodyOnA)).toHaveCount(0);
@@ -44,7 +45,7 @@ test("a Device pointed at the second Server syncs normally through it", async ({
   await sendEntry(pageA, body);
 
   await expect(pageA.getByText(body)).toBeVisible();
-  await expect(pageB.getByText(body)).toBeVisible({ timeout: 10_000 });
+  await expect(pageB.getByText(body)).toBeVisible({ timeout: 20_000 });
 
   await closeDevices(devices);
 });

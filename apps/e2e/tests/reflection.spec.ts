@@ -1,6 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { expect, type Page, test } from "@playwright/test";
-import { deleteEntryViaMenu, sendEntry, uniqueEntryBody } from "./helpers";
+import { SERVER_A_DATABASE } from "../servers";
+import {
+  deleteEntryViaMenu,
+  sendEntry,
+  uniqueEntryBody,
+  waitForEmbedding,
+  waitForEntryId,
+  waitForTombstone,
+} from "./helpers";
 
 // Reflection covered end to end against the tool-calling loop issue #96
 // built (`harness::agent_loop` over `harness::prompted::PromptedToolClient`
@@ -114,14 +122,27 @@ test("a deleted Entry does not come back through Reflection's Grounding", async 
   await expect(page.getByText(keptBody)).toBeVisible();
   await expect(page.getByText(deletedBody)).toBeVisible();
 
-  // Delete one of the two, and give its tombstone real time to reach the
-  // Server — this only proves anything once `deleted_at` is actually set
-  // there, not just locally. The wait also gives the kept Entry's
-  // embedding (computed off a sync hint, embedding.rs) plenty of room to
-  // be ready before the Question below is asked.
+  // Capture the about-to-be-deleted Entry's id while `body` still
+  // identifies it — a delete blanks `body` server-side (see
+  // `waitForEntryId`'s own doc comment), so this is the only handle left
+  // once it's gone. Polling rather than a bare `select` also folds in
+  // waiting for the initial sync to land at all.
+  const deletedId = await waitForEntryId(deletedBody, SERVER_A_DATABASE);
+
   await deleteEntryViaMenu(page, deletedBody);
   await expect(page.getByText(deletedBody)).toHaveCount(0);
-  await page.waitForTimeout(8_000);
+
+  // Issue #112: a fixed `waitForTimeout` here used to guess how long two
+  // pieces of Server-side background work take — the tombstone reaching
+  // the Server (`deleted_at` actually set, not just removed locally) and
+  // the kept Entry's embedding becoming ready (embedding.rs, off the
+  // `/v1/sync` hint) — plenty on a quiet machine, not on a loaded one.
+  // Polling for both conditions directly removes the guess. Order matters
+  // a little: confirming the tombstone first is what rules out the kept
+  // Entry's embedding racing ahead of the delete and the Question below
+  // catching the deleted Entry mid-flight, still un-tombstoned.
+  await waitForTombstone(deletedId, SERVER_A_DATABASE);
+  await waitForEmbedding(keptBody, SERVER_A_DATABASE);
 
   const question = `What did I write about grounding-${marker}?`;
   await page.getByRole("link", { name: "Reflect" }).click();

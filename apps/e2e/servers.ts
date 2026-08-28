@@ -17,3 +17,13 @@ export const SERVER_B_URL = `http://localhost:${SERVER_B_PORT}`;
 // did before this ticket.
 export const LLM_STUB_PORT = 41237;
 export const LLM_STUB_URL = `http://localhost:${LLM_STUB_PORT}`;
+
+// The Sandbox Postgres container and the two databases scripts/e2e.sh
+// recreates empty before every run (see that script and
+// scripts/e2e-server.sh/-b.sh's DATABASE_URLs) — named here so a spec that
+// needs to poll Server-side state directly (tests/helpers.ts's
+// `waitForEmbedding`/`waitForTombstone`, issue #112) doesn't repeat the
+// literal strings a typo could silently drift out of step with.
+export const POSTGRES_CONTAINER = "meologue-postgres-sandbox";
+export const SERVER_A_DATABASE = "meologue_e2e_a";
+export const SERVER_B_DATABASE = "meologue_e2e_b";
