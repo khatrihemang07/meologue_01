@@ -95,6 +95,25 @@ the thoughts they already captured.
 What Reflection gives back in response to a Question, drawn from the Grounding it found. An
 Answer is not an Entry either — it is not the user's own words, and it never enters History.
 
+### Turn
+
+One Question, together with the Answer it produced. Turn is the unit a Conversation is counted
+in: "the last 10 Turns" — the size of the window a later Question can lean on — means ten
+Question/Answer pairs, not something smaller. Reaching one Answer can take Reflection several
+Steps of its own work along the way, and none of that shows up as more than the one Turn it ends
+in: a Turn is what the user sees, a Question followed by its Answer, however much or little work
+sat between them.
+
+### Step
+
+One iteration of Reflection's own work while it answers a Question: the model produces one reply,
+and if that reply asks to use a tool, the tool's result is read before the model replies again. A
+Question can take several Steps — the model may look, decide it hasn't seen enough, and look
+again — before it has what it needs to write the Answer. A Step is not a second unit sitting next
+to Question and Answer; it is the machinery Reflection uses to get from one to the other, and
+nothing about how many Steps a Question takes changes what the user sees, which stays a single
+Turn regardless.
+
 ### Conversation
 
 The running sequence of Questions and Answers inside one Session. Each Question is read in the
@@ -144,6 +163,19 @@ for an Entry, even informally.
 This holds inside Reflection too, where the pull is strongest: a Conversation is made of
 Questions and Answers, never of messages. Every chat interface in the world calls them messages,
 which is exactly why it is worth refusing here — a Question has no addressee either.
+
+**Exception: the transcript Reflection sends to and reads back from the model.** Underneath a
+Question and its Answer, Reflection's harness builds and replays a transcript addressed to the
+model itself — a prior reply played back so the model sees its own history, a tool's result
+handed back for it to read next. Unlike a Question or an Answer, each of those genuinely has an
+addressee: it is built to be read by the model on a specific call, not captured for the user's
+own History and not the user asking or Reflection answering. That is exactly the property this
+entry's prohibition turns on — no addressee, don't call it a message — so where the property
+actually holds, the word is allowed: `harness::types::Message`, `MessagePayload` and the stored
+`message` entry type name a transcript frame addressed to the model, not a Question, an Answer,
+or an Entry. The exception stops at that layer. It does not reach upward: a Question is still not
+a message, an Answer is still not a message, and an Entry is still not a message, for the same
+reasons given above.
 
 ### "note"
 

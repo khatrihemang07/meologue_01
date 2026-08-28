@@ -54,7 +54,32 @@ use uuid::Uuid;
 /// rejected outright rather than silently degraded — a Device that can't
 /// represent "deleted" must not be allowed to push or pull entries at all,
 /// or it would resurrect a deleted Entry's content the next time it synced.
-pub const PROTOCOL_VERSION: i32 = 2;
+///
+/// Bumped again, to 3, by issue #96: `POST /v1/reflect` moved from a single
+/// JSON response to a `text/event-stream` of named events
+/// (`reflect::reflect_handler`'s own doc comment). This one shared constant
+/// is read by `sync.rs`, `reflect.rs` **and** `health.rs`, so bumping it for
+/// a change that only touches Reflection's wire shape also tells every
+/// `/v1/sync` caller the Server has moved on — a real consequence, not a
+/// side effect to route around. It's the correct one anyway: a Device is
+/// one build that either speaks the current wire protocol in full or
+/// doesn't, and an old Device that predates issue #96 has no way to render
+/// SSE events at all, so failing its `/v1/reflect` calls loudly (426) is
+/// strictly better than a client that can't parse the response it gets back
+/// and fails some other, less legible way. Sync's own wire shape
+/// (`EntryInput`/`EntryOutput`/`SyncRequest`/`SyncResponse`) is completely
+/// unchanged by this bump — an old Device is turned away not because
+/// anything about *sync* broke, but because there is exactly one version
+/// number for "this Device's whole build is current," and it just isn't.
+///
+/// Bumped again, to 4, by issue #104: `agent_loop::LoopEvent::TurnStart` and
+/// the `turn_start` SSE event it became on the wire are renamed to
+/// `StepStart`/`step_start`, so a Device still expecting `turn_start` would
+/// wait on an event that no longer arrives. Same reasoning as the bump to 3
+/// above — one shared constant, so this Reflection-only rename still turns
+/// away a stale `/v1/sync` caller too, and that is the correct, honest
+/// behaviour rather than a side effect to route around.
+pub const PROTOCOL_VERSION: i32 = 4;
 
 /// Caps how many Entries a single sync response returns, so a Device far behind
 /// doesn't pull the whole History in one response. Note: since the batch is the

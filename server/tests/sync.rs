@@ -74,7 +74,7 @@ async fn an_entry_round_trips_to_a_later_poll_with_a_lower_cursor(pool: PgPool) 
     let (status, posted) = post_sync(
         &pool,
         json!({
-            "protocol_version": 2,
+            "protocol_version": 4,
             "device_id": device_a,
             "since_seq": 0,
             "entries": [entry(entry_id, device_a, "hello meologue")],
@@ -89,7 +89,7 @@ async fn an_entry_round_trips_to_a_later_poll_with_a_lower_cursor(pool: PgPool) 
     let (status, polled) = post_sync(
         &pool,
         json!({
-            "protocol_version": 2,
+            "protocol_version": 4,
             "device_id": device_b,
             "since_seq": 0,
             "entries": [],
@@ -109,7 +109,7 @@ async fn replaying_the_same_request_creates_no_duplicate_rows(pool: PgPool) {
     let device = Uuid::new_v4();
     let entry_id = Uuid::new_v4();
     let request = json!({
-        "protocol_version": 2,
+        "protocol_version": 4,
         "device_id": device,
         "since_seq": 0,
         "entries": [entry(entry_id, device, "hello meologue")],
@@ -170,7 +170,7 @@ async fn the_response_is_capped_at_the_bounded_batch_size(pool: PgPool) {
     let (status, body) = post_sync(
         &pool,
         json!({
-            "protocol_version": 2,
+            "protocol_version": 4,
             "device_id": device,
             "since_seq": 0,
             "entries": [],
@@ -210,7 +210,7 @@ async fn an_edit_reaches_a_device_whose_cursor_already_passed_the_original(pool:
     let (_, posted) = post_sync(
         &pool,
         json!({
-            "protocol_version": 2,
+            "protocol_version": 4,
             "device_id": device_a,
             "since_seq": 0,
             "entries": [entry(entry_id, device_a, "original body")],
@@ -224,7 +224,7 @@ async fn an_edit_reaches_a_device_whose_cursor_already_passed_the_original(pool:
     let (_, polled) = post_sync(
         &pool,
         json!({
-            "protocol_version": 2,
+            "protocol_version": 4,
             "device_id": device_b,
             "since_seq": 0,
             "entries": [],
@@ -238,7 +238,7 @@ async fn an_edit_reaches_a_device_whose_cursor_already_passed_the_original(pool:
     let (status, edited) = post_sync(
         &pool,
         json!({
-            "protocol_version": 2,
+            "protocol_version": 4,
             "device_id": device_a,
             "since_seq": original_cursor,
             "entries": [entry(entry_id, device_a, "edited body")],
@@ -257,7 +257,7 @@ async fn an_edit_reaches_a_device_whose_cursor_already_passed_the_original(pool:
     let (status, repolled) = post_sync(
         &pool,
         json!({
-            "protocol_version": 2,
+            "protocol_version": 4,
             "device_id": device_b,
             "since_seq": device_b_cursor,
             "entries": [],
@@ -280,7 +280,7 @@ async fn a_tombstone_is_returned_by_a_poll_with_deleted_at_set_and_a_blank_body(
     post_sync(
         &pool,
         json!({
-            "protocol_version": 2,
+            "protocol_version": 4,
             "device_id": device,
             "since_seq": 0,
             "entries": [entry(entry_id, device, "gone soon")],
@@ -291,7 +291,7 @@ async fn a_tombstone_is_returned_by_a_poll_with_deleted_at_set_and_a_blank_body(
     let (status, _deleted) = post_sync(
         &pool,
         json!({
-            "protocol_version": 2,
+            "protocol_version": 4,
             "device_id": device,
             "since_seq": 0,
             "entries": [deleted_entry(entry_id, device, "2026-02-01T00:00:00Z")],
@@ -304,7 +304,7 @@ async fn a_tombstone_is_returned_by_a_poll_with_deleted_at_set_and_a_blank_body(
     let (status, polled) = post_sync(
         &pool,
         json!({
-            "protocol_version": 2,
+            "protocol_version": 4,
             "device_id": Uuid::new_v4(),
             "since_seq": 0,
             "entries": [],
@@ -333,7 +333,7 @@ async fn pushing_an_edit_to_an_already_deleted_entry_is_a_no_op(pool: PgPool) {
     post_sync(
         &pool,
         json!({
-            "protocol_version": 2,
+            "protocol_version": 4,
             "device_id": device,
             "since_seq": 0,
             "entries": [entry(entry_id, device, "original body")],
@@ -343,7 +343,7 @@ async fn pushing_an_edit_to_an_already_deleted_entry_is_a_no_op(pool: PgPool) {
     let (_, deleted) = post_sync(
         &pool,
         json!({
-            "protocol_version": 2,
+            "protocol_version": 4,
             "device_id": device,
             "since_seq": 0,
             "entries": [deleted_entry(entry_id, device, "2026-02-01T00:00:00Z")],
@@ -356,7 +356,7 @@ async fn pushing_an_edit_to_an_already_deleted_entry_is_a_no_op(pool: PgPool) {
     let (status, edited) = post_sync(
         &pool,
         json!({
-            "protocol_version": 2,
+            "protocol_version": 4,
             "device_id": device,
             "since_seq": 0,
             "entries": [entry(entry_id, device, "an edit that arrived too late")],
@@ -396,7 +396,7 @@ async fn replaying_an_unchanged_entry_across_two_pushes_does_not_move_the_cursor
     let (_, first) = post_sync(
         &pool,
         json!({
-            "protocol_version": 2,
+            "protocol_version": 4,
             "device_id": device,
             "since_seq": 0,
             "entries": [entry(entry_id, device, "unchanged body")],
@@ -408,7 +408,7 @@ async fn replaying_an_unchanged_entry_across_two_pushes_does_not_move_the_cursor
     let (status, second) = post_sync(
         &pool,
         json!({
-            "protocol_version": 2,
+            "protocol_version": 4,
             "device_id": device,
             "since_seq": 0,
             "entries": [entry(entry_id, device, "unchanged body")],
@@ -432,6 +432,56 @@ async fn protocol_version_1_is_now_rejected(pool: PgPool) {
         &pool,
         json!({
             "protocol_version": 1,
+            "device_id": Uuid::new_v4(),
+            "since_seq": 0,
+            "entries": [],
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UPGRADE_REQUIRED);
+}
+
+/// Issue #96 bumped `PROTOCOL_VERSION` from 2 to 3 — for a `/v1/reflect`
+/// wire change, not anything about sync's own shape (`sync::PROTOCOL_VERSION`'s
+/// own doc comment covers why one shared constant means a Device that
+/// predates issue #96 is turned away here too). This is the sharper version
+/// of `an_unrecognised_protocol_version_is_rejected` above: not an
+/// arbitrary invalid number, but the *real* version every Device spoke
+/// before this ticket — proving the bump actually took effect for `/v1/sync`,
+/// exactly as `reflect.rs`'s own
+/// `a_device_speaking_the_pre_bump_protocol_version_is_rejected` proves it
+/// for `/v1/reflect`.
+#[sqlx::test]
+async fn protocol_version_2_is_now_rejected(pool: PgPool) {
+    let (status, _) = post_sync(
+        &pool,
+        json!({
+            "protocol_version": 2,
+            "device_id": Uuid::new_v4(),
+            "since_seq": 0,
+            "entries": [],
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UPGRADE_REQUIRED);
+}
+
+/// Issue #104 bumped `PROTOCOL_VERSION` from 3 to 4 — for the
+/// `turn_start` -> `step_start` SSE rename (`sync::PROTOCOL_VERSION`'s own
+/// doc comment covers why one shared constant means a Device that predates
+/// issue #104 is turned away here too, even though nothing about sync's own
+/// shape changed). This is the sharper version of
+/// `an_unrecognised_protocol_version_is_rejected` above: not an arbitrary
+/// invalid number, but the *real* version every Device spoke before this
+/// ticket — proving the bump actually took effect for `/v1/sync`, exactly
+/// as `reflect.rs`'s own `a_device_speaking_the_pre_bump_protocol_version_is_rejected`
+/// proves it for `/v1/reflect`.
+#[sqlx::test]
+async fn protocol_version_3_is_now_rejected(pool: PgPool) {
+    let (status, _) = post_sync(
+        &pool,
+        json!({
+            "protocol_version": 3,
             "device_id": Uuid::new_v4(),
             "since_seq": 0,
             "entries": [],

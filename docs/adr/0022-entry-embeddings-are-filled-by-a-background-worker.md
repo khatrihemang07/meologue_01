@@ -2,7 +2,12 @@
 
 ## Status
 
-Accepted
+Accepted. **Amended by issue #100 (`8c653ed`): the verdict on whether embeddings earn their
+dependency they cost is keep, at moderate confidence — see the "Amendment (issue #100)" section
+below.** Everything this ADR decided about *how* embeddings are produced — the background worker,
+the nullable-column queue, the process-local attempt cap, no ANN index — stands unchanged; #100
+answers a different question this ADR always left open, which is whether the thing being produced
+is worth what it costs to keep producing.
 
 ## Context
 
@@ -121,3 +126,89 @@ existing test file that calls it keeps compiling; `router_with_embedding` is the
 version `main.rs` actually uses. A Device or test that never wires an embedding channel simply
 never gets the `try_send` hint — the scan still finds and embeds those Entries on its own
 schedule, just without the latency win the channel exists to provide.
+
+## Amendment (issue #100): the verdict, and why it's the reasoning that matters
+
+This ADR built the embedding pipeline without ever asking whether embeddings were worth their
+dependency — a background worker, a `vector(640)` column on every Entry, and a Server that refuses
+to start Reflection at all without an embedding model configured
+([0021](0021-the-server-calls-an-openai-compatible-llm.md)). Issue #94 gave Reflection a second
+retriever, `search_entries` ([0035](0035-entry-full-text-search-on-the-server.md)), that needs none
+of this. Issue #100 is the comparison that decides which one earns its keep — full results and
+per-Question detail are in `server/tests/eval-retrieval-baseline.md`; this amendment records the
+decision and, more importantly, the reasoning behind it, because the conclusion by itself
+understates how close this call actually was.
+
+**The verdict: keep embeddings, at moderate confidence — and not for the reason the earlier
+numbers suggested.** Issue #94's own recorded number, semantic search's 0.859 mean recall against
+word search's 0.748 at `k = 40`, looked like a clear win for embeddings. It wasn't a fair
+comparison: `semantic` (`similar_entries`) returns its unconditional top-40 of 119 Entries for
+every Question since issue #92 removed the similarity floor, while `word_search`
+(`search_entries`) naturally returns a mean of about 21 rows — it stops when its own ranking runs
+out of real matches rather than padding out to 40. Picking 40 of 119 Entries at random already
+scores ≈0.336 recall by chance, so the 0.859 number was inflated partly by a row budget nobody had
+equalised.
+
+**At the row count word search actually uses, the two arms are not meaningfully different.** A
+recall@k curve computed at `k = 5, 10, 20, 21, 30, 40` (`k = 21` being word search's own measured
+mean row count) shows the lead crossing over: word search leads outright at `k = 5` and `k = 10`
+on every measure — recall, pooled recall, and precision — and semantic only overtakes at `k ≈ 20`,
+pulling further ahead only as `k` grows toward 40. At `k = 21` specifically, the shared,
+comparable-cost budget, mean recall is 0.747 (semantic) against 0.748 (word search) — the same
+number inside rounding — and word search is **ahead** on pooled recall (0.742 vs 0.725) and
+precision (0.190 vs 0.188). Most of the original 0.859-vs-0.748 gap, in other words, was "we
+stopped forcing word search to compete on a row budget it doesn't naturally use," not "embeddings
+rank better."
+
+**Embeddings are kept for two things the head-to-head race does not show, both required by
+issue #100's own bar: "if embeddings are kept, the record says which Questions justify them."**
+
+1. **A short, specific list of Questions word search cannot reach**, ranked by the size of the gap
+   at the comparable `k = 21`: `aurora-devika` (1.00 vs 0.12, a gap of 0.88 — the clearest case in
+   the whole corpus, because the Question names a person, "Devika," that the relevant Entries
+   mostly refer to obliquely, with no word in common to match), `wedding-day` (+0.67), and
+   `knee-onset`, `caffeine-slip`, `flat-move-reason` (+0.50 each — Questions that paraphrase what
+   the Entries actually say, sharing no lexical stem with them). Past this list of five, every
+   further semantic win is smaller and more marginal.
+2. **A combined arm shows genuine complementary lift that neither tool alone provides, and this is
+   the stronger of the two results.** A union of both arms at a 20+20 budget uses 27 rows after
+   overlap and scores 0.878 mean recall / 0.875 pooled — beating semantic's own top-40 numbers
+   (0.859 / 0.833, using 40 rows) while returning a third fewer rows. At an ~11+11 budget the union
+   matches either single arm's own recall (0.747) using only 15.7 rows on average, with better
+   precision than either arm alone at that cost (0.249 vs 0.188/0.190). This is not the two arms
+   agreeing with each other — if it were, the union would look like either arm alone. It looks
+   better than both, which is only possible because the two are wrong on different Questions: the
+   same complementarity issue #94 asserted when it kept `search_entries` and `similar_entries` as
+   two separate tools rather than merging them into one hybrid retriever
+   ([0035](0035-entry-full-text-search-on-the-server.md)), now measured rather than argued.
+
+**Confidence is moderate, not high, and the amendment says so plainly rather than rounding up, for
+three reasons stated openly:**
+
+- The comparable-`k` race is genuinely close — close enough that word search wins outright at low
+  `k` and edges semantic on two of three measures at `k = 21`. The original 0.859-vs-0.748 framing
+  overstated what semantic alone is worth; correcting that cuts against embeddings, not for them.
+- **The corpus flatters semantic.** [0023](0023-reflection-is-a-fixed-three-source-fan-out.md)
+  measured `MIN_SIMILARITY` separating topics cleanly at roughly 80 Entries and failing to separate
+  them at 572 — nearest-neighbour ranking gets more confusable neighbours to rank among as a
+  History grows, a pressure lexical matching does not obviously share. The eval corpus holds ~119
+  live Entries, at the optimistic end of that range. A real History accumulated over years could
+  plausibly narrow this gap further, or erase it outright, rather than hold it.
+- **Word search's own number is a floor, not an estimate**, because the eval feeds it raw Question
+  text while the live harness lets the model choose its own search terms and search again when the
+  first attempt comes back thin (its own observed example: `search_entries(query: "Priya
+  wedding")`, chosen by the model, retrieved all 5 correct wedding Entries on a Question that
+  scored 0 recall under the old fixed pipeline's floor). Semantic search has no equivalent
+  headroom — a longer, more natural-language query is not a handicap for an embedding the way it
+  can be for a lexical match.
+
+**This measurement does not, by itself, justify the current shape of the dependency it was
+weighing.** A background worker, a vector column on every Entry, and a Server that refuses to
+start Reflection at all without an embedding model configured is a stronger dependency than "these
+two tools are worth having." The comparable-`k` finding — word search alone is not meaningfully
+worse than semantic alone — means a deployment that lost `similar_entries` entirely would likely
+retrieve reasonably well, not fail badly, which is a materially weaker justification for a
+hard startup dependency than the original 0.859-vs-0.748 numbers implied. That is an observation
+this amendment records, not a change this amendment makes: nothing about the worker, the column,
+or the startup gate is altered here — the verdict is keep, and what to do with a keep verdict that
+rests on a moderate-confidence, narrow case is left for whoever next revisits this dependency.

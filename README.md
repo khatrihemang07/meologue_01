@@ -190,11 +190,6 @@ cargo test --manifest-path server/Cargo.toml
 Tests use the Sandbox Postgres, never the production database. Stop a running Sandbox Server before a
 full end-to-end run if its Reflection and Digest workers cause timeouts.
 
-One server test currently fails on `main`, so `cargo test` is not green:
-`a_chat_client_that_always_fails_stops_after_exactly_max_attempts` in `server/tests/digest.rs`
-sees exactly twice `MAX_ATTEMPTS` calls. It is not a flake — it fails with `--test-threads=1`
-too. Noted here so it is not mistaken for damage from whatever you are working on.
-
 After changing Rust wire types, regenerate the committed TypeScript contract with:
 
 ```bash

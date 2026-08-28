@@ -9,7 +9,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use meologue_server::embedding;
-use meologue_server::llm::{ChatMessage, LlmClient};
+use meologue_server::llm::{ChatMessage, ChatReply, LlmClient};
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use tokio::sync::mpsc;
@@ -56,7 +56,7 @@ impl FakeLlmClient {
 
 #[async_trait]
 impl LlmClient for FakeLlmClient {
-    async fn chat(&self, _messages: &[ChatMessage]) -> Result<String> {
+    async fn chat(&self, _messages: &[ChatMessage]) -> Result<ChatReply> {
         unimplemented!("chat is not exercised by ticket 3's tests")
     }
 
@@ -163,7 +163,7 @@ async fn an_entry_synced_in_ends_up_with_an_embedding_and_a_model_name(pool: PgP
         &pool,
         Some(tx),
         json!({
-            "protocol_version": 2,
+            "protocol_version": 4,
             "device_id": device,
             "since_seq": 0,
             "entries": [entry(entry_id, device, "an entry that gets embedded")],
@@ -196,7 +196,7 @@ async fn sync_succeeds_even_when_the_embedding_client_always_errors(pool: PgPool
         &pool,
         Some(tx),
         json!({
-            "protocol_version": 2,
+            "protocol_version": 4,
             "device_id": device,
             "since_seq": 0,
             "entries": [entry(entry_id, device, "an entry the embedding client will refuse")],

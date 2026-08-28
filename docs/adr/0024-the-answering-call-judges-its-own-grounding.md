@@ -2,13 +2,32 @@
 
 ## Status
 
+**Superseded by [0031](0031-reflection-is-a-loop-over-tools.md): the `GROUNDED: yes/no` marker and
+the disclosed 3-day fallback this ADR built no longer exist.** Issue #99 (`6bed6b5`) removed both
+along with the fixed pipeline they were part of ([0023](0023-reflection-is-a-fixed-three-source-fan-out.md)'s
+own Status). `grounded` and `fallback_used` leave the vocabulary entirely rather than being
+reimplemented against the loop — see 0031's Decision for why the concept itself, not merely this
+ADR's mechanism for computing it, stopped having a referent once the model can stop searching
+whenever it judges itself satisfied rather than being handed one fixed pile of Entries to grade.
+Kept in full below as the record of a real relevance-judgment problem, correctly diagnosed and
+fixed within the shape it was built for — the shape itself is what changed. Everything below this
+line describes code that no longer exists.
+
 Accepted. Extends [0023](0023-reflection-is-a-fixed-three-source-fan-out.md) — the fan-out, the
-merge rule, the extraction call, and `MIN_SIMILARITY` as a cheap noise filter all stand exactly as
-that ADR left them. What this ADR changes is the one line 0023 flagged as provisional: `grounded`
-used to mean "the merged retrieval set is non-empty"; 0023's own "Why no floor was chosen instead"
-section measured that this had stopped meaning anything on a realistic History and said the
-judgment would move off cosine "in ticket 6." This is that ticket. 0023's own text has been
-cross-linked back to this ADR at the two places it made that promise.
+merge rule, the extraction call, and (at the time this ADR was written) `MIN_SIMILARITY` as a cheap
+noise filter all stood exactly as that ADR left them. What this ADR changes is the one line 0023
+flagged as provisional: `grounded` used to mean "the merged retrieval set is non-empty"; 0023's own
+"Why no floor was chosen instead" section measured that this had stopped meaning anything on a
+realistic History and said the judgment would move off cosine "in ticket 6." This is that ticket.
+0023's own text has been cross-linked back to this ADR at the two places it made that promise.
+
+**`MIN_SIMILARITY` no longer stands as this ADR left it.** Issue #92 deleted it outright — see
+[0023](0023-reflection-is-a-fixed-three-source-fan-out.md)'s Status for the measured reason (issue
+#90: mean recall 0.319 with 7 of 22 Questions at exactly zero, and the score tracking phrasing, not
+topic). The "A recalibrated `MIN_SIMILARITY`" alternative below, and its closing line that
+`MIN_SIMILARITY` "stays exactly where 0023 left it," describe a state that no longer holds; kept
+below for the historical record of why recalibration specifically was rejected, which is still the
+correct reasoning — it is why issue #92 removed the floor rather than retuning it.
 
 ## Context
 

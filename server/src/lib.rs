@@ -1,8 +1,10 @@
 pub mod digest;
 pub mod embedding;
+pub mod harness;
 pub mod health;
 pub mod llm;
 pub mod metrics;
+pub mod models;
 pub mod openapi;
 pub mod period;
 pub mod reflect;
@@ -264,7 +266,13 @@ pub fn router_with_digests(
             .route(
                 "/v1/sessions/{id}",
                 get(sessions::get_session_handler).delete(sessions::delete_session_handler),
-            );
+            )
+            // Issue #96: `GET /v1/models` proxies the configured chat
+            // wrapper's own model list. Gated on the same `reflect.is_some()`
+            // check as everything else in this block, for the same reason
+            // `models.rs`'s own doc comment gives — there is nothing for it
+            // to proxy without a configured chat wrapper to ask.
+            .route("/v1/models", get(models::models_handler));
     }
     if digests_enabled {
         // Gated separately from the `reflect.is_some()` block above —

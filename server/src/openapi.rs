@@ -2,6 +2,8 @@ use utoipa::OpenApi;
 
 use crate::digest::{Digest, DigestResponse};
 use crate::health::HealthResponse;
+use crate::llm::ModelInfo;
+use crate::models::ModelsResponse;
 use crate::reflect::{ReflectRequest, ReflectResponse};
 use crate::sessions::{SessionResponse, SessionRow, SessionTurnRow};
 use crate::sync::{EntryInput, EntryOutput, SyncRequest, SyncResponse};
@@ -17,6 +19,7 @@ use crate::sync::{EntryInput, EntryOutput, SyncRequest, SyncResponse};
         crate::sessions::delete_session_handler,
         crate::digest::latest_digest_handler,
         crate::digest::digest_at_handler,
+        crate::models::models_handler,
     ),
     components(schemas(
         HealthResponse,
@@ -31,6 +34,8 @@ use crate::sync::{EntryInput, EntryOutput, SyncRequest, SyncResponse};
         SessionRow,
         DigestResponse,
         Digest,
+        ModelsResponse,
+        ModelInfo,
     ))
 )]
 struct ApiDoc;

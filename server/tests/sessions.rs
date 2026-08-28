@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
-use meologue_server::llm::{ChatMessage, LlmClient};
+use meologue_server::llm::{ChatMessage, ChatReply, LlmClient};
 use meologue_server::reflect::ReflectState;
 use serde_json::Value;
 use sqlx::PgPool;
@@ -28,7 +28,7 @@ struct UnusedLlmClient;
 
 #[async_trait]
 impl LlmClient for UnusedLlmClient {
-    async fn chat(&self, _messages: &[ChatMessage]) -> Result<String> {
+    async fn chat(&self, _messages: &[ChatMessage]) -> Result<ChatReply> {
         unimplemented!("GET /v1/sessions/{{id}} never talks to an LlmClient")
     }
 
@@ -45,6 +45,18 @@ fn reflect_state() -> ReflectState {
     ReflectState {
         chat_client: Arc::new(UnusedLlmClient),
         embed_client: Arc::new(UnusedLlmClient),
+        context_window: 200_000,
+        // Issue #96: `GET /v1/models` needs these, but nothing in this file
+        // exercises that route — an address nothing should ever connect to,
+        // matching tests/reflect.rs's own `UNUSED_CHAT_BASE_URL` convention.
+        chat_base_url: "http://127.0.0.1:1".to_string(),
+        chat_api_key: None,
+        // Issue #98: `get_session_handler` reads `chat_model` (never a
+        // method on `chat_client`) to attribute a pre-#98 Turn — see
+        // `SessionTurnRow::model`'s own doc comment. `chat_streaming` is
+        // still never read by this route at all.
+        chat_model: "codex-terra".to_string(),
+        chat_streaming: false,
     }
 }
 
@@ -176,19 +188,219 @@ async fn insert_session_with_times(
         .unwrap();
 }
 
+/// Writes the pair of chained tree entries `sessions::record_turn_from_steps`
+/// would append for the same simple, no-tool-call Turn. This test crate has
+/// no access to that function's `pub(crate)` internals, so it replicates
+/// the shape directly in SQL rather than reimplementing it —
+/// `session_entries_append_and_read_back` and friends in
+/// `server/src/sessions.rs`'s own `#[cfg(test)]` module are what actually
+/// exercise `append_entry`. What matters here is only that `GET
+/// /v1/sessions/{id}` — which reads the tree, the only representation a
+/// Session has (issue #99 removed `session_turns`, the older one-row-per-Turn
+/// table this helper used to write alongside the tree) — sees exactly the
+/// Turns these tests seed.
 async fn insert_turn(pool: &PgPool, session_id: Uuid, question: &str, answer: &str) {
-    sqlx::query(
-        "insert into session_turns
-            (id, session_id, question, answer, grounding_entry_ids, grounded, fallback_used)
-         values ($1, $2, $3, $4, '{}', true, false)",
+    let leaf: Option<Uuid> = sqlx::query_scalar("select main_leaf_id from sessions where id = $1")
+        .bind(session_id)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+
+    let user_seq: i64 = sqlx::query_scalar(
+        "update sessions set next_seq = next_seq + 1 where id = $1 returning next_seq - 1",
     )
-    .bind(Uuid::new_v4())
     .bind(session_id)
-    .bind(question)
-    .bind(answer)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let user_entry_id = Uuid::new_v4();
+    sqlx::query(
+        "insert into session_entries (session_id, id, parent_id, seq, type, payload)
+         values ($1, $2, $3, $4, 'message', $5)",
+    )
+    .bind(session_id)
+    .bind(user_entry_id)
+    .bind(leaf)
+    .bind(user_seq)
+    .bind(serde_json::json!({"role": "user", "text": question}))
     .execute(pool)
     .await
     .unwrap();
+
+    let assistant_seq: i64 = sqlx::query_scalar(
+        "update sessions set next_seq = next_seq + 1 where id = $1 returning next_seq - 1",
+    )
+    .bind(session_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let assistant_entry_id = Uuid::new_v4();
+    sqlx::query(
+        "insert into session_entries (session_id, id, parent_id, seq, type, payload)
+         values ($1, $2, $3, $4, 'message', $5)",
+    )
+    .bind(session_id)
+    .bind(assistant_entry_id)
+    .bind(user_entry_id)
+    .bind(assistant_seq)
+    .bind(serde_json::json!({
+        "role": "assistant",
+        "text": answer,
+        "grounding_entry_ids": Vec::<Uuid>::new(),
+    }))
+    .execute(pool)
+    .await
+    .unwrap();
+
+    sqlx::query("update sessions set main_leaf_id = $1 where id = $2")
+        .bind(assistant_entry_id)
+        .bind(session_id)
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+/// Appends one tree entry onto whatever a Session's `main_leaf_id` currently
+/// is, and moves the leaf onto it — the same chaining `append_entry`/
+/// `record_turn_from_steps` do, reimplemented in raw SQL for the same reason
+/// `insert_turn` above is: this test crate has no access to `sessions.rs`'s
+/// `pub(crate)` internals. Returns the new entry's id, so a caller building
+/// a multi-step run (a tool call, a tool result, a real answer) can chain
+/// each one onto the last without re-deriving `main_leaf_id` itself.
+async fn append_tree_entry(pool: &PgPool, session_id: Uuid, payload: Value) -> Uuid {
+    let leaf: Option<Uuid> = sqlx::query_scalar("select main_leaf_id from sessions where id = $1")
+        .bind(session_id)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    let seq: i64 = sqlx::query_scalar(
+        "update sessions set next_seq = next_seq + 1 where id = $1 returning next_seq - 1",
+    )
+    .bind(session_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let id = Uuid::new_v4();
+    sqlx::query(
+        "insert into session_entries (session_id, id, parent_id, seq, type, payload)
+         values ($1, $2, $3, $4, 'message', $5)",
+    )
+    .bind(session_id)
+    .bind(id)
+    .bind(leaf)
+    .bind(seq)
+    .bind(payload)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query("update sessions set main_leaf_id = $1 where id = $2")
+        .bind(id)
+        .bind(session_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    id
+}
+
+/// Carry-over from #96 pass 2, recorded on issue #99: a Turn answered from a
+/// `read_digest` tool call must still say so — via `digest_source` on the
+/// wire — after a page reload, not just while the browser session that
+/// asked is still open. Before this ticket, `GET /v1/sessions/{id}` returned
+/// `SessionTurnRow` with no per-tool detail at all, so a Turn shaped exactly
+/// like this one — a tool call, a `tool_result` tagged `"source": "digest"`
+/// (`harness/tools/read_digest.rs`'s own shape), then the real answer — read
+/// back indistinguishable from an ordinary Entry-grounded Turn: this test
+/// would have failed to compile against the pre-#99 `SessionTurnRow` (no
+/// `digest_source` field existed to assert on at all), and would have
+/// failed at runtime against the pre-#99 `GET /v1/sessions/{id}`, which had
+/// nowhere in its response to carry this.
+#[sqlx::test]
+async fn a_digest_sourced_turn_reads_back_with_its_digest_source_after_reload(pool: PgPool) {
+    let session_id = Uuid::new_v4();
+    insert_session(&pool, session_id, "How did the flat move go?").await;
+
+    append_tree_entry(
+        &pool,
+        session_id,
+        serde_json::json!({"role": "user", "text": "And what about the month before?"}),
+    )
+    .await;
+    append_tree_entry(
+        &pool,
+        session_id,
+        serde_json::json!({
+            "role": "assistant",
+            "text": "[calling read_digest]",
+            "grounding_entry_ids": Vec::<Uuid>::new(),
+        }),
+    )
+    .await;
+    append_tree_entry(
+        &pool,
+        session_id,
+        serde_json::json!({
+            "role": "tool_result",
+            "text": "Digest for 2026-07-01 to 2026-07-31: ...",
+            "tool_name": "read_digest",
+            "is_error": false,
+            "details": {
+                "source": "digest",
+                "period": "month",
+                "period_start": "2026-07-01",
+                "period_end": "2026-07-31",
+            },
+        }),
+    )
+    .await;
+    append_tree_entry(
+        &pool,
+        session_id,
+        serde_json::json!({
+            "role": "assistant",
+            "text": "The month before was quieter — mostly settling in.",
+            "grounding_entry_ids": Vec::<Uuid>::new(),
+        }),
+    )
+    .await;
+
+    let (status, body) = get_session(&pool, Some(reflect_state()), session_id).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let turns = body["turns"].as_array().unwrap();
+    assert_eq!(turns.len(), 1);
+    assert_eq!(
+        turns[0]["digest_source"],
+        serde_json::json!({
+            "period": "month",
+            "period_start": "2026-07-01",
+            "period_end": "2026-07-31",
+        }),
+        "a Turn answered from a Digest must still say so after the read that survives a reload"
+    );
+}
+
+/// The mirror of the case above: a Turn whose tool calls never touched
+/// `read_digest` at all must read back with no `digest_source` — the field
+/// is `None`, not a guess or a leftover from a different Turn in the same
+/// Conversation.
+#[sqlx::test]
+async fn a_turn_with_no_digest_tool_call_reads_back_with_no_digest_source(pool: PgPool) {
+    let session_id = Uuid::new_v4();
+    insert_session(&pool, session_id, "How has my knee been?").await;
+    insert_turn(
+        &pool,
+        session_id,
+        "How has my knee been?",
+        "It's been a recurring issue since February.",
+    )
+    .await;
+
+    let (status, body) = get_session(&pool, Some(reflect_state()), session_id).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let turns = body["turns"].as_array().unwrap();
+    assert_eq!(turns.len(), 1);
+    assert_eq!(turns[0]["digest_source"], serde_json::Value::Null);
 }
 
 /// The whole point of a server-held Conversation (`docs/adr/0025`): a
@@ -247,25 +459,26 @@ async fn the_route_is_absent_when_chat_is_unconfigured(pool: PgPool) {
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
-/// `session_turns.session_id references sessions(id) on delete cascade` —
-/// exercised directly against Postgres rather than through
-/// `DELETE /v1/sessions/{id}`, so this proves the foreign key itself is
-/// wired the way the migration claims, independent of the handler built on
-/// top of it. `the_delete_endpoint_removes_the_session_and_cascades_its_turns`
-/// below exercises the same cascade through the real endpoint.
+/// `session_entries.session_id references sessions(id) on delete cascade`
+/// (migration `0006`) — exercised directly against Postgres rather than
+/// through `DELETE /v1/sessions/{id}`, so this proves the foreign key
+/// itself is wired the way the migration claims, independent of the
+/// handler built on top of it.
+/// `the_delete_endpoint_removes_the_session_and_cascades_its_turns` below
+/// exercises the same cascade through the real endpoint.
 #[sqlx::test]
 async fn deleting_a_session_cascades_its_turns(pool: PgPool) {
     let session_id = Uuid::new_v4();
     insert_session(&pool, session_id, "Anything?").await;
     insert_turn(&pool, session_id, "Anything?", "Not much.").await;
 
-    let turn_count_before: i64 =
-        sqlx::query_scalar("select count(*) from session_turns where session_id = $1")
+    let entry_count_before: i64 =
+        sqlx::query_scalar("select count(*) from session_entries where session_id = $1")
             .bind(session_id)
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert_eq!(turn_count_before, 1);
+    assert_eq!(entry_count_before, 2);
 
     sqlx::query("delete from sessions where id = $1")
         .bind(session_id)
@@ -273,13 +486,13 @@ async fn deleting_a_session_cascades_its_turns(pool: PgPool) {
         .await
         .unwrap();
 
-    let turn_count_after: i64 =
-        sqlx::query_scalar("select count(*) from session_turns where session_id = $1")
+    let entry_count_after: i64 =
+        sqlx::query_scalar("select count(*) from session_entries where session_id = $1")
             .bind(session_id)
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert_eq!(turn_count_after, 0);
+    assert_eq!(entry_count_after, 0);
 }
 
 /// `GET /v1/sessions` orders newest-first by `updated_at` — the column
@@ -313,6 +526,13 @@ async fn list_sessions_orders_by_updated_at_not_created_at(pool: PgPool) {
         now - Duration::hours(1),
     )
     .await;
+    // Issue #108: `list_sessions`'s unfiltered branch now excludes a
+    // Session with no entries at all — neither of the two above would
+    // appear in the list without this, which would make this test prove
+    // nothing about ordering. `insert_turn` never touches `updated_at`
+    // itself, so the pinned times above are unaffected.
+    insert_turn(&pool, older_id, "Q", "A").await;
+    insert_turn(&pool, newer_id, "Q", "A").await;
 
     let (status, body) = list_sessions(&pool, Some(reflect_state()), None).await;
 
@@ -332,6 +552,58 @@ async fn an_empty_session_table_is_200_empty_list(pool: PgPool) {
     assert_eq!(body.as_array().unwrap().len(), 0);
 }
 
+/// Issue #108: `reflect.rs::resolve_session` now mints a Session's `sessions`
+/// row up front, before the run it belongs to even starts — so a request
+/// that resolves a Session and then fails before ever producing an Answer
+/// can leave a real, committed Session with no entries at all behind
+/// (`sessions.rs`'s own doc comment on `create_session`). `docs/adr/0025`'s
+/// guarantee — "a Session holding an empty Conversation is unrepresentable"
+/// — is kept exactly where a client would actually observe it breaking:
+/// neither list shape may ever show such a Session, even though the row
+/// itself is real. The unfiltered branch needs an explicit guard for this
+/// (`list_sessions`'s own doc comment); the search branch already joins
+/// `session_entries` to match at all, so a Session with none can never
+/// produce a matching row to begin with — proven here too, rather than
+/// assumed.
+#[sqlx::test]
+async fn a_session_with_no_entries_is_absent_from_both_list_shapes(pool: PgPool) {
+    let empty_id = Uuid::new_v4();
+    insert_session(&pool, empty_id, "Never answered").await;
+
+    let real_id = Uuid::new_v4();
+    insert_session(&pool, real_id, "How has my knee been?").await;
+    insert_turn(
+        &pool,
+        real_id,
+        "How has my knee been?",
+        "It's been a recurring issue since February.",
+    )
+    .await;
+
+    let (status, body) = list_sessions(&pool, Some(reflect_state()), None).await;
+    assert_eq!(status, StatusCode::OK);
+    let ids: Vec<String> = body
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|session| session["id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        ids,
+        vec![real_id.to_string()],
+        "the entry-less Session must never appear in the unfiltered list: {body:?}"
+    );
+
+    let (status, body) = list_sessions(&pool, Some(reflect_state()), Some("Never")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body.as_array().unwrap().len(),
+        0,
+        "the search branch already joins session_entries, so it excludes an entry-less \
+         Session even though its own title matches the term: {body:?}"
+    );
+}
+
 /// `/v1/sessions` is gated on Reflection being configured, exactly like
 /// `/v1/sessions/{id}` (`lib.rs`'s `reflect.is_some()` block) — a Server
 /// with no chat model configured never created a Session in the first
@@ -345,8 +617,8 @@ async fn the_list_route_is_absent_when_chat_is_unconfigured(pool: PgPool) {
 
 /// `DELETE /v1/sessions/{id}` (issue #63): `204`, the Session is gone from
 /// `GET /v1/sessions`, and — proving the cascade through the real endpoint
-/// rather than assuming it from the foreign key alone — its Turns are gone
-/// from `session_turns` too, queried directly.
+/// rather than assuming it from the foreign key alone — its tree entries
+/// are gone from `session_entries` too, queried directly.
 #[sqlx::test]
 async fn the_delete_endpoint_removes_the_session_and_cascades_its_turns(pool: PgPool) {
     let session_id = Uuid::new_v4();
@@ -367,13 +639,13 @@ async fn the_delete_endpoint_removes_the_session_and_cascades_its_turns(pool: Pg
         "the deleted Session must not still be in the list"
     );
 
-    let turn_count: i64 =
-        sqlx::query_scalar("select count(*) from session_turns where session_id = $1")
+    let entry_count: i64 =
+        sqlx::query_scalar("select count(*) from session_entries where session_id = $1")
             .bind(session_id)
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert_eq!(turn_count, 0);
+    assert_eq!(entry_count, 0);
 }
 
 /// Deleting an id that names no Session is a 404, not a 204 — so a client

@@ -124,9 +124,53 @@ async fn main() -> anyhow::Result<()> {
     // An unset chat base URL/model (or an unresolvable embed config —
     // Reflection needs both, see `LlmConfig::reflect_config`) means
     // `/v1/reflect` is never registered at all — ticket 4.
-    let reflect = llm_config
-        .reflect_config()
-        .map(|(chat_client, embed_client)| meologue_server::reflect::ReflectState { chat_client, embed_client });
+    let reflect = match llm_config.reflect_config() {
+        Some((chat_client, embed_client)) => {
+            // Issue #97: resolved once, at startup, rather than per
+            // request — `LlmConfig::resolve_context_window`'s own doc
+            // comment covers why.
+            let context_window = llm_config.resolve_context_window().await;
+            // Issue #96: `GET /v1/models` (`models::models_handler`) needs
+            // the raw base URL/API key alongside the two `LlmClient`s above
+            // — `reflect_config()` already proved `chat_base_url` is `Some`
+            // (it's what built `chat_client`), so this `.expect` documents
+            // that invariant rather than guessing past it silently.
+            let chat_base_url = llm_config
+                .chat_base_url
+                .clone()
+                .expect("reflect_config() only returns Some when chat_base_url is set");
+            let chat_model = llm_config
+                .chat_model
+                .clone()
+                .expect("reflect_config() only returns Some when chat_model is set");
+            // Issue #98: whether the configured default model itself
+            // streams — resolved once, here, the same "at startup, not per
+            // request" reasoning `context_window` above already follows.
+            // `list_models` degrades to an empty list on any failure to
+            // reach the wrapper (its own doc comment), which folds into
+            // `unwrap_or(false)` below the same conservative way an unknown
+            // context window folds into `DEFAULT_CONTEXT_WINDOW` — a
+            // wrapper Reflection can't reach yet is not a reason to guess
+            // it streams.
+            let chat_streaming =
+                llm::list_models(&chat_base_url, llm_config.chat_api_key.as_deref())
+                    .await
+                    .into_iter()
+                    .find(|model| model.id == chat_model)
+                    .map(|model| model.streaming)
+                    .unwrap_or(false);
+            Some(meologue_server::reflect::ReflectState {
+                chat_client,
+                embed_client,
+                context_window,
+                chat_base_url,
+                chat_api_key: llm_config.chat_api_key.clone(),
+                chat_model,
+                chat_streaming,
+            })
+        }
+        None => None,
+    };
 
     let static_dir = env::var("STATIC_DIR").unwrap_or_else(|_| DEFAULT_STATIC_DIR.to_string());
     let app =

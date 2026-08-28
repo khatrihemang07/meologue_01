@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Datelike, NaiveDate, Utc};
 use chrono_tz::Tz;
 use meologue_server::digest;
-use meologue_server::llm::{ChatMessage, LlmClient};
+use meologue_server::llm::{ChatMessage, ChatReply, LlmClient};
 use meologue_server::period::{self, Period};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -55,11 +55,13 @@ impl FakeChatClient {
 
 #[async_trait]
 impl LlmClient for FakeChatClient {
-    async fn chat(&self, messages: &[ChatMessage]) -> Result<String> {
+    async fn chat(&self, messages: &[ChatMessage]) -> Result<ChatReply> {
         self.call_count.fetch_add(1, Ordering::SeqCst);
         self.calls.lock().unwrap().push(messages.to_vec());
         match self.behavior {
-            FakeBehavior::AlwaysSucceed => Ok("You wrote about a handful of things.".to_string()),
+            FakeBehavior::AlwaysSucceed => {
+                Ok(ChatReply::text("You wrote about a handful of things."))
+            }
             FakeBehavior::AlwaysFail => bail!("fake chat client always errors"),
         }
     }
@@ -789,4 +791,94 @@ async fn an_entry_at_1845_utc_lands_in_the_next_day_under_asia_kolkata(pool: PgP
     );
 
     worker.abort();
+}
+
+/// Issue #101: bucketing an Entry into the right Period (the pair of
+/// tests above) is only half the fix — the Entry also has to be *rendered*
+/// to the model under that same local day, not the UTC day `created_at`
+/// is stored in. Same instant and the same Kolkata-boundary shape as
+/// `an_entry_at_1845_utc_lands_in_the_next_day_under_asia_kolkata` above,
+/// but this asserts on the digest chat call's own message content
+/// (`client.all_calls()`) rather than which `digests` row gets written:
+/// the rendered Entry must say `[<Kolkata day>]`, never the UTC
+/// `[<utc_calendar_date>]`.
+#[sqlx::test]
+async fn a_digest_renders_an_entry_by_its_configured_local_day_not_utc(pool: PgPool) {
+    let kolkata: Tz = "Asia/Kolkata".parse().unwrap();
+    let now = Utc::now();
+    let horizon = period::most_recently_completed(Period::Day, kolkata, now);
+    let utc_calendar_date = horizon - chrono::Duration::days(1);
+    let naive_evening = utc_calendar_date.and_hms_opt(18, 45, 0).unwrap();
+    let instant = DateTime::<Utc>::from_naive_utc_and_offset(naive_evening, Utc);
+
+    let client = Arc::new(FakeChatClient::new(FakeBehavior::AlwaysSucceed));
+    let worker = spawn_worker(pool.clone(), client.clone(), kolkata);
+
+    let device = Uuid::new_v4();
+    insert_entry_at(&pool, Uuid::new_v4(), device, "an evening entry", instant).await;
+
+    wait_for_digest(&pool, Period::Day, horizon).await;
+    worker.abort();
+
+    let digest_call = client
+        .all_calls()
+        .into_iter()
+        .find(|call| is_digest_call(call))
+        .expect("the worker made at least one digest chat call");
+    let rendered = digest_call
+        .iter()
+        .find(|m| m.role == "user")
+        .expect("a digest call always carries a user message with the rendered Entries")
+        .content
+        .clone();
+
+    let kolkata_label = format!("[{}]", horizon.format("%Y-%m-%d"));
+    let utc_label = format!("[{}]", utc_calendar_date.format("%Y-%m-%d"));
+    assert!(
+        rendered.contains(&kolkata_label),
+        "expected the Entry rendered under its Kolkata-local day {kolkata_label}, got: {rendered}"
+    );
+    assert!(
+        !rendered.contains(&utc_label),
+        "must not render the UTC calendar day {utc_label}, which is one day earlier: {rendered}"
+    );
+}
+
+/// The other half of issue #101's acceptance criteria: rendering must be
+/// **unchanged** when `MEOLOGUE_TZ` is UTC (the default/unset case) — a
+/// plain UTC-day Entry renders under that same UTC day, exactly as it
+/// always did.
+#[sqlx::test]
+async fn a_digest_renders_entries_unchanged_under_utc(pool: PgPool) {
+    let now = Utc::now();
+    let horizon = period::most_recently_completed(Period::Day, Tz::UTC, now);
+    let naive_evening = horizon.and_hms_opt(9, 0, 0).unwrap();
+    let instant = DateTime::<Utc>::from_naive_utc_and_offset(naive_evening, Utc);
+
+    let client = Arc::new(FakeChatClient::new(FakeBehavior::AlwaysSucceed));
+    let worker = spawn_worker(pool.clone(), client.clone(), Tz::UTC);
+
+    let device = Uuid::new_v4();
+    insert_entry_at(&pool, Uuid::new_v4(), device, "a morning entry", instant).await;
+
+    wait_for_digest(&pool, Period::Day, horizon).await;
+    worker.abort();
+
+    let digest_call = client
+        .all_calls()
+        .into_iter()
+        .find(|call| is_digest_call(call))
+        .expect("the worker made at least one digest chat call");
+    let rendered = digest_call
+        .iter()
+        .find(|m| m.role == "user")
+        .expect("a digest call always carries a user message with the rendered Entries")
+        .content
+        .clone();
+
+    let utc_label = format!("[{}]", horizon.format("%Y-%m-%d"));
+    assert!(
+        rendered.contains(&utc_label),
+        "expected the Entry rendered under its UTC day {utc_label} (MEOLOGUE_TZ unset means UTC), got: {rendered}"
+    );
 }

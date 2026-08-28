@@ -108,11 +108,36 @@
         }
       }
     },
+    "/v1/models": {
+      "get": {
+        "tags": [
+          "crate::models"
+        ],
+        "operationId": "models_handler",
+        "responses": {
+          "200": {
+            "description": "The configured chat wrapper's own model list — empty, not an error, when the wrapper cannot be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Reflection (and so this route) is unconfigured"
+          }
+        }
+      }
+    },
     "/v1/reflect": {
       "post": {
         "tags": [
           "crate::reflect"
         ],
+        "summary": "Issue #96: `/v1/reflect` answers over `text/event-stream` now, not a\nsingle JSON body — pi's own event vocabulary (`step_start`,\n`tool_execution_start`, `tool_execution_end`, `message_start`,\n`message_update`, `message_end`, `agent_end`), emitted as\n`harness::agent_loop::run_with_events` actually makes progress, so the\nclient can render \"searching ... -> N Entries\" while it happens instead\nof a single \"searching\" spinner for however long the whole Question\ntakes. `utoipa` has no first-class way to describe a stream of\ndifferently-shaped named SSE frames as one response `body`, so this is\ndocumented as `text/event-stream` with no schema — `openapi.rs` still\nregisters every event payload's own Rust type (`MessageEndEventData`,\n`ToolExecutionStartEventData`, `ToolExecutionEndEventData`,\n`ReflectAgentEndEventData`) under `components.schemas` so a client\ngenerating types from `packages/core/src/generated/wire.ts` still gets\nthem, even though nothing here can point utoipa at \"frame N of this\nstream has this shape.\"",
+        "description": "The three status codes that predate this ticket keep meaning exactly\nwhat they did — 404 (Reflection unconfigured, or a `session_id` naming\nno Session) and 426 (a stale `protocol_version`) are still real HTTP\nstatuses, not folded into the event stream, because both are decided\n*before* this handler commits to a 200 and starts streaming (see\n`resolve_session`, called synchronously below): once the stream opens,\nthe status line has already gone out, so nothing after that point can\nchange it. A failure *inside* the streamed run — the chat endpoint\nerroring, the loop never producing an Answer — cannot become a 500 for\nthe same reason; it ends the stream instead, via an `agent_end` event\ncarrying `\"status\": \"error\"` (`run_reflect_stream`) rather than hanging\nor dropping the connection silently.",
         "operationId": "reflect_handler",
         "requestBody": {
           "content": {
@@ -126,17 +151,17 @@
         },
         "responses": {
           "200": {
-            "description": "An Answer grounded in the Entries retrieval found",
+            "description": "A stream of pi-vocabulary SSE events, ending in agent_end — see this handler's own doc comment",
             "content": {
-              "application/json": {
+              "text/event-stream": {
                 "schema": {
-                  "$ref": "#/components/schemas/ReflectResponse"
+                  "type": "string"
                 }
               }
             }
           },
           "404": {
-            "description": "session_id names a Session that does not exist"
+            "description": "Reflection is unconfigured, or session_id names a Session that does not exist"
           },
           "426": {
             "description": "protocol_version is not one this server understands"
@@ -215,7 +240,7 @@
         "tags": [
           "crate::sessions"
         ],
-        "summary": "Deletes a Session outright — the id itself, not its Turns, which\n`session_turns_session_id_fkey`'s `on delete cascade` (migration `0003`)\nremoves as a consequence of this one statement. `204 No Content` on\nsuccess, `404` when `id` names no Session — never a distinct \"already\ndeleted\" status, since from the Server's point of view those are the\nsame fact: there's nothing at `id` to delete.",
+        "summary": "Deletes a Session outright — the id itself, not its Turns, which\n`session_entries`' own `session_id references sessions(id) on delete\ncascade` (migration `0006`) removes as a consequence of this one\nstatement. `204 No Content` on\nsuccess, `404` when `id` names no Session — never a distinct \"already\ndeleted\" status, since from the Server's point of view those are the\nsame fact: there's nothing at `id` to delete.",
         "operationId": "delete_session_handler",
         "parameters": [
           {
@@ -342,6 +367,26 @@
           }
         }
       },
+      "DigestSourcePayload": {
+        "type": "object",
+        "description": "What a `read_digest` tool call found, when it found a real Digest — see\n`SessionTurnRow::digest_source`'s own doc comment for how this is\nderived and why. Field names deliberately match\n`harness/tools/read_digest.rs`'s own `details` JSON one for one (minus\nthe `\"source\": \"digest\"` tag itself, which this type's mere presence\nalready says), which is also what lets the client's existing\n`parseDigestSource` (`apps/web/src/lib/reflect-live-run.ts`) and this\nstruct agree on shape without either one having to translate the other.",
+        "required": [
+          "period",
+          "period_start",
+          "period_end"
+        ],
+        "properties": {
+          "period": {
+            "type": "string"
+          },
+          "period_end": {
+            "type": "string"
+          },
+          "period_start": {
+            "type": "string"
+          }
+        }
+      },
       "EntryInput": {
         "type": "object",
         "required": [
@@ -431,6 +476,45 @@
           }
         }
       },
+      "ModelInfo": {
+        "type": "object",
+        "description": "One Model the configured wrapper can serve — the subset of\n`localAIWrapper`'s own `OpenAIModel.local_ai_wrapper`\n(`discovery.ts::toOpenAIModel`) issue #96's `GET /v1/models` actually\nneeds to hand a client choosing a per-Session model (issue #98's own\nfeature; this ticket only wires the endpoint): which model to ask for,\nwhether it can stream — `streaming` is how a client tells \"answer-token\ndeltas ride the same stream\" apart from \"on codex-terra they simply\ndon't arrive\" (this module's own `ChatReply`, and\n`harness::prompted::PromptedToolClient`'s doc comment, are the server\nside of that same split) — and how much context it holds, the same\nfield `resolve_context_window` already reads for the *configured* model\nalone (`parse_context_window`, reused here for every Model the wrapper\nlists, not just that one).",
+        "required": [
+          "id",
+          "streaming"
+        ],
+        "properties": {
+          "context_window": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "id": {
+            "type": "string"
+          },
+          "streaming": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ModelsResponse": {
+        "type": "object",
+        "required": [
+          "models"
+        ],
+        "properties": {
+          "models": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ModelInfo"
+            },
+            "description": "The wrapper's own list, verbatim — empty, not an error or a missing\nfield, when the wrapper cannot be reached (`llm::list_models`'s own\ndoc comment covers every way that can happen). A client sees \"no\nmodels offered\" rather than a failed request."
+          }
+        }
+      },
       "ReflectRequest": {
         "type": "object",
         "required": [
@@ -438,6 +522,13 @@
           "question"
         ],
         "properties": {
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Issue #98: the model this Question should run on, or `None` to mean\n\"whatever this Conversation is already on\" — the Server's own\nconfigured default (`ReflectState::chat_model`) for a brand-new\nSession, or the model its own last Turn already recorded otherwise.\n**Choosing nothing is not the same as choosing the default on every\nrequest** — a Conversation that moved onto `claude-sonnet` keeps\nasking on `claude-sonnet` until a client names a different model\nagain, it does not silently fall back the moment a request omits\nthis field. `run_reflect_stream_inner`'s own call to `resolve_model`\nis where that resolution actually happens; a `Some` naming a model\nthis Server can no longer reach is not rejected here — see this\nmodule's own doc comment on what happens instead."
+          },
           "protocol_version": {
             "type": "integer",
             "format": "int32"
@@ -451,12 +542,12 @@
               "null"
             ],
             "format": "uuid",
-            "description": "The Session this Question belongs to, or `None` to start a new one\n— a null id on an ask *is* the create (`docs/adr/0025`); there is no\nseparate create endpoint. `run_reflect` loads that Session's prior\nTurns (`sessions::load_turns`) to read this Question \"in the light\nof the Conversation before it\" (CONTEXT.md's own phrase for what a\nConversation is) — the server holds that Conversation now, so this\nreplaces what used to round-trip on every request as `prior_turns`.\nA `Some` naming a Session that doesn't exist is a 404, not a\nsilently-ignored value."
+            "description": "The Session this Question belongs to, or `None` to start a new one\n— a null id on an ask *is* the create (`docs/adr/0025`); there is no\nseparate create endpoint. `resolve_session` loads that Session's\nprior Turns (`sessions::load_turns`) to read this Question \"in the\nlight of the Conversation before it\" (CONTEXT.md's own phrase for\nwhat a Conversation is) — the server holds that Conversation now, so\nthis replaces what used to round-trip on every request as\n`prior_turns`. A `Some` naming a Session that doesn't exist is a 404,\nnot a silently-ignored value."
           },
           "utc_offset_minutes": {
             "type": "integer",
             "format": "int32",
-            "description": "Minutes east of UTC for the asking Device, right now — the same sign\nconvention `apps/web/src/lib/entry-day.ts::deviceUtcOffsetMinutes`\nand ADR 0016's `toLocalParts` already use for Export's day grouping.\nThe extraction call (`extract_date_range_and_keyword`) uses this to\nresolve phrases like \"last week\" against the user's own local day,\nnever the server's clock.\n\n`#[serde(default)]` rather than required: `PROTOCOL_VERSION` stays 1\nfor this ticket (the sync contract's shape is unchanged, and bumping\nit would make every existing Device report the Server unreachable\nover an unrelated feature), so a Device that predates this ticket\nand posts with no `utc_offset_minutes` field must still get an\nAnswer — it just gets date phrases resolved against UTC instead of\nits own local day, which is a graceful degrade (defaults to `0`),\nnot a rejected Question."
+            "description": "Minutes east of UTC for the asking Device, right now — the same sign\nconvention `apps/web/src/lib/entry-day.ts::deviceUtcOffsetMinutes`\nand ADR 0016's `toLocalParts` already use for Export's day grouping.\n`EntriesInRangeTool` and `SearchEntriesTool` (`harness::tools`) both\ntake this to resolve a date phrase the model names in a tool call\n— \"last week,\" \"in March\" — against the user's own local day, never\nthe server's clock.\n\n`#[serde(default)]` rather than required, independent of whatever\n`PROTOCOL_VERSION` happens to be: a mismatched `protocol_version`\nalready rejects a stale Device outright (`reflect_handler`, 426), so\nthis field's own default exists to keep a *current* Device's request\nwell-formed even if some future caller ever omits it, not to soften\na version bump. Falling back to `0` (UTC) rather than rejecting the\nrequest is a graceful degrade either way: date phrases resolve\nagainst UTC instead of the asking Device's own local day, not a\nrejected Question."
           }
         }
       },
@@ -467,20 +558,23 @@
           "title",
           "answer",
           "grounding_entry_ids",
-          "grounded",
-          "fallback_used"
+          "tool_called",
+          "model"
         ],
         "properties": {
           "answer": {
             "type": "string"
           },
-          "fallback_used": {
-            "type": "boolean",
-            "description": "Whether the disclosed fallback (`docs/adr/0024`) ran: Reflection\njudged its Grounding didn't answer the Question (`grounded: false`)\n*and* Entries existed in the last few days to show instead. `false`\ncovers both \"the Grounding answered the Question\" (`grounded: true`)\nand \"it didn't, and there was nothing recent to show either\" —\n`grounded` is what tells those two `false` cases apart."
-          },
-          "grounded": {
-            "type": "boolean",
-            "description": "Whether Reflection judged that the Grounding it found actually\nanswers the Question — read off the \"GROUNDED: yes\"/\"GROUNDED: no\"\nmarker the answering chat call is now instructed to begin its reply\nwith (`SYSTEM_INSTRUCTION`, `parse_and_strip_verdict`), not from\nretrieval.\n\nThrough ticket 5 this meant something else entirely: \"the merged\nfan-out retrieval set (see `run_reflect`) is non-empty.\" `docs/adr/\n0023` measured why that stopped being a meaningful signal on a\nrealistic History — on the live 572-Entry corpus, an absent topic\n(\"my cat\", cosine 0.691) can outscore a present one (\"the wedding\",\n0.638), so the merged set is non-empty for essentially every\nQuestion and the old `grounded` was true almost unconditionally.\n`docs/adr/0024` is what moved the judgment onto the chat call\nitself, which actually reads what it was given, instead of a cosine\nfloor that can't tell \"relevant\" from \"large corpus.\""
+          "digest_source": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DigestSourcePayload",
+                "description": "Issue #105: the same field as `sessions::SessionTurnRow::digest_source`,\ncomputed the same way — `sessions::DigestSourceTracker` folded over\nthis run's own `grounded_steps` (the `..=answer_step_index` bound\nissue #106 already scopes Grounding to) — and put directly on this\nstruct rather than left for the client to derive on its own from\n`tool_execution_end` events. Flattened onto `agent_end` the same way\nevery other field here already is (`run_reflect_stream`'s own doc\ncomment), which is what makes this reach the client with no new\nplumbing: the live path and a page reload's `GET /v1/sessions/{id}`\nnow read from the identical computation, just at different times."
+              }
+            ]
           },
           "grounding_entry_ids": {
             "type": "array",
@@ -488,7 +582,11 @@
               "type": "string",
               "format": "uuid"
             },
-            "description": "The ids of the Entries the Answer was actually built from, in the\norder they were shown to the chat call (chronological — see\n`run_reflect`'s `merged.sort_by_key`).\n\nIn the normal case these are Grounding: the merged three-source\nfan-out (`docs/adr/0023`), judged (`grounded`, below) to actually\nanswer the Question. In the disclosed-fallback case\n(`fallback_used: true`) these are instead the last few days of\nEntries (`docs/adr/0024`) — shown despite *not* answering the\nQuestion, because CONTEXT.md's Grounding entry holds that admitting\nnothing was found beats inventing an Answer from somewhere else.\n`grounded: false` is what tells a reader — ticket 7's disclosure UI\nincluded — that these ids are not relevant matches; this field alone\n(non-empty or not) cannot tell the two cases apart."
+            "description": "The Entry ids that appeared in a tool result during this run, in the\norder they first appeared — `run_reflect_stream_inner`'s own dedup,\nover every `harness::agent_loop::Step::ToolResult` the loop\nproduced. Never a merged, ranked list computed in advance (issue\n#99 removed the pipeline that used to build one) — simply the Entry\nids the tools this run called happened to return. Empty when the\nloop never called a tool at all — a prose-only reply is not unusual,\nand carries no Grounding by construction, not by omission."
+          },
+          "model": {
+            "type": "string",
+            "description": "Issue #98: the model this Turn actually ran on — `resolve_model`'s\nown `resolved_model_id`, echoed back so a client can attribute the\nAnswer it just watched arrive without a second round trip to\n`GET /v1/sessions/{id}` (which would carry the same value, via\n`SessionTurnRow::model`, but only after the tree write this\nresponse is itself the result of has already committed)."
           },
           "session_id": {
             "type": "string",
@@ -498,6 +596,10 @@
           "title": {
             "type": "string",
             "description": "The Session's title: the existing title for a Session the request\nalready named, or the newly-derived one (`derive_title`) for a\nfreshly minted Session. Always present so a client never has to ask\nagain just to know what to show for a Session it just started."
+          },
+          "tool_called": {
+            "type": "boolean",
+            "description": "Whether this run called a tool at all — `true` the moment any\n`harness::agent_loop::Step::ToolResult` appears in `outcome.steps`,\nregardless of whether that call (or any other) found anything.\nIssue #103's own acceptance criterion: an empty `grounding_entry_ids`\nalone cannot tell a client, or a person reading a log, which of two\nvery different runs actually happened — one that called\n`search_entries` and it came back empty, or one that never called\nanything and wrote a reply anyway (the bug this issue was filed\nagainst: the model answered \"I can't access any journal entries from\nhere\" having tried nothing). Both reach this struct with an\nidentical `grounding_entry_ids: []`, and both used to render\nidentically to the user (\"Nothing in your History matched this\nQuestion\") for exactly that reason. This field is what lets that\ndistinction survive past `run_reflect_stream_inner` — both server-\nside (the `tracing::warn!` below) and on the wire, where the client\nrenders it as a distinct \"never looked\" outcome\n(`apps/web/src/lib/conversation.ts`'s `groundingOutcome`)."
           }
         }
       },
@@ -564,13 +666,13 @@
       },
       "SessionTurnRow": {
         "type": "object",
-        "description": "One Question/Answer pair persisted inside a Session, as loaded from\n`session_turns` — oldest first (`load_turns` orders by `seq asc`). This\nis also what `reflect.rs`'s `build_messages` takes a slice of in place\nof the wire's old `PriorTurn`, and it doubles as the wire shape for one\nentry of `SessionResponse::turns` below — the same fields both a\nfollow-up Question's prompt and a client restoring a Conversation need.",
+        "description": "One Question/Answer pair, rebuilt from a Session's entry tree\n(`entries_to_turns`) — oldest first (`load_turns` walks the tree root to\nleaf). This is also what `reflect.rs`'s `turns_to_messages` takes a\nslice of to replay a Conversation into the loop's own `Context`, and it\ndoubles as the wire shape for one entry of `SessionResponse::turns`\nbelow — the same fields both a follow-up Question's prompt and a client\nrestoring a Conversation need. Nothing here is stored directly: every\nfield is derived from the tree each time a Session is read, which is\nwhat issue #99 means by \"every Conversation reads from the tree\" — see\nthis module's own doc comment for the `session_turns` table this\nreplaced. `FromRow` is deliberately not derived here any more — nothing\ndecodes this struct straight off a query row today (`entries_to_turns`\nbelow builds every field itself), and `digest_source`'s nested\n`DigestSourcePayload` has no `sqlx::Decode` impl to derive one against.",
         "required": [
           "question",
           "answer",
           "grounding_entry_ids",
-          "grounded",
-          "fallback_used",
+          "tool_called",
+          "model",
           "created_at"
         ],
         "properties": {
@@ -581,21 +683,35 @@
             "type": "string",
             "format": "date-time"
           },
-          "fallback_used": {
-            "type": "boolean"
-          },
-          "grounded": {
-            "type": "boolean"
+          "digest_source": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DigestSourcePayload",
+                "description": "Issue #99's carry-over from #96 pass 2: a `read_digest` tool result\nfound a real Digest for this Turn, and this is what it was — the\nsame `period`/`period_start`/`period_end` the *live* `tool_execution_end`\nevent's `details` carries (`harness/tools/read_digest.rs`'s own\n`source: \"digest\"` tagging), now derived from the tree instead of\nonly ever available while the browser tab that asked the Question is\nstill open. Before this field existed, `GET /v1/sessions/{id}`\nreturned `SessionTurnRow` with no per-tool detail at all, so a\nDigest-sourced Turn read back — after a page reload — as though its\nGrounding were an ordinary list of Entries (whichever ids the same\nrun's *other* tool calls happened to surface, or none), not as\nhaving come from a Digest. `entries_to_turns` walks the same\n`tool_result` entries `tool_called` above reads, folding each one\ninto a `DigestSourceTracker` — see that type's own doc comment for\nthe rule issue #105 tightened this to: the most recent\n`\"source\": \"digest\"` tag still wins, but only when nothing seen\nafter it (before this Turn's own Answer) surfaced Entry ids of its\nown. `None` for every other Turn, including every one that predates\nissue #95, and for one where a Digest was read but then abandoned in\nfavour of raw Entries from elsewhere (issue #105's own reported\nbug)."
+              }
+            ]
           },
           "grounding_entry_ids": {
             "type": "array",
             "items": {
               "type": "string",
               "format": "uuid"
-            }
+            },
+            "description": "The Entry ids that appeared in a tool result during this Turn's run,\nin the order they first appeared — never a merged, deduped,\nrelevance-ranked list computed in advance (that description\nbelonged to the fixed pipeline issue #99 removed): simply what the\ntools returned, read back off the tree's own `tool_result` entries."
+          },
+          "model": {
+            "type": "string",
+            "description": "Issue #98: the model that produced this Turn's Answer — never\nstored on the Turn itself (there is no `model` column anywhere in\nthe tree, and `record_turn`/`record_turn_from_steps` carry no such\nfield either). Derived the same way `tool_called` above is:\n`entries_to_turns` tracks whichever model a `model_change` entry\nmost recently named while it walks the tree, and stamps that value\nonto every Turn it finishes — see `ModelChangePayload`'s own doc\ncomment for why that's the single source of truth this field reads\nfrom, rather than a second, independently-writable value."
           },
           "question": {
             "type": "string"
+          },
+          "tool_called": {
+            "type": "boolean",
+            "description": "Issue #103: whether this Turn's run called a tool at all —\n`grounding_entry_ids` alone cannot tell \"a tool ran and found\nnothing\" from \"no tool ever ran.\" No column backs this: it's\nderived, not stored — `entries_to_turns` computes it from whether a\n`tool_result` entry appears anywhere in the Turn's own run through\nthe tree, the same tree `session_entries` already holds every tool\ncall in (`harness::agent_loop::Step::ToolResult`, via\n`reflect.rs::build_tree_payloads`), rather than adding a second,\nindependently-writable flag that a future write path could forget to\nset."
           }
         }
       },
