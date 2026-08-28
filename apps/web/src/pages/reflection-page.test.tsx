@@ -779,14 +779,22 @@ describe("ReflectionPage", () => {
   // top-k for *every* Question, including one about a topic absent from
   // the journal — so a non-empty `grounding_entry_ids` under an Answer
   // that plainly says nothing was found is now the *common* shape, not an
-  // edge case. Before this fix, the disclosure still read "Grounded in N
-  // Entries" here — an on-screen contradiction directly beneath an Answer
-  // saying the opposite, because `groundingOutcome`/`summaryLabel` treated
-  // "the tools returned Entries" as "the Answer is grounded in them," a
-  // verdict the Server cannot make under the loop (this ticket's own
-  // module doc comment on `server/src/reflect.rs`). The fix is wording,
-  // not data: the disclosure must say what the list honestly is — Entries
-  // the tools returned — never that the Answer is grounded in them.
+  // edge case. #99 fixed the *verdict* half of this (the disclosure no
+  // longer says "Grounded in N Entries," a claim the Server can't back),
+  // but issue #111 caught a live recurrence of the same underlying
+  // problem, one layer down: #99's own replacement wording, "N Entries
+  // returned," still read as a claim about relevance — "returned" implies
+  // the search found N *relevant* things, so this disclosure still sat
+  // directly beneath "I couldn't find a journal entry about a football
+  // match" looking like a contradiction (reproduced on web, Android and
+  // macOS, with the count itself varying run to run — see issue #111 and
+  // ADR 0031). The two aren't actually in tension: the tools genuinely
+  // returned this many, and the model genuinely read all of them and
+  // judged none relevant. "N Entries read" says only that — a fact this
+  // component can actually verify (`search_entries.rs` builds
+  // `entry_ids` from exactly the `shown` set rendered into the tool
+  // result the model's context received) — so it never contradicts an
+  // Answer that goes on to say it found nothing useful among them.
   it("does not claim the Answer is grounded in Entries the tools returned but the model said it found nothing in", async () => {
     useSettingsStore.getState().setServerUrl("https://phone.example:41207");
     stubFetch({
@@ -809,7 +817,11 @@ describe("ReflectionPage", () => {
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText(/^Grounded in/)).not.toBeInTheDocument();
-    expect(screen.getByText("10 Entries returned")).toBeInTheDocument();
+    // "returned" is issue #111's own recurrence of the same contradiction
+    // (see the comment above) — pinned absent, not just "read" pinned
+    // present, so a regression back to the old verb fails loudly here.
+    expect(screen.queryByText(/Entries returned/)).not.toBeInTheDocument();
+    expect(screen.getByText("10 Entries read")).toBeInTheDocument();
   });
 
   // Issue #103: the case that used to be indistinguishable from the one
@@ -870,7 +882,7 @@ describe("ReflectionPage", () => {
     ask("How has my knee been?");
 
     expect(await screen.findByText("It's improved since February.")).toBeInTheDocument();
-    expect(screen.getByText("1 Entry returned")).toBeInTheDocument();
+    expect(screen.getByText("1 Entry read")).toBeInTheDocument();
   });
 
   // Issue #96: steps appear live, in order, as the harness reports them —
@@ -929,7 +941,7 @@ describe("ReflectionPage", () => {
       ]);
 
       await screen.findByText(
-        'Searched your Entries by meaning for "moving flat" — 20 Entries found.',
+        'Searched your Entries by meaning for "moving flat" — 20 Entries read.',
       );
     });
 
@@ -977,7 +989,7 @@ describe("ReflectionPage", () => {
           entry_count: 1,
         },
       ]);
-      await screen.findByText('Searched your Entries for "knee" — 1 Entry found.');
+      await screen.findByText('Searched your Entries for "knee" — 1 Entry read.');
 
       // Second loop turn: the model calls entries_in_range too.
       push(["step_start", {}]);
@@ -1004,16 +1016,16 @@ describe("ReflectionPage", () => {
         },
       ]);
       await screen.findByText(
-        "Looked through Entries from 2025-08-01 to 2025-08-31 — 1 Entry found.",
+        "Looked through Entries from 2025-08-01 to 2025-08-31 — 1 Entry read.",
       );
 
       // Both finished steps are still on screen together, in the order
       // they happened — not just the most recent one.
       expect(
-        screen.getByText('Searched your Entries for "knee" — 1 Entry found.'),
+        screen.getByText('Searched your Entries for "knee" — 1 Entry read.'),
       ).toBeInTheDocument();
       expect(
-        screen.getByText("Looked through Entries from 2025-08-01 to 2025-08-31 — 1 Entry found."),
+        screen.getByText("Looked through Entries from 2025-08-01 to 2025-08-31 — 1 Entry read."),
       ).toBeInTheDocument();
 
       // Third loop turn: the final Answer.

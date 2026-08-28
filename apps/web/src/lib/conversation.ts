@@ -168,7 +168,26 @@ export type GroundingOutcome =
    * not collapse back into one outcome the way they did before this field existed.
    */
   | "neverLooked"
-  /** A tool ran and genuinely found nothing — `toolCalled` is `true`, `groundingEntryIds` is empty. */
+  /**
+   * A tool ran and genuinely found nothing — `toolCalled` is `true`, `groundingEntryIds` is
+   * empty.
+   *
+   * Issue #111: since #92 removed `similar_entries`'s similarity floor, `groundingEntryIds`
+   * reaching this function empty requires *every* tool call the whole run made to come back
+   * empty — and `similar_entries` (semantic top-k, no floor) essentially never does for a
+   * non-empty journal, whatever the Question. So this outcome is not reachable by the kind of
+   * Question it was written for (a topic absent from the journal) unless the model happens
+   * never to call `similar_entries` at all during that run. It stays reachable through the
+   * other two tools, which *can* legitimately return zero: `entries_in_range` for a real
+   * calendar range with nothing written in it, and `search_entries`'s literal word/trigram
+   * match for a query nothing in the journal is close enough to. `apps/e2e/tests/reflection.spec.ts`'s
+   * "a run that genuinely finds nothing" test exercises exactly the `entries_in_range` case,
+   * deliberately (a query embedding the same as every Entry's, per `STUB_EMBEDDING`'s own doc
+   * comment in `llm-stub.ts`, would otherwise make `similar_entries` unable to come back empty
+   * even in the stub). Kept, not deleted: it is still the honest outcome for the runs that do
+   * hit it, and collapsing it into `"grounded"` would make an Entry-less disclosure claim
+   * Entries that don't exist.
+   */
   | "nothingFound"
   /** At least one Entry appeared in a tool result this run — simply what the tools returned, not a verdict that it actually answers the Question (see this type's own doc comment). */
   | "grounded";

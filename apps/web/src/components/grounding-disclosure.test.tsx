@@ -70,7 +70,7 @@ describe("GroundingDisclosure", () => {
       entry({ id: "entry-1", body: "Knee felt better" }),
     ]);
 
-    expect(screen.getByText("1 Entry returned")).toBeInTheDocument();
+    expect(screen.getByText("1 Entry read")).toBeInTheDocument();
   });
 
   it("labels multiple grounded Entries with plural wording", () => {
@@ -79,7 +79,7 @@ describe("GroundingDisclosure", () => {
       entry({ id: "entry-2", body: "Physio went well" }),
     ]);
 
-    expect(screen.getByText("2 Entries returned")).toBeInTheDocument();
+    expect(screen.getByText("2 Entries read")).toBeInTheDocument();
   });
 
   it("is collapsed by default and expands to show Entry bodies", () => {
@@ -87,7 +87,7 @@ describe("GroundingDisclosure", () => {
       entry({ id: "entry-1", body: "Knee felt better" }),
     ]);
 
-    const details = screen.getByText("1 Entry returned").closest("details");
+    const details = screen.getByText("1 Entry read").closest("details");
     expect(details).not.toBeNull();
     expect(details).not.toHaveAttribute("open");
     expect(screen.queryByText("Knee felt better")).not.toBeVisible();
@@ -138,7 +138,7 @@ describe("GroundingDisclosure", () => {
       entry({ id: "entry-1", body: "Knee felt better" }),
     ]);
 
-    const details = screen.getByText("1 Entry returned").closest("details");
+    const details = screen.getByText("1 Entry read").closest("details");
     expect(details).not.toBeNull();
     // biome-ignore lint/style/noNonNullAssertion: asserted not-null above.
     details!.setAttribute("open", "");
@@ -154,7 +154,7 @@ describe("GroundingDisclosure", () => {
       entry({ id: "entry-1", body: "Knee felt better" }),
     ]);
 
-    expect(screen.getByText("3 Entries returned")).toBeInTheDocument();
+    expect(screen.getByText("3 Entries read")).toBeInTheDocument();
   });
 
   // Issue #96: a Digest-sourced Answer is driven from `turn.digestSource`

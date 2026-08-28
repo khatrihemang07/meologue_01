@@ -133,13 +133,15 @@ test("a deleted Entry does not come back through Reflection's Grounding", async 
 
   // Expand the Grounding disclosure (a collapsed <details>/<summary> —
   // grounding-disclosure.tsx) and check its contents directly, rather than
-  // trusting the summary's count alone. "N Entries returned" is
+  // trusting the summary's count alone. "N Entries read" is
   // `summaryLabel`'s own current wording (issue #99's carry-over #2
   // deliberately dropped "Grounded in N Entries" — that phrasing claimed a
   // relationship between the Answer and those Entries the Server has no
-  // way to verify under the tool-calling loop; see that function's own doc
-  // comment).
-  const summary = page.getByText(/\d+ Entr(y|ies) returned/);
+  // way to verify under the tool-calling loop; issue #111 then found that
+  // its own replacement, "N Entries returned," still read as a relevance
+  // claim and sat as an apparent contradiction beneath an Answer that said
+  // nothing was found — see `summaryLabel`'s own doc comment).
+  const summary = page.getByText(/\d+ Entr(y|ies) read/);
   await expect(summary).toBeVisible({ timeout: 15_000 });
   await summary.click();
 

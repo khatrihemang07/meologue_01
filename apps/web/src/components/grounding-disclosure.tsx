@@ -1,6 +1,8 @@
 /**
  * A per-turn expander (ticket 7) showing the Entries a tool call returned
- * and the model read while answering — the only way to see what was behind
+ * and the model read while answering (issue #111 renamed the summary label
+ * itself from "returned" to "read" — see `summaryLabel`'s own doc comment
+ * for why) — the only way to see what was behind
  * an Answer by eye, since a confident wrong Answer and a right one
  * otherwise read identically. Collapsed by default behind a native
  * <details>/<summary>: keyboard-accessible and screen-reader-correct with
@@ -86,7 +88,7 @@ interface GroundingDisclosureProps {
 }
 
 /**
- * "N Entries returned" is the only wording this ever produces — the one
+ * "N Entries read" is the only wording this ever produces — the one
  * outcome `groundingOutcome` can return with a non-empty `groundingEntryIds`
  * (`"neverLooked"`/`"nothingFound"` both require it empty by construction,
  * and `"digest"` is handled by its own branch in the render below, before
@@ -107,15 +109,30 @@ interface GroundingDisclosureProps {
  * correctly answered "I couldn't find a journal entry about a football
  * match..." while this label still said "Grounded in 10 Entries" directly
  * beneath it — asserting a relationship between the Answer and those
- * Entries that the Server cannot actually know. "N Entries returned"
- * states only the fact this component does know: a tool call found this
- * many and the model saw them. Whether the Answer actually rests on any of
- * them is left to the Answer's own words, exactly as CONTEXT.md's
- * don't-invent rule already asks of everything else here.
+ * Entries that the Server cannot actually know.
+ *
+ * Issue #111: "N Entries returned" (this fix's own predecessor) turned out
+ * to carry the same problem in a smaller dose. "Returned" reads as "the
+ * search found N relevant things" — so on the very Question above, it
+ * still sat directly beneath "I couldn't find anything about a football
+ * match" implying a contradiction: if 10 things were "returned," why did
+ * the Answer say it found nothing? They aren't in tension — the search
+ * genuinely returned its top-k (per #92, with no floor to filter them),
+ * and the model genuinely read all of them and judged none relevant — but
+ * "returned" doesn't say that; it reads like a verdict about relevance.
+ * "Read" instead states the one fact this component and the Server can
+ * actually verify end to end: `search_entries.rs`'s pagination builds
+ * `entry_ids` from `shown`, the exact set rendered into the tool result
+ * the model's own context received (`server/src/harness/tools/search_entries.rs`,
+ * around its `entry_ids = shown.iter().map(...)` line) — not from `total`,
+ * which can be larger under pagination. "N Entries read" is simply true of
+ * what happened, whether or not any of the N mattered to the Answer, and
+ * so never contradicts an Answer that goes on to say it found nothing
+ * useful among them.
  */
 function summaryLabel(count: number): string {
   const noun = count === 1 ? "Entry" : "Entries";
-  return `${count} ${noun} returned`;
+  return `${count} ${noun} read`;
 }
 
 /** The period label a Digest-sourced disclosure shows — "day"/"week"/"month" plus its date range, collapsed to one date when the Digest is a single day. */

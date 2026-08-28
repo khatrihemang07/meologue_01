@@ -102,7 +102,14 @@ function parseDigestSource(details: unknown): DigestGroundingSource | undefined 
  * passed that one noun, so a general-purpose pluralizer was carrying no
  * weight and getting the only case it had wrong. The wording matches
  * `grounding-disclosure.tsx`'s summary label deliberately, so a running
- * step and the finished disclosure say the same word for the same thing.
+ * step and the finished disclosure say the same word for the same thing —
+ * literally the same word, since issue #111: `finishedLabel` below used to
+ * pair this with "found," while the disclosure's own summary said
+ * "returned." Two different verbs for the same count invited exactly the
+ * confusion #111 reported (a search "finding" N things read as a claim
+ * about relevance that the Server can't back up), so both now close on
+ * "read" — see `summaryLabel`'s own doc comment in grounding-disclosure.tsx
+ * for the full argument.
  */
 function entryCount(count: number): string {
   return `${count} ${count === 1 ? "Entry" : "Entries"}`;
@@ -145,12 +152,12 @@ function finishedLabel(
     case "entries_in_range": {
       const from = asString(record.from) ?? "?";
       const to = asString(record.to) ?? "?";
-      return `Looked through Entries from ${from} to ${to} — ${entryCount(event.entryCount)} found.`;
+      return `Looked through Entries from ${from} to ${to} — ${entryCount(event.entryCount)} read.`;
     }
     case "search_entries":
-      return `Searched your Entries for "${asString(record.query) ?? ""}" — ${entryCount(event.entryCount)} found.`;
+      return `Searched your Entries for "${asString(record.query) ?? ""}" — ${entryCount(event.entryCount)} read.`;
     case "similar_entries":
-      return `Searched your Entries by meaning for "${asString(record.query) ?? ""}" — ${entryCount(event.entryCount)} found.`;
+      return `Searched your Entries by meaning for "${asString(record.query) ?? ""}" — ${entryCount(event.entryCount)} read.`;
     case "read_digest": {
       const period = asString(record.period) ?? "";
       const date = asString(record.date) ?? "";
@@ -164,7 +171,7 @@ function finishedLabel(
           }.`;
     }
     default:
-      return `${toolName} finished — ${entryCount(event.entryCount)} found.`;
+      return `${toolName} finished — ${entryCount(event.entryCount)} read.`;
   }
 }
 
