@@ -201,12 +201,19 @@ implementation over a `PgPool`, the same seam `ChatClient` already draws.
 
 Two consequences are worth recording rather than leaving to be rediscovered.
 
-**Within one Turn, every record sorts before every entry.** Entries and records share one strictly
-consecutive `seq` per Session, which this ADR treats as "the order things happened." That reading is
-now approximate. A record commits the moment the loop reaches it, in its own short transaction,
-because a record that waits for the end is worthless to a run that crashes; entries still commit
-together at the end, once an Answer exists. So a `tool_started` record always carries a lower `seq`
-than the `session_entries` row it reserved the id for, even though the two describe the same moment.
+**Within one Turn, every record the loop writes sorts before every entry.** Entries and records share
+one strictly consecutive `seq` per Session, which this ADR treats as "the order things happened."
+That reading is now approximate. A record commits the moment the loop reaches it, in its own short
+transaction, because a record that waits for the end is worthless to a run that crashes; entries
+still commit together at the end, once an Answer exists. So a `tool_started` record always carries a
+lower `seq` than the `session_entries` row it reserved the id for, even though the two describe the
+same moment.
+
+The one exception is `operation_finished`, which `reflect.rs` writes *after* `record_turn_from_steps`
+has committed, so it sorts after the Turn's entries rather than before them. A real run bears this
+out — `operation_started`, `step_attempt`, `usage`, `tool_started`, `step_attempt`, `usage` at seq
+1-6, the Turn's four entries at 7-10, and `operation_finished` at 11. The rule is therefore about the
+records the loop itself writes through `RunLog`, not about every row in the table.
 Anything replaying a Session in `seq` order has to know this. The alternative — writing entries
 incrementally too — was rejected because it would put half-written Turns in the tree on every failed
 run, which is the guarantee [0025](0025-sessions-are-held-by-the-server.md) is right to keep.
