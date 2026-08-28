@@ -273,6 +273,20 @@ The cost is real and recorded rather than argued away: this is now a second plac
 look to answer "what differs by platform", and if a future difference needs real machinery rather
 than a predicate, it belongs in 0005's seam, not beside this.
 
+**The chord is deliberately not shown, which reverses one of #76's own acceptance criteria.** #76
+asked that "the send chord is visible in the UI on desktop targets", on the reasoning that a chord
+nobody can see is a chord nobody uses. `d434661` shipped exactly that: a `submitHint()` in
+`submit-chord.ts`, rendered under both the Composer and the Question composer. `9c204c2` then took
+all of it out — the helper, both renders, and the tests, which now assert the hint is *absent*.
+
+That was a decision made after living with the hint, not a regression, and it is recorded here
+because the ticket and the code otherwise contradict each other: a reader who finds
+`submit-chord.ts` with no `submitHint()` in it, holding #76's checklist, would reasonably conclude
+the work was left half-done. It was not. What survives is the criterion's mechanism without its
+affordance — Enter inserts a newline everywhere, the chord sends on desktop, the Send button sends
+on every target, and nothing in the interface says so. Discoverability now rests entirely on the
+Send button, which is the only path Android ever had.
+
 ## Alternatives considered
 
 - **Redirecting `/history` to `/` instead of deleting the route outright.** Rejected: a redirect
@@ -346,14 +360,20 @@ inline span collapses to a different height than one containing text — still w
 toggle when measured. Its height is now fixed outright. Anything later added inside that wrapper
 must not be allowed to change its height.
 
-**Reflection has the identical seeded-at-0 reflow defect `composer-page.tsx`'s `sendSignal` had**
-(issue #85). `reflection-page.tsx`'s `askSignal` is seeded with `useState(0)`, which defeats
-`use-pinned-scroll.ts`'s `forceToNewest === undefined` mount guard the same way `sendSignal` once
-did, forcing a second, redundant `jumpToNewest()` layout pass on every mount of Reflect on top of
-the `watch` effect's own one. It was left unfixed here because `reflection-page.tsx` was outside
-the file ownership of the ticket (#81) that fixed the Composer's copy of the same bug; the fix,
-when it lands, is the identical shape — seed `undefined`, increment with `(count ?? 0) + 1` rather
-than a plain `count + 1`, since `undefined + 1` is `NaN` and `Object.is(NaN, NaN)` is `true`.
+**Reflection had the identical seeded-at-0 reflow defect `composer-page.tsx`'s `sendSignal` had,
+and no longer does** (issue #85). When this was written, `reflection-page.tsx`'s `askSignal` was
+seeded with `useState(0)`, which defeated `use-pinned-scroll.ts`'s `forceToNewest === undefined`
+mount guard the same way `sendSignal` once did, forcing a second, redundant `jumpToNewest()`
+layout pass on every mount of Reflect on top of the `watch` effect's own one. It was left unfixed
+here because `reflection-page.tsx` was outside the file ownership of the ticket (#81) that fixed
+the Composer's copy of the same bug — and it stayed unfixed only until `871b00b`, which rewrote
+that page for #96 and took the fix with it.
+
+The paragraph is amended rather than deleted because the trap it names outlives the bug. The fix
+is to seed `undefined` and increment with `(count ?? 0) + 1`, never a plain `count + 1`:
+`undefined + 1` is `NaN`, `Object.is(NaN, NaN)` is `true`, and React's dependency check is
+`Object.is` — so a plain increment would leave the *second* ask looking unchanged and silently
+stop scrolling. Any future signal of this shape has the same two ways to be wrong.
 
 **The sol/terra/luna chat-model comparison issue #77's own acceptance criteria calls for has not
 been run.** The ticket's prompt changes shipped — Reflection's and Digest's length clauses are
