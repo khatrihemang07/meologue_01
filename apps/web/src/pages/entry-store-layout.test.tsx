@@ -1,6 +1,7 @@
 import type { EntryStore } from "@meologue/core";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
+import { useEffect } from "react";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { useEntryStore as UseEntryStore } from "./entry-store-layout";
@@ -62,6 +63,23 @@ function Probe() {
   return <p>{`disabled:${disabled} message:${message ?? "none"}`}</p>;
 }
 
+// Issue #110's regression probe: records every mount/unmount of whatever
+// renders under EntryStoreLayout's Outlet, so the remount test below can
+// assert on it directly rather than inferring it from side effects (a
+// second `GET /v1/models`, an aborted fetch) the way the original bug
+// report first had to.
+let mountEvents: string[] = [];
+
+function MountProbe() {
+  useEffect(() => {
+    mountEvents.push("mount");
+    return () => {
+      mountEvents.push("unmount");
+    };
+  }, []);
+  return <p>mounted</p>;
+}
+
 async function renderLayout() {
   const fresh = await importFresh();
   activeUseEntryStore = fresh.useEntryStore;
@@ -85,6 +103,7 @@ describe("EntryStoreLayout", () => {
   beforeEach(() => {
     createDriver.mockReset();
     openMock.mockReset();
+    mountEvents = [];
   });
 
   it("puts a disabled, message-free context on the outlet while the store is opening", async () => {
@@ -168,5 +187,52 @@ describe("EntryStoreLayout", () => {
     renderOnce();
     await waitFor(() => expect(screen.getByText(/disabled:true/)).toBeInTheDocument());
     expect(createDriver).toHaveBeenCalledTimes(1);
+  });
+
+  // Issue #110: EntryStoreLayout used to return a bare `<Outlet>` while the
+  // store was opening, then switch to an inner `<Ready>` component (which
+  // called `useHistory` itself) once it was — two different element types
+  // in the exact same position across those two renders, which React
+  // reconciles by unmounting the old subtree and mounting a fresh one. Every
+  // route rendered under here paid for that with a hidden remount ~50-100ms
+  // after first paint; on `/reflect` specifically, landing inside that
+  // window aborted whatever `/v1/reflect` fetch had just started
+  // (`activeAbortRef`'s cleanup in reflection-page.tsx runs on any unmount,
+  // not only a real navigation away). This asserts directly on the mount
+  // count, at the seam the bug actually lived in, rather than on a
+  // downstream symptom two more layers away.
+  it("keeps the routed subtree mounted across the store opening (issue #110)", async () => {
+    let resolveDriver: (value: unknown) => void = () => {};
+    createDriver.mockReturnValue(
+      new Promise((resolve) => {
+        resolveDriver = resolve;
+      }),
+    );
+    const store = createFakeStore();
+    openMock.mockResolvedValue({ store, deviceId: "device-a" });
+
+    const fresh = await importFresh();
+    activeUseEntryStore = fresh.useEntryStore;
+
+    render(
+      <QueryClientProvider client={fresh.queryClient}>
+        <MemoryRouter initialEntries={["/"]}>
+          <Routes>
+            <Route element={<fresh.EntryStoreLayout />}>
+              <Route path="/" element={<MountProbe />} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(mountEvents).toEqual(["mount"]);
+
+    // The store finishing its (async) open is what used to trigger the
+    // remount — resolving it here is what would have exposed the old bug.
+    resolveDriver({});
+    await waitFor(() => expect(store.list).toHaveBeenCalled());
+
+    expect(mountEvents).toEqual(["mount"]);
   });
 });

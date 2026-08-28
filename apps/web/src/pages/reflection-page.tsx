@@ -367,6 +367,16 @@ export function ReflectionPage() {
   // Aborts the in-flight `/v1/reflect` stream on unmount — navigating away
   // mid-Answer must not leave a connection open, or call `setState` on a
   // component that's no longer mounted.
+  //
+  // Issue #110: this used to also fire ~50-100ms after a genuine first
+  // mount, for a reason that had nothing to do with navigation —
+  // EntryStoreLayout (entry-store-layout.tsx) briefly rendered a different
+  // element type at this page's exact position in the tree once the Entry
+  // store finished opening, which React reconciles by tearing the old
+  // subtree down and mounting a fresh one, aborting whatever `/v1/reflect`
+  // request had just started. Fixed at that layout, not here: this cleanup
+  // was always doing the right thing on a real unmount, it just used to run
+  // on a spurious one too.
   const activeAbortRef = useRef<AbortController | null>(null);
   useEffect(() => {
     return () => activeAbortRef.current?.abort();

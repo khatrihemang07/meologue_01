@@ -1,7 +1,7 @@
 import type { Entry, EntryStore } from "@meologue/core";
 import { open } from "@meologue/core";
 import { queryOptions, useQuery } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Outlet, useOutletContext } from "react-router";
 import { type UseHistoryPagination, useHistory } from "@/hooks/use-history";
 import { SecondTabError, StorageUnavailableError } from "@/lib/entry-store-errors";
@@ -123,6 +123,31 @@ const notReadyPagination: UseHistoryPagination = {
   fetchMore: noopFetchMore,
 };
 
+// Issue #110's fix: forwards every `EntryStore` call to whatever
+// `openEntryStore()` eventually resolves to, so `useHistory` (below) has a
+// real `EntryStore` to call from this layout's very first render — not just
+// once `data` exists. Built once per mount from `promise` (itself the same
+// cached open, deduplicated by TanStack Query — see this file's own doc
+// comment on `entryStoreQueryOptions`), so a call made before the store
+// opens simply waits for that same open to finish rather than failing or
+// silently doing nothing; a call made after just resolves the already-kept
+// promise immediately. Nothing here ever opens a second store: this reaches
+// the store exclusively through the query cache, the same single door
+// `entryStoreQueryOptions`'s own comment already guarantees.
+function deferUntilOpen(promise: Promise<{ store: EntryStore; deviceId: string }>): EntryStore {
+  return {
+    list: (page) => promise.then(({ store }) => store.list(page)),
+    upsert: (entries) => promise.then(({ store }) => store.upsert(entries)),
+    pending: () => promise.then(({ store }) => store.pending()),
+    getCursor: () => promise.then(({ store }) => store.getCursor()),
+    setCursor: (seq) => promise.then(({ store }) => store.setCursor(seq)),
+    search: (query) => promise.then(({ store }) => store.search(query)),
+    edit: (id, body) => promise.then(({ store }) => store.edit(id, body)),
+    remove: (id) => promise.then(({ store }) => store.remove(id)),
+    getMany: (ids) => promise.then(({ store }) => store.getMany(ids)),
+  };
+}
+
 /**
  * The composition root for ADR 0001 and ADR 0013: opens the Entry store and
  * runs `useHistory` exactly once, above the routes that read from it — `/`,
@@ -145,50 +170,118 @@ const notReadyPagination: UseHistoryPagination = {
  * `entryStoreQueryOptions` independently, mounted above the router rather
  * than inside this layout, which is what keeps the sync loop running while
  * this layout is unmounted (the user is on Settings).
+ *
+ * Issue #110: this used to branch on `data` to decide *what to render* — a
+ * bare `<Outlet>` while the store was opening, or an inner `<Ready>`
+ * component (which called `useHistory` itself) once it was open. That put
+ * two different element types in the exact same position in the tree across
+ * those two renders, and React only preserves a subtree's state when the
+ * type at a given position stays the same — a change unmounts the old one
+ * and mounts a fresh one. So every route under here (`/`, `/reflect`,
+ * `/digest`) was silently torn down and rebuilt the moment the store
+ * finished opening, ~50-100ms after first paint: confirmed directly by a
+ * test that renders a probe here, resolves the store open, and watches the
+ * probe unmount and remount (entry-store-layout.test.tsx). For most routes
+ * that remount is invisible — there's nothing in flight yet to lose. For
+ * `/reflect`, landing inside that window aborts a `/v1/reflect` stream that
+ * happened to start during it (`activeAbortRef`'s cleanup,
+ * reflection-page.tsx runs on *any* unmount, not only a real navigation
+ * away).
+ *
+ * The fix keeps this component's *own* type constant across every render —
+ * `<Outlet>` is always the direct, only thing it returns — by calling
+ * `useHistory` unconditionally instead of only once `data` exists.
+ * `useHistory` needs a real `EntryStore` synchronously, so before `data`
+ * resolves it's handed `deferUntilOpen`'s facade instead of the real one;
+ * once `data` resolves, it's handed the real store directly. Either way,
+ * `useHistory`'s own hook calls (an infinite query, three mutations) run in
+ * the same order on every render, so nothing about *this* component's
+ * position or type ever changes — its child routes never lose their state
+ * to an internal remount again.
  */
 export function EntryStoreLayout() {
   const { data, error } = useQuery(entryStoreQueryOptions);
 
   const message = useMemo(() => (error ? describeOpenError(error) : undefined), [error]);
 
+  // A promise this component settles itself, from `data`/`error` above,
+  // rather than one obtained by independently asking TanStack Query to
+  // fetch (`fetchQuery`/`ensureQueryData`) — either of those triggers a
+  // fresh fetch attempt of their own whenever the query is sitting in an
+  // error state, bypassing `retryOnMount: false` (that option only governs
+  // `useQuery`'s own observer) and reopening a second Worker against the
+  // same OPFS pool lock on exactly the Settings-round-trip-after-a-failed-open
+  // path `retryOnMount: false` exists to prevent (see
+  // `entryStoreQueryOptions`'s own comment, and the regression test this
+  // mistake first failed). Settling this from `data`/`error` instead means
+  // it only ever reflects whatever `useQuery` itself already decided to do.
+  // `useState`'s lazy initializer runs exactly once per mount, so `deferred`
+  // is a stable object for this component's whole lifetime.
+  const [deferred] = useState(() => {
+    let resolve!: (value: { store: EntryStore; deviceId: string }) => void;
+    let reject!: (reason: unknown) => void;
+    const promise = new Promise<{ store: EntryStore; deviceId: string }>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    // A rejection here (the store failed to open) is already surfaced via
+    // `message` above — this only stops it from also logging as an
+    // unhandled rejection for the common case where nothing ever calls the
+    // facade while `disabled: true` keeps every real caller away from it.
+    promise.catch(() => {});
+    return { promise, resolve, reject };
+  });
+
+  // Calling `resolve`/`reject` here, during render, rather than from a
+  // `useEffect`: a Promise can only ever settle once, so calling either
+  // more than once (a StrictMode double-render in dev, or a render React
+  // ends up throwing away) is a harmless no-op — and settling eagerly, on
+  // the very render that first sees `data`/`error`, is what lets
+  // `useHistory`'s already-in-flight first fetch (started against
+  // `pendingStore` below) resolve against the real store the moment it's
+  // available, instead of waiting an extra effect tick.
   if (data) {
-    return <Ready store={data.store} deviceId={data.deviceId} />;
+    deferred.resolve(data);
+  } else if (error) {
+    deferred.reject(error);
   }
 
-  return (
-    <Outlet
-      context={
-        {
-          entries: [],
-          pagination: notReadyPagination,
-          sendEntry: noop,
-          search: noopSearch,
-          getEntries: noopGetEntries,
-          editEntry: noopEdit,
-          removeEntry: noopRemove,
-          disabled: true,
-          message,
-        } satisfies EntryStoreOutletContext
-      }
-    />
-  );
-}
+  // `useHistory`'s own fetch, kicked off the moment this facade is first
+  // used, captures `deferred.promise` in its closure — that's what lets an
+  // attempt that starts before the store opens complete against the real
+  // store once it does, with no manual retry.
+  const pendingStore = useMemo(() => deferUntilOpen(deferred.promise), [deferred]);
 
-function Ready({ store, deviceId }: { store: EntryStore; deviceId: string }) {
+  const store = data?.store ?? pendingStore;
+  const deviceId = data?.deviceId ?? "";
+
   const { entries, pagination, sendEntry, editEntry, removeEntry } = useHistory(store, deviceId);
+
   return (
     <Outlet
       context={
-        {
-          entries,
-          pagination,
-          sendEntry,
-          search: (query: string) => store.search(query),
-          getEntries: (ids: string[]) => store.getMany(ids),
-          editEntry,
-          removeEntry,
-          disabled: false,
-        } satisfies EntryStoreOutletContext
+        data
+          ? ({
+              entries,
+              pagination,
+              sendEntry,
+              search: (query: string) => store.search(query),
+              getEntries: (ids: string[]) => store.getMany(ids),
+              editEntry,
+              removeEntry,
+              disabled: false,
+            } satisfies EntryStoreOutletContext)
+          : ({
+              entries: [],
+              pagination: notReadyPagination,
+              sendEntry: noop,
+              search: noopSearch,
+              getEntries: noopGetEntries,
+              editEntry: noopEdit,
+              removeEntry: noopRemove,
+              disabled: true,
+              message,
+            } satisfies EntryStoreOutletContext)
       }
     />
   );

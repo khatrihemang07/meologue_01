@@ -148,25 +148,28 @@ test("a deleted Entry does not come back through Reflection's Grounding", async 
 });
 
 /**
- * Navigates to /reflect and waits until it's genuinely settled, not just
- * until the URL changed. Confirmed by driving a real browser directly:
- * ReflectionPage's first mount in a session is followed, well under a
- * second later, by an unrelated internal remount (a second `GET
- * /v1/models` fires shortly after the first, with no test action in
- * between) — and that remount's own cleanup aborts whatever
- * `/v1/reflect` fetch happens to already be in flight when it lands,
- * since `activeAbortRef`'s cleanup (reflection-page.tsx) runs on any
- * unmount, not only a real navigation away. The two tests above never hit
- * this: both reach Reflect only after real work on the Composer page
- * first (sending an Entry, waiting on assertions), which happens to
- * outlast the window by accident. The three tests below ask their first
- * Question as their very next action after arriving, so they need that
- * settling made explicit rather than borrowed.
+ * Navigates to /reflect. Named (and kept as its own function, over the
+ * three call sites below just inlining the two lines) for what it used to
+ * also do: driving a real browser directly showed ReflectionPage's first
+ * mount in a session was followed, well under a second later, by an
+ * unrelated internal remount (a second `GET /v1/models` fired shortly
+ * after the first, with no test action in between), which aborted
+ * whatever `/v1/reflect` fetch happened to already be in flight when it
+ * landed. Issue #110 traced that remount to EntryStoreLayout
+ * (entry-store-layout.tsx): it used to switch which element type sat at
+ * this page's exact position in the tree once the Entry store finished
+ * opening, and React tears down and rebuilds a subtree whenever the type
+ * at a position changes. Fixed there — the type at that position is now
+ * constant across every render — so there is no longer a remount here to
+ * wait out, and the `page.waitForLoadState("networkidle")` this function
+ * used to end with is gone. The two tests above never needed it in the
+ * first place: both reach Reflect only after real work on the Composer
+ * page first (sending an Entry, waiting on assertions), which happened to
+ * outlast the window by accident, before there was anything to wait for.
  */
 async function openReflectAndSettle(page: Page): Promise<void> {
   await page.getByRole("link", { name: "Reflect" }).click();
   await expect(page).toHaveURL("/reflect");
-  await page.waitForLoadState("networkidle");
 }
 
 // llm-stub.ts's multi-step script (keyed off the "multistep-" marker below)
