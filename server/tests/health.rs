@@ -6,6 +6,8 @@ use async_trait::async_trait;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
+use chrono_tz::Tz;
+use meologue_server::digest::DigestState;
 use meologue_server::llm::{ChatMessage, ChatReply, LlmClient};
 use meologue_server::reflect::ReflectState;
 use meologue_server::sync::PROTOCOL_VERSION;
@@ -85,21 +87,37 @@ fn chat_and_embed_reflect_state() -> ReflectState {
     }
 }
 
+/// A `DigestState` with the same `UnusedLlmClient` stand-in — `health_handler`
+/// never calls through it, only reads `AppState::digests_enabled`
+/// (derived from `Option<DigestState>::is_some()`, `lib.rs`'s
+/// `router_with_digests`), so this only has to satisfy `DigestState`'s
+/// shape.
+fn unused_digest_state() -> DigestState {
+    DigestState {
+        chat_client: Arc::new(UnusedLlmClient),
+        tz: Tz::UTC,
+    }
+}
+
 /// Builds the Router the same way `main.rs` does — `router_with_digests`
-/// gated on exactly the `reflect`/`digests_enabled` values a real
-/// `LlmConfig` would have produced — and reads back `/v1/health`'s
-/// `capabilities` object.
+/// gated on exactly the `reflect`/`digest` values a real `LlmConfig` would
+/// have produced — and reads back `/v1/health`'s `capabilities` object.
+/// `digests_enabled: bool` (issue #132 / ADR 0039: `router_with_digests`
+/// itself now takes `Option<DigestState>`, not a bare bool) is still this
+/// helper's own parameter — every call site below only ever cares about
+/// on/off, never about the client or `Tz` inside.
 async fn get_capabilities(
     pool: &PgPool,
     reflect: Option<ReflectState>,
     digests_enabled: bool,
 ) -> Value {
+    let digest = digests_enabled.then(unused_digest_state);
     let app = meologue_server::router_with_digests(
         pool.clone(),
         empty_static_dir(),
         None,
         reflect,
-        digests_enabled,
+        digest,
     );
     let response = app
         .oneshot(

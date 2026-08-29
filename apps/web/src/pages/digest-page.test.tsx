@@ -52,6 +52,10 @@ type DigestFixture = {
   grounding_entry_ids: string[];
   prev_date: string | null;
   next_date: string | null;
+  // Issue #132 / ADR 0039.
+  stale: boolean;
+  revision: number;
+  written_at: string;
 };
 
 function digestFixture(overrides: Partial<DigestFixture> & { period: string }): DigestFixture {
@@ -62,6 +66,9 @@ function digestFixture(overrides: Partial<DigestFixture> & { period: string }): 
     grounding_entry_ids: ["entry-1"],
     prev_date: null,
     next_date: null,
+    stale: false,
+    revision: 1,
+    written_at: "2026-08-21T06:00:00Z",
     ...overrides,
   };
 }
@@ -345,5 +352,50 @@ describe("DigestPage", () => {
     await waitFor(() => {
       expect(screen.getByTestId("location-path")).toHaveTextContent("/digest/day/2026-08-20");
     });
+  });
+
+  // Issue #132 / ADR 0039.
+  it("shows a neutral stale marker on a stale card, and none on a fresh one — no Regenerate button either way", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    stubDigestFetch({
+      day: {
+        status: 200,
+        digest: digestFixture({
+          period: "day",
+          period_start: "2026-08-20",
+          period_end: "2026-08-20",
+          stale: true,
+        }),
+      },
+      week: {
+        status: 200,
+        digest: digestFixture({
+          period: "week",
+          period_start: "2026-08-17",
+          period_end: "2026-08-23",
+          stale: false,
+        }),
+      },
+      month: { status: 200, digest: null },
+    });
+
+    renderDigestPage();
+
+    expect(
+      await screen.findByText("Entries for this day changed after this Digest was written."),
+    ).toBeInTheDocument();
+    // The week card fetched successfully and is not stale — no marker for
+    // it, and the month noun never appears at all since that card never
+    // resolved a Digest.
+    expect(
+      screen.queryByText("Entries for this week changed after this Digest was written."),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/Entries for this month changed after this Digest was written\./),
+    ).not.toBeInTheDocument();
+
+    // Cards never get a Regenerate action — only the reader does (issue
+    // #132: "a card is 'the latest of this Period,' not a specific date").
+    expect(screen.queryByRole("button", { name: "Regenerate" })).not.toBeInTheDocument();
   });
 });

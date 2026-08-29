@@ -5,7 +5,7 @@ import { BackToChats } from "@/components/back-to-chats";
 import { ServerUnreachableBanner } from "@/components/server-unreachable-banner";
 import { HistoryScrollContext, Shell } from "@/components/shell";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { formatDigestRange } from "@/lib/digest-format";
+import { formatDigestRange, formatStaleCopy } from "@/lib/digest-format";
 import { type DigestResult, digestTransport } from "@/lib/digest-transport";
 import { allocateLineBudgets } from "@/lib/proportional-clamp";
 import { digestQueryKey } from "@/lib/query-keys";
@@ -136,6 +136,17 @@ function DigestCard({
           <CardDescription>
             {formatDigestRange(period, digest.period_start, digest.period_end)}
           </CardDescription>
+          {digest.stale && (
+            // Issue #132 / ADR 0039: a stale marker only here — no
+            // Regenerate button, unlike the reader (`digest-reader-page.tsx`).
+            // A card is "the latest of this Period," not a specific date a
+            // reader navigated to, so there is no single Digest for a tap
+            // here to act on the way there is once you've opened one.
+            // Neutral copy, matching the reader's own (`formatStaleCopy`) —
+            // see that function's doc comment for why this is never styled
+            // as an error.
+            <p className="text-xs text-muted-foreground">{formatStaleCopy(period)}</p>
+          )}
         </CardHeader>
         <CardContent>
           {/*

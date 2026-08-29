@@ -100,18 +100,25 @@ async fn insert_entry_at(
         .unwrap();
 }
 
+// `revision` (issue #132 / ADR 0039): carried on this row so
+// `the_worker_never_mints_a_second_revision_on_a_tick` below can assert
+// directly on it, rather than only inferring "still revision 1" from
+// there being exactly one row.
 #[derive(sqlx::FromRow, Debug, Clone)]
 struct DigestRow {
     period: String,
     period_start: NaiveDate,
     grounding_entry_ids: Vec<Uuid>,
+    revision: i32,
 }
 
 async fn all_digests(pool: &PgPool) -> Vec<DigestRow> {
-    sqlx::query_as::<_, DigestRow>("select period, period_start, grounding_entry_ids from digests")
-        .fetch_all(pool)
-        .await
-        .unwrap()
+    sqlx::query_as::<_, DigestRow>(
+        "select period, period_start, grounding_entry_ids, revision from digests",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap()
 }
 
 async fn digest_count(pool: &PgPool) -> i64 {
@@ -123,7 +130,8 @@ async fn digest_count(pool: &PgPool) -> i64 {
 
 async fn find_digest(pool: &PgPool, period: Period, period_start: NaiveDate) -> Option<DigestRow> {
     sqlx::query_as::<_, DigestRow>(
-        "select period, period_start, grounding_entry_ids from digests where period = $1 and period_start = $2",
+        "select period, period_start, grounding_entry_ids, revision from digests \
+         where period = $1 and period_start = $2 order by revision desc limit 1",
     )
     .bind(period.as_str())
     .bind(period_start)
@@ -546,6 +554,68 @@ async fn running_further_ticks_after_catching_up_writes_nothing_new(pool: PgPool
     tokio::time::sleep(TEST_SCAN_INTERVAL * 30).await;
 
     assert_eq!(digest_count(&pool).await, count_after_first);
+
+    worker.abort();
+}
+
+/// Issue #132 / ADR 0039: the worker generates, it never regenerates. Once
+/// a Period has any Digest at all, `latest_digest_start`'s anchor (`max(period_start)`,
+/// unaffected by revision) advances past it, and the resume rule
+/// (`fill_period`'s `first > horizon` early-out) never reconsiders that
+/// Period on any later tick. Proven directly, not just inferred from the
+/// resume rule's own logic: seed a Digest, let an Entry land late in the
+/// same already-Digested Period (the exact shape a stale Digest looks
+/// like from the worker's side), run many more ticks, and assert only
+/// revision 1 ever exists.
+#[sqlx::test]
+async fn the_worker_never_mints_a_second_revision_on_a_tick(pool: PgPool) {
+    let yesterday = period::most_recently_completed(Period::Day, Tz::UTC, Utc::now());
+    let (from, _) = period::period_bounds(Period::Day, Tz::UTC, yesterday);
+    let device = Uuid::new_v4();
+    insert_entry_at(
+        &pool,
+        Uuid::new_v4(),
+        device,
+        "an entry",
+        from + chrono::Duration::hours(1),
+    )
+    .await;
+
+    let client = Arc::new(FakeChatClient::new(FakeBehavior::AlwaysSucceed));
+    let worker = spawn_worker(pool.clone(), client.clone(), Tz::UTC);
+
+    let first = wait_for_digest(&pool, Period::Day, yesterday).await;
+    assert_eq!(first.revision, 1);
+
+    // A further Entry lands in the same, already-Digested Period — the
+    // real-world trigger for staleness (see `digest_api.rs`'s own
+    // staleness tests), but the worker has no mechanism that reacts to it
+    // at all; it only ever asks "which completed Periods have no Digest
+    // yet."
+    insert_entry_at(
+        &pool,
+        Uuid::new_v4(),
+        device,
+        "a late arrival, after the digest was written",
+        from + chrono::Duration::hours(2),
+    )
+    .await;
+
+    // Many more ticks than it would ever need to notice and (wrongly) act
+    // on the late arrival, if it somehow did.
+    tokio::time::sleep(TEST_SCAN_INTERVAL * 30).await;
+
+    let day_digests: Vec<_> = all_digests(&pool)
+        .await
+        .into_iter()
+        .filter(|d| d.period == "day" && d.period_start == yesterday)
+        .collect();
+    assert_eq!(
+        day_digests.len(),
+        1,
+        "the worker must never mint a second revision for an already-Digested Period"
+    );
+    assert_eq!(day_digests[0].revision, 1);
 
     worker.abort();
 }

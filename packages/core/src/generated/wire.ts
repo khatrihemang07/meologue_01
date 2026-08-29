@@ -43,6 +43,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/digests/{period}/{date}/regenerate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["regenerate_digest_handler"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/health": {
         parameters: {
             query?: never;
@@ -235,6 +251,36 @@ export interface components {
              *     means this is the oldest Digest of this Period the Server holds.
              */
             prev_date?: string | null;
+            /**
+             * Format: int32
+             * @description Which revision this is — 1 for the background worker's own,
+             *     first-generation write; 2 and up for each successive
+             *     `POST /v1/digests/{period}/{date}/regenerate`. There is no revision
+             *     picker (issue #132): a client only ever sees the newest, and this
+             *     field plus `written_at` below is the provenance cue that
+             *     distinguishes "the Server wrote this by itself" (`revision == 1`)
+             *     from "you asked for this" (`revision > 1`).
+             */
+            revision: number;
+            /**
+             * @description Whether some Entry in this Period has moved (been added, edited, or
+             *     deleted) since this exact revision was written — issue #132 / ADR
+             *     0039. Computed fresh on every read (`select_is_stale`), never
+             *     stored: staleness is a fact about the *current* relationship
+             *     between this revision's `source_seq` and `entries`, not something
+             *     that could go stale itself. A neutral fact, not an error — CONTEXT.md's
+             *     Sync status entry sets the same tone for "off is not a failure."
+             */
+            stale: boolean;
+            /**
+             * Format: date-time
+             * @description This exact revision's own `created_at` — when *this* revision was
+             *     written, not when the Period itself started or ended
+             *     (`period_start`/`period_end` above already cover that). A reader
+             *     renders "Written {date}" for `revision == 1` or "Regenerated {date}"
+             *     otherwise, from this field.
+             */
+            written_at: string;
         };
         /**
          * @description The body both Digest routes return. **Always 200** — a missing Digest
@@ -666,6 +712,45 @@ export interface operations {
             };
             /** @description `period` is unrecognised, or `date` is not a valid YYYY-MM-DD date */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    regenerate_digest_handler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description "day", "week", or "month" */
+                period: string;
+                /** @description The Digest's `period_start`, as YYYY-MM-DD */
+                date: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The Digest at this exact date, now holding the newly written revision (or `{"digest": null}` if the Period held no Entries to write from) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DigestResponse"];
+                };
+            };
+            /** @description `period` is unrecognised, or `date` is not a valid YYYY-MM-DD date */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description the chat call, or the insert, failed */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -143,14 +143,20 @@ the user did not live is worse than one that admits it found nothing.
 
 ### Digest
 
-Prose the Server writes about a stretch of time, without being asked. It is not an Answer,
-because there is no Question behind it — nobody asked; the Server simply wrote. It is not an
-Entry either: not the user's own words, never added to History, never Synced. A Digest is
-immutable once written, so an Entry that Syncs in late for a Period already Digested is simply
-not in it — the Digest is not rewritten to catch up. "Last day" and "last week" mean the most
-recent Digest that exists, not the Period immediately before now: if there is a daily Digest for
-Monday and none for Tuesday, then on Wednesday the last daily Digest is still Monday's. A Digest
-is Grounded in the Entries it read, in the same sense an Answer is.
+Prose the Server writes about a stretch of time, usually without being asked — nobody asked; the
+Server simply wrote — though it can also be asked for directly, by regenerating it. It is not an Answer,
+because even a Digest written on request has no Question behind it. It is not an Entry either:
+not the user's own words, never added to History, never Synced. Each revision of a Digest is
+immutable once written — nothing is ever rewritten, only INSERTed as a new revision — so an Entry
+that Syncs in late for a Period already Digested is simply not in that revision. But a revision can
+be superseded: editing, adding, or deleting an Entry in an already-Digested Period marks it stale,
+and asking the Server to regenerate writes a fresh revision from the Period's current Entries
+rather than rewriting the one before it, which stays exactly as it was. A reader only ever sees the
+newest revision, with a cue for whether the Server wrote it on its own or someone asked for it.
+"Last day" and "last week" mean the most recent Digest that exists, not the Period immediately
+before now: if there is a daily Digest for Monday and none for Tuesday, then on Wednesday the last
+daily Digest is still Monday's. A Digest is Grounded in the Entries it read, in the same sense an
+Answer is.
 
 ### Period
 

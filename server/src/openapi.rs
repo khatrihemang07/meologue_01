@@ -19,6 +19,7 @@ use crate::sync::{EntryInput, EntryOutput, SyncRequest, SyncResponse};
         crate::sessions::delete_session_handler,
         crate::digest::latest_digest_handler,
         crate::digest::digest_at_handler,
+        crate::digest::regenerate_digest_handler,
         crate::models::models_handler,
     ),
     components(schemas(

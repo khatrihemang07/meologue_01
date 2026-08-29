@@ -87,6 +87,52 @@
         }
       }
     },
+    "/v1/digests/{period}/{date}/regenerate": {
+      "post": {
+        "tags": [
+          "crate::digest"
+        ],
+        "operationId": "regenerate_digest_handler",
+        "parameters": [
+          {
+            "name": "period",
+            "in": "path",
+            "description": "\"day\", \"week\", or \"month\"",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "date",
+            "in": "path",
+            "description": "The Digest's `period_start`, as YYYY-MM-DD",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The Digest at this exact date, now holding the newly written revision (or `{\"digest\": null}` if the Period held no Entries to write from)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DigestResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`period` is unrecognised, or `date` is not a valid YYYY-MM-DD date"
+          },
+          "500": {
+            "description": "the chat call, or the insert, failed"
+          }
+        }
+      }
+    },
     "/v1/health": {
       "get": {
         "tags": [
@@ -309,7 +355,10 @@
           "period_start",
           "period_end",
           "body",
-          "grounding_entry_ids"
+          "grounding_entry_ids",
+          "stale",
+          "revision",
+          "written_at"
         ],
         "properties": {
           "body": {
@@ -349,6 +398,20 @@
             ],
             "format": "date",
             "description": "The `period_start` of the previous Digest of this same Period that\nactually exists, skipping any completed-but-undigested gap — `None`\nmeans this is the oldest Digest of this Period the Server holds."
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Which revision this is — 1 for the background worker's own,\nfirst-generation write; 2 and up for each successive\n`POST /v1/digests/{period}/{date}/regenerate`. There is no revision\npicker (issue #132): a client only ever sees the newest, and this\nfield plus `written_at` below is the provenance cue that\ndistinguishes \"the Server wrote this by itself\" (`revision == 1`)\nfrom \"you asked for this\" (`revision > 1`)."
+          },
+          "stale": {
+            "type": "boolean",
+            "description": "Whether some Entry in this Period has moved (been added, edited, or\ndeleted) since this exact revision was written — issue #132 / ADR\n0039. Computed fresh on every read (`select_is_stale`), never\nstored: staleness is a fact about the *current* relationship\nbetween this revision's `source_seq` and `entries`, not something\nthat could go stale itself. A neutral fact, not an error — CONTEXT.md's\nSync status entry sets the same tone for \"off is not a failure.\""
+          },
+          "written_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "This exact revision's own `created_at` — when *this* revision was\nwritten, not when the Period itself started or ended\n(`period_start`/`period_end` above already cover that). A reader\nrenders \"Written {date}\" for `revision == 1` or \"Regenerated {date}\"\notherwise, from this field."
           }
         }
       },
