@@ -41,17 +41,25 @@ interface HistoryProps {
    */
   query?: string;
   /**
-   * Wires Edit/Delete (issue #78; ADR 0028) onto every row this renders.
-   * Both undefined and both present, never one or the other — see
-   * EntryRow's own `actions` prop, which this assembles (alongside the
-   * sheet-open setter below) and forwards. composer-page.tsx's footer,
-   * History's one remaining caller since issue #75 deleted `/history`'s
-   * own page, passes both; nothing here defaults them to a no-op, because
-   * a silently-broken action is worse than a type error at the call site
-   * that forgot one.
+   * Wires Edit/Delete/Refer (issue #78, ADR 0028; issue #144) onto every
+   * row this renders. All three undefined or all three present, never a
+   * partial set — see EntryRow's own `actions` prop, which this assembles
+   * (alongside the sheet-open setter below) and forwards. composer-page.tsx's
+   * footer, History's one remaining caller since issue #75 deleted
+   * `/history`'s own page, passes all three; nothing here defaults a
+   * missing one to a no-op, because a silently-broken action is worse than
+   * a type error at the call site that forgot one.
    */
   onEdit?: (entry: Entry) => void;
   onDelete?: (entry: Entry) => void;
+  /**
+   * Puts a Reference to an Entry into the Composer (issue #144) — see this
+   * prop group's own comment just above for the all-or-nothing rule it
+   * joins onEdit/onDelete under. Unlike Delete, Refer has no confirmation
+   * step: `actions.onRefer` below calls straight through to this rather
+   * than through a requester.
+   */
+  onRefer?: (entry: Entry) => void;
   /**
    * Issue #142/#143: the day or Entry a Reference seek (composer-page.tsx)
    * is looking for, or `null`/omitted while no seek is active. History is
@@ -258,6 +266,7 @@ export function History({
   query = "",
   onEdit,
   onDelete,
+  onRefer,
   seek,
   onSeekNeedsOlder,
   onSeekSettled,
@@ -277,28 +286,30 @@ export function History({
   // real `onDelete` below.
   const [confirmEntry, setConfirmEntry] = useState<Entry | null>(null);
 
-  // Both-or-neither (see the props' own comment): assembled once here
-  // rather than re-checked per row, and `undefined` when either is missing
-  // so EntryRow's own default ("no actions prop" -> "no actions") is what
-  // actually governs the no-actions case, instead of this component
-  // duplicating that decision. `onOpenSheet` is folded in here rather than
-  // being a third prop composer-page.tsx has to pass — it's this
-  // component's own state setter, not something an outside caller has any
-  // business supplying.
+  // All-or-nothing (see the props' own comment): assembled once here
+  // rather than re-checked per row, and `undefined` when any of the three
+  // is missing so EntryRow's own default ("no actions prop" -> "no
+  // actions") is what actually governs the no-actions case, instead of
+  // this component duplicating that decision. `onOpenSheet` is folded in
+  // here rather than being a fourth prop composer-page.tsx has to pass —
+  // it's this component's own state setter, not something an outside
+  // caller has any business supplying. `onRefer` (issue #144) passes
+  // straight through unwrapped, unlike `onDelete`: Refer has no
+  // confirmation step to route through first.
   //
   // Memoised (issue #81) so this is the same object across renders whenever
-  // `onEdit`/`onDelete` themselves are: every row below receives `actions`
-  // as a prop, and `React.memo` on EntryRow (entry-row.tsx) only skips a
-  // row's re-render if every one of its props is `===` the last render's —
-  // rebuilding this object inline, as before, would hand every row a fresh
-  // `actions` reference each time and defeat that memoisation entirely,
-  // even though nothing it points to actually changed.
+  // `onEdit`/`onDelete`/`onRefer` themselves are: every row below receives
+  // `actions` as a prop, and `React.memo` on EntryRow (entry-row.tsx) only
+  // skips a row's re-render if every one of its props is `===` the last
+  // render's — rebuilding this object inline, as before, would hand every
+  // row a fresh `actions` reference each time and defeat that memoisation
+  // entirely, even though nothing it points to actually changed.
   const actions = useMemo(
     () =>
-      onEdit && onDelete
-        ? { onEdit, onDelete: setConfirmEntry, onOpenSheet: setSheetEntry }
+      onEdit && onDelete && onRefer
+        ? { onEdit, onDelete: setConfirmEntry, onOpenSheet: setSheetEntry, onRefer }
         : undefined,
-    [onEdit, onDelete],
+    [onEdit, onDelete, onRefer],
   );
 
   // A swipe hands back the element it picked up, not an Entry: the hook is
@@ -783,6 +794,7 @@ export function History({
           }}
           onEdit={actions.onEdit}
           onCopy={copyEntry}
+          onRefer={actions.onRefer}
           onDelete={actions.onDelete}
         />
       )}

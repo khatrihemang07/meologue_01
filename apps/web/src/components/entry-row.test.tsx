@@ -182,7 +182,7 @@ describe("EntryRow", () => {
         <EntryRow
           entry={entry({ body: "hello" })}
           syncEnabled={false}
-          actions={{ onEdit: vi.fn(), onDelete: vi.fn(), onOpenSheet: vi.fn() }}
+          actions={{ onEdit: vi.fn(), onDelete: vi.fn(), onRefer: vi.fn(), onOpenSheet: vi.fn() }}
         />,
       );
 
@@ -207,12 +207,13 @@ describe("EntryRow", () => {
         <EntryRow
           entry={entry({ body: "hello" })}
           syncEnabled={false}
-          actions={{ onEdit: vi.fn(), onDelete: vi.fn(), onOpenSheet: vi.fn() }}
+          actions={{ onEdit: vi.fn(), onDelete: vi.fn(), onRefer: vi.fn(), onOpenSheet: vi.fn() }}
         />,
       );
 
       expect(screen.getByLabelText("Edit")).toBeInTheDocument();
       expect(screen.getByLabelText("Delete")).toBeInTheDocument();
+      expect(screen.getByLabelText("Refer to this Entry")).toBeInTheDocument();
     });
 
     it("calls onEdit with the whole Entry when the Edit button is pressed", () => {
@@ -223,7 +224,7 @@ describe("EntryRow", () => {
         <EntryRow
           entry={target}
           syncEnabled={false}
-          actions={{ onEdit, onDelete, onOpenSheet: vi.fn() }}
+          actions={{ onEdit, onDelete, onRefer: vi.fn(), onOpenSheet: vi.fn() }}
         />,
       );
 
@@ -250,7 +251,7 @@ describe("EntryRow", () => {
         <EntryRow
           entry={target}
           syncEnabled={false}
-          actions={{ onEdit, onDelete, onOpenSheet: vi.fn() }}
+          actions={{ onEdit, onDelete, onRefer: vi.fn(), onOpenSheet: vi.fn() }}
         />,
       );
 
@@ -258,6 +259,24 @@ describe("EntryRow", () => {
 
       expect(onDelete).toHaveBeenCalledWith(target);
       expect(onEdit).not.toHaveBeenCalled();
+    });
+
+    // Issue #144: unlike Delete, Refer calls straight through with no
+    // confirm step in between (entry-actions.tsx's own comment on why).
+    it("calls onRefer with the whole Entry when the Refer button is pressed", () => {
+      const onRefer = vi.fn();
+      const target = entry({ body: "hello" });
+      render(
+        <EntryRow
+          entry={target}
+          syncEnabled={false}
+          actions={{ onEdit: vi.fn(), onDelete: vi.fn(), onRefer, onOpenSheet: vi.fn() }}
+        />,
+      );
+
+      fireEvent.click(screen.getByLabelText("Refer to this Entry"));
+
+      expect(onRefer).toHaveBeenCalledWith(target);
     });
   });
 
@@ -276,7 +295,7 @@ describe("EntryRow", () => {
           <EntryRow
             entry={entry({ body: "hello" })}
             syncEnabled={false}
-            actions={{ onEdit: vi.fn(), onDelete: vi.fn(), onOpenSheet }}
+            actions={{ onEdit: vi.fn(), onDelete: vi.fn(), onRefer: vi.fn(), onOpenSheet }}
           />,
         );
 
@@ -308,7 +327,7 @@ describe("EntryRow", () => {
         <EntryRow
           entry={target}
           syncEnabled={false}
-          actions={{ onEdit: vi.fn(), onDelete: vi.fn(), onOpenSheet }}
+          actions={{ onEdit: vi.fn(), onDelete: vi.fn(), onRefer: vi.fn(), onOpenSheet }}
         />,
       );
 
@@ -325,7 +344,7 @@ describe("EntryRow", () => {
         <EntryRow
           entry={entry({ body: "hello" })}
           syncEnabled={false}
-          actions={{ onEdit: vi.fn(), onDelete: vi.fn(), onOpenSheet }}
+          actions={{ onEdit: vi.fn(), onDelete: vi.fn(), onRefer: vi.fn(), onOpenSheet }}
         />,
       );
 

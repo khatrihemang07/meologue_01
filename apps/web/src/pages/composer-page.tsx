@@ -1,8 +1,8 @@
 import type { Entry } from "@meologue/core";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
 import { BackToChats } from "@/components/back-to-chats";
-import { Composer } from "@/components/composer";
+import { Composer, type ComposerHandle } from "@/components/composer";
 import { History, type HistorySeekTarget } from "@/components/history";
 import { Shell } from "@/components/shell";
 import { useHistorySearch } from "@/hooks/use-history-search";
@@ -168,6 +168,19 @@ export function ComposerPage() {
     setEditingEntry(null);
   }
 
+  // Issue #144's "Refer" action (entry-actions.tsx, reached through
+  // History's sheet or hover row) needs to reach into whichever Composer
+  // is live on screen — see ComposerHandle's own comment (composer.tsx)
+  // for why that has to be an imperative ref rather than a prop this page
+  // could just pass down. Composer itself already targets the right
+  // textarea whether or not `editingEntry` is set, so this page only has
+  // to forward the call.
+  const composerRef = useRef<ComposerHandle>(null);
+
+  function handleRefer(entry: Entry) {
+    composerRef.current?.insertAtCursor(`[[e:${entry.id}]]`);
+  }
+
   // Reads an `editEntryId` a caller with no Composer of its own to edit in
   // navigates here with, in router state, rather than trusting a copy of
   // the Entry that could be stale by the time this effect runs — this page
@@ -223,6 +236,7 @@ export function ComposerPage() {
           query={query}
           onEdit={setEditingEntry}
           onDelete={removeEntry}
+          onRefer={handleRefer}
           seek={seek}
           onSeekNeedsOlder={handleSeekNeedsOlder}
           onSeekSettled={settleSeek}
@@ -230,11 +244,14 @@ export function ComposerPage() {
       }
       composerSlot={
         <Composer
+          ref={composerRef}
           onSend={handleSend}
           disabled={disabled}
           editingEntry={editingEntry}
           onCommitEdit={handleCommitEdit}
           onCancelEdit={handleCancelEdit}
+          recentEntries={entries}
+          searchEntries={search}
         />
       }
       // `shown`, not `entries`: while a search is narrowing this thread the

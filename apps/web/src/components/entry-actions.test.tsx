@@ -49,7 +49,9 @@ describe("EntryHoverActions", () => {
     const onEdit = vi.fn();
     const onDelete = vi.fn();
     const target = entry({});
-    render(<EntryHoverActions entry={target} onEdit={onEdit} onDelete={onDelete} />);
+    render(
+      <EntryHoverActions entry={target} onEdit={onEdit} onDelete={onDelete} onRefer={vi.fn()} />,
+    );
 
     fireEvent.click(screen.getByLabelText("Edit"));
 
@@ -67,7 +69,9 @@ describe("EntryHoverActions", () => {
     const onEdit = vi.fn();
     const onDelete = vi.fn();
     const target = entry({});
-    render(<EntryHoverActions entry={target} onEdit={onEdit} onDelete={onDelete} />);
+    render(
+      <EntryHoverActions entry={target} onEdit={onEdit} onDelete={onDelete} onRefer={vi.fn()} />,
+    );
 
     fireEvent.click(screen.getByLabelText("Delete"));
 
@@ -82,7 +86,7 @@ describe("EntryHoverActions", () => {
       // biome-ignore lint/a11y/noStaticElementInteractions: this stand-in ancestor only exists to prove the click doesn't bubble to it; it isn't the row itself.
       // biome-ignore lint/a11y/useKeyWithClickEvents: same reason.
       <div onClick={onRowClick}>
-        <EntryHoverActions entry={target} onEdit={onEdit} onDelete={vi.fn()} />
+        <EntryHoverActions entry={target} onEdit={onEdit} onDelete={vi.fn()} onRefer={vi.fn()} />
       </div>,
     );
 
@@ -90,6 +94,21 @@ describe("EntryHoverActions", () => {
 
     expect(onEdit).toHaveBeenCalledWith(target);
     expect(onRowClick).not.toHaveBeenCalled();
+  });
+
+  // Issue #144: unlike Edit/Delete, Refer calls straight through — there is
+  // no requester/confirm step to route it through first (entry-actions.tsx's
+  // own comment on why).
+  it("calls onRefer with the whole Entry when Refer is pressed", () => {
+    const onRefer = vi.fn();
+    const target = entry({});
+    render(
+      <EntryHoverActions entry={target} onEdit={vi.fn()} onDelete={vi.fn()} onRefer={onRefer} />,
+    );
+
+    fireEvent.click(screen.getByLabelText("Refer to this Entry"));
+
+    expect(onRefer).toHaveBeenCalledWith(target);
   });
 });
 
@@ -101,28 +120,32 @@ describe("EntryActionsSheet", () => {
         onOpenChange={vi.fn()}
         onEdit={vi.fn()}
         onCopy={vi.fn()}
+        onRefer={vi.fn()}
         onDelete={vi.fn()}
       />,
     );
 
     expect(screen.queryByText("Edit")).not.toBeInTheDocument();
     expect(screen.queryByText("Copy")).not.toBeInTheDocument();
+    expect(screen.queryByText("Refer to this Entry")).not.toBeInTheDocument();
     expect(screen.queryByText("Delete")).not.toBeInTheDocument();
   });
 
-  it("shows Edit, Copy and Delete when entry is set", () => {
+  it("shows Edit, Copy, Refer and Delete when entry is set", () => {
     render(
       <EntryActionsSheet
         entry={entry({})}
         onOpenChange={vi.fn()}
         onEdit={vi.fn()}
         onCopy={vi.fn()}
+        onRefer={vi.fn()}
         onDelete={vi.fn()}
       />,
     );
 
     expect(screen.getByText("Edit")).toBeInTheDocument();
     expect(screen.getByText("Copy")).toBeInTheDocument();
+    expect(screen.getByText("Refer to this Entry")).toBeInTheDocument();
     expect(screen.getByText("Delete")).toBeInTheDocument();
   });
 
@@ -136,6 +159,7 @@ describe("EntryActionsSheet", () => {
         onOpenChange={onOpenChange}
         onEdit={onEdit}
         onCopy={vi.fn()}
+        onRefer={vi.fn()}
         onDelete={vi.fn()}
       />,
     );
@@ -164,6 +188,7 @@ describe("EntryActionsSheet", () => {
         onOpenChange={onOpenChange}
         onEdit={vi.fn()}
         onCopy={vi.fn()}
+        onRefer={vi.fn()}
         onDelete={onDelete}
       />,
     );
@@ -188,6 +213,7 @@ describe("EntryActionsSheet", () => {
         onOpenChange={onOpenChange}
         onEdit={vi.fn()}
         onCopy={onCopy}
+        onRefer={vi.fn()}
         onDelete={vi.fn()}
       />,
     );
@@ -195,6 +221,32 @@ describe("EntryActionsSheet", () => {
     fireEvent.click(screen.getByText("Copy"));
 
     expect(onCopy).toHaveBeenCalledWith(target);
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  // Issue #144: Refer reports the choice and closes, exactly like Edit and
+  // Copy — it does not itself touch the Composer. composer-page.tsx is
+  // where the choice becomes an inserted Reference (see its own
+  // `handleRefer`), the same split Delete's confirmation and Copy's
+  // clipboard write already follow.
+  it("calls onRefer with the whole Entry and closes the sheet when Refer is pressed", () => {
+    const onRefer = vi.fn();
+    const onOpenChange = vi.fn();
+    const target = entry({});
+    render(
+      <EntryActionsSheet
+        entry={target}
+        onOpenChange={onOpenChange}
+        onEdit={vi.fn()}
+        onCopy={vi.fn()}
+        onRefer={onRefer}
+        onDelete={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByText("Refer to this Entry"));
+
+    expect(onRefer).toHaveBeenCalledWith(target);
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 });

@@ -469,6 +469,66 @@ describe("ComposerPage", () => {
     });
   });
 
+  // Issue #144: the real, end-to-end wiring for "Refer" — History's shared
+  // sheet, into this page's own `handleRefer`, into the docked Composer
+  // via `composerRef`. Each layer already has its own focused test
+  // (entry-row.test.tsx, entry-actions.test.tsx, history.test.tsx,
+  // composer.test.tsx); this is the one place that proves they're actually
+  // connected, the same role the Edit/Delete describe block just above
+  // plays for those two actions.
+  describe("Refer from a row's shared actions sheet", () => {
+    const referredEntry: EntryStoreOutletContext["entries"][number] = {
+      id: "referred-entry-id",
+      deviceId: "device-a",
+      body: "hello",
+      createdAt: "now",
+      seq: 1,
+      syncedAt: "now",
+      deletedAt: null,
+    };
+
+    it("puts a Reference to the Entry into the Composer, with no raw id visible in the sheet itself", async () => {
+      renderComposerPage({ ...readyContext, entries: [referredEntry] });
+
+      swipeLeft(screen.getByText("hello"));
+      // The sheet names the action, never the id it acts on.
+      expect(screen.queryByText(referredEntry.id)).not.toBeInTheDocument();
+      fireEvent.click(await screen.findByText("Refer to this Entry"));
+
+      expect(screen.getByPlaceholderText("What's on your mind?")).toHaveValue(
+        `[[e:${referredEntry.id}]]`,
+      );
+    });
+
+    // The Composer's `editingEntry` mode (ADR 0028) has its own textarea
+    // state, seeded from the Entry being edited rather than from whatever
+    // was mid-composition before — Refer has to land in THAT text, not
+    // start a fresh, separate Entry the reader never asked for.
+    it("inserts into an Entry already being edited, rather than starting a new Entry", async () => {
+      const editEntry = vi.fn();
+      const entries: EntryStoreOutletContext["entries"] = [
+        { ...referredEntry, id: "being-edited", body: "editing this one" },
+        { ...referredEntry, id: "referred-entry-id-2" },
+      ];
+      renderComposerPage({ ...readyContext, entries, editEntry });
+
+      // Enter edit mode on the first Entry.
+      swipeLeft(screen.getByText("editing this one"));
+      fireEvent.click(await screen.findByText("Edit"));
+      expect(screen.getByPlaceholderText("What's on your mind?")).toHaveValue("editing this one");
+
+      // Refer to the second Entry while still editing the first.
+      swipeLeft(screen.getByText("hello"));
+      fireEvent.click(await screen.findByText("Refer to this Entry"));
+
+      expect(screen.getByText("Editing Entry")).toBeInTheDocument();
+      expect(screen.getByPlaceholderText("What's on your mind?")).toHaveValue(
+        "editing this one[[e:referred-entry-id-2]]",
+      );
+      expect(editEntry).not.toHaveBeenCalled();
+    });
+  });
+
   // Issue #142: following a date Reference lands here with `?d=YYYY-MM-DD`
   // (composer-page.tsx's own comment on why a query param, not a path
   // segment) — this page owns the seek: reading the param, deciding

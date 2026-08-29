@@ -228,7 +228,12 @@ export const EntryBubble = memo(function EntryBubble({
       }}
       trailing={
         actions ? (
-          <EntryHoverActions entry={entry} onEdit={actions.onEdit} onDelete={actions.onDelete} />
+          <EntryHoverActions
+            entry={entry}
+            onEdit={actions.onEdit}
+            onDelete={actions.onDelete}
+            onRefer={actions.onRefer}
+          />
         ) : undefined
       }
     >

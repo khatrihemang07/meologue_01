@@ -90,8 +90,14 @@ const ENTRY_SNIPPET_MAX_LENGTH = 40;
  * plain text here also means a Reference nested inside the target's body
  * never recurses into a second live lookup just to build a preview of the
  * first one.
+ *
+ * Exported for `composer.tsx`'s own inline `[[` picker (issue #144): the
+ * same "an Entry's id names nothing a reader can use" reasoning that keeps
+ * this out of `EntryReferenceLink`'s rendered chip also keeps it out of the
+ * picker's list of candidates a reader is choosing *from* — a preview of
+ * the target's opening words, never its uuid, either place.
  */
-function entrySnippet(body: string): string {
+export function entrySnippet(body: string): string {
   const flat = inlineNodesToText(parseInlineMarkdown(body)).replace(/\s+/g, " ").trim();
   if (flat.length <= ENTRY_SNIPPET_MAX_LENGTH) {
     return flat;
@@ -196,25 +202,35 @@ export function EntryBody({ body, query }: { body: string; query: string }) {
 }
 
 /**
- * Edit/Delete, wired onto a row by history.tsx (ADR 0028 — see EntryRowProps'
- * own `actions` comment for who gets this and who deliberately doesn't).
- * Both callbacks take the whole Entry, not just its id: Delete's Undo (see
- * use-history.ts) needs the pre-delete body, and the simplest way to get
- * that to the caller is to hand over what this row already has in full,
- * rather than making every caller re-fetch it by id.
+ * Edit/Delete/Refer, wired onto a row by history.tsx (ADR 0028 for
+ * Edit/Delete, issue #144 for Refer — see EntryRowProps' own `actions`
+ * comment for who gets this and who deliberately doesn't). The callbacks
+ * that act on the Entry itself take the whole thing, not just its id:
+ * Delete's Undo (see use-history.ts) needs the pre-delete body, and the
+ * simplest way to get that to the caller is to hand over what this row
+ * already has in full, rather than making every caller re-fetch it by id.
  */
 export interface EntryRowActions {
   onEdit: (entry: Entry) => void;
   onDelete: (entry: Entry) => void;
   /**
+   * Puts a Reference to this Entry into the Composer (issue #144). Required
+   * alongside onEdit/onDelete, not a fourth independently-optional field:
+   * composer-page.tsx is this bundle's one real source (through
+   * history.tsx's own `actions` assembly — see its comment) and always has
+   * all three to give, and a caller that forgot one is a type error here
+   * rather than a Refer button that silently does nothing.
+   */
+  onRefer: (entry: Entry) => void;
+  /**
    * Opens history.tsx's single shared EntryActionsSheet for this Entry
    * (issue #78) — history.tsx's own sheet-open setter, assembled onto this
-   * bundle alongside onEdit/onDelete rather than being a fourth prop a
-   * caller has to know to pass. composer-page.tsx, the only outside
-   * caller, still only ever supplies onEdit and onDelete; both-or-neither
-   * (see EntryRowProps' `actions` comment) governs that external pair
-   * exactly as before, and history.tsx fills in this third field itself
-   * once both are present.
+   * bundle alongside the callbacks above rather than being a separate prop
+   * a caller has to know to pass. composer-page.tsx, the only outside
+   * caller, still only ever supplies onEdit, onDelete and onRefer;
+   * all-or-nothing (see EntryRowProps' `actions` comment) governs that
+   * external trio exactly as before, and history.tsx fills in this last
+   * field itself once all three are present.
    *
    * What reaches it changed in #127: a touch device gets there by swiping a
    * bubble left (`use-swipe-actions.ts`), not by tapping one. A tap does
@@ -372,7 +388,12 @@ export const EntryRow = memo(function EntryRow({
         )}
       </div>
       {actions && (
-        <EntryHoverActions entry={entry} onEdit={actions.onEdit} onDelete={actions.onDelete} />
+        <EntryHoverActions
+          entry={entry}
+          onEdit={actions.onEdit}
+          onDelete={actions.onDelete}
+          onRefer={actions.onRefer}
+        />
       )}
     </div>
   );

@@ -215,6 +215,27 @@ describe("History", () => {
       expect(screen.queryByText("Edit")).not.toBeInTheDocument();
     });
 
+    // Issue #144: Refer joins onEdit/onDelete under the same all-or-nothing
+    // rule (history.tsx's own `actions` comment) rather than being a fourth,
+    // independently-optional prop — a caller with onEdit/onDelete but no
+    // onRefer is exactly as unwired as one missing onDelete alone, above.
+    it("wires nothing when onEdit and onDelete are given but onRefer is missing", () => {
+      stubHoverCapable(false);
+      render(
+        <History
+          entries={[entry({ body: "hello" })]}
+          syncEnabled={false}
+          onEdit={vi.fn()}
+          onDelete={vi.fn()}
+        />,
+      );
+
+      fireEvent.click(screen.getByText("hello"));
+
+      expect(screen.queryByLabelText("Edit")).not.toBeInTheDocument();
+      expect(screen.queryByText("Edit")).not.toBeInTheDocument();
+    });
+
     it("wires hover Edit/Delete buttons onto every row when both are given", () => {
       render(
         <History
@@ -222,11 +243,13 @@ describe("History", () => {
           syncEnabled={false}
           onEdit={vi.fn()}
           onDelete={vi.fn()}
+          onRefer={vi.fn()}
         />,
       );
 
       expect(screen.getAllByLabelText("Edit")).toHaveLength(2);
       expect(screen.getAllByLabelText("Delete")).toHaveLength(2);
+      expect(screen.getAllByLabelText("Refer to this Entry")).toHaveLength(2);
     });
 
     // #127: a leftward swipe is what reaches the sheet on touch now, not a
@@ -240,6 +263,7 @@ describe("History", () => {
           syncEnabled={false}
           onEdit={vi.fn()}
           onDelete={vi.fn()}
+          onRefer={vi.fn()}
         />,
       );
 
@@ -247,6 +271,7 @@ describe("History", () => {
 
       expect(screen.getByText("Edit")).toBeInTheDocument();
       expect(screen.getByText("Copy")).toBeInTheDocument();
+      expect(screen.getByText("Refer to this Entry")).toBeInTheDocument();
       expect(screen.getByText("Delete")).toBeInTheDocument();
     });
 
@@ -258,6 +283,7 @@ describe("History", () => {
           syncEnabled={false}
           onEdit={vi.fn()}
           onDelete={vi.fn()}
+          onRefer={vi.fn()}
         />,
       );
 
@@ -266,11 +292,45 @@ describe("History", () => {
       expect(screen.queryByText("Edit")).not.toBeInTheDocument();
     });
 
+    // Issue #144's own acceptance criterion: right-click on a hover-capable
+    // device reaches the same sheet a touch device's swipe does, Refer
+    // included — entry-row.test.tsx already pins down `handleRowContextMenu`
+    // itself (calling `onOpenSheet`, and leaving a touch device's long-press
+    // alone entirely); this is the same mechanism exercised end to end
+    // through History, the one place the sheet it opens actually lives.
+    it("opens the shared sheet, with Refer offered, on right-click on a hover-capable device", () => {
+      stubHoverCapable(true);
+      render(
+        <History
+          entries={[entry({ body: "hello" })]}
+          syncEnabled={false}
+          onEdit={vi.fn()}
+          onDelete={vi.fn()}
+          onRefer={vi.fn()}
+        />,
+      );
+
+      fireEvent.contextMenu(screen.getByText("hello"));
+
+      expect(screen.getByText("Edit")).toBeInTheDocument();
+      expect(screen.getByText("Copy")).toBeInTheDocument();
+      expect(screen.getByText("Refer to this Entry")).toBeInTheDocument();
+      expect(screen.getByText("Delete")).toBeInTheDocument();
+    });
+
     it("calls onEdit with the whole Entry through the sheet", () => {
       stubHoverCapable(false);
       const onEdit = vi.fn();
       const target = entry({ body: "hello" });
-      render(<History entries={[target]} syncEnabled={false} onEdit={onEdit} onDelete={vi.fn()} />);
+      render(
+        <History
+          entries={[target]}
+          syncEnabled={false}
+          onEdit={onEdit}
+          onDelete={vi.fn()}
+          onRefer={vi.fn()}
+        />,
+      );
 
       swipeLeft(screen.getByText("hello"));
       fireEvent.click(screen.getByText("Edit"));
@@ -289,7 +349,13 @@ describe("History", () => {
       const onDelete = vi.fn();
       const target = entry({ body: "hello" });
       render(
-        <History entries={[target]} syncEnabled={false} onEdit={vi.fn()} onDelete={onDelete} />,
+        <History
+          entries={[target]}
+          syncEnabled={false}
+          onEdit={vi.fn()}
+          onDelete={onDelete}
+          onRefer={vi.fn()}
+        />,
       );
 
       swipeLeft(screen.getByText("hello"));
@@ -312,7 +378,13 @@ describe("History", () => {
       const e2 = entry({ id: "2", body: "second" });
       const e3 = entry({ id: "3", body: "third" });
       render(
-        <History entries={[e1, e2, e3]} syncEnabled={false} onEdit={vi.fn()} onDelete={vi.fn()} />,
+        <History
+          entries={[e1, e2, e3]}
+          syncEnabled={false}
+          onEdit={vi.fn()}
+          onDelete={vi.fn()}
+          onRefer={vi.fn()}
+        />,
       );
 
       expect(screen.queryAllByRole("dialog")).toHaveLength(0);
@@ -346,7 +418,13 @@ describe("History", () => {
     function openConfirmDialog(onDelete = vi.fn()) {
       const target = entry({ id: "7", body: "hello" });
       render(
-        <History entries={[target]} syncEnabled={false} onEdit={vi.fn()} onDelete={onDelete} />,
+        <History
+          entries={[target]}
+          syncEnabled={false}
+          onEdit={vi.fn()}
+          onDelete={onDelete}
+          onRefer={vi.fn()}
+        />,
       );
       fireEvent.click(screen.getByLabelText("Delete"));
       return { onDelete, target };
@@ -452,7 +530,13 @@ describe("History", () => {
       const e2 = entry({ id: "2", body: "second" });
       const e3 = entry({ id: "3", body: "third" });
       render(
-        <History entries={[e1, e2, e3]} syncEnabled={false} onEdit={vi.fn()} onDelete={vi.fn()} />,
+        <History
+          entries={[e1, e2, e3]}
+          syncEnabled={false}
+          onEdit={vi.fn()}
+          onDelete={vi.fn()}
+          onRefer={vi.fn()}
+        />,
       );
 
       expect(screen.queryAllByRole("alertdialog")).toHaveLength(0);
@@ -616,7 +700,13 @@ describe("History", () => {
       vi.mocked(copyText).mockResolvedValue(outcome);
       const target = entry({ body: "hello" });
       render(
-        <History entries={[target]} syncEnabled={false} onEdit={vi.fn()} onDelete={vi.fn()} />,
+        <History
+          entries={[target]}
+          syncEnabled={false}
+          onEdit={vi.fn()}
+          onDelete={vi.fn()}
+          onRefer={vi.fn()}
+        />,
       );
 
       swipeLeft(screen.getByText("hello"));
@@ -639,6 +729,32 @@ describe("History", () => {
       await waitFor(() => expect(toast.error).toHaveBeenCalled());
       expect(toast.success).not.toHaveBeenCalled();
     });
+  });
+
+  // Issue #144: choosing Refer from the shared sheet puts a Reference to
+  // the swiped Entry into the Composer — this pins down that the sheet
+  // reports the right Entry through `onRefer` and closes itself; turning
+  // that report into an actual insertion is composer-page.tsx's own
+  // `handleRefer`, covered end to end by composer-page.test.tsx.
+  it("calls onRefer with the whole swiped Entry and closes the sheet when Refer is pressed", () => {
+    stubHoverCapable(false);
+    const onRefer = vi.fn();
+    const target = entry({ body: "hello" });
+    render(
+      <History
+        entries={[target]}
+        syncEnabled={false}
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+        onRefer={onRefer}
+      />,
+    );
+
+    swipeLeft(screen.getByText("hello"));
+    fireEvent.click(screen.getByText("Refer to this Entry"));
+
+    expect(onRefer).toHaveBeenCalledWith(target);
+    expect(screen.queryByText("Refer to this Entry")).not.toBeInTheDocument();
   });
 
   it("bounds the zero-viewport fallback to a fixed window instead of rendering the whole History", () => {
