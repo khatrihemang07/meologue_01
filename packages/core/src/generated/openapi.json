@@ -92,11 +92,12 @@
         "tags": [
           "crate::health"
         ],
-        "summary": "Answers whether an address is actually a meologue Server, and which\nprotocol it speaks — without touching the database, so a Server whose\nPostgres is down still identifies itself. Unlike `/v1/sync`, this never\nrejects on protocol version: its whole job is letting the caller compare\nversions themselves. See ADR 0010.",
+        "summary": "Answers whether an address is actually a meologue Server, which protocol\nit speaks, and — since issue #133 — which Server-backed features it can\nactually serve, all without touching the database, so a Server whose\nPostgres is down still identifies itself. Unlike `/v1/sync`, this never\nrejects on protocol version: its whole job is letting the caller compare\nversions themselves. See ADR 0010.",
+        "description": "Reads `Option<ReflectState>` and `DigestsEnabled` off `AppState` (via\ntheir own `FromRef` impls in `lib.rs`) rather than the whole `AppState`\n— the same one-extractor-per-need shape `sync::sync_handler` and\n`reflect::reflect_handler` already use, and precisely what keeps this\nhandler from ever touching `PgPool` and staying DB-free.",
         "operationId": "health_handler",
         "responses": {
           "200": {
-            "description": "This address is a meologue Server speaking protocol_version",
+            "description": "This address is a meologue Server speaking protocol_version, with its Destination capabilities",
             "content": {
               "application/json": {
                 "schema": {
@@ -460,6 +461,26 @@
           }
         }
       },
+      "HealthCapabilities": {
+        "type": "object",
+        "description": "Which Server-backed features this Server can actually serve right now,\nderived from the same configuration `main.rs` already used to decide\nwhether `/v1/reflect`, `/v1/digests/*` and the embedding worker exist at\nall (issue #133). Reported alongside `HealthResponse` rather than left\nfor a Device to infer from probing each route in turn: a Device that only\nasked \"does `/v1/reflect` 404\" would still show a working-looking\nReflect row on a Server that has the route but no model behind it, since\n`router_with_digests` only ever gates *registration*, not per-request\nconfiguration checks.\n\n- `reflect` mirrors `reflect.is_some()` — the exact condition\n  `router_with_digests` gates `/v1/reflect`, `/v1/sessions*` and\n  `/v1/models` on.\n- `digest` mirrors `digests_enabled` — the exact bool `main.rs` computes\n  from `LlmConfig::digest_worker_config().is_some()` and\n  `router_with_digests` gates `/v1/digests/*` on.\n- `embeddings` reports whether Reflection's own embed client resolved\n  (`ReflectState::embed_client`). Issue #130: `reflect_config()` now\n  needs chat alone and hands back `None` for the embed half when no\n  embed config is resolvable, so a chat-only Server still reports\n  `reflect: true` while `embeddings: false` — exactly the Server on\n  which `reflect.rs`'s tool loop quietly omits `similar_entries`.",
+        "required": [
+          "reflect",
+          "digest",
+          "embeddings"
+        ],
+        "properties": {
+          "digest": {
+            "type": "boolean"
+          },
+          "embeddings": {
+            "type": "boolean"
+          },
+          "reflect": {
+            "type": "boolean"
+          }
+        }
+      },
       "HealthResponse": {
         "type": "object",
         "required": [
@@ -467,6 +488,17 @@
           "protocol_version"
         ],
         "properties": {
+          "capabilities": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/HealthCapabilities",
+                "description": "`Option`, not a bare `HealthCapabilities`, so the field is optional\non the wire (utoipa marks an `Option` field `required: false` in the\ngenerated schema, which `openapi-typescript` turns into\n`capabilities?: ...` for `packages/core`). This Server always\npopulates it — the `None` case exists only so an older Server that\npredates this field keeps producing a `HealthResponse` a current\nDevice can still parse, reading the missing field as \"unknown\"\nrather than a schema mismatch (`server-check.ts`)."
+              }
+            ]
+          },
           "protocol_version": {
             "type": "integer",
             "format": "int32"

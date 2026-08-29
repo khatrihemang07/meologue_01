@@ -26,13 +26,16 @@
  * Settings must keep working under the same conditions, since it's also
  * where a bad Server URL gets fixed.
  */
+import type { ServerCapabilities } from "@meologue/core";
 import { create } from "zustand";
+import { checkServerUrl } from "@/lib/server-check";
 
 const THEME_KEY = "meologue.theme";
 const SERVER_URL_KEY = "meologue.server-url";
 const LIST_WIDTH_KEY = "meologue.list-width";
 const ACCENT_KEY = "meologue.accent";
 const TEXT_SIZE_KEY = "meologue.text-size";
+const CAPABILITIES_KEY = "meologue.capabilities";
 
 /**
  * How wide the chat list pane is beside an open destination (ADR 0036), in
@@ -212,17 +215,92 @@ function writeStoredListWidth(width: number): void {
   }
 }
 
+/**
+ * Type-guards a parsed `localStorage` value before trusting it as
+ * `ServerCapabilities` — the same defensiveness `isAccentId`/`isTextSizeId`
+ * apply to a stored id, extended here to a whole shape rather than a single
+ * string, since a hand-edited or previous-version value could be anything.
+ */
+function isServerCapabilities(value: unknown): value is ServerCapabilities {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as ServerCapabilities).reflect === "boolean" &&
+    typeof (value as ServerCapabilities).digest === "boolean" &&
+    typeof (value as ServerCapabilities).embeddings === "boolean"
+  );
+}
+
+/**
+ * Issue #133: the last known answer to "which Server-backed Destinations
+ * can this Server serve" — `null` for unknown, read synchronously at module
+ * load exactly like `readStoredServerUrl` above, so `chat-list.tsx`'s
+ * `useDestinations()` can decide whether a row locks with no network call
+ * and no Entry-store read (ADR 0008/0009 — this pane has to keep rendering
+ * beside `/settings` when the Entry store never opens at all).
+ *
+ * `null` here is a real, distinct state from "every capability is false":
+ * it means this Device has never learned an answer (a fresh install, a
+ * Server URL that was just changed, or a cache write that got refused),
+ * and `chat-list.tsx` treats `null` as "unlocked" (optimistic-unknown) —
+ * see `refreshCapabilities` below for the only thing that ever moves this
+ * away from `null`.
+ */
+function readStoredCapabilities(): ServerCapabilities | null {
+  try {
+    const stored = localStorage.getItem(CAPABILITIES_KEY);
+    if (stored === null) {
+      return null;
+    }
+    const parsed: unknown = JSON.parse(stored);
+    return isServerCapabilities(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredCapabilities(capabilities: ServerCapabilities | null): void {
+  try {
+    if (capabilities === null) {
+      localStorage.removeItem(CAPABILITIES_KEY);
+    } else {
+      localStorage.setItem(CAPABILITIES_KEY, JSON.stringify(capabilities));
+    }
+  } catch {
+    // Refused write — the in-memory value below still applies for this
+    // session, same degradation every other setting here has.
+  }
+}
+
 interface SettingsState {
   theme: Theme;
   accent: AccentId;
   textSize: TextSizeId;
   serverUrl: string;
   listWidth: number;
+  capabilities: ServerCapabilities | null;
+  /**
+   * Whether the last request this Device actually sent to the Server got a
+   * response, rather than failing at the network level (issue #133's
+   * "Unreachable" state). Deliberately NOT persisted to `localStorage` the
+   * way `capabilities` is: an outage is true only of this moment — "the
+   * answer expires immediately" — so a stale `false` must never survive
+   * into the next launch and report a Server that has been back up for
+   * hours as still down. Defaults to `true` (optimistic, matching
+   * `capabilities: null`'s own "unknown means unlocked" posture) and is
+   * flipped by `server-request.ts`'s shared `serverRequest` helper, which
+   * every transport (Reflect, Digest, Sessions, Models) already funnels
+   * through — a real response of any status is reachability; only a thrown
+   * `fetch` is not.
+   */
+  serverReachable: boolean;
   setTheme: (theme: Theme) => void;
   setAccent: (accent: AccentId) => void;
   setTextSize: (size: TextSizeId) => void;
   setServerUrl: (url: string) => void;
   setListWidth: (width: number) => void;
+  setCapabilities: (capabilities: ServerCapabilities | null) => void;
+  setServerReachable: (reachable: boolean) => void;
 }
 
 /**
@@ -239,6 +317,8 @@ export const useSettingsStore = create<SettingsState>()((set) => ({
   textSize: readStoredTextSize(),
   serverUrl: readStoredServerUrl(),
   listWidth: readStoredListWidth(),
+  capabilities: readStoredCapabilities(),
+  serverReachable: true,
   setTheme: (theme) => {
     writeStoredTheme(theme);
     set({ theme });
@@ -261,9 +341,83 @@ export const useSettingsStore = create<SettingsState>()((set) => ({
     writeStoredListWidth(rounded);
     set({ listWidth: rounded });
   },
+  setCapabilities: (capabilities) => {
+    writeStoredCapabilities(capabilities);
+    set({ capabilities });
+  },
+  setServerReachable: (serverReachable) => {
+    // In-memory only — see `SettingsState.serverReachable`'s own doc
+    // comment on why this never touches `localStorage`.
+    set({ serverReachable });
+  },
 }));
 
 /** ADR 0011: an empty Server URL means Sync is off. Re-renders when the Server URL changes. */
 export function useSyncEnabled(): boolean {
   return useSettingsStore((state) => state.serverUrl !== "");
+}
+
+/**
+ * The last known capability report (issue #133), or `null` for unknown.
+ * Read this, not `capabilities: null` directly, wherever a component needs
+ * to react to a background refresh landing — `chat-list.tsx`'s
+ * `useDestinations()` is the first caller.
+ */
+export function useCapabilities(): ServerCapabilities | null {
+  return useSettingsStore((state) => state.capabilities);
+}
+
+/**
+ * The last known reachability of the configured Server (issue #133) —
+ * `true` until a request actually fails at the network level, never a
+ * pre-emptive probe. See `SettingsState.serverReachable`'s own doc comment.
+ */
+export function useServerReachable(): boolean {
+  return useSettingsStore((state) => state.serverReachable);
+}
+
+/**
+ * Re-probes the configured Server's `/v1/health` in the background and
+ * updates the capability cache and `serverReachable` with whatever it
+ * learns — never awaited by anything that renders (issue #133). Called
+ * once after this app's first paint (`main.tsx`) and again whenever a
+ * Server URL is saved in Settings (`settings-page.tsx`'s `saveServerUrl`);
+ * every reader above is a synchronous store read, and this is the only
+ * thing that ever moves either value.
+ *
+ * An empty Server URL clears the cache outright rather than probing
+ * anything — ADR 0011 already has an authoritative, free, offline answer
+ * for that case (`useSyncEnabled`), and a stale capability report for a
+ * Server this Device just disconnected from would be actively misleading.
+ *
+ * A network-level failure (`reason === "unreachable"`) marks
+ * `serverReachable: false` and deliberately leaves `capabilities`
+ * untouched: a Server that was reachable a moment ago and isn't right now
+ * hasn't necessarily changed what it can serve, and overwriting a
+ * known-good report with "unknown" here would undo the whole point of
+ * caching it. Every other outcome — a real answer from the Server, even a
+ * bad one (`http-error`, `protocol-mismatch`) or an unparseable URL — is
+ * not a reachability failure, so it clears `capabilities` to unknown
+ * (there is no capability report to trust) without touching
+ * `serverReachable`.
+ */
+export async function refreshCapabilities(): Promise<void> {
+  const store = useSettingsStore.getState();
+  const url = store.serverUrl;
+
+  if (url === "") {
+    store.setCapabilities(null);
+    store.setServerReachable(true);
+    return;
+  }
+
+  const result = await checkServerUrl(url);
+  if (result.ok) {
+    store.setCapabilities(result.capabilities ?? null);
+    store.setServerReachable(true);
+  } else if (result.reason === "unreachable") {
+    store.setServerReachable(false);
+  } else {
+    store.setCapabilities(null);
+  }
 }

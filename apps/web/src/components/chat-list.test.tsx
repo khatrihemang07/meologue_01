@@ -1,6 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { useSettingsStore } from "@/lib/settings";
 import { ChatList } from "./chat-list";
 
 function renderAt(path: string) {
@@ -59,6 +60,19 @@ describe("ChatList", () => {
     expect(screen.getByRole("link", { name: /Composer/ })).not.toHaveAttribute("aria-current");
   });
 
+  // ADR 0008/0009: this pane has to keep rendering beside `/settings` when
+  // the Entry store fails to open entirely, since Settings is where a bad
+  // Server URL gets fixed. This test carries no EntryStoreOutletContext, no
+  // QueryClientProvider and no mocked `entry-store-layout.tsx` at all — if
+  // a future change ever made `ChatList` read the Entry store (directly or
+  // via `useQuery(entryStoreQueryOptions)`), it would throw here instead of
+  // silently reintroducing the very defect this component's own module doc
+  // comment says it avoids.
+  it("renders with no Entry-store read, even when nothing has provided one", () => {
+    expect(() => renderAt("/")).not.toThrow();
+    expect(screen.getAllByRole("link")).toHaveLength(4);
+  });
+
   it("scopes its landmark to the list rather than announcing app-wide navigation", () => {
     renderAt("/");
 
@@ -77,5 +91,82 @@ describe("ChatList", () => {
     for (const summary of summaries) {
       expect(summary).toHaveClass("truncate");
     }
+  });
+
+  // Issue #133: Destination rows derive their lock state from the
+  // synchronous settings store — no Entry-store read, no network call — so
+  // this exercises `useDestinations()` purely by seeding that store before
+  // each render, the same way `useSyncEnabled`'s own callers are tested
+  // elsewhere in this app.
+  describe("locking", () => {
+    beforeEach(() => {
+      useSettingsStore.setState({ serverUrl: "", capabilities: null });
+    });
+
+    afterEach(() => {
+      useSettingsStore.setState({ serverUrl: "", capabilities: null });
+    });
+
+    it("locks every Server-backed row when no Server URL is configured", () => {
+      renderAt("/");
+
+      expect(screen.getByRole("link", { name: /Reflect/ })).toHaveAttribute("data-locked", "true");
+      expect(screen.getByRole("link", { name: /Digest/ })).toHaveAttribute("data-locked", "true");
+      // Settings is how a locked row gets fixed — it must never lock itself.
+      expect(screen.getByRole("link", { name: /Settings/ })).not.toHaveAttribute("data-locked");
+    });
+
+    // meologue is a local-first log: an Entry is captured, searched, edited
+    // and Exported on the Device with no Server at all, and `composer-page`
+    // keeps its thread and input working with Sync off. An unset Server URL
+    // is also the default (ADR 0011), so locking this row would greet every
+    // fresh install by calling its one working Destination unavailable.
+    it("never locks Composer, which works with no Server at all", () => {
+      renderAt("/");
+
+      expect(screen.getByRole("link", { name: /Composer/ })).not.toHaveAttribute("data-locked");
+    });
+
+    it("still gives every locked row a real href — it stays a working link", () => {
+      renderAt("/");
+
+      const reflect = screen.getByRole("link", { name: /Reflect/ });
+      expect(reflect).toHaveAttribute("data-locked", "true");
+      expect(reflect).toHaveAttribute("href", "/reflect");
+    });
+
+    it("mutes a locked row without any destructive/error styling", () => {
+      renderAt("/");
+
+      const reflect = screen.getByRole("link", { name: /Reflect/ });
+      expect(reflect).toHaveClass("text-muted-foreground");
+      expect(reflect.className).not.toMatch(/destructive/);
+    });
+
+    it("unlocks every row once a Server URL is configured and capabilities are unknown", () => {
+      // A fresh Server, or one this Device hasn't heard back from yet
+      // (`capabilities: null`) — "unknown means unlocked."
+      useSettingsStore.setState({ serverUrl: "https://server.example", capabilities: null });
+
+      renderAt("/");
+
+      for (const name of [/Composer/, /Reflect/, /Digest/, /Settings/]) {
+        expect(screen.getByRole("link", { name })).not.toHaveAttribute("data-locked");
+      }
+    });
+
+    it("locks only the Destination a configured Server reports it cannot serve", () => {
+      useSettingsStore.setState({
+        serverUrl: "https://server.example",
+        capabilities: { reflect: true, digest: false, embeddings: true },
+      });
+
+      renderAt("/");
+
+      expect(screen.getByRole("link", { name: /Composer/ })).not.toHaveAttribute("data-locked");
+      expect(screen.getByRole("link", { name: /Reflect/ })).not.toHaveAttribute("data-locked");
+      expect(screen.getByRole("link", { name: /Digest/ })).toHaveAttribute("data-locked", "true");
+      expect(screen.getByRole("link", { name: /Settings/ })).not.toHaveAttribute("data-locked");
+    });
   });
 });

@@ -41,6 +41,14 @@ pub struct AppState {
     pub pool: PgPool,
     pub embed_tx: Option<Sender<Uuid>>,
     pub reflect: Option<ReflectState>,
+    /// Whether `/v1/digests/*` is registered on this Router — the same bool
+    /// `router_with_digests` gates those routes on (see its own doc
+    /// comment). Threaded into `AppState`, rather than left a router-build
+    /// local, so `health::health_handler` (issue #133) can report a
+    /// `digest` capability that reads this exact switch instead of
+    /// recomputing it from `LlmConfig` a second time and risking the two
+    /// drift apart.
+    pub digests_enabled: bool,
 }
 
 impl FromRef<AppState> for PgPool {
@@ -58,6 +66,21 @@ impl FromRef<AppState> for Option<Sender<Uuid>> {
 impl FromRef<AppState> for Option<ReflectState> {
     fn from_ref(state: &AppState) -> Self {
         state.reflect.clone()
+    }
+}
+
+/// A newtype around `AppState::digests_enabled`'s `bool`, rather than a bare
+/// `impl FromRef<AppState> for bool` — `AppState` has exactly one `bool`
+/// field today, but a plain `bool` extractor gives every future one the
+/// same ambiguous claim on it. Mirrors `Option<Sender<Uuid>>` and
+/// `Option<ReflectState>` just above: one small `FromRef` per thing a
+/// handler might need out of the shared state.
+#[derive(Debug, Clone, Copy)]
+pub struct DigestsEnabled(pub bool);
+
+impl FromRef<AppState> for DigestsEnabled {
+    fn from_ref(state: &AppState) -> Self {
+        DigestsEnabled(state.digests_enabled)
     }
 }
 
@@ -302,7 +325,12 @@ pub fn router_with_digests(
     api_router = api_router.route("/v1/{*rest}", any(v1_not_found));
 
     api_router
-        .with_state(AppState { pool, embed_tx, reflect })
+        .with_state(AppState {
+            pool,
+            embed_tx,
+            reflect,
+            digests_enabled,
+        })
         .fallback_service(app_shell)
         .layer(axum::middleware::from_fn(metrics::track_metrics))
         .layer(trace_layer)

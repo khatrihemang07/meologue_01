@@ -9,6 +9,7 @@ import { Bubble } from "@/components/entry-bubble";
 import { GroundingDisclosure } from "@/components/grounding-disclosure";
 import { QuestionComposer } from "@/components/question-composer";
 import { NewSessionLink, SessionsLink } from "@/components/reflect-actions";
+import { ServerUnreachableBanner } from "@/components/server-unreachable-banner";
 import { Shell } from "@/components/shell";
 import {
   type ConversationTurn,
@@ -22,7 +23,7 @@ import { groundingEntriesQueryKey, MODELS_QUERY_KEY } from "@/lib/query-keys";
 import { applyReflectEvent, initialLiveRunState, type LiveRunState } from "@/lib/reflect-live-run";
 import { reflectTransport } from "@/lib/reflect-transport";
 import { type SessionResult, sessionsTransport } from "@/lib/sessions-transport";
-import { useSyncEnabled } from "@/lib/settings";
+import { refreshCapabilities, useServerReachable, useSyncEnabled } from "@/lib/settings";
 import { useEntryStore } from "@/pages/entry-store-layout";
 
 /**
@@ -244,6 +245,15 @@ function LiveRunView({ liveRun }: { liveRun: LiveRunState }) {
 // to close.
 export function ReflectionPage() {
   const syncEnabled = useSyncEnabled();
+  // Issue #133: the last known reachability of the configured Server —
+  // `false` only once a real request has actually failed at the network
+  // level (`server-request.ts`'s shared `serverRequest`, which
+  // `reflectTransport` and `sessionsTransport` both funnel through), never
+  // a pre-emptive probe this page runs on its own. Drives two things below:
+  // the Question input drops out of `composerSlot` (issue #133's "read yes,
+  // write no"), and a persistent `ServerUnreachableBanner` replaces what
+  // `handleAsk`'s own failure branch used to toast for this same reason.
+  const serverReachable = useServerReachable();
   const { sessionId } = useParams<{ sessionId?: string }>();
   const navigate = useNavigate();
   const location = useLocation();
@@ -612,7 +622,16 @@ export function ReflectionPage() {
       } else if (result.reason === "agent-error") {
         toast.error("Reflection couldn't answer that. Try again.");
       } else {
-        toast.error("Couldn't reach Reflection. Check your Server and try again.");
+        // Issue #133: `result.reason` here is `"unreachable"` (the only
+        // other member of `ReflectResult`'s failure union — see
+        // `reflect-transport.ts`), and by the time this branch runs
+        // `serverReachable` above has already flipped `false`: the very
+        // `serverRequest` call that produced this failure is what set it,
+        // synchronously, before `reflectTransport` ever returned. The
+        // persistent `ServerUnreachableBanner` this page now renders for
+        // that state replaces the toast a plain network failure used to
+        // get — a toast fades and has to repeat itself on every retry; the
+        // banner stays until the Server actually answers again.
       }
 
       // Issue #131: undo the pre-dispatch mint above — unlike "aborted"
@@ -658,8 +677,14 @@ export function ReflectionPage() {
       }
       back={<BackToChats />}
       pinnedThread={syncEnabled ? { watch: turns.length, forceToNewest: askSignal } : undefined}
+      // Issue #133: also gated on `serverReachable` — "read yes, write no."
+      // Old Sessions and whatever's already in `turns` stay fully readable
+      // below regardless; only the ability to ask something new goes away
+      // while the Server isn't answering, replaced by the persistent
+      // `ServerUnreachableBanner` this page renders instead of letting a
+      // reader type a Question that's certain to fail.
       composerSlot={
-        syncEnabled && !notFound ? (
+        syncEnabled && !notFound && serverReachable ? (
           <QuestionComposer
             onAsk={handleAsk}
             disabled={pending !== null}
@@ -680,6 +705,23 @@ export function ReflectionPage() {
         </p>
       )}
 
+      {syncEnabled && !serverReachable && (
+        // Issue #133: replaces the toast `handleAsk`'s failure branch used
+        // to show for a plain network failure — this stays on screen for
+        // as long as `serverReachable` does, rather than fading after one
+        // render, and offers a way back in instead of just naming the
+        // problem. `Retry` re-probes via `refreshCapabilities()`, the same
+        // background check `main.tsx` runs at boot and Settings runs on
+        // every Save; a successful probe flips `serverReachable` back to
+        // `true`, which brings the Question input straight back.
+        <ServerUnreachableBanner
+          message="Couldn't reach Reflection. Check your Server and try again."
+          onRetry={() => {
+            refreshCapabilities();
+          }}
+        />
+      )}
+
       {syncEnabled && notFound && !deletedElsewhere && (
         // A plain, honest message rather than a blank page or a crash (ADR
         // 0025) — this Session was deleted, or the Server URL now points
@@ -692,12 +734,17 @@ export function ReflectionPage() {
         </p>
       )}
 
-      {syncEnabled && unreachable && (
-        <p className="text-center text-sm text-muted-foreground">
-          Couldn't load this Conversation. Check your Server and try again.
-        </p>
-      )}
-
+      {/*
+        Issue #133: no separate "couldn't load this Conversation" message
+        here any more — a failed session fetch is exactly the kind of
+        request failure that flips `serverReachable` false (both go through
+        `sessionsTransport` → `serverRequest`), so the
+        `ServerUnreachableBanner` rendered above already covers this case,
+        persistently and with a Retry, rather than a second, one-off
+        paragraph saying the same thing next to it. `unreachable` itself is
+        still read below, to keep this session's own empty state (no turns,
+        no invitation) from rendering while its fetch has failed.
+      */}
       {syncEnabled &&
         !notFound &&
         !unreachable &&

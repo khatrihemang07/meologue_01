@@ -1,11 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, ChevronLeft, ChevronRight } from "lucide-react";
 import { Link, useLocation, useNavigate, useParams } from "react-router";
+import { ServerUnreachableBanner } from "@/components/server-unreachable-banner";
 import { Shell } from "@/components/shell";
 import { formatDigestRange } from "@/lib/digest-format";
 import { digestAtTransport } from "@/lib/digest-transport";
 import { digestAtQueryKey } from "@/lib/query-keys";
-import { useSyncEnabled } from "@/lib/settings";
+import { refreshCapabilities, useServerReachable, useSyncEnabled } from "@/lib/settings";
 
 const LABELS: Record<string, string> = { day: "Day", week: "Week", month: "Month" };
 
@@ -116,6 +117,16 @@ function DigestStepControl({
 // existed there once; see its own copy below.
 export function DigestReaderPage() {
   const syncEnabled = useSyncEnabled();
+  // Issue #133: as on `digest-page.tsx`, gates further fetches while the
+  // Server is known unreachable, so a failed background refetch (a window
+  // refocus, a reconnect event) can't silently overwrite an
+  // already-successful `DigestResult` in the query cache with a failure
+  // one — see that page's own comment on `DigestCards` for the mechanics
+  // (`digestAtTransport` never throws, so a failed refetch is new data to
+  // TanStack Query, not an error). Also drives the persistent banner below,
+  // ORed with the ordinary per-result `unreachable` check (a non-404 error
+  // status is "unreachable" here too, even though the Server did answer).
+  const serverReachable = useServerReachable();
   const { period, date } = useParams<{ period: string; date: string }>();
   const navigate = useNavigate();
   const location = useLocation();
@@ -127,12 +138,14 @@ export function DigestReaderPage() {
     // the key only has to be distinct, not meaningful.
     queryKey: digestAtQueryKey(period ?? "", date ?? ""),
     queryFn: () => digestAtTransport(period ?? "", date ?? ""),
-    enabled: syncEnabled && period !== undefined && date !== undefined,
+    enabled: syncEnabled && period !== undefined && date !== undefined && serverReachable,
   });
 
   const result = query.data;
   const notSupported = result !== undefined && !result.ok && result.reason === "not-supported";
-  const unreachable = result !== undefined && !result.ok && result.reason === "unreachable";
+  const unreachable =
+    !notSupported &&
+    ((result !== undefined && !result.ok && result.reason === "unreachable") || !serverReachable);
   const digest = result?.ok ? result.digest : undefined;
 
   // Reached only from `digest-page.tsx`'s own cards, so `/digest` is
@@ -179,9 +192,16 @@ export function DigestReaderPage() {
       )}
 
       {syncEnabled && unreachable && (
-        <p className="text-center text-sm text-muted-foreground">
-          Couldn't load this Digest. Check your Server and try again.
-        </p>
+        // Issue #133: a persistent banner with a Retry, same as
+        // `digest-page.tsx` — see that page's own comment on
+        // `ServerUnreachableBanner` for why this replaces what used to be
+        // a plain, one-off paragraph.
+        <ServerUnreachableBanner
+          message="Couldn't load this Digest. Check your Server and try again."
+          onRetry={() => {
+            refreshCapabilities();
+          }}
+        />
       )}
 
       {syncEnabled && result?.ok && digest === null && (

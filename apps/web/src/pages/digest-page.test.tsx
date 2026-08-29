@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Outlet, Route, Routes, useLocation } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useSettingsStore } from "@/lib/settings";
@@ -104,7 +104,15 @@ describe("DigestPage", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     localStorage.clear();
-    useSettingsStore.setState({ serverUrl: "" });
+    // `serverReachable`/`capabilities` (issue #133) reset here too — both
+    // are singleton store state a prior test's simulated network failure
+    // can leave behind, and `serverReachable: false` in particular would
+    // pause every later test's own Digest queries before they ever fired.
+    useSettingsStore.setState({
+      serverUrl: "",
+      serverReachable: true,
+      capabilities: null,
+    });
   });
 
   it("with Sync off, says so, points at Settings, and makes no request at all", () => {
@@ -250,6 +258,47 @@ describe("DigestPage", () => {
     expect(
       await screen.findByText("Couldn't load your Digests. Check your Server and try again."),
     ).toBeInTheDocument();
+  });
+
+  // Issue #133: "existing Digests still readable" — a Period that already
+  // loaded successfully must stay on screen next to the banner rather than
+  // the whole page collapsing to one error message the moment any one of
+  // the three requests fails.
+  it("keeps an already-loaded Digest visible next to the unreachable banner", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    stubDigestFetch({
+      day: {
+        status: 200,
+        digest: digestFixture({
+          period: "day",
+          period_start: "2026-08-20",
+          period_end: "2026-08-20",
+        }),
+      },
+      week: "network-error",
+      month: { status: 200, digest: null },
+    });
+
+    renderDigestPage();
+
+    expect(
+      await screen.findByText("Couldn't load your Digests. Check your Server and try again."),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Last day/ })).toBeInTheDocument();
+  });
+
+  it("offers a Retry on the unreachable banner", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    stubDigestFetch({
+      day: "network-error",
+      week: { status: 200, digest: null },
+      month: { status: 200, digest: null },
+    });
+
+    renderDigestPage();
+
+    const banner = await screen.findByTestId("server-unreachable-banner");
+    expect(within(banner).getByRole("button", { name: "Retry" })).toBeInTheDocument();
   });
 
   it("reads as working and waiting, not broken, for a Period with no Digest yet — worded per Period", async () => {

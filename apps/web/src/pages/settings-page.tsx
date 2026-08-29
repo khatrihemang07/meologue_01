@@ -11,6 +11,7 @@ import {
   ACCENTS,
   type AccentId,
   normaliseServerUrl,
+  refreshCapabilities,
   TEXT_SIZES,
   type TextSizeId,
   type Theme,
@@ -96,9 +97,34 @@ function ChoiceRow({ columns, children }: { columns: 3 | 5; children: React.Reac
 // rejection and OS cleartext blocking are all indistinguishable from
 // JavaScript — so "unreachable" is deliberately the one honest catch-all
 // rather than several confident guesses.
+//
+// Issue #133: a bare "Reachable" was true and useless on a Server that
+// answers its health check but can serve neither Destination — this names
+// the specific gap instead, straight off the same `capabilities` object
+// `useDestinations()` (`chat-list.tsx`) locks rows against, so Settings and
+// the chat list can never disagree about what a Server can do. `undefined`
+// (an older Server, or one this check hasn't learned the answer from yet)
+// still reads as a plain "Reachable" — Settings has no missing-model gap to
+// name when it doesn't know one exists, the same "unknown means unlocked"
+// posture the chat list takes.
 function describeServerCheck(result: ServerCheckResult): string {
   if (result.ok) {
-    return "Reachable — this server is up and speaking the protocol this app expects.";
+    const capabilities = result.capabilities;
+    if (capabilities === undefined) {
+      return "Reachable — this server is up and speaking the protocol this app expects.";
+    }
+    const missing: string[] = [];
+    if (!capabilities.reflect) missing.push("Reflect");
+    if (!capabilities.digest) missing.push("Digest");
+    if (missing.length === 0) {
+      return "Reachable — this server is up and speaking the protocol this app expects.";
+    }
+    // "no Digest model configured" for one gap; "no Reflect or Digest model
+    // configured" for both — `capabilities.embeddings` never gates a
+    // Destination row on its own (see `useDestinations()`), so it's left
+    // out of this sentence even though the Server reports it.
+    const gap = missing.map((name) => `${name} model`).join(" or ");
+    return `Reachable — but this server has no ${gap} configured.`;
   }
   switch (result.reason) {
     case "not-configured":
@@ -195,6 +221,14 @@ export function SettingsPage() {
     // blank the field the user just filled in.
     const normalised = normaliseServerUrl(serverUrl);
     setServerUrl(normalised);
+
+    // Issue #133: refreshes the capability cache `chat-list.tsx` reads —
+    // fire-and-forget, exactly like the boot-time call in `main.tsx`. This
+    // page's own `status`/`describeServerCheck` line below is a separate,
+    // synchronous-feeling one-off probe against the same URL, awaited for
+    // its own testid-bearing message; that await is unrelated to this call,
+    // which nothing here renders against.
+    refreshCapabilities();
 
     const result = await checkServerUrl(normalised);
     setCheck({ url: normalised, result });

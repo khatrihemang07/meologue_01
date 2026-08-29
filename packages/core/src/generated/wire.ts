@@ -51,11 +51,17 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Answers whether an address is actually a meologue Server, and which
-         *     protocol it speaks — without touching the database, so a Server whose
+         * Answers whether an address is actually a meologue Server, which protocol
+         *     it speaks, and — since issue #133 — which Server-backed features it can
+         *     actually serve, all without touching the database, so a Server whose
          *     Postgres is down still identifies itself. Unlike `/v1/sync`, this never
          *     rejects on protocol version: its whole job is letting the caller compare
          *     versions themselves. See ADR 0010.
+         * @description Reads `Option<ReflectState>` and `DigestsEnabled` off `AppState` (via
+         *     their own `FromRef` impls in `lib.rs`) rather than the whole `AppState`
+         *     — the same one-extractor-per-need shape `sync::sync_handler` and
+         *     `reflect::reflect_handler` already use, and precisely what keeps this
+         *     handler from ever touching `PgPool` and staying DB-free.
          */
         get: operations["health_handler"];
         put?: never;
@@ -309,7 +315,37 @@ export interface components {
             /** Format: int64 */
             seq: number;
         };
+        /**
+         * @description Which Server-backed features this Server can actually serve right now,
+         *     derived from the same configuration `main.rs` already used to decide
+         *     whether `/v1/reflect`, `/v1/digests/*` and the embedding worker exist at
+         *     all (issue #133). Reported alongside `HealthResponse` rather than left
+         *     for a Device to infer from probing each route in turn: a Device that only
+         *     asked "does `/v1/reflect` 404" would still show a working-looking
+         *     Reflect row on a Server that has the route but no model behind it, since
+         *     `router_with_digests` only ever gates *registration*, not per-request
+         *     configuration checks.
+         *
+         *     - `reflect` mirrors `reflect.is_some()` — the exact condition
+         *       `router_with_digests` gates `/v1/reflect`, `/v1/sessions*` and
+         *       `/v1/models` on.
+         *     - `digest` mirrors `digests_enabled` — the exact bool `main.rs` computes
+         *       from `LlmConfig::digest_worker_config().is_some()` and
+         *       `router_with_digests` gates `/v1/digests/*` on.
+         *     - `embeddings` reports whether Reflection's own embed client resolved
+         *       (`ReflectState::embed_client`). Issue #130: `reflect_config()` now
+         *       needs chat alone and hands back `None` for the embed half when no
+         *       embed config is resolvable, so a chat-only Server still reports
+         *       `reflect: true` while `embeddings: false` — exactly the Server on
+         *       which `reflect.rs`'s tool loop quietly omits `similar_entries`.
+         */
+        HealthCapabilities: {
+            digest: boolean;
+            embeddings: boolean;
+            reflect: boolean;
+        };
         HealthResponse: {
+            capabilities?: null | components["schemas"]["HealthCapabilities"];
             /** Format: int32 */
             protocol_version: number;
             service: string;
@@ -646,7 +682,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description This address is a meologue Server speaking protocol_version */
+            /** @description This address is a meologue Server speaking protocol_version, with its Destination capabilities */
             200: {
                 headers: {
                     [name: string]: unknown;

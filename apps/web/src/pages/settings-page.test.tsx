@@ -70,11 +70,15 @@ function renderPage() {
   );
 }
 
-function healthResponse(protocolVersion: number) {
+function healthResponse(protocolVersion: number, capabilities?: unknown) {
   return {
     ok: true,
     status: 200,
-    json: async () => ({ service: "meologue-server", protocol_version: protocolVersion }),
+    json: async () => ({
+      service: "meologue-server",
+      protocol_version: protocolVersion,
+      ...(capabilities !== undefined ? { capabilities } : {}),
+    }),
   };
 }
 
@@ -271,6 +275,42 @@ describe("SettingsPage", () => {
       );
       expect(successToast).not.toHaveBeenCalled();
       expect(errorToast).not.toHaveBeenCalled();
+    });
+
+    // Issue #133: a bare "Reachable" was true and useless on a Server that
+    // answers its health check but has no model behind either feature —
+    // Settings now names the specific gap.
+    it("names the missing Digest model on an otherwise-reachable server", async () => {
+      useSettingsStore.setState({ serverUrl: "https://phone.example:41207" });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () =>
+          healthResponse(PROTOCOL_VERSION, { reflect: true, digest: false, embeddings: true }),
+        ),
+      );
+
+      renderPage();
+
+      const status = await screen.findByTestId("server-status");
+      expect(status).toHaveTextContent(/reachable/i);
+      expect(status).toHaveTextContent(/no digest model configured/i);
+      // Still a neutral, not an error, tone — a missing model is a
+      // configuration fact, not a failure, the same reasoning
+      // "not-configured" gets above.
+      expect(status).not.toHaveClass("text-destructive");
+    });
+
+    it("keeps the bare reachable message when the server omits capabilities entirely", async () => {
+      useSettingsStore.setState({ serverUrl: "https://phone.example:41207" });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => healthResponse(PROTOCOL_VERSION)),
+      );
+
+      renderPage();
+
+      const status = await screen.findByTestId("server-status");
+      expect(status).toHaveTextContent(/^Reachable — this server is up/i);
     });
 
     it("shows a toast reporting the result when Save is clicked", async () => {

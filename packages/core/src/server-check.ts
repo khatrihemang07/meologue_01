@@ -1,8 +1,17 @@
 import { PROTOCOL_VERSION } from "./protocol";
-import type { WireHealthResponse } from "./wire";
+import type { WireHealthCapabilities, WireHealthResponse } from "./wire";
+
+/**
+ * Which Server-backed Destinations (CONTEXT.md) this Server can actually
+ * serve — carried straight off the wire, not reshaped, since
+ * `WireHealthCapabilities` already names exactly the three booleans issue
+ * #133 needs (`server/src/health.rs`'s own doc comment covers what each
+ * one reads).
+ */
+export type ServerCapabilities = WireHealthCapabilities;
 
 export type ServerCheckResult =
-  | { ok: true; protocolVersion: number }
+  | { ok: true; protocolVersion: number; capabilities: ServerCapabilities | undefined }
   | { ok: false; reason: "not-configured" }
   | { ok: false; reason: "invalid-url" }
   | { ok: false; reason: "unreachable" }
@@ -81,7 +90,22 @@ export async function checkServer(
       return { ok: false, reason: "protocol-mismatch", serverVersion: body.protocol_version };
     }
 
-    return { ok: true, protocolVersion: body.protocol_version };
+    // Issue #133: an older Server's `HealthResponse` simply has no
+    // `capabilities` key at all — `body.capabilities` reads as `undefined`
+    // exactly the same way whether the key is missing or the wire sent a
+    // JSON `null` (`WireHealthResponse`'s generated type allows both). This
+    // must never be reinterpreted as a `protocol-mismatch` or any other
+    // failure: it is orthogonal to the check above, and a Server that
+    // predates this field keeps checking exactly as it always has, with an
+    // `undefined` capabilities the caller is required to treat as unknown
+    // rather than "unsupported" (`ServerCapabilities`'s callers — the
+    // capability cache in `apps/web/src/lib/settings.ts` — apply that
+    // "unknown means unlocked" rule, not this function).
+    return {
+      ok: true,
+      protocolVersion: body.protocol_version,
+      capabilities: body.capabilities ?? undefined,
+    };
   } catch {
     return { ok: false, reason: "unreachable" };
   } finally {

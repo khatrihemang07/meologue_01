@@ -1,4 +1,5 @@
 import type { Entry } from "@meologue/core";
+import { PROTOCOL_VERSION } from "@meologue/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Outlet, Route, Routes, useLocation } from "react-router";
@@ -173,6 +174,15 @@ function stubFetch(options: {
   return fetchMock;
 }
 
+/** `GET /v1/health`'s ordinary answer — what `refreshCapabilities`'s own re-probe (a banner's Retry) reads to decide the Server has come back. */
+function healthResponse() {
+  return {
+    ok: true,
+    status: 200,
+    json: async () => ({ service: "meologue-server", protocol_version: PROTOCOL_VERSION }),
+  };
+}
+
 function wireSession(overrides: Partial<Record<string, unknown>> = {}) {
   return {
     id: "session-1",
@@ -192,7 +202,17 @@ describe("ReflectionPage", () => {
     // successful ask (which now writes to it) can't make a later test's
     // bare `/reflect` mount silently resume into the wrong Session.
     sessionStorage.clear();
-    useSettingsStore.setState({ theme: "system", serverUrl: "" });
+    // `serverReachable`/`capabilities` (issue #133) reset here too — both
+    // are singleton store state a prior test's simulated network failure
+    // can leave behind, and `serverReachable: false` in particular would
+    // silently hide this page's own Question composer for every later
+    // test in this file, not just the one that caused it.
+    useSettingsStore.setState({
+      theme: "system",
+      serverUrl: "",
+      serverReachable: true,
+      capabilities: null,
+    });
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -642,7 +662,69 @@ describe("ReflectionPage", () => {
     expect(await screen.findByText(/doesn't support reflection yet/i)).toBeInTheDocument();
   });
 
-  it("shows an error toast on a network failure, starting no Session", async () => {
+  // Required by issue #133: "read yes, write no" — an unreachable Server
+  // drops the Question input but must not take Sessions away. The
+  // "Sessions" action in the app bar (`SessionsLink`, `reflect-actions.tsx`)
+  // is a plain route link unrelated to reachability, so it stays fully
+  // present and enabled here exactly as it does on a healthy Server.
+  it("shows the banner and no composer while unreachable, but still offers Sessions", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("network down");
+      }),
+    );
+
+    renderReflectionPage();
+    ask("Anything?");
+
+    expect(await screen.findByTestId("server-unreachable-banner")).toBeInTheDocument();
+    expect(
+      screen.queryByPlaceholderText("Ask a Question about your History"),
+    ).not.toBeInTheDocument();
+
+    const sessionsLink = screen.getByRole("link", { name: "Sessions" });
+    expect(sessionsLink).toHaveAttribute("href", "/reflect/list");
+  });
+
+  // "Read yes" for the Conversation already on screen, not only for the
+  // separate Sessions list: a Turn answered before the outage started must
+  // stay visible once the Server stops answering, not vanish alongside the
+  // composer.
+  it("keeps an already-answered Turn on screen once a later ask finds the Server unreachable", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    stubMintedSessionId("session-move");
+    const fetchMock = stubFetch({
+      reflect: () => ({
+        answer: "It went well.",
+        grounding_entry_ids: [],
+        session_id: "session-move",
+        title: "How did the flat move go?",
+      }),
+    });
+
+    renderReflectionPage();
+    ask("How did the flat move go?");
+    expect(await screen.findByText("It went well.")).toBeInTheDocument();
+
+    // The Server goes quiet for the next ask.
+    fetchMock.mockImplementation(async () => {
+      throw new Error("network down");
+    });
+    ask("Anything else?");
+
+    expect(await screen.findByTestId("server-unreachable-banner")).toBeInTheDocument();
+    expect(screen.getByText("It went well.")).toBeInTheDocument();
+  });
+
+  // Issue #133: a plain network failure while asking now flips
+  // `serverReachable` false (`server-request.ts`'s shared `serverRequest`,
+  // which `reflectTransport` funnels through) and shows the persistent
+  // `ServerUnreachableBanner` instead of the toast this used to fire —
+  // a toast fades on its own; this stays until the Server actually
+  // answers again.
+  it("shows the persistent unreachable banner, not a toast, on a network failure, and starts no Session", async () => {
     useSettingsStore.getState().setServerUrl("https://phone.example:41207");
     vi.stubGlobal(
       "fetch",
@@ -655,8 +737,9 @@ describe("ReflectionPage", () => {
     renderReflectionPage();
     ask("Anything?");
 
-    await waitFor(() => expect(errorToast).toHaveBeenCalled());
+    expect(await screen.findByTestId("server-unreachable-banner")).toBeInTheDocument();
     expect(screen.getByTestId("location-path")).toHaveTextContent("/reflect");
+    expect(errorToast).not.toHaveBeenCalled();
   });
 
   // Issue #131's own report: leaving Reflect mid-Question used to report
@@ -767,39 +850,73 @@ describe("ReflectionPage", () => {
   // written down anywhere else — so a failure must not swallow it. Found on
   // a real device: the chat backend was down, the Question disappeared, and
   // all that was left was a toast that faded.
-  it("puts a Question back in the composer when it fails, rather than losing it", async () => {
+  //
+  // Issue #133 changed where it reappears: while the Server stays
+  // unreachable there is no composer to put it back into at all (the
+  // banner replaces it, "write no") — the Question comes back once
+  // `ServerUnreachableBanner`'s Retry re-probes and the Server answers
+  // again, restoring the composer pre-filled with exactly what was typed,
+  // rather than the field having lost it in the meantime.
+  it("restores the Question into the composer once Retry finds the Server reachable again", async () => {
     useSettingsStore.getState().setServerUrl("https://phone.example:41207");
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => {
+      vi.fn(async (url: string) => {
+        if (url.endsWith("/v1/health")) {
+          return healthResponse();
+        }
         throw new Error("network down");
       }),
     );
-    vi.spyOn(toast, "error");
+    const errorToast = vi.spyOn(toast, "error");
 
     renderReflectionPage();
     ask("How did the flat move go?");
 
+    expect(await screen.findByTestId("server-unreachable-banner")).toBeInTheDocument();
+    expect(
+      screen.queryByPlaceholderText("Ask a Question about your History"),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
     await waitFor(() => expect(askQuestionField()).toHaveValue("How did the flat move go?"));
+    expect(screen.queryByTestId("server-unreachable-banner")).not.toBeInTheDocument();
+    expect(errorToast).not.toHaveBeenCalled();
   });
 
-  it("restores a Question that fails twice in a row", async () => {
+  // The restore is keyed on a changing signal, not on the text alone
+  // (`question-composer.tsx`'s own `restoreSignal` effect) — this proves
+  // that still holds once "restore" means "reappear after a Retry" rather
+  // than "stay put in an already-visible field": asking the identical text
+  // a second time, failing a second time, must still bring it back after a
+  // second Retry.
+  it("restores a Question again after it fails a second time in a row", async () => {
     useSettingsStore.getState().setServerUrl("https://phone.example:41207");
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => {
+      vi.fn(async (url: string) => {
+        if (url.endsWith("/v1/health")) {
+          return healthResponse();
+        }
         throw new Error("network down");
       }),
     );
-    vi.spyOn(toast, "error");
 
     renderReflectionPage();
     ask("Anything?");
+    await screen.findByTestId("server-unreachable-banner");
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(askQuestionField()).toHaveValue("Anything?"));
 
-    // Re-asking the identical text must restore it again — which is why the
-    // restore is keyed on a changing signal and not on the text.
+    // Re-asking the identical text fails again (the stub above still throws
+    // for every request other than /v1/health) — the banner must come back
+    // and, on a second Retry, so must the Question.
     fireEvent.click(askButton());
+    await screen.findByTestId("server-unreachable-banner");
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(askQuestionField()).toHaveValue("Anything?"));
   });
 

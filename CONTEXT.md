@@ -41,6 +41,12 @@ in place rather than producing a separate one.
 The user's action of capturing a new Entry: writing text and committing it to their History.
 Send is what the user does; the Entry is what results.
 
+### Destination
+
+One of the app's top-level views, reachable directly by its own URL and listed as a row on the
+root screen: Composer, Reflection, Digest, and Settings (ADR 0036). Settings is a Destination
+like the other three even though it configures the app rather than showing Entries.
+
 ### Composer
 
 The view where the user writes an Entry before Sending it, and where they read the ones they

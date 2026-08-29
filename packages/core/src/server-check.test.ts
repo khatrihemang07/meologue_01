@@ -79,6 +79,40 @@ describe("checkServer", () => {
     expect(result).toEqual({ ok: false, reason: "http-error", status: 503 });
   });
 
+  it("carries the server's capabilities through when it reports them", async () => {
+    const capabilities = { reflect: true, digest: false, embeddings: true };
+    const fetchMock = vi.fn(async () =>
+      jsonResponse(200, {
+        service: "meologue-server",
+        protocol_version: PROTOCOL_VERSION,
+        capabilities,
+      }),
+    );
+
+    const result = await checkServer("https://server.example", { fetch: fetchMock });
+
+    expect(result).toEqual({ ok: true, protocolVersion: PROTOCOL_VERSION, capabilities });
+  });
+
+  // Issue #133: a Server that predates the `capabilities` field must never
+  // be mistaken for one that fails the protocol check — omitting the field
+  // is unknown, not a mismatch, and the two checks (protocol_version vs.
+  // capabilities) must stay independent of one another.
+  it("reports capabilities as unknown, not a protocol mismatch, when the server omits the field", async () => {
+    const fetchMock = vi.fn(async () =>
+      jsonResponse(200, { service: "meologue-server", protocol_version: PROTOCOL_VERSION }),
+    );
+
+    const result = await checkServer("https://server.example", { fetch: fetchMock });
+
+    expect(result).toEqual({
+      ok: true,
+      protocolVersion: PROTOCOL_VERSION,
+      capabilities: undefined,
+    });
+    expect(result.ok && result.capabilities).toBeUndefined();
+  });
+
   it("reports protocol-mismatch with the server's version when it differs", async () => {
     const fetchMock = vi.fn(async () =>
       jsonResponse(200, { service: "meologue-server", protocol_version: PROTOCOL_VERSION + 1 }),

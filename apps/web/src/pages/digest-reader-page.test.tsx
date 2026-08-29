@@ -58,7 +58,14 @@ describe("DigestReaderPage", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     localStorage.clear();
-    useSettingsStore.setState({ serverUrl: "" });
+    // `serverReachable`/`capabilities` (issue #133) reset here too — see
+    // `digest-page.test.tsx`'s identical reset for why a prior test's
+    // simulated network failure must not leak into a later one.
+    useSettingsStore.setState({
+      serverUrl: "",
+      serverReachable: true,
+      capabilities: null,
+    });
   });
 
   it("with Sync off, says so, points at Settings, and makes no request at all", () => {
