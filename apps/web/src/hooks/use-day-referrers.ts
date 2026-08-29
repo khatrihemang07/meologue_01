@@ -1,5 +1,5 @@
 import type { Entry } from "@meologue/core";
-import { useQuery } from "@tanstack/react-query";
+import { useProbeQuery } from "@/hooks/use-probe-query";
 import { dayReferrersQueryKey } from "@/lib/query-keys";
 
 /**
@@ -39,18 +39,8 @@ export function useDayReferrers(
   probe: ((dayKey: string) => Promise<Entry[]>) | undefined,
   dayKey: string,
 ): Entry[] | undefined {
-  const query = useQuery({
-    queryKey: dayReferrersQueryKey(dayKey),
-    queryFn: () => {
-      if (probe === undefined) {
-        // Unreachable while `enabled` below is false — TanStack Query
-        // never invokes queryFn for a disabled query — but the type of
-        // `probe` still needs narrowing here for queryFn's own return type.
-        return Promise.resolve<Entry[]>([]);
-      }
-      return probe(dayKey);
-    },
-    enabled: probe !== undefined,
-  });
-  return query.data;
+  return useProbeQuery(probe, dayReferrersQueryKey(dayKey), dayKey, EMPTY);
 }
+
+/** A stable empty array, so a disabled query cannot churn referential identity. */
+const EMPTY: Entry[] = [];

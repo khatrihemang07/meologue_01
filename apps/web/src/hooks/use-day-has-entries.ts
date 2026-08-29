@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useProbeQuery } from "@/hooks/use-probe-query";
 import { dayHasEntriesQueryKey } from "@/lib/query-keys";
 
 /**
@@ -41,18 +41,5 @@ export function useDayHasEntries(
   probe: ((dayKey: string) => Promise<boolean>) | undefined,
   dayKey: string,
 ): boolean | undefined {
-  const query = useQuery({
-    queryKey: dayHasEntriesQueryKey(dayKey),
-    queryFn: () => {
-      if (probe === undefined) {
-        // Unreachable while `enabled` below is false — TanStack Query
-        // never invokes queryFn for a disabled query — but the type of
-        // `probe` still needs narrowing here for queryFn's own return type.
-        return Promise.resolve(false);
-      }
-      return probe(dayKey);
-    },
-    enabled: probe !== undefined,
-  });
-  return query.data;
+  return useProbeQuery(probe, dayHasEntriesQueryKey(dayKey), dayKey, false);
 }

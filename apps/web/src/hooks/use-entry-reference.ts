@@ -1,5 +1,5 @@
 import type { Entry } from "@meologue/core";
-import { useQuery } from "@tanstack/react-query";
+import { useProbeQuery } from "@/hooks/use-probe-query";
 import { entryReferenceQueryKey } from "@/lib/query-keys";
 
 /**
@@ -44,28 +44,10 @@ export function useEntryReference(
   probe: ((entryId: string) => Promise<Entry | undefined>) | undefined,
   entryId: string,
 ): Entry | undefined {
-  const query = useQuery({
-    queryKey: entryReferenceQueryKey(entryId),
-    // `null`, not `undefined`, is the "nothing found" sentinel a queryFn
-    // hands back here — TanStack Query v5 treats a queryFn that resolves to
-    // `undefined` as a bug and throws ("Bad usage detected") rather than
-    // caching it, precisely because `undefined` is its own signal for "no
-    // data yet." `probe`'s own contract (EntryStoreOutletContext.getEntry)
-    // is allowed to resolve to `undefined` for an unresolvable target, so
-    // that value is folded into `null` here rather than passed straight
-    // through, and folded back to `undefined` below — the shape this hook's
-    // own callers, and useDayHasEntries's sibling contract, already expect.
-    queryFn: async () => {
-      if (probe === undefined) {
-        // Unreachable while `enabled` below is false — TanStack Query
-        // never invokes queryFn for a disabled query — but the type of
-        // `probe` still needs narrowing here for queryFn's own return type.
-        return null;
-      }
-      const found = await probe(entryId);
-      return found ?? null;
-    },
-    enabled: probe !== undefined,
-  });
-  return query.data ?? undefined;
+  // Folded through `null` on the way out and back on the way in: this is the
+  // one probe whose honest answer is "nothing found", and TanStack Query v5
+  // refuses to cache a `queryFn` that resolves to `undefined` — see
+  // `useProbeQuery`'s own `whenUnavailable` comment.
+  const resolve = probe === undefined ? undefined : async (id: string) => (await probe(id)) ?? null;
+  return useProbeQuery(resolve, entryReferenceQueryKey(entryId), entryId, null) ?? undefined;
 }
