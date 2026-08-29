@@ -155,8 +155,8 @@ rather than rewriting the one before it, which stays exactly as it was. A reader
 newest revision, with a cue for whether the Server wrote it on its own or someone asked for it.
 "Last day" and "last week" mean the most recent Digest that exists, not the Period immediately
 before now: if there is a daily Digest for Monday and none for Tuesday, then on Wednesday the last
-daily Digest is still Monday's. A Digest is Grounded in the Entries it read, in the same sense an
-Answer is.
+daily Digest is still Monday's. A Digest is Grounded in exactly the Entries it was written from —
+normally every Entry in the Period, and observably fewer when part of a Period had to be left out.
 
 ### Period
 

@@ -21,6 +21,12 @@ finds writable Periods with the same resume rule, and still writes only a first-
 Nothing in that machinery is touched here except the one guarantee this ADR adds to it — it must
 never write a second revision.
 
+Extended by [0040](0040-a-digest-body-is-validated-once-and-chunked-when-it-must-be.md), which puts
+a single validated step in front of both the worker and the regenerate route this ADR adds, and
+lets that step split an oversized Period across several chat calls. Nothing here — the revision
+count, the staleness watermark, "the worker generates, it never regenerates," or reads taking the
+newest revision unconditionally — is superseded by it.
+
 ## Context
 
 Issue #132's report is two things wearing one shape. Edit an Entry from a day that already has a

@@ -4,8 +4,9 @@
 //! with `insert_digest`, the same "assert against the real Router, seed the
 //! database directly" shape `tests/sessions.rs` uses for its own handlers.
 
+use std::collections::VecDeque;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -52,6 +53,11 @@ fn unused_digest_state() -> DigestState {
     DigestState {
         chat_client: Arc::new(UnusedLlmClient),
         tz: Tz::UTC,
+        // Never exercises a chat call in this file (`UnusedLlmClient`
+        // panics if it ever did), so a chunking budget is moot here too —
+        // an arbitrary large window, matching `tests/health.rs`'s own
+        // unused fixture.
+        context_window: 200_000,
     }
 }
 
@@ -162,22 +168,45 @@ async fn insert_digest_with_source_seq(
 /// Every `digests` row at one `(period, period_start)`, newest revision
 /// first — what the "regenerate inserts a new revision, every earlier one
 /// stays" tests assert against directly, rather than only through what a
-/// single GET happens to surface.
+/// single GET happens to surface. `grounding_entry_ids` and `source_seq`
+/// (issue #137) are carried here too — `Digest`'s wire shape only ever
+/// exposes the *derived* `stale` bool, never the raw watermark, so a test
+/// that wants to assert directly on the watermark itself (`0` for a
+/// partial Digest, the true max `seq` for a complete one) has to read it
+/// straight off the row, the same way `tests/digest.rs`'s own `DigestRow`
+/// does for the worker side.
 #[derive(sqlx::FromRow, Debug, Clone)]
 struct DigestRow {
     revision: i32,
     body: String,
+    grounding_entry_ids: Vec<Uuid>,
+    source_seq: i64,
 }
 
 async fn digest_revisions(pool: &PgPool, period: Period, period_start: chrono::NaiveDate) -> Vec<DigestRow> {
     sqlx::query_as::<_, DigestRow>(
-        "select revision, body from digests where period = $1 and period_start = $2 order by revision asc",
+        "select revision, body, grounding_entry_ids, source_seq from digests \
+         where period = $1 and period_start = $2 order by revision asc",
     )
     .bind(period.as_str())
     .bind(period_start)
     .fetch_all(pool)
     .await
     .unwrap()
+}
+
+/// The true watermark for a set of Entries, read straight from `entries`
+/// rather than derived from anything `digest.rs` computed — issue #137's
+/// "a complete multi-chunk Digest keeps the true watermark" tests need an
+/// answer that doesn't depend on the code under test to be a meaningful
+/// check. `ids` is always non-empty in every caller here, so `max(seq)` is
+/// never `null`.
+async fn max_entries_seq(pool: &PgPool, ids: &[Uuid]) -> i64 {
+    sqlx::query_scalar::<_, i64>("select max(seq) from entries where id = any($1)")
+        .bind(ids)
+        .fetch_one(pool)
+        .await
+        .unwrap()
 }
 
 /// Inserts an Entry directly (this file never runs Sync either), returning
@@ -265,6 +294,128 @@ fn fake_digest_state(reply: &str) -> DigestState {
             reply: reply.to_string(),
         }),
         tz: Tz::UTC,
+        // Every entry seeded in this file is a short, single sentence, far
+        // under even a fraction of this window's budget — none of the
+        // tests using this fixture are exercising issue #136's chunking,
+        // so an arbitrary large window keeps them all single-chunk, byte-
+        // identical to how they behaved before chunking existed. The
+        // chunking case itself is exercised below with
+        // `scripted_digest_state` and a deliberately small window.
+        context_window: 200_000,
+    }
+}
+
+/// A chat client that succeeds with a distinct scripted reply for each
+/// call, in order, and records every call's messages — issue #136's
+/// multi-chunk regenerate test needs both: distinct replies per chunk (so
+/// the stored, concatenated body proves each chunk's own reply landed,
+/// rather than one reply repeated verbatim `N` times), and the recorded
+/// messages themselves (so the test can assert each chunk's user message
+/// names *that chunk's own* date span, not the whole Period's — the same
+/// assertion `tests/digest.rs`'s `is_digest_call`/`all_calls` machinery
+/// makes on the worker side).
+struct ScriptedChatClient {
+    replies: Mutex<VecDeque<String>>,
+    calls: Mutex<Vec<Vec<ChatMessage>>>,
+}
+
+impl ScriptedChatClient {
+    fn new(replies: Vec<&str>) -> Self {
+        Self {
+            replies: Mutex::new(replies.into_iter().map(str::to_string).collect()),
+            calls: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn all_calls(&self) -> Vec<Vec<ChatMessage>> {
+        self.calls.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl LlmClient for ScriptedChatClient {
+    async fn chat(&self, messages: &[ChatMessage]) -> Result<ChatReply> {
+        self.calls.lock().unwrap().push(messages.to_vec());
+        let reply = self
+            .replies
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("scripted reply queue exhausted — fewer replies scripted than chat calls made");
+        Ok(ChatReply::text(&reply))
+    }
+    async fn embed_document(&self, _text: &str) -> Result<Vec<f32>> {
+        unimplemented!("digest routes never embed anything")
+    }
+    async fn embed_query(&self, _text: &str) -> Result<Vec<f32>> {
+        unimplemented!("digest routes never embed anything")
+    }
+}
+
+fn scripted_digest_state(client: Arc<ScriptedChatClient>, context_window: u32) -> DigestState {
+    DigestState {
+        chat_client: client,
+        tz: Tz::UTC,
+        context_window,
+    }
+}
+
+/// A chat client that succeeds or fails per call, in order — issue #137's
+/// regenerate-path tests need this and neither existing fake covers it:
+/// `ScriptedChatClient` above always succeeds (it exists to prove distinct
+/// replies land in the right chunk, not to fail), and `fake_digest_state`'s
+/// `FakeChatClient` always does the same one thing on every call. Proving
+/// "one chunk of several fails, the rest succeed" — or "every chunk
+/// fails" — on the regenerate path needs a client whose calls can differ
+/// from each other. Modeled on `tests/digest.rs`'s own `FakeChatClient`,
+/// just scripted per-call rather than by a fixed rule, since these tests'
+/// chunk counts are small and known up front.
+struct FlakyScriptedChatClient {
+    outcomes: Mutex<VecDeque<Result<&'static str, &'static str>>>,
+    calls: Mutex<Vec<Vec<ChatMessage>>>,
+}
+
+impl FlakyScriptedChatClient {
+    fn new(outcomes: Vec<Result<&'static str, &'static str>>) -> Self {
+        Self {
+            outcomes: Mutex::new(outcomes.into_iter().collect()),
+            calls: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn calls(&self) -> usize {
+        self.calls.lock().unwrap().len()
+    }
+}
+
+#[async_trait]
+impl LlmClient for FlakyScriptedChatClient {
+    async fn chat(&self, messages: &[ChatMessage]) -> Result<ChatReply> {
+        self.calls.lock().unwrap().push(messages.to_vec());
+        let outcome = self
+            .outcomes
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("FlakyScriptedChatClient outcomes exhausted — fewer scripted than chat calls made");
+        match outcome {
+            Ok(reply) => Ok(ChatReply::text(reply)),
+            Err(message) => Err(anyhow::anyhow!(message)),
+        }
+    }
+    async fn embed_document(&self, _text: &str) -> Result<Vec<f32>> {
+        unimplemented!("digest routes never embed anything")
+    }
+    async fn embed_query(&self, _text: &str) -> Result<Vec<f32>> {
+        unimplemented!("digest routes never embed anything")
+    }
+}
+
+fn flaky_digest_state(client: Arc<FlakyScriptedChatClient>, context_window: u32) -> DigestState {
+    DigestState {
+        chat_client: client,
+        tz: Tz::UTC,
+        context_window,
     }
 }
 
@@ -747,4 +898,547 @@ async fn regenerate_rescues_a_period_that_never_got_a_digest(pool: PgPool) {
     let revisions = digest_revisions(&pool, Period::Day, period_start).await;
     assert_eq!(revisions.len(), 1);
     assert_eq!(revisions[0].revision, 1);
+}
+
+/// Issue #135: neither writer may store an unvalidated body, and the
+/// regenerate route's own version of that failure is the sharper one —
+/// `select_digest_at`/`select_latest_digest` always take the newest
+/// revision unconditionally (ADR 0039), so a blank revision that did get
+/// inserted would shadow a perfectly good earlier one, not merely fail to
+/// improve on it. Seeds a genuinely good revision 1, regenerates with a
+/// reply `digest::generate_digest_body` rejects, and checks all three
+/// consequences at once: the route answers 500, no revision 2 is minted,
+/// and a plain read afterwards still returns the good revision 1
+/// untouched — proving it was never shadowed.
+async fn assert_rejected_regenerate_reply_mints_no_revision_and_original_still_reads_back(
+    pool: PgPool,
+    rejected_reply: &'static str,
+) {
+    let period_start = date(2026, 8, 10);
+    let (from, _) = period::period_bounds(Period::Day, Tz::UTC, period_start);
+    let device = Uuid::new_v4();
+    let entry_id = Uuid::new_v4();
+    insert_entry_at(
+        &pool,
+        entry_id,
+        device,
+        "the entry a good revision was already written from",
+        from + chrono::Duration::hours(1),
+    )
+    .await;
+
+    insert_digest_with_source_seq(
+        &pool,
+        Period::Day,
+        period_start,
+        "A perfectly good revision, written before this regenerate call.",
+        &[entry_id],
+        0,
+    )
+    .await;
+
+    let (status, body) = regenerate(&pool, fake_digest_state(rejected_reply), "day", "2026-08-10").await;
+
+    assert_eq!(
+        status,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "a rejected reply {rejected_reply:?} must surface as an error, not a 200 carrying a blank digest"
+    );
+    assert_eq!(body, Value::Null, "an error response carries no digest payload");
+
+    let revisions = digest_revisions(&pool, Period::Day, period_start).await;
+    assert_eq!(
+        revisions.len(),
+        1,
+        "a rejected reply must mint no new revision"
+    );
+    assert_eq!(
+        revisions[0].body,
+        "A perfectly good revision, written before this regenerate call."
+    );
+
+    // The good revision is still the one a plain read returns — the exact
+    // "regenerate on a Digest that was merely stale can blank it" failure
+    // this ticket was filed against never gets the chance to happen.
+    let (status, body) = get_digest_at(&pool, true, "day", "2026-08-10").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["digest"]["revision"], 1);
+    assert_eq!(
+        body["digest"]["body"],
+        "A perfectly good revision, written before this regenerate call."
+    );
+}
+
+#[sqlx::test]
+async fn regenerating_with_an_empty_reply_mints_no_revision(pool: PgPool) {
+    assert_rejected_regenerate_reply_mints_no_revision_and_original_still_reads_back(pool, "").await;
+}
+
+#[sqlx::test]
+async fn regenerating_with_a_whitespace_only_reply_mints_no_revision(pool: PgPool) {
+    assert_rejected_regenerate_reply_mints_no_revision_and_original_still_reads_back(pool, "   \n\t  ")
+        .await;
+}
+
+#[sqlx::test]
+async fn regenerating_with_a_bare_code_fence_reply_mints_no_revision(pool: PgPool) {
+    assert_rejected_regenerate_reply_mints_no_revision_and_original_still_reads_back(pool, "```").await;
+}
+
+#[sqlx::test]
+async fn regenerating_with_a_fenced_reply_with_nothing_between_the_fences_mints_no_revision(
+    pool: PgPool,
+) {
+    assert_rejected_regenerate_reply_mints_no_revision_and_original_still_reads_back(pool, "```\n```")
+        .await;
+}
+
+/// The other shape of "mints no revision": a Period that never had a
+/// Digest at all — `regenerate_rescues_a_period_that_never_got_a_digest`'s
+/// own setup, but with a rejected reply instead of a good one. Distinct
+/// from the tests above (which all guard against *shadowing* an existing
+/// good revision): here there is nothing to shadow, so the only thing
+/// worth proving is that a rejected reply doesn't get to write revision 1
+/// either — `coalesce(max(revision), 0) + 1` would happily resolve to `1`
+/// for an empty body exactly as it does for a good one, if this ticket's
+/// validation step weren't in the way.
+#[sqlx::test]
+async fn regenerating_a_never_digested_period_with_an_empty_reply_mints_no_revision(pool: PgPool) {
+    let period_start = date(2026, 8, 10);
+    let (from, _) = period::period_bounds(Period::Day, Tz::UTC, period_start);
+    let device = Uuid::new_v4();
+    insert_entry_at(
+        &pool,
+        Uuid::new_v4(),
+        device,
+        "an entry from a period the worker never managed to digest",
+        from + chrono::Duration::hours(1),
+    )
+    .await;
+
+    let (status, body) = regenerate(&pool, fake_digest_state(""), "day", "2026-08-10").await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(body, Value::Null);
+
+    let revisions = digest_revisions(&pool, Period::Day, period_start).await;
+    assert!(
+        revisions.is_empty(),
+        "a rejected reply must not write revision 1 either, when nothing existed before it"
+    );
+
+    let (status, body) = get_digest_at(&pool, true, "day", "2026-08-10").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["digest"], Value::Null);
+}
+
+// ---------------------------------------------------------------------
+// Chunking (issue #136): a Period too large for one chat call is split
+// across several, on the regenerate path exactly as it is on the
+// worker's own tick. `tests/digest.rs` carries the packing-boundary
+// tests (never splitting an Entry, an oversized single Entry earning its
+// own chunk); this file's own job is proving the *route* — not just
+// `generate_digest_body` in isolation — actually chunks, since
+// `run_regenerate` is where `DigestState::context_window` (issue #136)
+// reaches this crate's only other caller of `generate_digest_body`.
+// ---------------------------------------------------------------------
+
+/// Renders exactly the shape `render_entry` (`digest.rs`) does —
+/// `[YYYY-MM-DD] body` — so `body`'s length can be chosen to land the
+/// rendered Entry at a known token count (chars/4) and force a chunking
+/// split under a deliberately small `context_window`, the same technique
+/// `tests/digest.rs`'s own chunking tests use.
+fn rendered_len(body: &str) -> usize {
+    format!("[2026-08-10] {body}").len()
+}
+
+/// The three-Entry, three-chunk Week fixture every test in this section
+/// needs — a Monday, a Wednesday and a Friday Entry, each costing ~100
+/// tokens under the `chars/4` estimate (comfortably under a 150-token
+/// budget alone, but two together, ~200 tokens, exceed it), so a
+/// `context_window` of 250 (`DIGEST_ENTRY_BUDGET_FRACTION`'s 0.60 gives a
+/// 150-token Entry budget) forces `chunk_entries` to split at every
+/// boundary here, into exactly three chunks, one Entry each — the same
+/// sizing `regenerating_a_too_large_period_splits_into_several_chat_calls`
+/// established, factored out because issue #137's partial-chunk tests
+/// below need the identical three-chunk shape to make one chunk fail
+/// without collapsing back to a single call.
+async fn seed_three_chunk_week(pool: &PgPool) -> (chrono::NaiveDate, Uuid, Uuid, Uuid) {
+    let week_start = date(2026, 8, 10); // a Monday
+    let (from, _) = period::period_bounds(Period::Week, Tz::UTC, week_start);
+    let device = Uuid::new_v4();
+
+    let padding = "x".repeat(400 - rendered_len(""));
+    let monday_id = Uuid::new_v4();
+    let wednesday_id = Uuid::new_v4();
+    let friday_id = Uuid::new_v4();
+    insert_entry_at(
+        pool,
+        monday_id,
+        device,
+        &format!("MONDAY-{padding}"),
+        from + chrono::Duration::hours(1),
+    )
+    .await;
+    insert_entry_at(
+        pool,
+        wednesday_id,
+        device,
+        &format!("WEDNESDAY-{padding}"),
+        from + chrono::Duration::days(2) + chrono::Duration::hours(1),
+    )
+    .await;
+    insert_entry_at(
+        pool,
+        friday_id,
+        device,
+        &format!("FRIDAY-{padding}"),
+        from + chrono::Duration::days(4) + chrono::Duration::hours(1),
+    )
+    .await;
+
+    (week_start, monday_id, wednesday_id, friday_id)
+}
+
+/// A Period whose three Entries each cost too much of a deliberately
+/// small `context_window`'s budget to share a chunk splits into three
+/// chat calls, and the regenerate route stores their replies concatenated
+/// with `"\n\n"` — the multi-chunk case working end to end through
+/// `POST .../regenerate`, not just through `generate_digest_body` on its
+/// own. Uses a Week Period specifically so each chunk's own date span
+/// (Monday alone, Wednesday alone, Friday alone) is visibly narrower than
+/// the whole week's `"2026-08-10 to 2026-08-16 (a week)"` — issue #101's
+/// lesson, applied to a chunk boundary rather than a single Entry's
+/// render: a call's own wrapper sentence must never claim a span wider
+/// than what that one call was actually handed.
+///
+/// Issue #137: also proves the *complete* multi-chunk case keeps today's
+/// true watermark and reports `stale = false` — every chunk here succeeds,
+/// so this is the control this section's partial-chunk tests below are
+/// measured against.
+#[sqlx::test]
+async fn regenerating_a_too_large_period_splits_into_several_chat_calls(pool: PgPool) {
+    let (week_start, monday_id, wednesday_id, friday_id) = seed_three_chunk_week(&pool).await;
+
+    // `context_window` of 250: `DIGEST_ENTRY_BUDGET_FRACTION` (0.60)
+    // gives a 150-token Entry budget, exactly the boundary the padding
+    // above was sized against.
+    let client = Arc::new(ScriptedChatClient::new(vec![
+        "Monday's reply.",
+        "Wednesday's reply.",
+        "Friday's reply.",
+    ]));
+    let digest = scripted_digest_state(client.clone(), 250);
+
+    let (status, body) = regenerate(&pool, digest, "week", "2026-08-10").await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["digest"]["body"],
+        "Monday's reply.\n\nWednesday's reply.\n\nFriday's reply.",
+        "the three chunk replies must be concatenated with a blank line, with no merge pass"
+    );
+
+    let mut returned_ids: Vec<String> = body["digest"]["grounding_entry_ids"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|id| id.as_str().unwrap().to_string())
+        .collect();
+    returned_ids.sort();
+    let mut expected_ids: Vec<String> = [monday_id, wednesday_id, friday_id]
+        .iter()
+        .map(|id| id.to_string())
+        .collect();
+    expected_ids.sort();
+    assert_eq!(
+        returned_ids, expected_ids,
+        "grounding must cover every Entry in the Period, regardless of which chunk read it"
+    );
+
+    // Issue #137: a *complete* multi-chunk Digest keeps today's watermark
+    // exactly as before — the true max `seq` over every Entry the Period
+    // holds, not the `0` a partial one would record — and so reports
+    // `stale = false`.
+    assert_eq!(
+        body["digest"]["stale"], false,
+        "a complete multi-chunk Digest must not be born stale"
+    );
+    let true_watermark = max_entries_seq(&pool, &[monday_id, wednesday_id, friday_id]).await;
+    let stored = digest_revisions(&pool, Period::Week, week_start).await;
+    assert_eq!(stored.len(), 1);
+    assert_eq!(
+        stored[0].source_seq, true_watermark,
+        "a complete Digest's watermark is the max seq over every Entry it read, unchanged by issue #137"
+    );
+    let mut stored_ids: Vec<String> = stored[0]
+        .grounding_entry_ids
+        .iter()
+        .map(|id| id.to_string())
+        .collect();
+    stored_ids.sort();
+    assert_eq!(
+        stored_ids, expected_ids,
+        "the row actually stored, not just the API response, must ground every Entry in a complete Digest"
+    );
+
+    let calls = client.all_calls();
+    assert_eq!(calls.len(), 3, "one chat call per chunk");
+
+    // Each call's own user message names only that chunk's single day —
+    // never the whole week's "2026-08-10 to 2026-08-16 (a week)" span,
+    // and never a day it wasn't given.
+    let user_content = |call: &[ChatMessage]| {
+        call.iter()
+            .find(|m| m.role == "user")
+            .expect("every digest call carries a user message")
+            .content
+            .clone()
+    };
+    let contents: Vec<String> = calls.iter().map(|c| user_content(c)).collect();
+
+    assert!(contents[0].starts_with("Here is everything the user wrote from 2026-08-10:"));
+    assert!(contents[0].contains("MONDAY-"));
+    assert!(!contents[0].contains("WEDNESDAY-") && !contents[0].contains("FRIDAY-"));
+
+    assert!(contents[1].starts_with("Here is everything the user wrote from 2026-08-12:"));
+    assert!(contents[1].contains("WEDNESDAY-"));
+    assert!(!contents[1].contains("MONDAY-") && !contents[1].contains("FRIDAY-"));
+
+    assert!(contents[2].starts_with("Here is everything the user wrote from 2026-08-14:"));
+    assert!(contents[2].contains("FRIDAY-"));
+    assert!(!contents[2].contains("MONDAY-") && !contents[2].contains("WEDNESDAY-"));
+
+    for content in &contents {
+        assert!(
+            !content.contains("to 2026-08-16") && !content.contains("(a week)"),
+            "a chunk's own message must never claim the whole Period's span: {content}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------
+// Graceful degradation (issue #137): a chunk that fails is skipped, not
+// fatal — the surviving chunks still produce a Digest, `grounding_entry_ids`
+// discloses exactly which Entries made it in, and `source_seq = 0` marks
+// the revision stale on arrival, end to end through `POST .../regenerate`
+// and back out through a plain GET. `tests/digest.rs` proves the same
+// mechanics on the worker's own tick; this file's job is proving the
+// *route* behaves identically, since `run_regenerate` is
+// `generate_digest_body`'s only other caller.
+// ---------------------------------------------------------------------
+
+/// The acceptance criterion at the heart of this ticket: one bad chunk out
+/// of three costs only its own Entry. The Wednesday chunk's chat call
+/// fails; Monday's and Friday's both succeed. The route still answers 200
+/// with a Digest — never a 500, unlike every "reply rejected" test above,
+/// because here *not every* chunk failed — whose body is exactly the two
+/// surviving replies joined by `"\n\n"`, whose `grounding_entry_ids` holds
+/// Monday and Friday but never Wednesday, and whose `source_seq` is `0`
+/// rather than the true watermark those two Entries alone would imply
+/// (`generate_digest_body`'s own doc comment: the `0` is deliberate, not
+/// merely "whatever's cheapest to compute"). `stale` on the very next read
+/// is the proof this disclosure actually reaches a reader: with a `0`
+/// watermark, `select_is_stale`'s `seq > source_seq` is true for every
+/// Entry in the Period — Monday and Friday included — so this Digest
+/// reports itself stale immediately, with nothing having "moved" in the
+/// ordinary sense at all.
+#[sqlx::test]
+async fn a_bad_chunk_of_three_is_skipped_and_the_surviving_two_still_produce_a_digest(
+    pool: PgPool,
+) {
+    let (week_start, monday_id, wednesday_id, friday_id) = seed_three_chunk_week(&pool).await;
+
+    let client = Arc::new(FlakyScriptedChatClient::new(vec![
+        Ok("Monday's reply."),
+        Err("the Wednesday chat call failed"),
+        Ok("Friday's reply."),
+    ]));
+    let digest = flaky_digest_state(client.clone(), 250);
+
+    let (status, body) = regenerate(&pool, digest, "week", "2026-08-10").await;
+
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "one bad chunk out of three must still produce a Digest, not a 500"
+    );
+    assert_eq!(
+        body["digest"]["body"],
+        "Monday's reply.\n\nFriday's reply.",
+        "the stored body must be exactly the two surviving chunks, joined, with no trace of the failed one"
+    );
+
+    let mut returned_ids: Vec<String> = body["digest"]["grounding_entry_ids"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|id| id.as_str().unwrap().to_string())
+        .collect();
+    returned_ids.sort();
+    let mut expected_ids: Vec<String> = [monday_id, friday_id].iter().map(|id| id.to_string()).collect();
+    expected_ids.sort();
+    assert_eq!(
+        returned_ids, expected_ids,
+        "grounding must hold only the surviving chunks' Entries — Wednesday's must be absent, not merely unmentioned"
+    );
+    assert!(
+        !body["digest"]["grounding_entry_ids"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|id| id.as_str() == Some(&wednesday_id.to_string())),
+        "the skipped chunk's Entry must never appear in grounding"
+    );
+
+    assert_eq!(client.calls(), 3, "every chunk must still get its own attempt, regardless of where the bad one fell");
+
+    // `source_seq` is the literal `0`, not the true max over Monday and
+    // Friday alone — a partial Digest is stale by construction, on every
+    // Entry in the Period, not only the ones its own body happens to cover.
+    let stored = digest_revisions(&pool, Period::Week, week_start).await;
+    assert_eq!(stored.len(), 1, "a partial Digest is still exactly one written revision");
+    assert_eq!(
+        stored[0].source_seq, 0,
+        "a Digest that skipped any chunk must record source_seq = 0"
+    );
+
+    // The whole point of that `0`: a plain read afterwards reports this
+    // exact revision as stale, which is what prompts a reader to press
+    // Regenerate again — the only way this Period could ever improve.
+    let (status, reread) = get_digest_at(&pool, true, "week", "2026-08-10").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        reread["digest"]["stale"], true,
+        "a partial Digest must report stale on the very next read — the disclosure mechanism this ticket exists to prove end to end"
+    );
+    assert_eq!(reread["digest"]["body"], "Monday's reply.\n\nFriday's reply.");
+}
+
+/// The other half of issue #137's failure semantics, unchanged from issue
+/// #135: when *every* chunk fails, there is nothing to disclose partially
+/// — the whole Period gets no Digest at all, and the regenerate route
+/// errors exactly as it already does for a single rejected reply. Distinct
+/// from the "one bad chunk" test above in the one respect that matters:
+/// here `bodies` ends up empty, so `generate_digest_body` still returns
+/// `Err`, `run_regenerate`'s `?` still propagates it, and `regenerate_insert`
+/// is still never reached.
+#[sqlx::test]
+async fn every_chunk_failing_on_regenerate_mints_no_revision(pool: PgPool) {
+    let (week_start, ..) = seed_three_chunk_week(&pool).await;
+
+    let client = Arc::new(FlakyScriptedChatClient::new(vec![
+        Err("Monday failed"),
+        Err("Wednesday failed"),
+        Err("Friday failed"),
+    ]));
+    let digest = flaky_digest_state(client.clone(), 250);
+
+    let (status, body) = regenerate(&pool, digest, "week", "2026-08-10").await;
+
+    assert_eq!(
+        status,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "every chunk failing must surface as an error, not a 200 carrying an empty digest"
+    );
+    assert_eq!(body, Value::Null);
+    assert_eq!(
+        client.calls(),
+        3,
+        "every chunk must still get its own attempt before the Period is given up on"
+    );
+
+    let revisions = digest_revisions(&pool, Period::Week, week_start).await;
+    assert!(
+        revisions.is_empty(),
+        "no revision may be minted when every chunk of a Period failed"
+    );
+
+    let (status, body) = get_digest_at(&pool, true, "week", "2026-08-10").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["digest"], Value::Null);
+}
+
+/// Issue #137's accepted risk, proven rather than merely documented: a
+/// partial revision minted by regenerate can shadow a complete one that
+/// came before it, because reads always take the newest revision
+/// unconditionally (ADR 0039). Seeds a genuinely complete revision 1 (the
+/// true watermark, not `0` — this Digest is not stale before anything
+/// happens), regenerates with one chunk failing, and checks all three
+/// consequences at once: the partial revision 2 is what gets returned and
+/// stored, revision 1 is untouched underneath it, and a plain read
+/// afterwards surfaces revision 2 as the newest — stale — rather than
+/// falling back to the still-good revision 1. Nothing here refuses the
+/// downgrade; the stale marker is the only mitigation, exactly as
+/// `run_regenerate`'s own doc comment records.
+#[sqlx::test]
+async fn a_partial_regenerate_shadows_an_existing_complete_revision_and_reads_back_stale(
+    pool: PgPool,
+) {
+    let (week_start, monday_id, wednesday_id, friday_id) = seed_three_chunk_week(&pool).await;
+    let true_watermark = max_entries_seq(&pool, &[monday_id, wednesday_id, friday_id]).await;
+
+    insert_digest_with_source_seq(
+        &pool,
+        Period::Week,
+        week_start,
+        "A complete, worker-written revision one.",
+        &[monday_id, wednesday_id, friday_id],
+        true_watermark,
+    )
+    .await;
+
+    let (_, before) = get_digest_at(&pool, true, "week", "2026-08-10").await;
+    assert_eq!(
+        before["digest"]["stale"], false,
+        "revision one must not be stale before anything regenerates over it"
+    );
+
+    let client = Arc::new(FlakyScriptedChatClient::new(vec![
+        Ok("Monday's second reply."),
+        Err("the Wednesday chat call failed again"),
+        Ok("Friday's second reply."),
+    ]));
+    let digest = flaky_digest_state(client.clone(), 250);
+
+    let (status, body) = regenerate(&pool, digest, "week", "2026-08-10").await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["digest"]["revision"], 2);
+    assert_eq!(
+        body["digest"]["body"],
+        "Monday's second reply.\n\nFriday's second reply."
+    );
+    assert_eq!(
+        body["digest"]["stale"], true,
+        "the newly minted partial revision must be born stale"
+    );
+
+    let revisions = digest_revisions(&pool, Period::Week, week_start).await;
+    assert_eq!(
+        revisions.len(),
+        2,
+        "regenerating must insert a new revision, never overwrite the complete one underneath it"
+    );
+    assert_eq!(revisions[0].revision, 1);
+    assert_eq!(revisions[0].body, "A complete, worker-written revision one.");
+    assert_eq!(revisions[0].source_seq, true_watermark, "revision one's own watermark is untouched");
+    assert_eq!(revisions[1].revision, 2);
+    assert_eq!(revisions[1].source_seq, 0);
+
+    // The accepted risk itself: a plain read afterwards returns the newest
+    // revision unconditionally — the partial, stale revision 2 — not the
+    // complete revision 1 still sitting underneath it. There is no
+    // "refuse to downgrade" guard anywhere in this path.
+    let (status, reread) = get_digest_at(&pool, true, "week", "2026-08-10").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(reread["digest"]["revision"], 2);
+    assert_eq!(
+        reread["digest"]["body"],
+        "Monday's second reply.\n\nFriday's second reply."
+    );
+    assert_eq!(
+        reread["digest"]["stale"], true,
+        "the shadowed complete revision's own good watermark is irrelevant once a newer, partial revision exists"
+    );
 }
