@@ -105,25 +105,40 @@ async fn main() -> anyhow::Result<()> {
     // retrieves by date range, not by vector search), so it's gated on its
     // own, looser check — see `LlmConfig::digest_worker_config`.
     //
-    // Bound to a variable (rather than matched inline) so `digests_enabled`
-    // survives past the `Some(chat_client)` move below — issue #70's
-    // `/v1/digests/*` routes are gated on the same config as the worker
-    // itself, via `router_with_digests`, since there is nothing for those
-    // routes to serve on a Server whose worker never runs.
+    // `digest_tz` is read once here, not separately inside the worker and
+    // again per HTTP request — the same "one process-wide value" discipline
+    // ADR 0027 already requires (`period::server_timezone`'s own doc
+    // comment): every Period this process ever computes, whether from the
+    // worker's own tick or a reader's Regenerate press (issue #132), has to
+    // agree on the same calendar boundaries.
+    //
+    // `digest_state` (issue #132 / ADR 0039) is what
+    // `router_with_digests` uses to decide whether `/v1/digests/*` exists
+    // at all *and* what `regenerate_digest_handler` spends its own inline
+    // chat call on — a bare `digests_enabled` bool used to be threaded
+    // through here on its own; now the `Option<DigestState>` itself is the
+    // one thing both decisions read, so they can't drift apart. Built from
+    // a clone of `chat_client` so the worker below and the Router each get
+    // their own `Arc` to the same underlying client.
+    let digest_tz = period::server_timezone();
     let digest_worker_config = llm_config.digest_worker_config();
-    let digests_enabled = digest_worker_config.is_some();
+    let digest_state = digest_worker_config
+        .clone()
+        .map(|chat_client| digest::DigestState { chat_client, tz: digest_tz });
     if let Some(chat_client) = digest_worker_config {
         tokio::spawn(digest::run(
             pool.clone(),
             chat_client,
-            period::server_timezone(),
+            digest_tz,
             digest::SCAN_INTERVAL,
         ));
     }
 
-    // An unset chat base URL/model (or an unresolvable embed config —
-    // Reflection needs both, see `LlmConfig::reflect_config`) means
-    // `/v1/reflect` is never registered at all — ticket 4.
+    // An unset chat base URL/model means `/v1/reflect` is never registered
+    // at all — ticket 4. Issue #130: an unresolvable embed config no longer
+    // takes Reflection down with it — `reflect_config` hands back `None`
+    // for the embed client alone, and the loop below simply omits the one
+    // tool (`similar_entries`) that needs it; see `LlmConfig::reflect_config`.
     let reflect = match llm_config.reflect_config() {
         Some((chat_client, embed_client)) => {
             // Issue #97: resolved once, at startup, rather than per
@@ -174,7 +189,7 @@ async fn main() -> anyhow::Result<()> {
 
     let static_dir = env::var("STATIC_DIR").unwrap_or_else(|_| DEFAULT_STATIC_DIR.to_string());
     let app =
-        meologue_server::router_with_digests(pool, static_dir, embed_tx, reflect, digests_enabled);
+        meologue_server::router_with_digests(pool, static_dir, embed_tx, reflect, digest_state);
 
     let port: u16 = env::var("PORT")
         .ok()

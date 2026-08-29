@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Outlet, Route, Routes, useLocation } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useSettingsStore } from "@/lib/settings";
@@ -52,6 +52,10 @@ type DigestFixture = {
   grounding_entry_ids: string[];
   prev_date: string | null;
   next_date: string | null;
+  // Issue #132 / ADR 0039.
+  stale: boolean;
+  revision: number;
+  written_at: string;
 };
 
 function digestFixture(overrides: Partial<DigestFixture> & { period: string }): DigestFixture {
@@ -62,6 +66,9 @@ function digestFixture(overrides: Partial<DigestFixture> & { period: string }): 
     grounding_entry_ids: ["entry-1"],
     prev_date: null,
     next_date: null,
+    stale: false,
+    revision: 1,
+    written_at: "2026-08-21T06:00:00Z",
     ...overrides,
   };
 }
@@ -104,7 +111,16 @@ describe("DigestPage", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     localStorage.clear();
-    useSettingsStore.setState({ serverUrl: "" });
+    // `serverReachable`/`capabilities` (issue #133) reset here too — both
+    // are singleton store state a prior test's simulated network failure
+    // can leave behind, and `serverReachable: false` in particular would
+    // pause every later test's own Digest queries before they ever fired.
+    useSettingsStore.setState({
+      serverUrl: "",
+      serverReachable: true,
+      capabilities: null,
+      hiddenDestinations: new Set(),
+    });
   });
 
   it("with Sync off, says so, points at Settings, and makes no request at all", () => {
@@ -119,6 +135,22 @@ describe("DigestPage", () => {
       "/settings",
     );
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  // Issue #134: hiding a Destination from the chat list is list curation,
+  // not access control — `/digest` itself carries no guard, so it renders
+  // exactly as it would if this reader had never hidden the row. Reusing
+  // the Sync-off scenario above rather than a fresh one: it needs no fetch
+  // mocking of its own, so this stays a test of "does the route render at
+  // all," not a repeat of any other Digest test's own assertions.
+  it("still renders at its own URL even after being hidden from the chat list", () => {
+    useSettingsStore.setState({ hiddenDestinations: new Set(["digest"]) });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderDigestPage();
+
+    expect(screen.getByText(/Sync is off/)).toBeInTheDocument();
   });
 
   it("renders all three cards with their label, date range, and a clamped two-line teaser", async () => {
@@ -252,6 +284,47 @@ describe("DigestPage", () => {
     ).toBeInTheDocument();
   });
 
+  // Issue #133: "existing Digests still readable" — a Period that already
+  // loaded successfully must stay on screen next to the banner rather than
+  // the whole page collapsing to one error message the moment any one of
+  // the three requests fails.
+  it("keeps an already-loaded Digest visible next to the unreachable banner", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    stubDigestFetch({
+      day: {
+        status: 200,
+        digest: digestFixture({
+          period: "day",
+          period_start: "2026-08-20",
+          period_end: "2026-08-20",
+        }),
+      },
+      week: "network-error",
+      month: { status: 200, digest: null },
+    });
+
+    renderDigestPage();
+
+    expect(
+      await screen.findByText("Couldn't load your Digests. Check your Server and try again."),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Last day/ })).toBeInTheDocument();
+  });
+
+  it("offers a Retry on the unreachable banner", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    stubDigestFetch({
+      day: "network-error",
+      week: { status: 200, digest: null },
+      month: { status: 200, digest: null },
+    });
+
+    renderDigestPage();
+
+    const banner = await screen.findByTestId("server-unreachable-banner");
+    expect(within(banner).getByRole("button", { name: "Retry" })).toBeInTheDocument();
+  });
+
   it("reads as working and waiting, not broken, for a Period with no Digest yet — worded per Period", async () => {
     useSettingsStore.getState().setServerUrl("https://phone.example:41207");
     stubDigestFetch({
@@ -296,5 +369,50 @@ describe("DigestPage", () => {
     await waitFor(() => {
       expect(screen.getByTestId("location-path")).toHaveTextContent("/digest/day/2026-08-20");
     });
+  });
+
+  // Issue #132 / ADR 0039.
+  it("shows a neutral stale marker on a stale card, and none on a fresh one — no Regenerate button either way", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    stubDigestFetch({
+      day: {
+        status: 200,
+        digest: digestFixture({
+          period: "day",
+          period_start: "2026-08-20",
+          period_end: "2026-08-20",
+          stale: true,
+        }),
+      },
+      week: {
+        status: 200,
+        digest: digestFixture({
+          period: "week",
+          period_start: "2026-08-17",
+          period_end: "2026-08-23",
+          stale: false,
+        }),
+      },
+      month: { status: 200, digest: null },
+    });
+
+    renderDigestPage();
+
+    expect(
+      await screen.findByText("Entries for this day changed after this Digest was written."),
+    ).toBeInTheDocument();
+    // The week card fetched successfully and is not stale — no marker for
+    // it, and the month noun never appears at all since that card never
+    // resolved a Digest.
+    expect(
+      screen.queryByText("Entries for this week changed after this Digest was written."),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/Entries for this month changed after this Digest was written\./),
+    ).not.toBeInTheDocument();
+
+    // Cards never get a Regenerate action — only the reader does (issue
+    // #132: "a card is 'the latest of this Period,' not a specific date").
+    expect(screen.queryByRole("button", { name: "Regenerate" })).not.toBeInTheDocument();
   });
 });

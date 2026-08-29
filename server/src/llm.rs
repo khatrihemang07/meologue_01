@@ -488,6 +488,16 @@ pub struct LlmConfig {
     pub embed_api_key: Option<String>,
 }
 
+/// `LlmConfig::reflect_config`'s return type, named rather than inlined as
+/// a bare tuple — clippy's `type_complexity` lint aside, spelling it out
+/// once here is what lets the doc comment on `reflect_config` itself stay
+/// about *why* the embed half is optional (issue #130) rather than about
+/// untangling the type.
+type ReflectClients = (
+    Arc<dyn LlmClient + Send + Sync>,
+    Option<Arc<dyn LlmClient + Send + Sync>>,
+);
+
 impl LlmConfig {
     pub fn from_env() -> Self {
         fn var(name: &str) -> Option<String> {
@@ -517,22 +527,28 @@ impl LlmConfig {
         Some((Arc::new(client), model))
     }
 
-    /// Builds the two clients ticket 4's `/v1/reflect` route needs — a chat
-    /// client to turn Grounding plus a Question into an Answer, and an embed
-    /// client to turn the Question itself into a vector for retrieval — or
-    /// `None` if the route must not exist at all.
+    /// Builds what ticket 4's `/v1/reflect` route needs — a chat client to
+    /// turn Grounding plus a Question into an Answer, always, and an embed
+    /// client to turn the Question itself into a vector for retrieval, only
+    /// when one is configured — or `None` for the whole thing if the route
+    /// must not exist at all.
     ///
-    /// This is deliberately stricter than "chat is configured": Reflection
-    /// cannot retrieve anything without an embed client either (there is no
-    /// way to call `embed_query` without one), so requiring both is what
-    /// makes "the route exists" and "the route can actually answer" the same
-    /// fact, rather than a route that exists but 500s on every call in a
-    /// chat-only-configured deployment. In the documented setup (this
-    /// project's README) both are always configured together, so this is a
-    /// belt-and-suspenders guard for a split configuration than the primary
-    /// on/off switch, which — per ADR 0021 — is `MEOLOGUE_CHAT_BASE_URL`/
-    /// `MEOLOGUE_CHAT_MODEL`.
-    pub fn reflect_config(&self) -> Option<(Arc<dyn LlmClient + Send + Sync>, Arc<dyn LlmClient + Send + Sync>)> {
+    /// Gated on chat alone, per issue #130: under ADR 0023's fixed
+    /// three-source fan-out, Reflection genuinely could not retrieve
+    /// anything without an embed client (there was no way to call
+    /// `embed_query` without one), so requiring both used to be the only
+    /// way to keep "the route exists" and "the route can actually answer"
+    /// the same fact. ADR 0031 replaced that fan-out with a loop over four
+    /// tools, and only one of them — `similar_entries` — is embedding-
+    /// backed; `entries_in_range`, `search_entries` and `read_digest` all
+    /// answer without embeddings. So ADR 0023's premise for the stricter
+    /// gate is superseded, and this now matches `digest_worker_config`
+    /// below: unset chat config means the feature is off, per ADR 0021,
+    /// full stop. When the embed client comes back `None`, `reflect.rs`
+    /// simply omits `similar_entries` from the tool set it offers the
+    /// model for that request — see `ReflectState::embed_client` and the
+    /// tool-set construction in `run_reflect_stream_inner`.
+    pub fn reflect_config(&self) -> Option<ReflectClients> {
         let chat_base_url = self.chat_base_url.clone()?;
         let chat_model = self.chat_model.clone()?;
         let chat_client: Arc<dyn LlmClient + Send + Sync> = Arc::new(OpenAiCompatibleClient::new(
@@ -541,7 +557,7 @@ impl LlmConfig {
             self.chat_api_key.clone(),
         ));
 
-        let (embed_client, _model_name) = self.embed_worker_config()?;
+        let embed_client = self.embed_worker_config().map(|(client, _model_name)| client);
 
         Some((chat_client, embed_client))
     }
@@ -588,15 +604,16 @@ impl LlmConfig {
     /// needs, or `None` if the worker must not start. Gated on
     /// `MEOLOGUE_CHAT_BASE_URL`/`MEOLOGUE_CHAT_MODEL` alone — per ADR 0021,
     /// unset chat config means the feature is off, mirroring
-    /// `embed_worker_config` and `reflect_config` above.
+    /// `embed_worker_config` and, since issue #130, `reflect_config` above.
     ///
-    /// Deliberately looser than `reflect_config`, which also requires an
-    /// embed client: Reflection retrieves Grounding by vector similarity,
-    /// so it cannot function without something to turn a Question into a
-    /// vector. A Digest retrieves its Entries by date range
-    /// (`period::period_bounds`) instead, so it has no embedding
-    /// dependency at all — requiring one here would gate the worker on a
-    /// config knob it never reads.
+    /// A Digest retrieves its Entries by date range (`period::period_bounds`)
+    /// rather than by vector similarity, so it has no embedding dependency
+    /// at all — requiring one here would gate the worker on a config knob
+    /// it never reads. This was once also the contrast with `reflect_config`,
+    /// back when Reflection's fixed ADR 0023 fan-out genuinely needed
+    /// embeddings to retrieve anything; ADR 0031's tool loop ended that, so
+    /// the two functions are gated identically now — see `reflect_config`'s
+    /// own doc comment.
     pub fn digest_worker_config(&self) -> Option<Arc<dyn LlmClient + Send + Sync>> {
         let chat_base_url = self.chat_base_url.clone()?;
         let chat_model = self.chat_model.clone()?;
@@ -799,10 +816,80 @@ fn parse_usage(usage: Option<&Value>) -> Option<Usage> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ModelInfo, Usage, end_with_sentence_punctuation, parse_context_window,
+        LlmConfig, ModelInfo, Usage, end_with_sentence_punctuation, parse_context_window,
         parse_models_list, parse_usage,
     };
     use serde_json::json;
+
+    // -- reflect_config (issue #130) -----------------------------------------
+    //
+    // Built as struct literals rather than through `LlmConfig::from_env`
+    // deliberately: `from_env` reads real process environment variables,
+    // which are global, mutable state that `cargo test`'s parallel test
+    // threads would race over. Every field here is `pub`, so a literal is
+    // just as direct a way to express "chat configured, embed not" (or vice
+    // versa) without touching the process environment at all.
+
+    fn configured(chat_base_url: Option<&str>, embed_model: Option<&str>) -> LlmConfig {
+        LlmConfig {
+            chat_base_url: chat_base_url.map(str::to_string),
+            chat_model: chat_base_url.map(|_| "codex-terra".to_string()),
+            chat_api_key: None,
+            embed_base_url: None,
+            embed_model: embed_model.map(str::to_string),
+            embed_api_key: None,
+        }
+    }
+
+    #[test]
+    fn reflect_config_returns_a_none_embed_client_when_only_chat_is_configured() {
+        // Issue #130's own acceptance criterion: a chat-only configuration
+        // (no `MEOLOGUE_EMBED_MODEL`) must still make `reflect_config`
+        // return `Some` — Reflection is on — with `embed_client` itself
+        // `None`, not an error and not a client pointed at nothing.
+        let config = configured(Some("http://127.0.0.1:1"), None);
+        let (_, embed_client) = config
+            .reflect_config()
+            .expect("chat alone must be enough for reflect_config to return Some");
+        assert!(embed_client.is_none());
+    }
+
+    #[test]
+    fn reflect_config_returns_a_some_embed_client_when_both_are_configured() {
+        // The configuration this project's README documents as the normal
+        // case — unchanged by issue #130, proved here the same direct way.
+        let config = configured(Some("http://127.0.0.1:1"), Some("embed-model"));
+        let (_, embed_client) = config
+            .reflect_config()
+            .expect("chat and embed both configured must return Some");
+        assert!(embed_client.is_some());
+    }
+
+    #[test]
+    fn reflect_config_is_none_when_chat_is_unconfigured_even_with_an_embed_model() {
+        // Chat, not embed, is the on/off switch (ADR 0021) — an embed
+        // model alone can never turn Reflection on.
+        let config = configured(None, Some("embed-model"));
+        assert!(config.reflect_config().is_none());
+    }
+
+    #[test]
+    fn reflect_config_is_none_when_chat_model_alone_is_unset() {
+        // `configured`'s own base URL/model pairing can't express "URL set,
+        // model not" — this is the other half of ADR 0021's "unset chat
+        // config" that `configured(None, _)` above doesn't reach:
+        // `MEOLOGUE_CHAT_BASE_URL` present but `MEOLOGUE_CHAT_MODEL` absent
+        // must still mean off, not a client built with an empty model id.
+        let config = LlmConfig {
+            chat_base_url: Some("http://127.0.0.1:1".to_string()),
+            chat_model: None,
+            chat_api_key: None,
+            embed_base_url: None,
+            embed_model: None,
+            embed_api_key: None,
+        };
+        assert!(config.reflect_config().is_none());
+    }
 
     #[test]
     fn a_question_without_punctuation_gains_a_question_mark() {

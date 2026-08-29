@@ -1,16 +1,41 @@
-import { CalendarDays, Lightbulb, Settings as SettingsIcon, SquarePen } from "lucide-react";
+import { CalendarDays, Lightbulb, Lock, Settings as SettingsIcon, SquarePen } from "lucide-react";
 import { NavLink } from "react-router";
+import {
+  type HideableDestinationId,
+  useCapabilities,
+  useHiddenDestinations,
+  useSyncEnabled,
+} from "@/lib/settings";
 import { cn } from "@/lib/utils";
 
 /**
  * The four rows the root screen is made of (ADR 0036). The same four
  * destinations ADR 0018 first bounded to Material 3's three-to-five and
- * every ADR since has kept — the membership does not change here, only the
- * shape they are shown in.
+ * every ADR since has kept — the membership of `DESTINATIONS` itself does
+ * not change here, only the shape they are shown in. Issue #134 lets a
+ * reader hide Composer, Reflect or Digest from the *rendered* list without
+ * touching this array — see `useDestinations()` below for where that
+ * filter actually happens.
  *
  * `end` on Composer alone: every other route is a prefix of deeper routes
  * (`/reflect/list`, `/digest/:period/:date`) that should still mark their
  * own row as current, while `/composer` has no children to match.
+ *
+ * `requiresSync` marks the Destinations that have nothing to show without
+ * a Server. Only Reflection and Digest do: both are written by the Server
+ * and neither exists locally. **Composer is deliberately not one of them.**
+ * meologue is a local-first log (CONTEXT.md's own opening line) — an Entry
+ * is captured, searched, edited and Exported on the Device whether or not
+ * Sync is on, so `composer-page.tsx` keeps its thread and its input fully
+ * working with an unset Server URL and shows only a Sync-off note beside
+ * them. Locking that row would claim the one Destination that always works
+ * is unavailable, and since an unset Server URL is the *default* (ADR 0011)
+ * it would greet every fresh install with four locked rows.
+ *
+ * `capability` names which key of `ServerCapabilities` (`@meologue/core`)
+ * a Destination reads to decide it's locked, once Sync is on. Settings has
+ * neither flag: it configures the Server itself and must never lock (issue
+ * #133 — it is the only way out of every other locked row).
  */
 const DESTINATIONS = [
   {
@@ -19,6 +44,8 @@ const DESTINATIONS = [
     Icon: SquarePen,
     end: true,
     summary: "Everything you have written, newest last",
+    requiresSync: false,
+    capability: undefined,
   },
   {
     to: "/reflect",
@@ -26,6 +53,8 @@ const DESTINATIONS = [
     Icon: Lightbulb,
     end: false,
     summary: "Ask a Question of your own History",
+    requiresSync: true,
+    capability: "reflect",
   },
   {
     to: "/digest",
@@ -33,6 +62,8 @@ const DESTINATIONS = [
     Icon: CalendarDays,
     end: false,
     summary: "What the Server wrote about a stretch of time",
+    requiresSync: true,
+    capability: "digest",
   },
   {
     to: "/settings",
@@ -40,8 +71,69 @@ const DESTINATIONS = [
     Icon: SettingsIcon,
     end: false,
     summary: "Theme, Server URL, Export",
+    requiresSync: false,
+    capability: undefined,
   },
 ] as const;
+
+/**
+ * `DESTINATIONS` plus each row's current lock state (issue #133) — the
+ * prefactor the ticket asks for, so #134's own filter has a derivation to
+ * extend rather than a second one to invent beside it.
+ *
+ * A row locks when:
+ * - Sync itself is off (`useSyncEnabled` — no Server URL, ADR 0011), for
+ *   every Destination that `requiresSync` (Composer included: it works
+ *   fully offline, but the row still signals that Sync is off, the same
+ *   fact `composer-page.tsx`'s own "Sync is off" line already tells a
+ *   reader who opens it); or
+ * - Sync is on, but the cached capability report (`useCapabilities`) says
+ *   the Server has no model behind this Destination's feature.
+ *
+ * Deliberately reads only the settings store — no Entry-store read, no
+ * network call — both hooks above are synchronous selectors over state
+ * that was already resolved before this component ever rendered
+ * (`settings.ts`'s own doc comments cover where each one is populated).
+ * That's what keeps this list rendering beside `/settings` on a bad Server
+ * URL (ADR 0008/0009) and what keeps a fresh cold launch — capabilities
+ * still `null` — drawing every row unlocked rather than guessing "locked"
+ * for a Server nothing has been learned about yet.
+ *
+ * After locking, issue #134's `hiddenDestinations` (`useHiddenDestinations`,
+ * `settings.ts`) removes a row from the returned array outright rather than
+ * marking it. Hiding is list curation, not access control — the row's own
+ * route in `App.tsx` carries no guard and is unaffected — so there is
+ * nothing here for a hidden-but-still-locked Destination to show: it is
+ * simply absent, never a locked row that's also somehow hidden. Settings is
+ * filtered out of that check unconditionally (`destination.to === "/settings"`
+ * below), independent of what `hiddenDestinations` actually contains —
+ * `settings-page.tsx` never offers a control for it, but this is the second,
+ * load-bearing guarantee: even a hand-edited `localStorage` value naming
+ * "settings" cannot make the one recovery route (ADR 0008/0009) disappear.
+ */
+function useDestinations() {
+  const syncEnabled = useSyncEnabled();
+  const capabilities = useCapabilities();
+  const hiddenDestinations = useHiddenDestinations();
+
+  return DESTINATIONS.map((destination) => {
+    const capabilityMissing =
+      destination.capability !== undefined &&
+      capabilities !== null &&
+      capabilities[destination.capability] === false;
+    const locked = destination.requiresSync && (!syncEnabled || capabilityMissing);
+    return { ...destination, locked };
+  }).filter((destination) => {
+    if (destination.to === "/settings") {
+      return true;
+    }
+    // Every other `to` in `DESTINATIONS` is one of the three literal
+    // hideable routes, so the slug this slice produces is always a real
+    // `HideableDestinationId` — the cast repeats what `DESTINATIONS`'s own
+    // `as const` already guarantees rather than asserting something new.
+    return !hiddenDestinations.has(destination.to.slice(1) as HideableDestinationId);
+  });
+}
 
 /**
  * The root screen's list of destinations.
@@ -63,25 +155,43 @@ const DESTINATIONS = [
  * Sessions list and the Digest query, and this pane deliberately reads none
  * of them: it renders beside `/settings`, which ADR 0008/0009 require to
  * keep working when the store never opens at all.
+ *
+ * A locked row (issue #133) stays a full, real link — opening it lands on
+ * the Destination's own screen, which already explains the gap in its own
+ * words (the "Sync is off" or "this Server doesn't support …" prose every
+ * page here already carries). Locking only mutes the row and adds a lock
+ * glyph; it never turns red — CONTEXT.md's Sync status entry is explicit
+ * that Sync being off "reads as a neutral state, not an error," and the
+ * same posture applies to a configured-but-featureless Server.
  */
 export function ChatList() {
+  const destinations = useDestinations();
+
   return (
     <nav aria-label="Chats" className="flex flex-col">
-      {DESTINATIONS.map(({ to, label, Icon, end, summary }) => (
+      {destinations.map(({ to, label, Icon, end, summary, locked }) => (
         <NavLink
           key={to}
           to={to}
           end={end}
+          data-locked={locked ? "true" : undefined}
           className={({ isActive }) =>
             cn(
               "flex items-center gap-3 pl-4 text-left transition-colors hover:bg-muted",
               isActive && "bg-muted",
+              // Muted, never red/destructive — a locked row is a neutral
+              // fact about the current Server, not a failure of this
+              // Device's own (see this component's own doc comment).
+              locked && "text-muted-foreground",
             )
           }
         >
           <span
             aria-hidden="true"
-            className="flex size-11 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground"
+            className={cn(
+              "flex size-11 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground",
+              locked && "opacity-60",
+            )}
           >
             <Icon className="size-5" />
           </span>
@@ -100,7 +210,12 @@ export function ChatList() {
             rather than raising `--border`, which every input, card and pill
             in the app also reads.
           */}
-          <span className="flex min-w-0 flex-1 flex-col gap-0.5 border-[var(--separator)] border-b py-3 pr-4 last:border-b-0">
+          <span
+            className={cn(
+              "flex min-w-0 flex-1 flex-col gap-0.5 border-[var(--separator)] border-b py-3 pr-4 last:border-b-0",
+              locked && "opacity-70",
+            )}
+          >
             <span className="truncate font-medium text-foreground text-sm">{label}</span>
             {/*
               Every row's summary truncates the same way, including
@@ -109,6 +224,16 @@ export function ChatList() {
             */}
             <span className="truncate text-muted-foreground text-sm">{summary}</span>
           </span>
+          {locked && (
+            // Sibling of the text column above, not nested inside it — a
+            // trailing glyph rather than a second line of copy, so opening
+            // the row for the explanation stays the only way to learn more
+            // (this component intentionally carries no new prose of its
+            // own; see the Destination pages listed in this file's own
+            // module doc comment for where that explanation actually
+            // lives).
+            <Lock aria-hidden="true" className="mr-4 size-4 shrink-0 text-muted-foreground" />
+          )}
         </NavLink>
       ))}
     </nav>

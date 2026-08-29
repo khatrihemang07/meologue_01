@@ -1,6 +1,11 @@
 import type { components } from "./generated/wire";
 
 export type WireHealthResponse = components["schemas"]["HealthResponse"];
+// Issue #133: which Server-backed Destinations this Server can actually
+// serve, computed from the same `LlmConfig` that gates route registration
+// (`server/src/health.rs`'s own doc comment). Optional on the wire — an
+// older Server's `HealthResponse` simply omits it.
+export type WireHealthCapabilities = components["schemas"]["HealthCapabilities"];
 export type WireSyncRequest = components["schemas"]["SyncRequest"];
 export type WireSyncResponse = components["schemas"]["SyncResponse"];
 export type WireEntryInput = components["schemas"]["EntryInput"];

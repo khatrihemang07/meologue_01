@@ -87,16 +87,63 @@
         }
       }
     },
+    "/v1/digests/{period}/{date}/regenerate": {
+      "post": {
+        "tags": [
+          "crate::digest"
+        ],
+        "operationId": "regenerate_digest_handler",
+        "parameters": [
+          {
+            "name": "period",
+            "in": "path",
+            "description": "\"day\", \"week\", or \"month\"",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "date",
+            "in": "path",
+            "description": "The Digest's `period_start`, as YYYY-MM-DD",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The Digest at this exact date, now holding the newly written revision (or `{\"digest\": null}` if the Period held no Entries to write from)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DigestResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`period` is unrecognised, or `date` is not a valid YYYY-MM-DD date"
+          },
+          "500": {
+            "description": "the chat call, or the insert, failed"
+          }
+        }
+      }
+    },
     "/v1/health": {
       "get": {
         "tags": [
           "crate::health"
         ],
-        "summary": "Answers whether an address is actually a meologue Server, and which\nprotocol it speaks — without touching the database, so a Server whose\nPostgres is down still identifies itself. Unlike `/v1/sync`, this never\nrejects on protocol version: its whole job is letting the caller compare\nversions themselves. See ADR 0010.",
+        "summary": "Answers whether an address is actually a meologue Server, which protocol\nit speaks, and — since issue #133 — which Server-backed features it can\nactually serve, all without touching the database, so a Server whose\nPostgres is down still identifies itself. Unlike `/v1/sync`, this never\nrejects on protocol version: its whole job is letting the caller compare\nversions themselves. See ADR 0010.",
+        "description": "Reads `Option<ReflectState>` and `DigestsEnabled` off `AppState` (via\ntheir own `FromRef` impls in `lib.rs`) rather than the whole `AppState`\n— the same one-extractor-per-need shape `sync::sync_handler` and\n`reflect::reflect_handler` already use, and precisely what keeps this\nhandler from ever touching `PgPool` and staying DB-free.",
         "operationId": "health_handler",
         "responses": {
           "200": {
-            "description": "This address is a meologue Server speaking protocol_version",
+            "description": "This address is a meologue Server speaking protocol_version, with its Destination capabilities",
             "content": {
               "application/json": {
                 "schema": {
@@ -137,7 +184,7 @@
           "crate::reflect"
         ],
         "summary": "Issue #96: `/v1/reflect` answers over `text/event-stream` now, not a\nsingle JSON body — pi's own event vocabulary (`step_start`,\n`tool_execution_start`, `tool_execution_end`, `message_start`,\n`message_update`, `message_end`, `agent_end`), emitted as\n`harness::agent_loop::run_with_events` actually makes progress, so the\nclient can render \"searching ... -> N Entries\" while it happens instead\nof a single \"searching\" spinner for however long the whole Question\ntakes. `utoipa` has no first-class way to describe a stream of\ndifferently-shaped named SSE frames as one response `body`, so this is\ndocumented as `text/event-stream` with no schema — `openapi.rs` still\nregisters every event payload's own Rust type (`MessageEndEventData`,\n`ToolExecutionStartEventData`, `ToolExecutionEndEventData`,\n`ReflectAgentEndEventData`) under `components.schemas` so a client\ngenerating types from `packages/core/src/generated/wire.ts` still gets\nthem, even though nothing here can point utoipa at \"frame N of this\nstream has this shape.\"",
-        "description": "The three status codes that predate this ticket keep meaning exactly\nwhat they did — 404 (Reflection unconfigured, or a `session_id` naming\nno Session) and 426 (a stale `protocol_version`) are still real HTTP\nstatuses, not folded into the event stream, because both are decided\n*before* this handler commits to a 200 and starts streaming (see\n`resolve_session`, called synchronously below): once the stream opens,\nthe status line has already gone out, so nothing after that point can\nchange it. A failure *inside* the streamed run — the chat endpoint\nerroring, the loop never producing an Answer — cannot become a 500 for\nthe same reason; it ends the stream instead, via an `agent_end` event\ncarrying `\"status\": \"error\"` (`run_reflect_stream`) rather than hanging\nor dropping the connection silently.",
+        "description": "The two status codes that predate this ticket keep meaning exactly what\nthey did — 404 (Reflection unconfigured — see this handler's defensive\n`reflect.is_none()` fallback just below; not, as of issue #131, a\n`session_id` naming no Session, which `resolve_session` now creates\nrather than rejects) and 426 (a stale `protocol_version`) are still real\nHTTP statuses, not folded into the event stream, because both are\ndecided *before* this handler commits to a 200 and starts streaming\n(see `resolve_session`, called synchronously below): once the stream\nopens, the status line has already gone out, so nothing after that\npoint can change it. A failure *inside* the streamed run — the chat\nendpoint erroring, the loop never producing an Answer — cannot become a\n500 for the same reason; it ends the stream instead, via an `agent_end`\nevent carrying `\"status\": \"error\"` (`run_reflect_stream`) rather than\nhanging or dropping the connection silently.",
         "operationId": "reflect_handler",
         "requestBody": {
           "content": {
@@ -161,7 +208,7 @@
             }
           },
           "404": {
-            "description": "Reflection is unconfigured, or session_id names a Session that does not exist"
+            "description": "Reflection is unconfigured on this Server"
           },
           "426": {
             "description": "protocol_version is not one this server understands"
@@ -308,7 +355,10 @@
           "period_start",
           "period_end",
           "body",
-          "grounding_entry_ids"
+          "grounding_entry_ids",
+          "stale",
+          "revision",
+          "written_at"
         ],
         "properties": {
           "body": {
@@ -348,6 +398,20 @@
             ],
             "format": "date",
             "description": "The `period_start` of the previous Digest of this same Period that\nactually exists, skipping any completed-but-undigested gap — `None`\nmeans this is the oldest Digest of this Period the Server holds."
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Which revision this is — 1 for the background worker's own,\nfirst-generation write; 2 and up for each successive\n`POST /v1/digests/{period}/{date}/regenerate`. There is no revision\npicker (issue #132): a client only ever sees the newest, and this\nfield plus `written_at` below is the provenance cue that\ndistinguishes \"the Server wrote this by itself\" (`revision == 1`)\nfrom \"you asked for this\" (`revision > 1`)."
+          },
+          "stale": {
+            "type": "boolean",
+            "description": "Whether some Entry in this Period has moved (been added, edited, or\ndeleted) since this exact revision was written — issue #132 / ADR\n0039. Computed fresh on every read (`select_is_stale`), never\nstored: staleness is a fact about the *current* relationship\nbetween this revision's `source_seq` and `entries`, not something\nthat could go stale itself. A neutral fact, not an error — CONTEXT.md's\nSync status entry sets the same tone for \"off is not a failure.\""
+          },
+          "written_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "This exact revision's own `created_at` — when *this* revision was\nwritten, not when the Period itself started or ended\n(`period_start`/`period_end` above already cover that). A reader\nrenders \"Written {date}\" for `revision == 1` or \"Regenerated {date}\"\notherwise, from this field."
           }
         }
       },
@@ -460,6 +524,26 @@
           }
         }
       },
+      "HealthCapabilities": {
+        "type": "object",
+        "description": "Which Server-backed features this Server can actually serve right now,\nderived from the same configuration `main.rs` already used to decide\nwhether `/v1/reflect`, `/v1/digests/*` and the embedding worker exist at\nall (issue #133). Reported alongside `HealthResponse` rather than left\nfor a Device to infer from probing each route in turn: a Device that only\nasked \"does `/v1/reflect` 404\" would still show a working-looking\nReflect row on a Server that has the route but no model behind it, since\n`router_with_digests` only ever gates *registration*, not per-request\nconfiguration checks.\n\n- `reflect` mirrors `reflect.is_some()` — the exact condition\n  `router_with_digests` gates `/v1/reflect`, `/v1/sessions*` and\n  `/v1/models` on.\n- `digest` mirrors `digests_enabled` — the exact bool `main.rs` computes\n  from `LlmConfig::digest_worker_config().is_some()` and\n  `router_with_digests` gates `/v1/digests/*` on.\n- `embeddings` reports whether Reflection's own embed client resolved\n  (`ReflectState::embed_client`). Issue #130: `reflect_config()` now\n  needs chat alone and hands back `None` for the embed half when no\n  embed config is resolvable, so a chat-only Server still reports\n  `reflect: true` while `embeddings: false` — exactly the Server on\n  which `reflect.rs`'s tool loop quietly omits `similar_entries`.",
+        "required": [
+          "reflect",
+          "digest",
+          "embeddings"
+        ],
+        "properties": {
+          "digest": {
+            "type": "boolean"
+          },
+          "embeddings": {
+            "type": "boolean"
+          },
+          "reflect": {
+            "type": "boolean"
+          }
+        }
+      },
       "HealthResponse": {
         "type": "object",
         "required": [
@@ -467,6 +551,17 @@
           "protocol_version"
         ],
         "properties": {
+          "capabilities": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/HealthCapabilities",
+                "description": "`Option`, not a bare `HealthCapabilities`, so the field is optional\non the wire (utoipa marks an `Option` field `required: false` in the\ngenerated schema, which `openapi-typescript` turns into\n`capabilities?: ...` for `packages/core`). This Server always\npopulates it — the `None` case exists only so an older Server that\npredates this field keeps producing a `HealthResponse` a current\nDevice can still parse, reading the missing field as \"unknown\"\nrather than a schema mismatch (`server-check.ts`)."
+              }
+            ]
+          },
           "protocol_version": {
             "type": "integer",
             "format": "int32"
@@ -542,7 +637,7 @@
               "null"
             ],
             "format": "uuid",
-            "description": "The Session this Question belongs to, or `None` to start a new one\n— a null id on an ask *is* the create (`docs/adr/0025`); there is no\nseparate create endpoint. `resolve_session` loads that Session's\nprior Turns (`sessions::load_turns`) to read this Question \"in the\nlight of the Conversation before it\" (CONTEXT.md's own phrase for\nwhat a Conversation is) — the server holds that Conversation now, so\nthis replaces what used to round-trip on every request as\n`prior_turns`. A `Some` naming a Session that doesn't exist is a 404,\nnot a silently-ignored value."
+            "description": "The Session this Question belongs to, or `None` to start a new one\nunder a Server-chosen id — a null id on an ask *is* the create\n(`docs/adr/0025`); there is no separate create endpoint.\n`resolve_session` loads that Session's prior Turns\n(`sessions::load_turns`) to read this Question \"in the light of the\nConversation before it\" (CONTEXT.md's own phrase for what a\nConversation is) — the server holds that Conversation now, so this\nreplaces what used to round-trip on every request as `prior_turns`.\n\nIssue #131, ADR 0038: a `Some` naming a Session that doesn't exist is\nno longer a 404 — it creates that Session under the supplied id\ninstead, the same upsert shape `sync.rs`'s own Entry push already\nuses (the Device mints an id, the Server upserts on it). This is\nwhat lets the Device — `apps/web/src/pages/reflection-page.tsx`'s\n`handleAsk` — mint a fresh Session's id itself and know it before\nthis request is even sent, rather than learning it only from a\nsuccessful response."
           },
           "utc_offset_minutes": {
             "type": "integer",

@@ -10,7 +10,10 @@ import { checkServerUrl, type ServerCheckResult } from "@/lib/server-check";
 import {
   ACCENTS,
   type AccentId,
+  HIDEABLE_DESTINATIONS,
+  type HideableDestinationId,
   normaliseServerUrl,
+  refreshCapabilities,
   TEXT_SIZES,
   type TextSizeId,
   type Theme,
@@ -91,14 +94,83 @@ function ChoiceRow({ columns, children }: { columns: 3 | 5; children: React.Reac
   );
 }
 
+/**
+ * One Destination's own on/off row in the "Chat list" section (issue #134).
+ *
+ * Not a `ChoiceRow` (above): that control is a fixed-width group of
+ * mutually exclusive options — exactly one Theme, one Text size — and its
+ * own doc comment is explicit that `aria-pressed` toggles are standing in
+ * for a radio group. A visibility switch is a different shape entirely:
+ * three *independent* on/off facts, not one choice among several, so this
+ * is a real `role="switch"` with `aria-checked` rather than a fourth
+ * `aria-pressed` button pretending to be part of a choice it isn't.
+ *
+ * `size="touch"` on the switch itself, not just the row it sits in — ADR
+ * 0036's 44px minimum is a property of the interactive element a thumb has
+ * to land on, and this button already carries the `Button` component's
+ * `touch` size for exactly that reason (button.tsx's own comment on why
+ * Settings controls default away from the pointer-sized `h-8`).
+ */
+function DestinationVisibilityRow({
+  label,
+  hidden,
+  onToggle,
+}: {
+  label: string;
+  hidden: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <span className="text-sm">{label}</span>
+      <Button
+        type="button"
+        size="touch"
+        variant={hidden ? "outline" : "default"}
+        role="switch"
+        aria-checked={!hidden}
+        aria-label={`${label} in the chat list`}
+        onClick={onToggle}
+      >
+        {hidden ? "Hidden" : "Visible"}
+      </Button>
+    </div>
+  );
+}
+
 // Distinct, actionable copy per outcome (ticket 30). A failed `fetch` in a
 // browser is opaque — DNS failure, connection refused, TLS failure, CORS
 // rejection and OS cleartext blocking are all indistinguishable from
 // JavaScript — so "unreachable" is deliberately the one honest catch-all
 // rather than several confident guesses.
+//
+// Issue #133: a bare "Reachable" was true and useless on a Server that
+// answers its health check but can serve neither Destination — this names
+// the specific gap instead, straight off the same `capabilities` object
+// `useDestinations()` (`chat-list.tsx`) locks rows against, so Settings and
+// the chat list can never disagree about what a Server can do. `undefined`
+// (an older Server, or one this check hasn't learned the answer from yet)
+// still reads as a plain "Reachable" — Settings has no missing-model gap to
+// name when it doesn't know one exists, the same "unknown means unlocked"
+// posture the chat list takes.
 function describeServerCheck(result: ServerCheckResult): string {
   if (result.ok) {
-    return "Reachable — this server is up and speaking the protocol this app expects.";
+    const capabilities = result.capabilities;
+    if (capabilities === undefined) {
+      return "Reachable — this server is up and speaking the protocol this app expects.";
+    }
+    const missing: string[] = [];
+    if (!capabilities.reflect) missing.push("Reflect");
+    if (!capabilities.digest) missing.push("Digest");
+    if (missing.length === 0) {
+      return "Reachable — this server is up and speaking the protocol this app expects.";
+    }
+    // "no Digest model configured" for one gap; "no Reflect or Digest model
+    // configured" for both — `capabilities.embeddings` never gates a
+    // Destination row on its own (see `useDestinations()`), so it's left
+    // out of this sentence even though the Server reports it.
+    const gap = missing.map((name) => `${name} model`).join(" or ");
+    return `Reachable — but this server has no ${gap} configured.`;
   }
   switch (result.reason) {
     case "not-configured":
@@ -123,10 +195,12 @@ export function SettingsPage() {
   const accent = useSettingsStore((state) => state.accent);
   const textSize = useSettingsStore((state) => state.textSize);
   const storedServerUrl = useSettingsStore((state) => state.serverUrl);
+  const hiddenDestinations = useSettingsStore((state) => state.hiddenDestinations);
   const setStoredTheme = useSettingsStore((state) => state.setTheme);
   const setStoredAccent = useSettingsStore((state) => state.setAccent);
   const setStoredTextSize = useSettingsStore((state) => state.setTextSize);
   const setStoredServerUrl = useSettingsStore((state) => state.setServerUrl);
+  const setStoredHiddenDestinations = useSettingsStore((state) => state.setHiddenDestinations);
   const syncStatus = useSyncStatus();
 
   // Settings is a sibling route outside EntryStoreLayout (ADR 0008/0009), so
@@ -182,6 +256,20 @@ export function SettingsPage() {
     setStoredAccent(next);
   }
 
+  // No `apply*` step to run first, unlike theme/accent/text size — hiding a
+  // Destination has nothing to paint immediately on *this* screen; the only
+  // visible effect is the next time `chat-list.tsx` renders, which happens
+  // wherever this reader navigates to next.
+  function toggleDestinationHidden(id: HideableDestinationId) {
+    const next = new Set(hiddenDestinations);
+    if (next.has(id)) {
+      next.delete(id);
+    } else {
+      next.add(id);
+    }
+    setStoredHiddenDestinations(next);
+  }
+
   function selectTextSize(next: TextSizeId) {
     applyTextSize(next);
     setStoredTextSize(next);
@@ -195,6 +283,14 @@ export function SettingsPage() {
     // blank the field the user just filled in.
     const normalised = normaliseServerUrl(serverUrl);
     setServerUrl(normalised);
+
+    // Issue #133: refreshes the capability cache `chat-list.tsx` reads —
+    // fire-and-forget, exactly like the boot-time call in `main.tsx`. This
+    // page's own `status`/`describeServerCheck` line below is a separate,
+    // synchronous-feeling one-off probe against the same URL, awaited for
+    // its own testid-bearing message; that await is unrelated to this call,
+    // which nothing here renders against.
+    refreshCapabilities();
 
     const result = await checkServerUrl(normalised);
     setCheck({ url: normalised, result });
@@ -335,6 +431,36 @@ export function SettingsPage() {
             </Button>
           ))}
         </ChoiceRow>
+      </SettingsSection>
+
+      {/*
+        Issue #134. Composer, Reflect and Digest only — Settings is never
+        offered a control here, because ADR 0008/0009 make it the recovery
+        route when the Entry store won't open or the Server URL is wrong,
+        and a control that could hide the way out of every other problem
+        this page fixes would defeat the point of it. `HIDEABLE_DESTINATIONS`
+        (settings.ts) is the whole list this maps over, so there is no
+        fourth row to accidentally add one to.
+
+        This toggle reaches no Server and starts no request — it is a
+        `localStorage` write, full stop. In particular it cannot stop a
+        Digest being generated: the Digest worker runs on the Server's own
+        schedule from Server configuration and takes no input from any
+        Device (issue #134's own text). There is deliberately nothing here
+        that calls the Server to try.
+      */}
+      <SettingsSection
+        label="Chat list"
+        hint="Hides the row only — the Destination itself keeps working. A hidden Composer, Reflect or Digest still opens at its own address, its Entries still appear in Reflection's Grounding, are still summarised into Digests, are still included in an Export, and still Sync to every other Device."
+      >
+        {HIDEABLE_DESTINATIONS.map((destination) => (
+          <DestinationVisibilityRow
+            key={destination.id}
+            label={destination.label}
+            hidden={hiddenDestinations.has(destination.id)}
+            onToggle={() => toggleDestinationHidden(destination.id)}
+          />
+        ))}
       </SettingsSection>
 
       <SettingsSection label="Server URL">

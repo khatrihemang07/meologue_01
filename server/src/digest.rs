@@ -19,6 +19,19 @@
 //! `sessions.rs` gives for holding both `reflect.rs`'s persistence helpers
 //! and its own handlers.
 //!
+//! Issue #132 / ADR 0039 amends the "nothing asks for a Digest, ever" line
+//! above: a Digest can now also be asked for, through
+//! `POST /v1/digests/{period}/{date}/regenerate` — a synchronous, one-off
+//! request, never a second worker loop. That doesn't undo the sentence
+//! this module comment led with — the background worker above still never
+//! reacts to a request, still writes only a first, never-since-touched
+//! revision — it adds a second, deliberately different way a Digest gets
+//! written, alongside it rather than instead of it. `digests` gains a
+//! `revision` (`0009_digests_gain_revisions.sql`) so regenerating INSERTs
+//! rather than rewrites: ADR 0027's immutability clause is exactly as true
+//! after this as before it, and what's superseded is narrower — only "at
+//! most one Digest per Period."
+//!
 //! Issue #95 gives the harness a second reader: `harness::tools::read_digest`
 //! calls `select_digest_at` directly rather than going over HTTP to its own
 //! Server, so `DigestRecord` and `select_digest_at` are `pub(crate)` — the
@@ -88,11 +101,62 @@ pub const MAX_ATTEMPTS: u8 = 5;
 /// One Entry read out of a Period's window, in the shape `build_messages`
 /// needs to render it and `write_digest_for` needs to record its id as
 /// Grounding.
+///
+/// `seq` (issue #132 / ADR 0039) is read alongside `id`/`body`/`created_at`
+/// for exactly one reason: once a Digest's chat call succeeds,
+/// `write_digest_for` and `run_regenerate` both need the highest `seq`
+/// among the Entries just read, to record as `source_seq` — the staleness
+/// watermark. Reusing this same struct (rather than a second, narrower one)
+/// keeps "what an Entry looks like when a Digest reads it" answered in one
+/// place.
 #[derive(Debug, Clone, sqlx::FromRow)]
 struct DigestEntry {
     id: Uuid,
     body: String,
     created_at: DateTime<Utc>,
+    seq: i64,
+}
+
+/// The staleness watermark a Digest revision is written with: the highest
+/// `entries.seq` among the Entries it was built from, or `0` for a Period
+/// that held none.
+///
+/// One function rather than the expression inlined at each of its two call
+/// sites (`write_digest_for`, `run_regenerate`) because *which* number goes
+/// in this column is the whole of ADR 0039's staleness rule, and it is easy
+/// to get subtly wrong: `entries.seq` is reassigned on every edit and delete
+/// (`sync.rs`'s `on conflict do update ... seq = nextval(...)`), so the
+/// maximum over exactly the Entries that were read is what makes
+/// `select_is_stale`'s later `seq > source_seq` mean "something in this
+/// Period moved after this revision was written" and nothing else. A
+/// watermark that is too low reports a Period stale that never changed —
+/// the failure mode `0009_digests_gain_revisions.sql` had to back out of for
+/// pre-existing rows.
+fn source_seq_of(entries: &[DigestEntry]) -> i64 {
+    entries.iter().map(|entry| entry.seq).max().unwrap_or(0)
+}
+
+
+/// Digest's server-side dependencies, held in `AppState` only when chat is
+/// configured (`llm::LlmConfig::digest_worker_config`) — mirrors
+/// `reflect::ReflectState` exactly, including why: `lib.rs`'s
+/// `router_with_digests` derives `digests_enabled` from this being `Some`
+/// rather than carrying a second, independent bool that could drift from
+/// it (the same anti-drift reasoning `AppState::digests_enabled`'s own doc
+/// comment already gives for `health::health_handler`).
+///
+/// `chat_client` is what `regenerate_digest_handler` (issue #132) spends
+/// its one synchronous chat call on — the same client `main.rs` hands
+/// `digest::run`, just also reachable from a request handler now that a
+/// Digest can be asked for. `tz` is `period::server_timezone()`, read once
+/// at startup and threaded through here rather than re-read per request,
+/// for the same reason `run`'s own `tz` parameter is: every Period this
+/// process ever computes — whether from the worker's tick or a reader's
+/// button press — has to agree on the same calendar boundaries.
+#[derive(Clone)]
+pub struct DigestState {
+    pub chat_client: Arc<dyn LlmClient + Send + Sync>,
+    pub tz: Tz,
 }
 
 /// Runs forever. `tz` and `scan_interval` are parameters rather than
@@ -284,7 +348,12 @@ async fn write_digest_for(
     };
 
     let entry_ids: Vec<Uuid> = entries.iter().map(|entry| entry.id).collect();
-    match insert_digest(pool, period, start, &body, &entry_ids).await {
+    // The watermark this Digest's revision 1 goes stale against (ADR
+    // 0039). `entries` is non-empty here — the guard above already returned
+    // early otherwise — so `source_seq_of`'s empty case is unreachable from
+    // this call site, not the "no Entries" case itself.
+    let source_seq = source_seq_of(&entries);
+    match insert_digest(pool, period, start, &body, &entry_ids, source_seq).await {
         Ok(inserted) => {
             // Succeeded (or lost a race to another writer of the exact
             // same Period — the `on conflict do nothing` in `insert_digest`
@@ -348,7 +417,7 @@ async fn select_entries(
     // `select_entry_timestamps` above: a tombstone's blank body must never
     // be fed to the Digest-writing chat call as Grounding.
     sqlx::query_as::<_, DigestEntry>(
-        "select id, body, created_at from entries \
+        "select id, body, created_at, seq from entries \
          where created_at >= $1 and created_at < $2 and deleted_at is null \
          order by created_at asc",
     )
@@ -358,11 +427,24 @@ async fn select_entries(
     .await
 }
 
-/// Inserts one Digest, returning whether a row was actually written.
-/// `on conflict (period, period_start) do nothing` is what makes the
-/// `unique` constraint from migration `0004_create_digests.sql` a safe
-/// target for a retry or a race, rather than something this code has to
-/// avoid hitting on its own — immutability is structural (the schema
+/// Inserts the background worker's own Digest for one Period, returning
+/// whether a row was actually written. Always `revision = 1` — the worker
+/// generates, it never regenerates (issue #132 / ADR 0039: only
+/// `regenerate_digest_handler` ever mints revision 2 and above) — and the
+/// `where not exists` guard makes that "only where no Digest exists for
+/// this Period **at all**" literally, not merely "no revision 1 yet":
+/// revision numbering is always contiguous from 1 (both this function and
+/// `regenerate_insert` only ever write `coalesce(max(revision), 0) + 1`
+/// worth of the next number), so "no revision 1" and "no Digest at all"
+/// are the same fact here, but the explicit `not exists` says so directly
+/// instead of leaning on that invariant silently holding.
+///
+/// `on conflict (period, period_start, revision) do nothing` is what makes
+/// the `unique` constraint from migration `0009_digests_gain_revisions.sql`
+/// a safe target for a retry or a race — between two ticks of this worker,
+/// or between this worker and a concurrent `regenerate` racing to rescue
+/// the same never-written Period — rather than something this code has to
+/// avoid hitting on its own. Immutability is structural (the schema
 /// enforces it), not a discipline the worker has to maintain by checking
 /// first and hoping nothing else wrote in between.
 async fn insert_digest(
@@ -371,16 +453,20 @@ async fn insert_digest(
     start: NaiveDate,
     body: &str,
     entry_ids: &[Uuid],
+    source_seq: i64,
 ) -> sqlx::Result<bool> {
     let result = sqlx::query(
-        "insert into digests (id, period, period_start, body, grounding_entry_ids) values ($1, $2, $3, $4, $5) \
-         on conflict (period, period_start) do nothing",
+        "insert into digests (id, period, period_start, revision, body, grounding_entry_ids, source_seq) \
+         select $1, $2, $3, 1, $4, $5, $6 \
+         where not exists (select 1 from digests where period = $2 and period_start = $3) \
+         on conflict (period, period_start, revision) do nothing",
     )
     .bind(Uuid::new_v4())
     .bind(period.as_str())
     .bind(start)
     .bind(body)
     .bind(entry_ids)
+    .bind(source_seq)
     .execute(pool)
     .await?;
     Ok(result.rows_affected() > 0)
@@ -520,11 +606,22 @@ fn render_entry(entry: &DigestEntry, tz: Tz) -> String {
 /// place that knows what a `digests` row looks like, exactly what this
 /// module's own doc comment says to avoid. Nothing about the query or the
 /// row itself changes; only what can see it.
+///
+/// `revision`, `source_seq` and `created_at` (issue #132 / ADR 0039): the
+/// newest revision of a Period is now what both `select_latest_digest` and
+/// `select_digest_at` pick, and `build_digest_response` needs `source_seq`
+/// to answer "is this stale" and `revision`/`created_at` to render the
+/// provenance cue — `harness::tools::read_digest` simply ignores the three
+/// it doesn't use, the same as it already ignores `period_start` where it
+/// doesn't need it.
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub(crate) struct DigestRecord {
     pub(crate) period_start: NaiveDate,
     pub(crate) body: String,
     pub(crate) grounding_entry_ids: Vec<Uuid>,
+    pub(crate) revision: i32,
+    pub(crate) source_seq: i64,
+    pub(crate) created_at: DateTime<Utc>,
 }
 
 /// The wire shape of one Digest — everything a client needs to render it
@@ -554,6 +651,28 @@ pub struct Digest {
     /// The `period_start` of the next Digest of this same Period that
     /// actually exists — `None` means this is the newest.
     pub next_date: Option<NaiveDate>,
+    /// Whether some Entry in this Period has moved (been added, edited, or
+    /// deleted) since this exact revision was written — issue #132 / ADR
+    /// 0039. Computed fresh on every read (`select_is_stale`), never
+    /// stored: staleness is a fact about the *current* relationship
+    /// between this revision's `source_seq` and `entries`, not something
+    /// that could go stale itself. A neutral fact, not an error — CONTEXT.md's
+    /// Sync status entry sets the same tone for "off is not a failure."
+    pub stale: bool,
+    /// Which revision this is — 1 for the background worker's own,
+    /// first-generation write; 2 and up for each successive
+    /// `POST /v1/digests/{period}/{date}/regenerate`. There is no revision
+    /// picker (issue #132): a client only ever sees the newest, and this
+    /// field plus `written_at` below is the provenance cue that
+    /// distinguishes "the Server wrote this by itself" (`revision == 1`)
+    /// from "you asked for this" (`revision > 1`).
+    pub revision: i32,
+    /// This exact revision's own `created_at` — when *this* revision was
+    /// written, not when the Period itself started or ended
+    /// (`period_start`/`period_end` above already cover that). A reader
+    /// renders "Written {date}" for `revision == 1` or "Regenerated {date}"
+    /// otherwise, from this field.
+    pub written_at: DateTime<Utc>,
 }
 
 /// The body both Digest routes return. **Always 200** — a missing Digest
@@ -593,10 +712,21 @@ pub struct DigestResponse {
 )]
 pub async fn latest_digest_handler(
     State(pool): State<PgPool>,
+    State(digest): State<Option<DigestState>>,
     Path(period): Path<String>,
 ) -> Result<Json<DigestResponse>, StatusCode> {
     let period = Period::parse(&period).ok_or(StatusCode::BAD_REQUEST)?;
-    match run_latest_digest(&pool, period).await {
+    // Only reachable if this state's absence somehow slipped past the
+    // conditional route registration in `lib.rs` — mirrors
+    // `reflect::reflect_handler`'s own defensive fallback exactly. This
+    // route is registered only when `DigestState` is `Some` (`lib.rs`'s
+    // `router_with_digests`), so a `None` here means the registration
+    // gate itself broke, not anything a client did.
+    let Some(digest) = digest else {
+        tracing::error!("latest_digest_handler invoked with no DigestState — route should not be registered");
+        return Err(StatusCode::NOT_FOUND);
+    };
+    match run_latest_digest(&pool, digest.tz, period).await {
         Ok(response) => Ok(Json(response)),
         Err(err) => {
             tracing::error!(error = ?err, period = period.as_str(), "loading the latest digest failed");
@@ -624,11 +754,16 @@ pub async fn latest_digest_handler(
 )]
 pub async fn digest_at_handler(
     State(pool): State<PgPool>,
+    State(digest): State<Option<DigestState>>,
     Path((period, date)): Path<(String, String)>,
 ) -> Result<Json<DigestResponse>, StatusCode> {
     let period = Period::parse(&period).ok_or(StatusCode::BAD_REQUEST)?;
     let date = NaiveDate::parse_from_str(&date, "%Y-%m-%d").map_err(|_| StatusCode::BAD_REQUEST)?;
-    match run_digest_at(&pool, period, date).await {
+    let Some(digest) = digest else {
+        tracing::error!("digest_at_handler invoked with no DigestState — route should not be registered");
+        return Err(StatusCode::NOT_FOUND);
+    };
+    match run_digest_at(&pool, digest.tz, period, date).await {
         Ok(response) => Ok(Json(response)),
         Err(err) => {
             tracing::error!(error = ?err, period = period.as_str(), %date, "loading a digest by date failed");
@@ -637,28 +772,31 @@ pub async fn digest_at_handler(
     }
 }
 
-async fn run_latest_digest(pool: &PgPool, period: Period) -> anyhow::Result<DigestResponse> {
+async fn run_latest_digest(pool: &PgPool, tz: Tz, period: Period) -> anyhow::Result<DigestResponse> {
     let record = select_latest_digest(pool, period).await?;
-    build_digest_response(pool, period, record).await
+    build_digest_response(pool, tz, period, record).await
 }
 
 async fn run_digest_at(
     pool: &PgPool,
+    tz: Tz,
     period: Period,
     date: NaiveDate,
 ) -> anyhow::Result<DigestResponse> {
     let record = select_digest_at(pool, period, date).await?;
-    build_digest_response(pool, period, record).await
+    build_digest_response(pool, tz, period, record).await
 }
 
 /// Turns a possibly-absent row into the wire response, filling in
-/// `period_end` and both neighbour dates when a row was actually found.
-/// `None` short-circuits before either neighbour query runs — an absent
-/// Digest has no `period_start` to look for neighbours around, and the
-/// response is simply `{"digest": null}` (see `DigestResponse`'s doc
-/// comment for why that's a 200, never a 404).
+/// `period_end`, both neighbour dates, and (issue #132 / ADR 0039)
+/// `stale`/`revision`/`written_at` when a row was actually found. `None`
+/// short-circuits before any of that runs — an absent Digest has no
+/// `period_start` to look for neighbours around or a watermark to check,
+/// and the response is simply `{"digest": null}` (see `DigestResponse`'s
+/// doc comment for why that's a 200, never a 404).
 async fn build_digest_response(
     pool: &PgPool,
+    tz: Tz,
     period: Period,
     record: Option<DigestRecord>,
 ) -> anyhow::Result<DigestResponse> {
@@ -675,8 +813,19 @@ async fn build_digest_response(
     // Digest at a time and skip any gap without knowing where it is or
     // computing a date itself — see ADR 0027 and this ticket: it is also
     // exactly what removes the need for a list endpoint or pagination.
+    // Both are unaffected by revisions — they compare `period_start`
+    // values, which `digests` never gains a second one of for the same
+    // Period without also gaining a distinct revision.
     let prev_date = select_prev_digest_date(pool, period, record.period_start).await?;
     let next_date = select_next_digest_date(pool, period, record.period_start).await?;
+
+    // Issue #132 / ADR 0039: stale exactly when some Entry in this exact
+    // Period has moved (been added, edited, or deleted) since
+    // `record.source_seq` was recorded — see `select_is_stale`'s own doc
+    // comment for the query and why it deliberately never filters
+    // `deleted_at`.
+    let (from_utc, to_utc) = period::period_bounds(period, tz, record.period_start);
+    let stale = select_is_stale(pool, from_utc, to_utc, record.source_seq).await?;
 
     Ok(DigestResponse {
         digest: Some(Digest {
@@ -687,15 +836,60 @@ async fn build_digest_response(
             grounding_entry_ids: record.grounding_entry_ids,
             prev_date,
             next_date,
+            stale,
+            revision: record.revision,
+            written_at: record.created_at,
         }),
     })
 }
 
+/// Whether some Entry in `[from_utc, to_utc)` has moved since
+/// `source_seq` — issue #132 / ADR 0039's staleness rule, reusing
+/// `entries.seq` (reassigned on every edit and delete,
+/// `sync.rs`'s `on conflict do update ... seq = nextval(...)`) as the
+/// watermark ADR 0028 already gives for last-touch order, rather than
+/// adding an `updated_at` column ADR 0028 explicitly says isn't needed
+/// anywhere.
+///
+/// Deliberately **not** filtered by `deleted_at is null`, unlike every
+/// other query in this module that reads `entries` (`select_entries`,
+/// `select_entry_timestamps`) — those exist to decide what a Digest's
+/// *prose* should say, where a tombstone has nothing left to contribute;
+/// this one exists to decide whether that prose is still accurate, where a
+/// deletion is exactly the kind of change worth reporting. An Entry that
+/// was deleted after this revision was written moved its `seq` on the way
+/// out (the same `on conflict do update` reassigns `seq` on a delete, not
+/// only an edit), so it trips this predicate on its own merits — nothing
+/// deletion-specific has to be added here for that to hold.
+async fn select_is_stale(
+    pool: &PgPool,
+    from_utc: DateTime<Utc>,
+    to_utc: DateTime<Utc>,
+    source_seq: i64,
+) -> sqlx::Result<bool> {
+    sqlx::query_scalar::<_, bool>(
+        "select exists (
+             select 1 from entries
+             where created_at >= $1 and created_at < $2 and seq > $3
+         )",
+    )
+    .bind(from_utc)
+    .bind(to_utc)
+    .bind(source_seq)
+    .fetch_one(pool)
+    .await
+}
+
 async fn select_latest_digest(pool: &PgPool, period: Period) -> sqlx::Result<Option<DigestRecord>> {
+    // `order by period_start desc, revision desc` — the most recent
+    // Digest of this Period type overall, and (issue #132 / ADR 0039)
+    // whichever revision of that exact Period is newest, since more than
+    // one may now exist for the same `period_start`.
     sqlx::query_as::<_, DigestRecord>(
-        "select period_start, body, grounding_entry_ids from digests
+        "select period_start, body, grounding_entry_ids, revision, source_seq, created_at
+         from digests
          where period = $1
-         order by period_start desc
+         order by period_start desc, revision desc
          limit 1",
     )
     .bind(period.as_str())
@@ -708,9 +902,16 @@ pub(crate) async fn select_digest_at(
     period: Period,
     date: NaiveDate,
 ) -> sqlx::Result<Option<DigestRecord>> {
+    // `order by revision desc limit 1` (issue #132 / ADR 0039): reads take
+    // the newest revision of this exact `(period, period_start)` — there
+    // is no revision picker anywhere in this codebase, only ever "the
+    // newest."
     sqlx::query_as::<_, DigestRecord>(
-        "select period_start, body, grounding_entry_ids from digests
-         where period = $1 and period_start = $2",
+        "select period_start, body, grounding_entry_ids, revision, source_seq, created_at
+         from digests
+         where period = $1 and period_start = $2
+         order by revision desc
+         limit 1",
     )
     .bind(period.as_str())
     .bind(date)
@@ -744,4 +945,147 @@ async fn select_next_digest_date(
     .bind(after)
     .fetch_one(pool)
     .await
+}
+
+// ---------------------------------------------------------------------
+// HTTP: POST /v1/digests/{period}/{date}/regenerate (issue #132, ADR 0039)
+// ---------------------------------------------------------------------
+//
+// The reader's Regenerate action: synchronous, on purpose — a reader
+// pressed a button and is watching, so the chat call runs inline and the
+// response carries the new revision directly, rather than the worker's own
+// "hint, then poll" shape (there is no hint to give here; nothing is
+// polling). This reuses `select_entries` and `build_messages` — the exact
+// machinery `write_digest_for` already builds a Digest's chat call from —
+// so the prompt this route sends is indistinguishable from the worker's
+// own, including `digest_system_prompt`'s leading "You are the Digest
+// writer" phrase both `server/tests/digest.rs`'s `is_digest_call` and
+// `apps/e2e/llm-stub.ts`'s `isDigestCall` sniff to recognise a Digest call
+// at all. Nothing about that phrase changes here, deliberately: this route
+// existing is exactly the case those two test doubles have to keep
+// recognising, on the regenerate path as well as the worker's tick.
+//
+// Always inserts at `max(revision) + 1` for the named `(period, date)` —
+// or `1`, straight through `coalesce`, when nothing was ever written for
+// it at all. That second case is what makes this route the rescue ADR
+// 0027's Consequences names: a Period stuck past `MAX_ATTEMPTS` is
+// indistinguishable from one never attempted (the attempt count is
+// process-local and gone on restart, so no row exists either way), and
+// this is the only path in the whole codebase that can put a first row
+// there outside the worker's own tick.
+
+#[utoipa::path(
+    post,
+    path = "/v1/digests/{period}/{date}/regenerate",
+    params(
+        ("period" = String, Path, description = "\"day\", \"week\", or \"month\""),
+        ("date" = String, Path, description = "The Digest's `period_start`, as YYYY-MM-DD"),
+    ),
+    responses(
+        (status = 200, description = "The Digest at this exact date, now holding the newly written revision (or `{\"digest\": null}` if the Period held no Entries to write from)", body = DigestResponse),
+        (status = 400, description = "`period` is unrecognised, or `date` is not a valid YYYY-MM-DD date"),
+        (status = 500, description = "the chat call, or the insert, failed"),
+    )
+)]
+pub async fn regenerate_digest_handler(
+    State(pool): State<PgPool>,
+    State(digest): State<Option<DigestState>>,
+    Path((period, date)): Path<(String, String)>,
+) -> Result<Json<DigestResponse>, StatusCode> {
+    let period = Period::parse(&period).ok_or(StatusCode::BAD_REQUEST)?;
+    let date = NaiveDate::parse_from_str(&date, "%Y-%m-%d").map_err(|_| StatusCode::BAD_REQUEST)?;
+    // Same defensive fallback as `latest_digest_handler`/`digest_at_handler`
+    // above — this route is registered only alongside them, under the same
+    // `digest.is_some()` gate in `lib.rs`.
+    let Some(digest) = digest else {
+        tracing::error!(
+            "regenerate_digest_handler invoked with no DigestState — route should not be registered"
+        );
+        return Err(StatusCode::NOT_FOUND);
+    };
+
+    match run_regenerate(&pool, digest.chat_client.as_ref(), digest.tz, period, date).await {
+        Ok(response) => Ok(Json(response)),
+        Err(err) => {
+            tracing::error!(error = ?err, period = period.as_str(), %date, "regenerating a digest failed");
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+/// The regenerate route's whole body, split out from the handler the same
+/// way `run_latest_digest`/`run_digest_at` are — a plain `anyhow::Result`
+/// this file's own tests can call directly without going through axum's
+/// extractors.
+///
+/// If the named Period holds no Entries at all (deleted since, or never
+/// written), this writes nothing — mirroring `write_digest_for`'s own
+/// defensive "an empty Digest is pointless" guard — and simply returns
+/// whatever Digest already exists there (possibly `None`), the same
+/// "always 200, never invent a row" contract every other Digest read in
+/// this module already keeps.
+async fn run_regenerate(
+    pool: &PgPool,
+    client: &(dyn LlmClient + Send + Sync),
+    tz: Tz,
+    period: Period,
+    date: NaiveDate,
+) -> anyhow::Result<DigestResponse> {
+    let (from_utc, to_utc) = period::period_bounds(period, tz, date);
+    let entries = select_entries(pool, from_utc, to_utc).await?;
+
+    if !entries.is_empty() {
+        let messages = build_messages(period, date, &entries, tz);
+        let reply = client.chat(&messages).await?;
+        let entry_ids: Vec<Uuid> = entries.iter().map(|entry| entry.id).collect();
+        let source_seq = source_seq_of(&entries);
+        regenerate_insert(pool, period, date, &reply.content, &entry_ids, source_seq).await?;
+    }
+
+    let record = select_digest_at(pool, period, date).await?;
+    build_digest_response(pool, tz, period, record).await
+}
+
+/// Inserts the next revision of a Digest — `coalesce(max(revision), 0) +
+/// 1` for this exact `(period, period_start)`, computed inside the same
+/// `insert ... select` statement rather than read back separately, so
+/// there's no window between "read the current max" and "insert the next
+/// one" for a second call to land in. `unique (period, period_start,
+/// revision)` (`0009_digests_gain_revisions.sql`) still backs this up
+/// structurally against two truly concurrent regenerate calls racing for
+/// the same next number — this is a single-user journal with at most a
+/// handful of Devices, not a high-concurrency system, so the loser of that
+/// rare race simply surfaces its `sqlx::Error` up through `run_regenerate`
+/// as an ordinary 500 rather than being silently retried; a reader who
+/// hits that can just press Regenerate again.
+///
+/// Deliberately not `insert_digest` (the worker's own function) with an
+/// extra parameter: that function's entire contract is "only revision 1,
+/// only where nothing exists yet" (see its own doc comment) — the worker
+/// generates, it does not regenerate, and folding this function's
+/// "whatever comes next" behaviour into it would blur a distinction this
+/// ticket depends on staying sharp.
+async fn regenerate_insert(
+    pool: &PgPool,
+    period: Period,
+    start: NaiveDate,
+    body: &str,
+    entry_ids: &[Uuid],
+    source_seq: i64,
+) -> sqlx::Result<()> {
+    sqlx::query(
+        "insert into digests (id, period, period_start, revision, body, grounding_entry_ids, source_seq) \
+         select $1, $2, $3, coalesce(max(revision), 0) + 1, $4, $5, $6 \
+         from digests \
+         where period = $2 and period_start = $3",
+    )
+    .bind(Uuid::new_v4())
+    .bind(period.as_str())
+    .bind(start)
+    .bind(body)
+    .bind(entry_ids)
+    .bind(source_seq)
+    .execute(pool)
+    .await?;
+    Ok(())
 }

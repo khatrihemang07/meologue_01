@@ -5,10 +5,16 @@
 //! database directly" shape `tests/sessions.rs` uses for its own handlers.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
+use anyhow::Result;
+use async_trait::async_trait;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use chrono_tz::Tz;
 use http_body_util::BodyExt;
+use meologue_server::digest::DigestState;
+use meologue_server::llm::{ChatMessage, ChatReply, LlmClient};
 use meologue_server::period::{self, Period};
 use serde_json::Value;
 use sqlx::PgPool;
@@ -22,13 +28,41 @@ fn empty_static_dir() -> PathBuf {
     std::env::current_dir().unwrap()
 }
 
+/// Mirrors `tests/health.rs`'s own `UnusedLlmClient`: every test in this
+/// file only ever exercises the two GET routes (never `regenerate`), so
+/// nothing here ever calls through a `DigestState`'s `chat_client` — it
+/// only has to satisfy the shape `router_with_digests` needs to register
+/// the routes and resolve their `Tz` at all.
+struct UnusedLlmClient;
+
+#[async_trait]
+impl LlmClient for UnusedLlmClient {
+    async fn chat(&self, _messages: &[ChatMessage]) -> Result<ChatReply> {
+        unimplemented!("this test file never regenerates a digest")
+    }
+    async fn embed_document(&self, _text: &str) -> Result<Vec<f32>> {
+        unimplemented!("digest routes never embed anything")
+    }
+    async fn embed_query(&self, _text: &str) -> Result<Vec<f32>> {
+        unimplemented!("digest routes never embed anything")
+    }
+}
+
+fn unused_digest_state() -> DigestState {
+    DigestState {
+        chat_client: Arc::new(UnusedLlmClient),
+        tz: Tz::UTC,
+    }
+}
+
 async fn request(uri: String, digests_enabled: bool, pool: &PgPool) -> (StatusCode, Value) {
+    let digest = digests_enabled.then(unused_digest_state);
     let app = meologue_server::router_with_digests(
         pool.clone(),
         empty_static_dir(),
         None,
         None,
-        digests_enabled,
+        digest,
     );
     let response = app
         .oneshot(
@@ -95,6 +129,177 @@ async fn insert_digest(
     .execute(pool)
     .await
     .unwrap();
+}
+
+/// Like `insert_digest`, but also names `source_seq` (issue #132 / ADR
+/// 0039's staleness watermark) instead of leaving it at the column's own
+/// default of `0` — every staleness test below needs to seed a Digest
+/// exactly as though it had been written *after* whichever Entries it
+/// should not yet consider stale.
+async fn insert_digest_with_source_seq(
+    pool: &PgPool,
+    period: Period,
+    period_start: chrono::NaiveDate,
+    body: &str,
+    grounding_entry_ids: &[Uuid],
+    source_seq: i64,
+) {
+    sqlx::query(
+        "insert into digests (id, period, period_start, body, grounding_entry_ids, source_seq)
+         values ($1, $2, $3, $4, $5, $6)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(period.as_str())
+    .bind(period_start)
+    .bind(body)
+    .bind(grounding_entry_ids)
+    .bind(source_seq)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+/// Every `digests` row at one `(period, period_start)`, newest revision
+/// first — what the "regenerate inserts a new revision, every earlier one
+/// stays" tests assert against directly, rather than only through what a
+/// single GET happens to surface.
+#[derive(sqlx::FromRow, Debug, Clone)]
+struct DigestRow {
+    revision: i32,
+    body: String,
+}
+
+async fn digest_revisions(pool: &PgPool, period: Period, period_start: chrono::NaiveDate) -> Vec<DigestRow> {
+    sqlx::query_as::<_, DigestRow>(
+        "select revision, body from digests where period = $1 and period_start = $2 order by revision asc",
+    )
+    .bind(period.as_str())
+    .bind(period_start)
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+/// Inserts an Entry directly (this file never runs Sync either), returning
+/// the `seq` Postgres assigned it — mirrors `tests/digest.rs`'s own
+/// `insert_entry_at`, just also handing back `seq` since every staleness
+/// test here needs it to seed a Digest's `source_seq` against.
+async fn insert_entry_at(
+    pool: &PgPool,
+    id: Uuid,
+    device_id: Uuid,
+    body: &str,
+    created_at: chrono::DateTime<chrono::Utc>,
+) -> i64 {
+    sqlx::query_scalar::<_, i64>(
+        "insert into entries (id, device_id, body, created_at) values ($1, $2, $3, $4) returning seq",
+    )
+    .bind(id)
+    .bind(device_id)
+    .bind(body)
+    .bind(created_at)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+/// Reassigns an Entry's `seq` from the sequence, without touching
+/// `deleted_at` — the exact half of `sync.rs`'s
+/// `on conflict do update ... seq = nextval(...)` an ordinary edit
+/// exercises (ADR 0028), reproduced directly here rather than through a
+/// full Sync push/pull round trip: this file's staleness tests only need
+/// "an Entry's `seq` moved," not the whole reconciliation machinery that
+/// can cause it to.
+async fn bump_entry_seq(pool: &PgPool, id: Uuid) -> i64 {
+    sqlx::query_scalar::<_, i64>(
+        "update entries set seq = nextval(pg_get_serial_sequence('entries', 'seq')) \
+         where id = $1 returning seq",
+    )
+    .bind(id)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+/// The delete half of the same reassignment — `deleted_at` set alongside
+/// the `seq` bump, exactly as `sync.rs`'s upsert does for a delete push.
+/// `select_is_stale` (`digest.rs`) deliberately never filters
+/// `deleted_at`, so this is what proves a deletion trips staleness on its
+/// own, not just an edit's `seq` bump coincidentally sharing the same
+/// column.
+async fn soft_delete_entry(pool: &PgPool, id: Uuid) {
+    sqlx::query(
+        "update entries set deleted_at = now(), seq = nextval(pg_get_serial_sequence('entries', 'seq')) \
+         where id = $1",
+    )
+    .bind(id)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+/// A chat client that always succeeds with a fixed reply — mirrors
+/// `tests/digest.rs`'s own `FakeChatClient`, trimmed to just the one
+/// behaviour every regenerate test here needs (nothing in this file ever
+/// exercises a failing chat call on the regenerate path).
+struct FakeChatClient {
+    reply: String,
+}
+
+#[async_trait]
+impl LlmClient for FakeChatClient {
+    async fn chat(&self, _messages: &[ChatMessage]) -> Result<ChatReply> {
+        Ok(ChatReply::text(&self.reply))
+    }
+    async fn embed_document(&self, _text: &str) -> Result<Vec<f32>> {
+        unimplemented!("digest routes never embed anything")
+    }
+    async fn embed_query(&self, _text: &str) -> Result<Vec<f32>> {
+        unimplemented!("digest routes never embed anything")
+    }
+}
+
+fn fake_digest_state(reply: &str) -> DigestState {
+    DigestState {
+        chat_client: Arc::new(FakeChatClient {
+            reply: reply.to_string(),
+        }),
+        tz: Tz::UTC,
+    }
+}
+
+/// `POST /v1/digests/{period}/{date}/regenerate` against a Router built
+/// with `digest` — mirrors `request` above exactly, just a different verb
+/// and a `DigestState` that can actually answer a chat call (`request`'s
+/// own `digests_enabled: bool` only ever built an `UnusedLlmClient`, which
+/// would panic if `regenerate_digest_handler` ever reached it).
+async fn regenerate(pool: &PgPool, digest: DigestState, period: &str, date: &str) -> (StatusCode, Value) {
+    let app = meologue_server::router_with_digests(
+        pool.clone(),
+        empty_static_dir(),
+        None,
+        None,
+        Some(digest),
+    );
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/digests/{period}/{date}/regenerate"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let json = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes).unwrap()
+    };
+    (status, json)
 }
 
 fn date(year: i32, month: u32, day: u32) -> chrono::NaiveDate {
@@ -290,4 +495,256 @@ async fn the_routes_are_absent_when_chat_is_unconfigured(pool: PgPool) {
 
     let (status, _) = get_digest_at(&pool, false, "day", "2026-08-01").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+// ---------------------------------------------------------------------
+// Staleness (issue #132 / ADR 0039): a Digest knows when it is out of
+// date, reusing `entries.seq` (ADR 0028's Sync change log) as the
+// watermark rather than a new `updated_at` column ADR 0028 already
+// rejected by name. Three ways an Entry can move above the watermark a
+// Digest recorded — added, edited, deleted — each get their own test
+// below, matching the ticket's own "fires on add, on edit, AND on delete"
+// wording exactly, rather than trusting one shape to stand in for all
+// three.
+// ---------------------------------------------------------------------
+
+/// A brand-new Entry landing in an already-Digested Period is the
+/// simplest case: the Digest's `source_seq` predates the new Entry's
+/// `seq` entirely.
+#[sqlx::test]
+async fn adding_an_entry_to_an_already_digested_period_marks_it_stale(pool: PgPool) {
+    let period_start = date(2026, 8, 10);
+    let (from, _) = period::period_bounds(Period::Day, Tz::UTC, period_start);
+    let device = Uuid::new_v4();
+
+    let first_id = Uuid::new_v4();
+    let first_seq = insert_entry_at(&pool, first_id, device, "first", from + chrono::Duration::hours(1)).await;
+    insert_digest_with_source_seq(
+        &pool,
+        Period::Day,
+        period_start,
+        "Summary of one Entry.",
+        &[first_id],
+        first_seq,
+    )
+    .await;
+
+    // Not stale yet — nothing has moved above the watermark this Digest
+    // recorded.
+    let (_, body) = get_digest_at(&pool, true, "day", "2026-08-10").await;
+    assert_eq!(body["digest"]["stale"], false);
+
+    // A second Entry, in the same Period, added after the Digest was
+    // written.
+    insert_entry_at(
+        &pool,
+        Uuid::new_v4(),
+        device,
+        "second, added later",
+        from + chrono::Duration::hours(2),
+    )
+    .await;
+
+    let (status, body) = get_digest_at(&pool, true, "day", "2026-08-10").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["digest"]["stale"], true);
+}
+
+/// Editing an existing Entry the Digest already read also marks it stale
+/// — `sync.rs`'s upsert reassigns `seq` on an edit exactly as it does on
+/// an insert (ADR 0028), so the same watermark comparison catches it with
+/// no separate "was this Entry edited" check anywhere in `digest.rs`.
+#[sqlx::test]
+async fn editing_an_entry_the_digest_already_read_marks_it_stale(pool: PgPool) {
+    let period_start = date(2026, 8, 10);
+    let (from, _) = period::period_bounds(Period::Day, Tz::UTC, period_start);
+    let device = Uuid::new_v4();
+
+    let entry_id = Uuid::new_v4();
+    let original_seq = insert_entry_at(&pool, entry_id, device, "before the edit", from + chrono::Duration::hours(1)).await;
+    insert_digest_with_source_seq(
+        &pool,
+        Period::Day,
+        period_start,
+        "Summary written before the edit.",
+        &[entry_id],
+        original_seq,
+    )
+    .await;
+
+    let (_, body) = get_digest_at(&pool, true, "day", "2026-08-10").await;
+    assert_eq!(body["digest"]["stale"], false);
+
+    // The same Entry, edited — its `seq` moves above the Digest's
+    // watermark without any new row ever landing.
+    bump_entry_seq(&pool, entry_id).await;
+
+    let (status, body) = get_digest_at(&pool, true, "day", "2026-08-10").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["digest"]["stale"], true);
+}
+
+/// Deleting an Entry the Digest already read marks it stale too —
+/// `select_is_stale` deliberately never filters `deleted_at`, precisely so
+/// a deletion (which also reassigns `seq`, `sync.rs`'s same upsert) trips
+/// this predicate exactly like an edit does, rather than silently vanishing
+/// from consideration the moment it's tombstoned.
+#[sqlx::test]
+async fn deleting_an_entry_the_digest_already_read_marks_it_stale(pool: PgPool) {
+    let period_start = date(2026, 8, 10);
+    let (from, _) = period::period_bounds(Period::Day, Tz::UTC, period_start);
+    let device = Uuid::new_v4();
+
+    let entry_id = Uuid::new_v4();
+    let original_seq = insert_entry_at(&pool, entry_id, device, "will be deleted", from + chrono::Duration::hours(1)).await;
+    insert_digest_with_source_seq(
+        &pool,
+        Period::Day,
+        period_start,
+        "Summary written before the deletion.",
+        &[entry_id],
+        original_seq,
+    )
+    .await;
+
+    let (_, body) = get_digest_at(&pool, true, "day", "2026-08-10").await;
+    assert_eq!(body["digest"]["stale"], false);
+
+    soft_delete_entry(&pool, entry_id).await;
+
+    let (status, body) = get_digest_at(&pool, true, "day", "2026-08-10").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["digest"]["stale"], true);
+}
+
+// ---------------------------------------------------------------------
+// Regenerate (issue #132 / ADR 0039): `POST
+// /v1/digests/{period}/{date}/regenerate` inserts a new revision — never
+// mutates the one before it — and reads always take the newest.
+// ---------------------------------------------------------------------
+
+/// Regenerating an already-Digested Period inserts revision 2 and leaves
+/// revision 1 exactly as it was — the acceptance criterion "every earlier
+/// revision remains in the table," asserted directly against the raw rows
+/// rather than only through what one GET happens to surface.
+#[sqlx::test]
+async fn regenerating_inserts_revision_two_and_leaves_revision_one_intact(pool: PgPool) {
+    let period_start = date(2026, 8, 10);
+    let (from, _) = period::period_bounds(Period::Day, Tz::UTC, period_start);
+    let device = Uuid::new_v4();
+    let entry_id = Uuid::new_v4();
+    insert_entry_at(
+        &pool,
+        entry_id,
+        device,
+        "the entry both revisions are written from",
+        from + chrono::Duration::hours(1),
+    )
+    .await;
+
+    insert_digest_with_source_seq(
+        &pool,
+        Period::Day,
+        period_start,
+        "The first, worker-written revision.",
+        &[entry_id],
+        0, // stale on purpose — every Entry here postdates this watermark
+    )
+    .await;
+
+    let (status, body) = regenerate(
+        &pool,
+        fake_digest_state("The second, regenerated revision."),
+        "day",
+        "2026-08-10",
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["digest"]["body"], "The second, regenerated revision.");
+    assert_eq!(body["digest"]["revision"], 2);
+    // Freshly written from the current Entries, so no longer stale.
+    assert_eq!(body["digest"]["stale"], false);
+
+    let revisions = digest_revisions(&pool, Period::Day, period_start).await;
+    assert_eq!(revisions.len(), 2, "regenerating must insert, never overwrite");
+    assert_eq!(revisions[0].revision, 1);
+    assert_eq!(revisions[0].body, "The first, worker-written revision.");
+    assert_eq!(revisions[1].revision, 2);
+    assert_eq!(revisions[1].body, "The second, regenerated revision.");
+}
+
+/// A plain read after regenerating returns the new revision — issue
+/// #132's "reading a Digest after regeneration returns the new body
+/// without a manual refresh" acceptance criterion, proven with a
+/// completely separate GET (a fresh Router, exactly what an unrelated
+/// client's next request would build).
+#[sqlx::test]
+async fn a_read_after_regenerating_returns_the_newest_revision(pool: PgPool) {
+    let period_start = date(2026, 8, 10);
+    let (from, _) = period::period_bounds(Period::Day, Tz::UTC, period_start);
+    let device = Uuid::new_v4();
+    let entry_id = Uuid::new_v4();
+    insert_entry_at(
+        &pool,
+        entry_id,
+        device,
+        "grounding for every revision",
+        from + chrono::Duration::hours(1),
+    )
+    .await;
+    insert_digest_with_source_seq(&pool, Period::Day, period_start, "Revision one.", &[entry_id], 0).await;
+
+    regenerate(&pool, fake_digest_state("Revision two."), "day", "2026-08-10").await;
+
+    let (status, body) = get_digest_at(&pool, true, "day", "2026-08-10").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["digest"]["body"], "Revision two.");
+    assert_eq!(body["digest"]["revision"], 2);
+
+    // The archive-wide "most recent" read (no date named) also finds the
+    // newest revision, not merely the newest `period_start`.
+    let (status, body) = get_latest_digest(&pool, true, "day").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["digest"]["body"], "Revision two.");
+}
+
+/// Regenerate is the rescue for a Period that never got a Digest at all —
+/// ADR 0027's Consequences names exactly this gap (a Period stuck past
+/// `MAX_ATTEMPTS` is indistinguishable from one never attempted, since the
+/// attempt count is process-local). `coalesce(max(revision), 0) + 1`
+/// resolves to plain `1` when nothing exists yet, so this route can also
+/// write a Period's first row, not only its second and later ones.
+#[sqlx::test]
+async fn regenerate_rescues_a_period_that_never_got_a_digest(pool: PgPool) {
+    let period_start = date(2026, 8, 10);
+    let (from, _) = period::period_bounds(Period::Day, Tz::UTC, period_start);
+    let device = Uuid::new_v4();
+    insert_entry_at(
+        &pool,
+        Uuid::new_v4(),
+        device,
+        "an entry from a period the worker never managed to digest",
+        from + chrono::Duration::hours(1),
+    )
+    .await;
+
+    let (status, body) = regenerate(
+        &pool,
+        fake_digest_state("Written on request, past the worker's own attempt cap."),
+        "day",
+        "2026-08-10",
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["digest"]["revision"], 1);
+    assert_eq!(
+        body["digest"]["body"],
+        "Written on request, past the worker's own attempt cap."
+    );
+
+    let revisions = digest_revisions(&pool, Period::Day, period_start).await;
+    assert_eq!(revisions.len(), 1);
+    assert_eq!(revisions[0].revision, 1);
 }

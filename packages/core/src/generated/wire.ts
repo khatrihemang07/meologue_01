@@ -43,6 +43,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/digests/{period}/{date}/regenerate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["regenerate_digest_handler"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/health": {
         parameters: {
             query?: never;
@@ -51,11 +67,17 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Answers whether an address is actually a meologue Server, and which
-         *     protocol it speaks — without touching the database, so a Server whose
+         * Answers whether an address is actually a meologue Server, which protocol
+         *     it speaks, and — since issue #133 — which Server-backed features it can
+         *     actually serve, all without touching the database, so a Server whose
          *     Postgres is down still identifies itself. Unlike `/v1/sync`, this never
          *     rejects on protocol version: its whole job is letting the caller compare
          *     versions themselves. See ADR 0010.
+         * @description Reads `Option<ReflectState>` and `DigestsEnabled` off `AppState` (via
+         *     their own `FromRef` impls in `lib.rs`) rather than the whole `AppState`
+         *     — the same one-extractor-per-need shape `sync::sync_handler` and
+         *     `reflect::reflect_handler` already use, and precisely what keeps this
+         *     handler from ever touching `PgPool` and staying DB-free.
          */
         get: operations["health_handler"];
         put?: never;
@@ -108,18 +130,20 @@ export interface paths {
          *     generating types from `packages/core/src/generated/wire.ts` still gets
          *     them, even though nothing here can point utoipa at "frame N of this
          *     stream has this shape."
-         * @description The three status codes that predate this ticket keep meaning exactly
-         *     what they did — 404 (Reflection unconfigured, or a `session_id` naming
-         *     no Session) and 426 (a stale `protocol_version`) are still real HTTP
-         *     statuses, not folded into the event stream, because both are decided
-         *     *before* this handler commits to a 200 and starts streaming (see
-         *     `resolve_session`, called synchronously below): once the stream opens,
-         *     the status line has already gone out, so nothing after that point can
-         *     change it. A failure *inside* the streamed run — the chat endpoint
-         *     erroring, the loop never producing an Answer — cannot become a 500 for
-         *     the same reason; it ends the stream instead, via an `agent_end` event
-         *     carrying `"status": "error"` (`run_reflect_stream`) rather than hanging
-         *     or dropping the connection silently.
+         * @description The two status codes that predate this ticket keep meaning exactly what
+         *     they did — 404 (Reflection unconfigured — see this handler's defensive
+         *     `reflect.is_none()` fallback just below; not, as of issue #131, a
+         *     `session_id` naming no Session, which `resolve_session` now creates
+         *     rather than rejects) and 426 (a stale `protocol_version`) are still real
+         *     HTTP statuses, not folded into the event stream, because both are
+         *     decided *before* this handler commits to a 200 and starts streaming
+         *     (see `resolve_session`, called synchronously below): once the stream
+         *     opens, the status line has already gone out, so nothing after that
+         *     point can change it. A failure *inside* the streamed run — the chat
+         *     endpoint erroring, the loop never producing an Answer — cannot become a
+         *     500 for the same reason; it ends the stream instead, via an `agent_end`
+         *     event carrying `"status": "error"` (`run_reflect_stream`) rather than
+         *     hanging or dropping the connection silently.
          */
         post: operations["reflect_handler"];
         delete?: never;
@@ -227,6 +251,36 @@ export interface components {
              *     means this is the oldest Digest of this Period the Server holds.
              */
             prev_date?: string | null;
+            /**
+             * Format: int32
+             * @description Which revision this is — 1 for the background worker's own,
+             *     first-generation write; 2 and up for each successive
+             *     `POST /v1/digests/{period}/{date}/regenerate`. There is no revision
+             *     picker (issue #132): a client only ever sees the newest, and this
+             *     field plus `written_at` below is the provenance cue that
+             *     distinguishes "the Server wrote this by itself" (`revision == 1`)
+             *     from "you asked for this" (`revision > 1`).
+             */
+            revision: number;
+            /**
+             * @description Whether some Entry in this Period has moved (been added, edited, or
+             *     deleted) since this exact revision was written — issue #132 / ADR
+             *     0039. Computed fresh on every read (`select_is_stale`), never
+             *     stored: staleness is a fact about the *current* relationship
+             *     between this revision's `source_seq` and `entries`, not something
+             *     that could go stale itself. A neutral fact, not an error — CONTEXT.md's
+             *     Sync status entry sets the same tone for "off is not a failure."
+             */
+            stale: boolean;
+            /**
+             * Format: date-time
+             * @description This exact revision's own `created_at` — when *this* revision was
+             *     written, not when the Period itself started or ended
+             *     (`period_start`/`period_end` above already cover that). A reader
+             *     renders "Written {date}" for `revision == 1` or "Regenerated {date}"
+             *     otherwise, from this field.
+             */
+            written_at: string;
         };
         /**
          * @description The body both Digest routes return. **Always 200** — a missing Digest
@@ -307,7 +361,37 @@ export interface components {
             /** Format: int64 */
             seq: number;
         };
+        /**
+         * @description Which Server-backed features this Server can actually serve right now,
+         *     derived from the same configuration `main.rs` already used to decide
+         *     whether `/v1/reflect`, `/v1/digests/*` and the embedding worker exist at
+         *     all (issue #133). Reported alongside `HealthResponse` rather than left
+         *     for a Device to infer from probing each route in turn: a Device that only
+         *     asked "does `/v1/reflect` 404" would still show a working-looking
+         *     Reflect row on a Server that has the route but no model behind it, since
+         *     `router_with_digests` only ever gates *registration*, not per-request
+         *     configuration checks.
+         *
+         *     - `reflect` mirrors `reflect.is_some()` — the exact condition
+         *       `router_with_digests` gates `/v1/reflect`, `/v1/sessions*` and
+         *       `/v1/models` on.
+         *     - `digest` mirrors `digests_enabled` — the exact bool `main.rs` computes
+         *       from `LlmConfig::digest_worker_config().is_some()` and
+         *       `router_with_digests` gates `/v1/digests/*` on.
+         *     - `embeddings` reports whether Reflection's own embed client resolved
+         *       (`ReflectState::embed_client`). Issue #130: `reflect_config()` now
+         *       needs chat alone and hands back `None` for the embed half when no
+         *       embed config is resolvable, so a chat-only Server still reports
+         *       `reflect: true` while `embeddings: false` — exactly the Server on
+         *       which `reflect.rs`'s tool loop quietly omits `similar_entries`.
+         */
+        HealthCapabilities: {
+            digest: boolean;
+            embeddings: boolean;
+            reflect: boolean;
+        };
         HealthResponse: {
+            capabilities?: null | components["schemas"]["HealthCapabilities"];
             /** Format: int32 */
             protocol_version: number;
             service: string;
@@ -364,14 +448,22 @@ export interface components {
             /**
              * Format: uuid
              * @description The Session this Question belongs to, or `None` to start a new one
-             *     — a null id on an ask *is* the create (`docs/adr/0025`); there is no
-             *     separate create endpoint. `resolve_session` loads that Session's
-             *     prior Turns (`sessions::load_turns`) to read this Question "in the
-             *     light of the Conversation before it" (CONTEXT.md's own phrase for
-             *     what a Conversation is) — the server holds that Conversation now, so
-             *     this replaces what used to round-trip on every request as
-             *     `prior_turns`. A `Some` naming a Session that doesn't exist is a 404,
-             *     not a silently-ignored value.
+             *     under a Server-chosen id — a null id on an ask *is* the create
+             *     (`docs/adr/0025`); there is no separate create endpoint.
+             *     `resolve_session` loads that Session's prior Turns
+             *     (`sessions::load_turns`) to read this Question "in the light of the
+             *     Conversation before it" (CONTEXT.md's own phrase for what a
+             *     Conversation is) — the server holds that Conversation now, so this
+             *     replaces what used to round-trip on every request as `prior_turns`.
+             *
+             *     Issue #131, ADR 0038: a `Some` naming a Session that doesn't exist is
+             *     no longer a 404 — it creates that Session under the supplied id
+             *     instead, the same upsert shape `sync.rs`'s own Entry push already
+             *     uses (the Device mints an id, the Server upserts on it). This is
+             *     what lets the Device — `apps/web/src/pages/reflection-page.tsx`'s
+             *     `handleAsk` — mint a fresh Session's id itself and know it before
+             *     this request is even sent, rather than learning it only from a
+             *     successful response.
              */
             session_id?: string | null;
             /**
@@ -627,6 +719,45 @@ export interface operations {
             };
         };
     };
+    regenerate_digest_handler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description "day", "week", or "month" */
+                period: string;
+                /** @description The Digest's `period_start`, as YYYY-MM-DD */
+                date: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The Digest at this exact date, now holding the newly written revision (or `{"digest": null}` if the Period held no Entries to write from) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DigestResponse"];
+                };
+            };
+            /** @description `period` is unrecognised, or `date` is not a valid YYYY-MM-DD date */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description the chat call, or the insert, failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     health_handler: {
         parameters: {
             query?: never;
@@ -636,7 +767,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description This address is a meologue Server speaking protocol_version */
+            /** @description This address is a meologue Server speaking protocol_version, with its Destination capabilities */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -696,7 +827,7 @@ export interface operations {
                     "text/event-stream": string;
                 };
             };
-            /** @description Reflection is unconfigured, or session_id names a Session that does not exist */
+            /** @description Reflection is unconfigured on this Server */
             404: {
                 headers: {
                     [name: string]: unknown;

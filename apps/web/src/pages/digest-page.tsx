@@ -2,13 +2,14 @@ import { useQuery } from "@tanstack/react-query";
 import { useContext, useLayoutEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 import { BackToChats } from "@/components/back-to-chats";
+import { ServerUnreachableBanner } from "@/components/server-unreachable-banner";
 import { HistoryScrollContext, Shell } from "@/components/shell";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { formatDigestRange } from "@/lib/digest-format";
+import { formatDigestRange, formatStaleCopy } from "@/lib/digest-format";
 import { type DigestResult, digestTransport } from "@/lib/digest-transport";
 import { allocateLineBudgets } from "@/lib/proportional-clamp";
 import { digestQueryKey } from "@/lib/query-keys";
-import { useSyncEnabled } from "@/lib/settings";
+import { refreshCapabilities, useServerReachable, useSyncEnabled } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 
 /**
@@ -135,6 +136,17 @@ function DigestCard({
           <CardDescription>
             {formatDigestRange(period, digest.period_start, digest.period_end)}
           </CardDescription>
+          {digest.stale && (
+            // Issue #132 / ADR 0039: a stale marker only here — no
+            // Regenerate button, unlike the reader (`digest-reader-page.tsx`).
+            // A card is "the latest of this Period," not a specific date a
+            // reader navigated to, so there is no single Digest for a tap
+            // here to act on the way there is once you've opened one.
+            // Neutral copy, matching the reader's own (`formatStaleCopy`) —
+            // see that function's doc comment for why this is never styled
+            // as an error.
+            <p className="text-xs text-muted-foreground">{formatStaleCopy(period)}</p>
+          )}
         </CardHeader>
         <CardContent>
           {/*
@@ -328,17 +340,39 @@ function useFittedDigests() {
 }
 
 function DigestCards() {
+  // Issue #133: the last known reachability of the configured Server —
+  // read here so a known outage both pauses further fetches (below) and
+  // shows the persistent banner in place of what used to be a one-off
+  // "Couldn't load your Digests" paragraph.
+  const serverReachable = useServerReachable();
+
+  // `enabled: serverReachable` — not fetched at all while the Server is
+  // known unreachable. Digests are read-only already, so there is no
+  // "write" for an outage to block, but a background refetch (a window
+  // refocus, a reconnect event) that failed would otherwise overwrite an
+  // already-successful `DigestResult` in the query cache with a failure
+  // one the instant it resolved — TanStack Query keeps `data` as the last
+  // resolved value, and `digestTransport` never throws, so a failed
+  // refetch counts as new data, not an error. Pausing fetches while
+  // unreachable is what keeps a Digest already on screen "still readable"
+  // rather than blanking out from under a reader mid-outage. Retry
+  // (`ServerUnreachableBanner` below) flips `serverReachable` back to
+  // `true` once the Server answers again, and TanStack Query fetches on
+  // its own the moment a previously-disabled query becomes enabled.
   const dayQuery = useQuery({
     queryKey: digestQueryKey("day"),
     queryFn: () => digestTransport("day"),
+    enabled: serverReachable,
   });
   const weekQuery = useQuery({
     queryKey: digestQueryKey("week"),
     queryFn: () => digestTransport("week"),
+    enabled: serverReachable,
   });
   const monthQuery = useQuery({
     queryKey: digestQueryKey("month"),
     queryFn: () => digestTransport("month"),
+    enabled: serverReachable,
   });
 
   const { containerRef, registerBody, maxBodyHeights } = useFittedDigests();
@@ -353,15 +387,26 @@ function DigestCards() {
   // network failure in priority: both are possible readings of "some
   // requests failed and some didn't" if a caller raced Settings mid-flight,
   // but "too old to have these routes" is the more specific, more useful
-  // thing to tell a reader when it's true.
+  // thing to tell a reader when it's true. Unrelated to reachability — the
+  // Server answered with a real 404, which `server-request.ts` already
+  // counts as reachable — so it's still read off each result rather than
+  // `serverReachable`.
   const notSupported = flatResults.some(
     (result) => result !== undefined && !result.ok && result.reason === "not-supported",
   );
-  const unreachable =
+  // `digestTransport`'s own `"unreachable"` reason covers more than a
+  // network-level failure — a non-404 error status (a 500, say) counts too,
+  // even though the Server clearly did answer (`server-request.ts` marks
+  // that reachable). So this stays its own check, read straight off each
+  // query's result exactly as before, and ORed with the global
+  // `serverReachable` flag rather than replaced by it — the latter is only
+  // what decides whether to keep fetching at all (`enabled` above).
+  const anyResultUnreachable =
     !notSupported &&
     flatResults.some(
       (result) => result !== undefined && !result.ok && result.reason === "unreachable",
     );
+  const showUnreachableBanner = !notSupported && (anyResultUnreachable || !serverReachable);
 
   if (notSupported) {
     return (
@@ -371,30 +416,35 @@ function DigestCards() {
     );
   }
 
-  if (unreachable) {
-    // ADR 0025 requires an outage to say so rather than render as empty —
-    // the same rule `sessions-page.tsx` and `reflection-page.tsx` already
-    // follow for their own Server-backed reads.
-    return (
-      <p className="text-center text-sm text-muted-foreground">
-        Couldn't load your Digests. Check your Server and try again.
-      </p>
-    );
-  }
-
   return (
-    <div ref={containerRef} className="flex flex-col gap-4">
-      {PERIODS.map(({ period, label, emptyCopy }, index) => (
-        <DigestCard
-          key={period}
-          period={period}
-          label={label}
-          emptyCopy={emptyCopy}
-          result={results[period]}
-          maxBodyHeight={maxBodyHeights[index] ?? null}
-          bodyRef={registerBody(index)}
+    <div className="flex flex-col gap-4">
+      {showUnreachableBanner && (
+        // ADR 0025 requires an outage to say so rather than render as
+        // empty — the same rule `sessions-page.tsx` and
+        // `reflection-page.tsx` follow for their own Server-backed reads.
+        // Rendered above the cards, not instead of them (issue #133):
+        // whatever Digest each already loaded before the outage stays
+        // below, and only a Period that never loaded shows nothing.
+        <ServerUnreachableBanner
+          message="Couldn't load your Digests. Check your Server and try again."
+          onRetry={() => {
+            refreshCapabilities();
+          }}
         />
-      ))}
+      )}
+      <div ref={containerRef} className="flex flex-col gap-4">
+        {PERIODS.map(({ period, label, emptyCopy }, index) => (
+          <DigestCard
+            key={period}
+            period={period}
+            label={label}
+            emptyCopy={emptyCopy}
+            result={results[period]}
+            maxBodyHeight={maxBodyHeights[index] ?? null}
+            bodyRef={registerBody(index)}
+          />
+        ))}
+      </div>
     </div>
   );
 }

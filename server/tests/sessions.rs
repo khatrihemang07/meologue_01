@@ -44,7 +44,7 @@ impl LlmClient for UnusedLlmClient {
 fn reflect_state() -> ReflectState {
     ReflectState {
         chat_client: Arc::new(UnusedLlmClient),
-        embed_client: Arc::new(UnusedLlmClient),
+        embed_client: Some(Arc::new(UnusedLlmClient)),
         context_window: 200_000,
         // Issue #96: `GET /v1/models` needs these, but nothing in this file
         // exercises that route — an address nothing should ever connect to,

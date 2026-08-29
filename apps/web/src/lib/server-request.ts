@@ -17,6 +17,17 @@ import { useSettingsStore } from "@/lib/settings";
  * The Server URL is read per call, never hoisted: a URL saved in Settings
  * between two requests takes effect on the very next one, with no reload
  * (ADR 0011).
+ *
+ * Issue #133: every one of the four transports built on this (Reflect,
+ * Digest, Sessions, Models) already funnels through here, which makes this
+ * the one place that can learn Server reachability from a real request
+ * without duplicating the write in each of them. A response of any status
+ * — even a 404 or a 500 — means the Server answered, so it marks
+ * `serverReachable: true`; only a thrown `fetch` (this function's own
+ * `catch` below) marks it `false`. A caller-initiated abort is excluded
+ * from both, same as the existing `console.error` guard: the request was
+ * withdrawn, not failed, so it says nothing about whether the Server is
+ * actually reachable.
  */
 export async function serverRequest(path: string, init?: RequestInit): Promise<Response | null> {
   const url = useSettingsStore.getState().serverUrl;
@@ -28,7 +39,9 @@ export async function serverRequest(path: string, init?: RequestInit): Promise<R
     // every test that asserts on the request shape have to know a wrapper
     // sits in the way — which is the opposite of what extracting this was
     // for.
-    return init ? await fetch(target, init) : await fetch(target);
+    const response = init ? await fetch(target, init) : await fetch(target);
+    useSettingsStore.getState().setServerReachable(true);
+    return response;
   } catch (error) {
     // Same reasoning as `reflect-transport.ts`'s own read-loop `catch`: a
     // caller-initiated abort is routine and not worth logging, but
@@ -37,6 +50,7 @@ export async function serverRequest(path: string, init?: RequestInit): Promise<R
     // deliberate unmount without live device instrumentation.
     if (init?.signal?.aborted !== true) {
       console.error("serverRequest: fetch failed", target, error);
+      useSettingsStore.getState().setServerReachable(false);
     }
     return null;
   }

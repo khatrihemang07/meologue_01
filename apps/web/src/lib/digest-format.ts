@@ -62,3 +62,50 @@ export function formatDigestRange(period: string, periodStart: string, periodEnd
   const end = formatUtcDate(periodEnd, { month: "short", day: "numeric", year: "numeric" });
   return `${start} – ${end}`;
 }
+
+/**
+ * The reader's provenance cue (issue #132 / ADR 0039): "Written {date}"
+ * for a Digest's first, worker-written revision, "Regenerated {date}" for
+ * any later one. There is no revision picker anywhere in this app — a
+ * reader only ever sees the newest revision, and this line is what tells
+ * them whether the Server wrote it by itself or they asked for it.
+ *
+ * `writtenAt` is an instant (`WireDigest["written_at"]`, the revision's own
+ * `created_at`), not a calendar date like `period_start`/`period_end`
+ * above — so unlike `formatDigestRange`'s `formatUtcDate`, this is
+ * deliberately rendered in the reader's own local timezone rather than
+ * pinned to UTC: "when the Server wrote this" is a moment in this reader's
+ * day, not a Period boundary the Server itself already resolved.
+ */
+export function formatDigestProvenance(revision: number, writtenAt: string): string {
+  const label = revision <= 1 ? "Written" : "Regenerated";
+  const parsed = Date.parse(writtenAt);
+  if (Number.isNaN(parsed)) {
+    return label;
+  }
+  return `${label} ${new Date(parsed).toLocaleDateString(undefined, { dateStyle: "medium" })}`;
+}
+
+/**
+ * A completed-Period noun for the stale marker's own sentence below —
+ * `formatDigestRange`'s `LABELS` in `digest-reader-page.tsx` is titled
+ * ("Day"/"Week"/"Month", for a page heading); this is the lowercase noun
+ * that sentence actually reads with ("...changed after this Digest was
+ * written"). Falls back to "Period" (CONTEXT.md's own term for the
+ * concept) for a `period` string this client doesn't recognise, rather
+ * than rendering nothing.
+ */
+const STALE_PERIOD_NOUN: Record<string, string> = { day: "day", week: "week", month: "month" };
+
+/**
+ * The stale marker's copy (issue #132 / ADR 0039) — neutral, never an
+ * error, matching CONTEXT.md's *Sync status* precedent that "off" reads as
+ * a fact, not a failure: staleness is a fact about freshness, not a
+ * mistake anyone made. Shared between the reader and the cards
+ * (`digest-page.tsx`) so the two surfaces never drift into saying this two
+ * different ways.
+ */
+export function formatStaleCopy(period: string): string {
+  const noun = STALE_PERIOD_NOUN[period] ?? "Period";
+  return `Entries for this ${noun} changed after this Digest was written.`;
+}

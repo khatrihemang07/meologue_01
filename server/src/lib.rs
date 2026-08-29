@@ -41,6 +41,26 @@ pub struct AppState {
     pub pool: PgPool,
     pub embed_tx: Option<Sender<Uuid>>,
     pub reflect: Option<ReflectState>,
+    /// Digest's server-side dependencies (`digest::DigestState`) — `Some`
+    /// exactly when chat is configured for the Digest worker
+    /// (`llm::LlmConfig::digest_worker_config`), the same condition that
+    /// used to be carried here as a bare `bool` alone. Issue #132 / ADR
+    /// 0039's `regenerate_digest_handler` needs the actual chat client and
+    /// `Tz`, not just a yes/no — mirrors `Option<ReflectState>` just above
+    /// exactly, including why a whole `Option<T>` beats a second
+    /// independent bool: `digests_enabled` below is now *derived* from
+    /// `digest.is_some()` inside `router_with_digests` rather than passed
+    /// in as its own parameter, so there is exactly one place that knows
+    /// whether Digests are on, not two that could drift apart.
+    pub digest: Option<digest::DigestState>,
+    /// Whether `/v1/digests/*` is registered on this Router — always equal
+    /// to `digest.is_some()` (see that field's own doc comment for why
+    /// this is derived, not a second independent switch). Kept as its own
+    /// field, rather than computed on every read, so
+    /// `health::health_handler` (issue #133) can report a `digest`
+    /// capability without reaching into `Option<DigestState>` for a bool
+    /// it doesn't otherwise need.
+    pub digests_enabled: bool,
 }
 
 impl FromRef<AppState> for PgPool {
@@ -58,6 +78,27 @@ impl FromRef<AppState> for Option<Sender<Uuid>> {
 impl FromRef<AppState> for Option<ReflectState> {
     fn from_ref(state: &AppState) -> Self {
         state.reflect.clone()
+    }
+}
+
+impl FromRef<AppState> for Option<digest::DigestState> {
+    fn from_ref(state: &AppState) -> Self {
+        state.digest.clone()
+    }
+}
+
+/// A newtype around `AppState::digests_enabled`'s `bool`, rather than a bare
+/// `impl FromRef<AppState> for bool` — `AppState` has exactly one `bool`
+/// field today, but a plain `bool` extractor gives every future one the
+/// same ambiguous claim on it. Mirrors `Option<Sender<Uuid>>` and
+/// `Option<ReflectState>` just above: one small `FromRef` per thing a
+/// handler might need out of the shared state.
+#[derive(Debug, Clone, Copy)]
+pub struct DigestsEnabled(pub bool);
+
+impl FromRef<AppState> for DigestsEnabled {
+    fn from_ref(state: &AppState) -> Self {
+        DigestsEnabled(state.digests_enabled)
     }
 }
 
@@ -166,8 +207,8 @@ pub fn router_with_embedding(
 
 /// Same as `router_with_embedding`, but also wires the Reflection state
 /// (`llm::LlmConfig::reflect_config`) that `reflect::reflect_handler`
-/// needs. Delegates to `router_with_digests` with `digests_enabled: false`,
-/// so `/v1/digests/*` doesn't exist — every caller written against this
+/// needs. Delegates to `router_with_digests` with `digest: None`, so
+/// `/v1/digests/*` doesn't exist — every caller written against this
 /// signature before issue #70 (several test files) keeps compiling and
 /// keeps getting a server with no Digest routes, exactly as before.
 ///
@@ -182,26 +223,39 @@ pub fn router_with_reflection(
     embed_tx: Option<Sender<Uuid>>,
     reflect: Option<ReflectState>,
 ) -> Router {
-    router_with_digests(pool, static_dir, embed_tx, reflect, false)
+    router_with_digests(pool, static_dir, embed_tx, reflect, None)
 }
 
 /// The widest router constructor — everything `router_with_reflection`
-/// wires, plus the two Digest routes (issue #70) gated on `digests_enabled`
-/// rather than on `reflect.is_some()`: Digests need only a chat client
-/// (`llm::LlmConfig::digest_worker_config`), not the embed client
-/// Reflection additionally requires, so reusing the `reflect` gate would
-/// wrongly hide `/v1/digests/*` on a chat-only-configured Server that has
-/// no Reflection at all. `main.rs` calls this directly, passing whether
-/// `digest_worker_config()` resolved; `router_with_reflection` is the
-/// narrower, `digests_enabled: false` convenience the rest of the test
-/// suite is written against.
+/// wires, plus the three Digest routes (issue #70's two reads, issue #132's
+/// regenerate) gated on `digest.is_some()` rather than on
+/// `reflect.is_some()`. Reflection and Digest are gated on the same chat
+/// config today (`llm::LlmConfig::digest_worker_config` and, since issue
+/// #130, `reflect_config` both require chat alone and nothing else), but
+/// they remain two separate switches rather than one: a Digest and a
+/// Reflection are different features that happen to share a dependency,
+/// not one feature with two names, and `main.rs` builds `digest` from the
+/// Digest worker's own startup outcome rather than piggybacking on
+/// `reflect`'s. `main.rs` calls this directly, passing the same
+/// `DigestState` it hands `digest::run`; `router_with_reflection` is the
+/// narrower, `digest: None` convenience the rest of the test suite is
+/// written against.
+///
+/// `digest: Option<digest::DigestState>`, not a bare `bool`
+/// (issue #132 / ADR 0039) — `regenerate_digest_handler` needs the actual
+/// chat client and `Tz` to make its own inline chat call, not just a
+/// yes/no. `digests_enabled` is derived from `digest.is_some()` right
+/// below, once, so `AppState`'s own bool field (which `health_handler`
+/// reads) can never disagree with whether these routes are actually
+/// registered.
 pub fn router_with_digests(
     pool: PgPool,
     static_dir: impl AsRef<Path>,
     embed_tx: Option<Sender<Uuid>>,
     reflect: Option<ReflectState>,
-    digests_enabled: bool,
+    digest: Option<digest::DigestState>,
 ) -> Router {
+    let digests_enabled = digest.is_some();
     // Installs the global metrics recorder (if not already installed) before
     // any request can reach `track_metrics` — see src/metrics.rs.
     metrics::handle();
@@ -284,11 +338,21 @@ pub fn router_with_digests(
         // `digest::digest_at_handler` to find — these routes must 404
         // exactly like an older Server that never had them, the same
         // reasoning `v1_not_found`'s doc comment gives for `/v1/reflect`.
+        //
+        // `regenerate_digest_handler` (issue #132 / ADR 0039) is
+        // registered alongside the two reads, under the same gate — a
+        // Server that never ran the Digest worker has no chat client to
+        // spend on a regenerate request either, so there is nothing this
+        // route could do that a 404 doesn't already say more simply.
         api_router = api_router
             .route("/v1/digests/{period}", get(digest::latest_digest_handler))
             .route(
                 "/v1/digests/{period}/{date}",
                 get(digest::digest_at_handler),
+            )
+            .route(
+                "/v1/digests/{period}/{date}/regenerate",
+                post(digest::regenerate_digest_handler),
             );
     }
     // Always registered, whether or not Reflection is configured: this is
@@ -299,7 +363,13 @@ pub fn router_with_digests(
     api_router = api_router.route("/v1/{*rest}", any(v1_not_found));
 
     api_router
-        .with_state(AppState { pool, embed_tx, reflect })
+        .with_state(AppState {
+            pool,
+            embed_tx,
+            reflect,
+            digest,
+            digests_enabled,
+        })
         .fallback_service(app_shell)
         .layer(axum::middleware::from_fn(metrics::track_metrics))
         .layer(trace_layer)

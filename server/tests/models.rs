@@ -51,7 +51,7 @@ impl LlmClient for UnusedLlmClient {
 fn reflect_state(chat_base_url: &str) -> ReflectState {
     ReflectState {
         chat_client: Arc::new(UnusedLlmClient),
-        embed_client: Arc::new(UnusedLlmClient),
+        embed_client: Some(Arc::new(UnusedLlmClient)),
         context_window: 200_000,
         chat_base_url: chat_base_url.to_string(),
         chat_api_key: None,

@@ -70,3 +70,48 @@ export async function digestAtTransport(period: string, date: string): Promise<D
   const body = (await response.json()) as WireDigestResponse;
   return { ok: true, digest: body.digest ?? null };
 }
+
+/**
+ * Issue #132 / ADR 0039: `POST /v1/digests/{period}/{date}/regenerate` —
+ * writes and returns a new revision, synchronously (`digest.rs`'s own
+ * `regenerate_digest_handler` does the chat call inline, so this `fetch`
+ * genuinely takes as long as that one call does; the reader's Regenerate
+ * button shows a spinner for exactly that reason, not a fixed delay).
+ *
+ * Shares `DigestResult`'s shape rather than inventing a fourth transport
+ * type, with one addition: `"failed"` for a non-404, non-2xx status (the
+ * chat call or the insert failed server-side, `regenerate_digest_handler`'s
+ * own 500) — a real failure this button's own caller has to tell the
+ * reader about, which `digestTransport`/`digestAtTransport` never produce
+ * because a plain read has nothing that can fail this way. `"not-supported"`
+ * stays for a 404, defensively — the Regenerate action only ever renders
+ * once a Digest route answered something, so this Server predating the
+ * routes entirely would be a surprise, not the expected case.
+ */
+export type DigestRegenerateResult =
+  | { ok: true; digest: WireDigest | null }
+  | { ok: false; reason: "not-supported" }
+  | { ok: false; reason: "unreachable" }
+  | { ok: false; reason: "failed" };
+
+export async function digestRegenerateTransport(
+  period: string,
+  date: string,
+): Promise<DigestRegenerateResult> {
+  const response = await serverRequest(`/v1/digests/${period}/${date}/regenerate`, {
+    method: "POST",
+  });
+  if (response === null) {
+    return { ok: false, reason: "unreachable" };
+  }
+
+  if (response.status === 404) {
+    return { ok: false, reason: "not-supported" };
+  }
+  if (!response.ok) {
+    return { ok: false, reason: "failed" };
+  }
+
+  const body = (await response.json()) as WireDigestResponse;
+  return { ok: true, digest: body.digest ?? null };
+}

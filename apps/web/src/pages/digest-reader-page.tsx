@@ -1,11 +1,14 @@
-import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, ChevronLeft, ChevronRight } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ArrowLeft, ChevronLeft, ChevronRight, RefreshCw } from "lucide-react";
 import { Link, useLocation, useNavigate, useParams } from "react-router";
+import { toast } from "sonner";
+import { ServerUnreachableBanner } from "@/components/server-unreachable-banner";
 import { Shell } from "@/components/shell";
-import { formatDigestRange } from "@/lib/digest-format";
-import { digestAtTransport } from "@/lib/digest-transport";
-import { digestAtQueryKey } from "@/lib/query-keys";
-import { useSyncEnabled } from "@/lib/settings";
+import { formatDigestProvenance, formatDigestRange, formatStaleCopy } from "@/lib/digest-format";
+import { digestAtTransport, digestRegenerateTransport } from "@/lib/digest-transport";
+import { digestAtQueryKey, digestQueryKey } from "@/lib/query-keys";
+import { refreshCapabilities, useServerReachable, useSyncEnabled } from "@/lib/settings";
+import { cn } from "@/lib/utils";
 
 const LABELS: Record<string, string> = { day: "Day", week: "Week", month: "Month" };
 
@@ -98,6 +101,65 @@ function DigestStepControl({
   );
 }
 
+/**
+ * The app-bar Regenerate action (issue #132 / ADR 0039) — the reader's
+ * only rescue for a Period stuck past `digest.rs::MAX_ATTEMPTS` (a
+ * process-local attempt cap, ADR 0027:155-159 accepts it's lost on
+ * restart, so a permanently failed Period never earns a row on its own).
+ * **Always enabled**, deliberately never reading `stale` at all — a
+ * reader who wants a fresh take on a Period that changed since it was
+ * written, or who is simply rescuing one that was never written, has the
+ * same one action to reach for either way.
+ *
+ * Synchronous, and `mutation.isPending` is the only thing this component
+ * disables on — the request genuinely takes as long as `digest.rs`'s own
+ * inline chat call does (`regenerate_digest_handler` is not a "kick off a
+ * background job" endpoint), so a spinner in place of the icon is honest
+ * feedback, not decoration, and disabling the button while it spins is
+ * about not firing a second overlapping request, never about staleness.
+ *
+ * On success, invalidates both `digestQueryKey(period)` (the cards page)
+ * and `digestAtQueryKey(period, date)` (this page's own query) — issue
+ * #132's "reading a Digest after regeneration returns the new body
+ * without a manual refresh" acceptance criterion. `digestAtTransport`'s
+ * own query already refetches the instant its key is invalidated
+ * (TanStack Query's default), so nothing here has to touch `query.data`
+ * directly.
+ */
+function RegenerateAction({ period, date }: { period: string; date: string }) {
+  const queryClient = useQueryClient();
+
+  const mutation = useMutation({
+    mutationFn: () => digestRegenerateTransport(period, date),
+    onSuccess: (result) => {
+      if (result.ok) {
+        queryClient.invalidateQueries({ queryKey: digestQueryKey(period) });
+        queryClient.invalidateQueries({ queryKey: digestAtQueryKey(period, date) });
+      } else {
+        toast.error("Couldn't regenerate this Digest. Check your Server and try again.");
+      }
+    },
+    onError: () => {
+      toast.error("Couldn't regenerate this Digest. Check your Server and try again.");
+    },
+  });
+
+  return (
+    <button
+      type="button"
+      onClick={() => mutation.mutate()}
+      disabled={mutation.isPending}
+      aria-label="Regenerate"
+      className="flex size-11 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-60"
+    >
+      <RefreshCw
+        aria-hidden="true"
+        className={cn("size-4", mutation.isPending && "animate-spin")}
+      />
+    </button>
+  );
+}
+
 // `/digest/:period/:date` — opens one specific Digest (issue #71's "tapping
 // a card opens that Digest"), extended by issue #72 with the back/forward
 // controls (`DigestStepControl` below) that walk to the neighbouring
@@ -116,6 +178,16 @@ function DigestStepControl({
 // existed there once; see its own copy below.
 export function DigestReaderPage() {
   const syncEnabled = useSyncEnabled();
+  // Issue #133: as on `digest-page.tsx`, gates further fetches while the
+  // Server is known unreachable, so a failed background refetch (a window
+  // refocus, a reconnect event) can't silently overwrite an
+  // already-successful `DigestResult` in the query cache with a failure
+  // one — see that page's own comment on `DigestCards` for the mechanics
+  // (`digestAtTransport` never throws, so a failed refetch is new data to
+  // TanStack Query, not an error). Also drives the persistent banner below,
+  // ORed with the ordinary per-result `unreachable` check (a non-404 error
+  // status is "unreachable" here too, even though the Server did answer).
+  const serverReachable = useServerReachable();
   const { period, date } = useParams<{ period: string; date: string }>();
   const navigate = useNavigate();
   const location = useLocation();
@@ -127,12 +199,14 @@ export function DigestReaderPage() {
     // the key only has to be distinct, not meaningful.
     queryKey: digestAtQueryKey(period ?? "", date ?? ""),
     queryFn: () => digestAtTransport(period ?? "", date ?? ""),
-    enabled: syncEnabled && period !== undefined && date !== undefined,
+    enabled: syncEnabled && period !== undefined && date !== undefined && serverReachable,
   });
 
   const result = query.data;
   const notSupported = result !== undefined && !result.ok && result.reason === "not-supported";
-  const unreachable = result !== undefined && !result.ok && result.reason === "unreachable";
+  const unreachable =
+    !notSupported &&
+    ((result !== undefined && !result.ok && result.reason === "unreachable") || !serverReachable);
   const digest = result?.ok ? result.digest : undefined;
 
   // Reached only from `digest-page.tsx`'s own cards, so `/digest` is
@@ -161,6 +235,19 @@ export function DigestReaderPage() {
           <ArrowLeft aria-hidden="true" className="size-4" />
         </button>
       }
+      // Issue #132 / ADR 0039: only once this route actually names a
+      // Period and a date — `notSupported` (this Server has no Digest
+      // routes at all) also hides it, the same reasoning `!syncEnabled`
+      // already hides the whole page's content for: there is nothing this
+      // action could do on a Server that can't serve `/v1/digests/*` at
+      // all. Rendered whether or not a Digest exists yet at this date —
+      // that "nothing here yet" case is exactly the rescue this action
+      // exists for (see `RegenerateAction`'s own doc comment).
+      action={
+        syncEnabled && !notSupported && period !== undefined && date !== undefined ? (
+          <RegenerateAction period={period} date={date} />
+        ) : undefined
+      }
     >
       {!syncEnabled && (
         <p className="text-center text-sm text-muted-foreground">
@@ -179,9 +266,16 @@ export function DigestReaderPage() {
       )}
 
       {syncEnabled && unreachable && (
-        <p className="text-center text-sm text-muted-foreground">
-          Couldn't load this Digest. Check your Server and try again.
-        </p>
+        // Issue #133: a persistent banner with a Retry, same as
+        // `digest-page.tsx` — see that page's own comment on
+        // `ServerUnreachableBanner` for why this replaces what used to be
+        // a plain, one-off paragraph.
+        <ServerUnreachableBanner
+          message="Couldn't load this Digest. Check your Server and try again."
+          onRetry={() => {
+            refreshCapabilities();
+          }}
+        />
       )}
 
       {syncEnabled && result?.ok && digest === null && (
@@ -215,6 +309,27 @@ export function DigestReaderPage() {
               Icon={ChevronRight}
             />
           </div>
+          {/*
+            The provenance cue (issue #132 / ADR 0039): which revision this
+            is and when it was written, drawn from `digest.revision`/
+            `digest.written_at` — see `formatDigestProvenance`'s own doc
+            comment. Rendered above the body, below the stepper row, so it
+            reads as a property of *this* revision rather than of the
+            Period the stepper above it is walking through.
+          */}
+          <p className="text-center text-xs text-muted-foreground">
+            {formatDigestProvenance(digest.revision, digest.written_at)}
+          </p>
+          {digest.stale && (
+            // Neutral, never an error — see `formatStaleCopy`'s own doc
+            // comment citing CONTEXT.md's *Sync status* precedent. Styled
+            // identically to the provenance cue just above it (same muted
+            // tone, same size): staleness is one more fact about this
+            // revision, not a warning that needs to stand out from it.
+            <p className="text-center text-xs text-muted-foreground">
+              {formatStaleCopy(digest.period)}
+            </p>
+          )}
           <p className="whitespace-pre-wrap text-sm text-foreground">{digest.body}</p>
         </>
       )}

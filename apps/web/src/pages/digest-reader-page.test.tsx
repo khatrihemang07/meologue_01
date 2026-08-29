@@ -58,7 +58,14 @@ describe("DigestReaderPage", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     localStorage.clear();
-    useSettingsStore.setState({ serverUrl: "" });
+    // `serverReachable`/`capabilities` (issue #133) reset here too — see
+    // `digest-page.test.tsx`'s identical reset for why a prior test's
+    // simulated network failure must not leak into a later one.
+    useSettingsStore.setState({
+      serverUrl: "",
+      serverReachable: true,
+      capabilities: null,
+    });
   });
 
   it("with Sync off, says so, points at Settings, and makes no request at all", () => {
@@ -87,6 +94,9 @@ describe("DigestReaderPage", () => {
         grounding_entry_ids: ["entry-1"],
         prev_date: "2026-08-18",
         next_date: null,
+        stale: false,
+        revision: 1,
+        written_at: "2026-08-21T06:00:00Z",
       },
     });
 
@@ -125,6 +135,9 @@ describe("DigestReaderPage", () => {
         grounding_entry_ids: [],
         prev_date: null,
         next_date: null,
+        stale: false,
+        revision: 1,
+        written_at: "2026-08-21T06:00:00Z",
       },
     });
 
@@ -147,6 +160,9 @@ describe("DigestReaderPage", () => {
         grounding_entry_ids: [],
         prev_date: null,
         next_date: null,
+        stale: false,
+        revision: 1,
+        written_at: "2026-08-21T06:00:00Z",
       },
     });
 
@@ -205,6 +221,161 @@ describe("DigestReaderPage", () => {
     ).toBeInTheDocument();
   });
 
+  // Issue #132 / ADR 0039: staleness and the Regenerate action.
+  describe("regenerate and staleness", () => {
+    it("shows the neutral stale marker when the Digest is stale", async () => {
+      useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+      stubDigestAtFetch({
+        status: 200,
+        digest: {
+          period: "day",
+          period_start: "2026-08-20",
+          period_end: "2026-08-20",
+          body: "Body.",
+          grounding_entry_ids: [],
+          prev_date: null,
+          next_date: null,
+          stale: true,
+          revision: 2,
+          written_at: "2026-08-22T06:00:00Z",
+        },
+      });
+
+      renderDigestReaderPage("/digest/day/2026-08-20");
+
+      expect(
+        await screen.findByText("Entries for this day changed after this Digest was written."),
+      ).toBeInTheDocument();
+      // Provenance cue: revision 2 reads "Regenerated", never "Written" —
+      // the exact date is locale/timezone-dependent (`written_at` renders
+      // in the reader's own local timezone, `digest-format.ts`'s
+      // `formatDigestProvenance`), so only the label is asserted on here.
+      expect(screen.getByText(/^Regenerated /)).toBeInTheDocument();
+    });
+
+    it("shows no stale marker, and a Written provenance cue, for a fresh revision 1 Digest", async () => {
+      useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+      stubDigestAtFetch({
+        status: 200,
+        digest: {
+          period: "day",
+          period_start: "2026-08-20",
+          period_end: "2026-08-20",
+          body: "Body.",
+          grounding_entry_ids: [],
+          prev_date: null,
+          next_date: null,
+          stale: false,
+          revision: 1,
+          written_at: "2026-08-21T06:00:00Z",
+        },
+      });
+
+      renderDigestReaderPage("/digest/day/2026-08-20");
+
+      expect(await screen.findByText(/^Written /)).toBeInTheDocument();
+      expect(
+        screen.queryByText("Entries for this day changed after this Digest was written."),
+      ).not.toBeInTheDocument();
+    });
+
+    it("Regenerate is enabled even when the Digest is not stale — it is not gated on staleness at all", async () => {
+      useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+      stubDigestAtFetch({
+        status: 200,
+        digest: {
+          period: "day",
+          period_start: "2026-08-20",
+          period_end: "2026-08-20",
+          body: "Fresh, not stale.",
+          grounding_entry_ids: [],
+          prev_date: null,
+          next_date: null,
+          stale: false,
+          revision: 1,
+          written_at: "2026-08-21T06:00:00Z",
+        },
+      });
+
+      renderDigestReaderPage("/digest/day/2026-08-20");
+
+      expect(await screen.findByText("Fresh, not stale.")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Regenerate" })).toBeEnabled();
+    });
+
+    it("Regenerate is available even with no Digest at all for this date — the rescue for a Period past MAX_ATTEMPTS", async () => {
+      useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+      stubDigestAtFetch({ status: 200, digest: null });
+
+      renderDigestReaderPage("/digest/day/2026-08-20");
+
+      expect(await screen.findByText("No Digest was written for this date.")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Regenerate" })).toBeEnabled();
+    });
+
+    it("a successful Regenerate refreshes the shown body without a manual refresh", async () => {
+      useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+
+      // A stateful stub, unlike `stubDigestAtFetch`'s single canned
+      // response: this test needs the plain GET the page starts with, the
+      // POST .../regenerate the click fires, and a second GET (fired by
+      // TanStack Query's own automatic refetch once
+      // `RegenerateAction`'s `onSuccess` invalidates the query) to all
+      // agree on the same, evolving server-side state — exactly what a
+      // real Server round trip would do.
+      let current = {
+        period: "day",
+        period_start: "2026-08-20",
+        period_end: "2026-08-20",
+        body: "Written by the worker.",
+        grounding_entry_ids: ["entry-1"],
+        prev_date: null,
+        next_date: null,
+        stale: true,
+        revision: 1,
+        written_at: "2026-08-21T06:00:00Z",
+      };
+
+      const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+        const path = new URL(url).pathname;
+        if (path === "/v1/digests/day/2026-08-20/regenerate") {
+          expect(init?.method).toBe("POST");
+          current = {
+            ...current,
+            body: "Regenerated, freshly written from today's Entries.",
+            stale: false,
+            revision: 2,
+            written_at: "2026-08-22T06:00:00Z",
+          };
+          return { ok: true, status: 200, json: async () => ({ digest: current }) };
+        }
+        if (path === "/v1/digests/day/2026-08-20") {
+          return { ok: true, status: 200, json: async () => ({ digest: current }) };
+        }
+        return { ok: false, status: 404, json: async () => ({}) };
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      renderDigestReaderPage("/digest/day/2026-08-20");
+
+      expect(await screen.findByText("Written by the worker.")).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Regenerate" }));
+
+      expect(
+        await screen.findByText("Regenerated, freshly written from today's Entries."),
+      ).toBeInTheDocument();
+      expect(screen.queryByText("Written by the worker.")).not.toBeInTheDocument();
+      // The refreshed body's own provenance cue and stale marker follow
+      // along too — nothing here is a stale echo of the pre-regenerate
+      // state.
+      expect(screen.getByText(/^Regenerated /)).toBeInTheDocument();
+      expect(
+        screen.queryByText("Entries for this day changed after this Digest was written."),
+      ).not.toBeInTheDocument();
+    });
+  });
+
   // Issue #72: back/forward controls that walk the archive by following the
   // Server's own `prev_date`/`next_date`, never computing one — see
   // digest-reader-page.tsx's `DigestStepControl` for the full reasoning.
@@ -221,6 +392,9 @@ describe("DigestReaderPage", () => {
           grounding_entry_ids: [],
           prev_date: "2026-08-19",
           next_date: "2026-08-21",
+          stale: false,
+          revision: 1,
+          written_at: "2026-08-21T06:00:00Z",
         },
       });
 
@@ -242,6 +416,9 @@ describe("DigestReaderPage", () => {
           grounding_entry_ids: [],
           prev_date: "2026-08-19",
           next_date: "2026-08-21",
+          stale: false,
+          revision: 1,
+          written_at: "2026-08-21T06:00:00Z",
         },
       });
 
@@ -273,6 +450,9 @@ describe("DigestReaderPage", () => {
           grounding_entry_ids: [],
           prev_date: "2026-08-19",
           next_date: null,
+          stale: false,
+          revision: 1,
+          written_at: "2026-08-21T06:00:00Z",
         },
       });
 
@@ -301,6 +481,9 @@ describe("DigestReaderPage", () => {
           grounding_entry_ids: [],
           prev_date: "2026-08-15",
           next_date: null,
+          stale: false,
+          revision: 1,
+          written_at: "2026-08-21T06:00:00Z",
         },
       });
 
@@ -324,6 +507,9 @@ describe("DigestReaderPage", () => {
           grounding_entry_ids: [],
           prev_date: null,
           next_date: "2026-08-21",
+          stale: false,
+          revision: 1,
+          written_at: "2026-08-21T06:00:00Z",
         },
       });
 
@@ -348,6 +534,9 @@ describe("DigestReaderPage", () => {
           grounding_entry_ids: [],
           prev_date: null,
           next_date: null,
+          stale: false,
+          revision: 1,
+          written_at: "2026-08-21T06:00:00Z",
         },
       });
 

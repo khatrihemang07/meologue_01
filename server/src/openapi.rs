@@ -1,7 +1,7 @@
 use utoipa::OpenApi;
 
 use crate::digest::{Digest, DigestResponse};
-use crate::health::HealthResponse;
+use crate::health::{HealthCapabilities, HealthResponse};
 use crate::llm::ModelInfo;
 use crate::models::ModelsResponse;
 use crate::reflect::{ReflectRequest, ReflectResponse};
@@ -19,10 +19,12 @@ use crate::sync::{EntryInput, EntryOutput, SyncRequest, SyncResponse};
         crate::sessions::delete_session_handler,
         crate::digest::latest_digest_handler,
         crate::digest::digest_at_handler,
+        crate::digest::regenerate_digest_handler,
         crate::models::models_handler,
     ),
     components(schemas(
         HealthResponse,
+        HealthCapabilities,
         SyncRequest,
         SyncResponse,
         EntryInput,

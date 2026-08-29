@@ -275,9 +275,14 @@ describe("reflectTransport", () => {
       }
     });
     controller.abort();
-    await resultPromise;
+    const result = await resultPromise;
 
     expect(consoleError).not.toHaveBeenCalled();
+    // Issue #131: a deliberate abort is its own reason now, not folded
+    // into "unreachable" — see the test below this file's own comment on
+    // `ReflectResult`'s `"aborted"` variant for why that distinction
+    // exists at all.
+    expect(result).toEqual({ ok: false, reason: "aborted" });
     consoleError.mockRestore();
   });
 
@@ -286,9 +291,11 @@ describe("reflectTransport", () => {
   // resolves on its own, only rejects when the signal fires) with a hand-
   // rolled reader instead of a real `ReadableStream`, so the assertions
   // below can pin down precisely what `reflectTransport`'s own read loop
-  // does with that rejection: resolve `unreachable`, call `reader.cancel`,
-  // and report no further events.
-  it("aborts the in-flight stream and resolves gracefully when the caller's signal fires", async () => {
+  // does with that rejection: resolve `"aborted"` (issue #131 — not
+  // `"unreachable"`, which is what this used to report before the two
+  // reasons were told apart), call `reader.cancel`, and report no further
+  // events.
+  it("aborts the in-flight stream and resolves as 'aborted', not 'unreachable', when the caller's signal fires", async () => {
     const controller = new AbortController();
     let rejectRead: ((reason: unknown) => void) | null = null;
     const cancel = vi.fn(async () => undefined);
@@ -329,9 +336,35 @@ describe("reflectTransport", () => {
     controller.abort();
     const result = await resultPromise;
 
-    expect(result).toEqual({ ok: false, reason: "unreachable" });
+    expect(result).toEqual({ ok: false, reason: "aborted" });
     expect(cancel).toHaveBeenCalled();
     expect(events).toEqual([]);
+  });
+
+  // Issue #131: the same abort, one layer earlier — the caller's `signal`
+  // fires before `serverRequest`'s own `fetch` ever resolves, so
+  // `reflectTransport` never even reaches the read loop above. This is the
+  // `response === null` branch, which used to report this exactly like a
+  // genuine dropped connection.
+  it("reports 'aborted', not 'unreachable', when the signal fires before fetch itself resolves", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    const controller = new AbortController();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string, init?: RequestInit) => {
+        return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            reject(new DOMException("This operation was aborted", "AbortError"));
+          });
+        });
+      }),
+    );
+
+    const resultPromise = reflectTransport(request, { signal: controller.signal });
+    controller.abort();
+    const result = await resultPromise;
+
+    expect(result).toEqual({ ok: false, reason: "aborted" });
   });
 
   it("reports a 404 as 'not-supported' — this Server predates Reflection", async () => {

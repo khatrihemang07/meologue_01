@@ -9,6 +9,7 @@ import { Bubble } from "@/components/entry-bubble";
 import { GroundingDisclosure } from "@/components/grounding-disclosure";
 import { QuestionComposer } from "@/components/question-composer";
 import { NewSessionLink, SessionsLink } from "@/components/reflect-actions";
+import { ServerUnreachableBanner } from "@/components/server-unreachable-banner";
 import { Shell } from "@/components/shell";
 import {
   type ConversationTurn,
@@ -22,7 +23,7 @@ import { groundingEntriesQueryKey, MODELS_QUERY_KEY } from "@/lib/query-keys";
 import { applyReflectEvent, initialLiveRunState, type LiveRunState } from "@/lib/reflect-live-run";
 import { reflectTransport } from "@/lib/reflect-transport";
 import { type SessionResult, sessionsTransport } from "@/lib/sessions-transport";
-import { useSyncEnabled } from "@/lib/settings";
+import { refreshCapabilities, useServerReachable, useSyncEnabled } from "@/lib/settings";
 import { useEntryStore } from "@/pages/entry-store-layout";
 
 /**
@@ -244,6 +245,15 @@ function LiveRunView({ liveRun }: { liveRun: LiveRunState }) {
 // to close.
 export function ReflectionPage() {
   const syncEnabled = useSyncEnabled();
+  // Issue #133: the last known reachability of the configured Server —
+  // `false` only once a real request has actually failed at the network
+  // level (`server-request.ts`'s shared `serverRequest`, which
+  // `reflectTransport` and `sessionsTransport` both funnel through), never
+  // a pre-emptive probe this page runs on its own. Drives two things below:
+  // the Question input drops out of `composerSlot` (issue #133's "read yes,
+  // write no"), and a persistent `ServerUnreachableBanner` replaces what
+  // `handleAsk`'s own failure branch used to toast for this same reason.
+  const serverReachable = useServerReachable();
   const { sessionId } = useParams<{ sessionId?: string }>();
   const navigate = useNavigate();
   const location = useLocation();
@@ -269,6 +279,17 @@ export function ReflectionPage() {
   // entirely, so this page resolves Grounding ids through it instead.
   const { getEntries } = useEntryStore();
 
+  // The Question currently in flight, or null when nothing is being asked.
+  // Deliberately component-local rather than in the query cache: an
+  // in-flight Question isn't a Conversation turn yet (CONTEXT.md: a
+  // Conversation is Questions *and Answers*), and navigating away mid-ask
+  // is Reflection's page-level concern, not the Conversation's own data.
+  //
+  // Declared ahead of `sessionQuery` below (rather than beside the rest of
+  // this page's state further down) because `sessionQuery`'s own `enabled`
+  // needs to read it — see that query's own comment on why.
+  const [pending, setPending] = useState<string | null>(null);
+
   const sessionQuery = useQuery({
     // `sessionId ?? ""` rather than a "none" sentinel: `enabled` below already
     // means this query never runs without one, so the key only has to be
@@ -282,7 +303,22 @@ export function ReflectionPage() {
     // No sessionId → no query, empty Conversation (ADR 0025): a fresh
     // Session doesn't exist on the Server yet, so there is nothing to fetch
     // until the first ask creates one.
-    enabled: sessionId !== undefined,
+    //
+    // Issue #131: also gated on no ask being in flight. `handleAsk` below
+    // now mints a fresh Session's id and navigates to its URL *before*
+    // dispatching the request — which means `sessionId` can already name a
+    // row the Server hasn't created yet (`resolve_session` creates it
+    // synchronously once the POST arrives, not before). Fetching eagerly
+    // here would race that POST: a `GET` that lands first 404s, and if
+    // that response arrives *after* `handleAsk`'s own optimistic
+    // `queryClient.setQueryData` write, it would silently overwrite the
+    // just-answered Turn with "not found." Waiting for `pending` to clear
+    // sidesteps the race entirely rather than trying to out-time it — by
+    // then the ask has already settled, so either the optimistic write
+    // already holds the answered Turn (success) or the row genuinely
+    // exists with no Turns yet (failure — `resolve_session` still minted
+    // it), and either way this fetch is safe.
+    enabled: sessionId !== undefined && pending === null,
   });
 
   const sessionData = sessionId === undefined ? undefined : sessionQuery.data;
@@ -368,12 +404,6 @@ export function ReflectionPage() {
   const deletedElsewhere =
     notFound && rememberedSessionId !== null && sessionId === rememberedSessionId;
 
-  // The Question currently in flight, or null when nothing is being asked.
-  // Deliberately component-local rather than in the query cache: an
-  // in-flight Question isn't a Conversation turn yet (CONTEXT.md: a
-  // Conversation is Questions *and Answers*), and navigating away mid-ask
-  // is Reflection's page-level concern, not the Conversation's own data.
-  const [pending, setPending] = useState<string | null>(null);
   // Issue #96: replaces the old two-phase "Searching your Entries…" /
   // "Thinking…" copy staged on a bare timer — the harness now reports real
   // progress as it happens (`reflect-live-run.ts`), so there is no longer
@@ -483,6 +513,26 @@ export function ReflectionPage() {
     // ask, not the first.
     setAskSignal((count) => (count ?? 0) + 1);
 
+    // Issue #131, ADR 0038: the Device mints a fresh Session's id itself
+    // now, rather than learning it only from a successful `agent_end` —
+    // the same "the Device generates the id, the Server upserts on it"
+    // shape an Entry already uses (`server/src/sync.rs`'s own `on conflict
+    // (id) do update`). Both the memory write and the navigate happen
+    // *before* `reflectTransport` is even called: this is what makes a
+    // leave-mid-Question survivable — the URL and `last-session.ts`
+    // already point at the right Session however this request ends,
+    // instead of only once it succeeds. A follow-up ask on an already-open
+    // Session has nothing to mint; `sessionId` from the URL already names
+    // it.
+    const effectiveSessionId = sessionId ?? crypto.randomUUID();
+    writeLastSessionId(effectiveSessionId);
+    if (sessionId === undefined) {
+      // `replace` so Back doesn't bounce through the empty `/reflect` this
+      // Conversation started from — the same reasoning the old
+      // after-success navigate below this used to be carried (issue #80).
+      navigate(`/reflect/${effectiveSessionId}`, { replace: true });
+    }
+
     const controller = new AbortController();
     activeAbortRef.current = controller;
 
@@ -490,7 +540,7 @@ export function ReflectionPage() {
       {
         protocol_version: PROTOCOL_VERSION,
         question,
-        session_id: sessionId ?? null,
+        session_id: effectiveSessionId,
         // Ticket 5's extraction call resolves phrases like "last week"
         // against this Device's own local day, never the server's clock —
         // see ADR 0016's precedent (Export's per-day grouping) and ADR 0023.
@@ -534,18 +584,25 @@ export function ReflectionPage() {
         },
       }));
 
-      // Issue #80: a successful ask — new Session or a follow-up in an
-      // open one — is what makes a bare `/reflect` worth resuming *to*, so
-      // this is the moment the memory updates, alongside the existing
-      // navigate below for the new-Session case.
+      // Reaffirms what the pre-dispatch write above already recorded — a
+      // no-op in the ordinary case where the Server echoed back exactly
+      // the id this Device sent, kept anyway so a follow-up ask on an
+      // already-open Session (which mints nothing new above) still updates
+      // the memory the same way issue #80 always relied on it doing.
       writeLastSessionId(result.response.session_id);
-
-      if (sessionId === undefined) {
-        // A null session_id on the request is what created this Session
-        // (ADR 0025) — `replace` so Back doesn't bounce through the empty
-        // `/reflect` this Conversation started from.
-        navigate(`/reflect/${result.response.session_id}`, { replace: true });
-      }
+    } else if (result.reason === "aborted") {
+      // Issue #131: this call's own `signal` fired — today that only
+      // happens because this page unmounted (leaving Reflect mid-Question,
+      // `activeAbortRef`'s own cleanup above), which means every `setState`
+      // below would already be a no-op on a dead component. Handled as its
+      // own branch anyway, not folded into the network-failure one below,
+      // because the point isn't "this happens to do nothing here" — it's
+      // that a deliberate cancellation must never toast or restore a
+      // Question, on principle, independent of whether the component
+      // happens to still be mounted to notice. Before this reason existed,
+      // an abort reached the same `catch-all` toast every genuine outage
+      // did, which is what let leaving the screen report the reader's own
+      // navigation as a Server failure (issue #131's own report).
     } else {
       // A Question that failed goes back into the composer rather than
       // vanishing. Losing what someone wrote is the wrong failure mode
@@ -565,7 +622,41 @@ export function ReflectionPage() {
       } else if (result.reason === "agent-error") {
         toast.error("Reflection couldn't answer that. Try again.");
       } else {
-        toast.error("Couldn't reach Reflection. Check your Server and try again.");
+        // Issue #133: `result.reason` here is `"unreachable"` (the only
+        // other member of `ReflectResult`'s failure union — see
+        // `reflect-transport.ts`), and by the time this branch runs
+        // `serverReachable` above has already flipped `false`: the very
+        // `serverRequest` call that produced this failure is what set it,
+        // synchronously, before `reflectTransport` ever returned. The
+        // persistent `ServerUnreachableBanner` this page now renders for
+        // that state replaces the toast a plain network failure used to
+        // get — a toast fades and has to repeat itself on every retry; the
+        // banner stays until the Server actually answers again.
+      }
+
+      // Issue #131: undo the pre-dispatch mint above — unlike "aborted"
+      // (the run might still complete on the Server after the Device gave
+      // up, so its id is worth keeping), every reason that reaches this
+      // branch is known for certain: nothing is ever going to appear under
+      // `effectiveSessionId`. `not-supported` and a plain `unreachable`
+      // never got past `resolve_session` at all; `agent-error` did, but
+      // only ever produced an empty, Turn-less row no client can see
+      // anyway (`docs/adr/0025`'s own guarantee, kept by
+      // `sessions::list_sessions`). Reverting leaves this exactly where a
+      // failed ask always used to leave it — back on a bare `/reflect`,
+      // remembering whatever this Device actually had open before this
+      // ask, not the mint this ask made and never got to use. Only
+      // reachable when this ask itself did the minting (`sessionId ===
+      // undefined`): a follow-up on an already-open Session never
+      // navigated or overwrote the memory above, so there is nothing here
+      // to undo.
+      if (sessionId === undefined) {
+        if (rememberedSessionId !== null) {
+          writeLastSessionId(rememberedSessionId);
+        } else {
+          clearLastSessionId();
+        }
+        navigate("/reflect", { replace: true });
       }
     }
   }
@@ -586,8 +677,14 @@ export function ReflectionPage() {
       }
       back={<BackToChats />}
       pinnedThread={syncEnabled ? { watch: turns.length, forceToNewest: askSignal } : undefined}
+      // Issue #133: also gated on `serverReachable` — "read yes, write no."
+      // Old Sessions and whatever's already in `turns` stay fully readable
+      // below regardless; only the ability to ask something new goes away
+      // while the Server isn't answering, replaced by the persistent
+      // `ServerUnreachableBanner` this page renders instead of letting a
+      // reader type a Question that's certain to fail.
       composerSlot={
-        syncEnabled && !notFound ? (
+        syncEnabled && !notFound && serverReachable ? (
           <QuestionComposer
             onAsk={handleAsk}
             disabled={pending !== null}
@@ -608,6 +705,23 @@ export function ReflectionPage() {
         </p>
       )}
 
+      {syncEnabled && !serverReachable && (
+        // Issue #133: replaces the toast `handleAsk`'s failure branch used
+        // to show for a plain network failure — this stays on screen for
+        // as long as `serverReachable` does, rather than fading after one
+        // render, and offers a way back in instead of just naming the
+        // problem. `Retry` re-probes via `refreshCapabilities()`, the same
+        // background check `main.tsx` runs at boot and Settings runs on
+        // every Save; a successful probe flips `serverReachable` back to
+        // `true`, which brings the Question input straight back.
+        <ServerUnreachableBanner
+          message="Couldn't reach Reflection. Check your Server and try again."
+          onRetry={() => {
+            refreshCapabilities();
+          }}
+        />
+      )}
+
       {syncEnabled && notFound && !deletedElsewhere && (
         // A plain, honest message rather than a blank page or a crash (ADR
         // 0025) — this Session was deleted, or the Server URL now points
@@ -620,12 +734,17 @@ export function ReflectionPage() {
         </p>
       )}
 
-      {syncEnabled && unreachable && (
-        <p className="text-center text-sm text-muted-foreground">
-          Couldn't load this Conversation. Check your Server and try again.
-        </p>
-      )}
-
+      {/*
+        Issue #133: no separate "couldn't load this Conversation" message
+        here any more — a failed session fetch is exactly the kind of
+        request failure that flips `serverReachable` false (both go through
+        `sessionsTransport` → `serverRequest`), so the
+        `ServerUnreachableBanner` rendered above already covers this case,
+        persistently and with a Retry, rather than a second, one-off
+        paragraph saying the same thing next to it. `unreachable` itself is
+        still read below, to keep this session's own empty state (no turns,
+        no invitation) from rendering while its fetch has failed.
+      */}
       {syncEnabled &&
         !notFound &&
         !unreachable &&

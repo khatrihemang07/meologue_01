@@ -1,12 +1,28 @@
+import { PROTOCOL_VERSION } from "@meologue/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ACCENTS,
   DEFAULT_ACCENT,
+  DEFAULT_HIDDEN_DESTINATIONS,
   DEFAULT_TEXT_SIZE,
+  HIDEABLE_DESTINATIONS,
   normaliseServerUrl,
+  refreshCapabilities,
   TEXT_SIZES,
   useSettingsStore,
 } from "./settings";
+
+function healthResponse(capabilities?: unknown) {
+  return {
+    ok: true,
+    status: 200,
+    json: async () => ({
+      service: "meologue-server",
+      protocol_version: PROTOCOL_VERSION,
+      ...(capabilities !== undefined ? { capabilities } : {}),
+    }),
+  };
+}
 
 describe("settings store", () => {
   beforeEach(() => {
@@ -16,11 +32,15 @@ describe("settings store", () => {
       serverUrl: "",
       accent: DEFAULT_ACCENT,
       textSize: DEFAULT_TEXT_SIZE,
+      capabilities: null,
+      serverReachable: true,
+      hiddenDestinations: DEFAULT_HIDDEN_DESTINATIONS,
     });
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   describe("theme", () => {
@@ -124,6 +144,97 @@ describe("settings store", () => {
     });
   });
 
+  // Issue #134.
+  describe("hidden destinations", () => {
+    it("round-trips a written set, in the store and in storage", () => {
+      useSettingsStore.getState().setHiddenDestinations(new Set(["reflect", "digest"]));
+
+      expect(useSettingsStore.getState().hiddenDestinations).toEqual(
+        new Set(["reflect", "digest"]),
+      );
+      // Comma-joined, not JSON — ADR 0008's own reasoning, restated at the
+      // top of settings.ts beside `HIDDEN_DESTINATIONS_KEY`.
+      expect(localStorage.getItem("meologue.hidden-destinations")).toBe("reflect,digest");
+    });
+
+    it("defaults to nothing hidden — every Destination visible", () => {
+      expect(useSettingsStore.getState().hiddenDestinations).toEqual(new Set());
+      expect(DEFAULT_HIDDEN_DESTINATIONS).toEqual(new Set());
+    });
+
+    it("removes the stored key entirely once every Destination is unhidden again", () => {
+      useSettingsStore.getState().setHiddenDestinations(new Set(["composer"]));
+      expect(localStorage.getItem("meologue.hidden-destinations")).not.toBeNull();
+
+      useSettingsStore.getState().setHiddenDestinations(new Set());
+
+      expect(localStorage.getItem("meologue.hidden-destinations")).toBeNull();
+    });
+
+    it("does not throw when localStorage refuses the write, and still updates the store", () => {
+      vi.spyOn(localStorage, "setItem").mockImplementation(() => {
+        throw new Error("storage unavailable");
+      });
+
+      expect(() =>
+        useSettingsStore.getState().setHiddenDestinations(new Set(["digest"])),
+      ).not.toThrow();
+      expect(useSettingsStore.getState().hiddenDestinations).toEqual(new Set(["digest"]));
+    });
+
+    it("offers exactly the three hideable Destinations — Settings is never among them", () => {
+      expect(HIDEABLE_DESTINATIONS.map((destination) => destination.id)).toEqual([
+        "composer",
+        "reflect",
+        "digest",
+      ]);
+    });
+
+    // Required (issue #134): a corrupt/unreadable value degrades to
+    // everything visible, and an unrecognised slug is ignored rather than
+    // thrown on — both exercised at module load, since that's where
+    // `readStoredHiddenDestinations` actually runs (mirrors the
+    // "accent"/"text size" `vi.resetModules` tests above).
+    it("degrades to everything visible when localStorage throws on read", () => {
+      localStorage.setItem("meologue.hidden-destinations", "reflect");
+      vi.spyOn(localStorage, "getItem").mockImplementation(() => {
+        throw new Error("storage unavailable");
+      });
+
+      vi.resetModules();
+      return import("./settings").then((fresh) => {
+        expect(fresh.useSettingsStore.getState().hiddenDestinations).toEqual(new Set());
+      });
+    });
+
+    it("ignores an unrecognised slug in the stored string rather than throwing", () => {
+      // "history" is a real route this app once had (issue #75 deleted it)
+      // and is exactly the kind of slug a previous app version could still
+      // leave behind — mixed here with a slug this build does recognise, so
+      // the good one surviving proves this drops one at a time rather than
+      // discarding the whole value the way a failed `JSON.parse` would.
+      localStorage.setItem("meologue.hidden-destinations", "history,digest");
+
+      vi.resetModules();
+      return import("./settings").then((fresh) => {
+        expect(fresh.useSettingsStore.getState().hiddenDestinations).toEqual(new Set(["digest"]));
+      });
+    });
+
+    it("ignores 'settings' even if it appears in a hand-edited stored value", () => {
+      // Settings can never be hidden (ADR 0008/0009). It is never offered a
+      // control to add itself to this value, but a stored value can be
+      // edited by hand or carried over from a future build, so this is
+      // enforced on read too, not only by the absence of a control.
+      localStorage.setItem("meologue.hidden-destinations", "settings,composer");
+
+      vi.resetModules();
+      return import("./settings").then((fresh) => {
+        expect(fresh.useSettingsStore.getState().hiddenDestinations).toEqual(new Set(["composer"]));
+      });
+    });
+  });
+
   describe("server URL", () => {
     it("round-trips a written server URL, in the store and in storage", () => {
       useSettingsStore.getState().setServerUrl("https://phone.example:41207");
@@ -151,6 +262,112 @@ describe("settings store", () => {
         useSettingsStore.getState().setServerUrl("https://phone.example:41207"),
       ).not.toThrow();
       expect(useSettingsStore.getState().serverUrl).toBe("https://phone.example:41207");
+    });
+  });
+
+  // Issue #133.
+  describe("capabilities", () => {
+    it("round-trips a written capability report, in the store and in storage", () => {
+      const capabilities = { reflect: true, digest: false, embeddings: true };
+
+      useSettingsStore.getState().setCapabilities(capabilities);
+
+      expect(useSettingsStore.getState().capabilities).toEqual(capabilities);
+      expect(JSON.parse(localStorage.getItem("meologue.capabilities") ?? "null")).toEqual(
+        capabilities,
+      );
+    });
+
+    it("clears the stored report when set back to null (unknown)", () => {
+      useSettingsStore
+        .getState()
+        .setCapabilities({ reflect: true, digest: true, embeddings: true });
+
+      useSettingsStore.getState().setCapabilities(null);
+
+      expect(useSettingsStore.getState().capabilities).toBeNull();
+      expect(localStorage.getItem("meologue.capabilities")).toBeNull();
+    });
+
+    it("does not throw when localStorage refuses the write, and still updates the store", () => {
+      vi.spyOn(localStorage, "setItem").mockImplementation(() => {
+        throw new Error("storage unavailable");
+      });
+      const capabilities = { reflect: false, digest: true, embeddings: false };
+
+      expect(() => useSettingsStore.getState().setCapabilities(capabilities)).not.toThrow();
+      expect(useSettingsStore.getState().capabilities).toEqual(capabilities);
+    });
+  });
+
+  describe("refreshCapabilities", () => {
+    it("stores the server's capability report and marks the server reachable", async () => {
+      const capabilities = { reflect: true, digest: false, embeddings: false };
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => healthResponse(capabilities)),
+      );
+      useSettingsStore.getState().setServerUrl("https://server.example");
+
+      await refreshCapabilities();
+
+      expect(useSettingsStore.getState().capabilities).toEqual(capabilities);
+      expect(useSettingsStore.getState().serverReachable).toBe(true);
+    });
+
+    // Required: an omitted capability report reads as unknown (never
+    // "every capability off"), and `chat-list.tsx` treats unknown as
+    // unlocked — see `readStoredCapabilities`'s own doc comment.
+    it("degrades to unknown (optimistic) capabilities when the server omits the field", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => healthResponse(undefined)),
+      );
+      useSettingsStore.getState().setServerUrl("https://server.example");
+      useSettingsStore
+        .getState()
+        .setCapabilities({ reflect: true, digest: true, embeddings: true });
+
+      await refreshCapabilities();
+
+      expect(useSettingsStore.getState().capabilities).toBeNull();
+      expect(useSettingsStore.getState().serverReachable).toBe(true);
+    });
+
+    // Required: a network-level failure marks the server unreachable but
+    // leaves a previously-known capability report alone — the Server going
+    // quiet for a moment says nothing about what it could serve the last
+    // time it answered.
+    it("marks the server unreachable on a network failure, without touching a known capability report", async () => {
+      const capabilities = { reflect: true, digest: true, embeddings: false };
+      useSettingsStore.getState().setServerUrl("https://server.example");
+      useSettingsStore.getState().setCapabilities(capabilities);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => {
+          throw new TypeError("Failed to fetch");
+        }),
+      );
+
+      await refreshCapabilities();
+
+      expect(useSettingsStore.getState().serverReachable).toBe(false);
+      expect(useSettingsStore.getState().capabilities).toEqual(capabilities);
+    });
+
+    it("clears the capability cache and reports reachable when the server URL is empty", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      useSettingsStore
+        .getState()
+        .setCapabilities({ reflect: true, digest: true, embeddings: true });
+      useSettingsStore.getState().setServerReachable(false);
+
+      await refreshCapabilities();
+
+      expect(useSettingsStore.getState().capabilities).toBeNull();
+      expect(useSettingsStore.getState().serverReachable).toBe(true);
+      expect(fetchMock).not.toHaveBeenCalled();
     });
   });
 
@@ -226,5 +443,41 @@ describe("settings store cold start", () => {
     localStorage.setItem("meologue.server-url", "https://phone.example:41207");
     const { useSettingsStore: fresh } = await import("./settings");
     expect(fresh.getState().serverUrl).toBe("https://phone.example:41207");
+  });
+
+  // Issue #133: `null` (unknown) is the only safe cold-start value —
+  // `chat-list.tsx` reads it as "unlocked," so any of these degrading to
+  // "every capability false" would falsely lock a working Server on a cold
+  // launch, exactly the failure mode Part 2's "unknown means unlocked" rule
+  // exists to rule out.
+  it("defaults capabilities to null (unknown) when nothing is stored", async () => {
+    const { useSettingsStore: fresh } = await import("./settings");
+    expect(fresh.getState().capabilities).toBeNull();
+  });
+
+  it("defaults capabilities to null (unknown) for a malformed stored value", async () => {
+    localStorage.setItem("meologue.capabilities", JSON.stringify({ reflect: "yes" }));
+    const { useSettingsStore: fresh } = await import("./settings");
+    expect(fresh.getState().capabilities).toBeNull();
+  });
+
+  it("degrades capabilities to null (unknown, optimistic) when localStorage throws on read", async () => {
+    vi.spyOn(localStorage, "getItem").mockImplementation(() => {
+      throw new Error("storage unavailable");
+    });
+    const { useSettingsStore: fresh } = await import("./settings");
+    expect(fresh.getState().capabilities).toBeNull();
+  });
+
+  it("picks up an already-stored capability report", async () => {
+    const capabilities = { reflect: true, digest: false, embeddings: true };
+    localStorage.setItem("meologue.capabilities", JSON.stringify(capabilities));
+    const { useSettingsStore: fresh } = await import("./settings");
+    expect(fresh.getState().capabilities).toEqual(capabilities);
+  });
+
+  it("defaults serverReachable to true (optimistic)", async () => {
+    const { useSettingsStore: fresh } = await import("./settings");
+    expect(fresh.getState().serverReachable).toBe(true);
   });
 });

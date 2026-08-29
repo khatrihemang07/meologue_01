@@ -3,7 +3,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { SyncLoop } from "@/hooks/use-sync-loop";
 import { queryClient } from "@/lib/query-client";
-import { useSettingsStore } from "@/lib/settings";
+import { refreshCapabilities, useSettingsStore } from "@/lib/settings";
 import { applyAccent, applyTextSize, applyTheme, watchSystemTheme } from "@/lib/theme";
 import { registerServiceWorker } from "@/platform/register-service-worker";
 import "./index.css";
@@ -30,6 +30,20 @@ applyTheme(settings.theme);
 applyAccent(settings.accent);
 applyTextSize(settings.textSize);
 watchSystemTheme();
+
+// Issue #133: learns what the configured Server can actually serve, after
+// the first paint rather than before it — `chat-list.tsx`'s
+// `useDestinations()` already has a synchronous, optimistic answer from the
+// cache this refreshes (`settings.ts`'s own doc comment), so nothing on
+// this first render is waiting on the result. The double
+// `requestAnimationFrame` is the same "earliest point a frame has actually
+// been painted" trick `use-wide-layout.ts` uses, applied here to a network
+// call instead of a layout read.
+requestAnimationFrame(() => {
+  requestAnimationFrame(() => {
+    refreshCapabilities();
+  });
+});
 
 createRoot(rootElement).render(
   <StrictMode>

@@ -71,7 +71,20 @@ export type ReflectResult =
   | { ok: true; response: WireReflectResponse }
   | { ok: false; reason: "not-supported" }
   | { ok: false; reason: "unreachable" }
-  | { ok: false; reason: "agent-error"; error: string };
+  | { ok: false; reason: "agent-error"; error: string }
+  // Issue #131: the one failure that isn't a failure at all — the
+  // caller's own `signal` firing, which today only happens because
+  // `reflection-page.tsx` cancels the fetch on unmount (leaving the
+  // screen mid-Question). Folding this into `"unreachable"` used to
+  // report the reader's own navigation as a Server outage: the toast
+  // fired even though nothing was actually wrong, because this function
+  // had no way to tell a deliberate abort apart from a genuine dropped
+  // connection once both landed in the same bare `catch` below.
+  // `reflection-page.tsx`'s failure branch treats this reason as
+  // silent — no toast, no restored Question — there is nothing here to
+  // tell the reader that isn't already obvious from having left the
+  // screen.
+  | { ok: false; reason: "aborted" };
 
 /** One parsed `event:`/`data:` SSE frame — not yet interpreted into a `ReflectStreamEvent`. */
 interface RawFrame {
@@ -224,7 +237,14 @@ export async function reflectTransport(
   });
 
   if (response === null) {
-    return { ok: false, reason: "unreachable" };
+    // `serverRequest` returns `null` for both a genuine network failure and
+    // this call's own `signal` firing before the fetch ever got a response
+    // (`server-request.ts`'s own doc comment) — the same ambiguity the read
+    // loop's `catch` below resolves the same way, by checking `signal` back
+    // out. A caller that aborted this early has nothing to be told beyond
+    // "this run is over, uneventfully" — see `ReflectResult`'s own doc
+    // comment on `"aborted"`.
+    return { ok: false, reason: signal?.aborted === true ? "aborted" : "unreachable" };
   }
   // A stale `protocol_version` (426) and Reflection being unconfigured, or
   // this Server predating the route entirely (404), are both decided
@@ -275,9 +295,18 @@ export async function reflectTransport(
     // noise from the routine unmount-abort this function already expects
     // (the doc comment above), so only the unexpected case — a real
     // error, not this call's own signal firing — reaches the console.
-    if (signal?.aborted !== true) {
-      console.error("reflectTransport: stream read failed", error);
+    //
+    // Issue #131: the same check now also decides *what this returns*, not
+    // just whether it logs. Before this ticket both branches returned
+    // `"unreachable"` — the one thing `reflectTransport` knew for certain
+    // (the abort was deliberate) was thrown away right here, which is what
+    // let `reflection-page.tsx` report the reader's own navigation as a
+    // Server outage (issue #131's own report). See `ReflectResult`'s own
+    // doc comment on `"aborted"`.
+    if (signal?.aborted === true) {
+      return { ok: false, reason: "aborted" };
     }
+    console.error("reflectTransport: stream read failed", error);
     return { ok: false, reason: "unreachable" };
   } finally {
     try {
