@@ -38,6 +38,17 @@
 //! query and the row shape are unchanged; only what can see them is wider,
 //! the same minimal widening `entries_in_range.rs` made of
 //! `reflect::local_date_range_to_utc`.
+//!
+//! Issues #135/#136/#137 rebuild how a Digest's body actually gets written,
+//! in that order: #135 makes `generate_digest_body` the one validated path
+//! both writers use; #136 lets it split an oversized Period into several
+//! chat calls (`chunk_entries`); #137 makes a bad chunk among several
+//! survivable — the Period gets a partial Digest instead of none at all,
+//! with `grounding_entry_ids` and `source_seq = 0` disclosing exactly what
+//! was skipped. See `generate_digest_body`'s own doc comment for the full
+//! chain of reasoning; nothing about the module's two writers or its
+//! "generate once, regenerate on request" shape (issue #132 / ADR 0039,
+//! above) changes because of any of it.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -58,6 +69,7 @@ use uuid::Uuid;
 
 use crate::llm::{ChatMessage, LlmClient};
 use crate::period::{self, Period};
+use crate::reflect::strip_code_fences;
 
 /// How often the worker re-scans for Periods that completed since the last
 /// pass. 5 minutes, much coarser than the embedding worker's 30 seconds
@@ -98,6 +110,36 @@ pub const MAX_DIGESTS_PER_TICK: usize = 3;
 /// write on every failure. See `run`'s `attempts` map.
 pub const MAX_ATTEMPTS: u8 = 5;
 
+/// The fraction of the resolved chat context window Entries may claim in
+/// one Digest chat call (issue #136) — the remaining 40% is left for
+/// `digest_system_prompt`'s own text, the "Here is everything the user
+/// wrote from..." wrapper `build_messages` adds around the Entries block,
+/// and the room the model's own reply needs inside that same window. When
+/// a Period's Entries would exceed this fraction, `chunk_entries` below
+/// splits them across several chat calls rather than one call silently
+/// exceeding the model's own limit.
+///
+/// Deliberately **not** `harness::compaction::RESERVE_TOKENS` (16,384),
+/// even though both exist to leave headroom in a context window. That
+/// reserve is sized for a *growing multi-turn transcript* — pi's own
+/// reserve, kept empty so the reply that follows a compaction always has
+/// somewhere to write (`compaction.rs`'s own doc comment) — the exact
+/// opposite shape from a Digest's one call, which is a single system/user
+/// pair, made once, never revisited or extended with more turns. Reusing
+/// it here would also be actively worse than merely mismatched: against
+/// the `harness::compaction::DEFAULT_CONTEXT_WINDOW` (32,000) fallback
+/// this worker inherits whenever the configured endpoint's own window
+/// can't be learned (`llm::LlmConfig::resolve_context_window`),
+/// subtracting a flat 16,384-token reserve would leave only about 15,616
+/// tokens — under half the window — for Entries, on a call that never
+/// carries the multi-turn overhead that reserve exists to protect in the
+/// first place. 0.60 is instead sized for what a Digest's one call
+/// actually needs room for beyond the Entries themselves: a few hundred
+/// tokens of system prompt, a one-line wrapper sentence, and the Digest's
+/// own prose reply — all of which fit comfortably inside the remaining
+/// 40% even at the smallest realistic window.
+pub const DIGEST_ENTRY_BUDGET_FRACTION: f32 = 0.60;
+
 /// One Entry read out of a Period's window, in the shape `build_messages`
 /// needs to render it and `write_digest_for` needs to record its id as
 /// Grounding.
@@ -136,6 +178,353 @@ fn source_seq_of(entries: &[DigestEntry]) -> i64 {
     entries.iter().map(|entry| entry.seq).max().unwrap_or(0)
 }
 
+/// Digest's own version of `reflect::is_empty_final_reply` (issue #135):
+/// true when `text`, after stripping a wrapping code fence, is nothing but
+/// whitespace. That covers the two shapes issue #135 was actually filed
+/// against — a genuinely empty or whitespace-only reply (a 200 OK with
+/// `""` for a body, which `body text not null` happily accepted because
+/// `""` is not null), and a reply that ignores `digest_system_prompt`'s
+/// explicit "no backticks" instruction and fences its prose instead,
+/// leaving nothing behind once the fence is stripped. `strip_code_fences`
+/// (`reflect.rs`, already `pub(crate)` for exactly this kind of reuse) is
+/// called here rather than copied — the same function that already
+/// reduces a fence-only reply to an empty string for Reflection's own
+/// check does the identical job here, and a second copy of that stripping
+/// logic would be a second place that could learn to do it slightly
+/// differently.
+///
+/// Deliberately does **not** also strip a stray `<tool_call>` tag
+/// fragment the way `is_empty_final_reply` does. That shape can only
+/// survive into a final reply because `harness::prompted::PromptedToolClient`
+/// parses a tool-calling protocol out of a raw streamed reply, character
+/// by character, and an unmatched `</tool_call>` can slip through as
+/// literal text (see `is_empty_final_reply`'s own doc comment for the
+/// mechanism). A Digest's one chat call never goes anywhere near
+/// `prompted.rs` — `generate_digest_body` below calls `client.chat`
+/// directly with a plain two-message system/user pair, never through the
+/// tool-calling loop that could ever emit or misparse that tag — so there
+/// is no protocol here for a stray tag fragment to leak out of. Checking
+/// for a shape that structurally cannot occur on this path would not be
+/// defensive; it would just be dead code with a misleading comment
+/// attached to it.
+fn is_empty_digest_body(text: &str) -> bool {
+    strip_code_fences(text).trim().is_empty()
+}
+
+/// A Digest body that has passed `is_empty_digest_body`'s check — mirrors
+/// `reflect::NonEmptyAnswer`'s newtype shape exactly. `generate_digest_body`
+/// below is the only function in the crate that ever constructs one, which
+/// is what makes it the only path from a raw chat reply to a body either
+/// writer can store (issue #135's whole point: two writers, one validated
+/// step, rather than two independent trust decisions that can drift).
+///
+/// As with `NonEmptyAnswer`, this is a narrower guarantee than a
+/// type-level ban on ever writing an empty `body` into `digests` anywhere
+/// in the crate — `insert_digest`/`regenerate_insert` still take a plain
+/// `&str`, and the column itself is `text not null`, not "text, non-empty."
+/// What this type actually guarantees is that the one code path that
+/// exists today for turning a live model reply into a stored Digest body
+/// cannot do so with a rejected one. The raw reply is kept verbatim, not
+/// trimmed — unlike `NonEmptyAnswer`, which trims before storing — because
+/// a Period that succeeds must produce byte-identical output to what this
+/// worker wrote before issue #135 existed, and trimming a reply that
+/// happens to carry incidental leading or trailing whitespace would be a
+/// (harmless but real) behaviour change this ticket has no mandate to make.
+struct ValidatedDigestBody(String);
+
+impl ValidatedDigestBody {
+    fn new(raw: &str) -> Option<Self> {
+        if is_empty_digest_body(raw) {
+            None
+        } else {
+            Some(Self(raw.to_string()))
+        }
+    }
+
+    fn into_inner(self) -> String {
+        self.0
+    }
+}
+
+/// A crude chars/4 token estimate for one rendered string — this module's
+/// own copy of `harness::compaction`'s identical ratio, not a reuse of it:
+/// `compaction::CHARS_PER_TOKEN` is a private constant of that module, and
+/// the public `compaction::estimate_tokens` takes
+/// `&[harness::types::Message]`, the tool-calling harness's own wire
+/// shape, not the plain rendered `String` `chunk_entries` below needs to
+/// size. Duplicating a five-line ratio here is simpler and more honest
+/// than widening either of those to serve a second, unrelated caller —
+/// especially since that ratio is already documented as "crude but
+/// conservative" (`compaction::CHARS_PER_TOKEN`'s own doc comment) rather
+/// than a value either module is precision-tuned around, so a second copy
+/// of it can't drift into meaning something subtly different.
+fn estimate_tokens(text: &str) -> usize {
+    text.len() / 4
+}
+
+/// How many tokens Entries may claim in one Digest chat call, for a
+/// resolved context window of `context_window` —
+/// `DIGEST_ENTRY_BUDGET_FRACTION` applied directly, floored by the
+/// integer cast the same way every other token-budget arithmetic in this
+/// codebase floors rather than rounds (`compaction::should_compact`'s own
+/// `saturating_sub`): a slightly conservative budget only ever risks an
+/// extra, unnecessary chunk, never a call that overruns the window it was
+/// sized against.
+fn entry_budget_tokens(context_window: u32) -> usize {
+    (context_window as f32 * DIGEST_ENTRY_BUDGET_FRACTION) as usize
+}
+
+/// Splits `entries` into one or more contiguous slices, each rendering
+/// (via `render_entry`) to no more than `budget_tokens`, without ever
+/// splitting an Entry across two slices — issue #136's packing rule.
+/// Greedy, in the order `entries` already arrives (`select_entries`'s own
+/// `order by created_at asc`, preserved end to end): each Entry is added
+/// to the current slice unless doing so would push that slice over
+/// budget, in which case the current slice ends and a new one starts with
+/// that Entry. One code path serves day, week and month alike — nothing
+/// here reads `Period` at all, only the Entries and the budget.
+///
+/// **An Entry that alone exceeds `budget_tokens` still gets a slice of its
+/// own**, and the loop still terminates: the over-budget check only ever
+/// fires when the current slice already holds at least one Entry (`i >
+/// chunk_start`), so a lone oversized Entry is simply accepted into an
+/// empty slice — there is no smaller unit to split it into, and dropping
+/// it would break the completeness this worker has always guaranteed (a
+/// Digest's `grounding_entry_ids` covers every Entry `select_entries`
+/// read, never a subset silently thinned to fit). The very next Entry then
+/// starts a fresh slice rather than being appended to the already-over
+/// slice, so the overrun never compounds across Entries the way it would
+/// if the running total were left uncapped after accepting the oversized
+/// one.
+fn chunk_entries(entries: &[DigestEntry], tz: Tz, budget_tokens: usize) -> Vec<&[DigestEntry]> {
+    let mut chunks = Vec::new();
+    let mut chunk_start = 0usize;
+    let mut chunk_tokens = 0usize;
+
+    for (i, entry) in entries.iter().enumerate() {
+        let entry_tokens = estimate_tokens(&render_entry(entry, tz));
+        if i > chunk_start && chunk_tokens + entry_tokens > budget_tokens {
+            chunks.push(&entries[chunk_start..i]);
+            chunk_start = i;
+            chunk_tokens = 0;
+        }
+        chunk_tokens += entry_tokens;
+    }
+    if chunk_start < entries.len() {
+        chunks.push(&entries[chunk_start..]);
+    }
+    chunks
+}
+
+/// Turns one Period's Entries into a validated Digest body — the single
+/// step issue #135 introduces so `write_digest_for` (the background
+/// worker) and `run_regenerate` (`POST .../regenerate`, issue #132) share
+/// one path from "a Period's Entries" to "a body worth storing," instead
+/// of each building its own messages, making its own chat call, and
+/// trusting whatever came back. Before this function existed, a 200 OK
+/// carrying an empty string reached `insert_digest`/`regenerate_insert`
+/// exactly as unquestioned as a genuinely useful reply. On the regenerate
+/// route that was worse than merely wasteful: reads always take the
+/// newest revision unconditionally (ADR 0039), so a blank revision didn't
+/// just fail to improve on the last Digest — it shadowed a perfectly good
+/// one that was still sitting one revision back.
+///
+/// Issue #136: this is also the one place a Period's Entries get split
+/// across several chat calls, when they don't all fit in one. `entries` is
+/// packed by `chunk_entries` into one or more chunks against
+/// `entry_budget_tokens(context_window)`, and each chunk gets its own
+/// ordinary Digest call — same `digest_system_prompt`, no second prompt
+/// variant, built by the same `build_messages` a single-chunk Period
+/// always used. The overwhelmingly common case is exactly one chunk
+/// (`chunk_entries` never splits unless it must), and that case is
+/// deliberately indistinguishable from what this function did before
+/// chunking existed: one call, `period_range_label`'s Period-wide range,
+/// byte-identical output.
+///
+/// When there is more than one chunk, each call's user message names
+/// *that chunk's own* first-to-last local date span (`chunk_range_label`),
+/// never the whole Period's — this is issue #101 again, one level up: that
+/// ticket's failure was an Entry rendered under the wrong day inside a
+/// call that could see it; this one would be a call's own date label
+/// claiming Entries the call was never given at all. "Here is everything
+/// the user wrote from X to Y" must stay true of what that one call can
+/// actually see.
+///
+/// The chunk bodies are concatenated with `"\n\n"` once every surviving
+/// chunk has run — there is no merge or summarise pass afterwards. Handing
+/// a second chat call the concatenation of several already-written
+/// summaries, and asking it to summarise *that*, would be exactly the
+/// summary-of-summaries ADR 0027 rejects; concatenation has no second
+/// lossy pass, so nothing here needs one. For the same reason this
+/// function never reaches for `harness::compaction::transform_context`:
+/// that machinery exists to condense a *growing multi-turn transcript* by
+/// replacing its oldest messages with a model-written summary
+/// (`compaction.rs`'s own doc comment) — handed a single user message
+/// holding every Entry, it would summarise that one message and then feed
+/// the summary back through this function's own chat call to be
+/// summarised a second time, the identical shape ADR 0027 ruled out, just
+/// reached via different machinery than a manual merge pass would be.
+///
+/// **Failure semantics (issue #137, superseding #136's original, stricter
+/// rule): a bad chunk is skipped, not fatal.** The loop below never lets a
+/// single chunk's failure — a transport error from `client.chat`, or a
+/// reply `ValidatedDigestBody::new` rejects — end the Period. It catches
+/// that one chunk's `Err`, logs it, and moves on; every other chunk still
+/// gets its own attempt regardless of where in the sequence the bad one
+/// fell. What issue #136 shipped (any chunk failing fails the whole
+/// Period, via `?`, without attempting the rest) is exactly the softer
+/// case this ticket exists to replace — softening it needed no
+/// restructuring, only catching the error here instead of propagating it.
+/// Only when *every* chunk in a Period failed does this function return
+/// `Err`, once every chunk has had its turn (see the empty-`bodies` check
+/// below) — issue #135's original guarantee is unchanged for that case:
+/// nothing usable means nothing written, an attempt consumed by the
+/// worker and retried within `MAX_ATTEMPTS`, or a 500 with no revision
+/// minted on the regenerate route. A lone chunk failing *is* every chunk
+/// failing when `chunks.len() == 1` — the single-chunk path this function
+/// served before chunking existed is unaffected by any of this.
+///
+/// Builds each chunk's chat messages, makes its one chat call, and rejects
+/// the reply unless `ValidatedDigestBody::new` accepts it — see
+/// `is_empty_digest_body`'s doc comment for exactly which shapes that
+/// rejects, and why the `<tool_call>` shape `reflect::is_empty_final_reply`
+/// also checks for cannot occur on this path at all.
+///
+/// **Grounding and the staleness watermark now both disclose partiality
+/// (issue #137)**, rather than always covering all of `entries`:
+///
+/// `grounding_entry_ids` holds the ids of only the Entries whose *own*
+/// chunk survived — when every chunk succeeds (still the overwhelmingly
+/// common outcome, exactly as before this ticket), that is all of
+/// `entries`; when a chunk was skipped, its Entries are simply absent.
+/// This costs no new mechanism: `grounding_entry_ids` has meant "the
+/// Entries this Digest was actually written from" since issue #70, long
+/// before chunking or partial failure existed, so a partial body just
+/// makes that array smaller — it does its existing job, honestly, on a
+/// body that itself now covers less than the whole Period.
+///
+/// `source_seq` is the second half of that honesty, and it is deliberately
+/// **not** `source_seq_of` applied to the surviving Entries — it is the
+/// literal constant `0` whenever *any* chunk was skipped, full stop, even
+/// though the surviving Entries' own true maximum `seq` is right there and
+/// could be computed instead. `entries.seq` starts at `1`
+/// (`0001_create_entries.sql`), so recording `0` makes
+/// `select_is_stale`'s `seq > source_seq` comparison true for *every*
+/// Entry in the Period — including the ones that did make it into the
+/// stored body — the instant this revision is written. That is the point,
+/// not a side effect: the revision is **born flagged stale**, which is
+/// what gets a reader to press Regenerate (the marker `digest-reader-
+/// page.tsx`'s `formatStaleCopy` already renders, per ADR 0039) — the only
+/// way this Period ever improves, since the worker itself never revisits
+/// a Digest once one exists (`fill_period`'s `max(period_start)` anchor
+/// walks past any Period with a row at all, regardless of revision — see
+/// `write_digest_for`, unchanged by this ticket).
+///
+/// **This `0` is the deliberate inverse of the case
+/// `0009_digests_gain_revisions.sql` backed away from**, not a
+/// contradiction of it. That migration refused to default *every
+/// pre-existing row's* `source_seq` to `0`, specifically because doing so
+/// would have made every Digest already on disk report stale
+/// simultaneously, the moment the migration ran, before a single Entry
+/// had actually changed — in that migration's own words, "a marker that
+/// fires for every Period at once tells a reader nothing." The two cases
+/// share only the literal value, `0`; they differ in exactly the respect
+/// that decides whether the value means anything. Migration 0009's `0`
+/// would have applied uniformly, across the whole table, to rows that
+/// were in fact perfectly complete — a false alarm on every single one,
+/// with no way for a reader to tell a genuinely stale Digest from the
+/// bulk-flagged noise. This function's `0` applies only to a Digest that
+/// is, right now, actually incomplete — some chunk of its own Period was
+/// dropped — so every time it fires, the Period it fires for really did
+/// lose material. A **complete** Digest (still the common case) keeps
+/// `source_seq_of(entries)` — today's true watermark, the max `seq` over
+/// every Entry the Period holds — exactly as it always has, and reports
+/// `stale = false` unless and until a real edit moves an Entry's `seq`
+/// past it.
+async fn generate_digest_body(
+    client: &(dyn LlmClient + Send + Sync),
+    period: Period,
+    start: NaiveDate,
+    entries: &[DigestEntry],
+    tz: Tz,
+    context_window: u32,
+) -> anyhow::Result<(String, Vec<Uuid>, i64)> {
+    let budget_tokens = entry_budget_tokens(context_window);
+    let chunks = chunk_entries(entries, tz, budget_tokens);
+
+    let mut bodies = Vec::with_capacity(chunks.len());
+    let mut entry_ids: Vec<Uuid> = Vec::with_capacity(entries.len());
+    let mut any_chunk_skipped = false;
+    for chunk in &chunks {
+        // The single-chunk case renders the Period's own range, unchanged
+        // from before chunking existed; only a genuine split names a
+        // chunk's own narrower span. See this function's own doc comment
+        // for why that distinction matters (issue #101).
+        let range = if chunks.len() == 1 {
+            period_range_label(period, start)
+        } else {
+            chunk_range_label(chunk, tz)
+        };
+        let messages = build_messages(&range, chunk, tz);
+
+        // Issue #137: a chunk's own failure — transport error or a
+        // rejected reply — is caught here, not propagated with `?`, so one
+        // bad chunk never takes its neighbours down with it. See this
+        // function's own doc comment for the full reasoning.
+        let outcome: anyhow::Result<String> = match client.chat(&messages).await {
+            Ok(reply) => ValidatedDigestBody::new(&reply.content)
+                .map(ValidatedDigestBody::into_inner)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "digest reply was empty, whitespace-only, or only a code fence"
+                    )
+                }),
+            Err(err) => Err(err),
+        };
+
+        match outcome {
+            Ok(body) => {
+                bodies.push(body);
+                entry_ids.extend(chunk.iter().map(|entry| entry.id));
+            }
+            Err(err) => {
+                any_chunk_skipped = true;
+                tracing::warn!(
+                    error = ?err,
+                    period = period.as_str(),
+                    %start,
+                    "digest chunk skipped: its chat call failed or its reply was rejected (issue #137)"
+                );
+            }
+        }
+    }
+
+    // Every chunk failed: issue #135's original guarantee holds exactly as
+    // it did before this ticket — nothing usable means nothing written.
+    // For a single-chunk Period (still the common case) this is the only
+    // way `bodies` can end up empty, so this is a strict superset of that
+    // function's pre-#137 behaviour, not a new failure mode.
+    if bodies.is_empty() {
+        anyhow::bail!(
+            "every digest chunk failed ({} of {} chunk(s) skipped) — nothing to store",
+            chunks.len(),
+            chunks.len()
+        );
+    }
+
+    // `source_seq_of(entries)` — the max `seq` over the *whole* Period, not
+    // just the surviving Entries — is exactly right for the complete case,
+    // and deliberately not consulted at all for the partial one: see this
+    // function's own doc comment for why `0` is written outright rather
+    // than the (also honest, but not the chosen signal) max over
+    // `entry_ids` alone.
+    let source_seq = if any_chunk_skipped {
+        0
+    } else {
+        source_seq_of(entries)
+    };
+    Ok((bodies.join("\n\n"), entry_ids, source_seq))
+}
 
 /// Digest's server-side dependencies, held in `AppState` only when chat is
 /// configured (`llm::LlmConfig::digest_worker_config`) — mirrors
@@ -153,18 +542,32 @@ fn source_seq_of(entries: &[DigestEntry]) -> i64 {
 /// for the same reason `run`'s own `tz` parameter is: every Period this
 /// process ever computes — whether from the worker's tick or a reader's
 /// button press — has to agree on the same calendar boundaries.
+///
+/// `context_window` (issue #136) is the same value `run`'s own parameter
+/// of the same name is — `llm::LlmConfig::resolve_context_window`,
+/// resolved once at startup and reused here rather than a second
+/// resolution living only on this struct, so the worker's tick and a
+/// reader's Regenerate press always chunk an oversized Period at the same
+/// boundary. Held here rather than derived fresh per request for the same
+/// "resolved once, at startup" reasoning `reflect::ReflectState::context_window`
+/// already gives.
 #[derive(Clone)]
 pub struct DigestState {
     pub chat_client: Arc<dyn LlmClient + Send + Sync>,
     pub tz: Tz,
+    pub context_window: u32,
 }
 
-/// Runs forever. `tz` and `scan_interval` are parameters rather than
-/// constants read inside — the same testability seam ADR 0022 established
-/// for the embedding worker's `scan_interval`, load-bearing here too:
-/// `server/tests/digest.rs` drives this on a ~20ms interval instead of
-/// waiting on real wall-clock Periods to complete, and passes whichever
-/// `Tz` a given test wants to prove buckets Entries differently.
+/// Runs forever. `tz`, `scan_interval` and (issue #136) `context_window`
+/// are parameters rather than constants or a fresh resolution read inside
+/// — the same testability seam ADR 0022 established for the embedding
+/// worker's `scan_interval`, load-bearing here too: `server/tests/digest.rs`
+/// drives this on a ~20ms interval instead of waiting on real wall-clock
+/// Periods to complete, passes whichever `Tz` a given test wants to prove
+/// buckets Entries differently, and — new with #136 — can pass a
+/// deliberately small `context_window` to prove the chunking split fires
+/// at all, something no realistic corpus can currently reach (see
+/// `DIGEST_ENTRY_BUDGET_FRACTION`'s doc comment for the actual numbers).
 ///
 /// There is no channel: unlike embedding, nothing has a fresh hint about
 /// which Period just became eligible, so every tick simply re-derives "what
@@ -177,6 +580,7 @@ pub async fn run(
     client: Arc<dyn LlmClient + Send + Sync>,
     tz: Tz,
     scan_interval: Duration,
+    context_window: u32,
 ) {
     let mut attempts: HashMap<(Period, NaiveDate), u8> = HashMap::new();
     let mut interval = tokio::time::interval(scan_interval);
@@ -203,6 +607,7 @@ pub async fn run(
                 period,
                 MAX_DIGESTS_PER_TICK,
                 &mut attempts,
+                context_window,
             )
             .await;
         }
@@ -235,6 +640,7 @@ async fn fill_period(
     period: Period,
     budget: usize,
     attempts: &mut HashMap<(Period, NaiveDate), u8>,
+    context_window: u32,
 ) -> usize {
     if budget == 0 {
         return 0;
@@ -291,7 +697,7 @@ async fn fill_period(
         if written >= budget {
             break;
         }
-        if write_digest_for(pool, client, tz, period, start, attempts).await {
+        if write_digest_for(pool, client, tz, period, start, attempts, context_window).await {
             written += 1;
         }
     }
@@ -302,8 +708,24 @@ async fn fill_period(
 /// anything — because it's already at `MAX_ATTEMPTS`, the Period turned out
 /// to hold no Entries after all (defensive; `fill_period` only ever calls
 /// this for a `start` its own scan found Entries at), the chat call
-/// failed, or the insert failed. Counts and clears `attempts` itself so
-/// `fill_period` never has to know which failure mode occurred.
+/// failed, the reply it got back was rejected by `generate_digest_body`
+/// (issue #135 — empty, whitespace-only, or fence-only), issue #136's
+/// chunking split the Period into several calls and *every one* of them
+/// failed (issue #137 softened this: a chunk failing on its own is now
+/// skipped rather than fatal — see `generate_digest_body`'s own doc
+/// comment — so this function only ever sees `Err` here when nothing at
+/// all survived), or the insert failed. Counts and clears `attempts`
+/// itself so `fill_period` never has to know which failure mode occurred.
+///
+/// A row this function *does* write can still be a partial one — some
+/// chunk of the Period was skipped, `grounding_entry_ids` covers only the
+/// Entries that survived, and `source_seq` is `0` (issue #137,
+/// `generate_digest_body`'s own doc comment has the full reasoning). That
+/// row is written and counted as success here — `insert_digest` below
+/// cannot tell a partial body from a complete one, and does not need to:
+/// the `0` watermark already tells the reader the next time this Period is
+/// read, and no retry of this Period will ever happen anyway, complete or
+/// not (ADR 0039: the worker generates, it never regenerates).
 async fn write_digest_for(
     pool: &PgPool,
     client: &(dyn LlmClient + Send + Sync),
@@ -311,6 +733,7 @@ async fn write_digest_for(
     period: Period,
     start: NaiveDate,
     attempts: &mut HashMap<(Period, NaiveDate), u8>,
+    context_window: u32,
 ) -> bool {
     let key = (period, start);
     if attempts.get(&key).copied().unwrap_or(0) >= MAX_ATTEMPTS {
@@ -336,23 +759,31 @@ async fn write_digest_for(
         return false;
     }
 
-    let messages = build_messages(period, start, &entries, tz);
-    let body = match client.chat(&messages).await {
-        Ok(reply) => reply.content,
-        Err(err) => {
-            let count = attempts.entry(key).or_insert(0);
-            *count += 1;
-            tracing::warn!(error = ?err, period = period.as_str(), %start, attempt = *count, "digest chat call failed");
-            return false;
-        }
-    };
+    // `generate_digest_body` (issue #135, chunked per issue #136, made
+    // partiality-tolerant per issue #137) is the only path from these
+    // Entries to a body: it splits them into one or more chunks against
+    // `context_window`'s budget, makes one chat call per chunk, and skips
+    // (rather than fails on) a chunk whose call errors or whose reply is
+    // empty, whitespace-only, or fence-only. This `Err` arm is now reached
+    // only when *every* chunk in the Period failed — a transport failure
+    // and a rejected reply are still folded together here, exactly as
+    // before, but a single bad chunk among several good ones no longer
+    // lands here at all; it lands in the `Ok` arm below as a partial
+    // Digest instead. See `generate_digest_body`'s own doc comment for the
+    // full reasoning. Total failure is treated exactly as a failed chat
+    // call already was before issue #135: attempt consumed, nothing
+    // written, retried on a later tick within `MAX_ATTEMPTS`.
+    let (body, entry_ids, source_seq) =
+        match generate_digest_body(client, period, start, &entries, tz, context_window).await {
+            Ok(result) => result,
+            Err(err) => {
+                let count = attempts.entry(key).or_insert(0);
+                *count += 1;
+                tracing::warn!(error = ?err, period = period.as_str(), %start, attempt = *count, "digest body generation failed");
+                return false;
+            }
+        };
 
-    let entry_ids: Vec<Uuid> = entries.iter().map(|entry| entry.id).collect();
-    // The watermark this Digest's revision 1 goes stale against (ADR
-    // 0039). `entries` is non-empty here — the guard above already returned
-    // early otherwise — so `source_seq_of`'s empty case is unreachable from
-    // this call site, not the "no Entries" case itself.
-    let source_seq = source_seq_of(&entries);
     match insert_digest(pool, period, start, &body, &entry_ids, source_seq).await {
         Ok(inserted) => {
             // Succeeded (or lost a race to another writer of the exact
@@ -507,25 +938,18 @@ fn digest_system_prompt() -> &'static str {
      plain text, so any Markdown you emit reaches the reader as literal punctuation."
 }
 
-/// The user message naming the Period and its inclusive local date range,
-/// followed by its Entries rendered as `[YYYY-MM-DD] body`, blank-line
-/// separated, via `render_entry` below.
-///
-/// `tz` is the same `Tz` `write_digest_for` already resolved `start`'s
-/// Period bounds against (`period::period_bounds`) — reusing it here,
-/// rather than letting this function read `MEOLOGUE_TZ` a second time on
-/// its own, is what keeps "which Period an Entry was bucketed into" and
-/// "what date it's labelled with when shown to the model" answers to the
-/// same timezone, by construction, rather than by two call sites happening
-/// to agree.
-fn build_messages(
-    period: Period,
-    start: NaiveDate,
-    entries: &[DigestEntry],
-    tz: Tz,
-) -> Vec<ChatMessage> {
+/// The Period's own inclusive local date range, exactly as this module
+/// rendered it before issue #136's chunking existed —
+/// `"YYYY-MM-DD (day)"` for a Period whose start and end coincide,
+/// `"YYYY-MM-DD to YYYY-MM-DD (a week/month)"` otherwise. Used by
+/// `generate_digest_body` whenever a single chat call covers the whole
+/// Period (today, always, since a real corpus never reaches the chunking
+/// threshold — see `DIGEST_ENTRY_BUDGET_FRACTION`'s doc comment), which is
+/// what keeps that overwhelmingly common case byte-identical to every
+/// Digest this worker wrote before this function existed.
+fn period_range_label(period: Period, start: NaiveDate) -> String {
     let end = period::period_end(period, start);
-    let range = if start == end {
+    if start == end {
         format!("{} ({})", start.format("%Y-%m-%d"), period.as_str())
     } else {
         format!(
@@ -534,8 +958,64 @@ fn build_messages(
             end.format("%Y-%m-%d"),
             period.as_str()
         )
-    };
+    }
+}
 
+/// One chunk's own inclusive local date range — issue #136's answer for
+/// when a Period is split across several chat calls. `chunk` is never
+/// empty (`chunk_entries` never produces an empty slice) and is already in
+/// `created_at` order (`select_entries`'s `order by created_at asc`,
+/// preserved end to end by the packing in `chunk_entries`), so its first
+/// and last elements are that chunk's own earliest and latest Entry.
+///
+/// Naming *this span* rather than the whole Period's is the whole point:
+/// issue #101 was filed because an Entry could be rendered under the
+/// wrong local day inside a call that could see it fine; a multi-chunk
+/// call using the Period's own range would repeat that failure one level
+/// up — a date label true of the Period but false of what this one call
+/// was actually handed, since a chunk only ever sees a fraction of the
+/// Period's Entries. Deliberately not merged with `period_range_label`'s
+/// `"(a week)"`/`"(day)"` suffix: a chunk's span is not itself a Period,
+/// and inventing a Period-shaped word for an arbitrary slice of one would
+/// claim a calendar meaning this span doesn't have.
+fn chunk_range_label(chunk: &[DigestEntry], tz: Tz) -> String {
+    let first = chunk
+        .first()
+        .expect("chunk_entries never produces an empty chunk")
+        .created_at
+        .with_timezone(&tz)
+        .date_naive();
+    let last = chunk
+        .last()
+        .expect("chunk_entries never produces an empty chunk")
+        .created_at
+        .with_timezone(&tz)
+        .date_naive();
+    if first == last {
+        first.format("%Y-%m-%d").to_string()
+    } else {
+        format!("{} to {}", first.format("%Y-%m-%d"), last.format("%Y-%m-%d"))
+    }
+}
+
+/// The user message naming `range` and followed by `entries` rendered as
+/// `[YYYY-MM-DD] body`, blank-line separated, via `render_entry` below.
+/// Shared by both shapes `generate_digest_body` needs: the single-chunk
+/// case, where `range` is the whole Period's own span
+/// (`period_range_label`) and `entries` is every Entry the Period holds,
+/// and issue #136's multi-chunk case, where `range` and `entries` are one
+/// chunk's own (`chunk_range_label`) — the same rendering either way, so a
+/// reader (model or human) can't tell from the shape of the message
+/// itself whether the Period behind it fit in one call or several.
+///
+/// `tz` is the same `Tz` `write_digest_for` already resolved `start`'s
+/// Period bounds against (`period::period_bounds`) — reusing it here,
+/// rather than letting this function read `MEOLOGUE_TZ` a second time on
+/// its own, is what keeps "which Period an Entry was bucketed into" and
+/// "what date it's labelled with when shown to the model" answers to the
+/// same timezone, by construction, rather than by two call sites happening
+/// to agree.
+fn build_messages(range: &str, entries: &[DigestEntry], tz: Tz) -> Vec<ChatMessage> {
     let entries_block = entries
         .iter()
         .map(|entry| render_entry(entry, tz))
@@ -1004,7 +1484,16 @@ pub async fn regenerate_digest_handler(
         return Err(StatusCode::NOT_FOUND);
     };
 
-    match run_regenerate(&pool, digest.chat_client.as_ref(), digest.tz, period, date).await {
+    match run_regenerate(
+        &pool,
+        digest.chat_client.as_ref(),
+        digest.tz,
+        period,
+        date,
+        digest.context_window,
+    )
+    .await
+    {
         Ok(response) => Ok(Json(response)),
         Err(err) => {
             tracing::error!(error = ?err, period = period.as_str(), %date, "regenerating a digest failed");
@@ -1024,22 +1513,74 @@ pub async fn regenerate_digest_handler(
 /// whatever Digest already exists there (possibly `None`), the same
 /// "always 200, never invent a row" contract every other Digest read in
 /// this module already keeps.
+///
+/// Issue #135: if the Period does hold Entries but every chunk of
+/// `generate_digest_body`'s reply is rejected (empty, whitespace-only, or
+/// fence-only) or its chat call fails, this function returns `Err` — the
+/// `?` below propagates it straight through `regenerate_digest_handler` as
+/// a 500, and `regenerate_insert` is never called, so no revision is
+/// minted. That matters more here than in the worker:
+/// `select_digest_at`/`select_latest_digest` always take the newest
+/// revision unconditionally (ADR 0039), so a blank revision that did get
+/// inserted would shadow whatever good revision came before it, not
+/// merely fail to improve on it. There is no retry loop on this route the
+/// way `write_digest_for` has one across ticks — a rejected regenerate
+/// simply asks the caller to press the button again.
+///
+/// Issue #136: `context_window` (from `DigestState`, the same
+/// process-wide value `digest::run` was started with) flows straight into
+/// `generate_digest_body` here exactly as it does from the worker side —
+/// this route reuses `select_entries` and `generate_digest_body` in full,
+/// so a Period too large for one chat call splits on the regenerate path
+/// the same way it would on the worker's own tick, at the same budget.
+///
+/// **Issue #137, accepted risk: regenerate may write a partial revision
+/// over a complete one, and this function does not guard against it.**
+/// When some but not all chunks fail, `generate_digest_body` now returns
+/// `Ok` with a body covering only the surviving chunks, a
+/// `grounding_entry_ids` narrower than the full Period, and `source_seq =
+/// 0` — and this function inserts that revision exactly as it would a
+/// complete one, via the same `regenerate_insert` call below, with no
+/// check of what it is replacing. Concretely: pressing Regenerate on a
+/// Period that already holds a perfectly good revision 3 can mint a
+/// partial revision 4 that shadows it, because reads take the newest
+/// revision unconditionally (ADR 0039, restated just above). A "refuse to
+/// insert a partial revision over a complete one" guard was considered and
+/// rejected for this ticket — it would need to diff two revisions' own
+/// completeness before every insert, machinery this route has never
+/// needed for anything else, to defend against a case that already carries
+/// its own remedy: the `source_seq = 0` this same partial revision is
+/// born with makes it report `stale = true` on the very next read (see
+/// `generate_digest_body`'s own doc comment for why that `0` is written
+/// deliberately, not incidentally), which is the same cue that already
+/// tells a reader to press Regenerate again for any other stale Digest.
+/// The mitigation is that stale marker, not a write-time refusal — a
+/// reader who presses Regenerate a second time gets another chance at a
+/// complete revision, same as they would for any other cause of
+/// staleness.
 async fn run_regenerate(
     pool: &PgPool,
     client: &(dyn LlmClient + Send + Sync),
     tz: Tz,
     period: Period,
     date: NaiveDate,
+    context_window: u32,
 ) -> anyhow::Result<DigestResponse> {
     let (from_utc, to_utc) = period::period_bounds(period, tz, date);
     let entries = select_entries(pool, from_utc, to_utc).await?;
 
     if !entries.is_empty() {
-        let messages = build_messages(period, date, &entries, tz);
-        let reply = client.chat(&messages).await?;
-        let entry_ids: Vec<Uuid> = entries.iter().map(|entry| entry.id).collect();
-        let source_seq = source_seq_of(&entries);
-        regenerate_insert(pool, period, date, &reply.content, &entry_ids, source_seq).await?;
+        // `generate_digest_body` (issue #135, chunked per issue #136) is
+        // the same single path `write_digest_for` goes through — a
+        // rejected reply (empty, whitespace-only, or fence-only), or any
+        // one chunk of several failing, surfaces as an `Err` here, `?`
+        // propagates it straight out of this function, and
+        // `regenerate_insert` below is never reached: no revision is
+        // minted, so an existing good revision is never shadowed by a
+        // blank one (the exact failure this ticket was filed against).
+        let (body, entry_ids, source_seq) =
+            generate_digest_body(client, period, date, &entries, tz, context_window).await?;
+        regenerate_insert(pool, period, date, &body, &entry_ids, source_seq).await?;
     }
 
     let record = select_digest_at(pool, period, date).await?;

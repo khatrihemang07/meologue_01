@@ -96,6 +96,11 @@ fn unused_digest_state() -> DigestState {
     DigestState {
         chat_client: Arc::new(UnusedLlmClient),
         tz: Tz::UTC,
+        // Matches `chat_only_reflect_state`'s own `context_window` above —
+        // `health_handler` never reads this field either, so its exact
+        // value is arbitrary; the shared constant just keeps every unused
+        // fixture in this file agreeing on the same placeholder number.
+        context_window: 200_000,
     }
 }
 

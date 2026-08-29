@@ -571,6 +571,12 @@ impl LlmConfig {
     /// #97 names, not something a live `/v1/reflect` call should be paying
     /// an extra round trip for on every Question.
     ///
+    /// Issue #136: `main.rs` reuses this same resolution for the Digest
+    /// worker and its regenerate route too — one call at startup, not a
+    /// second one Digest would otherwise make on its own, so the two
+    /// features never disagree about how big the window they're both
+    /// budgeting against actually is.
+    ///
     /// Falls back to `harness::compaction::DEFAULT_CONTEXT_WINDOW` — the
     /// "conservative configured value" issue #97 asks for — on *any*
     /// failure to learn a real number: no chat config at all, the request

@@ -85,6 +85,21 @@ async fn main() -> anyhow::Result<()> {
 
     let llm_config = llm::LlmConfig::from_env();
 
+    // Issue #97 / #136: how much room the configured chat model has,
+    // resolved once here rather than once per feature — `resolve_context_window`
+    // is cheap to call even when chat isn't configured at all (it
+    // short-circuits to `harness::compaction::DEFAULT_CONTEXT_WINDOW`
+    // without a network call whenever `chat_base_url`/`chat_model` aren't
+    // both set, see its own doc comment), and Reflection and the Digest
+    // worker are gated on exactly those same two fields
+    // (`LlmConfig::reflect_config`/`digest_worker_config`), so whenever
+    // either is actually enabled this one resolution is the number both of
+    // them use. Digest reuses it (issue #136) rather than resolving a
+    // second, independent context window, so the worker's tick and a
+    // reader's Regenerate press always agree on the same chunking budget
+    // Reflection's own compaction trigger agrees on too.
+    let context_window = llm_config.resolve_context_window().await;
+
     // An unset embed model (with no base URL resolvable from either
     // MEOLOGUE_EMBED_BASE_URL or MEOLOGUE_CHAT_BASE_URL) means the
     // embedding worker never starts and the server runs exactly as it does
@@ -122,15 +137,18 @@ async fn main() -> anyhow::Result<()> {
     // their own `Arc` to the same underlying client.
     let digest_tz = period::server_timezone();
     let digest_worker_config = llm_config.digest_worker_config();
-    let digest_state = digest_worker_config
-        .clone()
-        .map(|chat_client| digest::DigestState { chat_client, tz: digest_tz });
+    let digest_state = digest_worker_config.clone().map(|chat_client| digest::DigestState {
+        chat_client,
+        tz: digest_tz,
+        context_window,
+    });
     if let Some(chat_client) = digest_worker_config {
         tokio::spawn(digest::run(
             pool.clone(),
             chat_client,
             digest_tz,
             digest::SCAN_INTERVAL,
+            context_window,
         ));
     }
 
@@ -141,10 +159,11 @@ async fn main() -> anyhow::Result<()> {
     // tool (`similar_entries`) that needs it; see `LlmConfig::reflect_config`.
     let reflect = match llm_config.reflect_config() {
         Some((chat_client, embed_client)) => {
-            // Issue #97: resolved once, at startup, rather than per
-            // request — `LlmConfig::resolve_context_window`'s own doc
-            // comment covers why.
-            let context_window = llm_config.resolve_context_window().await;
+            // Issue #97 / #136: `context_window` was already resolved once,
+            // above, before either Reflection or the Digest worker's own
+            // config was even inspected — reused here rather than a second
+            // call to `resolve_context_window`, per that function's own
+            // "called once, here" reasoning.
             // Issue #96: `GET /v1/models` (`models::models_handler`) needs
             // the raw base URL/API key alongside the two `LlmClient`s above
             // — `reflect_config()` already proved `chat_base_url` is `Some`
