@@ -11,6 +11,16 @@
  * other way round — and if both refuse, that is reported as a failure rather
  * than swallowed, because a clipboard the WebView refused must not look
  * identical to one that succeeded.
+ *
+ * What is actually verified, as opposed to reasoned: on the Android device
+ * `navigator.clipboard.writeText` is a function and Copy puts the Entry's
+ * body on the system clipboard. In the signed macOS Sandbox bundle Copy also
+ * works end to end — the toast appears and `pbpaste` returns the body — but
+ * WHICH of the two paths carried it is unknown, because a signed release
+ * build exposes no Web Inspector and the property could not be read. So the
+ * secure-context reasoning above is why the fallback is here, not something
+ * observed on WKWebView; if it is ever shown to be unnecessary there, this
+ * is the comment to correct.
  */
 
 /**
