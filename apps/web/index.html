@@ -3,7 +3,23 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      `viewport-fit=cover` is what makes `env(safe-area-inset-*)` resolve to
+      anything other than 0. Every use of it in this app — Shell's own edges,
+      the docked Composer, the bottom sheet — was written expecting real
+      numbers and silently got zeros until this key landed.
+
+      `interactive-widget=resizes-content` makes the virtual keyboard shrink
+      the *layout* viewport rather than sliding the visual one over the top,
+      so the docked Composer ends up above the keyboard instead of behind it.
+      It is a Chromium-only key: Android's WebView and the web build honour
+      it, WKWebView (what Tauri renders in) ignores it entirely. That second
+      engine is why `useKeyboardInset` exists — see its own doc comment.
+    -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
+    />
     <!--
       Matches vite.config.ts's VitePWA manifest theme_color (ticket 45) — the
       browser chrome and the OS task switcher use this, and it's not

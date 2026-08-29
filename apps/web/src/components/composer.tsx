@@ -147,8 +147,13 @@ export function Composer({
     // stay identical or the field stops agreeing with the thread. Its own
     // safe-area padding is what the stand-in on Shell's scroll region
     // existed to cover before this ticket gave the Composer a real bottom
-    // edge to own.
-    <div className="shrink-0 border-t border-border bg-background [padding-bottom:env(safe-area-inset-bottom)]">
+    // edge to own — but only at `md` and up. Below that, Shell's `nav` is
+    // ordered *after* this element and is the one against the window's edge,
+    // so padding here too reserved a second gesture bar's height in dead
+    // space between the two. `--safe-bottom` (set by Shell) is
+    // `env(safe-area-inset-bottom)` normally and 0 while a keyboard is up,
+    // since the home indicator is behind the keyboard.
+    <div className="shrink-0 border-t border-border bg-background md:[padding-bottom:var(--safe-bottom)]">
       {editingEntry && (
         // The visible half of "this is an edit, not a new Send" (ADR 0028).
         // Escape (handleKeyDown above) is the keyboard half of the edit

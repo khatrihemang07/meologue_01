@@ -1,8 +1,17 @@
 import { ArrowDown, ArrowLeft, Search as SearchIcon } from "lucide-react";
-import { createContext, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import {
+  type CSSProperties,
+  createContext,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import { SyncStatusIndicator } from "@/components/sync-status-indicator";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useKeyboardInset } from "@/hooks/use-keyboard-inset";
 import { usePinnedScroll } from "@/hooks/use-pinned-scroll";
 import { cn } from "@/lib/utils";
 
@@ -270,6 +279,11 @@ export function Shell({
     scrollToNewestIndex: runRegisteredScrollToNewest,
   });
 
+  // Every page renders through Shell, so asking here once is what gives the
+  // whole app one answer about the keyboard — see the returned element's own
+  // comment for what the two custom properties below it are for.
+  const keyboard = useKeyboardInset();
+
   // Ticket 55's mode switch: whether the app bar currently shows the search
   // field instead of the title/actions row. Lazily seeded from whether a
   // query is already active (a reload with `?q=`, or a link straight to a
@@ -308,7 +322,39 @@ export function Shell({
   }
 
   return (
-    <div className="flex h-svh w-full flex-col overflow-hidden bg-background [padding-left:env(safe-area-inset-left)] [padding-right:env(safe-area-inset-right)] md:flex-row">
+    // Two custom properties computed once here and inherited by everything
+    // below, rather than each bottom-edge component calling `useKeyboardInset`
+    // for itself: three sets of viewport listeners that can disagree by a
+    // frame, to answer one question the shell already knows the answer to.
+    //
+    // `--keyboard-inset` is what the keyboard occludes that layout has *not*
+    // already accounted for — always 0 on an engine that honoured
+    // `interactive-widget=resizes-content`, and the keyboard's height on one
+    // that ignored it. Subtracting it from the shell's own height is correct
+    // on both, which is the whole point of expressing it as a residual.
+    //
+    // `--safe-bottom` collapses to 0 while a keyboard is up. The home
+    // indicator is *behind* the keyboard, so reserving a gesture bar's worth
+    // of space above it is padding for something nothing can touch.
+    //
+    // The left/right insets on this element, and the header's own
+    // `padding-top` below, deliberately stay plain `env()` and are NOT
+    // routed through a keyboard-aware variable. A keyboard only ever takes
+    // space from the bottom edge: a notch, a Dynamic Island and a rounded
+    // corner are all exactly where they were while it is open, so those
+    // three insets are correct unchanged. They are named here only because
+    // `viewport-fit=cover` just moved them from resolving to 0 to resolving
+    // to something, which makes "unchanged" a decision rather than an
+    // oversight.
+    <div
+      className="flex h-[calc(100svh-var(--keyboard-inset))] w-full flex-col overflow-hidden bg-background [padding-left:env(safe-area-inset-left)] [padding-right:env(safe-area-inset-right)] md:flex-row"
+      style={
+        {
+          "--keyboard-inset": `${keyboard.inset}px`,
+          "--safe-bottom": keyboard.visible ? "0px" : "env(safe-area-inset-bottom)",
+        } as CSSProperties
+      }
+    >
       {nav && (
         <nav
           aria-label="Navigation"
@@ -333,7 +379,15 @@ export function Shell({
           // classes: a bottom bar stretches to the full window width in the
           // column case, a rail stretches to the full window height in the
           // row case.
-          className="order-2 flex shrink-0 border-t border-border bg-background [padding-bottom:env(safe-area-inset-bottom)] md:order-none md:w-20 md:flex-col md:gap-1 md:border-t-0 md:border-r md:p-2 md:[padding-bottom:0px]"
+          //
+          // That ordering decides who owns the bottom safe-area inset, which
+          // is why `--safe-bottom` is read here and not in the Composer: in
+          // the column case this element is the one against the window's
+          // bottom edge, and at `md` it is not. Both padding for it was
+          // double-counting a gesture bar's height, unnoticed only because
+          // the inset resolved to 0 until `index.html` gained
+          // `viewport-fit=cover`.
+          className="order-2 flex shrink-0 border-t border-border bg-background [padding-bottom:var(--safe-bottom)] md:order-none md:w-20 md:flex-col md:gap-1 md:border-t-0 md:border-r md:p-2 md:[padding-bottom:0px]"
         >
           {nav}
         </nav>

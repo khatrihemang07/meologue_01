@@ -120,6 +120,22 @@
 }
 
 @layer base {
+  /*
+   * Defaults for the two custom properties Shell computes from
+   * `useKeyboardInset` and sets inline on its own outermost element. Shell
+   * always sets both, so these are never what actually applies in the running
+   * app — they exist so the failure mode is benign if it ever doesn't.
+   *
+   * Without a default, `height: calc(100svh - var(--keyboard-inset))` is
+   * invalid at computed-value time the moment the property is missing, and an
+   * invalid `height` falls back to `auto` — which silently collapses the whole
+   * app shell rather than erroring anywhere you would notice. A component
+   * rendered outside Shell in a test is the likely way to meet that.
+   */
+  :root {
+    --keyboard-inset: 0px;
+    --safe-bottom: env(safe-area-inset-bottom);
+  }
   * {
     @apply border-border outline-ring/50;
   }
