@@ -13,7 +13,9 @@ import {
   useRef,
   useState,
 } from "react";
+import { useNavigate } from "react-router";
 import { toast } from "sonner";
+import { DatePickerSheet } from "@/components/date-picker-sheet";
 import { EntryActionsSheet } from "@/components/entry-actions";
 import { EntryBubble } from "@/components/entry-bubble";
 import { HistoryScrollContext } from "@/components/shell";
@@ -347,6 +349,27 @@ export function History({
       else toast.error("Couldn't copy this Entry. Select the text to copy it instead.");
     });
   }, []);
+
+  // Issue #146: which day a tap on either marker opened the picker for, or
+  // null while it's closed. Owned here for the same reason `sheetEntry` and
+  // `confirmEntry` are above — this is the one component above every marker
+  // this thread can render, so one `DatePickerSheet` instance serves both
+  // the sticky pill and however many inline separators are mounted, rather
+  // than one per marker.
+  const [datePickerDayKey, setDatePickerDayKey] = useState<string | null>(null);
+
+  // Confirming a day seeks History to it by the exact route a date
+  // Reference already uses (`DateReferenceLink`, entry-row.tsx) — `?d=` is
+  // read back by composer-page.tsx into a `seek` prop this same component
+  // already knows how to converge on (the effect above), so a tapped day
+  // and a followed Reference land through one mechanism, not two.
+  const navigate = useNavigate();
+  const handleDateConfirm = useCallback(
+    (dayKey: string) => {
+      navigate(`/composer?d=${dayKey}`);
+    },
+    [navigate],
+  );
 
   // `groupByDay` is the one genuinely O(entries.length) piece of render-body
   // work here (issue #81) — memoised so a render this component takes for
@@ -690,22 +713,71 @@ export function History({
           worth 16px of jump per toggle, measured in a real browser. A
           fixed height makes the flow contribution independent of the
           contents entirely. */}
-      <div className="sticky top-0 z-10 flex h-9 items-center justify-center">
-        <span
+      <div
+        data-testid="day-pill-wrapper"
+        className="sticky top-0 z-10 flex h-9 items-center justify-center"
+      >
+        {/* Issue #146: a `<button>`, not a `<span>` — tapping this opens
+            `DatePickerSheet` seeded with the topmost visible day, the same
+            as the inline separator below. `h-9` on the wrapper above is
+            what actually guarantees ADR 0030's "must not change height":
+            an explicit CSS height on a block-level box is not derived from
+            its children, so nothing this element does can grow or shrink
+            it. `appearance-none` is the one thing still worth adding on
+            top of that guarantee, rather than relying on it alone: this
+            app's global stylesheet (`index.css`'s `@import "tailwindcss"`)
+            already resets margin/padding/border to zero on every element
+            via Tailwind's own preflight (`*, ::before, ::after { margin:
+            0; padding: 0; border: 0 solid }`), so a bare `<button>` starts
+            from the identical box the old `<span>` did before either
+            one's own utility classes (`px-3 py-0.5 border`, both below)
+            apply — but that same preflight deliberately leaves
+            `appearance: button` on button elements (so a plain, unstyled
+            button still looks like a native one by default), and that
+            native rendering is the one remaining way a browser could paint
+            this wider or taller than the specified box. `appearance-none`
+            turns that off, so what's below is the only thing drawing this
+            control in every browser, not a browser's own button chrome
+            layered underneath it. */}
+        <button
+          type="button"
+          // Gated on `topmostDayKey !== null` alone, not `showOverlayPill`
+          // too: `showOverlayPill` only decides whether this pill's own
+          // label is currently the one thing on screen naming this day (as
+          // opposed to the inline separator already doing that job right
+          // above it — see that flag's own comment). Either way the
+          // topmost day is a real one worth seeding the picker with; the
+          // `invisible` class below (`visibility: hidden`) already removes
+          // this control from hit-testing, focus order and the
+          // accessibility tree for a real pointer or keyboard user whenever
+          // it applies, so nothing here needs to re-decide that in JS.
+          onClick={() => {
+            if (topmostDayKey !== null) {
+              setDatePickerDayKey(topmostDayKey);
+            }
+          }}
           title={
             showOverlayPill && topmostDayKey !== null
               ? formatDaySeparatorTitle(topmostDayKey)
               : undefined
           }
+          aria-label={
+            showOverlayPill && topmostDayKey !== null
+              ? `Choose a date to jump to — currently showing ${
+                  formatDaySeparatorTitle(topmostDayKey) ??
+                  formatDaySeparator(topmostDayKey, todayKey)
+                }`
+              : "Choose a date to jump to"
+          }
           className={cn(
-            "rounded-full border border-border bg-muted/90 px-3 py-0.5 text-xs font-medium text-muted-foreground backdrop-blur-sm",
+            "appearance-none rounded-full border border-border bg-muted/90 px-3 py-0.5 text-xs font-medium text-muted-foreground backdrop-blur-sm",
             !showOverlayPill && "invisible",
           )}
         >
           {showOverlayPill && topmostDayKey !== null
             ? formatDaySeparator(topmostDayKey, todayKey)
             : null}
-        </span>
+        </button>
       </div>
       {/* The bottom-alignment spacer (issue #83) — see its height's own
           comment above. Also this component's own non-circular measuring
@@ -745,12 +817,35 @@ export function History({
                 // moved out of flow); it still renders right where its
                 // day's Entries begin, exactly as before.
                 <div className="flex justify-center py-2">
-                  <span
+                  {/* Issue #146: same button, same height-neutrality
+                      reasoning as the always-present pill above — see its
+                      own comment. This one sits inside a virtualized row
+                      instead of the fixed-height wrapper, so here it's the
+                      row's own `measureElement` (not a fixed CSS height)
+                      that would notice any growth; `appearance-none` still
+                      applies for the same reason, so this row measures the
+                      same whether the reader has scrolled past it or not. */}
+                  <button
+                    type="button"
+                    // Same accessible name as the sticky pill above (both
+                    // markers do the same thing), which leaves nothing to
+                    // tell them apart by role/name alone once the pill is
+                    // also showing this same day — real, not hypothetical:
+                    // a short thread's pinned-to-newest scroll position can
+                    // already be past its one day separator on first paint.
+                    // `data-testid` disambiguates for the e2e suite only;
+                    // nothing in this app queries it.
+                    data-testid="day-separator"
+                    onClick={() => setDatePickerDayKey(item.dayKey)}
                     title={formatDaySeparatorTitle(item.dayKey)}
-                    className="rounded-full border border-border bg-muted/90 px-3 py-0.5 text-xs font-medium text-muted-foreground backdrop-blur-sm"
+                    aria-label={`Choose a date to jump to — currently showing ${
+                      formatDaySeparatorTitle(item.dayKey) ??
+                      formatDaySeparator(item.dayKey, todayKey)
+                    }`}
+                    className="appearance-none rounded-full border border-border bg-muted/90 px-3 py-0.5 text-xs font-medium text-muted-foreground backdrop-blur-sm"
                   >
                     {formatDaySeparator(item.dayKey, todayKey)}
-                  </span>
+                  </button>
                 </div>
               ) : (
                 // A bubble, not a row (ADR 0036). The `border-t` that used
@@ -823,6 +918,24 @@ export function History({
           }}
         />
       )}
+      {/* Issue #146: the one DatePickerSheet instance for however many day
+          markers this thread renders (the sticky pill plus one inline
+          separator per day) — same "one sheet above every row" shape as
+          EntryActionsSheet/ConfirmDialog above. Every date stays selectable
+          (date-picker-sheet.tsx's own doc comment); `handleDateConfirm`
+          navigates exactly where `DateReferenceLink` (entry-row.tsx) does,
+          so a tapped day and a followed Reference converge on the same
+          seek in composer-page.tsx rather than a second path. */}
+      <DatePickerSheet
+        open={datePickerDayKey !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDatePickerDayKey(null);
+          }
+        }}
+        initialDate={datePickerDayKey ?? undefined}
+        onConfirm={handleDateConfirm}
+      />
     </div>
   );
 }

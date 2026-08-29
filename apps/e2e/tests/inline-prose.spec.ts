@@ -36,9 +36,13 @@ test("a formatted Entry is no taller than a plain one, so the clock keeps its li
   await page.setViewportSize(NARROW);
   await page.goto("/composer");
 
-  // Same rendered text, same length — the only difference is the marks, so
-  // any height difference is the formatting's doing and nothing else.
-  const word = uniqueEntryBody("fmt");
+  // A SHORT word, not `uniqueEntryBody`'s full uuid. Bold text is genuinely
+  // wider than regular, so a long body in semibold legitimately wraps where
+  // the same body in regular weight does not — comparing those two measures
+  // the font, not the float, and fails for a reason that is not a defect.
+  // Kept far short of the wrap width, the only thing left that can add a
+  // line is the body ceasing to be one line box, which is what this guards.
+  const word = `f${Math.random().toString(36).slice(2, 8)}`;
   await sendEntry(page, word);
   await sendEntry(page, `**${word}**`);
   await expect(page.getByText(word).first()).toBeVisible();

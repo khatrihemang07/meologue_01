@@ -1,11 +1,33 @@
 import type { Entry } from "@meologue/core";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  type RenderOptions,
+  type RenderResult,
+  render as rtlRender,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import type { ReactElement } from "react";
+import { MemoryRouter, useLocation } from "react-router";
 import { toast } from "sonner";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { copyText } from "@/lib/clipboard";
 import * as entryDayModule from "@/lib/entry-day";
 import { swipeLeft, tap } from "@/test/swipe";
 import { History } from "./history";
+
+// Issue #146: History now calls `useNavigate()` (confirming a date picked
+// from either day marker), which throws outside a Router. Every render in
+// this file goes through this wrapper instead of `@testing-library/react`'s
+// own `render` directly, rather than touching each of the dozens of
+// existing call sites below: RTL's `wrapper` option applies to `rerender`
+// too (its own docs), so a `rerender(...)` call further down a test stays
+// wrapped in the same `MemoryRouter` its initial `render` was, with no
+// change needed at either call site.
+function render(ui: ReactElement, options?: RenderOptions): RenderResult {
+  return rtlRender(ui, { wrapper: MemoryRouter, ...options });
+}
 
 // Copy's two outcomes are the whole point of it reporting rather than
 // acting (#127), so both the clipboard and the toaster are stand-ins here:
@@ -667,11 +689,14 @@ describe("History", () => {
     const pillWrapper = spacer?.previousElementSibling;
     expect(pillWrapper).toHaveClass("sticky");
 
-    const pillLabel = pillWrapper?.querySelector("span");
+    // Issue #146: a `<button>` now, not a `<span>` — see history.tsx's own
+    // comment on the button by the wrapper's own `h-9` for why that
+    // conversion doesn't touch this wrapper's height.
+    const pillLabel = pillWrapper?.querySelector("button");
     expect(pillLabel).not.toBeNull();
     expect(pillLabel).toHaveClass("invisible");
     // Withheld, not just visually hidden — see history.tsx's own comment
-    // on why an `invisible` span still carrying the day label would
+    // on why an `invisible` button still carrying the day label would
     // duplicate the inline separator's own text.
     expect(pillLabel).toHaveTextContent("");
   });
@@ -1011,6 +1036,162 @@ describe("History", () => {
       await act(() => vi.advanceTimersByTimeAsync(1500));
 
       expect(fill).not.toHaveClass("ring-2");
+    });
+  });
+
+  // Issue #146: both day markers open `DatePickerSheet`, seeded with their
+  // own day, and confirming a date seeks History to it exactly the way a
+  // date Reference's own chip does (`DateReferenceLink`, entry-row.tsx) —
+  // navigating to `/composer?d=YYYY-MM-DD`, read back by composer-page.tsx
+  // into the very `seek` prop the suites above already exercise.
+  //
+  // The sticky pill and the topmost inline separator always name the same
+  // day in every test below, by construction (`renderTwoDays`' own
+  // comment): jsdom never lays out real scroll geometry, so
+  // `virtualizer.range` never moves off its initial guess and the topmost
+  // flattened row is always the oldest-loaded day's own separator (see
+  // `topmostItem`'s comment in history.tsx). That's also exactly why the
+  // pill's own accessible name below never carries a day — `showOverlayPill`
+  // is false whenever the topmost row is itself a separator, so the pill
+  // stays in its `invisible` state throughout this suite. That state, and
+  // the wrapper height ADR 0030 actually protects, is what the e2e spec
+  // checks in a real browser instead.
+  describe("day markers open a date picker (issue #146)", () => {
+    function renderTwoDays() {
+      const older = entry({ id: "1", body: "older", createdAt: "2020-01-01T10:00:00.000Z" });
+      const newer = entry({ id: "2", body: "newer", createdAt: "2020-01-02T10:00:00.000Z" });
+      return render(<History entries={[newer, older]} syncEnabled={false} />);
+    }
+
+    it("renders each inline day separator as a button naming its own day, not just a title attribute", () => {
+      renderTwoDays();
+
+      const separators = screen.getAllByRole("button", { name: /currently showing/ });
+      expect(separators).toHaveLength(2);
+      for (const separator of separators) {
+        expect(separator.tagName).toBe("BUTTON");
+        // `title` stays too (a pointer user's hover tooltip); the
+        // accessible name is the new thing this issue adds, not a
+        // replacement for it.
+        expect(separator).toHaveAttribute("title");
+      }
+    });
+
+    it("renders the sticky pill as a button too, distinguishable from the separators by its own (dayless) accessible name while hidden", () => {
+      renderTwoDays();
+
+      // An exact-string match, not a substring one: the separators' own
+      // names both start with this same phrase but continue with
+      // "— currently showing <day>" (previous test), so an exact match is
+      // what keeps this from also matching either of them.
+      const pill = screen.getByRole("button", { name: "Choose a date to jump to" });
+      expect(pill.tagName).toBe("BUTTON");
+      expect(pill).toHaveClass("invisible");
+    });
+
+    it("tapping an inline separator opens the picker seeded with that separator's own day", () => {
+      renderTwoDays();
+
+      // `renderTwoDays` (its own comment) puts January 1st's separator
+      // second in reading order, distinguishing it from January 2nd's —
+      // both are 2020, so the day itself has to disambiguate them here.
+      const separator = screen.getByRole("button", {
+        name: /currently showing.*January 1, 2020/,
+      });
+      fireEvent.click(separator);
+
+      // DatePickerSheet seeds `selected` from `initialDate`, and its
+      // Confirm button's own label names whatever is currently selected
+      // (date-picker-sheet.tsx) — reading that back is what actually
+      // proves the day this separator names is what the sheet opened with,
+      // rather than just that *a* sheet opened.
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+      const confirmButton = screen.getByRole("button", { name: /^Confirm/ });
+      expect(confirmButton).toHaveTextContent("January 1, 2020");
+    });
+
+    it("tapping the sticky pill opens the picker seeded with the topmost day, even while the pill itself is hidden", () => {
+      renderTwoDays();
+
+      // The pill is `invisible` (its own comment), not `disabled` — a real
+      // pointer/keyboard user can never reach it in this state, but
+      // nothing about the click handler itself depends on that CSS state
+      // (history.tsx's own comment on why), so a direct `fireEvent.click`
+      // here is exercising the same handler a visible pill would use once
+      // scrolled to, in a real browser, exactly to that position.
+      const pill = screen.getByRole("button", { name: "Choose a date to jump to" });
+      fireEvent.click(pill);
+
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+      // The topmost loaded day here is 2020-01-02 (`renderTwoDays`'s own
+      // comment: the oldest-loaded day's separator is always the topmost
+      // row under jsdom).
+      expect(screen.getByRole("button", { name: /^Confirm/ })).toHaveTextContent("January 2, 2020");
+    });
+
+    it("does not call onConfirm just from tapping a marker — the sheet's own tap-then-confirm still applies", () => {
+      renderTwoDays();
+
+      // Either separator does for this one — which day opened it isn't
+      // the point here.
+      const [firstSeparator] = screen.getAllByRole("button", {
+        name: /currently showing/,
+      }) as [HTMLElement, HTMLElement];
+      fireEvent.click(firstSeparator);
+      // Dismissing without pressing Confirm must not have navigated
+      // anywhere — checked properly by the "confirming navigates" test
+      // below; here it's enough that dismissing leaves the History page
+      // still mounted with nothing thrown, since DatePickerSheet's own
+      // suite already covers "tap alone never calls onConfirm" in isolation.
+      fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    it("is keyboard operable: a native <button>, focusable, and activated by the same click a real browser's Enter/Space resolves to", () => {
+      renderTwoDays();
+
+      // Either separator does for this one, same as the test above.
+      const [separator] = screen.getAllByRole("button", {
+        name: /currently showing/,
+      }) as [HTMLElement, HTMLElement];
+      // A native, unstyled `<button>` is exactly what makes Tab-then-Enter/
+      // Space work with no code of this component's own — every browser
+      // wires that up for a real `<button>` element, and jsdom itself has
+      // no such default action to fake here (confirmed against jsdom
+      // directly: dispatching a `keydown`/`keyup` with `key: "Enter"` or
+      // `" "` at a plain `<button>` fires no `click`). What a unit test
+      // *can* pin down is the two things that guarantee, rather than merely
+      // hope, that a keyboard reaches this control at all: it is a real
+      // `<button>` (not a `<span>`/`<div role="button">`, which would need
+      // its own keydown handling this component doesn't have), and it is
+      // actually focusable.
+      expect(separator.tagName).toBe("BUTTON");
+      expect(separator).not.toHaveAttribute("tabindex", "-1");
+      separator.focus();
+      expect(separator).toHaveFocus();
+
+      fireEvent.click(separator);
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+    });
+
+    it("confirming a picked date navigates to /composer?d=YYYY-MM-DD — the exact route a date Reference's own chip uses", () => {
+      function LocationDisplay() {
+        const location = useLocation();
+        return <div data-testid="location">{location.pathname + location.search}</div>;
+      }
+      const older = entry({ id: "1", body: "older", createdAt: "2020-01-01T10:00:00.000Z" });
+      rtlRender(
+        <MemoryRouter>
+          <History entries={[older]} syncEnabled={false} />
+          <LocationDisplay />
+        </MemoryRouter>,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: /currently showing/ }));
+      fireEvent.click(screen.getByRole("button", { name: /^Confirm/ }));
+
+      expect(screen.getByTestId("location")).toHaveTextContent("/composer?d=2020-01-01");
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
   });
 });
