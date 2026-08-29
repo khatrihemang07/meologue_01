@@ -8,11 +8,63 @@
  */
 import type { Entry } from "@meologue/core";
 import { type MouseEvent, memo, type ReactNode, useState } from "react";
+import { Link } from "react-router";
 import { EntryHoverActions, hoverCapable } from "@/components/entry-actions";
 import { inlineProse } from "@/components/inline-prose";
+import { useDayHasEntries } from "@/hooks/use-day-has-entries";
 import { formatClockTime } from "@/lib/entry-day";
 import { formatAbsoluteTime } from "@/lib/entry-time";
 import { cn } from "@/lib/utils";
+import { useEntryStore } from "@/pages/entry-store-layout";
+
+/**
+ * One `[[YYYY-MM-DD]]` date Reference (issue #142), rendered by
+ * `entryBodyContent` below wherever `inlineProse` finds one.
+ *
+ * A component of its own, not a plain render callback: `useDayHasEntries`
+ * needs its own hook state per Reference, and a body can carry more than
+ * one date Reference to different days at once. Giving each occurrence its
+ * own component instance — one `refs.date` invocation per node,
+ * inline-prose.tsx's own contract — is what keeps that state properly
+ * isolated per Reference regardless of how many appear in one Entry.
+ *
+ * Reads `dayHasEntries` off `useEntryStore()` rather than taking it as a
+ * prop threaded down through EntryRow/EntryBubble/History: every renderer
+ * of an Entry's body (History's thread, Grounding's list) already sits
+ * inside EntryStoreLayout's outlet (entry-store-layout.tsx's own routes
+ * comment), so the context is always there to read, and threading it as a
+ * prop would touch every caller between here and there for a concern only
+ * this one node type has.
+ */
+function DateReferenceLink({ date, raw }: { date: string; raw: string }) {
+  const { dayHasEntries } = useEntryStore();
+  const hasEntries = useDayHasEntries(dayHasEntries, date);
+
+  // Both "still resolving" (`undefined`) and "confirmed empty" (`false`)
+  // render the same way: the literal text a Reference to an unresolvable
+  // day always was, before this ticket existed. Only a confirmed `true`
+  // upgrades it to a link — see use-day-has-entries.ts's own comment for
+  // why flashing a link into existence before that would be worse than
+  // waiting for it.
+  if (hasEntries !== true) {
+    return raw;
+  }
+
+  return (
+    // The visible text stays the literal mark the user typed — the
+    // decision every unresolved-or-resolved Reference alike follows
+    // (inline-prose.tsx) — while the accessible name says where the link
+    // actually goes, since "[[2026-08-28]]" read aloud names a mark, not a
+    // destination.
+    <Link
+      to={`/composer?d=${date}`}
+      aria-label={`Open ${date} in History`}
+      className="underline underline-offset-2"
+    >
+      {raw}
+    </Link>
+  );
+}
 
 /**
  * An Entry's words with the Search query highlighted, as inline content and
@@ -29,7 +81,9 @@ import { cn } from "@/lib/utils";
  * History and Grounding, which is what `EntryBody`'s own extraction was for.
  */
 export function entryBodyContent(body: string, query: string): ReactNode {
-  return inlineProse(body, query);
+  return inlineProse(body, query, {
+    date: (node, key) => <DateReferenceLink key={key} date={node.date} raw={node.raw} />,
+  });
 }
 
 export function EntryBody({ body, query }: { body: string; query: string }) {

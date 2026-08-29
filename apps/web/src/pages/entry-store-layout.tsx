@@ -4,6 +4,8 @@ import { queryOptions, useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { Outlet, useOutletContext } from "react-router";
 import { type UseHistoryPagination, useHistory } from "@/hooks/use-history";
+import { dayHasEntries } from "@/lib/day-has-entries";
+import { deviceUtcOffsetMinutes } from "@/lib/entry-day";
 import { SecondTabError, StorageUnavailableError } from "@/lib/entry-store-errors";
 import { ENTRY_STORE_QUERY_KEY } from "@/lib/query-keys";
 import { createDriver } from "@/platform/sqlite-driver";
@@ -26,6 +28,24 @@ export interface EntryStoreOutletContext {
    * first.
    */
   getEntries: (ids: string[]) => Promise<Entry[]>;
+  /**
+   * Whether a local day (YYYY-MM-DD) holds at least one live Entry (issue
+   * #142) — day-has-entries.ts's own `dayHasEntries`, exposed as a context
+   * function the same way `search`/`getEntries` above are, rather than the
+   * raw store: entry-row.tsx's date-Reference link (via
+   * use-day-has-entries.ts) is this field's one caller, and it needs
+   * exactly this answer, not `EntryStore.list` itself.
+   *
+   * Optional, unlike `search`/`getEntries`: every other page that builds
+   * this context — reflection-page.tsx's and digest-reader-page.tsx's own
+   * tests among them, none of which know a date Reference exists — has no
+   * reason to supply it, and `use-day-has-entries.ts`'s own hook already
+   * treats "no probe available" the same as "still resolving": the
+   * Reference simply stays its literal text, the same "unresolved is plain
+   * text" rule inline-prose.tsx already applies to a removed Entry or a
+   * malformed mark.
+   */
+  dayHasEntries?: (dayKey: string) => Promise<boolean>;
   /** ADR 0028 — see use-history.ts's own doc comment for what these do and why removeEntry takes the whole Entry. */
   editEntry: (id: string, body: string) => void;
   removeEntry: (entry: Entry) => void;
@@ -98,6 +118,13 @@ async function noopSearch(): Promise<Entry[]> {
 
 async function noopGetEntries(): Promise<Entry[]> {
   return [];
+}
+
+// Before the store opens there are no Entries to find on any day (`entries:
+// []` above already says as much); this is the `dayHasEntries` field's own
+// stand-in for that same not-ready state.
+async function noopDayHasEntries(): Promise<boolean> {
+  return false;
 }
 
 // ADR 0028's edit/delete affordances need the store to exist just as much
@@ -267,6 +294,8 @@ export function EntryStoreLayout() {
               sendEntry,
               search: (query: string) => store.search(query),
               getEntries: (ids: string[]) => store.getMany(ids),
+              dayHasEntries: (dayKey: string) =>
+                dayHasEntries(store, dayKey, deviceUtcOffsetMinutes()),
               editEntry,
               removeEntry,
               disabled: false,
@@ -277,6 +306,7 @@ export function EntryStoreLayout() {
               sendEntry: noop,
               search: noopSearch,
               getEntries: noopGetEntries,
+              dayHasEntries: noopDayHasEntries,
               editEntry: noopEdit,
               removeEntry: noopRemove,
               disabled: true,

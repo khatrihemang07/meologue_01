@@ -1,8 +1,11 @@
 import type { Entry } from "@meologue/core";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
+import { MemoryRouter, Outlet, Route, Routes } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as entryDayModule from "@/lib/entry-day";
+import type { EntryStoreOutletContext } from "@/pages/entry-store-layout";
 import { EntryRow } from "./entry-row";
 
 function entry(overrides: Partial<Entry>): Entry {
@@ -35,6 +38,46 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
+
+/**
+ * A date Reference's own renderer (entry-row.tsx's `DateReferenceLink`)
+ * reads `dayHasEntries` off `useEntryStore()` and resolves it through
+ * TanStack Query — this stands EntryRow up inside the same outlet-context
+ * plus router plus query-client wiring composer-page.test.tsx uses for the
+ * page above it, scoped down to a bare `<EntryRow>`.
+ */
+function renderEntryRow(
+  target: Entry,
+  overrides: Partial<EntryStoreOutletContext> = {},
+  query = "",
+) {
+  const queryClient = new QueryClient();
+  const context: EntryStoreOutletContext = {
+    entries: [],
+    pagination: { hasMore: false, fetching: false, fetchMore: vi.fn() },
+    sendEntry: vi.fn(),
+    search: vi.fn(async () => []),
+    getEntries: vi.fn(async () => []),
+    editEntry: vi.fn(),
+    removeEntry: vi.fn(),
+    disabled: false,
+    ...overrides,
+  };
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter>
+        <Routes>
+          <Route element={<Outlet context={context} />}>
+            <Route
+              path="/"
+              element={<EntryRow entry={target} syncEnabled={false} query={query} />}
+            />
+          </Route>
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
 
 describe("EntryRow", () => {
   it("renders an Entry's body plain when no query is given", () => {
@@ -360,6 +403,76 @@ describe("EntryRow", () => {
 
       expect(screen.getByText("goodbye")).toBeInTheDocument();
       expect(clockSpy).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  // Issue #142: a `[[YYYY-MM-DD]]` date Reference resolves through
+  // entryBodyContent's own `refs.date` renderer (entry-row.tsx's
+  // `DateReferenceLink`), which is the single choke point both this
+  // component and the Entry bubble render an Entry's body through.
+  describe("a date Reference", () => {
+    it("renders as a link to the Composer, seeking that day, once the day is confirmed to hold Entries", async () => {
+      const dayHasEntries = vi.fn(async () => true);
+      renderEntryRow(entry({ body: "see [[2026-08-28]] for context" }), { dayHasEntries });
+
+      const link = await screen.findByRole("link", { name: /2026-08-28/ });
+      expect(link).toHaveAttribute("href", "/composer?d=2026-08-28");
+      // The visible text stays the literal mark, per the "a Reference keeps
+      // its literal text" rule — only the accessible name says where it
+      // goes.
+      expect(link).toHaveTextContent("[[2026-08-28]]");
+      expect(dayHasEntries).toHaveBeenCalledWith("2026-08-28");
+    });
+
+    it("says where it goes in its accessible name, distinct from its literal visible text", async () => {
+      const dayHasEntries = vi.fn(async () => true);
+      renderEntryRow(entry({ body: "[[2026-08-28]]" }), { dayHasEntries });
+
+      const link = await screen.findByRole("link");
+      expect(link.getAttribute("aria-label")).not.toBe("[[2026-08-28]]");
+      expect(link.getAttribute("aria-label")).toMatch(/2026-08-28/);
+    });
+
+    it("renders as literal text, not a link, once the day is confirmed to hold no Entries", async () => {
+      const dayHasEntries = vi.fn(async () => false);
+      renderEntryRow(entry({ body: "see [[2026-08-28]] for context" }), { dayHasEntries });
+
+      await screen.findByText("see [[2026-08-28]] for context");
+      expect(screen.queryByRole("link", { name: /2026-08-28/ })).not.toBeInTheDocument();
+    });
+
+    it("renders as literal text while the day-has-Entries check is still resolving", () => {
+      const dayHasEntries = vi.fn(() => new Promise<boolean>(() => {})); // never resolves
+      renderEntryRow(entry({ body: "[[2026-08-28]]" }), { dayHasEntries });
+
+      expect(screen.getByText("[[2026-08-28]]")).toBeInTheDocument();
+      expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    });
+
+    it("renders as literal text, and never probes anything, when no dayHasEntries is available at all", () => {
+      renderEntryRow(entry({ body: "[[2026-08-28]]" }));
+
+      expect(screen.getByText("[[2026-08-28]]")).toBeInTheDocument();
+      expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    });
+
+    // The parser's own guarantee (inline-markdown.ts's `parseReferenceDate`)
+    // is that a shape which is not a real calendar day never becomes a
+    // DateReference node at all — asserted here end to end, through
+    // entryBodyContent, rather than only at the parser's own level.
+    it("never reaches the renderer at all when the date is not a real calendar day", () => {
+      const dayHasEntries = vi.fn(async () => true);
+      renderEntryRow(entry({ body: "[[2026-13-45]]" }), { dayHasEntries });
+
+      expect(screen.getByText("[[2026-13-45]]")).toBeInTheDocument();
+      expect(screen.queryByRole("link")).not.toBeInTheDocument();
+      expect(dayHasEntries).not.toHaveBeenCalled();
+    });
+
+    it("highlights a Search match inside the literal text of an unresolved Reference", () => {
+      renderEntryRow(entry({ body: "[[2026-13-45]]" }), {}, "2026");
+
+      expect(screen.getByText("2026", { selector: "mark" })).toBeInTheDocument();
     });
   });
 });

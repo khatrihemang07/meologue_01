@@ -52,6 +52,28 @@ interface HistoryProps {
    */
   onEdit?: (entry: Entry) => void;
   onDelete?: (entry: Entry) => void;
+  /**
+   * Issue #142: the day a date-Reference seek (composer-page.tsx) is
+   * looking for, or `null`/omitted while no seek is active. History is the
+   * only thing that can act on this — it alone owns `flatItems` (below) and
+   * the virtualizer that can actually scroll to a row — so composer-page.tsx
+   * hands over the target day and gets called back rather than trying to
+   * reach into either of those itself.
+   */
+  seek?: { dayKey: string } | null;
+  /**
+   * The target day's separator wasn't in `flatItems` on this render.
+   * composer-page.tsx owns `pagination` (History does not — see
+   * HistoryProps' own shape), so it decides from here whether to load
+   * another page or give up: hasMore is false, this same seek has nothing
+   * further to check, and composer-page.tsx's own handler calls
+   * `onSeekSettled` in that case instead of fetching. History just reports
+   * "not found yet" every time that stays true; it does not loop on its
+   * own account at all.
+   */
+  onSeekNeedsOlder?: () => void;
+  /** The seek reached its target day, or (composer-page.tsx's own call) ran out of older Entries to check. Either way, there is nothing left for this seek to do. */
+  onSeekSettled?: () => void;
 }
 
 interface DayGroup {
@@ -207,7 +229,16 @@ const OVERSCAN = 25;
 // the per-row DOM cost issue #83 exists to remove.
 const MAX_FALLBACK_ROWS = OVERSCAN;
 
-export function History({ entries, syncEnabled, query = "", onEdit, onDelete }: HistoryProps) {
+export function History({
+  entries,
+  syncEnabled,
+  query = "",
+  onEdit,
+  onDelete,
+  seek,
+  onSeekNeedsOlder,
+  onSeekSettled,
+}: HistoryProps) {
   // The "which Entry is open" state behind the single shared
   // EntryActionsSheet below (issue #78) — owned here, not per-row, which
   // is what keeps exactly one sheet instance in the DOM no matter how many
@@ -453,6 +484,45 @@ export function History({ entries, syncEnabled, query = "", onEdit, onDelete }: 
     });
     return () => registerScrollToNewest(null);
   }, [flatItems.length, registerScrollToNewest, virtualizer]);
+
+  // Issue #142: "page until you arrive" — the seek's own convergence step.
+  // `seek` names a day; this finds that day's separator in `flatItems` (the
+  // one thing only History can do, since flattening and the virtualizer
+  // both live here) and reacts to whichever of the three outcomes actually
+  // holds this render:
+  //
+  // - found -> scroll to it and report the seek settled. `align: "start"`
+  //   puts the day's own separator at the top of the viewport, the same
+  //   place it sits during ordinary scrolling, rather than centring an
+  //   arbitrary row.
+  // - not found, but `flatItems` might still grow (composer-page.tsx owns
+  //   `pagination`, not this component — see onSeekNeedsOlder's own doc
+  //   comment) -> ask for another older page.
+  // - not found, and composer-page.tsx's own `onSeekNeedsOlder` handler has
+  //   nothing further to fetch -> that handler calls `onSeekSettled`
+  //   itself; History never decides "give up" on its own, only "not found
+  //   yet," which is what keeps this effect from ever needing to loop.
+  //
+  // An effect, not a plain render-body call: `flatItems` only changes when
+  // `entries` actually grows a page (it's memoised on `groups`, itself
+  // memoised on `entries` — see those comments above), so gating on it
+  // here is what stops this from re-running, and re-requesting a page, on
+  // every unrelated render while a seek is in flight.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on `seek?.dayKey`, not `seek` itself — composer-page.tsx hands this down as a fresh `{ dayKey }` object on every render it's active, and depending on that identity would re-run this effect (and re-request an older page) on every unrelated re-render rather than only when the target day, or the data available to search, actually changes.
+  useEffect(() => {
+    if (!seek) {
+      return;
+    }
+    const targetIndex = flatItems.findIndex(
+      (item) => item.kind === "separator" && item.dayKey === seek.dayKey,
+    );
+    if (targetIndex === -1) {
+      onSeekNeedsOlder?.();
+      return;
+    }
+    virtualizer.scrollToIndex(targetIndex, { align: "start" });
+    onSeekSettled?.();
+  }, [seek?.dayKey, flatItems, virtualizer, onSeekNeedsOlder, onSeekSettled]);
 
   // Issue #83's bottom alignment: however much shorter the virtualized
   // list is than the viewport, floored at zero — a leading spacer that

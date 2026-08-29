@@ -1,6 +1,6 @@
 import type { Entry } from "@meologue/core";
-import { useEffect, useState } from "react";
-import { Link, useLocation, useNavigate } from "react-router";
+import { useCallback, useEffect, useState } from "react";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
 import { BackToChats } from "@/components/back-to-chats";
 import { Composer } from "@/components/composer";
 import { History } from "@/components/history";
@@ -8,6 +8,18 @@ import { Shell } from "@/components/shell";
 import { useHistorySearch } from "@/hooks/use-history-search";
 import { useSyncEnabled } from "@/lib/settings";
 import { useEntryStore } from "@/pages/entry-store-layout";
+
+// A date Reference's own destination (issue #142): `?d=YYYY-MM-DD`, a query
+// param rather than a path segment. `/composer` has no child routes, and
+// chat-list.tsx's own NavLink matches it with `end: true` (that file's own
+// comment on why) — a segment (`/composer/2026-08-28`) would fail that
+// match entirely, costing the chat list's `aria-current`, where a query
+// param leaves both untouched. It also composes for free with everything
+// else that already reaches this route by URL: Back, a reload, and a link
+// from a different Destination (the Digest reader, Reflection's Grounding)
+// all just need this one string.
+const SEEK_DAY_PARAM = "d";
+const DAY_KEY_SHAPE = /^\d{4}-\d{2}-\d{2}$/;
 
 // `/` — the Composer plus the same, uncapped History that had its own
 // route at `/history` before issue #75 deleted it (a second door onto the
@@ -61,6 +73,61 @@ export function ComposerPage() {
     // from then on.
     setSendSignal((count) => (count ?? 0) + 1);
   }
+
+  // Issue #142: the seek a date Reference lands here with, held entirely in
+  // the URL rather than component state — the same reason Search's own
+  // query lives in `?q=` (use-history-search.ts). `seek` is derived fresh
+  // each render, not cached in a `useState`, because the URL param is
+  // already the single source of truth: caching it separately would just
+  // be a second place for the two to disagree.
+  //
+  // A malformed `?d=` (hand-edited, or a stale link to a shape this app no
+  // longer uses) is treated as no seek at all rather than an error —
+  // consistent with a date Reference's own "malformed is not a Reference"
+  // rule (inline-markdown.ts's `parseReferenceDate`), just applied to the
+  // URL instead of an Entry's body.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const seekDayParam = searchParams.get(SEEK_DAY_PARAM);
+  const seek =
+    seekDayParam !== null && DAY_KEY_SHAPE.test(seekDayParam) ? { dayKey: seekDayParam } : null;
+
+  // Removes `?d=` once the seek has nowhere left to go — either History
+  // found the target day and scrolled to it, or (handleSeekNeedsOlder,
+  // below) ran out of older Entries to check. `replace`, not the default
+  // push: this param's own job is already done by the time it's cleared,
+  // so leaving it out of history means Back from here returns to wherever
+  // the reader followed the Reference from, rather than landing back on
+  // this exact mid-seek URL and re-triggering the same seek a second time.
+  const settleSeek = useCallback(() => {
+    setSearchParams(
+      (previous) => {
+        const params = new URLSearchParams(previous);
+        params.delete(SEEK_DAY_PARAM);
+        return params;
+      },
+      { replace: true },
+    );
+  }, [setSearchParams]);
+
+  // History's own "not found yet" report (history.tsx's own comment on
+  // `onSeekNeedsOlder` for why the hasMore/fetching decision lives here
+  // rather than there: `pagination` is this page's, not History's own,
+  // prop). Guarded the same way `usePinnedScroll.ts`'s own
+  // `maybeFetchOlderPage` already guards issue #79's paging — `hasMore`
+  // false ends the seek at the boundary instead of asking again forever,
+  // and `fetching` true leaves an already-in-flight page alone rather than
+  // racing a second `fetchNextPage` against it (TanStack Query's own infinite
+  // query has no such guard built in).
+  const handleSeekNeedsOlder = useCallback(() => {
+    if (!pagination.hasMore) {
+      settleSeek();
+      return;
+    }
+    if (pagination.fetching) {
+      return;
+    }
+    pagination.fetchMore();
+  }, [pagination, settleSeek]);
 
   // ADR 0028: which Entry (if any) the Composer is editing, rather than
   // composing a new one. Owned here, not by Composer itself — see
@@ -131,6 +198,9 @@ export function ComposerPage() {
           query={query}
           onEdit={setEditingEntry}
           onDelete={removeEntry}
+          seek={seek}
+          onSeekNeedsOlder={handleSeekNeedsOlder}
+          onSeekSettled={settleSeek}
         />
       }
       composerSlot={
@@ -154,11 +224,18 @@ export function ComposerPage() {
       // its own bottom alignment via a leading spacer sized off its own
       // virtualizer — see PinnedThreadConfig's own comment for why Shell's
       // plain `min-h-full justify-end` treatment has to stand down for it.
+      // `seeking` (issue #142): disengages the pin for exactly as long as a
+      // date-Reference seek is paging through older Entries — see
+      // use-pinned-scroll.ts's own `seeking` option for why this has to be
+      // a forced override rather than merely "don't re-pin," and its own
+      // comment for why leaving it running would drag the reader back to
+      // the newest Entry the instant the seek's first page landed.
       pinnedThread={{
         watch: shown,
         forceToNewest: sendSignal,
         pagination,
         ownsBottomAlignment: true,
+        seeking: seek !== null,
       }}
     >
       {!syncEnabled && (

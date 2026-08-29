@@ -653,4 +653,122 @@ describe("History", () => {
     expect(rendered.length).toBeLessThan(entries.length);
     expect(rendered.length).toBeLessThanOrEqual(30);
   });
+
+  // Issue #142: a date-Reference seek is "page until you arrive" —
+  // History's own half of it (composer-page.tsx owns the pagination
+  // decision; see history.tsx's own `onSeekNeedsOlder` comment for why).
+  describe("date-Reference seek", () => {
+    it("does nothing when no seek is active", () => {
+      const onSeekNeedsOlder = vi.fn();
+      const onSeekSettled = vi.fn();
+      render(
+        <History
+          entries={[entry({ body: "hello" })]}
+          syncEnabled={false}
+          onSeekNeedsOlder={onSeekNeedsOlder}
+          onSeekSettled={onSeekSettled}
+        />,
+      );
+
+      expect(onSeekNeedsOlder).not.toHaveBeenCalled();
+      expect(onSeekSettled).not.toHaveBeenCalled();
+    });
+
+    it("asks for an older page when the target day isn't loaded, then finds it and settles once it lands", () => {
+      const onSeekNeedsOlder = vi.fn();
+      const onSeekSettled = vi.fn();
+      const recentEntry = entry({ id: "1", body: "recent", createdAt: "2026-08-18T10:00:00.000Z" });
+
+      const { rerender } = render(
+        <History
+          entries={[recentEntry]}
+          syncEnabled={false}
+          seek={{ dayKey: "2020-01-01" }}
+          onSeekNeedsOlder={onSeekNeedsOlder}
+          onSeekSettled={onSeekSettled}
+        />,
+      );
+
+      expect(onSeekNeedsOlder).toHaveBeenCalledTimes(1);
+      expect(onSeekSettled).not.toHaveBeenCalled();
+
+      // The older page onSeekNeedsOlder asked for lands, and it holds the
+      // target day.
+      const olderEntry = entry({ id: "2", body: "older", createdAt: "2020-01-01T10:00:00.000Z" });
+      rerender(
+        <History
+          entries={[recentEntry, olderEntry]}
+          syncEnabled={false}
+          seek={{ dayKey: "2020-01-01" }}
+          onSeekNeedsOlder={onSeekNeedsOlder}
+          onSeekSettled={onSeekSettled}
+        />,
+      );
+
+      expect(onSeekSettled).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps asking across several pages that still don't hold the target day", () => {
+      const onSeekNeedsOlder = vi.fn();
+      const onSeekSettled = vi.fn();
+      const e1 = entry({ id: "1", body: "one", createdAt: "2026-08-18T10:00:00.000Z" });
+
+      const { rerender } = render(
+        <History
+          entries={[e1]}
+          syncEnabled={false}
+          seek={{ dayKey: "2020-01-01" }}
+          onSeekNeedsOlder={onSeekNeedsOlder}
+          onSeekSettled={onSeekSettled}
+        />,
+      );
+      expect(onSeekNeedsOlder).toHaveBeenCalledTimes(1);
+
+      const e2 = entry({ id: "2", body: "two", createdAt: "2026-08-17T10:00:00.000Z" });
+      rerender(
+        <History
+          entries={[e1, e2]}
+          syncEnabled={false}
+          seek={{ dayKey: "2020-01-01" }}
+          onSeekNeedsOlder={onSeekNeedsOlder}
+          onSeekSettled={onSeekSettled}
+        />,
+      );
+
+      expect(onSeekNeedsOlder).toHaveBeenCalledTimes(2);
+      expect(onSeekSettled).not.toHaveBeenCalled();
+    });
+
+    // The dedupe property `onSeekNeedsOlder`'s own guard against firing
+    // while a fetch is already in flight (composer-page.tsx) depends on:
+    // History itself must not re-request just because it re-rendered for an
+    // unrelated reason (`query` changing, say) while the same data is still
+    // being searched.
+    it("does not ask again on a re-render triggered by something unrelated to the Entries available to search", () => {
+      const onSeekNeedsOlder = vi.fn();
+      const entries = [entry({ id: "1", body: "recent", createdAt: "2026-08-18T10:00:00.000Z" })];
+
+      const { rerender } = render(
+        <History
+          entries={entries}
+          syncEnabled={false}
+          seek={{ dayKey: "2020-01-01" }}
+          onSeekNeedsOlder={onSeekNeedsOlder}
+        />,
+      );
+      expect(onSeekNeedsOlder).toHaveBeenCalledTimes(1);
+
+      rerender(
+        <History
+          entries={entries}
+          syncEnabled={false}
+          query="rec"
+          seek={{ dayKey: "2020-01-01" }}
+          onSeekNeedsOlder={onSeekNeedsOlder}
+        />,
+      );
+
+      expect(onSeekNeedsOlder).toHaveBeenCalledTimes(1);
+    });
+  });
 });

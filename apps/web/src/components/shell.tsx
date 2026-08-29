@@ -65,6 +65,14 @@ interface PinnedThreadConfig {
     fetchMore: () => void;
   };
   /**
+   * Issue #142: passed straight through to usePinnedScroll's own `seeking`
+   * option — see that hook for what it does and why it has to be a forced
+   * override rather than merely "don't re-pin." Undefined (every page
+   * except the Composer while a date-Reference seek is in flight) leaves
+   * the pin exactly as before.
+   */
+  seeking?: boolean;
+  /**
    * Issue #83: History bottom-aligns itself now — a leading spacer sized
    * from its own virtualizer, computed in history.tsx (see that file's own
    * comment on why: `justify-end` can't act on rows it can't see, since a
@@ -255,6 +263,7 @@ export function Shell({
     forceToNewest: pinnedThread?.forceToNewest,
     pagination: pinnedThread?.pagination,
     scrollToNewestIndex: runRegisteredScrollToNewest,
+    seeking: pinnedThread?.seeking,
   });
 
   // Ticket 55's mode switch: whether the app bar currently shows the search

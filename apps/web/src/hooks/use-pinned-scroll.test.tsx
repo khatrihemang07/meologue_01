@@ -27,14 +27,16 @@ interface HarnessProps {
   watch: unknown;
   forceToNewest?: unknown;
   pagination?: { hasMore: boolean; fetching: boolean; fetchMore: () => void };
+  seeking?: boolean;
 }
 
-function Harness({ enabled, watch, forceToNewest, pagination }: HarnessProps) {
+function Harness({ enabled, watch, forceToNewest, pagination, seeking }: HarnessProps) {
   const { scrollRef, handleScroll, awayFromNewest, jumpToNewest } = usePinnedScroll({
     enabled,
     watch,
     forceToNewest,
     pagination,
+    seeking,
   });
   return (
     <div>
@@ -320,6 +322,96 @@ describe("usePinnedScroll", () => {
 
       expect(scrollHeightReads).toHaveBeenCalledTimes(1);
       expect(p.fetchMore).not.toHaveBeenCalled();
+    });
+  });
+
+  // Issue #142: this is the regression guard for the whole date-Reference
+  // seek feature (composer-page.tsx, history.tsx). A seek pages through
+  // older Entries in quick succession — each page changes `watch` exactly
+  // like an ordinary page load does — and without `seeking` forcing the pin
+  // off, the very first page the seek loads would read as "new content
+  // while pinned" and yank the reader straight back to the newest end
+  // before the seek has gone anywhere.
+  describe("seeking", () => {
+    it("does not scroll to newest when watch changes while seeking", () => {
+      const { rerender } = render(<Harness enabled watch={1} seeking />);
+      const scroller = screen.getByTestId("scroller");
+      // Pinned (the reader opened at the newest end) before the seek starts.
+      setScrollGeometry(scroller, { scrollHeight: 1000, clientHeight: 400, scrollTop: 1000 });
+
+      // A page the seek loaded lands, growing the scrollable area — an
+      // ordinary "new content" signal, except the seek is in progress.
+      setScrollGeometry(scroller, { scrollHeight: 1400, clientHeight: 400, scrollTop: 1000 });
+      rerender(<Harness enabled watch={2} seeking />);
+
+      expect(scroller.scrollTop).toBe(1000);
+    });
+
+    it("resumes following watch once seeking ends and the reader is still pinned", () => {
+      const { rerender } = render(<Harness enabled watch={1} seeking={false} />);
+      const scroller = screen.getByTestId("scroller");
+      setScrollGeometry(scroller, { scrollHeight: 1000, clientHeight: 400, scrollTop: 1000 });
+
+      setScrollGeometry(scroller, { scrollHeight: 1400, clientHeight: 400, scrollTop: 1000 });
+      rerender(<Harness enabled watch={2} seeking={false} />);
+
+      expect(scroller.scrollTop).toBe(1400);
+    });
+
+    it("stays pinned off after the seek ends, even though the reader had been pinned when it started — landing on a historical day is itself 'away from the newest end'", () => {
+      const { rerender } = render(<Harness enabled watch={1} seeking={false} />);
+      const scroller = screen.getByTestId("scroller");
+      setScrollGeometry(scroller, { scrollHeight: 1000, clientHeight: 400, scrollTop: 1000 });
+
+      // The seek runs (loads a page, `watch` changes) and then ends —
+      // composer-page.tsx's own sequence once History finds the target day.
+      // The seek itself does not move `scrollTop` here (History's own
+      // `scrollToIndex` is a virtualizer concern this bare harness has no
+      // stand-in for), but the pin must not silently resume as if nothing
+      // happened.
+      setScrollGeometry(scroller, { scrollHeight: 1400, clientHeight: 400, scrollTop: 1000 });
+      rerender(<Harness enabled watch={2} seeking />);
+      rerender(<Harness enabled watch={2} seeking={false} />);
+
+      // A later, unrelated `watch` change (an Entry syncing in) must not
+      // jump back to the newest end — the seek left the reader pinned off,
+      // exactly as a manual scroll-up would have.
+      setScrollGeometry(scroller, { scrollHeight: 1800, clientHeight: 400, scrollTop: 1000 });
+      rerender(<Harness enabled watch={3} seeking={false} />);
+
+      expect(scroller.scrollTop).toBe(1000);
+    });
+
+    // Same stub as the "re-pinning when the region itself resizes" describe
+    // block below, kept local to this one test rather than shared: this is
+    // the only test in this describe block that needs the ResizeObserver
+    // callback itself, as opposed to `seeking`'s effect on ordinary `watch`
+    // changes.
+    it("does not re-pin on a resize while seeking", () => {
+      let notifyResize: (() => void) | null = null;
+      vi.stubGlobal(
+        "ResizeObserver",
+        class {
+          constructor(callback: () => void) {
+            notifyResize = callback;
+          }
+          observe() {}
+          disconnect() {}
+        },
+      );
+
+      render(<Harness enabled watch={1} seeking />);
+      const scroller = screen.getByTestId("scroller");
+      setScrollGeometry(scroller, { scrollHeight: 1000, clientHeight: 400, scrollTop: 600 });
+
+      // The region shrinks — ordinarily this snaps a pinned reader back to
+      // the newest end (issue #126) — but a seek must not be interrupted by
+      // it either.
+      setScrollGeometry(scroller, { scrollHeight: 1000, clientHeight: 100, scrollTop: 600 });
+      act(() => notifyResize?.());
+
+      expect(scroller.scrollTop).toBe(600);
+      vi.unstubAllGlobals();
     });
   });
 });

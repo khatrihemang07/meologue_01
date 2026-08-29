@@ -45,3 +45,18 @@ export function digestAtQueryKey(period: string, date: string) {
 export function groundingEntriesQueryKey(ids: string[]) {
   return [...ENTRIES_QUERY_KEY, "grounding", ids] as const;
 }
+
+/**
+ * Issue #142: a date Reference's own "does this day have anything to link
+ * to?" check (`dayHasEntries`, day-has-entries.ts). A child of
+ * ENTRIES_QUERY_KEY, same reasoning as `groundingEntriesQueryKey` above —
+ * this reads Entries the same local store does, just keyed by day rather
+ * than by id set. Keyed on the day alone, not the Device's UTC offset too:
+ * the offset is read once per Device per session (deviceUtcOffsetMinutes,
+ * entry-day.ts) and does not vary per Reference, so folding it into the key
+ * would only ever produce one value in practice while making every day's
+ * cache entry harder to read in devtools.
+ */
+export function dayHasEntriesQueryKey(dayKey: string) {
+  return [...ENTRIES_QUERY_KEY, "day-has-entries", dayKey] as const;
+}

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Outlet, Route, Routes, useSearchParams } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useSettingsStore } from "@/lib/settings";
@@ -466,6 +466,145 @@ describe("ComposerPage", () => {
       fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
 
       expect(removeEntry).toHaveBeenCalledWith(oneEntry[0]);
+    });
+  });
+
+  // Issue #142: following a date Reference lands here with `?d=YYYY-MM-DD`
+  // (composer-page.tsx's own comment on why a query param, not a path
+  // segment) — this page owns the seek: reading the param, deciding
+  // whether to fetch another page or give up, and clearing the param once
+  // there's nothing left to do.
+  describe("a date-Reference seek (?d=)", () => {
+    function seekEntry(id: string, createdAt: string): EntryStoreOutletContext["entries"][number] {
+      return {
+        id,
+        deviceId: "device-a",
+        body: `entry ${id}`,
+        createdAt,
+        seq: 1,
+        syncedAt: "now",
+        deletedAt: null,
+      };
+    }
+
+    // A dedicated render helper for this describe block, rather than
+    // `renderComposerPage` above: a couple of these tests need to
+    // `rerender` with a *changed* outlet context (simulating an older page
+    // landing) against the exact same QueryClient and MemoryRouter
+    // instance — swapping in a brand-new QueryClient on rerender would
+    // reset every query's cached state, not just the one this test cares
+    // about.
+    function renderSeek(context: EntryStoreOutletContext, initialPath: string) {
+      const queryClient = new QueryClient();
+      const utils = render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={[initialPath]}>
+            <SearchParamProbe />
+            <Routes>
+              <Route element={<Outlet context={context} />}>
+                <Route path="/" element={<ComposerPage />} />
+              </Route>
+            </Routes>
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+      function rerenderWith(nextContext: EntryStoreOutletContext) {
+        utils.rerender(
+          <QueryClientProvider client={queryClient}>
+            <MemoryRouter initialEntries={[initialPath]}>
+              <SearchParamProbe />
+              <Routes>
+                <Route element={<Outlet context={nextContext} />}>
+                  <Route path="/" element={<ComposerPage />} />
+                </Route>
+              </Routes>
+            </MemoryRouter>
+          </QueryClientProvider>,
+        );
+      }
+      return { ...utils, rerenderWith };
+    }
+
+    it("clears ?d= once the target day is already loaded", async () => {
+      renderComposerPage(
+        {
+          ...readyContext,
+          entries: [seekEntry("1", "2020-01-01T10:00:00.000Z")],
+        },
+        "/?d=2020-01-01",
+      );
+
+      await waitFor(() => expect(screen.getByTestId("url-query")).not.toHaveTextContent("d="));
+    });
+
+    it("loads older pages until the target day appears, then clears ?d=", async () => {
+      const fetchMore = vi.fn();
+      const pagination = { hasMore: true, fetching: false, fetchMore };
+
+      const { rerenderWith } = renderSeek(
+        {
+          ...readyContext,
+          entries: [seekEntry("1", "2026-08-18T10:00:00.000Z")],
+          pagination,
+        },
+        "/?d=2020-01-01",
+      );
+
+      await waitFor(() => expect(fetchMore).toHaveBeenCalledTimes(1));
+      expect(screen.getByTestId("url-query")).toHaveTextContent("d=2020-01-01");
+
+      // The page that request asked for lands, and it holds the target day.
+      rerenderWith({
+        ...readyContext,
+        entries: [
+          seekEntry("1", "2026-08-18T10:00:00.000Z"),
+          seekEntry("2", "2020-01-01T10:00:00.000Z"),
+        ],
+        pagination,
+      });
+
+      await waitFor(() => expect(screen.getByTestId("url-query")).not.toHaveTextContent("d="));
+    });
+
+    it("clears ?d= once there are no more older pages to check, without ever fetching", async () => {
+      const fetchMore = vi.fn();
+
+      renderComposerPage(
+        {
+          ...readyContext,
+          entries: [seekEntry("1", "2026-08-18T10:00:00.000Z")],
+          pagination: { hasMore: false, fetching: false, fetchMore },
+        },
+        "/?d=2020-01-01",
+      );
+
+      await waitFor(() => expect(screen.getByTestId("url-query")).not.toHaveTextContent("d="));
+      expect(fetchMore).not.toHaveBeenCalled();
+    });
+
+    it("does not call fetchMore while a page is already in flight", async () => {
+      const fetchMore = vi.fn();
+
+      renderComposerPage(
+        {
+          ...readyContext,
+          entries: [seekEntry("1", "2026-08-18T10:00:00.000Z")],
+          pagination: { hasMore: true, fetching: true, fetchMore },
+        },
+        "/?d=2020-01-01",
+      );
+
+      // Give History's own effect a chance to run before asserting the
+      // negative — otherwise this would pass trivially before anything had
+      // a chance to fire at all.
+      await waitFor(() => expect(screen.getByTestId("url-query")).toHaveTextContent("d="));
+      expect(fetchMore).not.toHaveBeenCalled();
+    });
+
+    it("ignores a malformed ?d=, the same as no seek at all", () => {
+      renderComposerPage(readyContext, "/?d=not-a-day");
+
+      expect(screen.getByTestId("url-query")).toHaveTextContent("d=not-a-day");
     });
   });
 });
