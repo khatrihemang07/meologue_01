@@ -365,7 +365,7 @@ async fn post_reflect(
 fn reflect_state(chat: Arc<FakeChatClient>) -> ReflectState {
     ReflectState {
         chat_client: chat,
-        embed_client: Arc::new(UnusedEmbedClient),
+        embed_client: Some(Arc::new(UnusedEmbedClient)),
         context_window: 200_000,
         chat_base_url: UNUSED_CHAT_BASE_URL.to_string(),
         chat_api_key: None,
@@ -377,6 +377,20 @@ fn reflect_state(chat: Arc<FakeChatClient>) -> ReflectState {
         // pinned to today's real default.
         chat_model: DEFAULT_MODEL.to_string(),
         chat_streaming: false,
+    }
+}
+
+/// Issue #130: a Server with a chat model configured but no
+/// `MEOLOGUE_EMBED_MODEL` — `embed_client: None`, exactly what
+/// `LlmConfig::reflect_config` now builds for that configuration. Unlike
+/// `reflect_state` above, this isn't "an embed client nothing should call";
+/// there genuinely is none, and `run_reflect_stream_inner`'s tool-set
+/// construction must leave `similar_entries` out of the `Vec` entirely
+/// rather than offer a tool with nothing behind it.
+fn reflect_state_chat_only(chat: Arc<FakeChatClient>) -> ReflectState {
+    ReflectState {
+        embed_client: None,
+        ..reflect_state(chat)
     }
 }
 
@@ -406,7 +420,7 @@ impl LlmClient for FakeEmbedClient {
 fn reflect_state_with_embedding(chat: Arc<FakeChatClient>) -> ReflectState {
     ReflectState {
         chat_client: chat,
-        embed_client: Arc::new(FakeEmbedClient),
+        embed_client: Some(Arc::new(FakeEmbedClient)),
         context_window: 200_000,
         chat_base_url: UNUSED_CHAT_BASE_URL.to_string(),
         chat_api_key: None,
@@ -1895,7 +1909,7 @@ async fn an_embedding_failure_recovers_and_still_answers(pool: PgPool) {
     ]));
     let reflect = ReflectState {
         chat_client: chat.clone(),
-        embed_client: Arc::new(AlwaysFailingEmbedClient),
+        embed_client: Some(Arc::new(AlwaysFailingEmbedClient)),
         context_window: 200_000,
         chat_base_url: UNUSED_CHAT_BASE_URL.to_string(),
         chat_api_key: None,
@@ -2406,6 +2420,98 @@ async fn the_active_tool_set_is_named_in_the_system_prompt(pool: PgPool) {
         assert!(
             system_message.content.contains(tool_name),
             "the active tool set should be described in the system prompt: {}",
+            system_message.content
+        );
+    }
+}
+
+/// Issue #130's central acceptance criterion: a Server configured with a
+/// chat model but no `MEOLOGUE_EMBED_MODEL` (`reflect_state_chat_only`,
+/// `embed_client: None`) still answers a Question end to end through
+/// `/v1/reflect`, and the three embedding-free tools — `entries_in_range`
+/// (by date), `search_entries` (by word) and `read_digest` (a written
+/// Digest) — are all offered. `similar_entries` needs an embed client to
+/// turn the Question into a vector at all (`SimilarEntriesTool::execute`
+/// calls `embed_client.embed_query`); with none configured it must be left
+/// out of the *callable* tool set entirely, not merely present-but-
+/// guaranteed-to-fail.
+///
+/// "Offered" is checked against the `<tools>` JSON-schema block
+/// `harness::tools::to_wire_tools` builds (`"name":"similar_entries"`,
+/// literally what the model can invoke) rather than the whole system
+/// prompt: `search_entries`'s own natural-language `snippet`
+/// (`harness::tools::search_entries`, issue #94) names `similar_entries`
+/// by word as the tool to try next on an empty result, regardless of
+/// whether this Server actually has one configured — that cross-reference
+/// predates this ticket and is prose guidance, not a second declaration of
+/// the tool itself, so it staying in the text here is not a regression.
+#[sqlx::test]
+async fn a_chat_only_server_answers_without_offering_similar_entries(pool: PgPool) {
+    // Two identical replies: issue #103's structural corrective turn fires
+    // on any zero-tool-call Answer (`a_null_session_id_mints_a_new_session`'s
+    // own comment covers why) — this reply calls no tool, so the loop asks
+    // a second time to confirm it before treating it as the real Answer.
+    let chat = Arc::new(FakeChatClient::new([
+        "No tools needed for that.",
+        "No tools needed for that.",
+    ]));
+    let reflect = reflect_state_chat_only(chat.clone());
+
+    let (status, body) = post_reflect(
+        &pool,
+        Some(reflect),
+        json!({ "protocol_version": 4, "question": "Anything?" }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["answer"], "No tools needed for that.");
+
+    let system_message = &chat.last_call()[0];
+    assert_eq!(system_message.role, "system");
+    for tool_name in ["entries_in_range", "search_entries", "read_digest"] {
+        assert!(
+            system_message.content.contains(&format!("\"name\":\"{tool_name}\"")),
+            "the three embedding-free tools must still be declared in the <tools> block on a \
+             chat-only Server: {}",
+            system_message.content
+        );
+    }
+    assert!(
+        !system_message.content.contains("\"name\":\"similar_entries\""),
+        "similar_entries needs an embed client, and this Server has none, so it must not be \
+         declared in the <tools> block at all: {}",
+        system_message.content
+    );
+}
+
+/// The other half of issue #130's acceptance criteria: with an embed model
+/// configured (`reflect_state_with_embedding`), all four tools — including
+/// `similar_entries` — are still offered, exactly as before this ticket.
+#[sqlx::test]
+async fn a_server_with_an_embed_model_offers_all_four_tools(pool: PgPool) {
+    // Two identical replies — same corrective-turn reasoning as
+    // `a_chat_only_server_answers_without_offering_similar_entries` above.
+    let chat = Arc::new(FakeChatClient::new([
+        "No tools needed for that.",
+        "No tools needed for that.",
+    ]));
+    let reflect = reflect_state_with_embedding(chat.clone());
+
+    let (status, _) = post_reflect(
+        &pool,
+        Some(reflect),
+        json!({ "protocol_version": 4, "question": "Anything?" }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let system_message = &chat.last_call()[0];
+    for tool_name in ["entries_in_range", "search_entries", "similar_entries", "read_digest"] {
+        assert!(
+            system_message.content.contains(&format!("\"name\":\"{tool_name}\"")),
+            "all four tools must be declared in the <tools> block when an embed client is \
+             configured: {}",
             system_message.content
         );
     }
@@ -3111,7 +3217,7 @@ async fn a_session_nearing_its_context_window_gets_compacted_between_turns(pool:
     // and none of these Questions need a tool.
     let generous = ReflectState {
         chat_client: Arc::new(FakeChatClient::new(["a first answer", "a first answer"])),
-        embed_client: Arc::new(UnusedEmbedClient),
+        embed_client: Some(Arc::new(UnusedEmbedClient)),
         context_window: 200_000,
         chat_base_url: UNUSED_CHAT_BASE_URL.to_string(),
         chat_api_key: None,
@@ -3129,7 +3235,7 @@ async fn a_session_nearing_its_context_window_gets_compacted_between_turns(pool:
 
     let generous = ReflectState {
         chat_client: Arc::new(FakeChatClient::new(["a second answer", "a second answer"])),
-        embed_client: Arc::new(UnusedEmbedClient),
+        embed_client: Some(Arc::new(UnusedEmbedClient)),
         context_window: 200_000,
         chat_base_url: UNUSED_CHAT_BASE_URL.to_string(),
         chat_api_key: None,
@@ -3155,7 +3261,7 @@ async fn a_session_nearing_its_context_window_gets_compacted_between_turns(pool:
             "a third answer",
             "a third answer",
         ])),
-        embed_client: Arc::new(UnusedEmbedClient),
+        embed_client: Some(Arc::new(UnusedEmbedClient)),
         context_window: 20_000,
         chat_base_url: UNUSED_CHAT_BASE_URL.to_string(),
         chat_api_key: None,
@@ -3180,7 +3286,7 @@ async fn a_session_nearing_its_context_window_gets_compacted_between_turns(pool:
     // answered) must still be there.
     let unused = ReflectState {
         chat_client: Arc::new(FakeChatClient::new(["unused"])),
-        embed_client: Arc::new(UnusedEmbedClient),
+        embed_client: Some(Arc::new(UnusedEmbedClient)),
         context_window: 200_000,
         chat_base_url: UNUSED_CHAT_BASE_URL.to_string(),
         chat_api_key: None,
@@ -3216,7 +3322,7 @@ async fn a_summary_reaches_every_question_after_it_not_only_the_one_that_wrote_i
     // and none of these Questions need a tool.
     let seed = ReflectState {
         chat_client: Arc::new(FakeChatClient::new(["a first answer", "a first answer"])),
-        embed_client: Arc::new(UnusedEmbedClient),
+        embed_client: Some(Arc::new(UnusedEmbedClient)),
         context_window: 200_000,
         chat_base_url: UNUSED_CHAT_BASE_URL.to_string(),
         chat_api_key: None,
@@ -3238,7 +3344,7 @@ async fn a_summary_reaches_every_question_after_it_not_only_the_one_that_wrote_i
             "a second answer",
             "a second answer",
         ])),
-        embed_client: Arc::new(UnusedEmbedClient),
+        embed_client: Some(Arc::new(UnusedEmbedClient)),
         context_window: 20_000,
         chat_base_url: UNUSED_CHAT_BASE_URL.to_string(),
         chat_api_key: None,
@@ -3264,7 +3370,7 @@ async fn a_summary_reaches_every_question_after_it_not_only_the_one_that_wrote_i
             "a third answer",
             "a third answer",
         ])),
-        embed_client: Arc::new(UnusedEmbedClient),
+        embed_client: Some(Arc::new(UnusedEmbedClient)),
         context_window: 20_000,
         chat_base_url: UNUSED_CHAT_BASE_URL.to_string(),
         chat_api_key: None,

@@ -287,13 +287,19 @@ pub struct GroundingEntry {
     pub created_at: DateTime<Utc>,
 }
 
-/// Reflection's server-side dependencies, held in `AppState` only when both
-/// are configured (`llm::LlmConfig::reflect_config`) — see `lib.rs` for why
+/// Reflection's server-side dependencies, held in `AppState` only when chat
+/// is configured (`llm::LlmConfig::reflect_config`) — see `lib.rs` for why
 /// that's what decides whether `/v1/reflect` is registered at all.
 #[derive(Clone)]
 pub struct ReflectState {
     pub chat_client: Arc<dyn LlmClient + Send + Sync>,
-    pub embed_client: Arc<dyn LlmClient + Send + Sync>,
+    /// Issue #130: `None` when `MEOLOGUE_EMBED_MODEL` is unset —
+    /// `reflect_config`'s own doc comment covers why that no longer means
+    /// Reflection itself is off. When this is `None`, the tool-set
+    /// construction below simply leaves `SimilarEntriesTool` out of the
+    /// `Vec` offered to the model for the request; the other three tools
+    /// need no embedding client at all.
+    pub embed_client: Option<Arc<dyn LlmClient + Send + Sync>>,
     /// Issue #97: how much room the configured chat model has, read once at
     /// startup from its `GET /v1/models/{id}` entry
     /// (`llm::resolve_context_window`) — never `harness::compaction`'s
@@ -1230,7 +1236,7 @@ async fn run_reflect_stream_inner(
     )
     .await?;
 
-    // Four tools now: `entries_in_range` (issue #93, by date),
+    // Up to four tools: `entries_in_range` (issue #93, by date),
     // `search_entries` (issue #94, by word), `similar_entries` (issue #94,
     // by meaning) and `read_digest` (issue #95, a written summary rather
     // than raw Entries at all) — each independently constructible, so a
@@ -1239,16 +1245,34 @@ async fn run_reflect_stream_inner(
     // itself. `search_entries` and `similar_entries` stay two tools rather
     // than one merged one deliberately — see `harness::tools`'s own doc
     // comment for why.
-    let tools: Vec<Arc<dyn AgentTool>> = vec![
+    //
+    // Issue #130: `similar_entries` is the one tool of the four backed by
+    // embeddings (`SimilarEntriesTool::execute` calls `embed_client.
+    // embed_query`), so it's the one tool left out entirely — not merely
+    // disabled — when `reflect.embed_client` is `None`. Leaving it out of
+    // the `Vec` rather than offering it and letting every call fail is what
+    // keeps `render_tool_guidance` honest: a chat-only Server's system
+    // prompt never advertises a capability that would only turn out, turn
+    // by turn, not to work.
+    //
+    // Built as an initial three-tool `Vec` with `similar_entries` inserted
+    // at index 2 (rather than appended) so that when it *is* present, this
+    // stays the exact `entries_in_range, search_entries, similar_entries,
+    // read_digest` order the system prompt has always rendered in —
+    // `render_tool_guidance` walks the `Vec` in order, so appending instead
+    // would silently reorder the prompt for every already-configured Server
+    // this ticket has no reason to touch.
+    let mut tools: Vec<Arc<dyn AgentTool>> = vec![
         Arc::new(EntriesInRangeTool::new(pool.clone(), offset_minutes)),
         Arc::new(SearchEntriesTool::new(pool.clone(), offset_minutes)),
-        Arc::new(SimilarEntriesTool::new(
-            pool.clone(),
-            reflect.embed_client.clone(),
-            offset_minutes,
-        )),
         Arc::new(ReadDigestTool::new(pool.clone())),
     ];
+    if let Some(embed_client) = reflect.embed_client.clone() {
+        tools.insert(
+            2,
+            Arc::new(SimilarEntriesTool::new(pool.clone(), embed_client, offset_minutes)),
+        );
+    }
     let system_prompt = tools::render_tool_guidance(LOOP_SYSTEM_INSTRUCTION, &tools);
 
     // `prior_summary` is `Some` only when `maybe_compact_prior_turns` just

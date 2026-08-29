@@ -121,9 +121,11 @@ async fn main() -> anyhow::Result<()> {
         ));
     }
 
-    // An unset chat base URL/model (or an unresolvable embed config —
-    // Reflection needs both, see `LlmConfig::reflect_config`) means
-    // `/v1/reflect` is never registered at all — ticket 4.
+    // An unset chat base URL/model means `/v1/reflect` is never registered
+    // at all — ticket 4. Issue #130: an unresolvable embed config no longer
+    // takes Reflection down with it — `reflect_config` hands back `None`
+    // for the embed client alone, and the loop below simply omits the one
+    // tool (`similar_entries`) that needs it; see `LlmConfig::reflect_config`.
     let reflect = match llm_config.reflect_config() {
         Some((chat_client, embed_client)) => {
             // Issue #97: resolved once, at startup, rather than per

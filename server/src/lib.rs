@@ -187,11 +187,14 @@ pub fn router_with_reflection(
 
 /// The widest router constructor — everything `router_with_reflection`
 /// wires, plus the two Digest routes (issue #70) gated on `digests_enabled`
-/// rather than on `reflect.is_some()`: Digests need only a chat client
-/// (`llm::LlmConfig::digest_worker_config`), not the embed client
-/// Reflection additionally requires, so reusing the `reflect` gate would
-/// wrongly hide `/v1/digests/*` on a chat-only-configured Server that has
-/// no Reflection at all. `main.rs` calls this directly, passing whether
+/// rather than on `reflect.is_some()`. The two are gated on the same chat
+/// config today (`llm::LlmConfig::digest_worker_config` and, since issue
+/// #130, `reflect_config` both require chat alone and nothing else), but
+/// they remain two separate switches rather than one: a Digest and a
+/// Reflection are different features that happen to share a dependency,
+/// not one feature with two names, and `main.rs` computes `digests_enabled`
+/// from the Digest worker's own startup outcome rather than piggybacking on
+/// `reflect`'s. `main.rs` calls this directly, passing whether
 /// `digest_worker_config()` resolved; `router_with_reflection` is the
 /// narrower, `digests_enabled: false` convenience the rest of the test
 /// suite is written against.
