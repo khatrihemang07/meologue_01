@@ -92,7 +92,7 @@ test("an edited Entry keeps its position in History — editing does not move it
   const older = uniqueEntryBody("position-older");
   const newer = uniqueEntryBody("position-newer");
 
-  await page.goto("/");
+  await page.goto("/composer");
   await sendEntry(page, older);
   // `list()` orders by `created_at DESC, id DESC` (sqlite-entry-store.ts) —
   // two Entries minted within the same millisecond tie on `created_at` and
@@ -131,7 +131,7 @@ test("an edit survives a reload — it lives in the local store, not just React 
   const original = uniqueEntryBody("edit-reload-original");
   const edited = uniqueEntryBody("edit-reload-edited");
 
-  await page.goto("/");
+  await page.goto("/composer");
   await sendEntry(page, original);
   await editEntryViaMenu(page, original, edited);
   await expect(page.getByText(edited)).toBeVisible();
@@ -147,7 +147,7 @@ test("a delete survives a reload — the tombstone persisted, the Entry does not
 }) => {
   const body = uniqueEntryBody("delete-reload");
 
-  await page.goto("/");
+  await page.goto("/composer");
   await sendEntry(page, body);
   await deleteEntryViaMenu(page, body);
   await expect(page.getByText(body)).toHaveCount(0);
@@ -239,7 +239,7 @@ test("Search reflects an edited body — the new text is found, the old text is 
   const original = uniqueEntryBody("search-edit-original");
   const edited = uniqueEntryBody("search-edit-edited");
 
-  await page.goto("/");
+  await page.goto("/composer");
   await sendEntry(page, original);
   await editEntryViaMenu(page, original, edited);
   await expect(page.getByText(edited)).toBeVisible();
@@ -280,7 +280,7 @@ test("Search reflects an edited body — the new text is found, the old text is 
 test("hovering a History row reveals Edit and Delete", async ({ page }) => {
   const body = uniqueEntryBody("hover-actions-smoke");
 
-  await page.goto("/");
+  await page.goto("/composer");
   await sendEntry(page, body);
 
   const row = entryRow(page, body);

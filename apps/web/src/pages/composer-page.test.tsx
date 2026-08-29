@@ -57,28 +57,14 @@ describe("ComposerPage", () => {
     vi.restoreAllMocks();
   });
 
-  // Issue #75: History is gone and Settings is now the fourth Nav
-  // destination rather than a separate app-bar action — see nav.test.tsx
-  // for the dedicated "exactly four" assertion.
-  it("renders persistent nav links to Composer, Reflect, Digest and Settings", () => {
+  // ADR 0036 retires the persistent nav: a destination is a pane pushed over
+  // the root screen, so the way back out is a Back control rather than a nav
+  // link that was always on screen. `nav.test.tsx`'s "exactly four
+  // destinations" assertion moves with it, to `chat-list.test.tsx`.
+  it("offers a Back control out to the root screen", () => {
     renderComposerPage(readyContext);
 
-    expect(screen.getByRole("link", { name: "Composer" })).toHaveAttribute("href", "/");
-    expect(screen.getByRole("link", { name: "Reflect" })).toHaveAttribute("href", "/reflect");
-    expect(screen.getByRole("link", { name: "Digest" })).toHaveAttribute("href", "/digest");
-    expect(screen.getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings");
-  });
-
-  // Ticket 54's acceptance criteria: the current destination is visibly
-  // indicated. Composer is "/", the page under test, so its nav link
-  // carries aria-current="page" and the other three don't.
-  it("marks Composer as the current destination in the persistent nav", () => {
-    renderComposerPage(readyContext);
-
-    expect(screen.getByRole("link", { name: "Composer" })).toHaveAttribute("aria-current", "page");
-    expect(screen.getByRole("link", { name: "Reflect" })).not.toHaveAttribute("aria-current");
-    expect(screen.getByRole("link", { name: "Digest" })).not.toHaveAttribute("aria-current");
-    expect(screen.getByRole("link", { name: "Settings" })).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("link", { name: "Back to chats" })).toHaveAttribute("href", "/");
   });
 
   it("disables the Composer while the store isn't ready", () => {
@@ -227,7 +213,7 @@ describe("ComposerPage", () => {
       expect(screen.getByRole("searchbox", { name: "Search History" })).toBeInTheDocument();
       // The title/Sync-dot row is what the field replaces "in place" — it's
       // gone while searching, not merely covered.
-      expect(screen.queryByText("meologue")).not.toBeInTheDocument();
+      expect(screen.queryByText("Composer")).not.toBeInTheDocument();
     });
 
     it("narrows the Composer's thread to what the store's search returns", async () => {

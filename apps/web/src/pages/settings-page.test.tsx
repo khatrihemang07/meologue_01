@@ -113,30 +113,27 @@ describe("SettingsPage", () => {
   // (Composer, Reflect, Digest, Settings — no History), so this asserts the
   // whole set rather than just the other three the way it did while
   // Settings was reached through a separate app-bar gear.
-  it("renders its title and persistent nav links to Composer, Reflect, Digest and Settings", () => {
+  it("renders its title in the app bar", () => {
     renderPage();
 
-    // Scoped to the app bar (role "banner"): Settings is now also a visible
-    // Nav link's text (issue #75), so an unscoped getByText("Settings")
-    // would match both that link and this page's own title.
+    // Still scoped to the app bar (role "banner") even though ADR 0036 took
+    // the persistent nav's own "Settings" link away: this page's body has
+    // headings of its own, and an unscoped match would stop distinguishing
+    // the title from them.
     expect(
       within(screen.getByRole("banner")).getByText("Settings", { exact: true }),
     ).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Composer" })).toHaveAttribute("href", "/");
-    expect(screen.getByRole("link", { name: "Reflect" })).toHaveAttribute("href", "/reflect");
-    expect(screen.getByRole("link", { name: "Digest" })).toHaveAttribute("href", "/digest");
-    expect(screen.getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings");
   });
 
-  // Ticket 54's acceptance criteria, now covering Settings itself: the
-  // current destination is visibly indicated, and only the current one.
-  it("marks Settings as the current destination in the persistent nav", () => {
+  // ADR 0036: a destination is pushed over the root screen, so what proves
+  // a reader is not stranded is a Back control, not a nav link that was
+  // always on screen. Settings keeps this despite ADR 0018 once arguing an
+  // always-reachable destination needs no Back — it is no longer always
+  // reachable, which was that argument's whole premise.
+  it("offers a Back control out to the root screen", () => {
     renderPage();
 
-    expect(screen.getByRole("link", { name: "Settings" })).toHaveAttribute("aria-current", "page");
-    expect(screen.getByRole("link", { name: "Composer" })).not.toHaveAttribute("aria-current");
-    expect(screen.getByRole("link", { name: "Reflect" })).not.toHaveAttribute("aria-current");
-    expect(screen.getByRole("link", { name: "Digest" })).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("link", { name: "Back to chats" })).toHaveAttribute("href", "/");
   });
 
   it("marks System as the initially selected theme", () => {

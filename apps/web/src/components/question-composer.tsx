@@ -110,9 +110,9 @@ export function QuestionComposer({
 
   return (
     // Same bottom-edge ownership rule as composer.tsx — see its own comment:
-    // below `md`, Shell's `nav` is ordered after this and owns the inset;
-    // at `md` and up the nav is a rail and this element is the bottom edge.
-    <div className="shrink-0 border-t border-border bg-background md:[padding-bottom:var(--safe-bottom)]">
+    // with ADR 0036's persistent nav retired, this element is the pane's own
+    // bottom edge at every width and owns `--safe-bottom` outright.
+    <div className="shrink-0 border-t border-border bg-background [padding-bottom:var(--safe-bottom)]">
       {/* Issue #98: no picker at all when the Server offers no models —
           a Server that predates GET /v1/models, or one whose wrapper is
           unreachable right now (`ModelsResponse`'s own doc comment,

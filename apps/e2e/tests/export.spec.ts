@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { expect, test } from "@playwright/test";
 import { strFromU8, unzipSync } from "fflate";
-import { sendEntry, uniqueEntryBody } from "./helpers";
+import { openDestination, sendEntry, uniqueEntryBody } from "./helpers";
 
 // Ticket 46: Export lives on Settings, a sibling route outside
 // EntryStoreLayout (ADR 0008/0009) — it reads the store's Entries and hands
@@ -12,11 +12,11 @@ test("Export downloads a zip whose manifest and day file both carry the sent Ent
   page,
 }) => {
   const body = uniqueEntryBody("export");
-  await page.goto("/");
+  await page.goto("/composer");
   await sendEntry(page, body);
   await expect(page.getByText(body)).toBeVisible();
 
-  await page.getByRole("link", { name: "Settings" }).click();
+  await openDestination(page, "Settings");
   await expect(page).toHaveURL("/settings");
 
   const exportButton = page.getByRole("button", { name: "Export as zip" });

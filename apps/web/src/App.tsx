@@ -1,5 +1,7 @@
 import { BrowserRouter, Route, Routes } from "react-router";
 import { Toaster } from "@/components/ui/sonner";
+import { ChatListPage } from "@/pages/chat-list-page";
+import { ChatShellLayout } from "@/pages/chat-shell-layout";
 import { ComposerPage } from "@/pages/composer-page";
 import { DigestPage } from "@/pages/digest-page";
 import { DigestReaderPage } from "@/pages/digest-reader-page";
@@ -41,9 +43,23 @@ function App() {
     <BrowserRouter>
       <Toaster />
       <Routes>
-        <Route element={<EntryStoreLayout />}>
-          <Route path="/" element={<ComposerPage />} />
-          {/* `/reflect` is a fresh Session; `/reflect/:sessionId` is an open
+        {/* ADR 0036: every route renders inside the chat shell, which owns
+            the window, the keyboard custom properties, and — at 900px and
+            up — the chat list pinned beside whatever is open. It reads no
+            Entry and no Server, so wrapping `/settings` in it costs that
+            route none of the independence ADR 0008/0009 require. */}
+        <Route element={<ChatShellLayout />}>
+          {/* `/` is the root screen, and it is not the Composer any more:
+              a list of four rows you navigate away from (ADR 0036),
+              superseding ADR 0030's persistent nav in its strongest form.
+              It sits outside EntryStoreLayout deliberately — the list names
+              destinations rather than reading any of them, so it renders
+              whether or not the store ever opens, the same guarantee
+              `/settings` has always had. */}
+          <Route path="/" element={<ChatListPage />} />
+          <Route element={<EntryStoreLayout />}>
+            <Route path="/composer" element={<ComposerPage />} />
+            {/* `/reflect` is a fresh Session; `/reflect/:sessionId` is an open
               one (ADR 0025). Session ids are uuids, so they never contain a
               "." and stay safe under the constraint above — but flagging
               that here so nobody later routes something dotted into this
@@ -52,10 +68,10 @@ function App() {
               react-router ranks it above `:sessionId` regardless of
               declaration order, and no Session id can ever collide with the
               literal word "list". */}
-          <Route path="/reflect" element={<ReflectionPage />} />
-          <Route path="/reflect/list" element={<SessionsPage />} />
-          <Route path="/reflect/:sessionId" element={<ReflectionPage />} />
-          {/* `/digest` is the third nav destination's cards (issue #71,
+            <Route path="/reflect" element={<ReflectionPage />} />
+            <Route path="/reflect/list" element={<SessionsPage />} />
+            <Route path="/reflect/:sessionId" element={<ReflectionPage />} />
+            {/* `/digest` is the third nav destination's cards (issue #71,
               renumbered from fourth to third by issue #75 dropping History);
               `/digest/:period/:date` opens one of them. `period` is always
               "day"/"week"/"month" and `date` is a `YYYY-MM-DD`
@@ -64,13 +80,14 @@ function App() {
               constraint above, but flagging that here for the same reason
               ADR 0020 flagged it for Session ids: so nobody later routes
               something dotted into either segment. */}
-          <Route path="/digest" element={<DigestPage />} />
-          <Route path="/digest/:period/:date" element={<DigestReaderPage />} />
-        </Route>
-        {/* A sibling of EntryStoreLayout's children above, not nested under
+            <Route path="/digest" element={<DigestPage />} />
+            <Route path="/digest/:period/:date" element={<DigestReaderPage />} />
+          </Route>
+          {/* A sibling of EntryStoreLayout's children above, not nested under
             it — see this file's own top comment for why that has to hold
             regardless of where Settings sits in the Nav. */}
-        <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
+        </Route>
       </Routes>
     </BrowserRouter>
   );

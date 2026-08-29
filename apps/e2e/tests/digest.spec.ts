@@ -1,8 +1,10 @@
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { expect, test } from "@playwright/test";
+import { openDestination } from "./helpers";
 
-// Digest covered end to end (issue #73): open Digest from the nav, see a
+// Digest covered end to end (issue #73): open Digest from the root screen,
+// see a
 // card with a Period, its date range and prose, open it, see the full
 // prose, then step back to an earlier Digest — proving the Server
 // (server/src/digest.rs's two GET handlers), the wire shape
@@ -133,8 +135,8 @@ test("open Digest from the nav, read a card, open it, and step back across a gap
   seedDayDigest(MIDDLE_DATE, MIDDLE_BODY);
   seedDayDigest(NEWEST_DATE, NEWEST_BODY);
 
-  await page.goto("/");
-  await page.getByRole("link", { name: "Digest" }).click();
+  await page.goto("/composer");
+  await openDestination(page, "Digest");
   await expect(page).toHaveURL("/digest");
 
   // The "Last day" card (digest-page.tsx's `DigestCard`) shows the newest

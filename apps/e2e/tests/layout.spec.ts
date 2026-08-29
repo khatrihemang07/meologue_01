@@ -10,12 +10,13 @@ import { expect, type Page, test } from "@playwright/test";
 //
 // The expectation in every assertion below is computed from the container's
 // own measured clientWidth, not from the viewport width passed to
-// setViewportSize. That's deliberate: at `md` and up the nav rail
-// (md:w-20, 80px) sits beside the content in a flex row, so the content's
-// containing block is already (viewport − 80px), not the full viewport.
-// Deriving the expectation from the viewport would either have to hardcode
-// that 80px or be wrong on the wide side of the breakpoint; deriving it from
-// the container sidesteps the rail entirely.
+// setViewportSize. That was deliberate when an 80px nav rail sat beside the
+// content at `md` and up, and it survives ADR 0036 retiring that rail for a
+// reason worth stating rather than leaving as luck: at 900px and up the chat
+// list pane and its divider now take that space instead, and they take a
+// *draggable* amount of it. Deriving the expectation from the viewport would
+// have had to hardcode 80px before and would have to track a reader's own
+// divider position now; deriving it from the container sidesteps both.
 
 const VIEWPORTS = [
   { name: "phone", width: 390, height: 844 },
@@ -119,7 +120,7 @@ for (const viewport of VIEWPORTS) {
     page,
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    await page.goto("/");
+    await page.goto("/composer");
 
     const { containerWidth, content, composer } = await measureColumns(page);
     const expectedFraction = viewport.width < 768 ? 0.97 : 0.85;
@@ -150,11 +151,59 @@ for (const viewport of VIEWPORTS) {
 // same margin.
 test("the reading column steps down, not up, across the 768px breakpoint", async ({ page }) => {
   await page.setViewportSize({ width: 767, height: 1024 });
-  await page.goto("/");
+  await page.goto("/composer");
   const belowBreakpoint = await measureColumns(page);
 
   await page.setViewportSize({ width: 768, height: 1024 });
   const atBreakpoint = await measureColumns(page);
 
   expect(atBreakpoint.content.width).toBeLessThan(belowBreakpoint.content.width);
+});
+
+// ADR 0036's wide layout: at 900px and up the chat list stops being a screen
+// you navigate away from and becomes a pane beside the one you opened, with
+// a handle between them. Below that breakpoint exactly one pane is ever on
+// screen, which is what makes Back the only way out of a destination.
+test("the chat list pins beside the open destination only at the wide breakpoint", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 899, height: 900 });
+  await page.goto("/composer");
+  await expect(page.getByPlaceholder("What's on your mind?")).toBeVisible();
+
+  await expect(page.getByTestId("pane-divider")).toHaveCount(0);
+  await expect(page.getByRole("navigation", { name: "Chats" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Back to chats" })).toBeVisible();
+
+  await page.setViewportSize({ width: 1200, height: 900 });
+
+  await expect(page.getByTestId("pane-divider")).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Chats" })).toBeVisible();
+  // Back disappears rather than merely being redundant: the list it would
+  // return to is already on screen and clickable.
+  await expect(page.getByRole("link", { name: "Back to chats" })).toHaveCount(0);
+});
+
+// The divider is draggable and its width is remembered per Device, on every
+// platform. Keyboard stepping is what this asserts rather than a pointer
+// drag: it exercises the same clamp and the same persistence through a route
+// Playwright can drive deterministically, where a synthesised drag mostly
+// proves the browser can dispatch pointer events.
+test("the divider resizes the list and remembers the width across a reload", async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 900 });
+  await page.goto("/composer");
+
+  const divider = page.getByTestId("pane-divider");
+  await expect(divider).toBeVisible();
+  const before = Number(await divider.getAttribute("aria-valuenow"));
+
+  await divider.focus();
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("ArrowRight");
+
+  const after = Number(await divider.getAttribute("aria-valuenow"));
+  expect(after).toBeGreaterThan(before);
+
+  await page.reload();
+  await expect(page.getByTestId("pane-divider")).toHaveAttribute("aria-valuenow", String(after));
 });

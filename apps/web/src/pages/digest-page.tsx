@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router";
-import { Nav } from "@/components/nav";
+import { BackToChats } from "@/components/back-to-chats";
 import { Shell } from "@/components/shell";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatDigestRange } from "@/lib/digest-format";
@@ -138,7 +138,7 @@ export function DigestPage() {
   return (
     // No `action` slot (issue #75): Settings is a Nav destination now, not
     // an app-bar gear — see nav.tsx's DESTINATIONS.
-    <Shell title="Digest" nav={<Nav />}>
+    <Shell title="Digest" back={<BackToChats />}>
       {!syncEnabled && (
         <p className="text-center text-sm text-muted-foreground">
           Sync is off —{" "}

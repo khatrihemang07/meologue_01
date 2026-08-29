@@ -29,6 +29,20 @@ import { create } from "zustand";
 
 const THEME_KEY = "meologue.theme";
 const SERVER_URL_KEY = "meologue.server-url";
+const LIST_WIDTH_KEY = "meologue.list-width";
+
+/**
+ * How wide the chat list pane is beside an open destination (ADR 0036), in
+ * CSS pixels. A per-Device view preference, not synced state: a reader who
+ * drags the divider on a laptop should see no effect on a phone, the same
+ * category ADR 0019 put the reading column itself in.
+ *
+ * The clamp lives in CSS (`chat-shell-layout.tsx`) rather than here, so a
+ * stored value that no longer fits the window is corrected by the layout
+ * every render instead of being rewritten in storage the first time a
+ * reader opens the app on a smaller screen.
+ */
+export const DEFAULT_LIST_WIDTH = 320;
 
 export type Theme = "light" | "dark" | "system";
 
@@ -79,11 +93,34 @@ function writeStoredServerUrl(url: string): void {
   }
 }
 
+function readStoredListWidth(): number {
+  try {
+    const parsed = Number(localStorage.getItem(LIST_WIDTH_KEY));
+    // `Number("")` is 0 and `Number(null)` is 0, so a positive-and-finite
+    // check covers a missing key, a cleared value and anything a different
+    // version of this app might have written, without three separate guards.
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_LIST_WIDTH;
+  } catch {
+    return DEFAULT_LIST_WIDTH;
+  }
+}
+
+function writeStoredListWidth(width: number): void {
+  try {
+    localStorage.setItem(LIST_WIDTH_KEY, String(width));
+  } catch {
+    // Refused write — the in-memory value below still applies for this
+    // session, only the memory of it across launches is lost.
+  }
+}
+
 interface SettingsState {
   theme: Theme;
   serverUrl: string;
+  listWidth: number;
   setTheme: (theme: Theme) => void;
   setServerUrl: (url: string) => void;
+  setListWidth: (width: number) => void;
 }
 
 /**
@@ -97,6 +134,7 @@ interface SettingsState {
 export const useSettingsStore = create<SettingsState>()((set) => ({
   theme: readStoredTheme(),
   serverUrl: readStoredServerUrl(),
+  listWidth: readStoredListWidth(),
   setTheme: (theme) => {
     writeStoredTheme(theme);
     set({ theme });
@@ -105,6 +143,11 @@ export const useSettingsStore = create<SettingsState>()((set) => ({
     const normalised = normaliseServerUrl(url);
     writeStoredServerUrl(normalised);
     set({ serverUrl: normalised });
+  },
+  setListWidth: (width) => {
+    const rounded = Math.round(width);
+    writeStoredListWidth(rounded);
+    set({ listWidth: rounded });
   },
 }));
 

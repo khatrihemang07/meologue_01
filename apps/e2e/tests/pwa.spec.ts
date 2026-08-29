@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { sendEntry, uniqueEntryBody } from "./helpers";
+import { openDestination, sendEntry, uniqueEntryBody } from "./helpers";
 
 // The web app installs and keeps working with the network off (ticket 45).
 // vite.config.ts's VitePWA plugin precaches the app shell, its assets, and
@@ -8,7 +8,7 @@ import { sendEntry, uniqueEntryBody } from "./helpers";
 // part of it.
 
 test("History still renders after a reload with the network off", async ({ page, context }) => {
-  await page.goto("/");
+  await page.goto("/composer");
 
   const body = uniqueEntryBody("pwa-offline");
   await sendEntry(page, body);
@@ -40,7 +40,7 @@ test("History still renders after a reload with the network off", async ({ page,
   // Back to the Composer via client-side routing (no further network hit)
   // to prove the Entry survives the round trip and the store keeps reading
   // offline, the part of this test `/settings` alone can't show.
-  await page.getByRole("link", { name: "Composer" }).click();
+  await openDestination(page, "Composer");
   await expect(page.getByText(body)).toBeVisible();
 
   await context.setOffline(false);

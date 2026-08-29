@@ -4,9 +4,10 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
+import { BackToChats } from "@/components/back-to-chats";
 import { GroundingDisclosure } from "@/components/grounding-disclosure";
-import { Nav, NewSessionLink, SessionsLink } from "@/components/nav";
 import { QuestionComposer } from "@/components/question-composer";
+import { NewSessionLink, SessionsLink } from "@/components/reflect-actions";
 import { Shell } from "@/components/shell";
 import {
   type ConversationTurn,
@@ -554,7 +555,7 @@ export function ReflectionPage() {
           <SessionsLink />
         </>
       }
-      nav={<Nav />}
+      back={<BackToChats />}
       pinnedThread={syncEnabled ? { watch: turns.length, forceToNewest: askSignal } : undefined}
       composerSlot={
         syncEnabled && !notFound ? (

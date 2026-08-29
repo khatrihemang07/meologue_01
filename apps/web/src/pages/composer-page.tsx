@@ -1,9 +1,9 @@
 import type { Entry } from "@meologue/core";
 import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
+import { BackToChats } from "@/components/back-to-chats";
 import { Composer } from "@/components/composer";
 import { History } from "@/components/history";
-import { Nav } from "@/components/nav";
 import { Shell } from "@/components/shell";
 import { useHistorySearch } from "@/hooks/use-history-search";
 import { useSyncEnabled } from "@/lib/settings";
@@ -110,13 +110,18 @@ export function ComposerPage() {
 
   return (
     <Shell
-      title="meologue"
+      // "Composer", not "meologue". The app's name belonged in this bar
+      // while the Composer WAS the root screen; ADR 0036 made the chat list
+      // the root and this a destination pushed over it, so at the wide
+      // breakpoint the two panes sat side by side both saying "meologue"
+      // and neither saying which one this is.
+      title="Composer"
       // No `action` slot here any more (issue #75): History and Settings
       // both moved into the persistent Nav — History by being deleted
       // outright (this page already renders the same Entries through the
       // same History component; see history.tsx's own comment), Settings
       // by becoming Nav's fourth destination instead of an app-bar gear.
-      nav={<Nav />}
+      back={<BackToChats />}
       message={message}
       search={{ query, onQueryChange: setQuery, onDismiss: () => setQuery("") }}
       footer={

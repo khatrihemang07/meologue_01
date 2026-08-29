@@ -192,14 +192,39 @@ export async function openTwoDevices(
   const deviceB = await browser.newContext({ storageState: serverUrlStorageState(serverUrlB) });
   const pageA = await deviceA.newPage();
   const pageB = await deviceB.newPage();
-  await pageA.goto("/");
-  await pageB.goto("/");
+  // `/composer`, not `/`: ADR 0036's root screen sits outside
+  // EntryStoreLayout so it renders whether or not the store opens, which
+  // means landing there would leave both Devices with no store to sync.
+  await pageA.goto("/composer");
+  await pageB.goto("/composer");
   return { deviceA, deviceB, pageA, pageB };
 }
 
 export async function closeDevices(devices: TwoDevices): Promise<void> {
   await devices.deviceA.close();
   await devices.deviceB.close();
+}
+
+/**
+ * Opens one of the four destinations the way a reader does: from the root
+ * screen, by tapping its row.
+ *
+ * ADR 0036 replaced the persistent nav with a chat list, so there is no
+ * longer a nav link on every page to click — a destination is reached from
+ * `/` and left again with Back. Specs that only need to *be* somewhere
+ * should `page.goto` it directly; this exists for the ones whose point is
+ * that the navigation itself works.
+ *
+ * The row's accessible name is its label plus its summary line, so the
+ * substring match Playwright does by default is what makes `"Composer"`
+ * still find it.
+ */
+export async function openDestination(
+  page: Page,
+  name: "Composer" | "Reflect" | "Digest" | "Settings",
+): Promise<void> {
+  await page.goto("/");
+  await page.getByRole("link", { name }).click();
 }
 
 export async function sendEntry(page: Page, body: string): Promise<void> {

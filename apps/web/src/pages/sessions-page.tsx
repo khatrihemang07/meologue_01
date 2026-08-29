@@ -4,7 +4,7 @@ import { ArrowLeft, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import { toast } from "sonner";
-import { Nav, NewSessionLink } from "@/components/nav";
+import { NewSessionLink } from "@/components/reflect-actions";
 import { Shell } from "@/components/shell";
 import { ConfirmDialog } from "@/components/ui/alert-dialog";
 import { clearLastSessionId, readLastSessionId } from "@/lib/last-session";
@@ -327,7 +327,6 @@ export function SessionsPage() {
       // browsing old Sessions is exactly someone who might want to start a
       // new one without first opening one of the old ones.
       action={<NewSessionLink />}
-      nav={<Nav />}
       // Issue #64: the same Shell search slot History and the Composer
       // already use, `label` set to "Sessions" — see ShellSearchConfig's own
       // comment for why the label must not read "History" here. Sync being

@@ -3,6 +3,7 @@ import { expect, type Page, test } from "@playwright/test";
 import { SERVER_A_DATABASE } from "../servers";
 import {
   deleteEntryViaMenu,
+  openDestination,
   sendEntry,
   uniqueEntryBody,
   waitForEmbedding,
@@ -39,13 +40,13 @@ test("ask a Question, reload, find it in Sessions, search for it, delete it", as
   const marker = randomUUID().slice(0, 8);
   const question = `What did I write about reflect-${marker}?`;
 
-  await page.goto("/");
+  await page.goto("/composer");
 
   const entryBody = uniqueEntryBody("reflection-entry");
   await sendEntry(page, entryBody);
   await expect(page.getByText(entryBody)).toBeVisible();
 
-  await page.getByRole("link", { name: "Reflect" }).click();
+  await openDestination(page, "Reflect");
   await expect(page).toHaveURL("/reflect");
 
   await page.getByPlaceholder("Ask a Question about your History").fill(question);
@@ -116,7 +117,7 @@ test("a deleted Entry does not come back through Reflection's Grounding", async 
   const keptBody = uniqueEntryBody(`grounding-kept-${marker}`);
   const deletedBody = uniqueEntryBody(`grounding-deleted-${marker}`);
 
-  await page.goto("/");
+  await page.goto("/composer");
   await sendEntry(page, keptBody);
   await sendEntry(page, deletedBody);
   await expect(page.getByText(keptBody)).toBeVisible();
@@ -145,7 +146,7 @@ test("a deleted Entry does not come back through Reflection's Grounding", async 
   await waitForEmbedding(keptBody, SERVER_A_DATABASE);
 
   const question = `What did I write about grounding-${marker}?`;
-  await page.getByRole("link", { name: "Reflect" }).click();
+  await openDestination(page, "Reflect");
   await page.getByPlaceholder("Ask a Question about your History").fill(question);
   await page.getByRole("button", { name: "Ask" }).click();
 
@@ -191,7 +192,7 @@ test("a deleted Entry does not come back through Reflection's Grounding", async 
  * outlast the window by accident, before there was anything to wait for.
  */
 async function openReflectAndSettle(page: Page): Promise<void> {
-  await page.getByRole("link", { name: "Reflect" }).click();
+  await openDestination(page, "Reflect");
   await expect(page).toHaveURL("/reflect");
 }
 
@@ -215,7 +216,7 @@ test("a multi-step run renders its steps live, in the order they actually ran", 
   const marker = randomUUID().slice(0, 8);
   const question = `What did I write about multistep-${marker}?`;
 
-  await page.goto("/");
+  await page.goto("/composer");
   await openReflectAndSettle(page);
   await page.getByPlaceholder("Ask a Question about your History").fill(question);
   await page.getByRole("button", { name: "Ask" }).click();
@@ -261,7 +262,7 @@ test("a run that genuinely finds nothing says so, not a fabricated Answer", asyn
   const marker = randomUUID().slice(0, 8);
   const question = `What did I write about nomatch-${marker}?`;
 
-  await page.goto("/");
+  await page.goto("/composer");
   await openReflectAndSettle(page);
   await page.getByPlaceholder("Ask a Question about your History").fill(question);
   await page.getByRole("button", { name: "Ask" }).click();
@@ -290,7 +291,7 @@ test("a mid-stream failure leaves Reflection usable afterwards", async ({ page }
   const marker = randomUUID().slice(0, 8);
   const question = `What did I write about midstreamerror-${marker}?`;
 
-  await page.goto("/");
+  await page.goto("/composer");
   await openReflectAndSettle(page);
   const composer = page.getByPlaceholder("Ask a Question about your History");
   await composer.fill(question);

@@ -2,7 +2,7 @@ import { exportEntriesToZip, PROTOCOL_VERSION } from "@meologue/core";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Nav } from "@/components/nav";
+import { BackToChats } from "@/components/back-to-chats";
 import { Shell } from "@/components/shell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -176,7 +176,7 @@ export function SettingsPage() {
     // affordance only described where the user had been, not where they
     // could go") applies to Settings now for the same reason it always
     // applied to the other three.
-    <Shell title="Settings" nav={<Nav />}>
+    <Shell title="Settings" back={<BackToChats />}>
       <div className="flex flex-col gap-2">
         <span className="text-sm font-medium">Theme</span>
         <div className="inline-flex gap-1">

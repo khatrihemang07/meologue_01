@@ -1,8 +1,21 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render as rtlRender, screen } from "@testing-library/react";
+import type { ReactElement } from "react";
+import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useSettingsStore } from "@/lib/settings";
 import { useSyncStatusStore } from "@/lib/sync-status";
 import { Shell } from "./shell";
+
+// Shell reads `useLocation`/`useNavigationType` to decide whether it was
+// pushed onto (ADR 0036's list-then-push shape), so it needs a router above
+// it. Wrapping once here rather than at all 22 call sites below keeps each
+// test about the thing it names instead of about routing. RTL reapplies the
+// wrapper on `rerender`, so the pinned-thread tests that re-render keep it.
+function render(ui: ReactElement) {
+  return rtlRender(ui, {
+    wrapper: ({ children }) => <MemoryRouter>{children}</MemoryRouter>,
+  });
+}
 
 // jsdom lays nothing out, so scrollHeight/clientHeight are always 0 unless
 // a test overrides them — see use-pinned-scroll.test.tsx for the same
