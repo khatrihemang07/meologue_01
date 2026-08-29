@@ -168,10 +168,21 @@ export function seedDigest(
   body: string,
   database: string,
 ): void {
+  // `revision` is named explicitly, and so is the conflict target, because
+  // issue #132 replaced `unique (period, period_start)` with
+  // `unique (period, period_start, revision)` — Postgres rejects a conflict
+  // target that matches no unique constraint outright, so the older
+  // two-column form does not degrade here, it errors.
+  //
+  // A seeded Digest is always the Server's own first-generation write
+  // (revision 1), and `source_seq` is left at its default 0: every date
+  // these specs seed predates the Entries they create by years, so no Entry
+  // ever falls inside a seeded Period and the staleness watermark is never
+  // consulted for one.
   runSql(
-    "insert into digests (id, period, period_start, body, grounding_entry_ids) " +
-      `values (${sqlLiteral(randomUUID())}, ${sqlLiteral(period)}, ${sqlLiteral(periodStart)}, ${sqlLiteral(body)}, '{}') ` +
-      "on conflict (period, period_start) do nothing;",
+    "insert into digests (id, period, period_start, body, grounding_entry_ids, revision) " +
+      `values (${sqlLiteral(randomUUID())}, ${sqlLiteral(period)}, ${sqlLiteral(periodStart)}, ${sqlLiteral(body)}, '{}', 1) ` +
+      "on conflict (period, period_start, revision) do nothing;",
     database,
   );
 }
