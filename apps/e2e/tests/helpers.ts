@@ -311,6 +311,58 @@ export async function sendEntry(page: Page, body: string): Promise<void> {
 }
 
 /**
+ * Patches this page's own no-argument `new Date()`/`Date.now()` so a test
+ * can put Entries on two different local days without a real day elapsing
+ * — day-referrers.ts (issue #147) excludes a same-day self-Reference, so
+ * proving a real, later Reference needs exactly that.
+ *
+ * Deliberately not Playwright's own `page.clock`: that also virtualizes
+ * `requestAnimationFrame` and every timer, and this app's own
+ * scroll-to-newest (`usePinnedScroll`, on top of `@tanstack/react-virtual`'s
+ * own positioning) genuinely depends on those ticking — installing
+ * `page.clock` left the thread stuck wherever its very first paint
+ * happened to land, never actually reaching the newest Entry. This patch
+ * touches nothing but what a bare `new Date()`/`Date.now()` reports; every
+ * timer and animation frame keeps running in real time.
+ *
+ * Must be called before `page.goto` — `addInitScript` only reaches
+ * documents navigated to after it's registered. Use `advanceDateByDays`
+ * afterward to move the offset; it starts at zero (today, unshifted).
+ */
+export async function installDateOffset(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const RealDate = window.Date;
+    let offsetMs = 0;
+    class OffsetDate extends RealDate {
+      constructor(...args: ConstructorParameters<typeof Date>) {
+        if (args.length === 0) {
+          super(RealDate.now() + offsetMs);
+        } else {
+          // @ts-expect-error — forwarding whatever arity the caller used to the real Date.
+          super(...args);
+        }
+      }
+      static override now(): number {
+        return RealDate.now() + offsetMs;
+      }
+    }
+    Object.defineProperty(window, "__setDateOffsetMs", {
+      value: (ms: number) => {
+        offsetMs = ms;
+      },
+    });
+    window.Date = OffsetDate as unknown as DateConstructor;
+  });
+}
+
+/** Shifts every subsequent no-argument `new Date()`/`Date.now()` on this page forward by `days` — see `installDateOffset`'s own comment. */
+export async function advanceDateByDays(page: Page, days: number): Promise<void> {
+  await page.evaluate((ms) => {
+    (window as unknown as { __setDateOffsetMs: (ms: number) => void }).__setDateOffsetMs(ms);
+  }, days * 24 * 60 * 60 * 1000);
+}
+
+/**
  * Real OS-level tab backgrounding isn't controllable through Playwright, so
  * this drives the Page Visibility API directly, the same signal `apps/web`'s
  * continuous-sync wiring listens to (see wake-signals.web.ts).

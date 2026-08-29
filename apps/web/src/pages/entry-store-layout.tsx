@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import { Outlet, useOutletContext } from "react-router";
 import { type UseHistoryPagination, useHistory } from "@/hooks/use-history";
 import { dayHasEntries } from "@/lib/day-has-entries";
+import { dayReferrers } from "@/lib/day-referrers";
 import { deviceUtcOffsetMinutes } from "@/lib/entry-day";
 import { SecondTabError, StorageUnavailableError } from "@/lib/entry-store-errors";
 import { ENTRY_STORE_QUERY_KEY } from "@/lib/query-keys";
@@ -46,6 +47,24 @@ export interface EntryStoreOutletContext {
    * malformed mark.
    */
   dayHasEntries?: (dayKey: string) => Promise<boolean>;
+  /**
+   * The later Entries that Refer to a local day (YYYY-MM-DD) (issue #147,
+   * ADR 0042's own "a day can also be asked what Refers to it") —
+   * day-referrers.ts's own `dayReferrers`, exposed as a context function the
+   * same way `dayHasEntries` above is, rather than the raw store:
+   * history.tsx's own day-adjacent row (via use-day-referrers.ts) is this
+   * field's one caller, and it needs exactly this answer, not
+   * `EntryStore.search` itself (ADR 0042's "day shows what Refers to it" is
+   * two steps — narrowing with search, then confirming by parsing — and
+   * `dayReferrers` is where both live, not here).
+   *
+   * Optional, unlike `search`/`getEntries`, for the same reason
+   * `dayHasEntries` is: every other page that builds this context has no
+   * reason to supply it, and `use-day-referrers.ts`'s own hook already
+   * treats "no probe available" the same as "still resolving" — a day
+   * renders as having nothing Referring to it either way.
+   */
+  dayReferrers?: (dayKey: string) => Promise<Entry[]>;
   /**
    * Resolves one Entry Reference's target by id (issue #143) — the chip's
    * own probe, `entry-row.tsx`'s `EntryReferenceLink` (via
@@ -161,6 +180,13 @@ async function noopDayHasEntries(): Promise<boolean> {
 // already this field's own "unresolvable" answer, not a special case for it.
 async function noopGetEntry(): Promise<Entry | undefined> {
   return undefined;
+}
+
+// `dayReferrers`'s own not-ready stand-in, mirroring `noopDayHasEntries`:
+// nothing has Referred to any day before the store opens, and an empty
+// array is already this field's own "nothing found" answer.
+async function noopDayReferrers(): Promise<Entry[]> {
+  return [];
 }
 
 // ADR 0028's edit/delete affordances need the store to exist just as much
@@ -332,6 +358,8 @@ export function EntryStoreLayout() {
               getEntries: (ids: string[]) => store.getMany(ids),
               dayHasEntries: (dayKey: string) =>
                 dayHasEntries(store, dayKey, deviceUtcOffsetMinutes()),
+              dayReferrers: (dayKey: string) =>
+                dayReferrers(store, dayKey, deviceUtcOffsetMinutes()),
               getEntry: (entryId: string) => store.getMany([entryId]).then((found) => found.at(0)),
               editEntry,
               removeEntry,
@@ -344,6 +372,7 @@ export function EntryStoreLayout() {
               search: noopSearch,
               getEntries: noopGetEntries,
               dayHasEntries: noopDayHasEntries,
+              dayReferrers: noopDayReferrers,
               getEntry: noopGetEntry,
               editEntry: noopEdit,
               removeEntry: noopRemove,

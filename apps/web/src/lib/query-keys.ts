@@ -80,3 +80,21 @@ export function dayHasEntriesQueryKey(dayKey: string) {
 export function entryReferenceQueryKey(entryId: string) {
   return [...ENTRIES_QUERY_KEY, "entry-reference", entryId] as const;
 }
+
+/**
+ * Issue #147: a day's own "what Refers to me?" lookup (`dayReferrers`,
+ * day-referrers.ts) — the reverse of `dayHasEntriesQueryKey` above. A
+ * child of ENTRIES_QUERY_KEY for the same reason every sibling key here
+ * is: this reads Entries the same local store does, just by which day's
+ * text they match rather than by page, id set, or single id. Keyed on the
+ * day alone, same reasoning as `dayHasEntriesQueryKey`.
+ *
+ * `refreshNewestEntriesPage` (entries-pagination.ts) invalidates this same
+ * prefix on every local write, the same way it already does for Search and
+ * `entryReferenceQueryKey` — a new `[[date]]` Reference, or removing/editing
+ * an Entry that carried one, has to be reflected in what a day reports it's
+ * Referred by.
+ */
+export function dayReferrersQueryKey(dayKey: string) {
+  return [...ENTRIES_QUERY_KEY, "day-referrers", dayKey] as const;
+}

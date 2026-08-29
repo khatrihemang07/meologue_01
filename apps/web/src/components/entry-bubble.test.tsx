@@ -108,7 +108,7 @@ describe("EntryBubble", () => {
         entry={entry({ id: "e7" })}
         syncEnabled={false}
         side="out"
-        actions={{ onEdit: vi.fn(), onDelete: vi.fn(), onOpenSheet: vi.fn() }}
+        actions={{ onEdit: vi.fn(), onDelete: vi.fn(), onRefer: vi.fn(), onOpenSheet: vi.fn() }}
       />,
     );
 

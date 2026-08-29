@@ -37,8 +37,17 @@ const ENTRY_ID_SHAPE =
 // Uncapped on the theory that a future ticket might cap what shows here
 // without touching the shared History component itself.
 export function ComposerPage() {
-  const { entries, pagination, sendEntry, search, editEntry, removeEntry, disabled, message } =
-    useEntryStore();
+  const {
+    entries,
+    pagination,
+    sendEntry,
+    search,
+    editEntry,
+    removeEntry,
+    disabled,
+    message,
+    dayReferrers,
+  } = useEntryStore();
   // Subscribed, not a one-off read: a change saved on Settings now updates
   // this without a reload or a remount (ticket 36), on top of the render
   // this component already gets when it remounts navigating back from
@@ -237,6 +246,7 @@ export function ComposerPage() {
           onEdit={setEditingEntry}
           onDelete={removeEntry}
           onRefer={handleRefer}
+          dayReferrers={dayReferrers}
           seek={seek}
           onSeekNeedsOlder={handleSeekNeedsOlder}
           onSeekSettled={settleSeek}

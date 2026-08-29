@@ -127,4 +127,12 @@ export async function refreshNewestEntriesPage(store: EntryStore): Promise<void>
   // funnels through this one function already, so one invalidation here
   // covers all of them instead of one per call site.
   await queryClient.invalidateQueries({ queryKey: [...ENTRIES_QUERY_KEY, "entry-reference"] });
+
+  // Issue #147: a day's own "what Refers to me?" row (history.tsx's
+  // `DayReferrersRow`, query-keys.ts's own `dayReferrersQueryKey`) needs the
+  // same live catch-up as Search and an Entry Reference chip do — the exact
+  // same reason, one line up. A new `[[date]]` Reference just Sent, or an
+  // edit/delete that added or removed one from an existing Entry, has to
+  // change what the day it names reports.
+  await queryClient.invalidateQueries({ queryKey: [...ENTRIES_QUERY_KEY, "day-referrers"] });
 }

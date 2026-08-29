@@ -1,4 +1,5 @@
 import type { Entry } from "@meologue/core";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
   fireEvent,
@@ -8,12 +9,13 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import type { ReactElement } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { MemoryRouter, useLocation } from "react-router";
 import { toast } from "sonner";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { copyText } from "@/lib/clipboard";
 import * as entryDayModule from "@/lib/entry-day";
+import { dayReferrersQueryKey } from "@/lib/query-keys";
 import { swipeLeft, tap } from "@/test/swipe";
 import { History } from "./history";
 
@@ -25,8 +27,26 @@ import { History } from "./history";
 // too (its own docs), so a `rerender(...)` call further down a test stays
 // wrapped in the same `MemoryRouter` its initial `render` was, with no
 // change needed at either call site.
+//
+// Issue #147: `DayReferrersRow` is now unconditionally part of `flatItems`
+// (one per day separator, regardless of what any test's fixtures put in an
+// Entry's body), and it calls `useDayReferrers`, which calls `useQuery` —
+// unlike `DateReferenceLink`/`EntryReferenceLink`, whose own `useQuery`
+// calls only ever ran for a test that actually put a `[[...]]` mark in a
+// body. Every render in this file now needs a `QueryClient` in scope for
+// that reason alone, not because any given test cares about Referrers — a
+// fresh one per `render()` call, same as entry-row.test.tsx's own harness,
+// so a query cached in one test can't leak into the next.
 function render(ui: ReactElement, options?: RenderOptions): RenderResult {
-  return rtlRender(ui, { wrapper: MemoryRouter, ...options });
+  const queryClient = new QueryClient();
+  function Wrapper({ children }: { children: ReactNode }) {
+    return (
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter>{children}</MemoryRouter>
+      </QueryClientProvider>
+    );
+  }
+  return rtlRender(ui, { wrapper: Wrapper, ...options });
 }
 
 // Copy's two outcomes are the whole point of it reporting rather than
@@ -1180,11 +1200,17 @@ describe("History", () => {
         return <div data-testid="location">{location.pathname + location.search}</div>;
       }
       const older = entry({ id: "1", body: "older", createdAt: "2020-01-01T10:00:00.000Z" });
+      // Bypasses this file's own `render` wrapper (needs a sibling
+      // `<LocationDisplay>` outside `<History>`), so it needs its own
+      // `QueryClient` for the same reason that wrapper's own comment
+      // gives: `DayReferrersRow`'s `useDayReferrers` call is unconditional.
       rtlRender(
-        <MemoryRouter>
-          <History entries={[older]} syncEnabled={false} />
-          <LocationDisplay />
-        </MemoryRouter>,
+        <QueryClientProvider client={new QueryClient()}>
+          <MemoryRouter>
+            <History entries={[older]} syncEnabled={false} />
+            <LocationDisplay />
+          </MemoryRouter>
+        </QueryClientProvider>,
       );
 
       fireEvent.click(screen.getByRole("button", { name: /currently showing/ }));
@@ -1192,6 +1218,126 @@ describe("History", () => {
 
       expect(screen.getByTestId("location")).toHaveTextContent("/composer?d=2020-01-01");
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+  });
+
+  // Issue #147: "a day shows what Refers to it" (ADR 0042's own Context) —
+  // `DayReferrersRow`'s own suite. `dayReferrers` here is a bare stub, the
+  // same shape use-day-referrers.test.tsx's own harness uses — this level
+  // only cares that History wires the prop into the right row and renders
+  // (or withholds) the right thing, not that the real probe's own
+  // search-then-parse logic is correct (day-referrers.test.ts owns that).
+  describe("day Referrers (issue #147)", () => {
+    function referrer(overrides: Partial<Entry> = {}): Entry {
+      return entry({
+        id: "referrer-1",
+        body: "circling back to [[2026-08-28]]",
+        createdAt: "2026-08-29T09:00:00.000Z",
+        ...overrides,
+      });
+    }
+
+    it("shows how many later Entries Refer to a day, and lets the reader open one", async () => {
+      const dayReferrers = vi.fn(async (key: string) => (key === "2026-08-28" ? [referrer()] : []));
+      render(
+        <History
+          entries={[
+            entry({ id: "1", body: "the day itself", createdAt: "2026-08-28T10:00:00.000Z" }),
+          ]}
+          syncEnabled={false}
+          dayReferrers={dayReferrers}
+        />,
+      );
+
+      expect(await screen.findByText("Referred to by 1 Entry:")).toBeInTheDocument();
+      const link = screen.getByRole("link", { name: /that Refers to this day/ });
+      expect(link).toHaveAttribute("href", "/composer?e=referrer-1");
+      expect(dayReferrers).toHaveBeenCalledWith("2026-08-28");
+    });
+
+    it("shows every referrer, pluralised, when more than one Entry Refers to the day", async () => {
+      const dayReferrers = vi.fn(async () => [
+        referrer({ id: "a" }),
+        referrer({ id: "b", body: "also about [[2026-08-28]]" }),
+      ]);
+      render(
+        <History
+          entries={[entry({ id: "1", createdAt: "2026-08-28T10:00:00.000Z" })]}
+          syncEnabled={false}
+          dayReferrers={dayReferrers}
+        />,
+      );
+
+      expect(await screen.findByText("Referred to by 2 Entries:")).toBeInTheDocument();
+      expect(screen.getAllByRole("link", { name: /that Refers to this day/ })).toHaveLength(2);
+    });
+
+    // The acceptance criterion this whole suite exists to pin down: no
+    // empty state, no zero count, nothing rendered at all.
+    it("shows nothing at all for a day nothing Refers to", async () => {
+      const dayReferrers = vi.fn(async () => []);
+      render(
+        <History
+          entries={[entry({ id: "1", createdAt: "2026-08-28T10:00:00.000Z" })]}
+          syncEnabled={false}
+          dayReferrers={dayReferrers}
+        />,
+      );
+
+      await waitFor(() => expect(dayReferrers).toHaveBeenCalledWith("2026-08-28"));
+      expect(screen.queryByText(/Referred to by/)).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("link", { name: /that Refers to this day/ }),
+      ).not.toBeInTheDocument();
+    });
+
+    // The same "no probe is the same as still resolving" rule every sibling
+    // Reference hook already follows (`useDayHasEntries`, `useEntryReference`)
+    // — a page with no reason to know this feature exists simply omits the
+    // prop, and every day renders as if nothing Refers to it.
+    it("shows nothing when no dayReferrers probe is supplied at all", () => {
+      render(
+        <History
+          entries={[entry({ id: "1", createdAt: "2026-08-28T10:00:00.000Z" })]}
+          syncEnabled={false}
+        />,
+      );
+
+      expect(screen.queryByText(/Referred to by/)).not.toBeInTheDocument();
+    });
+
+    // Removing (or editing away) the one Entry that Referred to a day shows
+    // up here as exactly what a real removal produces downstream: the same
+    // query key (`dayReferrersQueryKey`) invalidated, and the probe now
+    // resolving to fewer Entries — entries-pagination.test.ts's own suite
+    // already pins down that a local write invalidates that key; this pins
+    // down that the row itself reacts correctly once it does. Built with an
+    // explicit `QueryClient`, bypassing this file's own `render` wrapper,
+    // because the test needs to invalidate that exact client's cache by
+    // hand rather than trusting a real write's own plumbing (out of scope
+    // for a component-level test).
+    it("stops showing a referrer once its Reference is removed and the cache is invalidated", async () => {
+      const dayReferrers = vi.fn(async () => [referrer()]);
+      const queryClient = new QueryClient();
+      rtlRender(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter>
+            <History
+              entries={[entry({ id: "1", createdAt: "2026-08-28T10:00:00.000Z" })]}
+              syncEnabled={false}
+              dayReferrers={dayReferrers}
+            />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+      await screen.findByText("Referred to by 1 Entry:");
+
+      dayReferrers.mockResolvedValue([]);
+      await act(async () => {
+        await queryClient.invalidateQueries({ queryKey: dayReferrersQueryKey("2026-08-28") });
+      });
+
+      await waitFor(() => expect(screen.queryByText(/Referred to by/)).not.toBeInTheDocument());
     });
   });
 });

@@ -13,13 +13,15 @@ import {
   useRef,
   useState,
 } from "react";
-import { useNavigate } from "react-router";
+import { Link, useNavigate } from "react-router";
 import { toast } from "sonner";
 import { DatePickerSheet } from "@/components/date-picker-sheet";
 import { EntryActionsSheet } from "@/components/entry-actions";
 import { EntryBubble } from "@/components/entry-bubble";
+import { entrySnippet } from "@/components/entry-row";
 import { HistoryScrollContext } from "@/components/shell";
 import { ConfirmDialog } from "@/components/ui/alert-dialog";
+import { useDayReferrers } from "@/hooks/use-day-referrers";
 import { useSwipeActions } from "@/hooks/use-swipe-actions";
 import { copyText } from "@/lib/clipboard";
 import { deviceUtcOffsetMinutes, entryDayKey, formatDaySeparator } from "@/lib/entry-day";
@@ -62,6 +64,23 @@ interface HistoryProps {
    * than through a requester.
    */
   onRefer?: (entry: Entry) => void;
+  /**
+   * Issue #147: the later Entries that Refer to a given local day
+   * (day-referrers.ts's own `dayReferrers`) — read from `useEntryStore()`
+   * by composer-page.tsx and handed down as a prop rather than read here
+   * directly, the same reasoning `seek`'s own trio just below follows for
+   * itself: history.test.tsx renders `<History>` bare, with no
+   * `EntryStoreLayout`/`Outlet` above it, and this row is unconditional —
+   * one per day, regardless of whether any Entry's body has ever been
+   * touched — unlike `DateReferenceLink` (entry-row.tsx), which only
+   * mounts, and so only calls `useEntryStore()`, when an actual
+   * `[[date]]` mark was parsed out of some Entry's body. Reading this
+   * context directly here would throw across every existing test in this
+   * file the moment a day separator exists at all. Undefined behaves
+   * exactly like `useDayReferrers`'s own "no probe" case: the row renders
+   * nothing, same as a day confirmed to have no referrers.
+   */
+  dayReferrers?: (dayKey: string) => Promise<Entry[]>;
   /**
    * Issue #142/#143: the day or Entry a Reference seek (composer-page.tsx)
    * is looking for, or `null`/omitted while no seek is active. History is
@@ -195,6 +214,20 @@ interface FlatSeparatorItem {
   key: string;
   dayKey: string;
 }
+/**
+ * Issue #147: what later Entries Refer to this day — its own row, adjacent
+ * to the separator rather than inside it or the sticky pill (see
+ * `DayReferrersRow`'s own comment for why: ADR 0030 forbids growing either
+ * of those, and the virtualizer measures a row, not a fixed-height
+ * wrapper). Emitted alongside every separator in `flattenGroups` below,
+ * unconditionally — `DayReferrersRow` itself decides, once its probe
+ * resolves, whether there is anything worth a reader seeing here at all.
+ */
+interface FlatDayReferrersItem {
+  kind: "dayReferrers";
+  key: string;
+  dayKey: string;
+}
 interface FlatEntryItem {
   kind: "entry";
   key: string;
@@ -204,13 +237,16 @@ interface FlatEntryItem {
   /** True for the first Entry in its group — the one row in each run that gets no divider above it (see the render below, replacing the old `divide-y` wrapper a virtualized list can't use: rows are no longer necessarily adjacent DOM siblings). */
   isFirstInGroup: boolean;
 }
-type FlatItem = FlatSeparatorItem | FlatEntryItem;
+type FlatItem = FlatSeparatorItem | FlatDayReferrersItem | FlatEntryItem;
 
 function flattenGroups(groups: DayGroup[]): FlatItem[] {
   const items: FlatItem[] = [];
   for (const group of groups) {
     if (group.dayKey !== null) {
       items.push({ kind: "separator", key: `sep:${group.dayKey}`, dayKey: group.dayKey });
+      // Issue #147: right after the separator it belongs to, not before —
+      // reads as "this day; here is what refers back to it" in that order.
+      items.push({ kind: "dayReferrers", key: `ref:${group.dayKey}`, dayKey: group.dayKey });
     }
     group.entries.forEach((entry, index) => {
       items.push({
@@ -262,6 +298,77 @@ const OVERSCAN = 25;
 // the per-row DOM cost issue #83 exists to remove.
 const MAX_FALLBACK_ROWS = OVERSCAN;
 
+/**
+ * Issue #147: "a day shows what Refers to it" (ADR 0042's own Context) —
+ * the half of the Reference feature that makes a day itself reachable from
+ * its future, rather than only letting a new Entry point backwards. Its
+ * own row (`FlatDayReferrersItem`), not text squeezed into the separator
+ * or the sticky pill: ADR 0030 forbids growing either of those, and this
+ * needs to render anywhere from nothing at all up to several links — a
+ * range only a row the virtualizer measures on its own can carry.
+ *
+ * Renders nothing — not an empty state, not a zero count — until `probe`
+ * resolves with at least one referrer: both "still resolving" and
+ * "confirmed nothing Refers here" render identically, the same "unresolved
+ * is invisible" shape `DateReferenceLink`/`EntryReferenceLink` already
+ * follow for a single mark, just applied to a whole row instead of one
+ * inline chip. `null` costs the row nothing extra: `estimateSize` below
+ * already guesses `0` for this item kind, so an empty day never reserves
+ * space that would otherwise have to shrink back down once the probe
+ * settles — the majority case, since most days have nothing pointing back
+ * at them.
+ *
+ * Opening a referrer reuses the exact seek a followed `[[e:...]]` chip
+ * already uses (`?e=<id>`, composer-page.tsx) rather than a second
+ * navigation path — the whole reason ADR 0042 put the seek's destination in
+ * a query param was so every caller, this one included, could just build
+ * the same URL.
+ */
+function DayReferrersRow({
+  dayKey,
+  probe,
+}: {
+  dayKey: string;
+  probe: ((dayKey: string) => Promise<Entry[]>) | undefined;
+}) {
+  const referrers = useDayReferrers(probe, dayKey);
+  if (referrers === undefined || referrers.length === 0) {
+    return null;
+  }
+  // Each link carries its own referrer's day and snippet — the same shape
+  // `EntryReferenceLink`'s own chip (entry-row.tsx) uses — rather than a
+  // bare, identical "open this" for every one: with more than one referrer,
+  // an identical accessible name on every link would leave a screen reader
+  // unable to tell them apart.
+  const offsetMinutes = deviceUtcOffsetMinutes();
+  const todayKey = entryDayKey(new Date().toISOString(), offsetMinutes) ?? "";
+  return (
+    <div className="flex flex-wrap items-center justify-center gap-x-1.5 gap-y-1 px-4 pb-2 text-xs text-muted-foreground">
+      <span>
+        {referrers.length === 1
+          ? "Referred to by 1 Entry:"
+          : `Referred to by ${referrers.length} Entries:`}
+      </span>
+      {referrers.map((referrer) => {
+        const referrerDayKey = entryDayKey(referrer.createdAt, offsetMinutes);
+        const dayLabel =
+          referrerDayKey === null ? null : formatDaySeparator(referrerDayKey, todayKey);
+        return (
+          <Link
+            key={referrer.id}
+            to={`/composer?e=${referrer.id}`}
+            aria-label={`Open the Entry from ${dayLabel ?? "an earlier day"} that Refers to this day`}
+            className="inline-flex max-w-40 items-baseline gap-1 rounded-full border border-border bg-muted/60 px-2 py-0.5 underline decoration-dotted underline-offset-2"
+          >
+            {dayLabel !== null && <span className="shrink-0 font-medium">{dayLabel}</span>}
+            <span className="truncate">{entrySnippet(referrer.body)}</span>
+          </Link>
+        );
+      })}
+    </div>
+  );
+}
+
 export function History({
   entries,
   syncEnabled,
@@ -269,6 +376,7 @@ export function History({
   onEdit,
   onDelete,
   onRefer,
+  dayReferrers,
   seek,
   onSeekNeedsOlder,
   onSeekSettled,
@@ -437,7 +545,20 @@ export function History({
   const virtualizer = useVirtualizer({
     count: flatItems.length,
     getScrollElement: () => scrollElement,
-    estimateSize: () => ESTIMATED_ROW_HEIGHT_PX,
+    // Issue #147: a `dayReferrers` row starts at an estimate of `0`, not
+    // `ESTIMATED_ROW_HEIGHT_PX` — deliberately, and this is what actually
+    // keeps a day with nothing Referring to it showing NOTHING rather than
+    // a blank gap the size of an ordinary row. Most days have no referrer
+    // at all, so `0` is already the *correct* answer for the common case
+    // before `DayReferrersRow`'s own probe ever resolves, which sidesteps
+    // `measureElement` below entirely for that case: there is no "real
+    // measured 0" to distrust when the estimate was already 0. Only once a
+    // referrer is confirmed does this row grow — from a true `0` to a real,
+    // positive `measureElement` reading — the same "estimate, then correct
+    // once rendered" path every other row already takes, just starting
+    // from the opposite end.
+    estimateSize: (index) =>
+      flatItems[index]?.kind === "dayReferrers" ? 0 : ESTIMATED_ROW_HEIGHT_PX,
     overscan: OVERSCAN,
     // Issue #79/#83: see FlatItem's own comment — measured sizes must
     // follow the row, not the index, across a prepend.
@@ -847,6 +968,11 @@ export function History({
                     {formatDaySeparator(item.dayKey, todayKey)}
                   </button>
                 </div>
+              ) : item.kind === "dayReferrers" ? (
+                // Issue #147: see `DayReferrersRow`'s own comment for why
+                // this is a row of its own rather than something folded
+                // into the separator above.
+                <DayReferrersRow dayKey={item.dayKey} probe={dayReferrers} />
               ) : (
                 // A bubble, not a row (ADR 0036). The `border-t` that used
                 // to travel with each row is gone with it: bubbles are told

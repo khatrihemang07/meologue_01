@@ -1,5 +1,10 @@
 import { expect, test } from "@playwright/test";
-import { sendEntry, uniqueEntryBody } from "./helpers";
+import { advanceDateByDays, installDateOffset, sendEntry, uniqueEntryBody } from "./helpers";
+
+// `.first()` on every getByText below is deliberate, not defensive noise: an
+// Entry's text appears both on the bubble's outer div (whose text also
+// includes the clock) and on the inner body span, so a bare getByText is a
+// strict-mode violation every time rather than intermittently.
 
 // Issue #146: both day markers in History — the sticky pill that floats at
 // the top while scrolling, and the inline separator between two days' worth
@@ -28,7 +33,7 @@ test("the sticky day pill's wrapper never changes height as its own label shows 
   for (let index = 0; index < 25; index += 1) {
     await sendEntry(page, `${marker} ${index}`);
   }
-  await expect(page.getByText(`${marker} 24`)).toBeVisible();
+  await expect(page.getByText(`${marker} 24`).first()).toBeVisible();
 
   const scrollRegion = page.getByTestId("shell-scroll-region");
   // Added to history.tsx solely for this measurement — a plain data
@@ -72,7 +77,7 @@ test("the sticky day pill's wrapper never changes height as its own label shows 
   await scrollRegion.evaluate((element) => {
     element.scrollTop = element.scrollHeight;
   });
-  await expect(page.getByText(`${marker} 24`)).toBeVisible();
+  await expect(page.getByText(`${marker} 24`).first()).toBeVisible();
 });
 
 test("tapping a day marker opens the date picker, and confirming a day with no Entries seeks there without spinning", async ({
@@ -83,7 +88,7 @@ test("tapping a day marker opens the date picker, and confirming a day with no E
 
   const marker = uniqueEntryBody("seek");
   await sendEntry(page, marker);
-  await expect(page.getByText(marker)).toBeVisible();
+  await expect(page.getByText(marker).first()).toBeVisible();
 
   // The inline day separator sitting above today's one Entry — its
   // accessible name is the thing issue #146 actually adds (history.tsx: a
@@ -121,5 +126,92 @@ test("tapping a day marker opens the date picker, and confirming a day with no E
 
   // The thread itself is still there and responsive afterward — the seek
   // landing at the boundary didn't leave History stuck or empty.
-  await expect(page.getByText(marker)).toBeVisible();
+  await expect(page.getByText(marker).first()).toBeVisible();
+});
+
+// Issue #147: "a day shows what Refers to it" adds a whole new row next to
+// the day separator (`DayReferrersRow`, history.tsx) — its own, deliberately
+// separate row rather than anything folded into the separator or the sticky
+// pill, precisely so it can never touch either one's box (ADR 0030, and see
+// the sibling test above for the property this one extends). Nothing in the
+// unit suite can see this either, for the same reason the sibling test
+// can't: jsdom never lays out real geometry.
+//
+// A real Referrers row needs a *later* Entry Referring back to an earlier
+// day — day-referrers.ts explicitly excludes a same-day self-Reference, so
+// this needs two distinct local days inside one test, and real wall-clock
+// time can't run a day backward. `installDateOffset` patches the browser's
+// own no-argument `new Date()`/`Date.now()`, which is exactly what
+// `use-history.ts` stamps a new Entry's `createdAt` from (a main-thread
+// call, never inside the SQLite worker), so advancing it here genuinely
+// produces an Entry captured "the next day" — see that helper's own
+// comment for why this isn't built on Playwright's `page.clock` instead
+// (it also freezes `requestAnimationFrame`, which this app's own
+// scroll-to-newest depends on).
+test("the sticky day pill's wrapper is unaffected by a day's own Referrers row, even with real content in it (issue #147, ADR 0030)", async ({
+  page,
+}) => {
+  await page.setViewportSize(NARROW);
+  await installDateOffset(page);
+  await page.goto("/composer");
+
+  // Day A is real, unshifted "today" — the local calendar day
+  // `entryDayKey` (apps/web/src/lib/entry-day.ts) would compute for the
+  // Device running this test, read the same way in Node so the `[[...]]`
+  // mark built below names the exact day the app itself will group these
+  // Entries under, whatever day this suite happens to run on.
+  const now = new Date();
+  const dayAKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(
+    now.getDate(),
+  ).padStart(2, "0")}`;
+
+  // Enough Entries on day A that the thread is taller than one screen —
+  // the same reason the sibling test needs 25.
+  const marker = uniqueEntryBody("referrers-pill");
+  for (let index = 0; index < 25; index += 1) {
+    await sendEntry(page, `${marker} ${index}`);
+  }
+  await expect(page.getByText(`${marker} 24`).first()).toBeVisible();
+
+  // Advance to day B and Refer back to day A — a genuine later Reference,
+  // not a self-Reference.
+  await advanceDateByDays(page, 1);
+  const referrerBody = uniqueEntryBody("referrer");
+  await sendEntry(page, `looking back on [[${dayAKey}]] — ${referrerBody}`);
+  await expect(page.getByText(referrerBody, { exact: false }).first()).toBeVisible();
+
+  const scrollRegion = page.getByTestId("shell-scroll-region");
+  const wrapper = page.getByTestId("day-pill-wrapper");
+
+  // Pinned to the newest Entry — with 25 short day-A Entries plus day B's
+  // one, the viewport's own top edge still lands inside day A's own run
+  // (its own separator scrolled well out of view above), so the pill
+  // shows day A's label here, not day B's "Today" — either is a genuine
+  // "shown" state; which day's name it is isn't the point.
+  await expect(wrapper).not.toHaveText("");
+  const shownBox = await wrapper.boundingBox();
+  expect(shownBox).not.toBeNull();
+
+  // Scroll to the very top: day A's separator is now the topmost visible
+  // row — the pill withholds its own label (same rule as the sibling test:
+  // the topmost visible row already names the day itself) — and its own
+  // Referrers row, immediately below it, now shows real content ("Referred
+  // to by 1 Entry:") rather than nothing.
+  await scrollRegion.evaluate((element) => {
+    element.scrollTop = 0;
+  });
+  await expect(page.getByText("Referred to by 1 Entry:").first()).toBeVisible();
+  // Deliberately NOT asserting the pill's label here. Which day it names at
+  // the top of the thread depends on whether the topmost visible row is a
+  // separator or an Entry, and with two days in play that is incidental to
+  // what this test is for. The property ADR 0030 cares about is the box, and
+  // the box is what gets measured.
+  const hiddenBox = await wrapper.boundingBox();
+  expect(hiddenBox).not.toBeNull();
+
+  // The one assertion ADR 0030 actually depends on: a real Referrers row,
+  // with real rendered content, sitting immediately below the day A
+  // separator, must not have changed the pill wrapper's own fixed box.
+  expect(hiddenBox?.height).toBe(shownBox?.height);
+  expect(hiddenBox?.height).toBeGreaterThan(0);
 });
