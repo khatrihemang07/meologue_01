@@ -155,7 +155,14 @@ function EntryReferenceLink({ entryId, raw }: { entryId: string; raw: string }) 
     <Link
       to={`/composer?e=${entryId}`}
       aria-label={`Open Entry from ${dayLabel ?? "an earlier day"} in History`}
-      className="mx-0.5 inline-flex max-w-full items-baseline gap-1.5 rounded-full border border-border bg-background/60 px-2 align-baseline text-xs leading-normal underline decoration-dotted underline-offset-2"
+      // `max-w` leaves room for the clock, and that is load-bearing rather
+      // than cosmetic. An inline-flex box is atomic: it cannot be broken
+      // across lines, so if it is allowed to grow to the full width of the
+      // body there is no space beside it for `BubbleMeta`'s right float, and
+      // the clock drops to a line of its own — ADR 0036's defect exactly,
+      // and one no test in jsdom can see because jsdom does not lay out
+      // floats. Caught by measuring a real bubble in a real browser.
+      className="mx-0.5 inline-flex max-w-[calc(100%-4.5rem)] items-baseline gap-1.5 rounded-full border border-border bg-background/60 px-2 align-baseline text-xs leading-normal underline decoration-dotted underline-offset-2"
     >
       {dayLabel !== null && <span className="shrink-0 font-medium">{dayLabel}</span>}
       <span className="truncate">{snippet}</span>
