@@ -117,6 +117,26 @@ struct DigestEntry {
     seq: i64,
 }
 
+/// The staleness watermark a Digest revision is written with: the highest
+/// `entries.seq` among the Entries it was built from, or `0` for a Period
+/// that held none.
+///
+/// One function rather than the expression inlined at each of its two call
+/// sites (`write_digest_for`, `run_regenerate`) because *which* number goes
+/// in this column is the whole of ADR 0039's staleness rule, and it is easy
+/// to get subtly wrong: `entries.seq` is reassigned on every edit and delete
+/// (`sync.rs`'s `on conflict do update ... seq = nextval(...)`), so the
+/// maximum over exactly the Entries that were read is what makes
+/// `select_is_stale`'s later `seq > source_seq` mean "something in this
+/// Period moved after this revision was written" and nothing else. A
+/// watermark that is too low reports a Period stale that never changed —
+/// the failure mode `0009_digests_gain_revisions.sql` had to back out of for
+/// pre-existing rows.
+fn source_seq_of(entries: &[DigestEntry]) -> i64 {
+    entries.iter().map(|entry| entry.seq).max().unwrap_or(0)
+}
+
+
 /// Digest's server-side dependencies, held in `AppState` only when chat is
 /// configured (`llm::LlmConfig::digest_worker_config`) — mirrors
 /// `reflect::ReflectState` exactly, including why: `lib.rs`'s
@@ -329,11 +349,10 @@ async fn write_digest_for(
 
     let entry_ids: Vec<Uuid> = entries.iter().map(|entry| entry.id).collect();
     // The watermark this Digest's revision 1 goes stale against (ADR
-    // 0039): the highest `seq` among the Entries just read. `entries` is
-    // non-empty here (the guard above already returned early otherwise),
-    // so `unwrap_or(0)` is defensive, not the "no Entries" case itself —
-    // that case never reaches `insert_digest` at all.
-    let source_seq = entries.iter().map(|entry| entry.seq).max().unwrap_or(0);
+    // 0039). `entries` is non-empty here — the guard above already returned
+    // early otherwise — so `source_seq_of`'s empty case is unreachable from
+    // this call site, not the "no Entries" case itself.
+    let source_seq = source_seq_of(&entries);
     match insert_digest(pool, period, start, &body, &entry_ids, source_seq).await {
         Ok(inserted) => {
             // Succeeded (or lost a race to another writer of the exact
@@ -1019,7 +1038,7 @@ async fn run_regenerate(
         let messages = build_messages(period, date, &entries, tz);
         let reply = client.chat(&messages).await?;
         let entry_ids: Vec<Uuid> = entries.iter().map(|entry| entry.id).collect();
-        let source_seq = entries.iter().map(|entry| entry.seq).max().unwrap_or(0);
+        let source_seq = source_seq_of(&entries);
         regenerate_insert(pool, period, date, &reply.content, &entry_ids, source_seq).await?;
     }
 
