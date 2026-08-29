@@ -12,6 +12,12 @@ never guesses a timezone from its own clock — see the `MEOLOGUE_TZ` section be
 extends rather than contradicts that). Nothing in any of the three is superseded; this ADR only
 records what got built on top of them.
 
+Extended by [0039](0039-digests-gain-revisions-and-can-be-asked-for.md) (revisions and the
+regenerate route) and, on top of that,
+[0040](0040-a-digest-body-is-validated-once-and-chunked-when-it-must-be.md) (a single validated
+step both writers go through, and the chunking that step does when a Period is too large for one
+chat call). Neither touches this ADR's worker shape, its resume rule, or its budgets.
+
 ## Context
 
 CONTEXT.md's Digest entry describes prose the Server writes about a stretch of time without being
