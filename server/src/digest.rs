@@ -441,6 +441,34 @@ fn chunk_entries(entries: &[DigestEntry], tz: Tz, budget_tokens: usize) -> Vec<&
 /// every Entry the Period holds — exactly as it always has, and reports
 /// `stale = false` unless and until a real edit moves an Entry's `seq`
 /// past it.
+/// What `generate_digest_body` produces: a Digest body worth storing, and the
+/// two facts a caller has to record alongside it that only body-generation
+/// itself can answer.
+///
+/// A named type rather than the `(String, Vec<Uuid>, i64)` tuple this used to
+/// be, because all three travel together to both writers and are destructured
+/// identically at each — and because two of the three are easy to confuse for
+/// something they are not. `grounding_entry_ids` is not "the Period's Entries"
+/// (issue #137: a skipped chunk's Entries are absent from it), and `source_seq`
+/// is not always `source_seq_of(entries)` (it is a literal `0` when any chunk
+/// was skipped, which is what makes a partial Digest report stale on its very
+/// next read). A bare `i64` in third position invites a caller to reach for
+/// the watermark it already has; a field named for what it means does not.
+struct GeneratedDigest {
+    /// The prose to store — one chunk's reply, or several joined by a blank
+    /// line. Never empty: `generate_digest_body` returns `Err` rather than
+    /// construct this with nothing in it.
+    body: String,
+    /// The Entries this `body` was actually written from, which is what
+    /// `grounding_entry_ids` has always meant. Narrower than the Period's own
+    /// Entries exactly when a chunk was skipped.
+    grounding_entry_ids: Vec<Uuid>,
+    /// The staleness watermark to record (ADR 0039). `0` for a partial
+    /// Digest, so every Entry in the Period trips `select_is_stale`'s
+    /// `seq > source_seq` and the reader is told to regenerate.
+    source_seq: i64,
+}
+
 async fn generate_digest_body(
     client: &(dyn LlmClient + Send + Sync),
     period: Period,
@@ -448,7 +476,7 @@ async fn generate_digest_body(
     entries: &[DigestEntry],
     tz: Tz,
     context_window: u32,
-) -> anyhow::Result<(String, Vec<Uuid>, i64)> {
+) -> anyhow::Result<GeneratedDigest> {
     let budget_tokens = entry_budget_tokens(context_window);
     let chunks = chunk_entries(entries, tz, budget_tokens);
 
@@ -523,7 +551,11 @@ async fn generate_digest_body(
     } else {
         source_seq_of(entries)
     };
-    Ok((bodies.join("\n\n"), entry_ids, source_seq))
+    Ok(GeneratedDigest {
+        body: bodies.join("\n\n"),
+        grounding_entry_ids: entry_ids,
+        source_seq,
+    })
 }
 
 /// Digest's server-side dependencies, held in `AppState` only when chat is
@@ -773,7 +805,7 @@ async fn write_digest_for(
     // full reasoning. Total failure is treated exactly as a failed chat
     // call already was before issue #135: attempt consumed, nothing
     // written, retried on a later tick within `MAX_ATTEMPTS`.
-    let (body, entry_ids, source_seq) =
+    let generated =
         match generate_digest_body(client, period, start, &entries, tz, context_window).await {
             Ok(result) => result,
             Err(err) => {
@@ -784,7 +816,16 @@ async fn write_digest_for(
             }
         };
 
-    match insert_digest(pool, period, start, &body, &entry_ids, source_seq).await {
+    match insert_digest(
+        pool,
+        period,
+        start,
+        &generated.body,
+        &generated.grounding_entry_ids,
+        generated.source_seq,
+    )
+    .await
+    {
         Ok(inserted) => {
             // Succeeded (or lost a race to another writer of the exact
             // same Period — the `on conflict do nothing` in `insert_digest`
@@ -1578,9 +1619,17 @@ async fn run_regenerate(
         // `regenerate_insert` below is never reached: no revision is
         // minted, so an existing good revision is never shadowed by a
         // blank one (the exact failure this ticket was filed against).
-        let (body, entry_ids, source_seq) =
+        let generated =
             generate_digest_body(client, period, date, &entries, tz, context_window).await?;
-        regenerate_insert(pool, period, date, &body, &entry_ids, source_seq).await?;
+        regenerate_insert(
+            pool,
+            period,
+            date,
+            &generated.body,
+            &generated.grounding_entry_ids,
+            generated.source_seq,
+        )
+        .await?;
     }
 
     let record = select_digest_at(pool, period, date).await?;
