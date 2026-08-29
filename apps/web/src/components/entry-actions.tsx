@@ -14,7 +14,9 @@
  *   own comment for why per-row cost has to stay plain DOM.
  * - `EntryActionsSheet`: the ONE bottom sheet `history.tsx` renders
  *   regardless of how many rows exist, driven by "which Entry is open"
- *   state that lives in `history.tsx`, not here and not per-row.
+ *   state that lives in `history.tsx`, not here and not per-row. Since #127
+ *   a leftward swipe is what opens it, and it carries Copy alongside Edit
+ *   and Delete.
  *
  * Neither of them deletes. Both report the choice through `onDelete` and
  * let `history.tsx` decide what it means — which is where the confirm
@@ -22,14 +24,14 @@
  * serves every row instead of one per row.
  *
  * `hoverCapable()` is what lets both `entry-row.tsx` (deciding whether a
- * tap should open the sheet) and this file split on "can this device
- * hover a pointer", rather than on which build (web/android/macos) is
- * running — the ticket's own instruction, since a build target says
+ * right-click should open the sheet) and this file split on "can this
+ * device hover a pointer", rather than on which build (web/android/macos)
+ * is running — the ticket's own instruction, since a build target says
  * nothing about whether the particular device running it has a mouse (a
  * touchscreen Windows laptop and a phone can both run the "web" build).
  */
 import type { Entry } from "@meologue/core";
-import { PencilIcon, Trash2Icon } from "lucide-react";
+import { CopyIcon, PencilIcon, Trash2Icon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
@@ -147,16 +149,30 @@ export interface EntryActionsSheetProps {
   entry: Entry | null;
   onOpenChange: (open: boolean) => void;
   onEdit: (entry: Entry) => void;
+  /**
+   * Reports that Copy was chosen. Like `onDelete`, it does not act: writing
+   * to the clipboard can fail, and `history.tsx` is where the difference
+   * between "copied" and "the WebView refused" is turned into something the
+   * reader can see.
+   */
+  onCopy: (entry: Entry) => void;
   onDelete: (entry: Entry) => void;
 }
 
 /**
  * The touch-device equivalent of `EntryHoverActions`: one instance,
  * rendered once by `history.tsx`, reused for whichever row was last
- * tapped. `SheetTitle` is `sr-only` rather than omitted — Radix's Dialog
+ * swiped. `SheetTitle` is `sr-only` rather than omitted — Radix's Dialog
  * warns (and screen readers need) an accessible name, but the visual
- * design here is Edit/Delete as the only two rows, with no heading of
+ * design here is the three actions as the only rows, with no heading of
  * its own.
+ *
+ * Copy is here and deliberately NOT on `EntryHoverActions` (#127). It was
+ * withheld from touch only because the retired prototype's revealed strip
+ * had no room for a third button; a sheet has room. A mouse never needed
+ * one — selecting text and pressing the platform's own copy chord is what
+ * a pointer device already does — so adding it there would be a button for
+ * something the reader can already do, on the one input where they can.
  *
  * Choosing Delete here reports the choice through `onDelete` and closes
  * the sheet; it does not delete. `history.tsx` is what turns that choice
@@ -169,6 +185,7 @@ export function EntryActionsSheet({
   entry,
   onOpenChange,
   onEdit,
+  onCopy,
   onDelete,
 }: EntryActionsSheetProps) {
   return (
@@ -189,6 +206,21 @@ export function EntryActionsSheet({
         >
           <PencilIcon />
           Edit
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="lg"
+          className="justify-start gap-2"
+          onClick={() => {
+            if (entry) {
+              onCopy(entry);
+            }
+            onOpenChange(false);
+          }}
+        >
+          <CopyIcon />
+          Copy
         </Button>
         <Button
           type="button"

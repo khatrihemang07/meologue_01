@@ -1,7 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, ChevronLeft, ChevronRight } from "lucide-react";
 import { Link, useLocation, useNavigate, useParams } from "react-router";
-import { Nav } from "@/components/nav";
 import { Shell } from "@/components/shell";
 import { formatDigestRange } from "@/lib/digest-format";
 import { digestAtTransport } from "@/lib/digest-transport";
@@ -162,7 +161,6 @@ export function DigestReaderPage() {
           <ArrowLeft aria-hidden="true" className="size-4" />
         </button>
       }
-      nav={<Nav />}
     >
       {!syncEnabled && (
         <p className="text-center text-sm text-muted-foreground">

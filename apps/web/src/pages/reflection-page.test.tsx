@@ -183,24 +183,14 @@ describe("ReflectionPage", () => {
 
   // Issue #75: History is gone and Settings is now a fourth Nav
   // destination rather than a separate app-bar action.
-  it("renders persistent nav links to Composer, Reflect, Digest and Settings", () => {
+  // ADR 0036 retires the persistent nav: a destination is a pane pushed over
+  // the root screen, so the way back out is a Back control rather than a nav
+  // link that was always on screen. `nav.test.tsx`'s "exactly four
+  // destinations" assertion moves with it, to `chat-list.test.tsx`.
+  it("offers a Back control out to the root screen", () => {
     renderReflectionPage();
 
-    expect(screen.getByRole("link", { name: "Composer" })).toHaveAttribute("href", "/");
-    expect(screen.getByRole("link", { name: "Reflect" })).toHaveAttribute("href", "/reflect");
-    expect(screen.getByRole("link", { name: "Digest" })).toHaveAttribute("href", "/digest");
-    expect(screen.getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings");
-  });
-
-  // Ticket 54's acceptance criteria, extended to the third destination:
-  // the current destination is visibly indicated.
-  it("marks Reflect as the current destination in the persistent nav", () => {
-    renderReflectionPage();
-
-    expect(screen.getByRole("link", { name: "Reflect" })).toHaveAttribute("aria-current", "page");
-    expect(screen.getByRole("link", { name: "Composer" })).not.toHaveAttribute("aria-current");
-    expect(screen.getByRole("link", { name: "Digest" })).not.toHaveAttribute("aria-current");
-    expect(screen.getByRole("link", { name: "Settings" })).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("link", { name: "Back to chats" })).toHaveAttribute("href", "/");
   });
 
   // Ticket 62: Sessions is an app-bar action, not a fifth NavLink — it's

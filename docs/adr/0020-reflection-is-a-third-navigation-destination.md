@@ -39,6 +39,17 @@ inside `EntryStoreLayout`, the Sync-off gate and its reasoning, keeping Settings
 outside that layout — stands unchanged and is still load-bearing; only which four things the
 persistent Nav shows changed, not how Reflection itself sits among them.
 
+Partially superseded by
+[0036](0036-the-shell-is-a-chat-list-and-a-thread-is-a-chat-thread.md) — this ADR's "Reflection joins
+the persistent Nav" clause
+cannot hold, because a destination cannot join a navigation element that no longer exists. The
+persistent `<nav>` is deleted there and the four destinations become four rows on a root screen
+instead; Reflect keeps exactly the standing this ADR gave it, by a different mechanism. Everything
+else here survives unchanged and is still load-bearing: the `/reflect` route inside
+`EntryStoreLayout`, the Sync-off gate, and Sessions staying one level down rather than becoming a
+peer — which is why `reflect-actions.tsx` carries New Session and Sessions as app-bar controls on
+Reflection's own pages rather than as rows in the list.
+
 ## Context
 
 CONTEXT.md just gained five terms — Reflection, Question, Answer, Conversation, Grounding —

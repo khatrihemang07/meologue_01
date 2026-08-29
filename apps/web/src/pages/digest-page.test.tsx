@@ -164,12 +164,27 @@ describe("DigestPage", () => {
     // because period_start and period_end fall in the same calendar month.
     expect(screen.getByText("August 2026")).toBeInTheDocument();
 
-    // The teaser is clamped via a Tailwind utility class, not truncated
-    // text — both lines of the fixture body are present in the DOM.
+    // #128: nothing is clamped while the three fit one screen, which is
+    // what jsdom's un-measurable viewport always reports (see
+    // `useFittedDigests`' own fallback). The prose itself is never
+    // truncated in the DOM either way — it is the wrapper around it that
+    // carries a `max-height`, and here it carries none.
     const teasers = screen.getAllByText(/You wrote about your knee again today\./);
     expect(teasers.length).toBeGreaterThan(0);
     for (const teaser of teasers) {
-      expect(teaser.className).toContain("line-clamp-2");
+      expect(teaser.className).not.toContain("line-clamp");
+      expect(teaser.parentElement?.style.maxHeight).toBe("");
+    }
+
+    // The "read the rest" affordance is in the DOM at every size — it is
+    // what keeps the measurement above it stable — but it is
+    // `visibility: hidden`, and out of the accessibility tree with it, until
+    // there is genuinely more to read.
+    const affordances = screen.getAllByText("Read the rest");
+    expect(affordances.length).toBeGreaterThan(0);
+    for (const affordance of affordances) {
+      expect(affordance.className).toContain("invisible");
+      expect(affordance).toHaveAttribute("aria-hidden", "true");
     }
   });
 

@@ -25,6 +25,19 @@ resulting four (Composer, Reflect, Digest, Settings). Everything else this ADR d
 bottom-docked Composer, the reading-order reversal, the shared day-separator helper, one `<nav>`
 repositioned by CSS rather than rendered twice — stands unchanged and is still load-bearing.
 
+Superseded in its navigation technique by
+[0036](0036-the-shell-is-a-chat-list-and-a-thread-is-a-chat-thread.md) — the persistent `<nav>`
+this ADR
+argued for is deleted rather than repositioned, so the one-`<nav>`-repositioned-by-CSS technique
+above (which 0020 and 0030 both left load-bearing) no longer describes anything in the tree. The
+problem it solved does not arise on a shell whose navigation is a screen the reader leaves: there
+is no navigation region present on every page to be one landmark or two. What that technique gave
+for free — a real link per destination, a current-page marker, one navigation landmark — 0036 pays
+for explicitly, and its own Status section says how. This ADR's bottom-docked Composer, its
+reading-order reversal and its shared day-separator helper survive 0036 unchanged and are still
+load-bearing; so does its argument that an always-reachable destination needs no Back, which 0036
+applies at the wide breakpoint for exactly the same reason.
+
 ## Context
 
 The app grew its navigation one ticket at a time and never had a layout pass. Every page was a

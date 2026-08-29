@@ -4,6 +4,7 @@ import { MemoryRouter, Outlet, Route, Routes, useSearchParams } from "react-rout
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useSettingsStore } from "@/lib/settings";
 import type { EntryStoreOutletContext } from "@/pages/entry-store-layout";
+import { swipeLeft } from "@/test/swipe";
 import { ComposerPage } from "./composer-page";
 
 // Stand-in for surfacing the current "?q=..." from MemoryRouter's own
@@ -57,28 +58,14 @@ describe("ComposerPage", () => {
     vi.restoreAllMocks();
   });
 
-  // Issue #75: History is gone and Settings is now the fourth Nav
-  // destination rather than a separate app-bar action — see nav.test.tsx
-  // for the dedicated "exactly four" assertion.
-  it("renders persistent nav links to Composer, Reflect, Digest and Settings", () => {
+  // ADR 0036 retires the persistent nav: a destination is a pane pushed over
+  // the root screen, so the way back out is a Back control rather than a nav
+  // link that was always on screen. `nav.test.tsx`'s "exactly four
+  // destinations" assertion moves with it, to `chat-list.test.tsx`.
+  it("offers a Back control out to the root screen", () => {
     renderComposerPage(readyContext);
 
-    expect(screen.getByRole("link", { name: "Composer" })).toHaveAttribute("href", "/");
-    expect(screen.getByRole("link", { name: "Reflect" })).toHaveAttribute("href", "/reflect");
-    expect(screen.getByRole("link", { name: "Digest" })).toHaveAttribute("href", "/digest");
-    expect(screen.getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings");
-  });
-
-  // Ticket 54's acceptance criteria: the current destination is visibly
-  // indicated. Composer is "/", the page under test, so its nav link
-  // carries aria-current="page" and the other three don't.
-  it("marks Composer as the current destination in the persistent nav", () => {
-    renderComposerPage(readyContext);
-
-    expect(screen.getByRole("link", { name: "Composer" })).toHaveAttribute("aria-current", "page");
-    expect(screen.getByRole("link", { name: "Reflect" })).not.toHaveAttribute("aria-current");
-    expect(screen.getByRole("link", { name: "Digest" })).not.toHaveAttribute("aria-current");
-    expect(screen.getByRole("link", { name: "Settings" })).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("link", { name: "Back to chats" })).toHaveAttribute("href", "/");
   });
 
   it("disables the Composer while the store isn't ready", () => {
@@ -227,7 +214,7 @@ describe("ComposerPage", () => {
       expect(screen.getByRole("searchbox", { name: "Search History" })).toBeInTheDocument();
       // The title/Sync-dot row is what the field replaces "in place" — it's
       // gone while searching, not merely covered.
-      expect(screen.queryByText("meologue")).not.toBeInTheDocument();
+      expect(screen.queryByText("Composer")).not.toBeInTheDocument();
     });
 
     it("narrows the Composer's thread to what the store's search returns", async () => {
@@ -333,7 +320,7 @@ describe("ComposerPage", () => {
       // nodes — waiting for "older" with exact:false is what tolerates
       // that.
       await screen.findByText("older", { exact: false });
-      const bodies = Array.from(container.querySelectorAll("p.whitespace-pre-wrap")).map(
+      const bodies = Array.from(container.querySelectorAll('[data-slot="bubble-body"]')).map(
         (el) => el.textContent,
       );
       expect(bodies).toEqual(["search-older", "search-newer"]);
@@ -439,6 +426,7 @@ describe("ComposerPage", () => {
   // (entry-actions.tsx's `hoverCapable()` reads that as "no hover"), so a
   // plain tap on the row here opens the sheet exactly as it would on a
   // touch device — no explicit stub needed for that default.
+  // #127: the sheet is reached by swiping a bubble left, not by tapping it.
   describe("Edit and Delete from a row's shared actions sheet", () => {
     const oneEntry: EntryStoreOutletContext["entries"] = [
       {
@@ -455,7 +443,7 @@ describe("ComposerPage", () => {
     it("choosing Edit puts the Composer into editing mode, seeded with the Entry's body", async () => {
       renderComposerPage({ ...readyContext, entries: oneEntry });
 
-      fireEvent.click(screen.getByText("hello"));
+      swipeLeft(screen.getByText("hello"));
       fireEvent.click(await screen.findByText("Edit"));
 
       expect(screen.getByText("Editing Entry")).toBeInTheDocument();
@@ -470,7 +458,7 @@ describe("ComposerPage", () => {
       const removeEntry = vi.fn();
       renderComposerPage({ ...readyContext, entries: oneEntry, removeEntry });
 
-      fireEvent.click(screen.getByText("hello"));
+      swipeLeft(screen.getByText("hello"));
       fireEvent.click(await screen.findByText("Delete"));
 
       expect(removeEntry).not.toHaveBeenCalled();

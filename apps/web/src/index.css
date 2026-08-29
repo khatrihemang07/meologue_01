@@ -82,6 +82,36 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
+
+  /*
+   * The five Accents a reader can pick in Settings (#128). The VALUES live
+   * here and nowhere else — `lib/settings.ts` owns their ids and labels, and
+   * `lib/theme.ts` only ever writes `data-accent` onto <html>. That split is
+   * what lets `index.html`'s pre-paint script apply a stored Accent without
+   * carrying a second copy of five colours it would then have to be kept in
+   * step with, the same way it already applies the theme.
+   *
+   * oklch rather than hex, for the same reason `color-mix(in oklch, ...)`
+   * is used below: these five were chosen for even perceived lightness, so
+   * no one of them reads as heavier than the others behind the same words.
+   */
+  --accent-green: oklch(64% 0.16 145);
+  --accent-teal: oklch(64% 0.11 195);
+  --accent-blue: oklch(62% 0.18 255);
+  --accent-violet: oklch(60% 0.19 305);
+  --accent-graphite: oklch(55% 0.015 260);
+
+  /*
+   * A list divider, distinct from `--border`. The chat list's inset row
+   * dividers were effectively invisible in the dark theme: `--border` there
+   * is white at 10%, which is right for a card edge sitting next to a fill
+   * that already reads as an edge, and far too faint for a hairline that is
+   * the ONLY thing separating two rows of the same colour. The light theme
+   * has the same shape of problem in a milder dose. A second token rather
+   * than raising `--border` itself, which every input, card and pill in the
+   * app also reads.
+   */
+  --separator: oklch(0.9 0 0);
 }
 
 .dark {
@@ -117,9 +147,94 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
+  --separator: oklch(1 0 0 / 20%);
+}
+
+/*
+ * What an Accent actually paints, and how much of it. Written once per
+ * theme rather than per Accent: the five hues differ, the recipe does not.
+ *
+ * Mixed against `--background` rather than laid over it at an alpha, so the
+ * fill is opaque and a bubble never picks up whatever it happens to be
+ * scrolling over. The dark theme takes a larger share because the same
+ * proportion of colour reads as far weaker against a dark ground.
+ *
+ * `in oklab`, NOT `in oklch`, and this is not a style preference — it was a
+ * bug on screen. `--background` is `oklch(1 0 0)`: achromatic, with a hue of
+ * 0 that CSS Color 4 calls "powerless" and that Chromium interpolates
+ * anyway. Mixing the blue Accent (hue 255) toward it takes the short way
+ * round the hue circle — 255 up through 360 — so every bubble rendered
+ * PINK. oklab has no hue channel to interpolate, so a tint toward white
+ * stays the colour it started as. Every test passed while this was wrong;
+ * only a screenshot caught it.
+ *
+ * `--entry-accent` defaults to the same Accent `lib/settings.ts` defaults
+ * to, so a Device that has never opened Settings — or one whose
+ * localStorage refused the read — paints the intended colour rather than an
+ * invalid `color-mix` that would silently fall back to no fill at all.
+ */
+:root {
+  --entry-accent: var(--accent-blue);
+  --entry-accent-fill: color-mix(in oklab, var(--entry-accent) 12%, var(--background));
+}
+.dark {
+  --entry-accent-fill: color-mix(in oklab, var(--entry-accent) 24%, var(--background));
+}
+
+:root[data-accent="green"] {
+  --entry-accent: var(--accent-green);
+}
+:root[data-accent="teal"] {
+  --entry-accent: var(--accent-teal);
+}
+:root[data-accent="blue"] {
+  --entry-accent: var(--accent-blue);
+}
+:root[data-accent="violet"] {
+  --entry-accent: var(--accent-violet);
+}
+:root[data-accent="graphite"] {
+  --entry-accent: var(--accent-graphite);
+}
+
+/*
+ * Text size (#128) multiplies the words the reader wrote and nothing else.
+ * `entry-bubble.tsx`'s body is the one thing that reads this; the clock
+ * time, the sync tick and the day pill carry their own fixed sizes and
+ * never reference it, which is what keeps them still while the Entry grows.
+ * Scaling those too would just be making the whole screen bigger, which the
+ * OS already does better.
+ */
+:root {
+  --entry-text-scale: 1;
+}
+:root[data-text-size="small"] {
+  --entry-text-scale: 0.875;
+}
+:root[data-text-size="default"] {
+  --entry-text-scale: 1;
+}
+:root[data-text-size="large"] {
+  --entry-text-scale: 1.25;
 }
 
 @layer base {
+  /*
+   * Defaults for the two custom properties Shell computes from
+   * `useKeyboardInset` and sets inline on its own outermost element. Shell
+   * always sets both, so these are never what actually applies in the running
+   * app — they exist so the failure mode is benign if it ever doesn't.
+   *
+   * Without a default, `height: calc(100svh - var(--keyboard-inset))` is
+   * invalid at computed-value time the moment the property is missing, and an
+   * invalid `height` falls back to `auto` — which silently collapses the whole
+   * app shell rather than erroring anywhere you would notice. A component
+   * rendered outside Shell in a test is the likely way to meet that.
+   */
+  :root {
+    --keyboard-inset: 0px;
+    --safe-bottom: env(safe-area-inset-bottom);
+  }
   * {
     @apply border-border outline-ring/50;
   }

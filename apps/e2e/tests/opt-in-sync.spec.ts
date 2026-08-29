@@ -1,6 +1,6 @@
 import { expect, type Request, test } from "@playwright/test";
 import { SERVER_A_URL } from "../servers";
-import { SYNC_TICK_MS, sendEntry, uniqueEntryBody } from "./helpers";
+import { openDestination, SYNC_TICK_MS, sendEntry, uniqueEntryBody } from "./helpers";
 
 // ADR 0011: an unset Server URL means sync is off, not "attempt and fail" —
 // verifiable as no network traffic. Every other spec in this suite runs
@@ -25,7 +25,7 @@ test("no /v1/sync request is made while no Server URL is configured", async ({ p
     countSyncRequests((count) => (syncRequests = count)),
   );
 
-  await page.goto("/");
+  await page.goto("/composer");
   await expect(page.getByPlaceholder("What's on your mind?")).toBeVisible();
 
   // A local Send still lands immediately (local-first) even with sync off.
@@ -47,8 +47,8 @@ test("saving a Server URL starts sync on the next tick, with no reload", async (
   // it, so a Device that has never visited "/" has no loop running yet to
   // pick up the URL this test is about to save. Visiting "/" first is what
   // an actual first-run Device does.
-  await page.goto("/");
-  await page.getByRole("link", { name: "Settings" }).click();
+  await page.goto("/composer");
+  await openDestination(page, "Settings");
   await expect(page).toHaveURL("/settings");
 
   let syncRequests = 0;
@@ -65,8 +65,8 @@ test("saving a Server URL starts sync on the next tick, with no reload", async (
 });
 
 test("clearing a Server URL stops sync", async ({ page }) => {
-  await page.goto("/");
-  await page.getByRole("link", { name: "Settings" }).click();
+  await page.goto("/composer");
+  await openDestination(page, "Settings");
   await expect(page).toHaveURL("/settings");
   await page.getByLabel(/server url/i).fill(SERVER_A_URL);
   await page.getByRole("button", { name: "Save" }).click();

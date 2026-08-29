@@ -146,6 +146,73 @@ export async function waitForTombstone(
 }
 
 /**
+ * Writes one Digest row straight into the database the suite is running
+ * against.
+ *
+ * SQL through `docker exec` rather than driving the Server's own writer:
+ * `server/src/digest.rs`'s resume rule means a cold e2e database would need
+ * real Entries, a real embedding pass and a real LLM call before any Digest
+ * existed, and none of that is what a Digest test on the client is about.
+ * `digest.spec.ts`'s own header comment records the full reasoning.
+ *
+ * `on conflict ... do nothing` mirrors `server/src/digest.rs::insert_digest`
+ * exactly, for the same reason it exists there: re-running a spec locally
+ * against a database that already holds these rows must stay a no-op rather
+ * than a duplicate-key failure. `grounding_entry_ids` is an empty array —
+ * no spec that seeds this way asserts on a Digest's Grounding, so there is
+ * no Entry for these rows to reference.
+ */
+export function seedDigest(
+  period: "day" | "week" | "month",
+  periodStart: string,
+  body: string,
+  database: string,
+): void {
+  runSql(
+    "insert into digests (id, period, period_start, body, grounding_entry_ids) " +
+      `values (${sqlLiteral(randomUUID())}, ${sqlLiteral(period)}, ${sqlLiteral(periodStart)}, ${sqlLiteral(body)}, '{}') ` +
+      "on conflict (period, period_start) do nothing;",
+    database,
+  );
+}
+
+/**
+ * Removes a seeded Digest again.
+ *
+ * Worth having because `/v1/digest/:period` answers with the NEWEST Digest
+ * of that Period, so two specs that both seed one are not independent: the
+ * later date wins for whichever of them runs second. A spec that seeds a
+ * Digest newer than another spec's therefore has to take it away again —
+ * `scripts/e2e.sh` recreates the databases per run, not per file.
+ */
+export function deleteDigest(
+  period: "day" | "week" | "month",
+  periodStart: string,
+  database: string,
+): void {
+  runSql(
+    `delete from digests where period = ${sqlLiteral(period)} and period_start = ${sqlLiteral(periodStart)};`,
+    database,
+  );
+}
+
+function runSql(sql: string, database: string): void {
+  execFileSync("docker", [
+    "exec",
+    POSTGRES_CONTAINER,
+    "psql",
+    "-U",
+    "meologue",
+    "-d",
+    database,
+    "-v",
+    "ON_ERROR_STOP=1",
+    "-c",
+    sql,
+  ]);
+}
+
+/**
  * A Playwright `storageState` that seeds `meologue.server-url` for the app's
  * own origin before any page script runs — sync is opt-in (ADR 0011), so
  * without this every context would load with sync off and none of the
@@ -192,14 +259,39 @@ export async function openTwoDevices(
   const deviceB = await browser.newContext({ storageState: serverUrlStorageState(serverUrlB) });
   const pageA = await deviceA.newPage();
   const pageB = await deviceB.newPage();
-  await pageA.goto("/");
-  await pageB.goto("/");
+  // `/composer`, not `/`: ADR 0036's root screen sits outside
+  // EntryStoreLayout so it renders whether or not the store opens, which
+  // means landing there would leave both Devices with no store to sync.
+  await pageA.goto("/composer");
+  await pageB.goto("/composer");
   return { deviceA, deviceB, pageA, pageB };
 }
 
 export async function closeDevices(devices: TwoDevices): Promise<void> {
   await devices.deviceA.close();
   await devices.deviceB.close();
+}
+
+/**
+ * Opens one of the four destinations the way a reader does: from the root
+ * screen, by tapping its row.
+ *
+ * ADR 0036 replaced the persistent nav with a chat list, so there is no
+ * longer a nav link on every page to click — a destination is reached from
+ * `/` and left again with Back. Specs that only need to *be* somewhere
+ * should `page.goto` it directly; this exists for the ones whose point is
+ * that the navigation itself works.
+ *
+ * The row's accessible name is its label plus its summary line, so the
+ * substring match Playwright does by default is what makes `"Composer"`
+ * still find it.
+ */
+export async function openDestination(
+  page: Page,
+  name: "Composer" | "Reflect" | "Digest" | "Settings",
+): Promise<void> {
+  await page.goto("/");
+  await page.getByRole("link", { name }).click();
 }
 
 export async function sendEntry(page: Page, body: string): Promise<void> {
@@ -233,8 +325,82 @@ export async function setTabHidden(page: Page, hidden: boolean): Promise<void> {
  * suffix guarantees that), since the row is found via its rendered text.
  */
 export function entryRow(page: Page, body: string): Locator {
-  return page.locator('[data-slot="entry-row"]').filter({ hasText: body });
+  // `bubble`, not `entry-row`: ADR 0036 made the thread a chat thread, and
+  // `entry-bubble.tsx` renders its Entries. `entry-row.tsx` still exists and
+  // still carries `data-slot="entry-row"`, but only for the two surfaces
+  // that stayed lists — Reflection's Grounding disclosure and Search
+  // results — so matching it here would find an Entry everywhere except the
+  // History this helper is named for.
+  return page.locator('[data-slot="bubble"]').filter({ hasText: body });
 }
+
+/**
+ * The element a finger actually picks up (#127) — `entry-bubble.tsx` puts
+ * `data-swipe-target` on the bubble's own fill, one level inside the
+ * `[data-slot="bubble"]` row `entryRow` matches. The distinction matters:
+ * the recogniser resolves its target with `closest()`, so a gesture
+ * dispatched on the row around the bubble finds nothing.
+ */
+export function entrySwipeTarget(page: Page, body: string): Locator {
+  return page.locator("[data-swipe-target]").filter({ hasText: body });
+}
+
+/**
+ * Dispatches one synthetic touch pointer event on an Entry's bubble.
+ *
+ * `bubbles: true` is not optional: `use-swipe-actions.ts` attaches ONE
+ * recogniser to the thread's row container rather than one per row, so an
+ * event that does not travel up the tree is never seen at all.
+ *
+ * Playwright's own `page.touchscreen` only taps, and mouse emulation
+ * produces `pointerType: "mouse"`, which the recogniser deliberately
+ * ignores so that dragging to select still selects. Dispatching the events
+ * is what expresses a finger here. It is not a substitute for the device —
+ * #127 was verified against real touch on Android — but it is what keeps
+ * the gesture from silently rotting in a real browser, at real layout,
+ * where jsdom cannot see a bubble's width at all.
+ */
+async function touchAt(target: Locator, type: string, x: number, y: number): Promise<void> {
+  await target.dispatchEvent(type, {
+    pointerId: 1,
+    pointerType: "touch",
+    clientX: x,
+    clientY: y,
+    bubbles: true,
+    cancelable: true,
+  });
+}
+
+/** Where a swipe on this Entry starts, and the y it stays on throughout. */
+export async function swipeOrigin(target: Locator): Promise<{ x: number; y: number }> {
+  const box = await target.boundingBox();
+  if (!box) throw new Error("the Entry's bubble has no box to swipe");
+  return { x: box.x + box.width - 8, y: box.y + box.height / 2 };
+}
+
+/** Just past the recogniser's 12px horizontal threshold. */
+export const SWIPE_CONFIRM_PX = 13;
+/** Comfortably past half the 48px peek limit, so the release opens. */
+export const SWIPE_OPEN_PX = 40;
+
+export async function swipeEntryLeft(page: Page, body: string): Promise<void> {
+  const target = entrySwipeTarget(page, body);
+  const { x, y } = await swipeOrigin(target);
+  await touchAt(target, "pointerdown", x, y);
+  await touchAt(target, "pointermove", x - SWIPE_CONFIRM_PX, y);
+  await touchAt(target, "pointermove", x - SWIPE_CONFIRM_PX - SWIPE_OPEN_PX, y);
+  await touchAt(target, "pointerup", x - SWIPE_CONFIRM_PX - SWIPE_OPEN_PX, y);
+}
+
+/** A finger landing and lifting on an Entry without moving. */
+export async function tapEntry(page: Page, body: string): Promise<void> {
+  const target = entrySwipeTarget(page, body);
+  const { x, y } = await swipeOrigin(target);
+  await touchAt(target, "pointerdown", x, y);
+  await touchAt(target, "pointerup", x, y);
+}
+
+export { touchAt };
 
 /**
  * Hovers a History row, revealing its Edit/Delete buttons. They sit behind

@@ -1,8 +1,18 @@
 import type { Entry } from "@meologue/core";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { toast } from "sonner";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { copyText } from "@/lib/clipboard";
 import * as entryDayModule from "@/lib/entry-day";
+import { swipeLeft, tap } from "@/test/swipe";
 import { History } from "./history";
+
+// Copy's two outcomes are the whole point of it reporting rather than
+// acting (#127), so both the clipboard and the toaster are stand-ins here:
+// jsdom has no clipboard worth exercising, and `<Toaster />` is mounted by
+// App, not by History.
+vi.mock("@/lib/clipboard", () => ({ copyText: vi.fn() }));
+vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 function entry(overrides: Partial<Entry>): Entry {
   return {
@@ -153,7 +163,9 @@ describe("History", () => {
     expect(screen.getByText("Yesterday")).toBeInTheDocument();
     expect(screen.getByText(/August 16/)).toBeInTheDocument();
 
-    const bodies = Array.from(container.querySelectorAll("p")).map((p) => p.textContent);
+    const bodies = Array.from(container.querySelectorAll('[data-slot="bubble-body"]')).map(
+      (p) => p.textContent,
+    );
     expect(bodies).toEqual(["first", "second", "third", "fourth"]);
   });
 
@@ -217,7 +229,10 @@ describe("History", () => {
       expect(screen.getAllByLabelText("Delete")).toHaveLength(2);
     });
 
-    it("opens the shared sheet for the tapped row's Entry on a touch device", () => {
+    // #127: a leftward swipe is what reaches the sheet on touch now, not a
+    // tap. A tap does nothing, which is what leaves it free to place a
+    // cursor or dismiss a selection.
+    it("opens the shared sheet for the swiped row's Entry on a touch device", () => {
       stubHoverCapable(false);
       render(
         <History
@@ -228,10 +243,27 @@ describe("History", () => {
         />,
       );
 
-      fireEvent.click(screen.getByText("hello"));
+      swipeLeft(screen.getByText("hello"));
 
       expect(screen.getByText("Edit")).toBeInTheDocument();
+      expect(screen.getByText("Copy")).toBeInTheDocument();
       expect(screen.getByText("Delete")).toBeInTheDocument();
+    });
+
+    it("leaves the sheet shut for a tap", () => {
+      stubHoverCapable(false);
+      render(
+        <History
+          entries={[entry({ body: "hello" })]}
+          syncEnabled={false}
+          onEdit={vi.fn()}
+          onDelete={vi.fn()}
+        />,
+      );
+
+      tap(screen.getByText("hello"));
+
+      expect(screen.queryByText("Edit")).not.toBeInTheDocument();
     });
 
     it("calls onEdit with the whole Entry through the sheet", () => {
@@ -240,7 +272,7 @@ describe("History", () => {
       const target = entry({ body: "hello" });
       render(<History entries={[target]} syncEnabled={false} onEdit={onEdit} onDelete={vi.fn()} />);
 
-      fireEvent.click(screen.getByText("hello"));
+      swipeLeft(screen.getByText("hello"));
       fireEvent.click(screen.getByText("Edit"));
 
       expect(onEdit).toHaveBeenCalledWith(target);
@@ -260,7 +292,7 @@ describe("History", () => {
         <History entries={[target]} syncEnabled={false} onEdit={vi.fn()} onDelete={onDelete} />,
       );
 
-      fireEvent.click(screen.getByText("hello"));
+      swipeLeft(screen.getByText("hello"));
       fireEvent.click(screen.getByText("Delete"));
 
       expect(onDelete).not.toHaveBeenCalled();
@@ -274,7 +306,7 @@ describe("History", () => {
     // Entries are rendered, there is exactly one sheet in the DOM — never
     // one per row (that was the old ContextMenu's per-row cost, just
     // moved to a different primitive).
-    it("keeps exactly one sheet instance no matter how many rows are tapped", () => {
+    it("keeps exactly one sheet instance no matter how many rows are swiped", () => {
       stubHoverCapable(false);
       const e1 = entry({ id: "1", body: "first" });
       const e2 = entry({ id: "2", body: "second" });
@@ -285,13 +317,13 @@ describe("History", () => {
 
       expect(screen.queryAllByRole("dialog")).toHaveLength(0);
 
-      fireEvent.click(screen.getByText("first"));
+      swipeLeft(screen.getByText("first"));
       expect(screen.getAllByRole("dialog")).toHaveLength(1);
 
-      fireEvent.click(screen.getByText("second"));
+      swipeLeft(screen.getByText("second"));
       expect(screen.getAllByRole("dialog")).toHaveLength(1);
 
-      fireEvent.click(screen.getByText("third"));
+      swipeLeft(screen.getByText("third"));
       expect(screen.getAllByRole("dialog")).toHaveLength(1);
     });
   });
@@ -569,6 +601,46 @@ describe("History", () => {
   // against — jsdom's own case here, and this stands in for a real
   // browser's first paint too, since both reach the fallback the same way
   // (history.tsx's own comment on `hasSizedScrollElement`).
+  // #127: Copy lives here for the same reason Delete's confirmation does —
+  // this is the one component above every row. It has to distinguish its
+  // outcomes, because a WebView that refused the clipboard and one that
+  // wrote to it are indistinguishable to the reader until something says
+  // so, and they then paste stale text somewhere else and blame that.
+  describe("Copy from the actions sheet", () => {
+    async function copyFromSheet(outcome: boolean) {
+      // The module-level `vi.mock` factories above make these long-lived
+      // `vi.fn()`s; the file's own `restoreAllMocks` does not reset them.
+      vi.mocked(toast.success).mockClear();
+      vi.mocked(toast.error).mockClear();
+      stubHoverCapable(false);
+      vi.mocked(copyText).mockResolvedValue(outcome);
+      const target = entry({ body: "hello" });
+      render(
+        <History entries={[target]} syncEnabled={false} onEdit={vi.fn()} onDelete={vi.fn()} />,
+      );
+
+      swipeLeft(screen.getByText("hello"));
+      fireEvent.click(screen.getByText("Copy"));
+      await waitFor(() => expect(copyText).toHaveBeenCalled());
+      return target;
+    }
+
+    it("writes the swiped Entry's own body, and says so", async () => {
+      const target = await copyFromSheet(true);
+
+      expect(copyText).toHaveBeenCalledWith(target.body);
+      await waitFor(() => expect(toast.success).toHaveBeenCalled());
+      expect(toast.error).not.toHaveBeenCalled();
+    });
+
+    it("says something different when the clipboard refused", async () => {
+      await copyFromSheet(false);
+
+      await waitFor(() => expect(toast.error).toHaveBeenCalled());
+      expect(toast.success).not.toHaveBeenCalled();
+    });
+  });
+
   it("bounds the zero-viewport fallback to a fixed window instead of rendering the whole History", () => {
     const entries = Array.from({ length: 200 }, (_, i) =>
       entry({ id: String(i), body: `entry-${i}`, createdAt: "2026-08-18T15:00:00.000Z" }),

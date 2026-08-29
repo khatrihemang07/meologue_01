@@ -55,6 +55,17 @@ log) and, despite `entry-row.tsx` once citing it in a comment that suggested oth
 the widget that exposed them — that comment has been corrected in place, and this ADR's row-actions
 section is the decision 0028 never made.
 
+Superseded in its strongest form by
+[0036](0036-the-shell-is-a-chat-list-and-a-thread-is-a-chat-thread.md). This ADR is titled "the shell
+gets a root
+screen" and its Decision never built one — what it actually decided was which four destinations
+the persistent nav carried, with `/` still the Composer. 0036 is that root screen: `/` becomes a
+chat list of the same four destinations and the Composer moves to `/composer`. The membership
+decision here survives intact, and so does everything this ADR decided about `EntryStoreLayout`,
+the Sync-off gates, Settings as a sibling route outside the store, and the row actions
+`entry-row.tsx` exposes — though 0036 replaces the touch *gesture* that reaches them, a tap, with
+a leftward swipe, and adds Copy to the sheet.
+
 ## Context
 
 The shell had grown for several tickets straight without a pass back over what it had accumulated.

@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { sendEntry, uniqueEntryBody } from "./helpers";
+import { openDestination, sendEntry, uniqueEntryBody } from "./helpers";
 
 // Client-side routing (ticket 25) — real paths, not hash routing, which
 // only works if the server serving the production build falls back to the
@@ -7,41 +7,85 @@ import { sendEntry, uniqueEntryBody } from "./helpers";
 // genuinely uncertain about the change, so it gets its own spec that loads
 // /settings directly and hard-reloads on it, against the real Rust server.
 
-// Every page, Settings included, is reachable directly (ticket 54), and this
-// same persistent nav is what proves the way back to the Composer works
-// too. Settings lost its Back control when issue #75 made it a Nav
-// destination in its own right (ADR 0018's "an always-reachable destination
-// doesn't need Back" then applied to it the same way it always did to
-// Composer/Reflect/Digest) — the nav link below is now the only way back,
-// and this test is what proves it still works.
-test("/settings loads directly, survives a hard reload, and its persistent nav returns to a working composer", async ({
+// Playwright's default `Desktop Chrome` viewport is 1280px, which is above
+// ADR 0036's 900px breakpoint — so the chat list is pinned beside the open
+// destination there and Back is deliberately absent, because the list it
+// would return to is already on screen. The push-and-Back shape these three
+// tests are about is a narrow-window behaviour, so they say so rather than
+// inheriting a width that quietly tests the other layout.
+const NARROW = { width: 390, height: 844 };
+
+// Every destination is still reachable directly (ticket 54), and Back is now
+// what proves the way out. ADR 0036 gave Settings its Back control back:
+// ADR 0018 argued an always-reachable destination does not need one, and
+// issue #75 applied that to Settings when it became a Nav destination — but
+// retiring the persistent nav removes the premise, because a destination
+// pushed over the root screen is not always reachable any more.
+test("/settings loads directly, survives a hard reload, and Back reaches a working Composer", async ({
   page,
 }) => {
+  await page.setViewportSize(NARROW);
   await page.goto("/settings");
   await expect(page.getByRole("banner").getByText("Settings")).toBeVisible();
 
   await page.reload();
   await expect(page.getByRole("banner").getByText("Settings")).toBeVisible();
 
-  await page.getByRole("link", { name: "Composer" }).click();
+  await page.getByRole("link", { name: "Back to chats" }).click();
   await expect(page).toHaveURL("/");
+
+  await page.getByRole("link", { name: "Composer" }).click();
+  await expect(page).toHaveURL("/composer");
 
   const body = uniqueEntryBody("routing");
   await sendEntry(page, body);
   await expect(page.getByText(body)).toBeVisible();
 });
 
-// Issue #75: Settings moved from a gear-shaped app-bar action into the
-// persistent Nav's fourth destination — same navigation outcome as before,
-// reached a different way, and this is what proves the new way works.
-test("the Settings destination in the persistent nav navigates there from the composer", async ({
+// ADR 0036's headline shape: `/` is a list of exactly four rows you navigate
+// away from, and opening one is a full-bleed push. The count is asserted
+// here for the same reason the retired `nav.test.tsx` asserted it — every
+// ADR since 0018 has kept it inside Material 3's three-to-five bound, and
+// ADR 0036 declined to add a fifth for Reflect's Sessions.
+test("the root screen is a list of four destinations, each of which opens", async ({ page }) => {
+  await page.setViewportSize(NARROW);
+  await page.goto("/");
+
+  const rows = page.getByRole("navigation", { name: "Chats" }).getByRole("link");
+  await expect(rows).toHaveCount(4);
+
+  for (const [name, url] of [
+    ["Composer", "/composer"],
+    ["Reflect", "/reflect"],
+    ["Digest", "/digest"],
+    ["Settings", "/settings"],
+  ] as const) {
+    await page.goto("/");
+    await page.getByRole("link", { name }).click();
+    await expect(page).toHaveURL(url);
+    await expect(page.getByRole("link", { name: "Back to chats" })).toBeVisible();
+  }
+});
+
+// The open destination has to be identifiable without sight of which pane is
+// highlighted — the half of the debt ADR 0036 owes for retiring a landmark
+// that carried `aria-current` for free.
+//
+// Asserted at the wide breakpoint, and only there, because that is where the
+// question exists: the list and the open destination are on screen together.
+// On a narrow window the list is only ever showing when nothing is open, so
+// there is no current row to mark and no reader who could be confused about
+// which one it is.
+test("the pinned list marks the open destination as current, and only that one", async ({
   page,
 }) => {
-  await page.goto("/");
-  await page.getByRole("link", { name: "Settings" }).click();
+  await page.setViewportSize({ width: 1200, height: 900 });
+  await page.goto("/digest");
 
-  await expect(page).toHaveURL("/settings");
-  await expect(page.getByRole("banner").getByText("Settings")).toBeVisible();
+  const chats = page.getByRole("navigation", { name: "Chats" });
+  await expect(chats.getByRole("link", { name: "Digest" })).toHaveAttribute("aria-current", "page");
+  await expect(chats.getByRole("link", { name: "Composer" })).not.toHaveAttribute("aria-current");
+  await expect(chats.getByRole("link", { name: "Settings" })).not.toHaveAttribute("aria-current");
 });
 
 // Unit tests already cover applyTheme/watchSystemTheme in isolation; what
@@ -92,20 +136,20 @@ test("the theme is on the document before the app bundle runs", async ({ page })
 // nested under the layout plus the sibling Settings route outside it.
 test("routing between /, /reflect and /settings does not reopen the store", async ({ page }) => {
   const body = uniqueEntryBody("round-trip");
-  await page.goto("/");
+  await page.goto("/composer");
   await sendEntry(page, body);
   await expect(page.getByText(body)).toBeVisible();
 
-  await page.getByRole("link", { name: "Reflect" }).click();
+  await openDestination(page, "Reflect");
   await expect(page).toHaveURL("/reflect");
 
-  await page.getByRole("link", { name: "Composer" }).click();
-  await expect(page).toHaveURL("/");
+  await openDestination(page, "Composer");
+  await expect(page).toHaveURL("/composer");
 
-  await page.getByRole("link", { name: "Settings" }).click();
+  await openDestination(page, "Settings");
   await expect(page).toHaveURL("/settings");
-  await page.getByRole("link", { name: "Composer" }).click();
-  await expect(page).toHaveURL("/");
+  await openDestination(page, "Composer");
+  await expect(page).toHaveURL("/composer");
 
   await expect(page.getByText(body)).toBeVisible();
   await expect(page.getByText(/already open in another tab/i)).toHaveCount(0);
@@ -117,8 +161,7 @@ test("routing between /, /reflect and /settings does not reopen the store", asyn
 // Counting real /v1/sync requests while parked on Settings is a direct
 // check of that, rather than inferring it from timing on the way back.
 test("the sync loop keeps making requests while the user is on Settings", async ({ page }) => {
-  await page.goto("/");
-  await page.getByRole("link", { name: "Settings" }).click();
+  await openDestination(page, "Settings");
   await expect(page).toHaveURL("/settings");
 
   let syncRequestsWhileOnSettings = 0;

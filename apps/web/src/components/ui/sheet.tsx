@@ -53,9 +53,14 @@ function SheetContent({
         className={cn(
           // `env(safe-area-inset-bottom)` keeps the last row clear of an
           // Android/iOS gesture bar or home indicator — the same concern
-          // `index.html`'s own viewport-fit setup exists for elsewhere in
+          // `index.html`'s own `viewport-fit=cover` exists for elsewhere in
           // this app, just applied to a sheet pinned to the bottom edge
-          // instead of the page itself.
+          // instead of the page itself. `env()` rather than Shell's own
+          // `--safe-bottom`, deliberately: this content is portalled to
+          // document.body, so Shell's keyboard-aware override never reaches
+          // it and the variable would resolve to the plain `:root` default in
+          // index.css — the same `env()` written out, but arrived at in a way
+          // that reads like it tracks the keyboard when it does not.
           "fixed inset-x-0 bottom-0 z-50 flex flex-col gap-1 rounded-t-xl border-t border-border bg-popover p-2 text-popover-foreground shadow-lg outline-hidden duration-150 data-open:animate-in data-open:slide-in-from-bottom data-closed:animate-out data-closed:slide-out-to-bottom",
           className,
         )}

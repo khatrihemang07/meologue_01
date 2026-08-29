@@ -6,9 +6,16 @@ import {
   deleteEntryViaMenu,
   editEntryViaMenu,
   entryRow,
+  entrySwipeTarget,
   openTwoDevices,
+  SWIPE_CONFIRM_PX,
+  SWIPE_OPEN_PX,
   SYNC_TICK_MS,
   sendEntry,
+  swipeEntryLeft,
+  swipeOrigin,
+  tapEntry,
+  touchAt,
   uniqueEntryBody,
   waitForEntryId,
   waitForTombstone,
@@ -26,7 +33,11 @@ import {
  * one Entry.
  */
 async function entryBodiesInOrder(page: Page): Promise<string[]> {
-  return page.locator("p.whitespace-pre-wrap").allTextContents();
+  // A data-slot, not a tag-plus-class: the thread's Entries are bubbles
+  // since ADR 0036, and their body is inline rather than a `<p>` precisely
+  // so the clock time can share its last line. Matching on the markup shape
+  // is what tied this to a `<p>` that no longer exists.
+  return page.locator('[data-slot="bubble-body"]').allTextContents();
 }
 
 // ADR 0028: Entries stopped being append-only, and Sync stopped carrying
@@ -92,7 +103,7 @@ test("an edited Entry keeps its position in History — editing does not move it
   const older = uniqueEntryBody("position-older");
   const newer = uniqueEntryBody("position-newer");
 
-  await page.goto("/");
+  await page.goto("/composer");
   await sendEntry(page, older);
   // `list()` orders by `created_at DESC, id DESC` (sqlite-entry-store.ts) —
   // two Entries minted within the same millisecond tie on `created_at` and
@@ -131,7 +142,7 @@ test("an edit survives a reload — it lives in the local store, not just React 
   const original = uniqueEntryBody("edit-reload-original");
   const edited = uniqueEntryBody("edit-reload-edited");
 
-  await page.goto("/");
+  await page.goto("/composer");
   await sendEntry(page, original);
   await editEntryViaMenu(page, original, edited);
   await expect(page.getByText(edited)).toBeVisible();
@@ -147,7 +158,7 @@ test("a delete survives a reload — the tombstone persisted, the Entry does not
 }) => {
   const body = uniqueEntryBody("delete-reload");
 
-  await page.goto("/");
+  await page.goto("/composer");
   await sendEntry(page, body);
   await deleteEntryViaMenu(page, body);
   await expect(page.getByText(body)).toHaveCount(0);
@@ -239,7 +250,7 @@ test("Search reflects an edited body — the new text is found, the old text is 
   const original = uniqueEntryBody("search-edit-original");
   const edited = uniqueEntryBody("search-edit-edited");
 
-  await page.goto("/");
+  await page.goto("/composer");
   await sendEntry(page, original);
   await editEntryViaMenu(page, original, edited);
   await expect(page.getByText(edited)).toBeVisible();
@@ -280,7 +291,7 @@ test("Search reflects an edited body — the new text is found, the old text is 
 test("hovering a History row reveals Edit and Delete", async ({ page }) => {
   const body = uniqueEntryBody("hover-actions-smoke");
 
-  await page.goto("/");
+  await page.goto("/composer");
   await sendEntry(page, body);
 
   const row = entryRow(page, body);
@@ -288,4 +299,129 @@ test("hovering a History row reveals Edit and Delete", async ({ page }) => {
 
   await expect(row.getByRole("button", { name: "Edit" })).toBeVisible();
   await expect(row.getByRole("button", { name: "Delete" })).toBeVisible();
+});
+
+// #127's touch model, in a real browser at real layout. The gesture itself
+// was verified against real touch on the Android device — a synthesised
+// pointer sequence cannot reproduce the platform's own long-press and
+// selection competing for the same finger, which is what the recogniser's
+// numbers were tuned against. What these add is the half a device session
+// cannot repeat cheaply on every change: that the wiring survives, and that
+// the bubble's box is arithmetically untouched while it moves.
+
+test("swiping an Entry left opens its actions — Edit, Copy and Delete", async ({ page }) => {
+  const body = uniqueEntryBody("swipe-opens-sheet");
+
+  await page.goto("/composer");
+  await sendEntry(page, body);
+  await expect(page.getByText(body)).toBeVisible();
+
+  await swipeEntryLeft(page, body);
+
+  const sheet = page.getByRole("dialog");
+  await expect(sheet.getByRole("button", { name: "Edit" })).toBeVisible();
+  await expect(sheet.getByRole("button", { name: "Copy" })).toBeVisible();
+  await expect(sheet.getByRole("button", { name: "Delete" })).toBeVisible();
+});
+
+// THE DEFECT THIS TICKET EXISTS TO AVOID. The retired prototype kept the
+// actions inside the row, which meant narrowing the bubble's max width by
+// the revealed strip's width once latched — so a one-line Entry became two
+// the instant the row opened. A sheet has no such cost, and a transform
+// cannot reflow anything. jsdom lays nothing out, so this assertion is only
+// expressible here.
+test("an Entry's bubble keeps its exact width and height before, during and after a swipe", async ({
+  page,
+}) => {
+  // Long enough to wrap several times, so a width change would move a line
+  // break and show up as a height change rather than being absorbed.
+  const body = `${uniqueEntryBody("swipe-no-reflow")} ${"reflow ".repeat(40)}`;
+
+  await page.goto("/composer");
+  await sendEntry(page, body);
+  const target = entrySwipeTarget(page, body);
+  await expect(target).toBeVisible();
+
+  const box = async () => {
+    const measured = await target.boundingBox();
+    if (!measured) throw new Error("the Entry's bubble vanished mid-gesture");
+    return { width: measured.width, height: measured.height };
+  };
+
+  const before = await box();
+  const { x, y } = await swipeOrigin(target);
+  await touchAt(target, "pointerdown", x, y);
+  await touchAt(target, "pointermove", x - SWIPE_CONFIRM_PX, y);
+  await touchAt(target, "pointermove", x - SWIPE_CONFIRM_PX - SWIPE_OPEN_PX, y);
+
+  // Held open under the finger: the bubble has moved, so its x has changed
+  // — and nothing else about its box has.
+  const during = await box();
+  expect(during).toEqual(before);
+  const heldAt = await target.boundingBox();
+  expect(heldAt?.x).toBeLessThan(x);
+
+  await touchAt(target, "pointerup", x - SWIPE_CONFIRM_PX - SWIPE_OPEN_PX, y);
+  await expect(page.getByRole("dialog")).toBeVisible();
+  expect(await box()).toEqual(before);
+});
+
+// A tap is worth more free than spent: it places a cursor and dismisses a
+// selection, which is what tapping text anywhere else in the app does.
+test("tapping an Entry opens nothing", async ({ page }) => {
+  const body = uniqueEntryBody("tap-opens-nothing");
+
+  await page.goto("/composer");
+  await sendEntry(page, body);
+  await expect(page.getByText(body)).toBeVisible();
+
+  await tapEntry(page, body);
+
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+});
+
+// Copy reports both outcomes because they are not the same thing: a WebView
+// that refused the clipboard and one that wrote to it look identical to the
+// reader until something says otherwise, and they then paste stale text
+// somewhere else and blame that. This proves the success half end to end —
+// the refusal half is `lib/clipboard.test.ts`'s, since a browser cannot be
+// asked to refuse on demand.
+test("Copy puts the Entry's own body on the clipboard, and says so", async ({ page }) => {
+  const body = uniqueEntryBody("swipe-copy");
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+
+  await page.goto("/composer");
+  await sendEntry(page, body);
+  await expect(page.getByText(body)).toBeVisible();
+
+  await swipeEntryLeft(page, body);
+  await page.getByRole("dialog").getByRole("button", { name: "Copy" }).click();
+
+  await expect(page.getByText("Entry copied.")).toBeVisible();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(body);
+});
+
+// The pointer half, unchanged by #127 and worth pinning as unchanged: a
+// mouse drag across Entry text must still select it rather than confirming
+// a swipe, which is exactly what issue #78 restored by deleting the per-row
+// ContextMenu's `select-none`.
+test("dragging across an Entry with a mouse still selects its text, and opens nothing", async ({
+  page,
+}) => {
+  const body = uniqueEntryBody("mouse-drag-selects");
+
+  await page.goto("/composer");
+  await sendEntry(page, body);
+  const target = entrySwipeTarget(page, body);
+  await expect(target).toBeVisible();
+
+  const box = await target.boundingBox();
+  if (!box) throw new Error("the Entry's bubble has no box to drag across");
+  await page.mouse.move(box.x + box.width - 8, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + 8, box.y + box.height / 2, { steps: 10 });
+  await page.mouse.up();
+
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  expect(await page.evaluate(() => window.getSelection()?.toString() ?? "")).not.toBe("");
 });

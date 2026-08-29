@@ -214,105 +214,36 @@ describe("EntryRow", () => {
     });
   });
 
-  // Issue #78's hover/touch split: a tap opens history.tsx's shared sheet
-  // only on a device without hover; a hover-capable device's own inline
-  // buttons (covered above) are the entry point there instead, so a plain
-  // click on the row body must stay a no-op — otherwise dragging across
-  // Entry text to select it on a mouse-equipped device would pop a sheet
-  // over the selection the moment the mouse button is released.
-  describe("tapping the row", () => {
-    it("opens the sheet for this Entry on a device without hover", () => {
-      stubHoverCapable(false);
-      const onOpenSheet = vi.fn();
-      const target = entry({ body: "hello" });
-      render(
-        <EntryRow
-          entry={target}
-          syncEnabled={false}
-          actions={{ onEdit: vi.fn(), onDelete: vi.fn(), onOpenSheet }}
-        />,
-      );
+  // #127 retired the tap entirely. This component is what the one surface
+  // that stayed a list renders (Reflection's Grounding disclosure), and it
+  // wires no `actions` at all — but the assertion is worth keeping, because
+  // "a click on Entry text does nothing" is what leaves the click free to
+  // place a cursor or dismiss a selection, and a regression here would be
+  // invisible on every surface until someone wired `actions` back on.
+  describe("clicking the row", () => {
+    it("does nothing, on a touch device or a hover-capable one", () => {
+      for (const hover of [false, true]) {
+        stubHoverCapable(hover);
+        const onOpenSheet = vi.fn();
+        const { unmount } = render(
+          <EntryRow
+            entry={entry({ body: "hello" })}
+            syncEnabled={false}
+            actions={{ onEdit: vi.fn(), onDelete: vi.fn(), onOpenSheet }}
+          />,
+        );
 
-      fireEvent.click(screen.getByText("hello"));
+        fireEvent.click(screen.getByText("hello"));
 
-      expect(onOpenSheet).toHaveBeenCalledWith(target);
-    });
-
-    // The bug this guards, seen on a real Android device: long-pressing an
-    // Entry opened the sheet instead of starting text selection. Android's
-    // WebView fires a `click` when a long-press is released, exactly as it
-    // does for a quick tap, so the click alone cannot tell them apart —
-    // which made the one gesture issue #78 promised to leave alone the one
-    // gesture that popped a sheet over the text being selected.
-    it("ignores the click that ends a long-press, so text selection is left alone", () => {
-      stubHoverCapable(false);
-      const onOpenSheet = vi.fn();
-      const target = entry({ body: "hello" });
-      render(
-        <EntryRow
-          entry={target}
-          syncEnabled={false}
-          actions={{ onEdit: vi.fn(), onDelete: vi.fn(), onOpenSheet }}
-        />,
-      );
-
-      const row = screen.getByText("hello");
-      const now = Date.now();
-      vi.spyOn(Date, "now").mockReturnValue(now);
-      fireEvent.pointerDown(row);
-      vi.spyOn(Date, "now").mockReturnValue(now + 600);
-      fireEvent.click(row);
-
-      expect(onOpenSheet).not.toHaveBeenCalled();
-      vi.mocked(Date.now).mockRestore();
-    });
-
-    it("ignores a click that lands while text is selected", () => {
-      stubHoverCapable(false);
-      const onOpenSheet = vi.fn();
-      const target = entry({ body: "hello" });
-      render(
-        <EntryRow
-          entry={target}
-          syncEnabled={false}
-          actions={{ onEdit: vi.fn(), onDelete: vi.fn(), onOpenSheet }}
-        />,
-      );
-
-      // A selection left over from a drag-select: the release at the end of
-      // it is a click, and it must not cost the reader their selection.
-      vi.spyOn(window, "getSelection").mockReturnValue({
-        isCollapsed: false,
-      } as unknown as Selection);
-
-      fireEvent.click(screen.getByText("hello"));
-
-      expect(onOpenSheet).not.toHaveBeenCalled();
-      vi.mocked(window.getSelection).mockRestore();
-    });
-
-    it("does nothing on a hover-capable device", () => {
-      stubHoverCapable(true);
-      const onOpenSheet = vi.fn();
-      render(
-        <EntryRow
-          entry={entry({ body: "hello" })}
-          syncEnabled={false}
-          actions={{ onEdit: vi.fn(), onDelete: vi.fn(), onOpenSheet }}
-        />,
-      );
-
-      fireEvent.click(screen.getByText("hello"));
-
-      expect(onOpenSheet).not.toHaveBeenCalled();
+        expect(onOpenSheet).not.toHaveBeenCalled();
+        unmount();
+      }
     });
 
     it("does nothing when actions is omitted", () => {
       stubHoverCapable(false);
       render(<EntryRow entry={entry({ body: "hello" })} syncEnabled={false} />);
 
-      // No onOpenSheet to spy on with no actions — this only asserts a
-      // click doesn't throw with nothing wired up.
       expect(() => fireEvent.click(screen.getByText("hello"))).not.toThrow();
     });
   });

@@ -4,9 +4,11 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
+import { BackToChats } from "@/components/back-to-chats";
+import { Bubble } from "@/components/entry-bubble";
 import { GroundingDisclosure } from "@/components/grounding-disclosure";
-import { Nav, NewSessionLink, SessionsLink } from "@/components/nav";
 import { QuestionComposer } from "@/components/question-composer";
+import { NewSessionLink, SessionsLink } from "@/components/reflect-actions";
 import { Shell } from "@/components/shell";
 import {
   type ConversationTurn,
@@ -57,16 +59,30 @@ async function fetchSession(sessionId: string): Promise<SessionQueryData> {
   };
 }
 
+// A Question and its Answer render through the same `Bubble` Composer's
+// Entries do (ADR 0036). None of the three is the same *thing* — CONTEXT.md
+// is explicit that a Question is not an Entry and an Answer is not an Entry
+// — but they are the same shape in a thread, and keeping two hand-written
+// copies of that shape is how the two destinations start disagreeing about
+// what "outgoing" looks like.
+//
+// This is also where the side asymmetry earns its keep most: Reflect is the
+// genuinely two-sided destination, and before it a Question and its Answer
+// were told apart by a saturated fill on one of them alone.
 function AskedQuestion({ text }: { text: string }) {
   return (
-    <p className="ml-auto max-w-[85%] rounded-2xl bg-primary px-4 py-2 text-sm text-primary-foreground">
+    <Bubble side="out" groupedWithPrevious>
       {text}
-    </p>
+    </Bubble>
   );
 }
 
 function GivenAnswer({ text }: { text: string }) {
-  return <p className="mr-auto max-w-[85%] whitespace-pre-wrap text-sm text-foreground">{text}</p>;
+  return (
+    <Bubble side="in" className="whitespace-pre-wrap">
+      {text}
+    </Bubble>
+  );
 }
 
 // An explicit note per turn, independent of the Answer's own wording — the
@@ -131,20 +147,34 @@ function ConversationTurnRow({
     <div className="flex flex-col gap-2">
       <AskedQuestion text={turn.question} />
       <GivenAnswer text={turn.answer} />
-      {/* Issue #98: "reading a Conversation back shows which model produced
-          which part" — shown for every turn, not only on a change, so a
-          limit hit under one model is never mistaken for one under
-          whichever model replaced it (this ticket's own acceptance
-          criterion, server/src/reflect.rs's ReflectResponse.model doc
-          comment). */}
-      <p className="mr-auto text-xs text-muted-foreground">{turn.model}</p>
-      <GroundingNote turn={turn} />
-      <GroundingDisclosure
-        turn={turn}
-        entries={groundingEntries}
-        loading={groundingEntriesLoading}
-        syncEnabled={syncEnabled}
-      />
+      {/*
+        Everything an Answer carries underneath it, sharing the Answer's own
+        geometry (#128). `pr-[12%]` is the incoming bubble's own inset and
+        `pl-3` is its own horizontal padding, so these lines start under the
+        Answer's first character and end where the Answer ends. Before this
+        they were `mr-auto max-w-[85%]`: flush against the pane's left edge,
+        three pixels out of step with the words they describe, and 85% of a
+        width the bubble had not used since ADR 0036 gave it a side.
+
+        One wrapper rather than the same two classes written on each of the
+        three, so a fourth caption cannot arrive misaligned.
+      */}
+      <div className="flex flex-col gap-1 pr-[12%] pl-3">
+        {/* Issue #98: "reading a Conversation back shows which model produced
+            which part" — shown for every turn, not only on a change, so a
+            limit hit under one model is never mistaken for one under
+            whichever model replaced it (this ticket's own acceptance
+            criterion, server/src/reflect.rs's ReflectResponse.model doc
+            comment). */}
+        <p className="text-muted-foreground text-xs">{turn.model}</p>
+        <GroundingNote turn={turn} />
+        <GroundingDisclosure
+          turn={turn}
+          entries={groundingEntries}
+          loading={groundingEntriesLoading}
+          syncEnabled={syncEnabled}
+        />
+      </div>
     </div>
   );
 }
@@ -554,7 +584,7 @@ export function ReflectionPage() {
           <SessionsLink />
         </>
       }
-      nav={<Nav />}
+      back={<BackToChats />}
       pinnedThread={syncEnabled ? { watch: turns.length, forceToNewest: askSignal } : undefined}
       composerSlot={
         syncEnabled && !notFound ? (

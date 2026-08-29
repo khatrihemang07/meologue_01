@@ -1,12 +1,32 @@
 import { useQuery } from "@tanstack/react-query";
+import { useContext, useLayoutEffect, useRef, useState } from "react";
 import { Link } from "react-router";
-import { Nav } from "@/components/nav";
-import { Shell } from "@/components/shell";
+import { BackToChats } from "@/components/back-to-chats";
+import { HistoryScrollContext, Shell } from "@/components/shell";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatDigestRange } from "@/lib/digest-format";
 import { type DigestResult, digestTransport } from "@/lib/digest-transport";
+import { allocateLineBudgets } from "@/lib/proportional-clamp";
 import { digestQueryKey } from "@/lib/query-keys";
 import { useSyncEnabled } from "@/lib/settings";
+import { cn } from "@/lib/utils";
+
+/**
+ * The fewest lines a clamped Digest is cut to. Below this a card stops being
+ * a teaser of what the Server wrote and becomes a fragment — and the reader
+ * can no longer tell the three Periods apart by what they actually say,
+ * which is the only reason to show three at once rather than one.
+ */
+const MIN_CLAMPED_LINES = 3;
+
+/**
+ * Shell's own content padding (`py-4`), which sits below this page's last
+ * card and is not part of the space the cards may fill. Named rather than
+ * folded into the arithmetic below: it is a number this file has to keep in
+ * step with `shell.tsx`, and a bare 16 in a subtraction says nothing about
+ * that.
+ */
+const SHELL_CONTENT_BOTTOM_PADDING_PX = 16;
 
 /**
  * The three cards this page opens on, in reading order — issue #71's
@@ -63,11 +83,22 @@ function DigestCard({
   emptyCopy,
   period,
   result,
+  maxBodyHeight,
+  bodyRef,
 }: {
   label: string;
   emptyCopy: string;
   period: (typeof PERIODS)[number]["period"];
   result: DigestResult | undefined;
+  /**
+   * How tall this card's prose may be, in px, or null for "as tall as it
+   * wants". Always a whole number of lines (`DigestCards` computes it from
+   * the measured line height), which is what keeps a clamp from leaking a
+   * sliver of the next line through underneath the last one — the specific
+   * defect the old `line-clamp-2` produced.
+   */
+  maxBodyHeight: number | null;
+  bodyRef: (node: HTMLParagraphElement | null) => void;
 }) {
   // A card that hasn't resolved yet (or failed) renders nothing of its
   // own — the page-level states in `DigestCards` (`unreachable`/
@@ -106,7 +137,42 @@ function DigestCard({
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <p className="line-clamp-2 text-sm text-muted-foreground">{digest.body}</p>
+          {/*
+            The clamp is a `max-height` on this wrapper, not `line-clamp` on
+            the prose itself. Two reasons, and both were defects here before:
+            `line-clamp` reports its own clamped height back through
+            `scrollHeight`, so the measurement below could never see what the
+            prose actually needed once it had been cut once; and its ellipsis
+            sat at the end of the last visible line with a sliver of the next
+            one showing through beneath it. A whole number of lines with the
+            overflow hidden shows only whole lines, and the affordance under
+            it says there is more rather than a "…" implying it.
+          */}
+          <div className="overflow-hidden" style={{ maxHeight: maxBodyHeight ?? undefined }}>
+            <p ref={bodyRef} className="text-muted-foreground text-sm">
+              {digest.body}
+            </p>
+          </div>
+          {/*
+            Kept in flow at every size, and only made invisible when there is
+            nothing more to read — `invisible` (`visibility: hidden`), never
+            `display: none`. The measurement below reads the space this card
+            spends on everything that is not prose; a footer that appeared and
+            disappeared would change that number in the middle of settling on
+            it. `history.tsx`'s always-present day pill is the same trick for
+            the same reason. `visibility: hidden` also takes it out of the
+            accessibility tree, so it is not announced on a card with nothing
+            hidden behind it.
+          */}
+          <p
+            aria-hidden={maxBodyHeight === null}
+            className={cn(
+              "mt-2 font-medium text-foreground text-xs",
+              maxBodyHeight === null && "invisible",
+            )}
+          >
+            Read the rest
+          </p>
         </CardContent>
       </Card>
     </Link>
@@ -138,7 +204,7 @@ export function DigestPage() {
   return (
     // No `action` slot (issue #75): Settings is a Nav destination now, not
     // an app-bar gear — see nav.tsx's DESTINATIONS.
-    <Shell title="Digest" nav={<Nav />}>
+    <Shell title="Digest" back={<BackToChats />}>
       {!syncEnabled && (
         <p className="text-center text-sm text-muted-foreground">
           Sync is off —{" "}
@@ -161,6 +227,106 @@ export function DigestPage() {
  * that never renders makes "no request is made at all" (the ticket's own
  * wording) true by construction rather than by a flag on each query.
  */
+
+/**
+ * How much of each Digest fits (#128).
+ *
+ * Three cards used to clamp to two lines each while more than half the
+ * screen sat empty below them. Now nothing is clamped at all while the three
+ * fit one screen, and only when they overflow does anything get cut — each
+ * proportionally to what it actually needs, and always to a whole number of
+ * lines.
+ *
+ * Everything here is measured rather than assumed. The line height comes off
+ * the rendered prose, not from a constant that would have to be kept in step
+ * with a Tailwind class; the space a card spends on things that are not prose
+ * (its title, its date range, its padding, the affordance under it) is the
+ * difference between what the container occupies and what the prose inside it
+ * does, so no part of the card's own layout is duplicated here as arithmetic.
+ *
+ * The fallback is "clamp nothing". With no scroll element yet, or one that
+ * has not been measured (jsdom, and a real browser's first few frames before
+ * its first ResizeObserver callback), every card renders at its natural
+ * height — the same shape of benign fallback `history.tsx` uses for the same
+ * situation, and the right way round: a Digest showing too much of itself is
+ * a page that scrolls, where one showing too little is prose the reader
+ * cannot get at.
+ */
+function useFittedDigests() {
+  // Shell owns the scroll region, and it is the only thing that knows how
+  // tall the visible page actually is. Reached through the same context
+  // `history.tsx` uses for it — named for History, but it is the shell's
+  // scroll element, and a second way to find the same node would be a second
+  // thing to keep correct.
+  const { scrollElement } = useContext(HistoryScrollContext);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const bodiesRef = useRef<(HTMLParagraphElement | null)[]>([]);
+  const [maxBodyHeights, setMaxBodyHeights] = useState<(number | null)[]>(() =>
+    PERIODS.map(() => null),
+  );
+
+  const registerBody = (index: number) => (node: HTMLParagraphElement | null) => {
+    bodiesRef.current[index] = node;
+  };
+
+  useLayoutEffect(() => {
+    const container = containerRef.current;
+    if (!container || !scrollElement) return;
+
+    const measure = () => {
+      const bodies = bodiesRef.current;
+      const firstBody = bodies.find((body) => body !== null && body !== undefined);
+      if (!firstBody) return;
+      const lineHeight = Number.parseFloat(window.getComputedStyle(firstBody).lineHeight);
+      if (!Number.isFinite(lineHeight) || lineHeight <= 0) return;
+
+      // `scrollHeight` on the prose itself, which is never the element with
+      // the clamp on it — see the card's own comment. So this stays the
+      // height the words really want, however many times it has been cut.
+      const demands = PERIODS.map((_, index) => {
+        const body = bodies[index];
+        return body ? Math.round(body.scrollHeight / lineHeight) : 0;
+      });
+
+      const proseHeight = PERIODS.reduce((sum, _, index) => {
+        const wrapper = bodies[index]?.parentElement;
+        return sum + (wrapper?.clientHeight ?? 0);
+      }, 0);
+      const chromeHeight = container.scrollHeight - proseHeight;
+      const availablePx =
+        scrollElement.clientHeight -
+        container.offsetTop -
+        SHELL_CONTENT_BOTTOM_PADDING_PX -
+        chromeHeight;
+      const available = Math.floor(availablePx / lineHeight);
+
+      const budgets = allocateLineBudgets({ demands, available, minimum: MIN_CLAMPED_LINES });
+      const next = budgets.map((lines) => (lines === null ? null : lines * lineHeight));
+      setMaxBodyHeights((current) =>
+        current.length === next.length && current.every((value, index) => value === next[index])
+          ? current
+          : next,
+      );
+    };
+
+    measure();
+    // Guarded the same way `use-pinned-scroll.ts` guards its own: jsdom has
+    // no ResizeObserver, and this hook's whole failure mode is already
+    // "clamp nothing", which is the right outcome there anyway.
+    if (typeof ResizeObserver === "undefined") return;
+    // The scroll region for the window changing (a rotation, a resize, the
+    // pane divider moving), and the container for the prose itself arriving
+    // — the three queries do not resolve together, so the first measurement
+    // usually runs against fewer than three cards.
+    const observer = new ResizeObserver(measure);
+    observer.observe(scrollElement);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [scrollElement]);
+
+  return { containerRef, registerBody, maxBodyHeights };
+}
+
 function DigestCards() {
   const dayQuery = useQuery({
     queryKey: digestQueryKey("day"),
@@ -174,6 +340,8 @@ function DigestCards() {
     queryKey: digestQueryKey("month"),
     queryFn: () => digestTransport("month"),
   });
+
+  const { containerRef, registerBody, maxBodyHeights } = useFittedDigests();
 
   const results: Record<(typeof PERIODS)[number]["period"], DigestResult | undefined> = {
     day: dayQuery.data,
@@ -215,14 +383,16 @@ function DigestCards() {
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      {PERIODS.map(({ period, label, emptyCopy }) => (
+    <div ref={containerRef} className="flex flex-col gap-4">
+      {PERIODS.map(({ period, label, emptyCopy }, index) => (
         <DigestCard
           key={period}
           period={period}
           label={label}
           emptyCopy={emptyCopy}
           result={results[period]}
+          maxBodyHeight={maxBodyHeights[index] ?? null}
+          bodyRef={registerBody(index)}
         />
       ))}
     </div>

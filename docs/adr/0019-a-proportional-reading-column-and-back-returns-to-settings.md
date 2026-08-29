@@ -17,6 +17,15 @@ because Settings wasn't a destination yet. Once it is, that carve-out has nothin
 The proportional reading column this ADR decided is untouched by 0030 and still governs every
 route, including the three that remain inside `EntryStoreLayout`.
 
+Composed with, not superseded by,
+[0036](0036-the-shell-is-a-chat-list-and-a-thread-is-a-chat-thread.md). The proportional reading
+column still governs
+every destination's content; what changes is what it is proportional *to* — at the wide breakpoint
+the column now fills the open pane rather than the window, because the chat list takes a share of
+the window beside it. This ADR's own category argument, that a reading width is a per-Device view
+mechanic rather than something the glossary names, is what 0036 reuses for the pane divider's
+stored width, for Accent and for text size.
+
 ## Context
 
 The reading column had been capped at `max-w-2xl` (672px) since ticket 50 introduced the app shell,

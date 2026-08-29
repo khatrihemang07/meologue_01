@@ -4,11 +4,22 @@ import {
   useVirtualizer,
   type VirtualItem,
 } from "@tanstack/react-virtual";
-import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { toast } from "sonner";
 import { EntryActionsSheet } from "@/components/entry-actions";
-import { EntryRow } from "@/components/entry-row";
+import { EntryBubble } from "@/components/entry-bubble";
 import { HistoryScrollContext } from "@/components/shell";
 import { ConfirmDialog } from "@/components/ui/alert-dialog";
+import { useSwipeActions } from "@/hooks/use-swipe-actions";
+import { copyText } from "@/lib/clipboard";
 import { deviceUtcOffsetMinutes, entryDayKey, formatDaySeparator } from "@/lib/entry-day";
 import { cn } from "@/lib/utils";
 
@@ -235,6 +246,42 @@ export function History({ entries, syncEnabled, query = "", onEdit, onDelete }: 
         : undefined,
     [onEdit, onDelete],
   );
+
+  // A swipe hands back the element it picked up, not an Entry: the hook is
+  // deliberately ignorant of what a row stands for. Resolving the id here
+  // reads whatever `entries` is at the moment of the release rather than
+  // whatever it was when the listener was attached, which matters because a
+  // sync tick can replace the array mid-gesture.
+  const entriesRef = useRef(entries);
+  entriesRef.current = entries;
+  const openSheetForSwipe = useCallback((target: HTMLElement) => {
+    const id = target.dataset.entryId;
+    const swiped = entriesRef.current.find((candidate) => candidate.id === id);
+    if (swiped) setSheetEntry(swiped);
+  }, []);
+  // The element every bubble is positioned inside, and the one thing the
+  // swipe recogniser is attached to (#127) — once, for the whole thread,
+  // rather than once per row. A callback ref, because this component's very
+  // first render (Entry store still opening) returns early with no row
+  // container at all; see `use-swipe-actions.ts` for what that cost.
+  const rowsRef = useSwipeActions({
+    onOpen: openSheetForSwipe,
+    // Nothing to open without Edit/Delete wired up — Grounding renders the
+    // same Entries and must stay read-only (EntryRowProps' own comment).
+    enabled: actions !== undefined,
+  });
+
+  // Copy (#127). The sheet reports the choice; this is where it happens, for
+  // the same reason Delete's confirmation lives here — one component above
+  // every row. Both outcomes are announced, and differently: a WebView that
+  // refuses the clipboard must not be indistinguishable from one that wrote
+  // to it, or the reader pastes stale text somewhere else and blames that.
+  const copyEntry = useCallback((entry: Entry) => {
+    void copyText(entry.body).then((copied) => {
+      if (copied) toast.success("Entry copied.");
+      else toast.error("Couldn't copy this Entry. Select the text to copy it instead.");
+    });
+  }, []);
 
   // `groupByDay` is the one genuinely O(entries.length) piece of render-body
   // work here (issue #81) — memoised so a render this component takes for
@@ -529,7 +576,7 @@ export function History({ entries, syncEnabled, query = "", onEdit, onDelete }: 
           zero height so that measurement always has something to attach
           to. */}
       <div ref={spacerRef} style={{ height: spacerHeight }} aria-hidden="true" />
-      <div style={{ position: "relative", height: totalSize, width: "100%" }}>
+      <div ref={rowsRef} style={{ position: "relative", height: totalSize, width: "100%" }}>
         {virtualRows.map((virtualRow) => {
           const item = flatItems[virtualRow.index];
           if (!item) {
@@ -569,21 +616,26 @@ export function History({ entries, syncEnabled, query = "", onEdit, onDelete }: 
                   </span>
                 </div>
               ) : (
-                // Issue #83's replacement for the old `divide-y` wrapper:
-                // rows are no longer guaranteed adjacent DOM siblings (only
-                // whatever's near the viewport is actually rendered), so
-                // the divider has to travel with the row it belongs to
-                // instead of coming from a shared ancestor. `isFirstInGroup`
-                // (flattenGroups, above) is exactly the boundary `divide-y`
-                // used to find structurally, computed once instead.
-                <div className={cn(!item.isFirstInGroup && "border-t border-border")}>
-                  <EntryRow
-                    entry={item.entry}
-                    query={query}
-                    syncEnabled={syncEnabled}
-                    actions={actions}
-                  />
-                </div>
+                // A bubble, not a row (ADR 0036). The `border-t` that used
+                // to travel with each row is gone with it: bubbles are told
+                // apart by their own shape and the gap between them, and a
+                // rule between two of them would be drawing a boundary the
+                // fill already draws. `isFirstInGroup` still earns its keep
+                // — it is exactly "the first Entry under a day separator",
+                // which is the one bubble in a run that must NOT be grouped
+                // tightly against what sits above it.
+                //
+                // Every Entry is `side="out"`: Composer is all-outgoing
+                // because an Entry has no addressee (CONTEXT.md), not
+                // because the other side happens to be empty.
+                <EntryBubble
+                  entry={item.entry}
+                  query={query}
+                  syncEnabled={syncEnabled}
+                  side="out"
+                  groupedWithPrevious={!item.isFirstInGroup}
+                  actions={actions}
+                />
               )}
             </div>
           );
@@ -603,6 +655,7 @@ export function History({ entries, syncEnabled, query = "", onEdit, onDelete }: 
             }
           }}
           onEdit={actions.onEdit}
+          onCopy={copyEntry}
           onDelete={actions.onDelete}
         />
       )}

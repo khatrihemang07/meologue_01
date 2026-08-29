@@ -7,32 +7,46 @@
  * Reflection both import from here rather than each keeping their own copy.
  */
 import type { Entry } from "@meologue/core";
-import { type MouseEvent, memo, useRef, useState } from "react";
+import { type MouseEvent, memo, type ReactNode, useState } from "react";
 import { EntryHoverActions, hoverCapable } from "@/components/entry-actions";
 import { formatClockTime } from "@/lib/entry-day";
 import { formatAbsoluteTime } from "@/lib/entry-time";
 import { highlightMatches } from "@/lib/highlight-match";
 import { cn } from "@/lib/utils";
 
-export function EntryBody({ body, query }: { body: string; query: string }) {
+/**
+ * An Entry's words with the Search query highlighted, as inline content and
+ * nothing else — no block wrapper of its own.
+ *
+ * Split out of `EntryBody` for `entry-bubble.tsx`. A bubble puts its clock
+ * time in a right-floated span after the text so it can share the last line,
+ * and a float can only be placed on a line box it is actually in: with the
+ * body wrapped in a `<p>`, the float has no line of its own to join and
+ * drops beneath the whole block every time. That is what made a one-word
+ * Entry cost two lines.
+ *
+ * Shared rather than reimplemented so the *words* still cannot drift between
+ * History and Grounding, which is what `EntryBody`'s own extraction was for.
+ */
+export function entryBodyContent(body: string, query: string): ReactNode {
   if (query.trim() === "") {
-    return <p className="min-w-0 flex-1 whitespace-pre-wrap">{body}</p>;
+    return body;
   }
-  return (
-    <p className="min-w-0 flex-1 whitespace-pre-wrap">
-      {highlightMatches(body, query).map((segment, index) =>
-        segment.matched ? (
-          // biome-ignore lint/suspicious/noArrayIndexKey: segments are a stable, ordered split of one Entry's body for one render.
-          <mark key={index} className="rounded-sm bg-primary/30 text-inherit">
-            {segment.text}
-          </mark>
-        ) : (
-          // biome-ignore lint/suspicious/noArrayIndexKey: segments are a stable, ordered split of one Entry's body for one render.
-          <span key={index}>{segment.text}</span>
-        ),
-      )}
-    </p>
+  return highlightMatches(body, query).map((segment, index) =>
+    segment.matched ? (
+      // biome-ignore lint/suspicious/noArrayIndexKey: segments are a stable, ordered split of one Entry's body for one render.
+      <mark key={index} className="rounded-sm bg-primary/30 text-inherit">
+        {segment.text}
+      </mark>
+    ) : (
+      // biome-ignore lint/suspicious/noArrayIndexKey: segments are a stable, ordered split of one Entry's body for one render.
+      <span key={index}>{segment.text}</span>
+    ),
   );
+}
+
+export function EntryBody({ body, query }: { body: string; query: string }) {
+  return <p className="min-w-0 flex-1 whitespace-pre-wrap">{entryBodyContent(body, query)}</p>;
 }
 
 /**
@@ -55,6 +69,14 @@ export interface EntryRowActions {
    * (see EntryRowProps' `actions` comment) governs that external pair
    * exactly as before, and history.tsx fills in this third field itself
    * once both are present.
+   *
+   * What reaches it changed in #127: a touch device gets there by swiping a
+   * bubble left (`use-swipe-actions.ts`), not by tapping one. A tap does
+   * nothing now, which is what leaves it free to place a cursor or dismiss a
+   * selection the way tapping text anywhere else does — and the
+   * tap-vs-long-press timing this file used to carry went with it, because
+   * nothing has to tell a quick tap from the click Android's WebView fires
+   * at the end of a long-press when neither one opens anything.
    */
   onOpenSheet: (entry: Entry) => void;
 }
@@ -89,65 +111,18 @@ export interface EntryRowProps {
 }
 
 /**
- * The longest a press may last and still count as a tap. Android's WebView
- * fires a `click` when a long-press is released, exactly as it does for a
- * quick tap — the two are indistinguishable from the click alone. Without
- * this threshold the sheet opened on long-press, which is the one gesture
- * issue #78 promised to leave alone, because it is the gesture the platform
- * itself uses to start selecting text. Verified on a device: the sheet
- * appeared and no selection handles ever did.
- *
- * 400ms sits above a deliberate tap and below Android's own ~500ms
- * long-press threshold, so a press that the platform is about to treat as a
- * selection is never also treated as a tap here.
- */
-const MAX_TAP_MS = 400;
-
-/**
- * Opens history.tsx's shared sheet for a tap on this row, but only on a
- * device without hover — issue #78's split is on hover-capability, not on
- * pointer type or build target. On a hover-capable device the row's own
- * EntryHoverActions buttons are the way to reach Edit/Delete, and this
- * simply does nothing, leaving an ordinary click on the row body free to
- * do what clicking text anywhere else does (place a selection), rather
- * than popping a sheet over it.
- *
- * Two things disqualify a click from being a tap, and both exist so that
- * selecting text never costs the reader a sheet they did not ask for:
- * a press held longer than MAX_TAP_MS, and a click that lands while text
- * is actually selected (the release at the end of a drag-select, and the
- * click that dismisses an existing selection).
- */
-function handleRowTap(
-  actions: EntryRowActions | undefined,
-  entry: Entry,
-  pressStartedAt: number | null,
-) {
-  if (!actions || hoverCapable()) {
-    return;
-  }
-  if (pressStartedAt !== null && Date.now() - pressStartedAt > MAX_TAP_MS) {
-    return;
-  }
-  if (!window.getSelection()?.isCollapsed) {
-    return;
-  }
-  actions.onOpenSheet(entry);
-}
-
-/**
  * The optional half of "Right-click on a pointer device may open the same
- * sheet/menu if that falls out cheaply" — cheap here because it's just
- * `handleRowTap`'s own hover check, reused. `preventDefault` only runs
- * behind that same hoverCapable() gate, so a touch device's long-press
- * (which also dispatches `contextmenu` in most mobile browsers) is never
- * intercepted: this handler simply returns, its default action runs
- * unprevented, and that default action is exactly what starts native text
- * selection. Long-press is left alone on every platform, per the ticket —
- * this is what makes that true here specifically for a right-click-shaped
- * event, not just for the removed long-press timer.
+ * sheet/menu if that falls out cheaply" — cheap here because `hoverCapable()`
+ * is the one check it needs. `preventDefault` only runs behind that gate, so
+ * a touch device's long-press (which also dispatches `contextmenu` in most
+ * mobile browsers) is never intercepted: this handler simply returns, its
+ * default action runs unprevented, and that default action is exactly what
+ * raises the platform's own selection handles and system Copy toolbar.
+ * Long-press is left alone on every platform, and #127 left it alone again
+ * — it is the one gesture the swipe recogniser bails out of rather than
+ * competes with.
  */
-function handleRowContextMenu(
+export function handleRowContextMenu(
   event: MouseEvent,
   actions: EntryRowActions | undefined,
   entry: Entry,
@@ -170,6 +145,13 @@ function handleRowContextMenu(
 // only added when `actions` is present: EntryHoverActions' `group-hover`
 // styling needs an ancestor to watch, and a bare row (grounding-
 // disclosure.tsx's caller) has nothing depending on it.
+//
+// No swipe here, and no tap either (#127). This component is what the one
+// surface that stayed a LIST renders — Reflection's Grounding disclosure —
+// and it deliberately wires no `actions` at all, so a touch affordance here
+// would be one nothing can reach. The thread's own bubbles
+// (entry-bubble.tsx) are where the gesture lives; what survives here is the
+// right-click a mouse already had.
 //
 // Wrapped in `React.memo` (issue #81): History can render hundreds of
 // these, and most re-renders of History itself (a Search keystroke
@@ -213,25 +195,11 @@ export const EntryRow = memo(function EntryRow({
     }
   };
 
-  // When the current press began, so a click can tell a tap from the tail
-  // end of a long-press (see MAX_TAP_MS). A ref, not state: nothing renders
-  // from it, and a re-render per touch would be pure waste.
-  const pressStartedAtRef = useRef<number | null>(null);
-
   return (
-    // biome-ignore lint/a11y/noStaticElementInteractions: onClick here is a touch-only progressive enhancement (handleRowTap no-ops on a hover-capable device — see its own comment) layered on a row that must stay plain, selectable text, not a control; giving it an interactive role would contradict that and would duplicate the two real <button>s below.
-    // biome-ignore lint/a11y/useKeyWithClickEvents: no keyboard equivalent is needed for the same reason — "reachable without a pointer" (the ticket's own requirement) is satisfied by EntryHoverActions' real, tabbable <button>s, not by this row.
+    // biome-ignore lint/a11y/noStaticElementInteractions: onContextMenu here is a pointer-only progressive enhancement (handleRowContextMenu no-ops without hover — see its own comment) layered on a row that must stay plain, selectable text, not a control; giving it an interactive role would contradict that and would duplicate the two real <button>s below.
     <div
       data-slot="entry-row"
       className={cn("flex items-baseline gap-3 py-1.5 text-sm text-foreground", actions && "group")}
-      onPointerDown={
-        actions
-          ? () => {
-              pressStartedAtRef.current = Date.now();
-            }
-          : undefined
-      }
-      onClick={actions ? () => handleRowTap(actions, entry, pressStartedAtRef.current) : undefined}
       onContextMenu={actions ? (event) => handleRowContextMenu(event, actions, entry) : undefined}
     >
       <EntryBody body={entry.body} query={query} />

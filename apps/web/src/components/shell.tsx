@@ -1,5 +1,6 @@
 import { ArrowDown, ArrowLeft, Search as SearchIcon } from "lucide-react";
 import { createContext, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { useLocation, useNavigationType } from "react-router";
 import { SyncStatusIndicator } from "@/components/sync-status-indicator";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -153,20 +154,12 @@ interface ShellProps {
   /** Rendered after `children`, in the same scrollable region — e.g. the Composer page's History. */
   footer?: ReactNode;
   /**
-   * The persistent nav's contents (ticket 54 — Composer and History, #49's
-   * settled config: a left rail on a wide window, a bottom bar on a narrow
-   * one, the same technique the chosen prototype, .scratch/ui-variants
-   * variant 08, uses for its `.lrail`/`.bnav` pair). Rendered into exactly
-   * one `<nav>` landmark below, repositioned by CSS rather than duplicated —
-   * see that element's own comment for why.
-   */
-  nav?: ReactNode;
-  /**
-   * The Composer (ticket 51), docked between the scrollable content and
-   * `nav`'s bottom-bar placement so it stays put while History scrolls
-   * behind it. The Composer owns its own safe-area-inset-bottom handling —
-   * see the scroll region's padding comment below for why Shell doesn't
-   * duplicate that here.
+   * The Composer (ticket 51), docked below the scrollable content so it
+   * stays put while History scrolls behind it. With ADR 0036 retiring the
+   * persistent nav there is nothing under it any more, so the Composer is
+   * the pane's own bottom edge and owns `--safe-bottom` outright — see the
+   * scroll region's padding comment below for why Shell doesn't duplicate
+   * that here.
    */
   composerSlot?: ReactNode;
   /**
@@ -192,21 +185,16 @@ interface ShellProps {
 
 // The app shell every page renders through (ticket 50, replacing the
 // centred max-w-xl Card ticket 25 introduced). A fixed top app bar, a
-// scrollable content region, and reserved nav/composer slots that #54 and
-// #51 fill in.
+// scrollable content region, and a reserved composer slot that #51 fills
+// in. The nav slot #54 filled is gone with ADR 0036's persistent nav.
 //
-// The outer element is a flex container whose direction flips at `md`
-// (column on a narrow window, row on a wide one) rather than CSS Grid.
-// That, plus `order` on the `nav` element below, is what lets one `nav`
-// element serve as both the bottom bar and the rail — see its own comment.
-//
-// h-svh + overflow-hidden on the outer element (rather than min-h-svh, as
-// before) is what makes this a real app shell instead of a page that grows
-// taller than the viewport: the shell always fills the window exactly, and
-// only the content region scrolls internally. That, plus no horizontal
-// overflow anywhere in this tree, is what keeps a narrow window free of
-// both page-level scrollbars the old centred-card layout never had to
-// avoid.
+// This element no longer sizes itself to the window — `chat-shell-layout.tsx`
+// does that, and hands each pane a box to fill. `h-full` plus
+// `overflow-hidden` is what keeps this a real pane rather than a page that
+// grows taller than its box: only the content region scrolls internally.
+// That, plus no horizontal overflow anywhere in this tree, is what keeps a
+// narrow window free of the page-level scrollbars the old centred-card
+// layout never had to avoid.
 export function Shell({
   title,
   back,
@@ -214,7 +202,6 @@ export function Shell({
   message,
   children,
   footer,
-  nav,
   composerSlot,
   pinnedThread,
   search,
@@ -302,125 +289,139 @@ export function Shell({
   // without either caller having to know the other exists.
   const searchLabel = `Search ${search?.label ?? "History"}`;
 
+  // Which of the four destinations this pane is, and whether we arrived by
+  // pushing rather than by loading the URL directly. Both only drive the
+  // enter animation — Shell stays ignorant of what any particular route
+  // means, the same way it does for `action` and `back`.
+  const location = useLocation();
+  const navigationType = useNavigationType();
+  const destination = location.pathname.split("/")[1] || "root";
+  const pushed = navigationType === "PUSH";
+
   function dismissSearch() {
     setSearchOpen(false);
     search?.onDismiss();
   }
 
   return (
-    <div className="flex h-svh w-full flex-col overflow-hidden bg-background [padding-left:env(safe-area-inset-left)] [padding-right:env(safe-area-inset-right)] md:flex-row">
-      {nav && (
-        <nav
-          aria-label="Navigation"
-          // Ticket 54's defect fix: #50 rendered this slot's contents twice
-          // — once as a left rail (hidden md:flex), once as a bottom bar
-          // (flex md:hidden) — which was harmless while `nav` was empty but
-          // becomes two duplicate accessible-tree <nav> landmarks and every
-          // link matching Playwright's strict-mode queries twice the moment
-          // it holds real links. Fixed by mounting `nav` exactly once here
-          // and repositioning this single element with `order` instead of
-          // toggling two elements' `display`.
-          //
-          // The outer shell is a column on a narrow window and a row on a
-          // wide one (see its own comment). `order-2` only does anything in
-          // the column case: it's what pushes this element after the
-          // header/content/composer group below rather than before it —
-          // that group defaults to order 0, which would otherwise lose the
-          // tie to `nav` coming first in DOM order. `md:order-none` drops
-          // back to that DOM order at the wide breakpoint, which already
-          // puts `nav` first — i.e. a rail down the left edge. Flexbox's
-          // default `align-items: stretch` does the rest without any extra
-          // classes: a bottom bar stretches to the full window width in the
-          // column case, a rail stretches to the full window height in the
-          // row case.
-          className="order-2 flex shrink-0 border-t border-border bg-background [padding-bottom:env(safe-area-inset-bottom)] md:order-none md:w-20 md:flex-col md:gap-1 md:border-t-0 md:border-r md:p-2 md:[padding-bottom:0px]"
-        >
-          {nav}
-        </nav>
+    // One pane, sized to whatever `chat-shell-layout.tsx` gives it, rather
+    // than to the window. That layout owns the window's height, the
+    // keyboard custom properties and the two-pane split; this owns an app
+    // bar, a scroll region and a docked Composer, and nothing above it.
+    //
+    // Before ADR 0036 this element WAS the window, and it carried the
+    // persistent `<nav>` — one landmark repositioned by CSS between a bottom
+    // bar and a left rail. That element is gone rather than moved: a chat
+    // list of plain rows has no navigation region present on every page to
+    // be one landmark or two, because the list is a screen you navigate away
+    // from rather than chrome that stays mounted beside whatever is showing.
+    // What replaces it for a screen-reader user is `chat-list.tsx`'s own
+    // scoped `<nav aria-label="Chats">` plus a real `href` and
+    // `aria-current` on every row.
+    //
+    // `key` on the destination rather than the whole pathname: `/reflect`
+    // and `/reflect/:sessionId` are the same destination, and remounting
+    // this subtree between them would throw away the thread's scroll
+    // position to replay an animation the reader did not ask for.
+    // `navigationType` gates the animation on an actual push, so a direct
+    // load or a reload lands without one.
+    <div
+      key={destination}
+      className={cn(
+        "flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-background",
+        pushed &&
+          "motion-safe:animate-in motion-safe:slide-in-from-right-4 motion-safe:duration-200",
       )}
-
-      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        {/* Fixed top app bar: title plus the Sync status dot (ticket 40),
+    >
+      {/* Fixed top app bar: title plus the Sync status dot (ticket 40),
             which loses its home in CardTitle once the Card is gone and
             moves here instead — ambient and always-present on every page,
             unchanged from before. min-h rather than h so the safe-area
             padding-top can grow the bar under a notch/Dynamic Island
             instead of clipping the title against it. */}
-        <header className="flex min-h-14 shrink-0 items-center gap-2 border-b border-border bg-background px-4 [padding-top:env(safe-area-inset-top)]">
-          {searching && search ? (
-            // Ticket 55: the field replaces the title/Sync-dot row and the
-            // magnifier entirely rather than appearing alongside them — "in
-            // place," not a second row pushing the thread down, which is
-            // what makes this agree with CONTEXT.md's "narrows History in
-            // place rather than producing a separate collection" for the
-            // *navigation* half of Search too, not just the filtering
-            // itself.
-            //
-            // `action` (Settings) stays, deliberately departing from the
-            // reference prototype (#49 variant 08), which hides its whole
-            // app bar including its Settings icon while searching. Settings
-            // is reachable *only* through this app-bar action — it isn't in
-            // the persistent Nav (nav.tsx) — so hiding it here would strand
-            // a reader who starts a search mid-visit with no way to reach
-            // Settings without first dismissing (which clears the query).
-            // "The session-storage backup that restores a query after
-            // leaving the page still works" is this ticket's own kept
-            // guarantee (#55, restating #39): that guarantee is only worth
-            // keeping if the round trip through Settings it describes is
-            // still reachable while a search is active, not just before one.
-            <>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                aria-label="Close search"
-                onClick={dismissSearch}
-                className="shrink-0 text-muted-foreground"
-              >
-                <ArrowLeft aria-hidden="true" className="size-4" />
-              </Button>
-              <Input
-                type="search"
-                aria-label={searchLabel}
-                placeholder={searchLabel}
-                autoFocus
-                value={search.query}
-                onChange={(event) => search.onQueryChange(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Escape") {
-                    dismissSearch();
-                  }
-                }}
-                className="h-9 flex-1"
-              />
-              {action && <div className="ml-auto flex items-center gap-3">{action}</div>}
-            </>
-          ) : (
-            <>
-              {back}
-              <span className="flex items-center gap-2 font-heading text-base font-medium">
-                {title}
-                <SyncStatusIndicator />
-              </span>
-              {(search || action) && (
-                <div className="ml-auto flex items-center gap-3">
-                  {search && (
-                    <button
-                      type="button"
-                      aria-label={searchLabel}
-                      onClick={() => setSearchOpen(true)}
-                      className="flex size-11 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                    >
-                      <SearchIcon aria-hidden="true" className="size-4" />
-                    </button>
-                  )}
-                  {action}
-                </div>
-              )}
-            </>
-          )}
-        </header>
+      <header className="flex min-h-14 shrink-0 items-center gap-2 border-b border-border bg-background px-4 [padding-top:env(safe-area-inset-top)]">
+        {searching && search ? (
+          // Ticket 55: the field replaces the title/Sync-dot row and the
+          // magnifier entirely rather than appearing alongside them — "in
+          // place," not a second row pushing the thread down, which is
+          // what makes this agree with CONTEXT.md's "narrows History in
+          // place rather than producing a separate collection" for the
+          // *navigation* half of Search too, not just the filtering
+          // itself.
+          //
+          // `action` (Settings) stays, deliberately departing from the
+          // reference prototype (#49 variant 08), which hides its whole
+          // app bar including its Settings icon while searching. Settings
+          // is reachable *only* through this app-bar action — it isn't in
+          // the persistent Nav (nav.tsx) — so hiding it here would strand
+          // a reader who starts a search mid-visit with no way to reach
+          // Settings without first dismissing (which clears the query).
+          // "The session-storage backup that restores a query after
+          // leaving the page still works" is this ticket's own kept
+          // guarantee (#55, restating #39): that guarantee is only worth
+          // keeping if the round trip through Settings it describes is
+          // still reachable while a search is active, not just before one.
+          <>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label="Close search"
+              onClick={dismissSearch}
+              className="shrink-0 text-muted-foreground"
+            >
+              <ArrowLeft aria-hidden="true" className="size-4" />
+            </Button>
+            <Input
+              type="search"
+              aria-label={searchLabel}
+              placeholder={searchLabel}
+              autoFocus
+              value={search.query}
+              onChange={(event) => search.onQueryChange(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  dismissSearch();
+                }
+              }}
+              className="h-9 flex-1"
+            />
+            {action && <div className="ml-auto flex items-center gap-3">{action}</div>}
+          </>
+        ) : (
+          <>
+            {back}
+            <span className="flex items-center gap-2 font-heading text-base font-medium">
+              {title}
+              <SyncStatusIndicator />
+            </span>
+            {(search || action) && (
+              <div className="ml-auto flex items-center gap-3">
+                {search && (
+                  <button
+                    type="button"
+                    aria-label={searchLabel}
+                    onClick={() => setSearchOpen(true)}
+                    className="flex size-11 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  >
+                    <SearchIcon aria-hidden="true" className="size-4" />
+                  </button>
+                )}
+                {action}
+              </div>
+            )}
+          </>
+        )}
+      </header>
 
+      {/*
+        A positioned wrapper around the scroll region, so the jump-to-newest
+        control below can hang at the region's own bottom edge — just above
+        the Composer — rather than at the viewport's. It cannot live inside
+        the scroll region itself: an absolutely positioned child of a
+        scrolling box scrolls away with the content.
+      */}
+      <div className="relative flex min-h-0 flex-1 flex-col">
         {/* The scrollable content region between the app bar and whatever
             sits below it. Full-bleed on a wide window — the reading column
             inside is what's sized, proportionally rather than to a fixed
@@ -492,35 +493,38 @@ export function Shell({
           </HistoryScrollContext.Provider>
         </div>
 
-        {/* Ticket 53's jump-to-newest control, as a band between the thread
-            and the Composer rather than an overlay floating over the thread.
-            An overlay was the first shape tried and it was wrong: the control
-            hangs at the *viewport's* bottom edge, and it only ever shows while
-            the reader is scrolled away from the newest end — so whatever line
-            happened to be at the bottom of the screen sat underneath it, clipped,
-            and no amount of padding on the content could move it out of the way.
-            Out here it takes its own row and covers nothing. It shows only while
-            away from the newest end, so the height it claims is never taken from
-            a pinned thread; when it goes away the scroll region grows, and a
-            grown region keeps its bottom edge, leaving the reader still at the
-            newest Entry. */}
-        {pinnedThread && awayFromNewest && (
-          <div className="flex justify-center border-t bg-background py-2">
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              onClick={jumpToNewest}
-              className="gap-1.5 rounded-full shadow-sm"
-            >
-              <ArrowDown aria-hidden="true" className="size-3.5" />
-              Jump to newest
-            </Button>
-          </div>
-        )}
+        {/*
+        Ticket 53's jump-to-newest control. It was a band between the thread
+        and the Composer, and that reasoning was sound against the shape it
+        was compared to: an overlay hanging at the *viewport's* bottom edge
+        covered whatever line happened to sit underneath it, and no padding
+        on the content could move it out of the way.
 
-        {composerSlot}
+        A circle anchored to the wrapper above rather than to the viewport
+        has neither problem. It covers a corner of the thread instead of a
+        full line, costs none of the permanent thread height a band claimed,
+        and is the shape gesture-memory expects from every other chat
+        application.
+
+        No count on it: no read or seen state exists anywhere in this app —
+        not on an Entry, not on a Digest, not on a Session — and inventing
+        one to fill a badge is a far larger decision than this control.
+      */}
+        {pinnedThread && awayFromNewest && (
+          <Button
+            type="button"
+            variant="secondary"
+            size="icon"
+            aria-label="Jump to newest"
+            onClick={jumpToNewest}
+            className="absolute right-4 bottom-3 z-10 size-10 rounded-full border border-border shadow-md motion-safe:animate-in motion-safe:fade-in"
+          >
+            <ArrowDown aria-hidden="true" className="size-4" />
+          </Button>
+        )}
       </div>
+
+      {composerSlot}
     </div>
   );
 }

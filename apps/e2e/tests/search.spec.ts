@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { sendEntry, uniqueEntryBody } from "./helpers";
+import { openDestination, sendEntry, uniqueEntryBody } from "./helpers";
 
 // Search's app bar (ticket 55, generalising ticket 39/54's earlier
 // History-only box): the magnifier turns the app bar into a field in
@@ -20,7 +20,7 @@ test("search narrows History to a matching Entry, and clearing it restores both"
   const alpha = uniqueEntryBody("search-alpha");
   const beta = uniqueEntryBody("search-beta");
 
-  await page.goto("/");
+  await page.goto("/composer");
   await sendEntry(page, alpha);
   await sendEntry(page, beta);
 
@@ -46,14 +46,14 @@ test("dismissing search restores the app bar and clears the narrowing", async ({
   const alpha = uniqueEntryBody("search-dismiss-alpha");
   const beta = uniqueEntryBody("search-dismiss-beta");
 
-  await page.goto("/");
+  await page.goto("/composer");
   await sendEntry(page, alpha);
   await sendEntry(page, beta);
 
   await page.getByRole("button", { name: "Search History" }).click();
   await page.getByRole("searchbox", { name: "Search History" }).fill("search-dismiss-alpha");
 
-  await expect(page).toHaveURL(/\/\?q=search-dismiss-alpha/);
+  await expect(page).toHaveURL(/\/composer\?q=search-dismiss-alpha/);
   await expect(page.getByText(beta)).toHaveCount(0);
 
   await page.getByRole("button", { name: "Close search" }).click();
@@ -63,7 +63,7 @@ test("dismissing search restores the app bar and clears the narrowing", async ({
   // narrowing" is ticket 55's acceptance criteria verbatim.
   await expect(page.getByRole("searchbox", { name: "Search History" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Search History" })).toBeVisible();
-  await expect(page).toHaveURL("/");
+  await expect(page).toHaveURL("/composer");
   await expect(page.getByText(alpha)).toBeVisible();
   await expect(page.getByText(beta)).toBeVisible();
 });
@@ -74,14 +74,14 @@ test("a reload with a query in the URL keeps the filter, and the field opens on 
   const alpha = uniqueEntryBody("search-reload-alpha");
   const beta = uniqueEntryBody("search-reload-beta");
 
-  await page.goto("/");
+  await page.goto("/composer");
   await sendEntry(page, alpha);
   await sendEntry(page, beta);
 
   await page.getByRole("button", { name: "Search History" }).click();
   await page.getByRole("searchbox", { name: "Search History" }).fill("search-reload-alpha");
 
-  await expect(page).toHaveURL(/\/\?q=search-reload-alpha/);
+  await expect(page).toHaveURL(/\/composer\?q=search-reload-alpha/);
   await expect(page.getByText(alpha)).toBeVisible();
   await expect(page.getByText(beta)).toHaveCount(0);
 
@@ -106,7 +106,7 @@ test("a search survives a round trip through Settings", async ({ page }) => {
   const alpha = uniqueEntryBody("search-settings-alpha");
   const beta = uniqueEntryBody("search-settings-beta");
 
-  await page.goto("/");
+  await page.goto("/composer");
   await sendEntry(page, alpha);
   await sendEntry(page, beta);
 
@@ -115,15 +115,15 @@ test("a search survives a round trip through Settings", async ({ page }) => {
   await expect(page.getByText(alpha)).toBeVisible();
   await expect(page.getByText(beta)).toHaveCount(0);
 
-  await page.getByRole("link", { name: "Settings" }).click();
+  await openDestination(page, "Settings");
   await expect(page).toHaveURL("/settings");
   // Settings never grows a search affordance of its own (ADR 0008/0009 —
   // it must stay usable with no thread at all).
   await expect(page.getByRole("button", { name: "Search History" })).toHaveCount(0);
 
-  await page.getByRole("link", { name: "Composer" }).click();
+  await openDestination(page, "Composer");
 
-  await expect(page).toHaveURL(/\/\?q=search-settings-alpha/);
+  await expect(page).toHaveURL(/\/composer\?q=search-settings-alpha/);
   await expect(page.getByRole("searchbox", { name: "Search History" })).toHaveValue(
     "search-settings-alpha",
   );
