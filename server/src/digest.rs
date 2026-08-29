@@ -975,8 +975,9 @@ fn digest_system_prompt() -> &'static str {
      user in the second person. Use only what the Entries say — invent nothing: a Digest that \
      invents a past the user did not live is worse than one that says little. Do not include a \
      title, a preamble, headings or bullet points — just the prose itself. Write plain prose \
-     with no Markdown: no asterisks, no underscores, no backticks. The Digest is rendered as \
-     plain text, so any Markdown you emit reaches the reader as literal punctuation."
+     with no Markdown: no asterisks, no underscores, no backticks. A Digest is meant to read as \
+     one continuous piece of writing about a stretch of time, and formatting marks would make \
+     it read as a document instead."
 }
 
 /// The Period's own inclusive local date range, exactly as this module
@@ -1678,4 +1679,32 @@ async fn regenerate_insert(
     .execute(pool)
     .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::digest_system_prompt;
+
+    // Issue #140: the Digest reader now renders the same inline formatting
+    // as everywhere else, so this prompt's old claim that "the Digest is
+    // rendered as plain text" became false. This test pins the two halves
+    // of that repair that must both still hold: the leading phrase both
+    // `server/tests/digest.rs`'s `is_digest_call` and
+    // `apps/e2e/llm-stub.ts`'s `isDigestCall` sniff to recognise a Digest
+    // call at all (the prompt's own doc comment names this a test
+    // contract, not a stylistic choice — nothing mechanical catches a
+    // rewording of it besides these two matchers), and the instruction
+    // that the model itself still emit no Markdown, which did not change
+    // just because the reader now knows how to render it if it did.
+    #[test]
+    fn digest_system_prompt_still_opens_with_the_sniffed_phrase_and_forbids_markdown() {
+        let prompt = digest_system_prompt();
+        assert!(
+            prompt.starts_with("You are the Digest writer"),
+            "changing this opening breaks server/tests/digest.rs's is_digest_call and \
+             apps/e2e/llm-stub.ts's isDigestCall, neither of which lives in this crate"
+        );
+        assert!(prompt.contains("no Markdown"));
+        assert!(prompt.contains("no asterisks"));
+    }
 }

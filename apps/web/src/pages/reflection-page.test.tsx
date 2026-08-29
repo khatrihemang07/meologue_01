@@ -1294,6 +1294,66 @@ describe("ReflectionPage", () => {
       expect(await screen.findByText("It's improved.")).toBeInTheDocument();
     });
 
+    // Issue #140: `LiveRunView`'s streaming Answer and `GivenAnswer`'s
+    // settled one used to be two hand-written elements interpolating the
+    // same string, so formatting one and not the other would have made the
+    // Answer visibly reflow the instant streaming ended — the exact defect
+    // the prefactor (`answerProse`, shared by both) exists to rule out.
+    // This proves the two never disagree: the same `**much**` renders as a
+    // <strong> while still streaming, and still does once the turn settles
+    // into the Conversation below.
+    it("renders the streaming Answer's formatting exactly as the settled Answer renders it, so ending streaming does not reflow the text", async () => {
+      useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+      stubMintedSessionId("session-bold-140");
+      let push!: (event: [string, unknown]) => void;
+      let close!: () => void;
+      const encoder = new TextEncoder();
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          push = (event) => controller.enqueue(encoder.encode(sseFrame(event[0], event[1])));
+          close = () => controller.close();
+        },
+      });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((url: string) => {
+          if (url.endsWith("/v1/reflect")) {
+            return Promise.resolve({ ok: true, status: 200, body });
+          }
+          return new Promise(() => {});
+        }),
+      );
+
+      renderReflectionPage();
+      ask("How has my knee been?");
+
+      push(["step_start", {}]);
+      push(["message_start", {}]);
+      push(["message_update", { delta: "It's **much** better." }]);
+
+      const streamingStrong = await screen.findByText("much");
+      expect(streamingStrong.tagName).toBe("STRONG");
+
+      push([
+        "agent_end",
+        {
+          status: "ok",
+          session_id: "session-bold-140",
+          title: "How has my knee been?",
+          answer: "It's **much** better.",
+          grounding_entry_ids: [],
+        },
+      ]);
+      close();
+
+      // Once the streamed paragraph is gone and the turn has settled into
+      // the Conversation (`GivenAnswer`'s `Bubble`), the identical prose
+      // still renders as a <strong> rather than reverting to the literal
+      // asterisks — the same code path produced both.
+      const settledStrong = await screen.findByText("much");
+      expect(settledStrong.tagName).toBe("STRONG");
+    });
+
     // Accessibility (issue #96's own acceptance criterion): steps are
     // announced to assistive technology, but the streamed Answer must not
     // be narrated character by character — the two need different
@@ -1536,5 +1596,55 @@ describe("ReflectionPage", () => {
         Object.defineProperty(window, "sessionStorage", originalDescriptor);
       }
     }
+  });
+
+  // Issue #140: the same inline formatting the Entry bubble and Grounding
+  // already render now applies to the Question and the Answer too.
+  describe("inline formatting", () => {
+    it("renders the user's own Question with the same inline formatting as an Entry", async () => {
+      useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+      stubMintedSessionId("session-question-140");
+      stubFetch({
+        reflect: () => ({
+          answer: "Yes, it was.",
+          grounding_entry_ids: [],
+          session_id: "session-question-140",
+          title: "Did my knee hurt?",
+        }),
+      });
+
+      renderReflectionPage();
+      ask("Did my **knee** hurt today?");
+
+      const strong = await screen.findByText("knee");
+      expect(strong.tagName).toBe("STRONG");
+    });
+
+    // `inlineProse` only ever enters the inline layer (ADR 0041) — a
+    // heading or bullet marker never reaches the block layer that would
+    // turn it into an `<h1>`/`<ul>`, so it reaches the reader exactly as
+    // typed. Both the Question and the settled Answer go through it, so
+    // both are checked here.
+    it("renders no block element for block-looking prose in either the Question or the Answer", async () => {
+      useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+      stubMintedSessionId("session-block-140");
+      stubFetch({
+        reflect: () => ({
+          answer: "# Not an Answer heading, just text.",
+          grounding_entry_ids: [],
+          session_id: "session-block-140",
+          title: "Question",
+        }),
+      });
+
+      renderReflectionPage();
+      ask("- Not a Question bullet, just text.");
+
+      const question = await screen.findByText(/Not a Question bullet/);
+      const answer = await screen.findByText(/Not an Answer heading/);
+      const blockTags = ["H1", "H2", "H3", "H4", "H5", "H6", "UL", "OL", "LI"];
+      expect(blockTags).not.toContain(question.tagName);
+      expect(blockTags).not.toContain(answer.tagName);
+    });
   });
 });

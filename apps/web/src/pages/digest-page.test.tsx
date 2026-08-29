@@ -220,6 +220,37 @@ describe("DigestPage", () => {
     }
   });
 
+  // Issue #140: the card preview renders through `inlineProse` too, and the
+  // clamp (`useFittedDigests`) measures that same paragraph's `scrollHeight`
+  // divided by its `lineHeight` — arithmetic that only holds while the
+  // measured element is one inline line box. `inlineProse` never emits a
+  // wrapper of its own (ADR 0041's inline-only parse), so formatting a
+  // `<strong>` into the preview must not add a block child to the `<p
+  // ref={bodyRef}>` the measurement reads.
+  it("renders formatting in the card's clamped preview, with no block element inside the measured paragraph", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    stubDigestFetch({
+      day: {
+        status: 200,
+        digest: digestFixture({
+          period: "day",
+          body: "You wrote about your **knee** again today.",
+        }),
+      },
+      week: { status: 200, digest: null },
+      month: { status: 200, digest: null },
+    });
+
+    renderDigestPage();
+
+    const strong = await screen.findByText("knee");
+    expect(strong.tagName).toBe("STRONG");
+
+    const proseParagraph = strong.closest("p");
+    expect(proseParagraph).not.toBeNull();
+    expect(proseParagraph?.querySelector("div, p, h1, h2, h3, h4, h5, h6, ul, ol, li")).toBeNull();
+  });
+
   it("links each card to /digest/{period}/{period_start}", async () => {
     useSettingsStore.getState().setServerUrl("https://phone.example:41207");
     stubDigestFetch({

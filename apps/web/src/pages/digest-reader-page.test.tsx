@@ -123,6 +123,42 @@ describe("DigestReaderPage", () => {
     expect(screen.getByRole("button", { name: "Next Digest" })).toBeDisabled();
   });
 
+  // Issue #140: the Digest reader now renders through `inlineProse`, the
+  // same inline renderer as the Entry bubble and Grounding — so a `**bold**`
+  // the Server wrote reaches the reader as a `<strong>`, not literal
+  // asterisks. `inlineProse` never enters the block layer (ADR 0041), so a
+  // heading- or bullet-looking line stays plain text too, rather than
+  // becoming an `<h1>`/`<ul>` that would break the line-count measurement a
+  // block element elsewhere in this codebase depends on.
+  it("renders the Digest body's inline formatting, with no block element for a heading- or bullet-looking line", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    stubDigestAtFetch({
+      status: 200,
+      digest: {
+        period: "day",
+        period_start: "2026-08-20",
+        period_end: "2026-08-20",
+        body: "Your **knee** felt better today.\n# Not a heading, just text.",
+        grounding_entry_ids: ["entry-1"],
+        prev_date: null,
+        next_date: null,
+        stale: false,
+        revision: 1,
+        written_at: "2026-08-21T06:00:00Z",
+      },
+    });
+
+    renderDigestReaderPage("/digest/day/2026-08-20");
+
+    const strong = await screen.findByText("knee");
+    expect(strong.tagName).toBe("STRONG");
+
+    const headingLooking = screen.getByText(/Not a heading, just text\./);
+    expect(["H1", "H2", "H3", "H4", "H5", "H6", "UL", "OL", "LI"]).not.toContain(
+      headingLooking.tagName,
+    );
+  });
+
   it("shows the Period and its date range for a week Digest", async () => {
     useSettingsStore.getState().setServerUrl("https://phone.example:41207");
     stubDigestAtFetch({

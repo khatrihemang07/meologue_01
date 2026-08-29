@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useContext, useLayoutEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 import { BackToChats } from "@/components/back-to-chats";
+import { inlineProse } from "@/components/inline-prose";
 import { ServerUnreachableBanner } from "@/components/server-unreachable-banner";
 import { HistoryScrollContext, Shell } from "@/components/shell";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -162,7 +163,7 @@ function DigestCard({
           */}
           <div className="overflow-hidden" style={{ maxHeight: maxBodyHeight ?? undefined }}>
             <p ref={bodyRef} className="text-muted-foreground text-sm">
-              {digest.body}
+              {inlineProse(digest.body)}
             </p>
           </div>
           {/*

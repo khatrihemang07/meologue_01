@@ -9,9 +9,9 @@
 import type { Entry } from "@meologue/core";
 import { type MouseEvent, memo, type ReactNode, useState } from "react";
 import { EntryHoverActions, hoverCapable } from "@/components/entry-actions";
+import { inlineProse } from "@/components/inline-prose";
 import { formatClockTime } from "@/lib/entry-day";
 import { formatAbsoluteTime } from "@/lib/entry-time";
-import { highlightMatches } from "@/lib/highlight-match";
 import { cn } from "@/lib/utils";
 
 /**
@@ -29,20 +29,7 @@ import { cn } from "@/lib/utils";
  * History and Grounding, which is what `EntryBody`'s own extraction was for.
  */
 export function entryBodyContent(body: string, query: string): ReactNode {
-  if (query.trim() === "") {
-    return body;
-  }
-  return highlightMatches(body, query).map((segment, index) =>
-    segment.matched ? (
-      // biome-ignore lint/suspicious/noArrayIndexKey: segments are a stable, ordered split of one Entry's body for one render.
-      <mark key={index} className="rounded-sm bg-primary/30 text-inherit">
-        {segment.text}
-      </mark>
-    ) : (
-      // biome-ignore lint/suspicious/noArrayIndexKey: segments are a stable, ordered split of one Entry's body for one render.
-      <span key={index}>{segment.text}</span>
-    ),
-  );
+  return inlineProse(body, query);
 }
 
 export function EntryBody({ body, query }: { body: string; query: string }) {
