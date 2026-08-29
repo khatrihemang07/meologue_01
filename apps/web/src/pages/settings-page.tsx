@@ -7,9 +7,17 @@ import { Shell } from "@/components/shell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { checkServerUrl, type ServerCheckResult } from "@/lib/server-check";
-import { normaliseServerUrl, type Theme, useSettingsStore } from "@/lib/settings";
+import {
+  ACCENTS,
+  type AccentId,
+  normaliseServerUrl,
+  TEXT_SIZES,
+  type TextSizeId,
+  type Theme,
+  useSettingsStore,
+} from "@/lib/settings";
 import { useSyncStatus } from "@/lib/sync-status";
-import { applyTheme } from "@/lib/theme";
+import { applyAccent, applyTextSize, applyTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import { entryStoreQueryOptions } from "@/pages/entry-store-layout";
 import { saveFile } from "@/platform/save-file";
@@ -19,6 +27,69 @@ const THEME_OPTIONS: { value: Theme; label: string }[] = [
   { value: "dark", label: "Dark" },
   { value: "system", label: "System" },
 ];
+
+/**
+ * One section's shape, so every section on this page has the same one
+ * (#128). The label, the optional line explaining what the control does,
+ * and the control itself sit at fixed gaps here rather than being written
+ * out five times — which is how a page ends up pairing its tightest gap
+ * with its heaviest control and nobody notices.
+ *
+ * A `<fieldset>` with a real `<legend>`, so the visible label IS the group's
+ * accessible name. Three of these five sections are genuinely groups of
+ * mutually exclusive choices; naming them with a `<span>` and then adding
+ * `role="group"` plus an `aria-label` elsewhere would say the same word
+ * twice, once to a reader's eyes and once to their screen reader.
+ *
+ * `mb-2` on the legend rather than a gap: a `<legend>` is laid out specially
+ * by the UA and is not a flex item of its own fieldset, so a `gap` on the
+ * fieldset would silently not apply to the one place this page most needs it
+ * to. The margin and the inner `gap-2` are deliberately the same number.
+ */
+function SettingsSection({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    // `min-w-0` fights the UA's own `min-inline-size: min-content` on a
+    // fieldset, which would otherwise let a long status line push this
+    // section wider than the column it sits in.
+    <fieldset className="min-w-0">
+      <legend className="mb-2 font-medium text-sm">{label}</legend>
+      {hint && <p className="mb-2 text-muted-foreground text-xs">{hint}</p>}
+      <div className="flex flex-col gap-2">{children}</div>
+    </fieldset>
+  );
+}
+
+/**
+ * A row of mutually exclusive choices, laid out as an even grid rather than
+ * a wrapping flex row.
+ *
+ * The grid is what stops the fifth Accent swatch from orphaning onto a row
+ * of its own: a `flex-wrap` row breaks wherever it runs out of width, which
+ * on a phone is after four. `grid-cols-5` is five even columns at every
+ * width the app supports — 5 x 44px plus four 8px gaps is 252px, inside the
+ * content width of the narrowest Device this runs on.
+ *
+ * `aria-pressed` toggles rather than real radios, matching what the Theme
+ * control on this page already did before there were three of these: one
+ * pattern for all three groups is worth more here than the marginally
+ * better semantics of a radio group in one of them and not the others. The
+ * group's own name comes from `SettingsSection`'s `<legend>`, not from here.
+ */
+function ChoiceRow({ columns, children }: { columns: 3 | 5; children: React.ReactNode }) {
+  return (
+    <div className={cn("grid gap-2", columns === 3 ? "grid-cols-3" : "grid-cols-5")}>
+      {children}
+    </div>
+  );
+}
 
 // Distinct, actionable copy per outcome (ticket 30). A failed `fetch` in a
 // browser is opaque — DNS failure, connection refused, TLS failure, CORS
@@ -49,8 +120,12 @@ export function SettingsPage() {
   // than copying it into local state means this control can never drift
   // from what's actually in effect.
   const theme = useSettingsStore((state) => state.theme);
+  const accent = useSettingsStore((state) => state.accent);
+  const textSize = useSettingsStore((state) => state.textSize);
   const storedServerUrl = useSettingsStore((state) => state.serverUrl);
   const setStoredTheme = useSettingsStore((state) => state.setTheme);
+  const setStoredAccent = useSettingsStore((state) => state.setAccent);
+  const setStoredTextSize = useSettingsStore((state) => state.setTextSize);
   const setStoredServerUrl = useSettingsStore((state) => state.setServerUrl);
   const syncStatus = useSyncStatus();
 
@@ -93,9 +168,23 @@ export function SettingsPage() {
     };
   }, []);
 
+  // Apply first, then persist — the same order `selectTheme` has always
+  // used. The visible effect is a custom property or a class on <html>, and
+  // a storage write that throws (private browsing) must not be what stands
+  // between the reader and the change they just asked for.
   function selectTheme(next: Theme) {
     applyTheme(next);
     setStoredTheme(next);
+  }
+
+  function selectAccent(next: AccentId) {
+    applyAccent(next);
+    setStoredAccent(next);
+  }
+
+  function selectTextSize(next: TextSizeId) {
+    applyTextSize(next);
+    setStoredTextSize(next);
   }
 
   async function saveServerUrl() {
@@ -177,13 +266,13 @@ export function SettingsPage() {
     // could go") applies to Settings now for the same reason it always
     // applied to the other three.
     <Shell title="Settings" back={<BackToChats />}>
-      <div className="flex flex-col gap-2">
-        <span className="text-sm font-medium">Theme</span>
-        <div className="inline-flex gap-1">
+      <SettingsSection label="Theme">
+        <ChoiceRow columns={3}>
           {THEME_OPTIONS.map((option) => (
             <Button
               key={option.value}
               type="button"
+              size="touch"
               variant={theme === option.value ? "default" : "outline"}
               aria-pressed={theme === option.value}
               onClick={() => selectTheme(option.value)}
@@ -191,13 +280,64 @@ export function SettingsPage() {
               {option.label}
             </Button>
           ))}
-        </div>
-      </div>
+        </ChoiceRow>
+      </SettingsSection>
 
-      <div className="flex flex-col gap-2">
-        <label htmlFor="server-url" className="text-sm font-medium">
-          Server URL
-        </label>
+      <SettingsSection label="Accent" hint="Recolours your own Entries, right away.">
+        <ChoiceRow columns={5}>
+          {ACCENTS.map((option) => (
+            <button
+              key={option.id}
+              type="button"
+              aria-label={option.label}
+              aria-pressed={accent === option.id}
+              onClick={() => selectAccent(option.id)}
+              className={cn(
+                "flex h-11 flex-col items-center justify-center gap-1 rounded-lg border transition-colors",
+                accent === option.id
+                  ? "border-foreground bg-muted"
+                  : "border-transparent hover:bg-muted",
+              )}
+            >
+              {/*
+                The colour comes from `index.css`'s own per-Accent variable
+                rather than an inline hex, so a swatch can never show one
+                colour while the thread paints another.
+              */}
+              <span
+                aria-hidden="true"
+                className="size-4 shrink-0 rounded-full"
+                style={{ backgroundColor: `var(--accent-${option.id})` }}
+              />
+              <span className="w-full truncate px-0.5 text-center text-[10px] text-muted-foreground">
+                {option.label}
+              </span>
+            </button>
+          ))}
+        </ChoiceRow>
+      </SettingsSection>
+
+      <SettingsSection
+        label="Text size"
+        hint="Changes the words you wrote. The time, the sync tick and the day label stay the same size."
+      >
+        <ChoiceRow columns={3}>
+          {TEXT_SIZES.map((option) => (
+            <Button
+              key={option.id}
+              type="button"
+              size="touch"
+              variant={textSize === option.id ? "default" : "outline"}
+              aria-pressed={textSize === option.id}
+              onClick={() => selectTextSize(option.id)}
+            >
+              {option.label}
+            </Button>
+          ))}
+        </ChoiceRow>
+      </SettingsSection>
+
+      <SettingsSection label="Server URL">
         {/*
           Issue #76: a real <form>, submitted on plain Enter — not the
           Composer's chord (submit-chord.ts). That chord exists to keep
@@ -208,6 +348,10 @@ export function SettingsPage() {
           benefit. The button becomes type="submit" so it triggers the same
           form submission Enter does, rather than the two paths calling
           saveServerUrl independently and drifting apart later.
+
+          The visible label is `SettingsSection`'s own, and the <label for>
+          below it is `sr-only` rather than deleted: an <input> needs a real
+          label, and two visible ones saying "Server URL" would say it twice.
         */}
         <form
           className="flex gap-2"
@@ -216,14 +360,20 @@ export function SettingsPage() {
             saveServerUrl();
           }}
         >
+          <label htmlFor="server-url" className="sr-only">
+            Server URL
+          </label>
           <Input
             id="server-url"
             type="text"
             placeholder="Leave empty to turn sync off"
             value={serverUrl}
             onChange={(event) => setServerUrl(event.target.value)}
+            className="h-11"
           />
-          <Button type="submit">Save</Button>
+          <Button type="submit" size="touch">
+            Save
+          </Button>
         </form>
         {status && (
           <p
@@ -250,20 +400,19 @@ export function SettingsPage() {
           // field matches what's saved, same reasoning as `status`: mid-edit,
           // the reason on screen would be about an address the user is in the
           // middle of replacing.
-          <p data-testid="sync-failure-reason" className="text-sm text-destructive">
+          <p data-testid="sync-failure-reason" className="text-destructive text-sm">
             Sync is failing: {syncStatus.reason}
           </p>
         )}
-      </div>
+      </SettingsSection>
 
-      <div className="flex flex-col gap-2">
-        <span className="text-sm font-medium">Export</span>
+      <SettingsSection label="Export">
         <div>
-          <Button type="button" onClick={handleExport} disabled={!opened}>
+          <Button type="button" size="touch" onClick={handleExport} disabled={!opened}>
             Export as zip
           </Button>
         </div>
-      </div>
+      </SettingsSection>
     </Shell>
   );
 }

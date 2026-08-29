@@ -91,8 +91,16 @@ export function ChatList() {
             the avatar. `last:border-b-0` rather than a border on the
             container's children generally: the final row has nothing below
             it to be separated from.
+
+            `--separator`, not `border-border` (#128). In the dark theme
+            `--border` is white at 10%, which is right for a card edge beside
+            a fill that already reads as one and far too faint for a hairline
+            that is the ONLY thing between two rows of the same colour —
+            these dividers were effectively invisible there. A second token
+            rather than raising `--border`, which every input, card and pill
+            in the app also reads.
           */}
-          <span className="flex min-w-0 flex-1 flex-col gap-0.5 border-b border-border py-3 pr-4 last:border-b-0">
+          <span className="flex min-w-0 flex-1 flex-col gap-0.5 border-[var(--separator)] border-b py-3 pr-4 last:border-b-0">
             <span className="truncate font-medium text-foreground text-sm">{label}</span>
             {/*
               Every row's summary truncates the same way, including

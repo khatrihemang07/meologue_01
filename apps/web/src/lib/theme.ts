@@ -1,4 +1,4 @@
-import { type Theme, useSettingsStore } from "@/lib/settings";
+import { type AccentId, type TextSizeId, type Theme, useSettingsStore } from "@/lib/settings";
 
 const DARK_MEDIA_QUERY = "(prefers-color-scheme: dark)";
 
@@ -21,6 +21,25 @@ function resolve(theme: Theme): "light" | "dark" {
  */
 export function applyTheme(theme: Theme): void {
   document.documentElement.classList.toggle("dark", resolve(theme) === "dark");
+}
+
+/**
+ * Puts the chosen Accent on the document root (#128). One attribute, not a
+ * colour: `index.css` owns the five values under `[data-accent]`, so this —
+ * and `index.html`'s pre-paint script, which does exactly the same thing
+ * before the bundle runs — never carry a second copy of them.
+ *
+ * Nothing re-renders as a result. Every bubble already reads
+ * `--entry-accent-fill`, so changing the attribute repaints them on the
+ * next frame, including the ones scrolled out of view.
+ */
+export function applyAccent(accent: AccentId): void {
+  document.documentElement.dataset.accent = accent;
+}
+
+/** The same, for text size — `index.css` owns the three scales. */
+export function applyTextSize(size: TextSizeId): void {
+  document.documentElement.dataset.textSize = size;
 }
 
 /**

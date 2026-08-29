@@ -147,20 +147,34 @@ function ConversationTurnRow({
     <div className="flex flex-col gap-2">
       <AskedQuestion text={turn.question} />
       <GivenAnswer text={turn.answer} />
-      {/* Issue #98: "reading a Conversation back shows which model produced
-          which part" — shown for every turn, not only on a change, so a
-          limit hit under one model is never mistaken for one under
-          whichever model replaced it (this ticket's own acceptance
-          criterion, server/src/reflect.rs's ReflectResponse.model doc
-          comment). */}
-      <p className="mr-auto text-xs text-muted-foreground">{turn.model}</p>
-      <GroundingNote turn={turn} />
-      <GroundingDisclosure
-        turn={turn}
-        entries={groundingEntries}
-        loading={groundingEntriesLoading}
-        syncEnabled={syncEnabled}
-      />
+      {/*
+        Everything an Answer carries underneath it, sharing the Answer's own
+        geometry (#128). `pr-[12%]` is the incoming bubble's own inset and
+        `pl-3` is its own horizontal padding, so these lines start under the
+        Answer's first character and end where the Answer ends. Before this
+        they were `mr-auto max-w-[85%]`: flush against the pane's left edge,
+        three pixels out of step with the words they describe, and 85% of a
+        width the bubble had not used since ADR 0036 gave it a side.
+
+        One wrapper rather than the same two classes written on each of the
+        three, so a fourth caption cannot arrive misaligned.
+      */}
+      <div className="flex flex-col gap-1 pr-[12%] pl-3">
+        {/* Issue #98: "reading a Conversation back shows which model produced
+            which part" — shown for every turn, not only on a change, so a
+            limit hit under one model is never mistaken for one under
+            whichever model replaced it (this ticket's own acceptance
+            criterion, server/src/reflect.rs's ReflectResponse.model doc
+            comment). */}
+        <p className="text-muted-foreground text-xs">{turn.model}</p>
+        <GroundingNote turn={turn} />
+        <GroundingDisclosure
+          turn={turn}
+          entries={groundingEntries}
+          loading={groundingEntriesLoading}
+          syncEnabled={syncEnabled}
+        />
+      </div>
     </div>
   );
 }

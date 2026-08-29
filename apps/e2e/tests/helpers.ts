@@ -146,6 +146,73 @@ export async function waitForTombstone(
 }
 
 /**
+ * Writes one Digest row straight into the database the suite is running
+ * against.
+ *
+ * SQL through `docker exec` rather than driving the Server's own writer:
+ * `server/src/digest.rs`'s resume rule means a cold e2e database would need
+ * real Entries, a real embedding pass and a real LLM call before any Digest
+ * existed, and none of that is what a Digest test on the client is about.
+ * `digest.spec.ts`'s own header comment records the full reasoning.
+ *
+ * `on conflict ... do nothing` mirrors `server/src/digest.rs::insert_digest`
+ * exactly, for the same reason it exists there: re-running a spec locally
+ * against a database that already holds these rows must stay a no-op rather
+ * than a duplicate-key failure. `grounding_entry_ids` is an empty array —
+ * no spec that seeds this way asserts on a Digest's Grounding, so there is
+ * no Entry for these rows to reference.
+ */
+export function seedDigest(
+  period: "day" | "week" | "month",
+  periodStart: string,
+  body: string,
+  database: string,
+): void {
+  runSql(
+    "insert into digests (id, period, period_start, body, grounding_entry_ids) " +
+      `values (${sqlLiteral(randomUUID())}, ${sqlLiteral(period)}, ${sqlLiteral(periodStart)}, ${sqlLiteral(body)}, '{}') ` +
+      "on conflict (period, period_start) do nothing;",
+    database,
+  );
+}
+
+/**
+ * Removes a seeded Digest again.
+ *
+ * Worth having because `/v1/digest/:period` answers with the NEWEST Digest
+ * of that Period, so two specs that both seed one are not independent: the
+ * later date wins for whichever of them runs second. A spec that seeds a
+ * Digest newer than another spec's therefore has to take it away again —
+ * `scripts/e2e.sh` recreates the databases per run, not per file.
+ */
+export function deleteDigest(
+  period: "day" | "week" | "month",
+  periodStart: string,
+  database: string,
+): void {
+  runSql(
+    `delete from digests where period = ${sqlLiteral(period)} and period_start = ${sqlLiteral(periodStart)};`,
+    database,
+  );
+}
+
+function runSql(sql: string, database: string): void {
+  execFileSync("docker", [
+    "exec",
+    POSTGRES_CONTAINER,
+    "psql",
+    "-U",
+    "meologue",
+    "-d",
+    database,
+    "-v",
+    "ON_ERROR_STOP=1",
+    "-c",
+    sql,
+  ]);
+}
+
+/**
  * A Playwright `storageState` that seeds `meologue.server-url` for the app's
  * own origin before any page script runs — sync is opt-in (ADR 0011), so
  * without this every context would load with sync off and none of the

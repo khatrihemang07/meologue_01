@@ -91,7 +91,13 @@ export function Bubble({
           // floated meta line is contained by the bubble rather than
           // escaping it.
           "max-w-full overflow-hidden rounded-2xl px-3 py-2 text-sm",
-          side === "out" ? "bg-primary/10" : "bg-muted",
+          // The reader's chosen Accent (#128), mixed against the background
+          // rather than laid over it — see index.css. Before this, "out" was
+          // `bg-primary/10` and "in" was `bg-muted`, which in the light theme
+          // are both near-grey: on Composer that costs nothing, since every
+          // Entry is outgoing, but on Reflect it left a Question and its
+          // Answer told apart by a tint neither of them really had.
+          side === "out" ? "bg-[var(--entry-accent-fill)]" : "bg-muted",
           innerClassName,
         )}
         {...innerRest}
@@ -213,7 +219,19 @@ export const EntryBubble = memo(function EntryBubble({
         block, it has no line to join and drops beneath the whole thing —
         which is exactly what made a one-word Entry cost two lines.
       */}
-      <span data-slot="bubble-body" className="whitespace-pre-wrap">
+      {/*
+        The one thing text size scales (#128). `BubbleMeta` below, the day
+        pill above and the sync tick all carry their own fixed sizes and
+        never read `--entry-text-scale`, which is what keeps the furniture
+        still while the words the reader wrote grow. Reflect's Question and
+        Answer deliberately do not scale: a Question is the reader's own
+        words and an Answer is not, and scaling one without the other would
+        put two sizes of prose in the same thread.
+      */}
+      <span
+        data-slot="bubble-body"
+        className="whitespace-pre-wrap text-[calc(0.875rem*var(--entry-text-scale,1))]"
+      >
         {entryBodyContent(entry.body, query)}
       </span>
       <BubbleMeta

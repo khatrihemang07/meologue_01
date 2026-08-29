@@ -159,7 +159,11 @@ export function GroundingDisclosure({
   // Answer usually has none at all (see this module's own doc comment).
   if (outcome === "digest" && digestSource !== undefined) {
     return (
-      <p className="mr-auto max-w-[85%] text-xs text-muted-foreground">
+      // Neither the inset nor the width lives here any more (#128):
+      // `reflection-page.tsx` gives every caption under an Answer the
+      // Answer's own geometry in one place, so this and the disclosure below
+      // cannot drift apart from each other or from the bubble.
+      <p className="text-muted-foreground text-xs">
         Answered from the {digestSource.period} Digest for {digestRangeLabel(digestSource)}.
       </p>
     );
@@ -170,8 +174,14 @@ export function GroundingDisclosure({
   }
 
   return (
-    <details className="mr-auto max-w-[85%] text-xs text-muted-foreground">
-      <summary className="cursor-pointer select-none">
+    <details className="text-muted-foreground text-xs">
+      {/*
+        `min-h-11` (44px) so the one control on an Answer that a finger has
+        to hit is a target a finger can hit — the same size every app-bar
+        control already uses. `items-center` is what keeps the label itself
+        vertically centred in that taller box rather than sitting at its top.
+      */}
+      <summary className="flex min-h-11 cursor-pointer select-none items-center">
         {summaryLabel(groundingEntryIds.length)}
       </summary>
       <div className="mt-1 divide-y divide-border rounded-md border border-border px-2">

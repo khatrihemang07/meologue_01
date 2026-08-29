@@ -1,7 +1,5 @@
-import { execFileSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import { expect, test } from "@playwright/test";
-import { openDestination } from "./helpers";
+import { openDestination, seedDigest } from "./helpers";
 
 // Digest covered end to end (issue #73): open Digest from the root screen,
 // see a
@@ -58,7 +56,6 @@ import { openDestination } from "./helpers";
 // They must stay in step with `scripts/e2e-server.sh`'s DATABASE_URL:
 // this spec seeds rows that server A is then asked to serve.
 
-const CONTAINER = "meologue-postgres-sandbox";
 const DATABASE = "meologue_e2e_a";
 
 // Three "day" Digests, oldest first, with a deliberate multi-day gap
@@ -87,45 +84,12 @@ const NEWEST_BODY =
   "Seeded stub prose for the newest day - the Digest the cards page opens by default.";
 
 /**
- * Doubles an embedded single quote — the one escape a plain SQL string
- * literal needs. Every value this spec ever passes here is a fixed
- * literal written above, never anything from outside the test, so this
- * is defensive rather than load-bearing.
- */
-function sqlLiteral(value: string): string {
-  return `'${value.replace(/'/g, "''")}'`;
-}
-
-/**
- * Inserts one "day" Digest row straight into the database the e2e suite
- * is running against — see this file's header comment for why SQL,
- * issued through `docker exec`, is the seeding mechanism. `on conflict
- * ... do nothing` mirrors `server/src/digest.rs::insert_digest` exactly,
- * for the same reason it exists there: re-running this spec locally
- * against a database that already holds these rows must stay a no-op,
- * never a duplicate-key failure. `grounding_entry_ids` is `'{}'` (an
- * empty array) — this spec asserts on the Digest's prose and its Period
- * stepping, never on its Grounding, so there is no Entry for these rows
- * to reference.
+ * One "day" Digest, through the shared writer in `helpers.ts` — see its own
+ * doc comment for why this is SQL through `docker exec` rather than the
+ * Server's own writer, and this file's header for the fuller reasoning.
  */
 function seedDayDigest(periodStart: string, body: string): void {
-  const sql =
-    "insert into digests (id, period, period_start, body, grounding_entry_ids) " +
-    `values (${sqlLiteral(randomUUID())}, 'day', ${sqlLiteral(periodStart)}, ${sqlLiteral(body)}, '{}') ` +
-    "on conflict (period, period_start) do nothing;";
-  execFileSync("docker", [
-    "exec",
-    CONTAINER,
-    "psql",
-    "-U",
-    "meologue",
-    "-d",
-    DATABASE,
-    "-v",
-    "ON_ERROR_STOP=1",
-    "-c",
-    sql,
-  ]);
+  seedDigest("day", periodStart, body, DATABASE);
 }
 
 test("open Digest from the nav, read a card, open it, and step back across a gap", async ({

@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { SyncLoop } from "@/hooks/use-sync-loop";
 import { queryClient } from "@/lib/query-client";
 import { useSettingsStore } from "@/lib/settings";
-import { applyTheme, watchSystemTheme } from "@/lib/theme";
+import { applyAccent, applyTextSize, applyTheme, watchSystemTheme } from "@/lib/theme";
 import { registerServiceWorker } from "@/platform/register-service-worker";
 import "./index.css";
 import App from "./App.tsx";
@@ -20,11 +20,15 @@ if (!rootElement) {
   throw new Error("#root element not found");
 }
 
-// index.html already applied the theme inline, before the browser's first
-// paint — this bundle is a deferred module and would otherwise run after the
-// stylesheet had painted the light palette. Re-applying here keeps the whole
-// resolution in one place for every later change, and costs one class toggle.
-applyTheme(useSettingsStore.getState().theme);
+// index.html already applied all three of these inline, before the browser's
+// first paint — this bundle is a deferred module and would otherwise run
+// after the stylesheet had painted the light palette and the default Accent.
+// Re-applying here keeps the whole resolution in one place for every later
+// change, and costs one class toggle and two attribute writes.
+const settings = useSettingsStore.getState();
+applyTheme(settings.theme);
+applyAccent(settings.accent);
+applyTextSize(settings.textSize);
 watchSystemTheme();
 
 createRoot(rootElement).render(

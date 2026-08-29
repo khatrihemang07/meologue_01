@@ -169,6 +169,28 @@ test("a deleted Entry does not come back through Reflection's Grounding", async 
 
   await expect(page.getByText(keptBody)).toBeVisible();
   await expect(page.getByText(deletedBody)).toHaveCount(0);
+
+  // #128: the disclosure sits under an Answer bubble rather than beside it.
+  // Its left edge lines up with the Answer's own first character (the
+  // bubble's `px-3`), and its right edge stops where the Answer's does (the
+  // bubble's `pr-[12%]`) — before this it was flush against the pane's left
+  // edge and 85% of a width the bubble had not used since ADR 0036 gave it
+  // a side. Measured rather than asserted from class names, because the
+  // inset is a percentage of a width jsdom does not have.
+  const answerBubble = page
+    .locator('[data-slot="bubble"][data-side="in"]')
+    .filter({ hasText: STUB_ANSWER })
+    .locator("> div")
+    .first();
+  const answerBox = await answerBubble.boundingBox();
+  const summaryBox = await summary.boundingBox();
+  expect(answerBox).not.toBeNull();
+  expect(summaryBox).not.toBeNull();
+  // Within a pixel: the bubble's own horizontal padding is what the caption
+  // is indented by, so the two text edges coincide.
+  expect(Math.abs((summaryBox?.x ?? 0) - ((answerBox?.x ?? 0) + 12))).toBeLessThan(1.5);
+  // And it is a target a finger can hit — the one control an Answer carries.
+  expect(summaryBox?.height ?? 0).toBeGreaterThanOrEqual(44);
 });
 
 /**
