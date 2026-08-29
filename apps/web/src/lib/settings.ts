@@ -7,8 +7,9 @@
  * only refreshed when something else happened to re-render them (ticket 36).
  *
  * Persisted as plain `localStorage` string keys, one per setting —
- * `meologue.theme`, `meologue.server-url`, and since #128
- * `meologue.accent` and `meologue.text-size` — not a single JSON blob under
+ * `meologue.theme`, `meologue.server-url`, since #128 `meologue.accent` and
+ * `meologue.text-size`, and since #134 `meologue.hidden-destinations` — not
+ * a single JSON blob under
  * Zustand's `persist` middleware, which writes the whole store under one
  * key. Three things depend on that format: the inline
  * blocking script in `index.html` that applies the theme before first paint
@@ -35,6 +36,14 @@ const SERVER_URL_KEY = "meologue.server-url";
 const LIST_WIDTH_KEY = "meologue.list-width";
 const ACCENT_KEY = "meologue.accent";
 const TEXT_SIZE_KEY = "meologue.text-size";
+// Issue #134. Comma-joined slugs, e.g. "reflect,digest" — deliberately not
+// a JSON blob under one key: ADR 0008's stated reasoning for "no JSON blob"
+// is that a shared shape means a corrupt or unparseable value for one
+// setting can take out another on read, and a `String.split(",")` has
+// nothing to parse that can throw the way `JSON.parse` can, so a hand-edited
+// or truncated value degrades one slug at a time (`isHideableDestinationId`
+// below) rather than losing the whole preference.
+const HIDDEN_DESTINATIONS_KEY = "meologue.hidden-destinations";
 const CAPABILITIES_KEY = "meologue.capabilities";
 
 /**
@@ -104,6 +113,34 @@ export const TEXT_SIZES: { id: TextSizeId; label: string }[] = [
 
 export const DEFAULT_TEXT_SIZE: TextSizeId = "default";
 
+/**
+ * The Destinations a reader can hide from the root screen's list (issue
+ * #134) — Composer, Reflect and Digest, matching `chat-list.tsx`'s own
+ * `DESTINATIONS` slugs (each row's `to` with the leading slash stripped).
+ * Settings is deliberately not one of these ids and is never offered a
+ * control by `settings-page.tsx`: ADR 0008/0009 make it the recovery route
+ * when the Entry store won't open or the Server URL is wrong, so it must
+ * never be capable of disappearing from the list that leads to it.
+ */
+export type HideableDestinationId = "composer" | "reflect" | "digest";
+
+export const HIDEABLE_DESTINATIONS: { id: HideableDestinationId; label: string }[] = [
+  { id: "composer", label: "Composer" },
+  { id: "reflect", label: "Reflect" },
+  { id: "digest", label: "Digest" },
+];
+
+/**
+ * Nothing hidden — every Destination visible. This is also what a Device
+ * that has never opened Settings and what a corrupt or unrecognised stored
+ * value both degrade to (`readStoredHiddenDestinations` below), which is
+ * what makes "absent means visible" true for a Destination this app adds
+ * in some future version: it can never appear inside an *older* stored
+ * value, so it is never in this set and is drawn exactly like every other
+ * unhidden row.
+ */
+export const DEFAULT_HIDDEN_DESTINATIONS: ReadonlySet<HideableDestinationId> = new Set();
+
 function isAccentId(value: unknown): value is AccentId {
   return ACCENTS.some((accent) => accent.id === value);
 }
@@ -144,6 +181,50 @@ function writeStoredTextSize(size: TextSizeId): void {
     localStorage.setItem(TEXT_SIZE_KEY, size);
   } catch {
     // As above.
+  }
+}
+
+function isHideableDestinationId(value: unknown): value is HideableDestinationId {
+  return HIDEABLE_DESTINATIONS.some((destination) => destination.id === value);
+}
+
+/**
+ * Issue #134. Splits the stored comma-joined string and keeps only the
+ * slugs this build still recognises — silently, with no thrown error and
+ * no visible warning, the same "ignore what you don't recognise" posture
+ * `isAccentId`/`isTextSizeId` take on a single value, just applied per
+ * element of a list instead of to one scalar. That's what makes a slug from
+ * a future version of this app (forward compatibility) and a slug from a
+ * hand-edited or truncated value (corruption) resolve the same way here:
+ * both are simply absent from the returned set, and an absent Destination
+ * is visible (`DEFAULT_HIDDEN_DESTINATIONS`'s own doc comment).
+ */
+function readStoredHiddenDestinations(): ReadonlySet<HideableDestinationId> {
+  try {
+    const stored = localStorage.getItem(HIDDEN_DESTINATIONS_KEY);
+    if (stored === null || stored === "") {
+      return DEFAULT_HIDDEN_DESTINATIONS;
+    }
+    return new Set(stored.split(",").filter(isHideableDestinationId));
+  } catch {
+    return DEFAULT_HIDDEN_DESTINATIONS;
+  }
+}
+
+function writeStoredHiddenDestinations(hidden: ReadonlySet<HideableDestinationId>): void {
+  try {
+    if (hidden.size === 0) {
+      // No key at all rather than an empty string, so a reader who once hid
+      // every Destination and then unhid them all leaves no trace in
+      // storage — indistinguishable from a Device that never touched this
+      // setting, which is exactly what "nothing hidden" should be.
+      localStorage.removeItem(HIDDEN_DESTINATIONS_KEY);
+    } else {
+      localStorage.setItem(HIDDEN_DESTINATIONS_KEY, Array.from(hidden).join(","));
+    }
+  } catch {
+    // Refused write — the in-memory value below still applies for this
+    // session, same degradation every other setting here has.
   }
 }
 
@@ -294,6 +375,13 @@ interface SettingsState {
    * `fetch` is not.
    */
   serverReachable: boolean;
+  /**
+   * Issue #134: which Destinations this reader has hidden from the root
+   * screen's list — a Device-local view preference, exactly like `accent`
+   * and `textSize` above, never Synced and never gating anything but the
+   * row itself (`chat-list.tsx`'s `useDestinations()` is the only reader).
+   */
+  hiddenDestinations: ReadonlySet<HideableDestinationId>;
   setTheme: (theme: Theme) => void;
   setAccent: (accent: AccentId) => void;
   setTextSize: (size: TextSizeId) => void;
@@ -301,6 +389,7 @@ interface SettingsState {
   setListWidth: (width: number) => void;
   setCapabilities: (capabilities: ServerCapabilities | null) => void;
   setServerReachable: (reachable: boolean) => void;
+  setHiddenDestinations: (hidden: ReadonlySet<HideableDestinationId>) => void;
 }
 
 /**
@@ -319,6 +408,7 @@ export const useSettingsStore = create<SettingsState>()((set) => ({
   listWidth: readStoredListWidth(),
   capabilities: readStoredCapabilities(),
   serverReachable: true,
+  hiddenDestinations: readStoredHiddenDestinations(),
   setTheme: (theme) => {
     writeStoredTheme(theme);
     set({ theme });
@@ -350,6 +440,10 @@ export const useSettingsStore = create<SettingsState>()((set) => ({
     // comment on why this never touches `localStorage`.
     set({ serverReachable });
   },
+  setHiddenDestinations: (hiddenDestinations) => {
+    writeStoredHiddenDestinations(hiddenDestinations);
+    set({ hiddenDestinations });
+  },
 }));
 
 /** ADR 0011: an empty Server URL means Sync is off. Re-renders when the Server URL changes. */
@@ -374,6 +468,17 @@ export function useCapabilities(): ServerCapabilities | null {
  */
 export function useServerReachable(): boolean {
   return useSettingsStore((state) => state.serverReachable);
+}
+
+/**
+ * Which Destinations this reader has hidden from the root screen's list
+ * (issue #134). `chat-list.tsx`'s `useDestinations()` is the only caller
+ * that needs this outside `settings-page.tsx`'s own controls — reading it
+ * is what lets that list stay a pure derivation of the settings store, the
+ * same posture `useSyncEnabled`/`useCapabilities` already have.
+ */
+export function useHiddenDestinations(): ReadonlySet<HideableDestinationId> {
+  return useSettingsStore((state) => state.hiddenDestinations);
 }
 
 /**

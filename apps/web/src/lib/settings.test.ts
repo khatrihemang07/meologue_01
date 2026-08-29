@@ -3,7 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ACCENTS,
   DEFAULT_ACCENT,
+  DEFAULT_HIDDEN_DESTINATIONS,
   DEFAULT_TEXT_SIZE,
+  HIDEABLE_DESTINATIONS,
   normaliseServerUrl,
   refreshCapabilities,
   TEXT_SIZES,
@@ -32,6 +34,7 @@ describe("settings store", () => {
       textSize: DEFAULT_TEXT_SIZE,
       capabilities: null,
       serverReachable: true,
+      hiddenDestinations: DEFAULT_HIDDEN_DESTINATIONS,
     });
   });
 
@@ -138,6 +141,97 @@ describe("settings store", () => {
     it("offers three sizes, with the default among them", () => {
       expect(TEXT_SIZES.map((size) => size.id)).toEqual(["small", "default", "large"]);
       expect(TEXT_SIZES.map((size) => size.id)).toContain(DEFAULT_TEXT_SIZE);
+    });
+  });
+
+  // Issue #134.
+  describe("hidden destinations", () => {
+    it("round-trips a written set, in the store and in storage", () => {
+      useSettingsStore.getState().setHiddenDestinations(new Set(["reflect", "digest"]));
+
+      expect(useSettingsStore.getState().hiddenDestinations).toEqual(
+        new Set(["reflect", "digest"]),
+      );
+      // Comma-joined, not JSON — ADR 0008's own reasoning, restated at the
+      // top of settings.ts beside `HIDDEN_DESTINATIONS_KEY`.
+      expect(localStorage.getItem("meologue.hidden-destinations")).toBe("reflect,digest");
+    });
+
+    it("defaults to nothing hidden — every Destination visible", () => {
+      expect(useSettingsStore.getState().hiddenDestinations).toEqual(new Set());
+      expect(DEFAULT_HIDDEN_DESTINATIONS).toEqual(new Set());
+    });
+
+    it("removes the stored key entirely once every Destination is unhidden again", () => {
+      useSettingsStore.getState().setHiddenDestinations(new Set(["composer"]));
+      expect(localStorage.getItem("meologue.hidden-destinations")).not.toBeNull();
+
+      useSettingsStore.getState().setHiddenDestinations(new Set());
+
+      expect(localStorage.getItem("meologue.hidden-destinations")).toBeNull();
+    });
+
+    it("does not throw when localStorage refuses the write, and still updates the store", () => {
+      vi.spyOn(localStorage, "setItem").mockImplementation(() => {
+        throw new Error("storage unavailable");
+      });
+
+      expect(() =>
+        useSettingsStore.getState().setHiddenDestinations(new Set(["digest"])),
+      ).not.toThrow();
+      expect(useSettingsStore.getState().hiddenDestinations).toEqual(new Set(["digest"]));
+    });
+
+    it("offers exactly the three hideable Destinations — Settings is never among them", () => {
+      expect(HIDEABLE_DESTINATIONS.map((destination) => destination.id)).toEqual([
+        "composer",
+        "reflect",
+        "digest",
+      ]);
+    });
+
+    // Required (issue #134): a corrupt/unreadable value degrades to
+    // everything visible, and an unrecognised slug is ignored rather than
+    // thrown on — both exercised at module load, since that's where
+    // `readStoredHiddenDestinations` actually runs (mirrors the
+    // "accent"/"text size" `vi.resetModules` tests above).
+    it("degrades to everything visible when localStorage throws on read", () => {
+      localStorage.setItem("meologue.hidden-destinations", "reflect");
+      vi.spyOn(localStorage, "getItem").mockImplementation(() => {
+        throw new Error("storage unavailable");
+      });
+
+      vi.resetModules();
+      return import("./settings").then((fresh) => {
+        expect(fresh.useSettingsStore.getState().hiddenDestinations).toEqual(new Set());
+      });
+    });
+
+    it("ignores an unrecognised slug in the stored string rather than throwing", () => {
+      // "history" is a real route this app once had (issue #75 deleted it)
+      // and is exactly the kind of slug a previous app version could still
+      // leave behind — mixed here with a slug this build does recognise, so
+      // the good one surviving proves this drops one at a time rather than
+      // discarding the whole value the way a failed `JSON.parse` would.
+      localStorage.setItem("meologue.hidden-destinations", "history,digest");
+
+      vi.resetModules();
+      return import("./settings").then((fresh) => {
+        expect(fresh.useSettingsStore.getState().hiddenDestinations).toEqual(new Set(["digest"]));
+      });
+    });
+
+    it("ignores 'settings' even if it appears in a hand-edited stored value", () => {
+      // Settings can never be hidden (ADR 0008/0009). It is never offered a
+      // control to add itself to this value, but a stored value can be
+      // edited by hand or carried over from a future build, so this is
+      // enforced on read too, not only by the absence of a control.
+      localStorage.setItem("meologue.hidden-destinations", "settings,composer");
+
+      vi.resetModules();
+      return import("./settings").then((fresh) => {
+        expect(fresh.useSettingsStore.getState().hiddenDestinations).toEqual(new Set(["composer"]));
+      });
     });
   });
 

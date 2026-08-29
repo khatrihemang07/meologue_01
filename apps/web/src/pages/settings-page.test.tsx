@@ -89,7 +89,7 @@ function errorResponse(status: number) {
 describe("SettingsPage", () => {
   beforeEach(() => {
     localStorage.clear();
-    useSettingsStore.setState({ theme: "system", serverUrl: "" });
+    useSettingsStore.setState({ theme: "system", serverUrl: "", hiddenDestinations: new Set() });
     useSyncStatusStore.setState({ lastAttempt: null });
     document.documentElement.classList.remove("dark");
     // A quiet default so tests that don't care about the server check don't
@@ -155,6 +155,93 @@ describe("SettingsPage", () => {
     expect(screen.getByRole("button", { name: "Dark" })).toHaveAttribute("aria-pressed", "true");
     expect(document.documentElement.classList.contains("dark")).toBe(true);
     expect(useSettingsStore.getState().theme).toBe("dark");
+  });
+
+  // Issue #134.
+  describe("chat list visibility", () => {
+    it("lists Composer, Reflect and Digest, each with a visibility control, and offers none for Settings", () => {
+      renderPage();
+
+      expect(screen.getByRole("switch", { name: /Composer/ })).toBeInTheDocument();
+      expect(screen.getByRole("switch", { name: /Reflect/ })).toBeInTheDocument();
+      expect(screen.getByRole("switch", { name: /Digest/ })).toBeInTheDocument();
+      expect(screen.queryByRole("switch", { name: /Settings/ })).not.toBeInTheDocument();
+    });
+
+    it("starts every Destination visible when nothing is hidden", () => {
+      renderPage();
+
+      expect(screen.getByRole("switch", { name: /Digest/ })).toHaveAttribute(
+        "aria-checked",
+        "true",
+      );
+    });
+
+    it("hides a Destination on click, and persists it", () => {
+      renderPage();
+
+      fireEvent.click(screen.getByRole("switch", { name: /Digest/ }));
+
+      expect(screen.getByRole("switch", { name: /Digest/ })).toHaveAttribute(
+        "aria-checked",
+        "false",
+      );
+      expect(useSettingsStore.getState().hiddenDestinations).toEqual(new Set(["digest"]));
+      expect(localStorage.getItem("meologue.hidden-destinations")).toBe("digest");
+    });
+
+    it("shows a hidden Destination again on a second click", () => {
+      useSettingsStore.setState({ hiddenDestinations: new Set(["digest"]) });
+      renderPage();
+
+      fireEvent.click(screen.getByRole("switch", { name: /Digest/ }));
+
+      expect(screen.getByRole("switch", { name: /Digest/ })).toHaveAttribute(
+        "aria-checked",
+        "true",
+      );
+      expect(useSettingsStore.getState().hiddenDestinations).toEqual(new Set());
+    });
+
+    it("toggles each Destination independently", () => {
+      renderPage();
+
+      fireEvent.click(screen.getByRole("switch", { name: /Reflect/ }));
+
+      expect(useSettingsStore.getState().hiddenDestinations).toEqual(new Set(["reflect"]));
+      expect(screen.getByRole("switch", { name: /Composer/ })).toHaveAttribute(
+        "aria-checked",
+        "true",
+      );
+      expect(screen.getByRole("switch", { name: /Digest/ })).toHaveAttribute(
+        "aria-checked",
+        "true",
+      );
+    });
+
+    // Every control on this page must clear ADR 0036's 44px minimum touch
+    // target — the switch is a `Button` at `size="touch"` (`h-11`, 44px)
+    // for exactly that reason; this asserts the class rather than a
+    // measured pixel height, the same way this repo already tests Server
+    // URL's `Save` button (`className="h-11"` on its `Input` sibling).
+    it("gives each visibility switch the 44px touch target every other control here has", () => {
+      renderPage();
+
+      expect(screen.getByRole("switch", { name: /Digest/ })).toHaveClass("h-11");
+    });
+
+    // The hint must say plainly that hiding affects only the row — not
+    // Entries, Grounding, Digests, Export or Sync (issue #134's own
+    // acceptance criterion).
+    it("states in the hint that hiding affects the row only, not Entries, Grounding, Digests, Export or Sync", () => {
+      renderPage();
+
+      const hint = screen.getByText(/Hides the row only/);
+      expect(hint).toHaveTextContent(/Grounding/);
+      expect(hint).toHaveTextContent(/summarised into Digests/);
+      expect(hint).toHaveTextContent(/Export/);
+      expect(hint).toHaveTextContent(/Sync/);
+    });
   });
 
   it("initialises the Server URL field from the store", () => {

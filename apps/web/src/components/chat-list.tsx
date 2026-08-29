@@ -1,13 +1,21 @@
 import { CalendarDays, Lightbulb, Lock, Settings as SettingsIcon, SquarePen } from "lucide-react";
 import { NavLink } from "react-router";
-import { useCapabilities, useSyncEnabled } from "@/lib/settings";
+import {
+  type HideableDestinationId,
+  useCapabilities,
+  useHiddenDestinations,
+  useSyncEnabled,
+} from "@/lib/settings";
 import { cn } from "@/lib/utils";
 
 /**
  * The four rows the root screen is made of (ADR 0036). The same four
  * destinations ADR 0018 first bounded to Material 3's three-to-five and
- * every ADR since has kept — the membership does not change here, only the
- * shape they are shown in.
+ * every ADR since has kept — the membership of `DESTINATIONS` itself does
+ * not change here, only the shape they are shown in. Issue #134 lets a
+ * reader hide Composer, Reflect or Digest from the *rendered* list without
+ * touching this array — see `useDestinations()` below for where that
+ * filter actually happens.
  *
  * `end` on Composer alone: every other route is a prefix of deeper routes
  * (`/reflect/list`, `/digest/:period/:date`) that should still mark their
@@ -90,10 +98,23 @@ const DESTINATIONS = [
  * URL (ADR 0008/0009) and what keeps a fresh cold launch — capabilities
  * still `null` — drawing every row unlocked rather than guessing "locked"
  * for a Server nothing has been learned about yet.
+ *
+ * After locking, issue #134's `hiddenDestinations` (`useHiddenDestinations`,
+ * `settings.ts`) removes a row from the returned array outright rather than
+ * marking it. Hiding is list curation, not access control — the row's own
+ * route in `App.tsx` carries no guard and is unaffected — so there is
+ * nothing here for a hidden-but-still-locked Destination to show: it is
+ * simply absent, never a locked row that's also somehow hidden. Settings is
+ * filtered out of that check unconditionally (`destination.to === "/settings"`
+ * below), independent of what `hiddenDestinations` actually contains —
+ * `settings-page.tsx` never offers a control for it, but this is the second,
+ * load-bearing guarantee: even a hand-edited `localStorage` value naming
+ * "settings" cannot make the one recovery route (ADR 0008/0009) disappear.
  */
 function useDestinations() {
   const syncEnabled = useSyncEnabled();
   const capabilities = useCapabilities();
+  const hiddenDestinations = useHiddenDestinations();
 
   return DESTINATIONS.map((destination) => {
     const capabilityMissing =
@@ -102,6 +123,15 @@ function useDestinations() {
       capabilities[destination.capability] === false;
     const locked = destination.requiresSync && (!syncEnabled || capabilityMissing);
     return { ...destination, locked };
+  }).filter((destination) => {
+    if (destination.to === "/settings") {
+      return true;
+    }
+    // Every other `to` in `DESTINATIONS` is one of the three literal
+    // hideable routes, so the slug this slice produces is always a real
+    // `HideableDestinationId` — the cast repeats what `DESTINATIONS`'s own
+    // `as const` already guarantees rather than asserting something new.
+    return !hiddenDestinations.has(destination.to.slice(1) as HideableDestinationId);
   });
 }
 

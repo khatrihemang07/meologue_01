@@ -169,4 +169,84 @@ describe("ChatList", () => {
       expect(screen.getByRole("link", { name: /Settings/ })).not.toHaveAttribute("data-locked");
     });
   });
+
+  // Issue #134: a reader can hide Composer, Reflect or Digest from this
+  // list. Seeded straight onto the settings store, the same way the
+  // "locking" describe block above seeds `serverUrl`/`capabilities` — this
+  // list is a pure derivation of the settings store, so there is nothing
+  // else to arrange.
+  describe("hiding", () => {
+    afterEach(() => {
+      useSettingsStore.setState({ hiddenDestinations: new Set() });
+    });
+
+    it("removes a hidden Destination's row from the list", () => {
+      useSettingsStore.setState({ hiddenDestinations: new Set(["digest"]) });
+
+      renderAt("/");
+
+      expect(screen.queryByRole("link", { name: /Digest/ })).not.toBeInTheDocument();
+      expect(screen.getByRole("link", { name: /Composer/ })).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: /Reflect/ })).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: /Settings/ })).toBeInTheDocument();
+      expect(within(screen.getByRole("navigation")).getAllByRole("link")).toHaveLength(3);
+    });
+
+    // Settings can never be hidden (ADR 0008/0009 — it's the recovery route
+    // for a bad Server URL or a store that won't open), enforced by
+    // `useDestinations()` itself regardless of what a corrupt or
+    // hand-edited stored value might contain — not only by
+    // `settings-page.tsx` never offering a control for it.
+    it("keeps Settings even if a corrupt stored value names it", () => {
+      useSettingsStore.setState({
+        // Double cast past the type (via `unknown`): this is exactly the
+        // "hand-edited value" `readStoredHiddenDestinations` (settings.ts)
+        // already guards against on read, exercised here at the store layer
+        // instead, where the type system would otherwise refuse to let a
+        // non-`HideableDestinationId` slug in at all.
+        hiddenDestinations: new Set(["settings"]) as unknown as ReadonlySet<
+          "composer" | "reflect" | "digest"
+        >,
+      });
+
+      renderAt("/");
+
+      expect(screen.getByRole("link", { name: /Settings/ })).toBeInTheDocument();
+    });
+
+    // Hiding all three leaves a one-row list containing only Settings, and
+    // that state must be recoverable from there (issue #134's own
+    // acceptance criterion) — this just proves the row nothing else here
+    // depends on is still standing.
+    it("leaves Settings behind when all three hideable Destinations are hidden", () => {
+      useSettingsStore.setState({
+        hiddenDestinations: new Set(["composer", "reflect", "digest"]),
+      });
+
+      renderAt("/");
+
+      expect(within(screen.getByRole("navigation")).getAllByRole("link")).toHaveLength(1);
+      expect(screen.getByRole("link", { name: /Settings/ })).toHaveAttribute("href", "/settings");
+    });
+
+    // A Destination that is both locked (issue #133 — no Server URL) and
+    // hidden (issue #134) is simply absent, not rendered as a locked row:
+    // hiding wins because it removes the row outright rather than marking
+    // it, so there is no locked-and-hidden row for a reader to see either
+    // way.
+    it("hides a Destination that is also locked, rather than showing it locked", () => {
+      useSettingsStore.setState({
+        serverUrl: "",
+        capabilities: null,
+        hiddenDestinations: new Set(["reflect"]),
+      });
+
+      renderAt("/");
+
+      expect(screen.queryByRole("link", { name: /Reflect/ })).not.toBeInTheDocument();
+      // Digest is locked (no Server URL) but not hidden, so it is still the
+      // control proving locking on its own still works beside hiding.
+      expect(screen.getByRole("link", { name: /Digest/ })).toHaveAttribute("data-locked", "true");
+    });
+  });
 });

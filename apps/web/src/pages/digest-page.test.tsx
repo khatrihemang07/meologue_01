@@ -119,6 +119,7 @@ describe("DigestPage", () => {
       serverUrl: "",
       serverReachable: true,
       capabilities: null,
+      hiddenDestinations: new Set(),
     });
   });
 
@@ -134,6 +135,22 @@ describe("DigestPage", () => {
       "/settings",
     );
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  // Issue #134: hiding a Destination from the chat list is list curation,
+  // not access control — `/digest` itself carries no guard, so it renders
+  // exactly as it would if this reader had never hidden the row. Reusing
+  // the Sync-off scenario above rather than a fresh one: it needs no fetch
+  // mocking of its own, so this stays a test of "does the route render at
+  // all," not a repeat of any other Digest test's own assertions.
+  it("still renders at its own URL even after being hidden from the chat list", () => {
+    useSettingsStore.setState({ hiddenDestinations: new Set(["digest"]) });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderDigestPage();
+
+    expect(screen.getByText(/Sync is off/)).toBeInTheDocument();
   });
 
   it("renders all three cards with their label, date range, and a clamped two-line teaser", async () => {
