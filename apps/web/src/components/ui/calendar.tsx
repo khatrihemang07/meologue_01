@@ -37,7 +37,13 @@ function Calendar({
       showOutsideDays={showOutsideDays}
       className={cn("w-fit p-2", className)}
       classNames={{
-        root: "w-fit",
+        // `relative` is load-bearing, not decoration: `nav` below is
+        // absolutely positioned, so without a positioned ancestor here it
+        // anchors to whatever container the calendar happens to sit in — in
+        // the date-picker Sheet that put the previous-month chevron on top of
+        // the sheet's own heading and threw the next-month one into the
+        // opposite corner. Caught on a device screenshot, not by a test.
+        root: "relative w-fit",
         months: "flex flex-col gap-4",
         month: "flex w-full flex-col gap-3",
         nav: "absolute inset-x-0 top-0 flex items-center justify-between px-2",
