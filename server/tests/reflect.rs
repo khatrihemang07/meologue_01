@@ -812,28 +812,46 @@ async fn a_device_speaking_protocol_version_3_is_rejected(pool: PgPool) {
     );
 }
 
+// Issue #131, ADR 0038: the Device now mints a Session's id itself and
+// sends it with the very first ask — `apps/web/src/pages/reflection-page.tsx`'s
+// `handleAsk` writes it to `last-session.ts` and navigates to
+// `/reflect/<id>` *before* this request is even dispatched, so a
+// `session_id` naming no existing row is this Session's genuine first
+// creation, not a stale or mistyped reference any more. This is what used
+// to be `an_unknown_session_id_is_a_404`, before this ticket flipped the
+// meaning of a supplied-but-unknown id from "reject" to "create" — the
+// same upsert shape `sync.rs`'s own Entry push already uses (the Device
+// mints an id, the Server upserts on it).
 #[sqlx::test]
-async fn an_unknown_session_id_is_a_404(pool: PgPool) {
-    let chat = Arc::new(FakeChatClient::new(["unused"]));
+async fn a_supplied_session_id_that_does_not_exist_creates_that_session_with_that_id(
+    pool: PgPool,
+) {
+    let chat = Arc::new(FakeChatClient::new(["An answer.", "An answer."]));
     let reflect = reflect_state(chat.clone());
+    let device_minted_id = Uuid::new_v4();
 
-    let (status, _) = post_reflect(
+    let (status, body) = post_reflect(
         &pool,
         Some(reflect),
         json!({
             "protocol_version": 4,
-            "question": "Anything?",
-            "session_id": Uuid::new_v4(),
+            "question": "How has my knee been this year?",
+            "session_id": device_minted_id,
         }),
     )
     .await;
 
-    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(status, StatusCode::OK);
     assert_eq!(
-        chat.call_count(),
-        0,
-        "a 404 must short-circuit before any chat call"
+        session_id(&body),
+        device_minted_id,
+        "the Session must be created under the Device's own id, not a Server-chosen one"
     );
+    // Title is still derived server-side (`derive_title`) even though the
+    // Device chose the id — the Device sends only the id, never a title.
+    assert_eq!(body["title"], "How has my knee been this year?");
+    assert_eq!(session_count(&pool).await, 1);
+    assert_eq!(turn_count(&pool).await, 1);
 }
 
 #[sqlx::test]
@@ -2622,24 +2640,51 @@ async fn a_successful_answer_persists_its_turn(pool: PgPool) {
     );
 }
 
+// The failing counterpart of
+// `a_supplied_session_id_that_does_not_exist_creates_that_session_with_that_id`
+// just above: `resolve_session` mints the row under the Device's own id
+// synchronously, before the model is ever called (issue #108's own
+// reasoning, now extended to a Device-supplied id by issue #131), so a run
+// that goes on to fail still leaves that Session behind — the exact shape
+// that makes leaving Reflection mid-Question survivable (issue #131's own
+// report: the Question's Session was "in the Session list, complete" even
+// though the Device itself never learned its id under the old,
+// Server-mints-on-success-only behaviour). No Turn is recorded, matching
+// `a_final_reply_still_empty_after_a_corrective_turn_ends_the_stream_with_an_agent_end_error_event`'s
+// own `session_id: null` case just above, this time for a Device-minted id
+// instead of a Server-minted one.
 #[sqlx::test]
-async fn an_unknown_session_id_persists_no_session_and_no_turn(pool: PgPool) {
-    let chat = Arc::new(FakeChatClient::new(["unused"]));
+async fn a_supplied_session_id_that_does_not_exist_still_persists_the_session_when_the_run_fails(
+    pool: PgPool,
+) {
+    let chat = Arc::new(FakeChatClient::failing("simulated chat endpoint failure"));
     let reflect = reflect_state(chat);
+    let device_minted_id = Uuid::new_v4();
 
-    let (status, _) = post_reflect(
+    let (status, body) = post_reflect(
         &pool,
         Some(reflect),
         json!({
             "protocol_version": 4,
             "question": "Anything?",
-            "session_id": Uuid::new_v4(),
+            "session_id": device_minted_id,
         }),
     )
     .await;
 
-    assert_eq!(status, StatusCode::NOT_FOUND);
-    assert_eq!(session_count(&pool).await, 0);
+    // The stream still opens as an ordinary 200 — resolving the Session
+    // succeeded; the run itself failed once the loop actually ran.
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["status"], "error");
+    assert_eq!(session_count(&pool).await, 1);
+    let persisted_id: Uuid = sqlx::query_scalar("select id from sessions")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        persisted_id, device_minted_id,
+        "the surviving row must be under the Device's own id, not a substitute"
+    );
     assert_eq!(turn_count(&pool).await, 0);
 }
 

@@ -88,6 +88,27 @@ function ask(question: string) {
   fireEvent.click(askButton());
 }
 
+/**
+ * Issue #131: `handleAsk` now mints a fresh Session's own id itself
+ * (`crypto.randomUUID()`) before ever dispatching `/v1/reflect`, rather
+ * than learning it from the response — so a test that asks with no
+ * `sessionId` in the URL has to pin what that mint returns, or the
+ * pre-dispatch `navigate` (to `/reflect/<minted-id>`) and the mocked
+ * response's own hardcoded `session_id` end up naming two different
+ * Sessions: `queryClient.setQueryData` would write the just-answered turn
+ * under a cache key nothing on screen is reading from, and the Answer
+ * would never render. Every fixture below already names the Session it
+ * wants a fresh ask to land in (`session_id: "session-abc"`, etc.) — this
+ * just makes that the actual minted id instead of a label only the mock
+ * knew about. Restored by the same `vi.restoreAllMocks()` every test's own
+ * `beforeEach` already calls.
+ */
+function stubMintedSessionId(id: string) {
+  vi.spyOn(crypto, "randomUUID").mockReturnValue(
+    id as `${string}-${string}-${string}-${string}-${string}`,
+  );
+}
+
 /** One SSE frame — `event: <name>\ndata: <json>\n\n` — matching what `server/src/reflect.rs`'s `sse_event` actually puts on the wire. */
 function sseFrame(event: string, data: unknown): string {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -259,8 +280,9 @@ describe("ReflectionPage", () => {
     expect(screen.queryByText(/it's improved since february/i)).not.toBeInTheDocument();
   });
 
-  it("navigates to the new Session's URL after asking with no Session, with replace so Back doesn't return to an empty /reflect", async () => {
+  it("navigates to the new Session's URL before the ask even resolves, with replace so Back doesn't return to an empty /reflect", async () => {
     useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    stubMintedSessionId("session-abc");
     stubFetch({
       reflect: () => ({
         answer: "It's improved since February.",
@@ -273,7 +295,12 @@ describe("ReflectionPage", () => {
     renderReflectionPage();
     expect(screen.getByTestId("location-path")).toHaveTextContent("/reflect");
 
+    // Issue #131: the Device mints this Session's id itself now and
+    // navigates to it *before* dispatching the request — so the URL has
+    // already moved by the time `ask` returns, not only once the Answer
+    // comes back.
     ask("How has my knee been?");
+    expect(screen.getByTestId("location-path")).toHaveTextContent("/reflect/session-abc");
 
     await screen.findByText("It's improved since February.");
     expect(screen.getByTestId("location-path")).toHaveTextContent("/reflect/session-abc");
@@ -281,9 +308,12 @@ describe("ReflectionPage", () => {
 
   it("appends the newly-answered turn to the query cache immediately, without waiting for a refetch", async () => {
     useSettingsStore.getState().setServerUrl("https://phone.example:41207");
-    // No `session` handler: the GET this navigation triggers hangs forever,
-    // so the Answer can only be on screen because it was written straight
-    // into the cache, not because a refetch resolved.
+    stubMintedSessionId("session-abc");
+    // No `session` handler: the background GET `sessionQuery` fires once
+    // `pending` clears (issue #131's own race-avoidance — see that query's
+    // `enabled` comment in reflection-page.tsx) hangs forever, so the
+    // Answer can only be on screen because it was written straight into
+    // the cache, not because a refetch resolved.
     stubFetch({
       reflect: () => ({
         answer: "It's improved since February.",
@@ -402,6 +432,7 @@ describe("ReflectionPage", () => {
 
   it("sends the Session id on a follow-up Question, with no whole-Conversation field in the request body", async () => {
     useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    stubMintedSessionId("session-knee");
     const fetchMock = stubFetch({
       reflect: () => ({
         answer: "Yes, in March.",
@@ -440,7 +471,11 @@ describe("ReflectionPage", () => {
       (url as string).endsWith("/v1/reflect"),
     );
     const firstRequestBody = JSON.parse((reflectCalls[0]?.[1] as RequestInit)?.body as string);
-    expect(firstRequestBody.session_id).toBeNull();
+    // Issue #131: the first ask's `session_id` is no longer `null` — the
+    // Device mints it before dispatching (`stubMintedSessionId` above
+    // pins what that mint returns), rather than leaving the Server to
+    // choose one and learning it only from the response.
+    expect(firstRequestBody.session_id).toBe("session-knee");
     expect(firstRequestBody).not.toHaveProperty("prior_turns");
 
     const secondRequestBody = JSON.parse((reflectCalls[1]?.[1] as RequestInit)?.body as string);
@@ -516,6 +551,7 @@ describe("ReflectionPage", () => {
 
   it("sends the chosen model on the wire when the picker is changed, and shows nothing chosen by default", async () => {
     useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    stubMintedSessionId("session-model");
     const fetchMock = stubFetch({
       reflect: () => ({
         answer: "An answer from claude-sonnet.",
@@ -623,6 +659,73 @@ describe("ReflectionPage", () => {
     expect(screen.getByTestId("location-path")).toHaveTextContent("/reflect");
   });
 
+  // Issue #131's own report: leaving Reflect mid-Question used to report
+  // the reader's own navigation as this exact toast — "Couldn't reach
+  // Reflection" — even though the Server was never actually unreachable.
+  // Modelled the same way `reflect-transport.test.ts`'s own abort tests
+  // are: a `fetch` that never resolves on its own, only rejects once the
+  // request's `signal` fires, so unmounting (this page's own cleanup
+  // effect, `activeAbortRef`) is what ends it, not a network response.
+  it("shows no toast when leaving the screen aborts the request mid-Question", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string, init?: RequestInit) => {
+        if (url.endsWith("/v1/reflect")) {
+          return new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => {
+              reject(new DOMException("This operation was aborted", "AbortError"));
+            });
+          });
+        }
+        return new Promise(() => {});
+      }),
+    );
+    const errorToast = vi.spyOn(toast, "error");
+
+    const { unmount } = renderReflectionPage();
+    ask("How has my knee been?");
+    // Give the pending ask's own `fetch` call a chance to actually start
+    // (and register its `abort` listener) before this page unmounts.
+    await waitFor(() => expect(askQuestionField()).toBeDisabled());
+
+    unmount();
+    // The abort rejects synchronously once fired, but `reflectTransport`
+    // still has a handful of its own `await`s between that and returning —
+    // flush them before asserting nothing was ever toasted.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(errorToast).not.toHaveBeenCalled();
+  });
+
+  // Issue #131's own fix: the Device mints a fresh Session's id and
+  // remembers it *before* `handleAsk` ever dispatches the request — not
+  // only once an Answer comes back — which is what makes a leave-mid-
+  // Question survivable. Pinned here with a `fetch` that never resolves,
+  // so the only way this assertion can pass is if the memory write already
+  // happened while the ask is still genuinely in flight.
+  it("records the last-Session id before the ask resolves, not only once the Answer arrives", async () => {
+    useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise(() => {})),
+    );
+
+    renderReflectionPage();
+    expect(readLastSessionId()).toBeNull();
+
+    ask("How has my knee been?");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("location-path").textContent).toMatch(/^\/reflect\/.+/);
+    });
+    const mintedId = screen.getByTestId("location-path").textContent?.replace(/^\/reflect\//, "");
+    // The request above never resolves in this test — the memory (and the
+    // URL) already point at the minted Session regardless.
+    expect(readLastSessionId()).toBe(mintedId);
+  });
+
   // Issue #96's subtlest change: a failed run is now agent_end
   // {"status": "error"} on a 200 response, not a 500 — the stream itself
   // succeeded; the run inside it didn't. It must still render as a
@@ -702,6 +805,7 @@ describe("ReflectionPage", () => {
 
   it("does not restore anything after a Question succeeds", async () => {
     useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    stubMintedSessionId("session-move");
     stubFetch({
       reflect: () => ({
         answer: "It went well.",
@@ -723,6 +827,7 @@ describe("ReflectionPage", () => {
   // confident wrong one without trusting how the model phrased itself.
   it("shows no note when the tools returned at least one Entry", async () => {
     useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    stubMintedSessionId("session-note-1");
     stubFetch({
       reflect: () => ({
         answer: "It's improved since February.",
@@ -741,6 +846,7 @@ describe("ReflectionPage", () => {
 
   it("shows an ungrounded note when a tool ran and genuinely found nothing", async () => {
     useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    stubMintedSessionId("session-note-3");
     stubFetch({
       reflect: () => ({
         answer: "I couldn't find anything about that.",
@@ -787,6 +893,7 @@ describe("ReflectionPage", () => {
   // Answer that goes on to say it found nothing useful among them.
   it("does not claim the Answer is grounded in Entries the tools returned but the model said it found nothing in", async () => {
     useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    stubMintedSessionId("session-absent-topic");
     stubFetch({
       reflect: () => ({
         answer:
@@ -823,6 +930,7 @@ describe("ReflectionPage", () => {
   // search.
   it("shows a distinct note when the run never called a tool at all", async () => {
     useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    stubMintedSessionId("session-note-4");
     stubFetch({
       reflect: () => ({
         answer: "I can't access any journal entries from here.",
@@ -856,6 +964,7 @@ describe("ReflectionPage", () => {
   // under test here.
   it("shows a Grounding disclosure labelled 'Grounded' for a grounded turn", async () => {
     useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    stubMintedSessionId("session-disclosure-1");
     stubFetch({
       reflect: () => ({
         answer: "It's improved since February.",
@@ -937,6 +1046,7 @@ describe("ReflectionPage", () => {
 
     it("shows each of a multi-step Question's tool calls, in order, then the Answer", async () => {
       useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+      stubMintedSessionId("session-multi");
       let push!: (event: [string, unknown]) => void;
       let close!: () => void;
       const encoder = new TextEncoder();
@@ -1120,6 +1230,7 @@ describe("ReflectionPage", () => {
   // the persistent Nav's plain `to="/reflect"` link produces.
   it("resumes the same Conversation after navigating away and back to a bare /reflect", async () => {
     useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    stubMintedSessionId("session-abc");
     stubFetch({
       reflect: () => ({
         answer: "It's improved since February.",
@@ -1193,6 +1304,7 @@ describe("ReflectionPage", () => {
 
   it("New Session starts an empty Conversation, and the resume does not immediately undo it", async () => {
     useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+    stubMintedSessionId("session-abc");
     stubFetch({
       reflect: () => ({
         answer: "It's improved since February.",
@@ -1287,6 +1399,7 @@ describe("ReflectionPage", () => {
 
     try {
       useSettingsStore.getState().setServerUrl("https://phone.example:41207");
+      stubMintedSessionId("session-abc");
       stubFetch({
         reflect: () => ({
           answer: "It's improved since February.",

@@ -171,14 +171,22 @@ pub struct ReflectRequest {
     pub protocol_version: i32,
     pub question: String,
     /// The Session this Question belongs to, or `None` to start a new one
-    /// — a null id on an ask *is* the create (`docs/adr/0025`); there is no
-    /// separate create endpoint. `resolve_session` loads that Session's
-    /// prior Turns (`sessions::load_turns`) to read this Question "in the
-    /// light of the Conversation before it" (CONTEXT.md's own phrase for
-    /// what a Conversation is) — the server holds that Conversation now, so
-    /// this replaces what used to round-trip on every request as
-    /// `prior_turns`. A `Some` naming a Session that doesn't exist is a 404,
-    /// not a silently-ignored value.
+    /// under a Server-chosen id — a null id on an ask *is* the create
+    /// (`docs/adr/0025`); there is no separate create endpoint.
+    /// `resolve_session` loads that Session's prior Turns
+    /// (`sessions::load_turns`) to read this Question "in the light of the
+    /// Conversation before it" (CONTEXT.md's own phrase for what a
+    /// Conversation is) — the server holds that Conversation now, so this
+    /// replaces what used to round-trip on every request as `prior_turns`.
+    ///
+    /// Issue #131, ADR 0038: a `Some` naming a Session that doesn't exist is
+    /// no longer a 404 — it creates that Session under the supplied id
+    /// instead, the same upsert shape `sync.rs`'s own Entry push already
+    /// uses (the Device mints an id, the Server upserts on it). This is
+    /// what lets the Device — `apps/web/src/pages/reflection-page.tsx`'s
+    /// `handleAsk` — mint a fresh Session's id itself and know it before
+    /// this request is even sent, rather than learning it only from a
+    /// successful response.
     #[serde(default)]
     pub session_id: Option<Uuid>,
     /// Minutes east of UTC for the asking Device, right now — the same sign
@@ -339,20 +347,24 @@ pub struct ReflectState {
     pub chat_streaming: bool,
 }
 
-/// The two ways `resolve_session` (issue #96's own synchronous preflight,
+/// The one way `resolve_session` (issue #96's own synchronous preflight,
 /// run before `reflect_handler` ever commits to a 200 and starts streaming)
-/// can end other than success. `SessionNotFound` is the one case that must
-/// reach the client as a clean 404 rather than the catch-all 500 every
-/// other failure gets — see `ReflectRequest::session_id`. `From<anyhow::Error>`
-/// is what lets every existing `?` on an `anyhow::Result` inside it keep
-/// working unchanged: it's the conversion Rust's `?` reaches for
-/// automatically. `run_reflect_stream_inner`, by contrast, returns a plain
-/// `anyhow::Result` — once session resolution has already happened, nothing
-/// left inside the streamed run can turn into a distinct HTTP status (the
-/// headers already went out as 200), so there is no reason for it to carry
-/// this extra variant.
+/// can fail. `From<anyhow::Error>` is what lets every existing `?` on an
+/// `anyhow::Result` inside it keep working unchanged: it's the conversion
+/// Rust's `?` reaches for automatically. `run_reflect_stream_inner`, by
+/// contrast, returns a plain `anyhow::Result` — once session resolution has
+/// already happened, nothing left inside the streamed run can turn into a
+/// distinct HTTP status (the headers already went out as 200), so there is
+/// no reason for it to carry the same wrapper.
+///
+/// Issue #131 removed this enum's other variant, `SessionNotFound`: a
+/// `session_id` naming no existing row used to be a 404
+/// (`ReflectRequest::session_id`'s old doc comment) and is now
+/// `resolve_session`'s ordinary create-with-that-id branch instead (see
+/// that function's own doc comment) — there is no longer a failure here
+/// this variant could be constructed from, so keeping it around would only
+/// be a `match` arm nothing could ever reach.
 enum ReflectError {
-    SessionNotFound,
     Internal(anyhow::Error),
 }
 
@@ -379,18 +391,20 @@ impl From<anyhow::Error> for ReflectError {
 /// them, even though nothing here can point utoipa at "frame N of this
 /// stream has this shape."
 ///
-/// The three status codes that predate this ticket keep meaning exactly
-/// what they did — 404 (Reflection unconfigured, or a `session_id` naming
-/// no Session) and 426 (a stale `protocol_version`) are still real HTTP
-/// statuses, not folded into the event stream, because both are decided
-/// *before* this handler commits to a 200 and starts streaming (see
-/// `resolve_session`, called synchronously below): once the stream opens,
-/// the status line has already gone out, so nothing after that point can
-/// change it. A failure *inside* the streamed run — the chat endpoint
-/// erroring, the loop never producing an Answer — cannot become a 500 for
-/// the same reason; it ends the stream instead, via an `agent_end` event
-/// carrying `"status": "error"` (`run_reflect_stream`) rather than hanging
-/// or dropping the connection silently.
+/// The two status codes that predate this ticket keep meaning exactly what
+/// they did — 404 (Reflection unconfigured — see this handler's defensive
+/// `reflect.is_none()` fallback just below; not, as of issue #131, a
+/// `session_id` naming no Session, which `resolve_session` now creates
+/// rather than rejects) and 426 (a stale `protocol_version`) are still real
+/// HTTP statuses, not folded into the event stream, because both are
+/// decided *before* this handler commits to a 200 and starts streaming
+/// (see `resolve_session`, called synchronously below): once the stream
+/// opens, the status line has already gone out, so nothing after that
+/// point can change it. A failure *inside* the streamed run — the chat
+/// endpoint erroring, the loop never producing an Answer — cannot become a
+/// 500 for the same reason; it ends the stream instead, via an `agent_end`
+/// event carrying `"status": "error"` (`run_reflect_stream`) rather than
+/// hanging or dropping the connection silently.
 #[utoipa::path(
     post,
     path = "/v1/reflect",
@@ -398,8 +412,7 @@ impl From<anyhow::Error> for ReflectError {
     responses(
         (status = 200, description = "A stream of pi-vocabulary SSE events, ending in \
             agent_end — see this handler's own doc comment", content_type = "text/event-stream", body = String),
-        (status = 404, description = "Reflection is unconfigured, or session_id names a Session \
-            that does not exist"),
+        (status = 404, description = "Reflection is unconfigured on this Server"),
         (status = 426, description = "protocol_version is not one this server understands"),
     )
 )]
@@ -423,11 +436,12 @@ pub async fn reflect_handler(
         return StatusCode::NOT_FOUND.into_response();
     };
 
-    // Resolved synchronously, before any SSE frame is ever sent — this is
-    // what keeps `session_id` naming no Session a genuine 404 rather than a
-    // stream that opens and then has to explain the same failure through an
-    // event instead (this function's own doc comment covers why that
-    // distinction matters: once headers go out, the status can't change).
+    // Resolved synchronously, before any SSE frame is ever sent — a
+    // database error minting/loading the Session is what stays a genuine
+    // 500 rather than a stream that opens and then has to explain the same
+    // failure through an event instead (this function's own doc comment
+    // covers why that distinction matters: once headers go out, the status
+    // can't change).
     //
     // Issue #108: `resolve_session` now always returns a real `session_id`
     // — minted up front (`sessions::create_session`) for a request naming
@@ -438,7 +452,6 @@ pub async fn reflect_handler(
     let (session_id, prior_turns, title) =
         match resolve_session(&pool, req.session_id, &req.question, &reflect.chat_model).await {
             Ok(resolved) => resolved,
-            Err(ReflectError::SessionNotFound) => return StatusCode::NOT_FOUND.into_response(),
             Err(ReflectError::Internal(err)) => {
                 tracing::error!(error = ?err, "reflect failed while resolving the Session");
                 return StatusCode::INTERNAL_SERVER_ERROR.into_response();
@@ -468,8 +481,7 @@ pub async fn reflect_handler(
 }
 
 /// The one thing `reflect_handler` must decide *before* it can commit to a
-/// 200 and start streaming: which Session this Question belongs to (or that
-/// it names one that doesn't exist, `ReflectError::SessionNotFound`), what
+/// 200 and start streaming: which Session this Question belongs to, what
 /// title to answer under, and — issue #108 — a real `session_id` the whole
 /// run can carry from its very first moment. Split out of what used to be
 /// `run_reflect_loop`'s own opening lines for exactly that reason — this
@@ -477,8 +489,8 @@ pub async fn reflect_handler(
 /// spawned, streaming `run_reflect_stream`.
 ///
 /// **Issue #108: this is where a Session's `sessions` row is now created**
-/// for a request naming no existing Session (`session_id: None`) —
-/// `sessions::create_session`, called here rather than left for
+/// for a request naming no existing Session — `sessions::create_session` /
+/// `sessions::create_session_with_id`, called here rather than left for
 /// `sessions::record_turn_from_steps` to mint only once a Turn has actually
 /// succeeded, the way it worked before this ticket. The reason is the
 /// operation log: `harness::run_log::RunLog`'s very first record for this
@@ -489,6 +501,27 @@ pub async fn reflect_handler(
 /// can fail as a clean 500 like everything else here, so a database error
 /// minting the row is no different from any other failure this function
 /// already surfaces.
+///
+/// **Issue #131: `Some(id)` is upsert-shaped, not "resume or 404" any
+/// more.** Before this ticket a `session_id` naming no row was a client
+/// error (`ReflectError::SessionNotFound`, a 404) — the Server was always
+/// the one minting a fresh Session's id, so any *other* id on the wire
+/// could only mean a stale or mistyped one. Now the Device mints a fresh
+/// Session's id itself, before it ever asks (`apps/web/src/pages/reflection-page.tsx`'s
+/// `handleAsk`, docs/adr/0038) — a null-vs-not distinction can no longer
+/// tell "resume" apart from "create" the way it used to, since every
+/// request now carries an id either way. What tells them apart is only
+/// whether that id already names a row: `find_session` returning `Some`
+/// resumes it exactly as before; `None` creates it under the id the
+/// request already supplied, the same "the Device generates the id, the
+/// Server upserts on it" shape `sync.rs::run_sync`'s own Entry upsert
+/// already uses (`insert ... on conflict (id) do update`) — see
+/// `sessions::create_session_with_id`'s own doc comment for why a Session's
+/// version of that only ever needs the "create" half. The bare
+/// `session_id: None` branch below still exists for a caller that hasn't
+/// adopted this yet (or never will — nothing about the wire contract
+/// requires it), and still mints a Server-chosen id exactly as it always
+/// has.
 async fn resolve_session(
     pool: &PgPool,
     session_id: Option<Uuid>,
@@ -496,13 +529,17 @@ async fn resolve_session(
     default_model: &str,
 ) -> Result<(Uuid, Vec<SessionTurnRow>, String), ReflectError> {
     match session_id {
-        Some(id) => {
-            let session = sessions::find_session(pool, id)
-                .await?
-                .ok_or(ReflectError::SessionNotFound)?;
-            let turns = sessions::load_turns(pool, id, default_model).await?;
-            Ok((id, turns, session.title))
-        }
+        Some(id) => match sessions::find_session(pool, id).await? {
+            Some(session) => {
+                let turns = sessions::load_turns(pool, id, default_model).await?;
+                Ok((id, turns, session.title))
+            }
+            None => {
+                let title = derive_title(question);
+                sessions::create_session_with_id(pool, id, &title).await?;
+                Ok((id, Vec::new(), title))
+            }
+        },
         None => {
             let title = derive_title(question);
             let id = sessions::create_session(pool, &title).await?;

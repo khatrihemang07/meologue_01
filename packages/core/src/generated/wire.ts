@@ -108,18 +108,20 @@ export interface paths {
          *     generating types from `packages/core/src/generated/wire.ts` still gets
          *     them, even though nothing here can point utoipa at "frame N of this
          *     stream has this shape."
-         * @description The three status codes that predate this ticket keep meaning exactly
-         *     what they did — 404 (Reflection unconfigured, or a `session_id` naming
-         *     no Session) and 426 (a stale `protocol_version`) are still real HTTP
-         *     statuses, not folded into the event stream, because both are decided
-         *     *before* this handler commits to a 200 and starts streaming (see
-         *     `resolve_session`, called synchronously below): once the stream opens,
-         *     the status line has already gone out, so nothing after that point can
-         *     change it. A failure *inside* the streamed run — the chat endpoint
-         *     erroring, the loop never producing an Answer — cannot become a 500 for
-         *     the same reason; it ends the stream instead, via an `agent_end` event
-         *     carrying `"status": "error"` (`run_reflect_stream`) rather than hanging
-         *     or dropping the connection silently.
+         * @description The two status codes that predate this ticket keep meaning exactly what
+         *     they did — 404 (Reflection unconfigured — see this handler's defensive
+         *     `reflect.is_none()` fallback just below; not, as of issue #131, a
+         *     `session_id` naming no Session, which `resolve_session` now creates
+         *     rather than rejects) and 426 (a stale `protocol_version`) are still real
+         *     HTTP statuses, not folded into the event stream, because both are
+         *     decided *before* this handler commits to a 200 and starts streaming
+         *     (see `resolve_session`, called synchronously below): once the stream
+         *     opens, the status line has already gone out, so nothing after that
+         *     point can change it. A failure *inside* the streamed run — the chat
+         *     endpoint erroring, the loop never producing an Answer — cannot become a
+         *     500 for the same reason; it ends the stream instead, via an `agent_end`
+         *     event carrying `"status": "error"` (`run_reflect_stream`) rather than
+         *     hanging or dropping the connection silently.
          */
         post: operations["reflect_handler"];
         delete?: never;
@@ -364,14 +366,22 @@ export interface components {
             /**
              * Format: uuid
              * @description The Session this Question belongs to, or `None` to start a new one
-             *     — a null id on an ask *is* the create (`docs/adr/0025`); there is no
-             *     separate create endpoint. `resolve_session` loads that Session's
-             *     prior Turns (`sessions::load_turns`) to read this Question "in the
-             *     light of the Conversation before it" (CONTEXT.md's own phrase for
-             *     what a Conversation is) — the server holds that Conversation now, so
-             *     this replaces what used to round-trip on every request as
-             *     `prior_turns`. A `Some` naming a Session that doesn't exist is a 404,
-             *     not a silently-ignored value.
+             *     under a Server-chosen id — a null id on an ask *is* the create
+             *     (`docs/adr/0025`); there is no separate create endpoint.
+             *     `resolve_session` loads that Session's prior Turns
+             *     (`sessions::load_turns`) to read this Question "in the light of the
+             *     Conversation before it" (CONTEXT.md's own phrase for what a
+             *     Conversation is) — the server holds that Conversation now, so this
+             *     replaces what used to round-trip on every request as `prior_turns`.
+             *
+             *     Issue #131, ADR 0038: a `Some` naming a Session that doesn't exist is
+             *     no longer a 404 — it creates that Session under the supplied id
+             *     instead, the same upsert shape `sync.rs`'s own Entry push already
+             *     uses (the Device mints an id, the Server upserts on it). This is
+             *     what lets the Device — `apps/web/src/pages/reflection-page.tsx`'s
+             *     `handleAsk` — mint a fresh Session's id itself and know it before
+             *     this request is even sent, rather than learning it only from a
+             *     successful response.
              */
             session_id?: string | null;
             /**
@@ -696,7 +706,7 @@ export interface operations {
                     "text/event-stream": string;
                 };
             };
-            /** @description Reflection is unconfigured, or session_id names a Session that does not exist */
+            /** @description Reflection is unconfigured on this Server */
             404: {
                 headers: {
                     [name: string]: unknown;

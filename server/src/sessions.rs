@@ -774,6 +774,35 @@ pub(crate) async fn create_session(pool: &PgPool, title: &str) -> anyhow::Result
     Ok(id)
 }
 
+/// Mints a Session under an id the *Device* already chose, rather than one
+/// this function generates itself — issue #131: `reflect.rs::resolve_session`
+/// calls this when a request's own `session_id` names no existing row,
+/// which after this ticket is the Device's normal first-ask shape (it mints
+/// a uuid, remembers it, and navigates to `/reflect/<id>` before the
+/// request is even sent — see that module's own doc comment on why), not
+/// an error case. This mirrors how an Entry already works
+/// (`sync.rs::run_sync`'s `insert ... on conflict (id) do update`: the
+/// Device generates the id and the Server upserts on it) — except a
+/// Session's own upsert only ever needs the "create" half here, because
+/// `resolve_session` already routed a *known* id through `find_session`
+/// above; by the time this runs, `id` is either genuinely new or (a
+/// retried/duplicated request racing a previous one for the same
+/// Device-minted id) already exactly this row, and `on conflict (id) do
+/// nothing` is what makes that retry idempotent instead of erroring on the
+/// primary key.
+pub(crate) async fn create_session_with_id(
+    pool: &PgPool,
+    id: Uuid,
+    title: &str,
+) -> anyhow::Result<()> {
+    sqlx::query("insert into sessions (id, title) values ($1, $2) on conflict (id) do nothing")
+        .bind(id)
+        .bind(title)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// Opens a transaction and reads the Session a new Turn is about to be
 /// appended to — its current `main_leaf_id`, and a bumped `updated_at`.
 /// Factored out of `record_turn_from_steps` (its one caller) purely to keep
