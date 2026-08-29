@@ -4,6 +4,7 @@ import { MemoryRouter, Outlet, Route, Routes, useSearchParams } from "react-rout
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useSettingsStore } from "@/lib/settings";
 import type { EntryStoreOutletContext } from "@/pages/entry-store-layout";
+import { swipeLeft } from "@/test/swipe";
 import { ComposerPage } from "./composer-page";
 
 // Stand-in for surfacing the current "?q=..." from MemoryRouter's own
@@ -425,6 +426,7 @@ describe("ComposerPage", () => {
   // (entry-actions.tsx's `hoverCapable()` reads that as "no hover"), so a
   // plain tap on the row here opens the sheet exactly as it would on a
   // touch device — no explicit stub needed for that default.
+  // #127: the sheet is reached by swiping a bubble left, not by tapping it.
   describe("Edit and Delete from a row's shared actions sheet", () => {
     const oneEntry: EntryStoreOutletContext["entries"] = [
       {
@@ -441,7 +443,7 @@ describe("ComposerPage", () => {
     it("choosing Edit puts the Composer into editing mode, seeded with the Entry's body", async () => {
       renderComposerPage({ ...readyContext, entries: oneEntry });
 
-      fireEvent.click(screen.getByText("hello"));
+      swipeLeft(screen.getByText("hello"));
       fireEvent.click(await screen.findByText("Edit"));
 
       expect(screen.getByText("Editing Entry")).toBeInTheDocument();
@@ -456,7 +458,7 @@ describe("ComposerPage", () => {
       const removeEntry = vi.fn();
       renderComposerPage({ ...readyContext, entries: oneEntry, removeEntry });
 
-      fireEvent.click(screen.getByText("hello"));
+      swipeLeft(screen.getByText("hello"));
       fireEvent.click(await screen.findByText("Delete"));
 
       expect(removeEntry).not.toHaveBeenCalled();

@@ -268,6 +268,74 @@ export function entryRow(page: Page, body: string): Locator {
 }
 
 /**
+ * The element a finger actually picks up (#127) — `entry-bubble.tsx` puts
+ * `data-swipe-target` on the bubble's own fill, one level inside the
+ * `[data-slot="bubble"]` row `entryRow` matches. The distinction matters:
+ * the recogniser resolves its target with `closest()`, so a gesture
+ * dispatched on the row around the bubble finds nothing.
+ */
+export function entrySwipeTarget(page: Page, body: string): Locator {
+  return page.locator("[data-swipe-target]").filter({ hasText: body });
+}
+
+/**
+ * Dispatches one synthetic touch pointer event on an Entry's bubble.
+ *
+ * `bubbles: true` is not optional: `use-swipe-actions.ts` attaches ONE
+ * recogniser to the thread's row container rather than one per row, so an
+ * event that does not travel up the tree is never seen at all.
+ *
+ * Playwright's own `page.touchscreen` only taps, and mouse emulation
+ * produces `pointerType: "mouse"`, which the recogniser deliberately
+ * ignores so that dragging to select still selects. Dispatching the events
+ * is what expresses a finger here. It is not a substitute for the device —
+ * #127 was verified against real touch on Android — but it is what keeps
+ * the gesture from silently rotting in a real browser, at real layout,
+ * where jsdom cannot see a bubble's width at all.
+ */
+async function touchAt(target: Locator, type: string, x: number, y: number): Promise<void> {
+  await target.dispatchEvent(type, {
+    pointerId: 1,
+    pointerType: "touch",
+    clientX: x,
+    clientY: y,
+    bubbles: true,
+    cancelable: true,
+  });
+}
+
+/** Where a swipe on this Entry starts, and the y it stays on throughout. */
+export async function swipeOrigin(target: Locator): Promise<{ x: number; y: number }> {
+  const box = await target.boundingBox();
+  if (!box) throw new Error("the Entry's bubble has no box to swipe");
+  return { x: box.x + box.width - 8, y: box.y + box.height / 2 };
+}
+
+/** Just past the recogniser's 12px horizontal threshold. */
+export const SWIPE_CONFIRM_PX = 13;
+/** Comfortably past half the 48px peek limit, so the release opens. */
+export const SWIPE_OPEN_PX = 40;
+
+export async function swipeEntryLeft(page: Page, body: string): Promise<void> {
+  const target = entrySwipeTarget(page, body);
+  const { x, y } = await swipeOrigin(target);
+  await touchAt(target, "pointerdown", x, y);
+  await touchAt(target, "pointermove", x - SWIPE_CONFIRM_PX, y);
+  await touchAt(target, "pointermove", x - SWIPE_CONFIRM_PX - SWIPE_OPEN_PX, y);
+  await touchAt(target, "pointerup", x - SWIPE_CONFIRM_PX - SWIPE_OPEN_PX, y);
+}
+
+/** A finger landing and lifting on an Entry without moving. */
+export async function tapEntry(page: Page, body: string): Promise<void> {
+  const target = entrySwipeTarget(page, body);
+  const { x, y } = await swipeOrigin(target);
+  await touchAt(target, "pointerdown", x, y);
+  await touchAt(target, "pointerup", x, y);
+}
+
+export { touchAt };
+
+/**
  * Hovers a History row, revealing its Edit/Delete buttons. They sit behind
  * `@media (hover: hover)` and are `opacity-0` until the row is hovered — a
  * headless Chromium reports as hover-capable, so they are in the DOM, and the

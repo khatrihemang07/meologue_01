@@ -4,11 +4,22 @@ import {
   useVirtualizer,
   type VirtualItem,
 } from "@tanstack/react-virtual";
-import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { toast } from "sonner";
 import { EntryActionsSheet } from "@/components/entry-actions";
 import { EntryBubble } from "@/components/entry-bubble";
 import { HistoryScrollContext } from "@/components/shell";
 import { ConfirmDialog } from "@/components/ui/alert-dialog";
+import { useSwipeActions } from "@/hooks/use-swipe-actions";
+import { copyText } from "@/lib/clipboard";
 import { deviceUtcOffsetMinutes, entryDayKey, formatDaySeparator } from "@/lib/entry-day";
 import { cn } from "@/lib/utils";
 
@@ -235,6 +246,42 @@ export function History({ entries, syncEnabled, query = "", onEdit, onDelete }: 
         : undefined,
     [onEdit, onDelete],
   );
+
+  // A swipe hands back the element it picked up, not an Entry: the hook is
+  // deliberately ignorant of what a row stands for. Resolving the id here
+  // reads whatever `entries` is at the moment of the release rather than
+  // whatever it was when the listener was attached, which matters because a
+  // sync tick can replace the array mid-gesture.
+  const entriesRef = useRef(entries);
+  entriesRef.current = entries;
+  const openSheetForSwipe = useCallback((target: HTMLElement) => {
+    const id = target.dataset.entryId;
+    const swiped = entriesRef.current.find((candidate) => candidate.id === id);
+    if (swiped) setSheetEntry(swiped);
+  }, []);
+  // The element every bubble is positioned inside, and the one thing the
+  // swipe recogniser is attached to (#127) — once, for the whole thread,
+  // rather than once per row. A callback ref, because this component's very
+  // first render (Entry store still opening) returns early with no row
+  // container at all; see `use-swipe-actions.ts` for what that cost.
+  const rowsRef = useSwipeActions({
+    onOpen: openSheetForSwipe,
+    // Nothing to open without Edit/Delete wired up — Grounding renders the
+    // same Entries and must stay read-only (EntryRowProps' own comment).
+    enabled: actions !== undefined,
+  });
+
+  // Copy (#127). The sheet reports the choice; this is where it happens, for
+  // the same reason Delete's confirmation lives here — one component above
+  // every row. Both outcomes are announced, and differently: a WebView that
+  // refuses the clipboard must not be indistinguishable from one that wrote
+  // to it, or the reader pastes stale text somewhere else and blames that.
+  const copyEntry = useCallback((entry: Entry) => {
+    void copyText(entry.body).then((copied) => {
+      if (copied) toast.success("Entry copied.");
+      else toast.error("Couldn't copy this Entry. Select the text to copy it instead.");
+    });
+  }, []);
 
   // `groupByDay` is the one genuinely O(entries.length) piece of render-body
   // work here (issue #81) — memoised so a render this component takes for
@@ -529,7 +576,7 @@ export function History({ entries, syncEnabled, query = "", onEdit, onDelete }: 
           zero height so that measurement always has something to attach
           to. */}
       <div ref={spacerRef} style={{ height: spacerHeight }} aria-hidden="true" />
-      <div style={{ position: "relative", height: totalSize, width: "100%" }}>
+      <div ref={rowsRef} style={{ position: "relative", height: totalSize, width: "100%" }}>
         {virtualRows.map((virtualRow) => {
           const item = flatItems[virtualRow.index];
           if (!item) {
@@ -608,6 +655,7 @@ export function History({ entries, syncEnabled, query = "", onEdit, onDelete }: 
             }
           }}
           onEdit={actions.onEdit}
+          onCopy={copyEntry}
           onDelete={actions.onDelete}
         />
       )}

@@ -1,19 +1,12 @@
 import type { Entry } from "@meologue/core";
-import {
-  type ComponentProps,
-  type MouseEvent,
-  memo,
-  type ReactNode,
-  useRef,
-  useState,
-} from "react";
+import { type ComponentProps, type MouseEvent, memo, type ReactNode, useState } from "react";
 import { EntryHoverActions } from "@/components/entry-actions";
 import {
   type EntryRowActions,
   entryBodyContent,
   handleRowContextMenu,
-  handleRowTap,
 } from "@/components/entry-row";
+import { SWIPE_TARGET_ATTRIBUTE } from "@/hooks/use-swipe-actions";
 import { formatClockTime } from "@/lib/entry-day";
 import { formatAbsoluteTime } from "@/lib/entry-time";
 import { cn } from "@/lib/utils";
@@ -182,30 +175,28 @@ export const EntryBubble = memo(function EntryBubble({
   groupedWithPrevious = false,
   actions,
 }: EntryBubbleProps) {
-  // When the current press began, so a click can tell a tap from the tail end
-  // of a long-press. A ref, not state: nothing renders from it.
-  const pressStartedAtRef = useRef<number | null>(null);
-
   return (
     <Bubble
       side={side}
       groupedWithPrevious={groupedWithPrevious}
       className={cn(actions && "group")}
       innerProps={{
-        // The touch-only progressive enhancement `entry-row.tsx` documents:
-        // a bubble stays plain, selectable text rather than becoming a
-        // control, and the real, tabbable <button>s are EntryHoverActions.
+        // What a finger can pick up (#127). The attribute goes on the bubble
+        // itself, so the element the recogniser translates is the one whose
+        // fill and text the reader sees move — and `touch-action: pan-y` is
+        // what lets it: the browser keeps carrying a vertical scroll, and
+        // leaves the horizontal axis to `use-swipe-actions.ts`. It is the
+        // deliberate opposite of `pane-divider.tsx`'s `touch-action: none`.
+        //
+        // No tap handler. A tap on a bubble does nothing now: it was an
+        // unusual thing for a chat interface to spend a tap on, and the tap
+        // is worth more free — placing a cursor, dismissing a selection.
         // Biome's a11y rules do not reach these because they arrive as an
-        // object rather than JSX attributes — the reasoning is recorded here
-        // rather than as a suppression it would now call unused.
-        onPointerDown: actions
-          ? () => {
-              pressStartedAtRef.current = Date.now();
-            }
-          : undefined,
-        onClick: actions
-          ? () => handleRowTap(actions, entry, pressStartedAtRef.current)
-          : undefined,
+        // object rather than JSX attributes; the bubble stays plain,
+        // selectable text rather than becoming a control, and the real,
+        // tabbable <button>s are EntryHoverActions.
+        ...(actions ? { [SWIPE_TARGET_ATTRIBUTE]: "", "data-entry-id": entry.id } : {}),
+        className: actions ? "touch-pan-y" : undefined,
         onContextMenu: actions
           ? (event: MouseEvent) => handleRowContextMenu(event, actions, entry)
           : undefined,

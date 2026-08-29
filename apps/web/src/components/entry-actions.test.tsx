@@ -96,24 +96,33 @@ describe("EntryHoverActions", () => {
 describe("EntryActionsSheet", () => {
   it("renders nothing open when entry is null", () => {
     render(
-      <EntryActionsSheet entry={null} onOpenChange={vi.fn()} onEdit={vi.fn()} onDelete={vi.fn()} />,
+      <EntryActionsSheet
+        entry={null}
+        onOpenChange={vi.fn()}
+        onEdit={vi.fn()}
+        onCopy={vi.fn()}
+        onDelete={vi.fn()}
+      />,
     );
 
     expect(screen.queryByText("Edit")).not.toBeInTheDocument();
+    expect(screen.queryByText("Copy")).not.toBeInTheDocument();
     expect(screen.queryByText("Delete")).not.toBeInTheDocument();
   });
 
-  it("shows Edit and Delete when entry is set", () => {
+  it("shows Edit, Copy and Delete when entry is set", () => {
     render(
       <EntryActionsSheet
         entry={entry({})}
         onOpenChange={vi.fn()}
         onEdit={vi.fn()}
+        onCopy={vi.fn()}
         onDelete={vi.fn()}
       />,
     );
 
     expect(screen.getByText("Edit")).toBeInTheDocument();
+    expect(screen.getByText("Copy")).toBeInTheDocument();
     expect(screen.getByText("Delete")).toBeInTheDocument();
   });
 
@@ -126,6 +135,7 @@ describe("EntryActionsSheet", () => {
         entry={target}
         onOpenChange={onOpenChange}
         onEdit={onEdit}
+        onCopy={vi.fn()}
         onDelete={vi.fn()}
       />,
     );
@@ -153,6 +163,7 @@ describe("EntryActionsSheet", () => {
         entry={target}
         onOpenChange={onOpenChange}
         onEdit={vi.fn()}
+        onCopy={vi.fn()}
         onDelete={onDelete}
       />,
     );
@@ -160,6 +171,30 @@ describe("EntryActionsSheet", () => {
     fireEvent.click(screen.getByText("Delete"));
 
     expect(onDelete).toHaveBeenCalledWith(target);
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  // #127: Copy reports the choice and closes, exactly like Edit and Delete
+  // — it does not touch the clipboard. history.tsx is what writes, because
+  // writing can fail and the difference between "copied" and "the WebView
+  // refused" has to be announced from somewhere that can show a toast.
+  it("calls onCopy with the whole Entry and closes the sheet when Copy is pressed", () => {
+    const onCopy = vi.fn();
+    const onOpenChange = vi.fn();
+    const target = entry({});
+    render(
+      <EntryActionsSheet
+        entry={target}
+        onOpenChange={onOpenChange}
+        onEdit={vi.fn()}
+        onCopy={onCopy}
+        onDelete={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByText("Copy"));
+
+    expect(onCopy).toHaveBeenCalledWith(target);
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 });

@@ -1,6 +1,7 @@
 import type { Entry } from "@meologue/core";
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { SWIPE_TARGET_ATTRIBUTE } from "@/hooks/use-swipe-actions";
 import { EntryBubble } from "./entry-bubble";
 
 function entry(overrides: Partial<Entry> = {}): Entry {
@@ -94,5 +95,34 @@ describe("EntryBubble", () => {
 
     expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
+  });
+
+  // #127. The marking and the `touch-action` go together: without the
+  // attribute the recogniser never picks the bubble up, and without
+  // `pan-y` Chromium's own scroll recogniser claims the drag before any
+  // handler sees the second move — the same thing `pane-divider.tsx` needs
+  // `touch-action: none` for, on the other axis.
+  it("marks itself as something a finger can swipe, and leaves the vertical axis to the browser", () => {
+    const { container } = render(
+      <EntryBubble
+        entry={entry({ id: "e7" })}
+        syncEnabled={false}
+        side="out"
+        actions={{ onEdit: vi.fn(), onDelete: vi.fn(), onOpenSheet: vi.fn() }}
+      />,
+    );
+
+    const target = container.querySelector<HTMLElement>(`[${SWIPE_TARGET_ATTRIBUTE}]`);
+    expect(target).not.toBeNull();
+    expect(target).toHaveClass("touch-pan-y");
+    // The id is how history.tsx turns the element the gesture hands back
+    // into the Entry the sheet opens for.
+    expect(target?.dataset.entryId).toBe("e7");
+  });
+
+  it("marks nothing swipeable when no actions are wired", () => {
+    const { container } = render(<EntryBubble entry={entry()} syncEnabled={false} side="out" />);
+
+    expect(container.querySelector(`[${SWIPE_TARGET_ATTRIBUTE}]`)).toBeNull();
   });
 });
