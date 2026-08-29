@@ -6,7 +6,7 @@ import {
 } from "@tanstack/react-virtual";
 import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { EntryActionsSheet } from "@/components/entry-actions";
-import { EntryRow } from "@/components/entry-row";
+import { EntryBubble } from "@/components/entry-bubble";
 import { HistoryScrollContext } from "@/components/shell";
 import { ConfirmDialog } from "@/components/ui/alert-dialog";
 import { deviceUtcOffsetMinutes, entryDayKey, formatDaySeparator } from "@/lib/entry-day";
@@ -569,21 +569,26 @@ export function History({ entries, syncEnabled, query = "", onEdit, onDelete }: 
                   </span>
                 </div>
               ) : (
-                // Issue #83's replacement for the old `divide-y` wrapper:
-                // rows are no longer guaranteed adjacent DOM siblings (only
-                // whatever's near the viewport is actually rendered), so
-                // the divider has to travel with the row it belongs to
-                // instead of coming from a shared ancestor. `isFirstInGroup`
-                // (flattenGroups, above) is exactly the boundary `divide-y`
-                // used to find structurally, computed once instead.
-                <div className={cn(!item.isFirstInGroup && "border-t border-border")}>
-                  <EntryRow
-                    entry={item.entry}
-                    query={query}
-                    syncEnabled={syncEnabled}
-                    actions={actions}
-                  />
-                </div>
+                // A bubble, not a row (ADR 0036). The `border-t` that used
+                // to travel with each row is gone with it: bubbles are told
+                // apart by their own shape and the gap between them, and a
+                // rule between two of them would be drawing a boundary the
+                // fill already draws. `isFirstInGroup` still earns its keep
+                // — it is exactly "the first Entry under a day separator",
+                // which is the one bubble in a run that must NOT be grouped
+                // tightly against what sits above it.
+                //
+                // Every Entry is `side="out"`: Composer is all-outgoing
+                // because an Entry has no addressee (CONTEXT.md), not
+                // because the other side happens to be empty.
+                <EntryBubble
+                  entry={item.entry}
+                  query={query}
+                  syncEnabled={syncEnabled}
+                  side="out"
+                  groupedWithPrevious={!item.isFirstInGroup}
+                  actions={actions}
+                />
               )}
             </div>
           );

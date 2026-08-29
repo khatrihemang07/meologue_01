@@ -258,7 +258,13 @@ export async function setTabHidden(page: Page, hidden: boolean): Promise<void> {
  * suffix guarantees that), since the row is found via its rendered text.
  */
 export function entryRow(page: Page, body: string): Locator {
-  return page.locator('[data-slot="entry-row"]').filter({ hasText: body });
+  // `bubble`, not `entry-row`: ADR 0036 made the thread a chat thread, and
+  // `entry-bubble.tsx` renders its Entries. `entry-row.tsx` still exists and
+  // still carries `data-slot="entry-row"`, but only for the two surfaces
+  // that stayed lists — Reflection's Grounding disclosure and Search
+  // results — so matching it here would find an Entry everywhere except the
+  // History this helper is named for.
+  return page.locator('[data-slot="bubble"]').filter({ hasText: body });
 }
 
 /**

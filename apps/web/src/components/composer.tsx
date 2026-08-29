@@ -187,7 +187,23 @@ export function Composer({
           // into ticket 51's "one line, grows to about five, then scrolls."
           // Sending clears `value`, and field-sizing shrinks the box back to
           // min-h on its own — no row-count state to track.
-          className="min-h-11 max-h-36 resize-none overflow-y-auto rounded-3xl"
+          //
+          // `leading-6` and an exact max-height, rather than `max-h-36`:
+          // the ceiling has to be a whole number of lines plus the padding
+          // and border, or the field clips its own last line horizontally
+          // through the glyphs at full height. 36 (144px) was not — it left
+          // a third of a sixth line showing. Pinning the line box at 24px
+          // also stops the count changing between the base and `md` font
+          // sizes, which is why it is set here rather than inherited.
+          // 5 lines x 24px + 16px padding + 2px border = 138px.
+          //
+          // The focus ring is gated to hover-capable devices. `:focus-visible`
+          // always matches a focused text field per spec, so on a phone
+          // tapping the Composer painted a 3px ring around it — a
+          // browser-shaped artefact on a surface that should look like a
+          // chat input. Gating on `(hover: hover)` mirrors the same
+          // pointer-capability split `entry-actions.tsx` already makes.
+          className="min-h-11 max-h-[8.625rem] resize-none overflow-y-auto rounded-3xl leading-6 focus-visible:ring-0 [@media(hover:hover)]:focus-visible:ring-3"
         />
         <Button
           aria-label="Send"
@@ -199,7 +215,10 @@ export function Composer({
           // doesn't reach.
           className="size-11 shrink-0 self-end rounded-full"
           onClick={send}
-          disabled={disabled}
+          // Empty is not sendable — `send` already refuses it (entry-text.ts
+          // rejects a blank draft), so a Send that looks live over an empty
+          // field is the button lying about what it will do.
+          disabled={disabled || value.trim() === ""}
         >
           <ArrowUp aria-hidden="true" className="size-5" />
         </Button>

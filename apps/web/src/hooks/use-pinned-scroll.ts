@@ -201,6 +201,38 @@ export function usePinnedScroll({
     }
   }, [enabled, watch, scrollToNewest]);
 
+  // Issue #126: the pin has to survive the *box* changing, not just new
+  // content arriving. Three things resize the scroll region without adding
+  // an Entry to it — the soft keyboard opening or closing, the Composer
+  // growing as a draft wraps onto another line, and a rotation — and a
+  // browser preserves `scrollTop` across all three. Preserving scrollTop is
+  // exactly wrong at the bottom of a thread: the region gets shorter, the
+  // distance from the top stays put, and the newest Entry walks off the
+  // bottom edge. That is the whole of "in WhatsApp my bottom stays at the
+  // bottom".
+  //
+  // A ResizeObserver on the scroll element itself answers all three at once
+  // and needs to know nothing about which one happened. It re-pins only
+  // when the reader was already pinned, for the same reason the `watch`
+  // effect above does: someone who has scrolled up to read is not asking to
+  // be dragged back down because their keyboard appeared.
+  useEffect(() => {
+    if (!enabled || typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const el = scrollRef.current;
+    if (!el) {
+      return;
+    }
+    const observer = new ResizeObserver(() => {
+      if (pinnedRef.current) {
+        scrollToNewest();
+      }
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [enabled, scrollToNewest]);
+
   // Issue #79: preserves scroll position across an older page landing
   // above the reader (`watch` changing while `prependAnchorRef` is set —
   // see maybeFetchOlderPage above for when that happens). A `useLayoutEffect`

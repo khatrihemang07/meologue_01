@@ -319,7 +319,7 @@ describe("ComposerPage", () => {
       // nodes — waiting for "older" with exact:false is what tolerates
       // that.
       await screen.findByText("older", { exact: false });
-      const bodies = Array.from(container.querySelectorAll("p.whitespace-pre-wrap")).map(
+      const bodies = Array.from(container.querySelectorAll('[data-slot="bubble-body"]')).map(
         (el) => el.textContent,
       );
       expect(bodies).toEqual(["search-older", "search-newer"]);

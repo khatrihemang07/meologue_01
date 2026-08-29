@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import { BackToChats } from "@/components/back-to-chats";
+import { Bubble } from "@/components/entry-bubble";
 import { GroundingDisclosure } from "@/components/grounding-disclosure";
 import { QuestionComposer } from "@/components/question-composer";
 import { NewSessionLink, SessionsLink } from "@/components/reflect-actions";
@@ -58,16 +59,30 @@ async function fetchSession(sessionId: string): Promise<SessionQueryData> {
   };
 }
 
+// A Question and its Answer render through the same `Bubble` Composer's
+// Entries do (ADR 0036). None of the three is the same *thing* — CONTEXT.md
+// is explicit that a Question is not an Entry and an Answer is not an Entry
+// — but they are the same shape in a thread, and keeping two hand-written
+// copies of that shape is how the two destinations start disagreeing about
+// what "outgoing" looks like.
+//
+// This is also where the side asymmetry earns its keep most: Reflect is the
+// genuinely two-sided destination, and before it a Question and its Answer
+// were told apart by a saturated fill on one of them alone.
 function AskedQuestion({ text }: { text: string }) {
   return (
-    <p className="ml-auto max-w-[85%] rounded-2xl bg-primary px-4 py-2 text-sm text-primary-foreground">
+    <Bubble side="out" groupedWithPrevious>
       {text}
-    </p>
+    </Bubble>
   );
 }
 
 function GivenAnswer({ text }: { text: string }) {
-  return <p className="mr-auto max-w-[85%] whitespace-pre-wrap text-sm text-foreground">{text}</p>;
+  return (
+    <Bubble side="in" className="whitespace-pre-wrap">
+      {text}
+    </Bubble>
+  );
 }
 
 // An explicit note per turn, independent of the Answer's own wording — the

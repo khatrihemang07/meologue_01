@@ -26,7 +26,11 @@ import {
  * one Entry.
  */
 async function entryBodiesInOrder(page: Page): Promise<string[]> {
-  return page.locator("p.whitespace-pre-wrap").allTextContents();
+  // A data-slot, not a tag-plus-class: the thread's Entries are bubbles
+  // since ADR 0036, and their body is inline rather than a `<p>` precisely
+  // so the clock time can share its last line. Matching on the markup shape
+  // is what tied this to a `<p>` that no longer exists.
+  return page.locator('[data-slot="bubble-body"]').allTextContents();
 }
 
 // ADR 0028: Entries stopped being append-only, and Sync stopped carrying

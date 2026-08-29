@@ -153,7 +153,9 @@ describe("History", () => {
     expect(screen.getByText("Yesterday")).toBeInTheDocument();
     expect(screen.getByText(/August 16/)).toBeInTheDocument();
 
-    const bodies = Array.from(container.querySelectorAll("p")).map((p) => p.textContent);
+    const bodies = Array.from(container.querySelectorAll('[data-slot="bubble-body"]')).map(
+      (p) => p.textContent,
+    );
     expect(bodies).toEqual(["first", "second", "third", "fourth"]);
   });
 

@@ -414,7 +414,15 @@ export function Shell({
         )}
       </header>
 
-      {/* The scrollable content region between the app bar and whatever
+      {/*
+        A positioned wrapper around the scroll region, so the jump-to-newest
+        control below can hang at the region's own bottom edge — just above
+        the Composer — rather than at the viewport's. It cannot live inside
+        the scroll region itself: an absolutely positioned child of a
+        scrolling box scrolls away with the content.
+      */}
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        {/* The scrollable content region between the app bar and whatever
             sits below it. Full-bleed on a wide window — the reading column
             inside is what's sized, proportionally rather than to a fixed
             cap (ADR 0019): 97% of a narrow window, 85% of the space beside
@@ -423,36 +431,36 @@ export function Shell({
             claims the bottom edge and handles env(safe-area-inset-bottom)
             itself — padding it again here would double it under a home
             indicator. */}
-      <div
-        ref={(node) => {
-          // Issue #83: this div is both `usePinnedScroll`'s own scroll
-          // element (`scrollRef`, unchanged) and the node
-          // HistoryScrollContext hands down to History's virtualizer
-          // (`scrollElement`, new). Two refs on one JSX element can't be
-          // written as `ref={a}` twice, so this callback fans the single
-          // attach/detach out to both — `scrollRef.current` synchronously
-          // (usePinnedScroll reads it directly, no re-render needed) and
-          // `setScrollElement` as state (History, a descendant, needs a
-          // value that actually changes to react to — see the context's
-          // own comment on why a bare ref isn't enough there).
-          scrollRef.current = node;
-          setScrollElement(node);
-        }}
-        onScroll={pinnedThread ? handleScroll : undefined}
-        data-testid="shell-scroll-region"
-        // `relative` (issue #83): the one thing History's virtualizer
-        // needs from this element beyond the ref itself. History measures
-        // how much of its own content (a leading spacer, an always-present
-        // day pill — see history.tsx) sits above the virtualized list by
-        // reading that content's own `offsetTop`, and `offsetTop` is
-        // relative to the nearest *positioned* ancestor — with nothing
-        // positioned in between, that would otherwise walk all the way up
-        // to the document body and return a number that includes the app
-        // bar, not just this region's own scrolled content.
-        className="relative flex-1 overflow-x-hidden overflow-y-auto"
-      >
-        <HistoryScrollContext.Provider value={historyScrollContextValue}>
-          {/* A pinned thread hugs the bottom when it is shorter than the
+        <div
+          ref={(node) => {
+            // Issue #83: this div is both `usePinnedScroll`'s own scroll
+            // element (`scrollRef`, unchanged) and the node
+            // HistoryScrollContext hands down to History's virtualizer
+            // (`scrollElement`, new). Two refs on one JSX element can't be
+            // written as `ref={a}` twice, so this callback fans the single
+            // attach/detach out to both — `scrollRef.current` synchronously
+            // (usePinnedScroll reads it directly, no re-render needed) and
+            // `setScrollElement` as state (History, a descendant, needs a
+            // value that actually changes to react to — see the context's
+            // own comment on why a bare ref isn't enough there).
+            scrollRef.current = node;
+            setScrollElement(node);
+          }}
+          onScroll={pinnedThread ? handleScroll : undefined}
+          data-testid="shell-scroll-region"
+          // `relative` (issue #83): the one thing History's virtualizer
+          // needs from this element beyond the ref itself. History measures
+          // how much of its own content (a leading spacer, an always-present
+          // day pill — see history.tsx) sits above the virtualized list by
+          // reading that content's own `offsetTop`, and `offsetTop` is
+          // relative to the nearest *positioned* ancestor — with nothing
+          // positioned in between, that would otherwise walk all the way up
+          // to the document body and return a number that includes the app
+          // bar, not just this region's own scrolled content.
+          className="relative flex-1 overflow-x-hidden overflow-y-auto"
+        >
+          <HistoryScrollContext.Provider value={historyScrollContextValue}>
+            {/* A pinned thread hugs the bottom when it is shorter than the
               viewport (ticket 53): the newest Entry belongs next to the
               Composer, and top-aligning a two-Entry History leaves it
               stranded at the top above a screen of empty space — the one
@@ -465,52 +473,56 @@ export function Shell({
               leading spacer — see PinnedThreadConfig's own
               `ownsBottomAlignment` comment) skips this treatment rather than
               layering both on top of each other. */}
-          <div
-            className={cn(
-              // ADR 0019's proportional reading column, flipping at the
-              // same `md` where the nav becomes a rail — one transition
-              // for the eye rather than two. 85% is narrower than 97% at
-              // every window size, so the column steps *down* here; that
-              // step is the rule's, not a bug in it. px-4 stays inside
-              // the percentage, so the text itself lands a few points
-              // narrower than the container.
-              "mx-auto flex w-[97%] flex-col gap-4 px-4 py-4 md:w-[85%]",
-              pinnedThread && !pinnedThread.ownsBottomAlignment && "min-h-full justify-end",
-            )}
-          >
-            {message && <p className="text-sm text-destructive">{message}</p>}
-            {children}
-            {footer}
-          </div>
-        </HistoryScrollContext.Provider>
-      </div>
+            <div
+              className={cn(
+                // ADR 0019's proportional reading column, flipping at the
+                // same `md` where the nav becomes a rail — one transition
+                // for the eye rather than two. 85% is narrower than 97% at
+                // every window size, so the column steps *down* here; that
+                // step is the rule's, not a bug in it. px-4 stays inside
+                // the percentage, so the text itself lands a few points
+                // narrower than the container.
+                "mx-auto flex w-[97%] flex-col gap-4 px-4 py-4 md:w-[85%]",
+                pinnedThread && !pinnedThread.ownsBottomAlignment && "min-h-full justify-end",
+              )}
+            >
+              {message && <p className="text-sm text-destructive">{message}</p>}
+              {children}
+              {footer}
+            </div>
+          </HistoryScrollContext.Provider>
+        </div>
 
-      {/* Ticket 53's jump-to-newest control, as a band between the thread
-            and the Composer rather than an overlay floating over the thread.
-            An overlay was the first shape tried and it was wrong: the control
-            hangs at the *viewport's* bottom edge, and it only ever shows while
-            the reader is scrolled away from the newest end — so whatever line
-            happened to be at the bottom of the screen sat underneath it, clipped,
-            and no amount of padding on the content could move it out of the way.
-            Out here it takes its own row and covers nothing. It shows only while
-            away from the newest end, so the height it claims is never taken from
-            a pinned thread; when it goes away the scroll region grows, and a
-            grown region keeps its bottom edge, leaving the reader still at the
-            newest Entry. */}
-      {pinnedThread && awayFromNewest && (
-        <div className="flex justify-center border-t bg-background py-2">
+        {/*
+        Ticket 53's jump-to-newest control. It was a band between the thread
+        and the Composer, and that reasoning was sound against the shape it
+        was compared to: an overlay hanging at the *viewport's* bottom edge
+        covered whatever line happened to sit underneath it, and no padding
+        on the content could move it out of the way.
+
+        A circle anchored to the wrapper above rather than to the viewport
+        has neither problem. It covers a corner of the thread instead of a
+        full line, costs none of the permanent thread height a band claimed,
+        and is the shape gesture-memory expects from every other chat
+        application.
+
+        No count on it: no read or seen state exists anywhere in this app —
+        not on an Entry, not on a Digest, not on a Session — and inventing
+        one to fill a badge is a far larger decision than this control.
+      */}
+        {pinnedThread && awayFromNewest && (
           <Button
             type="button"
             variant="secondary"
-            size="sm"
+            size="icon"
+            aria-label="Jump to newest"
             onClick={jumpToNewest}
-            className="gap-1.5 rounded-full shadow-sm"
+            className="absolute right-4 bottom-3 z-10 size-10 rounded-full border border-border shadow-md motion-safe:animate-in motion-safe:fade-in"
           >
-            <ArrowDown aria-hidden="true" className="size-3.5" />
-            Jump to newest
+            <ArrowDown aria-hidden="true" className="size-4" />
           </Button>
-        </div>
-      )}
+        )}
+      </div>
 
       {composerSlot}
     </div>

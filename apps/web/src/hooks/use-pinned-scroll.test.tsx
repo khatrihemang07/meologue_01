@@ -1,5 +1,5 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { usePinnedScroll } from "./use-pinned-scroll";
 
 afterEach(() => {
@@ -321,5 +321,82 @@ describe("usePinnedScroll", () => {
       expect(scrollHeightReads).toHaveBeenCalledTimes(1);
       expect(p.fetchMore).not.toHaveBeenCalled();
     });
+  });
+});
+
+// Issue #126: the box changing is as much a reason to re-pin as new content
+// arriving. The soft keyboard, a growing Composer and a rotation all shrink
+// the scroll region without adding an Entry to it, and a browser preserves
+// `scrollTop` across all three — which walks the newest Entry off the bottom.
+describe("usePinnedScroll re-pinning when the region itself resizes", () => {
+  // The stub records what it was asked to watch as well as capturing the
+  // callback. Capturing alone let a mutation that never calls `observe()` at
+  // all pass every test here — the callback still existed to be fired, so
+  // the suite proved the reaction without proving the subscription.
+  let notifyResize: (() => void) | null = null;
+  let observedTargets: Element[] = [];
+
+  beforeEach(() => {
+    notifyResize = null;
+    observedTargets = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: () => void) {
+          notifyResize = callback;
+        }
+        observe(target: Element) {
+          observedTargets.push(target);
+        }
+        disconnect() {
+          notifyResize = null;
+          observedTargets = [];
+        }
+      },
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("watches the scroll region itself, not some other element", () => {
+    render(<Harness enabled watch={1} />);
+
+    expect(observedTargets).toEqual([screen.getByTestId("scroller")]);
+  });
+
+  it("stops watching when it unmounts", () => {
+    const { unmount } = render(<Harness enabled watch={1} />);
+    expect(notifyResize).not.toBeNull();
+
+    unmount();
+
+    expect(notifyResize).toBeNull();
+  });
+
+  it("returns to the newest end when the region shrinks under a pinned reader", () => {
+    render(<Harness enabled watch={1} />);
+    const scroller = screen.getByTestId("scroller");
+    setScrollGeometry(scroller, { scrollHeight: 1000, clientHeight: 400, scrollTop: 600 });
+
+    // The keyboard opens: the region is shorter, `scrollTop` is untouched,
+    // and the reader is 300px from the bottom without having moved.
+    setScrollGeometry(scroller, { scrollHeight: 1000, clientHeight: 100, scrollTop: 600 });
+    act(() => notifyResize?.());
+
+    expect(scroller.scrollTop).toBe(1000);
+  });
+
+  it("leaves a reader who scrolled away exactly where they are", () => {
+    render(<Harness enabled watch={1} />);
+    const scroller = screen.getByTestId("scroller");
+    setScrollGeometry(scroller, { scrollHeight: 1000, clientHeight: 400, scrollTop: 100 });
+    fireEvent.scroll(scroller);
+
+    setScrollGeometry(scroller, { scrollHeight: 1000, clientHeight: 100, scrollTop: 100 });
+    act(() => notifyResize?.());
+
+    expect(scroller.scrollTop).toBe(100);
   });
 });

@@ -7,32 +7,46 @@
  * Reflection both import from here rather than each keeping their own copy.
  */
 import type { Entry } from "@meologue/core";
-import { type MouseEvent, memo, useRef, useState } from "react";
+import { type MouseEvent, memo, type ReactNode, useRef, useState } from "react";
 import { EntryHoverActions, hoverCapable } from "@/components/entry-actions";
 import { formatClockTime } from "@/lib/entry-day";
 import { formatAbsoluteTime } from "@/lib/entry-time";
 import { highlightMatches } from "@/lib/highlight-match";
 import { cn } from "@/lib/utils";
 
-export function EntryBody({ body, query }: { body: string; query: string }) {
+/**
+ * An Entry's words with the Search query highlighted, as inline content and
+ * nothing else — no block wrapper of its own.
+ *
+ * Split out of `EntryBody` for `entry-bubble.tsx`. A bubble puts its clock
+ * time in a right-floated span after the text so it can share the last line,
+ * and a float can only be placed on a line box it is actually in: with the
+ * body wrapped in a `<p>`, the float has no line of its own to join and
+ * drops beneath the whole block every time. That is what made a one-word
+ * Entry cost two lines.
+ *
+ * Shared rather than reimplemented so the *words* still cannot drift between
+ * History and Grounding, which is what `EntryBody`'s own extraction was for.
+ */
+export function entryBodyContent(body: string, query: string): ReactNode {
   if (query.trim() === "") {
-    return <p className="min-w-0 flex-1 whitespace-pre-wrap">{body}</p>;
+    return body;
   }
-  return (
-    <p className="min-w-0 flex-1 whitespace-pre-wrap">
-      {highlightMatches(body, query).map((segment, index) =>
-        segment.matched ? (
-          // biome-ignore lint/suspicious/noArrayIndexKey: segments are a stable, ordered split of one Entry's body for one render.
-          <mark key={index} className="rounded-sm bg-primary/30 text-inherit">
-            {segment.text}
-          </mark>
-        ) : (
-          // biome-ignore lint/suspicious/noArrayIndexKey: segments are a stable, ordered split of one Entry's body for one render.
-          <span key={index}>{segment.text}</span>
-        ),
-      )}
-    </p>
+  return highlightMatches(body, query).map((segment, index) =>
+    segment.matched ? (
+      // biome-ignore lint/suspicious/noArrayIndexKey: segments are a stable, ordered split of one Entry's body for one render.
+      <mark key={index} className="rounded-sm bg-primary/30 text-inherit">
+        {segment.text}
+      </mark>
+    ) : (
+      // biome-ignore lint/suspicious/noArrayIndexKey: segments are a stable, ordered split of one Entry's body for one render.
+      <span key={index}>{segment.text}</span>
+    ),
   );
+}
+
+export function EntryBody({ body, query }: { body: string; query: string }) {
+  return <p className="min-w-0 flex-1 whitespace-pre-wrap">{entryBodyContent(body, query)}</p>;
 }
 
 /**
@@ -118,7 +132,7 @@ const MAX_TAP_MS = 400;
  * is actually selected (the release at the end of a drag-select, and the
  * click that dismisses an existing selection).
  */
-function handleRowTap(
+export function handleRowTap(
   actions: EntryRowActions | undefined,
   entry: Entry,
   pressStartedAt: number | null,
@@ -147,7 +161,7 @@ function handleRowTap(
  * this is what makes that true here specifically for a right-click-shaped
  * event, not just for the removed long-press timer.
  */
-function handleRowContextMenu(
+export function handleRowContextMenu(
   event: MouseEvent,
   actions: EntryRowActions | undefined,
   entry: Entry,
