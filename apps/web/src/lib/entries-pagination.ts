@@ -116,4 +116,15 @@ export async function refreshNewestEntriesPage(store: EntryStore): Promise<void>
   // criterion — without also re-triggering the newest-page-only logic
   // above a second time (this key never matches ENTRIES_QUERY_KEY itself).
   await queryClient.invalidateQueries({ queryKey: [...ENTRIES_QUERY_KEY, "search"] });
+
+  // Issue #143: an Entry Reference's chip (entry-row.tsx's
+  // `EntryReferenceLink`, query-keys.ts's own `entryReferenceQueryKey`) is
+  // ADR 0042's "resolves live rather than storing a snapshot" — a chip
+  // already mounted and pointing at whatever Entry this write just touched
+  // has to notice. Same shape as the Search invalidation just above, and
+  // the same reason it lives here rather than in a per-mutation
+  // `onSuccess`: every local write (Send, edit, delete) and every sync pull
+  // funnels through this one function already, so one invalidation here
+  // covers all of them instead of one per call site.
+  await queryClient.invalidateQueries({ queryKey: [...ENTRIES_QUERY_KEY, "entry-reference"] });
 }

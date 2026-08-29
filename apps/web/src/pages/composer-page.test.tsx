@@ -607,4 +607,168 @@ describe("ComposerPage", () => {
       expect(screen.getByTestId("url-query")).toHaveTextContent("d=not-a-day");
     });
   });
+
+  // Issue #143: following an Entry Reference's chip lands here with
+  // `?e=<uuid>`, extending the exact same seek mechanism the `?d=` suite
+  // above already covers — mirrored test for test.
+  describe("an Entry-Reference seek (?e=)", () => {
+    const targetId = "0192abcd-1234-7890-abcd-0123456789ab";
+
+    function seekEntry(id: string, createdAt: string): EntryStoreOutletContext["entries"][number] {
+      return {
+        id,
+        deviceId: "device-a",
+        body: `entry ${id}`,
+        createdAt,
+        seq: 1,
+        syncedAt: "now",
+        deletedAt: null,
+      };
+    }
+
+    // Same reasoning as the `?d=` suite's own `renderSeek`: a couple of
+    // these tests need to `rerender` with a *changed* outlet context
+    // (simulating an older page landing) against the exact same
+    // QueryClient and MemoryRouter, so a fresh render per assertion isn't
+    // an option.
+    function renderSeek(context: EntryStoreOutletContext, initialPath: string) {
+      const queryClient = new QueryClient();
+      const utils = render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={[initialPath]}>
+            <SearchParamProbe />
+            <Routes>
+              <Route element={<Outlet context={context} />}>
+                <Route path="/" element={<ComposerPage />} />
+              </Route>
+            </Routes>
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+      function rerenderWith(nextContext: EntryStoreOutletContext) {
+        utils.rerender(
+          <QueryClientProvider client={queryClient}>
+            <MemoryRouter initialEntries={[initialPath]}>
+              <SearchParamProbe />
+              <Routes>
+                <Route element={<Outlet context={nextContext} />}>
+                  <Route path="/" element={<ComposerPage />} />
+                </Route>
+              </Routes>
+            </MemoryRouter>
+          </QueryClientProvider>,
+        );
+      }
+      return { ...utils, rerenderWith };
+    }
+
+    it("clears ?e= once the target Entry is already loaded", async () => {
+      renderComposerPage(
+        {
+          ...readyContext,
+          entries: [seekEntry(targetId, "2020-01-01T10:00:00.000Z")],
+        },
+        `/?e=${targetId}`,
+      );
+
+      await waitFor(() => expect(screen.getByTestId("url-query")).not.toHaveTextContent("e="));
+    });
+
+    it("loads older pages until the target Entry appears, then clears ?e=", async () => {
+      const fetchMore = vi.fn();
+      const pagination = { hasMore: true, fetching: false, fetchMore };
+
+      const { rerenderWith } = renderSeek(
+        {
+          ...readyContext,
+          entries: [seekEntry("1", "2026-08-18T10:00:00.000Z")],
+          pagination,
+        },
+        `/?e=${targetId}`,
+      );
+
+      await waitFor(() => expect(fetchMore).toHaveBeenCalledTimes(1));
+      expect(screen.getByTestId("url-query")).toHaveTextContent(`e=${targetId}`);
+
+      // The page that request asked for lands, and it holds the target Entry.
+      rerenderWith({
+        ...readyContext,
+        entries: [
+          seekEntry("1", "2026-08-18T10:00:00.000Z"),
+          seekEntry(targetId, "2020-01-01T10:00:00.000Z"),
+        ],
+        pagination,
+      });
+
+      await waitFor(() => expect(screen.getByTestId("url-query")).not.toHaveTextContent("e="));
+    });
+
+    it("clears ?e= once there are no more older pages to check, without ever fetching", async () => {
+      const fetchMore = vi.fn();
+
+      renderComposerPage(
+        {
+          ...readyContext,
+          entries: [seekEntry("1", "2026-08-18T10:00:00.000Z")],
+          pagination: { hasMore: false, fetching: false, fetchMore },
+        },
+        `/?e=${targetId}`,
+      );
+
+      await waitFor(() => expect(screen.getByTestId("url-query")).not.toHaveTextContent("e="));
+      expect(fetchMore).not.toHaveBeenCalled();
+    });
+
+    it("does not call fetchMore while a page is already in flight", async () => {
+      const fetchMore = vi.fn();
+
+      renderComposerPage(
+        {
+          ...readyContext,
+          entries: [seekEntry("1", "2026-08-18T10:00:00.000Z")],
+          pagination: { hasMore: true, fetching: true, fetchMore },
+        },
+        `/?e=${targetId}`,
+      );
+
+      // Give History's own effect a chance to run before asserting the
+      // negative — otherwise this would pass trivially before anything had
+      // a chance to fire at all.
+      await waitFor(() => expect(screen.getByTestId("url-query")).toHaveTextContent("e="));
+      expect(fetchMore).not.toHaveBeenCalled();
+    });
+
+    it("ignores a malformed ?e=, the same as no seek at all", () => {
+      renderComposerPage(readyContext, "/?e=not-a-uuid");
+
+      expect(screen.getByTestId("url-query")).toHaveTextContent("e=not-a-uuid");
+    });
+
+    // The rule composer-page.tsx's own comment names: `?e=` wins
+    // deterministically over `?d=` when both are present, rather than
+    // either being silently dropped or the two racing each other.
+    it("prefers ?e= over ?d= when both are present, ignoring ?d= entirely", async () => {
+      const fetchMore = vi.fn();
+      renderComposerPage(
+        {
+          ...readyContext,
+          // This loaded Entry falls exactly on the day ?d= names — if
+          // ?d= were the seek actually in flight, it would settle
+          // immediately with no fetch, the same as "clears ?d= once the
+          // target day is already loaded" above.
+          entries: [seekEntry("1", "2020-01-01T10:00:00.000Z")],
+          pagination: { hasMore: true, fetching: false, fetchMore },
+        },
+        `/?d=2020-01-01&e=${targetId}`,
+      );
+
+      // The target Entry (targetId) is not loaded, so a seek genuinely
+      // keyed on ?e= has to ask for an older page instead of settling —
+      // proof ?e=, not the trivially-satisfiable ?d=, is the seek in
+      // flight.
+      await waitFor(() => expect(fetchMore).toHaveBeenCalledTimes(1));
+      expect(screen.getByTestId("url-query")).toHaveTextContent(`e=${targetId}`);
+      expect(screen.getByTestId("url-query")).toHaveTextContent("d=2020-01-01");
+    });
+  });
 });

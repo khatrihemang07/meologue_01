@@ -46,6 +46,35 @@ export interface EntryStoreOutletContext {
    * malformed mark.
    */
   dayHasEntries?: (dayKey: string) => Promise<boolean>;
+  /**
+   * Resolves one Entry Reference's target by id (issue #143) — the chip's
+   * own probe, `entry-row.tsx`'s `EntryReferenceLink` (via
+   * `use-entry-reference.ts`) is its one caller. Returns `undefined` for an
+   * id `getMany` doesn't hand back — a tombstoned Entry, or one that hasn't
+   * Synced to this Device yet — which is exactly the "unresolvable" case
+   * the chip renders as plain text (ADR 0042's "one rule, four causes").
+   *
+   * Built on `EntryStore.getMany`, the same primitive `getEntries` above
+   * already wraps, rather than widening `EntryStore` with a singular
+   * lookup of its own. Kept as its own field instead of reusing `getEntries`
+   * directly: `getEntries` is keyed by reflection-page.tsx's own
+   * `groundingEntriesQueryKey` — the *set* of ids one Grounding disclosure
+   * needs at once, refetched together whenever that set changes — while a
+   * chip needs its own target cached per id alone
+   * (`entryReferenceQueryKey`), so two chips pointing at the same Entry
+   * anywhere in the app share one lookup regardless of what else either of
+   * them also happens to reference. A second field is what keeps those two
+   * cache shapes independent without teaching `getEntries`'s callers about
+   * per-id caching they have no use for.
+   *
+   * Optional, unlike `getEntries`: the same reasoning as `dayHasEntries`
+   * just above — every outlet-context builder that predates this ticket
+   * (reflection-page.test.tsx and digest-reader-page.test.tsx among them)
+   * has no reason to know an Entry Reference exists, and
+   * `use-entry-reference.ts`'s own hook already treats "no probe supplied"
+   * the same as "still resolving."
+   */
+  getEntry?: (entryId: string) => Promise<Entry | undefined>;
   /** ADR 0028 — see use-history.ts's own doc comment for what these do and why removeEntry takes the whole Entry. */
   editEntry: (id: string, body: string) => void;
   removeEntry: (entry: Entry) => void;
@@ -125,6 +154,13 @@ async function noopGetEntries(): Promise<Entry[]> {
 // stand-in for that same not-ready state.
 async function noopDayHasEntries(): Promise<boolean> {
   return false;
+}
+
+// `getEntry`'s own not-ready stand-in, mirroring `noopDayHasEntries` just
+// above: nothing can be resolved before the store opens, and `undefined` is
+// already this field's own "unresolvable" answer, not a special case for it.
+async function noopGetEntry(): Promise<Entry | undefined> {
+  return undefined;
 }
 
 // ADR 0028's edit/delete affordances need the store to exist just as much
@@ -296,6 +332,7 @@ export function EntryStoreLayout() {
               getEntries: (ids: string[]) => store.getMany(ids),
               dayHasEntries: (dayKey: string) =>
                 dayHasEntries(store, dayKey, deviceUtcOffsetMinutes()),
+              getEntry: (entryId: string) => store.getMany([entryId]).then((found) => found.at(0)),
               editEntry,
               removeEntry,
               disabled: false,
@@ -307,6 +344,7 @@ export function EntryStoreLayout() {
               search: noopSearch,
               getEntries: noopGetEntries,
               dayHasEntries: noopDayHasEntries,
+              getEntry: noopGetEntry,
               editEntry: noopEdit,
               removeEntry: noopRemove,
               disabled: true,

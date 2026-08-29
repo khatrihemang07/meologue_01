@@ -60,3 +60,23 @@ export function groundingEntriesQueryKey(ids: string[]) {
 export function dayHasEntriesQueryKey(dayKey: string) {
   return [...ENTRIES_QUERY_KEY, "day-has-entries", dayKey] as const;
 }
+
+/**
+ * Issue #143: an Entry Reference's own "what does the target look like right
+ * now?" probe (`getEntry`, entry-store-layout.tsx), which the chip
+ * (entry-row.tsx's `EntryReferenceLink`) resolves through. A child of
+ * ENTRIES_QUERY_KEY, same shape as `dayHasEntriesQueryKey` above — this
+ * reads Entries the same local store does, just keyed by the target's id
+ * rather than by day. Keyed on that id alone, so every chip anywhere in the
+ * app pointing at the same Entry shares one cache entry and the probe runs
+ * at most once per distinct target, not once per occurrence.
+ *
+ * `refreshNewestEntriesPage` (entries-pagination.ts) invalidates this same
+ * prefix on every local write, the same way it does for Search — that is
+ * what makes a chip's snippet live rather than a snapshot: editing the
+ * target invalidates its cache entry, so every mounted chip pointing at it
+ * refetches and shows the new text.
+ */
+export function entryReferenceQueryKey(entryId: string) {
+  return [...ENTRIES_QUERY_KEY, "entry-reference", entryId] as const;
+}

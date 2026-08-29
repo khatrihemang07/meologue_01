@@ -1,5 +1,5 @@
 import type { Entry } from "@meologue/core";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { toast } from "sonner";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { copyText } from "@/lib/clipboard";
@@ -683,7 +683,7 @@ describe("History", () => {
         <History
           entries={[recentEntry]}
           syncEnabled={false}
-          seek={{ dayKey: "2020-01-01" }}
+          seek={{ kind: "day", dayKey: "2020-01-01" }}
           onSeekNeedsOlder={onSeekNeedsOlder}
           onSeekSettled={onSeekSettled}
         />,
@@ -699,7 +699,7 @@ describe("History", () => {
         <History
           entries={[recentEntry, olderEntry]}
           syncEnabled={false}
-          seek={{ dayKey: "2020-01-01" }}
+          seek={{ kind: "day", dayKey: "2020-01-01" }}
           onSeekNeedsOlder={onSeekNeedsOlder}
           onSeekSettled={onSeekSettled}
         />,
@@ -717,7 +717,7 @@ describe("History", () => {
         <History
           entries={[e1]}
           syncEnabled={false}
-          seek={{ dayKey: "2020-01-01" }}
+          seek={{ kind: "day", dayKey: "2020-01-01" }}
           onSeekNeedsOlder={onSeekNeedsOlder}
           onSeekSettled={onSeekSettled}
         />,
@@ -729,7 +729,7 @@ describe("History", () => {
         <History
           entries={[e1, e2]}
           syncEnabled={false}
-          seek={{ dayKey: "2020-01-01" }}
+          seek={{ kind: "day", dayKey: "2020-01-01" }}
           onSeekNeedsOlder={onSeekNeedsOlder}
           onSeekSettled={onSeekSettled}
         />,
@@ -752,7 +752,7 @@ describe("History", () => {
         <History
           entries={entries}
           syncEnabled={false}
-          seek={{ dayKey: "2020-01-01" }}
+          seek={{ kind: "day", dayKey: "2020-01-01" }}
           onSeekNeedsOlder={onSeekNeedsOlder}
         />,
       );
@@ -763,12 +763,138 @@ describe("History", () => {
           entries={entries}
           syncEnabled={false}
           query="rec"
-          seek={{ dayKey: "2020-01-01" }}
+          seek={{ kind: "day", dayKey: "2020-01-01" }}
           onSeekNeedsOlder={onSeekNeedsOlder}
         />,
       );
 
       expect(onSeekNeedsOlder).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // Issue #143: following an Entry Reference's chip seeks by id rather than
+  // by day — same "page until you arrive" convergence as the date-Reference
+  // suite just above, mirrored test for test, plus the flash a day seek has
+  // no equivalent of.
+  describe("Entry-Reference seek", () => {
+    it("asks for an older page when the target Entry isn't loaded, then finds it and settles once it lands", () => {
+      const onSeekNeedsOlder = vi.fn();
+      const onSeekSettled = vi.fn();
+      const recentEntry = entry({ id: "1", body: "recent", createdAt: "2026-08-18T10:00:00.000Z" });
+
+      const { rerender } = render(
+        <History
+          entries={[recentEntry]}
+          syncEnabled={false}
+          seek={{ kind: "entry", entryId: "2" }}
+          onSeekNeedsOlder={onSeekNeedsOlder}
+          onSeekSettled={onSeekSettled}
+        />,
+      );
+
+      expect(onSeekNeedsOlder).toHaveBeenCalledTimes(1);
+      expect(onSeekSettled).not.toHaveBeenCalled();
+
+      const olderEntry = entry({ id: "2", body: "older", createdAt: "2020-01-01T10:00:00.000Z" });
+      rerender(
+        <History
+          entries={[recentEntry, olderEntry]}
+          syncEnabled={false}
+          seek={{ kind: "entry", entryId: "2" }}
+          onSeekNeedsOlder={onSeekNeedsOlder}
+          onSeekSettled={onSeekSettled}
+        />,
+      );
+
+      expect(onSeekSettled).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps asking across several pages that still don't hold the target Entry", () => {
+      const onSeekNeedsOlder = vi.fn();
+      const onSeekSettled = vi.fn();
+      const e1 = entry({ id: "1", body: "one", createdAt: "2026-08-18T10:00:00.000Z" });
+
+      const { rerender } = render(
+        <History
+          entries={[e1]}
+          syncEnabled={false}
+          seek={{ kind: "entry", entryId: "missing" }}
+          onSeekNeedsOlder={onSeekNeedsOlder}
+          onSeekSettled={onSeekSettled}
+        />,
+      );
+      expect(onSeekNeedsOlder).toHaveBeenCalledTimes(1);
+
+      const e2 = entry({ id: "2", body: "two", createdAt: "2026-08-17T10:00:00.000Z" });
+      rerender(
+        <History
+          entries={[e1, e2]}
+          syncEnabled={false}
+          seek={{ kind: "entry", entryId: "missing" }}
+          onSeekNeedsOlder={onSeekNeedsOlder}
+          onSeekSettled={onSeekSettled}
+        />,
+      );
+
+      expect(onSeekNeedsOlder).toHaveBeenCalledTimes(2);
+      expect(onSeekSettled).not.toHaveBeenCalled();
+    });
+
+    it("does not ask again on a re-render triggered by something unrelated to the Entries available to search", () => {
+      const onSeekNeedsOlder = vi.fn();
+      const entries = [entry({ id: "1", body: "recent", createdAt: "2026-08-18T10:00:00.000Z" })];
+
+      const { rerender } = render(
+        <History
+          entries={entries}
+          syncEnabled={false}
+          seek={{ kind: "entry", entryId: "missing" }}
+          onSeekNeedsOlder={onSeekNeedsOlder}
+        />,
+      );
+      expect(onSeekNeedsOlder).toHaveBeenCalledTimes(1);
+
+      rerender(
+        <History
+          entries={entries}
+          syncEnabled={false}
+          query="rec"
+          seek={{ kind: "entry", entryId: "missing" }}
+          onSeekNeedsOlder={onSeekNeedsOlder}
+        />,
+      );
+
+      expect(onSeekNeedsOlder).toHaveBeenCalledTimes(1);
+    });
+
+    // Acceptance criterion: "Following one lands on that Entry and marks
+    // it." The flash lives on the bubble's fill (entry-bubble.test.tsx's
+    // own "highlighted" suite covers that prop in isolation) — this proves
+    // History actually drives it, and clears it again on its own timer
+    // rather than leaving the row marked forever.
+    it("flashes the target bubble once the seek lands on it, then clears the flash on its own", async () => {
+      vi.useFakeTimers();
+      const target = entry({
+        id: "1",
+        body: "target entry",
+        createdAt: "2026-08-18T10:00:00.000Z",
+      });
+
+      render(
+        <History entries={[target]} syncEnabled={false} seek={{ kind: "entry", entryId: "1" }} />,
+      );
+
+      const fill = screen
+        .getByText("target entry")
+        .closest('[data-slot="bubble"]')?.firstElementChild;
+      expect(fill).toHaveClass("ring-2");
+
+      // SEEK_HIGHLIGHT_DURATION_MS, history.tsx's own private constant —
+      // long enough that a reader can register the flash, not so long it
+      // reads as a mode the row is stuck in.
+      await act(() => vi.advanceTimersByTimeAsync(1500));
+
+      expect(fill).not.toHaveClass("ring-2");
     });
   });
 });

@@ -12,8 +12,15 @@ import { Link } from "react-router";
 import { EntryHoverActions, hoverCapable } from "@/components/entry-actions";
 import { inlineProse } from "@/components/inline-prose";
 import { useDayHasEntries } from "@/hooks/use-day-has-entries";
-import { formatClockTime } from "@/lib/entry-day";
+import { useEntryReference } from "@/hooks/use-entry-reference";
+import {
+  deviceUtcOffsetMinutes,
+  entryDayKey,
+  formatClockTime,
+  formatDaySeparator,
+} from "@/lib/entry-day";
 import { formatAbsoluteTime } from "@/lib/entry-time";
+import { inlineNodesToText, parseInlineMarkdown } from "@/lib/inline-markdown";
 import { cn } from "@/lib/utils";
 import { useEntryStore } from "@/pages/entry-store-layout";
 
@@ -66,6 +73,96 @@ function DateReferenceLink({ date, raw }: { date: string; raw: string }) {
   );
 }
 
+/** How much of a chip's target's opening survives before it is cut off with an ellipsis (issue #143). */
+const ENTRY_SNIPPET_MAX_LENGTH = 40;
+
+/**
+ * The opening of an Entry's text, flattened to one line with no formatting
+ * — a chip has room for a preview, not the whole shape of the target's own
+ * prose.
+ *
+ * Goes through `parseInlineMarkdown`/`inlineNodesToText` (inline-markdown.ts)
+ * rather than `entryBodyContent`/`inlineProse` below: those render the
+ * target's own marks — bold text stays bold, a nested Reference resolves to
+ * its own chip — which is right for reading that Entry on its own terms, but
+ * wrong for a two-line preview sitting inside a Reference already carrying
+ * its own formatting (the day label, the chip's border). Collapsing to
+ * plain text here also means a Reference nested inside the target's body
+ * never recurses into a second live lookup just to build a preview of the
+ * first one.
+ */
+function entrySnippet(body: string): string {
+  const flat = inlineNodesToText(parseInlineMarkdown(body)).replace(/\s+/g, " ").trim();
+  if (flat.length <= ENTRY_SNIPPET_MAX_LENGTH) {
+    return flat;
+  }
+  return `${flat.slice(0, ENTRY_SNIPPET_MAX_LENGTH).trimEnd()}…`;
+}
+
+/**
+ * One `[[e:<uuid>]]` Entry Reference (issue #143), rendered by
+ * `entryBodyContent` below wherever `inlineProse` finds one — the Entry
+ * chip's own analogue of `DateReferenceLink` just above, following the same
+ * shape for the same reasons (see that component's own comment for why this
+ * needs to be a component of its own, and why it reads its probe off
+ * `useEntryStore()` instead of taking it as a prop).
+ *
+ * Resolves live, through `useEntryReference` (a TanStack Query keyed on the
+ * target's id — see that hook and `entryReferenceQueryKey`'s own comments),
+ * rather than from a snapshot taken when this Entry was captured: ADR 0042's
+ * "editing a referred-to Entry updates every chip pointing at it." `target
+ * === undefined` folds together every unresolvable cause the chip can't
+ * tell apart — removed, not yet Synced to this Device, or the probe hasn't
+ * settled yet — into the one rule a date Reference already follows: the
+ * literal text the user typed, not interactive.
+ *
+ * The chip itself is an inline `<a>`, `inline-flex` (never `display:block`,
+ * matching `BubbleMeta`'s own floated `<span>` next door): it renders inside
+ * `EntryBubble`'s `bubble-body` span, which must stay one line box for
+ * `BubbleMeta`'s right-floated clock to share (ADR 0036) — the exact defect
+ * that ADR records as "passed every test and was wrong on screen."
+ *
+ * Deliberately renders the target's own snippet through `entrySnippet`
+ * above rather than `entryBodyContent`'s `query`-aware highlighting: the
+ * Search match that produced `query` matched THIS Entry's body, never the
+ * target's, and this component is never even handed `query` (inline-
+ * prose.tsx's `ReferenceRenderers.entry` signature carries only `entryId`
+ * and `raw`) — so a match inside the target's own words structurally cannot
+ * paint a `<mark>` in here.
+ */
+function EntryReferenceLink({ entryId, raw }: { entryId: string; raw: string }) {
+  const { getEntry } = useEntryStore();
+  const target = useEntryReference(getEntry, entryId);
+
+  if (target === undefined) {
+    return raw;
+  }
+
+  const offsetMinutes = deviceUtcOffsetMinutes();
+  const dayKey = entryDayKey(target.createdAt, offsetMinutes);
+  const todayKey = entryDayKey(new Date().toISOString(), offsetMinutes) ?? "";
+  const dayLabel = dayKey === null ? null : formatDaySeparator(dayKey, todayKey);
+  const snippet = entrySnippet(target.body);
+
+  return (
+    // The visible content is the target's day and a snippet of its words,
+    // not the literal `[[e:...]]` mark — unlike a date Reference, which
+    // keeps its mark visible and only changes what it links to. A day
+    // Reference's own text (`2026-08-28`) already tells the reader where it
+    // goes; an Entry's id is opaque, so showing it verbatim would say
+    // nothing a reader could use, and the whole point of a chip is to show
+    // what's actually over there instead.
+    <Link
+      to={`/composer?e=${entryId}`}
+      aria-label={`Open Entry from ${dayLabel ?? "an earlier day"} in History`}
+      className="mx-0.5 inline-flex max-w-full items-baseline gap-1.5 rounded-full border border-border bg-background/60 px-2 align-baseline text-xs leading-normal underline decoration-dotted underline-offset-2"
+    >
+      {dayLabel !== null && <span className="shrink-0 font-medium">{dayLabel}</span>}
+      <span className="truncate">{snippet}</span>
+    </Link>
+  );
+}
+
 /**
  * An Entry's words with the Search query highlighted, as inline content and
  * nothing else — no block wrapper of its own.
@@ -83,6 +180,7 @@ function DateReferenceLink({ date, raw }: { date: string; raw: string }) {
 export function entryBodyContent(body: string, query: string): ReactNode {
   return inlineProse(body, query, {
     date: (node, key) => <DateReferenceLink key={key} date={node.date} raw={node.raw} />,
+    entry: (node, key) => <EntryReferenceLink key={key} entryId={node.entryId} raw={node.raw} />,
   });
 }
 

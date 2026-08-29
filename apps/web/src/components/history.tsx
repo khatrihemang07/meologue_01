@@ -53,14 +53,21 @@ interface HistoryProps {
   onEdit?: (entry: Entry) => void;
   onDelete?: (entry: Entry) => void;
   /**
-   * Issue #142: the day a date-Reference seek (composer-page.tsx) is
-   * looking for, or `null`/omitted while no seek is active. History is the
-   * only thing that can act on this — it alone owns `flatItems` (below) and
-   * the virtualizer that can actually scroll to a row — so composer-page.tsx
-   * hands over the target day and gets called back rather than trying to
-   * reach into either of those itself.
+   * Issue #142/#143: the day or Entry a Reference seek (composer-page.tsx)
+   * is looking for, or `null`/omitted while no seek is active. History is
+   * the only thing that can act on this — it alone owns `flatItems` (below)
+   * and the virtualizer that can actually scroll to a row — so
+   * composer-page.tsx hands over the target and gets called back rather
+   * than trying to reach into either of those itself.
+   *
+   * A tagged union rather than two independent optional fields: the two
+   * kinds converge differently once found (an Entry seek also flashes the
+   * row it lands on — see the effect below — a day seek only scrolls), and
+   * `kind` is what lets that branch read as "which seek is this" instead of
+   * a pair of nullable fields a caller could, in principle, both set at
+   * once.
    */
-  seek?: { dayKey: string } | null;
+  seek?: HistorySeekTarget | null;
   /**
    * The target day's separator wasn't in `flatItems` on this render.
    * composer-page.tsx owns `pagination` (History does not — see
@@ -72,9 +79,25 @@ interface HistoryProps {
    * own account at all.
    */
   onSeekNeedsOlder?: () => void;
-  /** The seek reached its target day, or (composer-page.tsx's own call) ran out of older Entries to check. Either way, there is nothing left for this seek to do. */
+  /** The seek reached its target, or (composer-page.tsx's own call) ran out of older Entries to check. Either way, there is nothing left for this seek to do. */
   onSeekSettled?: () => void;
 }
+
+/**
+ * What a Reference seek is looking for (see `HistoryProps.seek`'s own
+ * comment). Exported so composer-page.tsx — which builds this from `?d=` or
+ * `?e=` — and history.test.tsx share the exact shape rather than each
+ * re-deriving it structurally.
+ */
+export type HistorySeekTarget =
+  | { kind: "day"; dayKey: string }
+  | { kind: "entry"; entryId: string };
+
+// Issue #143: how long a followed Entry Reference's target stays flashed
+// once the seek lands on it. Long enough that a reader who was mid-scroll
+// notices which row they arrived at; short enough that it reads as a
+// momentary flash rather than a mode the row is stuck in.
+const SEEK_HIGHLIGHT_DURATION_MS = 1500;
 
 interface DayGroup {
   /** null for an Entry whose createdAt didn't parse — see groupByDay below. */
@@ -485,16 +508,44 @@ export function History({
     return () => registerScrollToNewest(null);
   }, [flatItems.length, registerScrollToNewest, virtualizer]);
 
-  // Issue #142: "page until you arrive" — the seek's own convergence step.
-  // `seek` names a day; this finds that day's separator in `flatItems` (the
-  // one thing only History can do, since flattening and the virtualizer
-  // both live here) and reacts to whichever of the three outcomes actually
-  // holds this render:
+  // Issue #143: which Entry, if any, a seek just landed on should still be
+  // flashed — set by the seek effect below the instant it finds an "entry"
+  // kind target, and cleared by its own timer a fixed duration later (the
+  // effect just after this state). Kept separate from `seek`/`onSeekSettled`
+  // deliberately: `onSeekSettled` fires (and clears `?e=`) the instant the
+  // row is found, far sooner than a reader can register a flash, so tying
+  // the flash's lifetime to the URL param would either cut it short or hold
+  // the param open for a concern it has nothing to do with.
+  const [highlightedEntryId, setHighlightedEntryId] = useState<string | null>(null);
+  useEffect(() => {
+    if (highlightedEntryId === null) {
+      return;
+    }
+    const timer = setTimeout(() => setHighlightedEntryId(null), SEEK_HIGHLIGHT_DURATION_MS);
+    return () => clearTimeout(timer);
+  }, [highlightedEntryId]);
+
+  // A stable primitive to key the effect below on (its own comment) —
+  // `seek` itself is a fresh object every render composer-page.tsx has one
+  // active, regardless of which kind it names.
+  const seekTargetKey = !seek
+    ? null
+    : seek.kind === "day"
+      ? `d:${seek.dayKey}`
+      : `e:${seek.entryId}`;
+
+  // Issue #142/#143: "page until you arrive" — the seek's own convergence
+  // step. `seek` names a day or an Entry; this finds the matching row in
+  // `flatItems` (the one thing only History can do, since flattening and
+  // the virtualizer both live here) and reacts to whichever of the three
+  // outcomes actually holds this render:
   //
   // - found -> scroll to it and report the seek settled. `align: "start"`
-  //   puts the day's own separator at the top of the viewport, the same
-  //   place it sits during ordinary scrolling, rather than centring an
-  //   arbitrary row.
+  //   puts the target at the top of the viewport, the same place a day
+  //   separator sits during ordinary scrolling, rather than centring an
+  //   arbitrary row. An "entry" seek additionally starts its flash — see
+  //   `highlightedEntryId`'s own comment above for why that state, and its
+  //   clearing, live apart from the rest of this.
   // - not found, but `flatItems` might still grow (composer-page.tsx owns
   //   `pagination`, not this component — see onSeekNeedsOlder's own doc
   //   comment) -> ask for another older page.
@@ -508,21 +559,26 @@ export function History({
   // memoised on `entries` — see those comments above), so gating on it
   // here is what stops this from re-running, and re-requesting a page, on
   // every unrelated render while a seek is in flight.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on `seek?.dayKey`, not `seek` itself — composer-page.tsx hands this down as a fresh `{ dayKey }` object on every render it's active, and depending on that identity would re-run this effect (and re-request an older page) on every unrelated re-render rather than only when the target day, or the data available to search, actually changes.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on `seekTargetKey`, not `seek` itself — composer-page.tsx hands this down as a fresh object on every render a seek is active, and depending on its identity would re-run this effect (and re-request an older page) on every unrelated re-render rather than only when the target, or the data available to search, actually changes.
   useEffect(() => {
     if (!seek) {
       return;
     }
-    const targetIndex = flatItems.findIndex(
-      (item) => item.kind === "separator" && item.dayKey === seek.dayKey,
+    const targetIndex = flatItems.findIndex((item) =>
+      seek.kind === "day"
+        ? item.kind === "separator" && item.dayKey === seek.dayKey
+        : item.kind === "entry" && item.entry.id === seek.entryId,
     );
     if (targetIndex === -1) {
       onSeekNeedsOlder?.();
       return;
     }
     virtualizer.scrollToIndex(targetIndex, { align: "start" });
+    if (seek.kind === "entry") {
+      setHighlightedEntryId(seek.entryId);
+    }
     onSeekSettled?.();
-  }, [seek?.dayKey, flatItems, virtualizer, onSeekNeedsOlder, onSeekSettled]);
+  }, [seekTargetKey, flatItems, virtualizer, onSeekNeedsOlder, onSeekSettled]);
 
   // Issue #83's bottom alignment: however much shorter the virtualized
   // list is than the viewport, floored at zero — a leading spacer that
@@ -705,6 +761,7 @@ export function History({
                   side="out"
                   groupedWithPrevious={!item.isFirstInGroup}
                   actions={actions}
+                  highlighted={item.entry.id === highlightedEntryId}
                 />
               )}
             </div>

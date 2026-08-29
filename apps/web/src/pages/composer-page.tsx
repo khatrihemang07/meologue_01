@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
 import { BackToChats } from "@/components/back-to-chats";
 import { Composer } from "@/components/composer";
-import { History } from "@/components/history";
+import { History, type HistorySeekTarget } from "@/components/history";
 import { Shell } from "@/components/shell";
 import { useHistorySearch } from "@/hooks/use-history-search";
 import { useSyncEnabled } from "@/lib/settings";
@@ -20,6 +20,16 @@ import { useEntryStore } from "@/pages/entry-store-layout";
 // all just need this one string.
 const SEEK_DAY_PARAM = "d";
 const DAY_KEY_SHAPE = /^\d{4}-\d{2}-\d{2}$/;
+
+// An Entry Reference's own destination (issue #143), extending the exact
+// same mechanism above it: `?e=<uuid>`, a query param for the reasons
+// `SEEK_DAY_PARAM`'s own comment already gives — none of them are specific
+// to a day. Shape-only, like DAY_KEY_SHAPE just above rather than
+// inline-markdown.ts's own `ENTRY_SHAPE`: that regex additionally requires
+// the `e:` mark prefix, which doesn't apply to a bare id sitting in the URL.
+const SEEK_ENTRY_PARAM = "e";
+const ENTRY_ID_SHAPE =
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
 // `/` — the Composer plus the same, uncapped History that had its own
 // route at `/history` before issue #75 deleted it (a second door onto the
@@ -74,35 +84,50 @@ export function ComposerPage() {
     setSendSignal((count) => (count ?? 0) + 1);
   }
 
-  // Issue #142: the seek a date Reference lands here with, held entirely in
+  // Issue #142/#143: the seek a Reference lands here with, held entirely in
   // the URL rather than component state — the same reason Search's own
   // query lives in `?q=` (use-history-search.ts). `seek` is derived fresh
   // each render, not cached in a `useState`, because the URL param is
   // already the single source of truth: caching it separately would just
   // be a second place for the two to disagree.
   //
-  // A malformed `?d=` (hand-edited, or a stale link to a shape this app no
-  // longer uses) is treated as no seek at all rather than an error —
-  // consistent with a date Reference's own "malformed is not a Reference"
-  // rule (inline-markdown.ts's `parseReferenceDate`), just applied to the
-  // URL instead of an Entry's body.
+  // A malformed `?d=` or `?e=` (hand-edited, or a stale link to a shape this
+  // app no longer uses) is treated as no seek at all rather than an error —
+  // consistent with a Reference's own "malformed is not a Reference" rule
+  // (inline-markdown.ts's `parseReferenceDate`/`ENTRY_SHAPE`), just applied
+  // to the URL instead of an Entry's body.
+  //
+  // `?e=` wins deterministically when both are somehow present at once (a
+  // hand-built URL, or a stale link built before this ticket only ever set
+  // one) — checked first, so an Entry Reference's own, more specific target
+  // is what a seek converges on rather than either param being silently
+  // dropped or the two racing each other over the same virtualizer.
   const [searchParams, setSearchParams] = useSearchParams();
+  const seekEntryParam = searchParams.get(SEEK_ENTRY_PARAM);
   const seekDayParam = searchParams.get(SEEK_DAY_PARAM);
-  const seek =
-    seekDayParam !== null && DAY_KEY_SHAPE.test(seekDayParam) ? { dayKey: seekDayParam } : null;
+  const seek: HistorySeekTarget | null =
+    seekEntryParam !== null && ENTRY_ID_SHAPE.test(seekEntryParam)
+      ? { kind: "entry", entryId: seekEntryParam }
+      : seekDayParam !== null && DAY_KEY_SHAPE.test(seekDayParam)
+        ? { kind: "day", dayKey: seekDayParam }
+        : null;
 
-  // Removes `?d=` once the seek has nowhere left to go — either History
-  // found the target day and scrolled to it, or (handleSeekNeedsOlder,
-  // below) ran out of older Entries to check. `replace`, not the default
-  // push: this param's own job is already done by the time it's cleared,
-  // so leaving it out of history means Back from here returns to wherever
-  // the reader followed the Reference from, rather than landing back on
-  // this exact mid-seek URL and re-triggering the same seek a second time.
+  // Removes `?d=` and `?e=` once the seek has nowhere left to go — either
+  // History found the target and scrolled to it, or (handleSeekNeedsOlder,
+  // below) ran out of older Entries to check. Both are cleared regardless
+  // of which one was actually driving the seek: clearing only the winner
+  // (above) would leave a loser param sitting in the URL forever if both
+  // happened to be present. `replace`, not the default push: this param's
+  // own job is already done by the time it's cleared, so leaving it out of
+  // history means Back from here returns to wherever the reader followed
+  // the Reference from, rather than landing back on this exact mid-seek URL
+  // and re-triggering the same seek a second time.
   const settleSeek = useCallback(() => {
     setSearchParams(
       (previous) => {
         const params = new URLSearchParams(previous);
         params.delete(SEEK_DAY_PARAM);
+        params.delete(SEEK_ENTRY_PARAM);
         return params;
       },
       { replace: true },
@@ -224,8 +249,9 @@ export function ComposerPage() {
       // its own bottom alignment via a leading spacer sized off its own
       // virtualizer — see PinnedThreadConfig's own comment for why Shell's
       // plain `min-h-full justify-end` treatment has to stand down for it.
-      // `seeking` (issue #142): disengages the pin for exactly as long as a
-      // date-Reference seek is paging through older Entries — see
+      // `seeking` (issue #142, extended to an Entry target by #143):
+      // disengages the pin for exactly as long as a Reference seek is
+      // paging through older Entries — see
       // use-pinned-scroll.ts's own `seeking` option for why this has to be
       // a forced override rather than merely "don't re-pin," and its own
       // comment for why leaving it running would drag the reader back to
