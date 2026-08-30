@@ -108,7 +108,7 @@ describe("EntryBubble", () => {
         entry={entry({ id: "e7" })}
         syncEnabled={false}
         side="out"
-        actions={{ onEdit: vi.fn(), onDelete: vi.fn(), onOpenSheet: vi.fn() }}
+        actions={{ onEdit: vi.fn(), onDelete: vi.fn(), onRefer: vi.fn(), onOpenSheet: vi.fn() }}
       />,
     );
 
@@ -124,5 +124,26 @@ describe("EntryBubble", () => {
     const { container } = render(<EntryBubble entry={entry()} syncEnabled={false} side="out" />);
 
     expect(container.querySelector(`[${SWIPE_TARGET_ATTRIBUTE}]`)).toBeNull();
+  });
+
+  // Issue #143: history.tsx's own signal that a followed Entry Reference's
+  // seek just landed on this row. The flash lives on the fill (the div
+  // `bubbleOf`'s first child is — same one `SWIPE_TARGET_ATTRIBUTE` marks
+  // above), not the outer wrapper `bubbleOf` itself checks elsewhere in this
+  // file, because that's the box with an actual visible edge to ring.
+  describe("highlighted", () => {
+    it("rings the bubble's fill when highlighted", () => {
+      const { container } = render(
+        <EntryBubble entry={entry()} syncEnabled={false} side="out" highlighted />,
+      );
+
+      expect(bubbleOf(container).firstElementChild).toHaveClass("ring-2");
+    });
+
+    it("stays plain, by default, with no seek in flight", () => {
+      const { container } = render(<EntryBubble entry={entry()} syncEnabled={false} side="out" />);
+
+      expect(bubbleOf(container).firstElementChild).not.toHaveClass("ring-2");
+    });
   });
 });

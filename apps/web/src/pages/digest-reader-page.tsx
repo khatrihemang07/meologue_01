@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, ChevronLeft, ChevronRight, RefreshCw } from "lucide-react";
 import { Link, useLocation, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
+import { inlineProse } from "@/components/inline-prose";
 import { ServerUnreachableBanner } from "@/components/server-unreachable-banner";
 import { Shell } from "@/components/shell";
 import { formatDigestProvenance, formatDigestRange, formatStaleCopy } from "@/lib/digest-format";
@@ -330,7 +331,7 @@ export function DigestReaderPage() {
               {formatStaleCopy(digest.period)}
             </p>
           )}
-          <p className="whitespace-pre-wrap text-sm text-foreground">{digest.body}</p>
+          <p className="whitespace-pre-wrap text-sm text-foreground">{inlineProse(digest.body)}</p>
         </>
       )}
 

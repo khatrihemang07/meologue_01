@@ -1,12 +1,22 @@
 import type { Entry } from "@meologue/core";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as entryDayModule from "@/lib/entry-day";
 import { Composer } from "./composer";
 
 function getTextarea() {
   return screen.getByPlaceholderText("What's on your mind?");
 }
+
+/** Pins the Device's UTC offset (issue #144's date suggestions read it off `deviceUtcOffsetMinutes()`) so which calendar day a UTC instant falls on doesn't depend on whichever host and timezone happens to run the suite — the same idea as history.test.tsx's own `pinClock`, minus the fake system clock this file's tests have no need of. */
+function stubOffset(offsetMinutes = 0) {
+  vi.spyOn(entryDayModule, "deviceUtcOffsetMinutes").mockReturnValue(offsetMinutes);
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 function entry(overrides: Partial<Entry> = {}): Entry {
   return {
@@ -269,6 +279,153 @@ describe("Composer", () => {
 
       expect(onCommitEdit).toHaveBeenCalledWith("42", "edited body");
       expect(getTextarea()).toHaveValue("a draft in progress");
+    });
+  });
+
+  // Issue #144: typing `[[` opens an inline list offering both kinds of
+  // Reference (ADR 0042) without ever making the reader see or type an id.
+  // Every test here fires at least two separate `fireEvent.change` calls
+  // for the trigger itself — `derivePicker` (composer.tsx) deliberately
+  // opens only when the caret sits immediately after a freshly-typed `[[`,
+  // the same thing a real keystroke-by-keystroke `onChange` would report,
+  // which a single jump straight to a longer string does not.
+  describe("the inline [[ picker", () => {
+    it("opens a list after typing [[", () => {
+      render(<Composer onSend={vi.fn()} />);
+
+      fireEvent.change(getTextarea(), { target: { value: "[[" } });
+
+      expect(screen.getByRole("listbox")).toBeInTheDocument();
+    });
+
+    it("does not open for a [[ that arrives as part of a larger pasted change", () => {
+      render(<Composer onSend={vi.fn()} />);
+
+      fireEvent.change(getTextarea(), { target: { value: "some [[text pasted at once" } });
+
+      expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    });
+
+    it("Escape closes the list without inserting anything", () => {
+      render(<Composer onSend={vi.fn()} />);
+
+      fireEvent.change(getTextarea(), { target: { value: "[[" } });
+      expect(screen.getByRole("listbox")).toBeInTheDocument();
+
+      fireEvent.keyDown(getTextarea(), { key: "Escape" });
+
+      expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+      expect(getTextarea()).toHaveValue("[[");
+    });
+
+    it("choosing a recent day inserts [[YYYY-MM-DD]]", () => {
+      stubOffset(0);
+      const recentEntries = [entry({ id: "r1", createdAt: "2026-08-15T12:00:00.000Z" })];
+      render(<Composer onSend={vi.fn()} recentEntries={recentEntries} />);
+
+      fireEvent.change(getTextarea(), { target: { value: "[[" } });
+      fireEvent.click(screen.getByText("2026-08-15"));
+
+      expect(getTextarea()).toHaveValue("[[2026-08-15]]");
+      expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    });
+
+    it("accepts a fully typed YYYY-MM-DD even when it is not among the recent days", () => {
+      render(<Composer onSend={vi.fn()} recentEntries={[]} />);
+
+      fireEvent.change(getTextarea(), { target: { value: "[[" } });
+      fireEvent.change(getTextarea(), { target: { value: "[[2026-08-15" } });
+      fireEvent.click(screen.getByText("2026-08-15"));
+
+      expect(getTextarea()).toHaveValue("[[2026-08-15]]");
+    });
+
+    it("does not offer an invalid calendar date", () => {
+      render(<Composer onSend={vi.fn()} recentEntries={[]} />);
+
+      fireEvent.change(getTextarea(), { target: { value: "[[" } });
+      fireEvent.change(getTextarea(), { target: { value: "[[2026-13-45" } });
+
+      expect(screen.queryByText("2026-13-45")).not.toBeInTheDocument();
+      expect(screen.getByText("No matching day")).toBeInTheDocument();
+    });
+
+    // Issue #144's own acceptance criterion: the reader never has to read
+    // or type an Entry's id.
+    it("choosing a searched Entry inserts [[e:<id>]], and its id is never shown as text in the list", async () => {
+      const target = entry({ id: "target-entry-id", body: "a target entry" });
+      const searchEntries = vi.fn(async () => [target]);
+      render(<Composer onSend={vi.fn()} searchEntries={searchEntries} />);
+
+      fireEvent.change(getTextarea(), { target: { value: "[[" } });
+      fireEvent.change(getTextarea(), { target: { value: "[[target" } });
+
+      const option = await screen.findByText("a target entry");
+      expect(screen.queryByText(target.id)).not.toBeInTheDocument();
+
+      fireEvent.click(option);
+
+      expect(getTextarea()).toHaveValue(`[[e:${target.id}]]`);
+      expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    });
+
+    it("searches with the typed text once it can no longer be a date", () => {
+      const searchEntries = vi.fn(async () => []);
+      render(<Composer onSend={vi.fn()} searchEntries={searchEntries} />);
+
+      fireEvent.change(getTextarea(), { target: { value: "[[" } });
+      fireEvent.change(getTextarea(), { target: { value: "[[groceries" } });
+
+      expect(searchEntries).toHaveBeenCalledWith("groceries");
+    });
+
+    it("moves the highlight with arrow keys", () => {
+      stubOffset(0);
+      const recentEntries = [
+        entry({ id: "r1", createdAt: "2026-08-15T12:00:00.000Z" }),
+        entry({ id: "r2", createdAt: "2026-08-16T12:00:00.000Z" }),
+      ];
+      render(<Composer onSend={vi.fn()} recentEntries={recentEntries} />);
+
+      fireEvent.change(getTextarea(), { target: { value: "[[" } });
+      const options = screen.getAllByRole("option");
+      expect(options).toHaveLength(2);
+      expect(options[0]).toHaveAttribute("aria-selected", "true");
+      expect(options[1]).toHaveAttribute("aria-selected", "false");
+
+      fireEvent.keyDown(getTextarea(), { key: "ArrowDown" });
+      expect(options[0]).toHaveAttribute("aria-selected", "false");
+      expect(options[1]).toHaveAttribute("aria-selected", "true");
+
+      fireEvent.keyDown(getTextarea(), { key: "ArrowUp" });
+      expect(options[0]).toHaveAttribute("aria-selected", "true");
+      expect(options[1]).toHaveAttribute("aria-selected", "false");
+    });
+
+    it("Enter chooses the highlighted suggestion", () => {
+      stubOffset(0);
+      const recentEntries = [entry({ id: "r1", createdAt: "2026-08-15T12:00:00.000Z" })];
+      render(<Composer onSend={vi.fn()} recentEntries={recentEntries} />);
+
+      fireEvent.change(getTextarea(), { target: { value: "[[" } });
+      fireEvent.keyDown(getTextarea(), { key: "Enter" });
+
+      expect(getTextarea()).toHaveValue("[[2026-08-15]]");
+    });
+
+    // The one rule issue #144 treats as non-negotiable: the Send chord
+    // still sends, list open or not.
+    it("still sends on Cmd+Enter while the list is open", () => {
+      const onSend = vi.fn();
+      render(<Composer onSend={onSend} />);
+
+      fireEvent.change(getTextarea(), { target: { value: "hello [[" } });
+      expect(screen.getByRole("listbox")).toBeInTheDocument();
+
+      fireEvent.keyDown(getTextarea(), { key: "Enter", metaKey: true });
+
+      expect(onSend).toHaveBeenCalledWith("hello [[");
+      expect(getTextarea()).toHaveValue("");
     });
   });
 });

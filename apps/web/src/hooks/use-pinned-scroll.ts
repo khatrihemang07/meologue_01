@@ -78,6 +78,27 @@ export interface UsePinnedScrollOptions {
    * unchanged by this option's addition.
    */
   scrollToNewestIndex?: () => boolean;
+  /**
+   * Issue #142: true while a date-Reference seek (composer-page.tsx) is
+   * paging backward through older Entries looking for a target day. A seek
+   * loads a page, waits for History to check whether the target's
+   * separator landed, and — if not — loads another; every one of those
+   * loads changes `watch` exactly the way an ordinary page load does, and
+   * the `watch` follow effect and the ResizeObserver below both exist
+   * specifically to chase `watch` back to the newest end. Left running
+   * during a seek, either one would yank the reader back to the newest
+   * Entry after the very first page it loads, and the seek would never
+   * converge on the target day at all.
+   *
+   * This does not merely skip re-pinning if the reader happens to already
+   * be away from the newest end — it forces the pin off outright. A seek
+   * always starts from wherever the reader was (often already pinned, at
+   * the newest end, since that is where a fresh Composer visit opens), and
+   * without an explicit override the very first page the seek loads would
+   * read as "new content while pinned" and jump straight back before the
+   * seek has moved anywhere.
+   */
+  seeking?: boolean;
 }
 
 export interface UsePinnedScrollResult {
@@ -103,6 +124,7 @@ export function usePinnedScroll({
   forceToNewest,
   pagination,
   scrollToNewestIndex,
+  seeking = false,
 }: UsePinnedScrollOptions): UsePinnedScrollResult {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   // A ref alongside the state: the effects below need the *current* pin
@@ -110,6 +132,26 @@ export function usePinnedScroll({
   // whatever render closed over them — state alone would only ever see the
   // value as of the last render.
   const pinnedRef = useRef(true);
+  // Issue #142: forced false on every render while a seek is in flight,
+  // regardless of whatever the reader's real scroll position last set it
+  // to — see `seeking`'s own doc comment for why this has to be an
+  // unconditional override rather than merely "don't re-pin." Written
+  // during render rather than in an effect: both the `watch` effect and the
+  // ResizeObserver below read `pinnedRef.current` the instant they run, and
+  // an effect-based assignment would still leave one render's worth of
+  // staleness for whichever of them fires first.
+  if (seeking) {
+    pinnedRef.current = false;
+  }
+  // A ref for the ResizeObserver callback specifically (below): that
+  // callback is created once per `[enabled, scrollToNewest]` change and
+  // then invoked later, directly by the browser, entirely outside React's
+  // render/effect cycle — reading the plain `seeking` parameter there would
+  // close over whatever it was the last time the effect itself ran, not
+  // whatever it is now. `pinnedRef` next door is the same pattern for the
+  // same reason.
+  const seekingRef = useRef(seeking);
+  seekingRef.current = seeking;
   const [awayFromNewest, setAwayFromNewest] = useState(false);
   // Issue #79: set the instant a "fetch an older page" request goes out,
   // holding exactly the geometry `scrollTop`/`scrollHeight` had at that
@@ -191,15 +233,20 @@ export function usePinnedScroll({
   // appeared, from Send or Sync alike), but only actually moves the scroll
   // position if the reader was already pinned — an Entry arriving from
   // Sync while the reader has scrolled up must not yank them back down.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `watch` is deliberately the only content-driven dependency — it stands in for "new content appeared," not a value this effect reads.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `watch` is deliberately the only content-driven dependency — it stands in for "new content appeared," not a value this effect reads. `seeking` needs no place in this array either: this effect already re-runs on every `watch` change (exactly what a seek's own page loads produce), so the closure it runs always closes over that render's current `seeking` — unlike the ResizeObserver below, whose callback survives across renders and genuinely needs a ref for the same value.
   useEffect(() => {
-    if (!enabled) {
+    // Issue #142: a seek forces `pinnedRef.current` false during render
+    // (see that field's own comment) before this effect ever runs, so
+    // `pinnedRef.current` alone would already stop this from firing — this
+    // check names the real reason directly, rather than leaving a reader
+    // of this effect to rediscover it by tracing where the ref got set.
+    if (!enabled || seeking) {
       return;
     }
     if (pinnedRef.current) {
       scrollToNewest();
     }
-  }, [enabled, watch, scrollToNewest]);
+  }, [enabled, watch, scrollToNewest, seeking]);
 
   // Issue #126: the pin has to survive the *box* changing, not just new
   // content arriving. Three things resize the scroll region without adding
@@ -225,6 +272,15 @@ export function usePinnedScroll({
       return;
     }
     const observer = new ResizeObserver(() => {
+      // Issue #142: `seekingRef`, not the plain `seeking` parameter — this
+      // callback is created once (whenever `[enabled, scrollToNewest]`
+      // last changed) and then invoked later by the browser, outside
+      // React's render cycle entirely, so only a ref reading the *current*
+      // value avoids firing on a seek that started after this callback was
+      // built.
+      if (seekingRef.current) {
+        return;
+      }
       if (pinnedRef.current) {
         scrollToNewest();
       }

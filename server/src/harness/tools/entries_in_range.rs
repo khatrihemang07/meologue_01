@@ -17,6 +17,21 @@
 //! silence is how the model knows it has everything, so the absence of that
 //! note is load-bearing, not an oversight (see the tests below that assert
 //! it explicitly).
+//!
+//! Issue #145 adds one more thing this tool's `guidelines()` has to teach:
+//! what a Reference — `[[YYYY-MM-DD]]` or `[[e:<id>]]`, plain text a user
+//! wrote inside an Entry's body — means once it reaches the model verbatim
+//! (`super::render_entry` never touches it). A day Reference is nothing new
+//! to *this* tool: `from == to` already returns exactly one whole local
+//! day, so following one is just calling `entries_in_range` again with both
+//! ends set to that date. A fifth tool (`entries_on_date`) was designed and
+//! then dropped for exactly that reason — it would have been a second path
+//! to a call this tool already makes, and ADR 0037 ties the tool list to
+//! advertised Server capability, which is not a thing to grow for a
+//! redundant path. An Entry Reference has no such path at all: there is no
+//! tool that resolves an Entry id, on purpose (see `guidelines()` below for
+//! what a model should do with one instead), so it isn't a case for a fifth
+//! tool either.
 
 use async_trait::async_trait;
 use chrono::NaiveDate;
@@ -112,7 +127,13 @@ impl AgentTool for EntriesInRangeTool {
     fn guidelines(&self) -> Option<&str> {
         Some(
             "A page ends with a bracketed note naming the exact offset to call next when there's \
-             more to see; no such note means every matching Entry has already been shown.",
+             more to see; no such note means every matching Entry has already been shown. An \
+             Entry's text may hold a Reference: `[[YYYY-MM-DD]]` points at a day — follow it by \
+             calling this tool with `from` and `to` both set to that date, which returns exactly \
+             that one local day. `[[e:<id>]]` points at another Entry, but that id cannot be \
+             resolved — no tool looks an Entry up by id — so read it only as a sign the two \
+             Entries are connected, and find the referenced Entry another way (by date, or by \
+             search) if you need its content.",
         )
     }
 
@@ -241,11 +262,14 @@ fn parse_optional_i64(arguments: &Value, field: &str) -> Option<i64> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use chrono::{DateTime, Duration, Utc};
     use sqlx::PgPool;
     use uuid::Uuid;
 
     use super::*;
+    use crate::harness::tools::render_tool_guidance;
 
     async fn insert_entry_at(pool: &PgPool, body: &str, created_at: DateTime<Utc>) {
         sqlx::query(
@@ -501,5 +525,32 @@ mod tests {
             outcome.content
         );
         assert_eq!(outcome.entry_ids.len(), 1);
+    }
+
+    // -------------------------------------------------------------------
+    // Issue #145: the guidance teaches both Reference forms.
+    // -------------------------------------------------------------------
+
+    /// `a_tools_snippet_and_guidelines_are_appended` (`mod.rs`) proves
+    /// generically that `guidelines()` reaches the prompt at all; this
+    /// pins that *this* tool's actual wording — both Reference forms, and
+    /// what to do with each — is what shows up, the same split
+    /// `read_digest.rs`'s own `the_tools_guidance_appears_in_the_rendered_system_prompt`
+    /// draws between the generic mechanism and one tool's specific text.
+    #[sqlx::test]
+    async fn the_tools_guidance_appears_in_the_rendered_system_prompt(pool: PgPool) {
+        let tools: Vec<Arc<dyn AgentTool>> = vec![Arc::new(EntriesInRangeTool::new(pool, 0))];
+        let prompt = render_tool_guidance("Base.", &tools);
+
+        // A day Reference is followed by calling this same tool again with
+        // `from` and `to` both set to that date.
+        assert!(prompt.contains("[[YYYY-MM-DD]]"));
+        assert!(prompt.contains("`from` and `to` both set to that date"));
+
+        // An Entry Reference cannot be resolved — there is no tool that
+        // looks an Entry up by id — only read as a signal the two Entries
+        // are connected.
+        assert!(prompt.contains("[[e:<id>]]"));
+        assert!(prompt.contains("cannot be resolved"));
     }
 }

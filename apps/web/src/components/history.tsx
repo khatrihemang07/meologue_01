@@ -13,11 +13,15 @@ import {
   useRef,
   useState,
 } from "react";
+import { Link, useNavigate } from "react-router";
 import { toast } from "sonner";
+import { DatePickerSheet } from "@/components/date-picker-sheet";
 import { EntryActionsSheet } from "@/components/entry-actions";
 import { EntryBubble } from "@/components/entry-bubble";
+import { entrySnippet } from "@/components/entry-row";
 import { HistoryScrollContext } from "@/components/shell";
 import { ConfirmDialog } from "@/components/ui/alert-dialog";
+import { useDayReferrers } from "@/hooks/use-day-referrers";
 import { useSwipeActions } from "@/hooks/use-swipe-actions";
 import { copyText } from "@/lib/clipboard";
 import { deviceUtcOffsetMinutes, entryDayKey, formatDaySeparator } from "@/lib/entry-day";
@@ -41,18 +45,88 @@ interface HistoryProps {
    */
   query?: string;
   /**
-   * Wires Edit/Delete (issue #78; ADR 0028) onto every row this renders.
-   * Both undefined and both present, never one or the other — see
-   * EntryRow's own `actions` prop, which this assembles (alongside the
-   * sheet-open setter below) and forwards. composer-page.tsx's footer,
-   * History's one remaining caller since issue #75 deleted `/history`'s
-   * own page, passes both; nothing here defaults them to a no-op, because
-   * a silently-broken action is worse than a type error at the call site
-   * that forgot one.
+   * Wires Edit/Delete/Refer (issue #78, ADR 0028; issue #144) onto every
+   * row this renders. All three undefined or all three present, never a
+   * partial set — see EntryRow's own `actions` prop, which this assembles
+   * (alongside the sheet-open setter below) and forwards. composer-page.tsx's
+   * footer, History's one remaining caller since issue #75 deleted
+   * `/history`'s own page, passes all three; nothing here defaults a
+   * missing one to a no-op, because a silently-broken action is worse than
+   * a type error at the call site that forgot one.
    */
   onEdit?: (entry: Entry) => void;
   onDelete?: (entry: Entry) => void;
+  /**
+   * Puts a Reference to an Entry into the Composer (issue #144) — see this
+   * prop group's own comment just above for the all-or-nothing rule it
+   * joins onEdit/onDelete under. Unlike Delete, Refer has no confirmation
+   * step: `actions.onRefer` below calls straight through to this rather
+   * than through a requester.
+   */
+  onRefer?: (entry: Entry) => void;
+  /**
+   * Issue #147: the later Entries that Refer to a given local day
+   * (day-referrers.ts's own `dayReferrers`) — read from `useEntryStore()`
+   * by composer-page.tsx and handed down as a prop rather than read here
+   * directly, the same reasoning `seek`'s own trio just below follows for
+   * itself: history.test.tsx renders `<History>` bare, with no
+   * `EntryStoreLayout`/`Outlet` above it, and this row is unconditional —
+   * one per day, regardless of whether any Entry's body has ever been
+   * touched — unlike `DateReferenceLink` (entry-row.tsx), which only
+   * mounts, and so only calls `useEntryStore()`, when an actual
+   * `[[date]]` mark was parsed out of some Entry's body. Reading this
+   * context directly here would throw across every existing test in this
+   * file the moment a day separator exists at all. Undefined behaves
+   * exactly like `useDayReferrers`'s own "no probe" case: the row renders
+   * nothing, same as a day confirmed to have no referrers.
+   */
+  dayReferrers?: (dayKey: string) => Promise<Entry[]>;
+  /**
+   * Issue #142/#143: the day or Entry a Reference seek (composer-page.tsx)
+   * is looking for, or `null`/omitted while no seek is active. History is
+   * the only thing that can act on this — it alone owns `flatItems` (below)
+   * and the virtualizer that can actually scroll to a row — so
+   * composer-page.tsx hands over the target and gets called back rather
+   * than trying to reach into either of those itself.
+   *
+   * A tagged union rather than two independent optional fields: the two
+   * kinds converge differently once found (an Entry seek also flashes the
+   * row it lands on — see the effect below — a day seek only scrolls), and
+   * `kind` is what lets that branch read as "which seek is this" instead of
+   * a pair of nullable fields a caller could, in principle, both set at
+   * once.
+   */
+  seek?: HistorySeekTarget | null;
+  /**
+   * The target day's separator wasn't in `flatItems` on this render.
+   * composer-page.tsx owns `pagination` (History does not — see
+   * HistoryProps' own shape), so it decides from here whether to load
+   * another page or give up: hasMore is false, this same seek has nothing
+   * further to check, and composer-page.tsx's own handler calls
+   * `onSeekSettled` in that case instead of fetching. History just reports
+   * "not found yet" every time that stays true; it does not loop on its
+   * own account at all.
+   */
+  onSeekNeedsOlder?: () => void;
+  /** The seek reached its target, or (composer-page.tsx's own call) ran out of older Entries to check. Either way, there is nothing left for this seek to do. */
+  onSeekSettled?: () => void;
 }
+
+/**
+ * What a Reference seek is looking for (see `HistoryProps.seek`'s own
+ * comment). Exported so composer-page.tsx — which builds this from `?d=` or
+ * `?e=` — and history.test.tsx share the exact shape rather than each
+ * re-deriving it structurally.
+ */
+export type HistorySeekTarget =
+  | { kind: "day"; dayKey: string }
+  | { kind: "entry"; entryId: string };
+
+// Issue #143: how long a followed Entry Reference's target stays flashed
+// once the seek lands on it. Long enough that a reader who was mid-scroll
+// notices which row they arrived at; short enough that it reads as a
+// momentary flash rather than a mode the row is stuck in.
+const SEEK_HIGHLIGHT_DURATION_MS = 1500;
 
 interface DayGroup {
   /** null for an Entry whose createdAt didn't parse — see groupByDay below. */
@@ -140,6 +214,20 @@ interface FlatSeparatorItem {
   key: string;
   dayKey: string;
 }
+/**
+ * Issue #147: what later Entries Refer to this day — its own row, adjacent
+ * to the separator rather than inside it or the sticky pill (see
+ * `DayReferrersRow`'s own comment for why: ADR 0030 forbids growing either
+ * of those, and the virtualizer measures a row, not a fixed-height
+ * wrapper). Emitted alongside every separator in `flattenGroups` below,
+ * unconditionally — `DayReferrersRow` itself decides, once its probe
+ * resolves, whether there is anything worth a reader seeing here at all.
+ */
+interface FlatDayReferrersItem {
+  kind: "dayReferrers";
+  key: string;
+  dayKey: string;
+}
 interface FlatEntryItem {
   kind: "entry";
   key: string;
@@ -149,13 +237,16 @@ interface FlatEntryItem {
   /** True for the first Entry in its group — the one row in each run that gets no divider above it (see the render below, replacing the old `divide-y` wrapper a virtualized list can't use: rows are no longer necessarily adjacent DOM siblings). */
   isFirstInGroup: boolean;
 }
-type FlatItem = FlatSeparatorItem | FlatEntryItem;
+type FlatItem = FlatSeparatorItem | FlatDayReferrersItem | FlatEntryItem;
 
 function flattenGroups(groups: DayGroup[]): FlatItem[] {
   const items: FlatItem[] = [];
   for (const group of groups) {
     if (group.dayKey !== null) {
       items.push({ kind: "separator", key: `sep:${group.dayKey}`, dayKey: group.dayKey });
+      // Issue #147: right after the separator it belongs to, not before —
+      // reads as "this day; here is what refers back to it" in that order.
+      items.push({ kind: "dayReferrers", key: `ref:${group.dayKey}`, dayKey: group.dayKey });
     }
     group.entries.forEach((entry, index) => {
       items.push({
@@ -207,7 +298,89 @@ const OVERSCAN = 25;
 // the per-row DOM cost issue #83 exists to remove.
 const MAX_FALLBACK_ROWS = OVERSCAN;
 
-export function History({ entries, syncEnabled, query = "", onEdit, onDelete }: HistoryProps) {
+/**
+ * Issue #147: "a day shows what Refers to it" (ADR 0042's own Context) —
+ * the half of the Reference feature that makes a day itself reachable from
+ * its future, rather than only letting a new Entry point backwards. Its
+ * own row (`FlatDayReferrersItem`), not text squeezed into the separator
+ * or the sticky pill: ADR 0030 forbids growing either of those, and this
+ * needs to render anywhere from nothing at all up to several links — a
+ * range only a row the virtualizer measures on its own can carry.
+ *
+ * Renders nothing — not an empty state, not a zero count — until `probe`
+ * resolves with at least one referrer: both "still resolving" and
+ * "confirmed nothing Refers here" render identically, the same "unresolved
+ * is invisible" shape `DateReferenceLink`/`EntryReferenceLink` already
+ * follow for a single mark, just applied to a whole row instead of one
+ * inline chip. `null` costs the row nothing extra: `estimateSize` below
+ * already guesses `0` for this item kind, so an empty day never reserves
+ * space that would otherwise have to shrink back down once the probe
+ * settles — the majority case, since most days have nothing pointing back
+ * at them.
+ *
+ * Opening a referrer reuses the exact seek a followed `[[e:...]]` chip
+ * already uses (`?e=<id>`, composer-page.tsx) rather than a second
+ * navigation path — the whole reason ADR 0042 put the seek's destination in
+ * a query param was so every caller, this one included, could just build
+ * the same URL.
+ */
+function DayReferrersRow({
+  dayKey,
+  probe,
+}: {
+  dayKey: string;
+  probe: ((dayKey: string) => Promise<Entry[]>) | undefined;
+}) {
+  const referrers = useDayReferrers(probe, dayKey);
+  if (referrers === undefined || referrers.length === 0) {
+    return null;
+  }
+  // Each link carries its own referrer's day and snippet — the same shape
+  // `EntryReferenceLink`'s own chip (entry-row.tsx) uses — rather than a
+  // bare, identical "open this" for every one: with more than one referrer,
+  // an identical accessible name on every link would leave a screen reader
+  // unable to tell them apart.
+  const offsetMinutes = deviceUtcOffsetMinutes();
+  const todayKey = entryDayKey(new Date().toISOString(), offsetMinutes) ?? "";
+  return (
+    <div className="flex flex-wrap items-center justify-center gap-x-1.5 gap-y-1 px-4 pb-2 text-xs text-muted-foreground">
+      <span>
+        {referrers.length === 1
+          ? "Referred to by 1 Entry:"
+          : `Referred to by ${referrers.length} Entries:`}
+      </span>
+      {referrers.map((referrer) => {
+        const referrerDayKey = entryDayKey(referrer.createdAt, offsetMinutes);
+        const dayLabel =
+          referrerDayKey === null ? null : formatDaySeparator(referrerDayKey, todayKey);
+        return (
+          <Link
+            key={referrer.id}
+            to={`/composer?e=${referrer.id}`}
+            aria-label={`Open the Entry from ${dayLabel ?? "an earlier day"} that Refers to this day`}
+            className="inline-flex max-w-40 items-baseline gap-1 rounded-full border border-border bg-muted/60 px-2 py-0.5 underline decoration-dotted underline-offset-2"
+          >
+            {dayLabel !== null && <span className="shrink-0 font-medium">{dayLabel}</span>}
+            <span className="truncate">{entrySnippet(referrer.body)}</span>
+          </Link>
+        );
+      })}
+    </div>
+  );
+}
+
+export function History({
+  entries,
+  syncEnabled,
+  query = "",
+  onEdit,
+  onDelete,
+  onRefer,
+  dayReferrers,
+  seek,
+  onSeekNeedsOlder,
+  onSeekSettled,
+}: HistoryProps) {
   // The "which Entry is open" state behind the single shared
   // EntryActionsSheet below (issue #78) — owned here, not per-row, which
   // is what keeps exactly one sheet instance in the DOM no matter how many
@@ -223,28 +396,30 @@ export function History({ entries, syncEnabled, query = "", onEdit, onDelete }: 
   // real `onDelete` below.
   const [confirmEntry, setConfirmEntry] = useState<Entry | null>(null);
 
-  // Both-or-neither (see the props' own comment): assembled once here
-  // rather than re-checked per row, and `undefined` when either is missing
-  // so EntryRow's own default ("no actions prop" -> "no actions") is what
-  // actually governs the no-actions case, instead of this component
-  // duplicating that decision. `onOpenSheet` is folded in here rather than
-  // being a third prop composer-page.tsx has to pass — it's this
-  // component's own state setter, not something an outside caller has any
-  // business supplying.
+  // All-or-nothing (see the props' own comment): assembled once here
+  // rather than re-checked per row, and `undefined` when any of the three
+  // is missing so EntryRow's own default ("no actions prop" -> "no
+  // actions") is what actually governs the no-actions case, instead of
+  // this component duplicating that decision. `onOpenSheet` is folded in
+  // here rather than being a fourth prop composer-page.tsx has to pass —
+  // it's this component's own state setter, not something an outside
+  // caller has any business supplying. `onRefer` (issue #144) passes
+  // straight through unwrapped, unlike `onDelete`: Refer has no
+  // confirmation step to route through first.
   //
   // Memoised (issue #81) so this is the same object across renders whenever
-  // `onEdit`/`onDelete` themselves are: every row below receives `actions`
-  // as a prop, and `React.memo` on EntryRow (entry-row.tsx) only skips a
-  // row's re-render if every one of its props is `===` the last render's —
-  // rebuilding this object inline, as before, would hand every row a fresh
-  // `actions` reference each time and defeat that memoisation entirely,
-  // even though nothing it points to actually changed.
+  // `onEdit`/`onDelete`/`onRefer` themselves are: every row below receives
+  // `actions` as a prop, and `React.memo` on EntryRow (entry-row.tsx) only
+  // skips a row's re-render if every one of its props is `===` the last
+  // render's — rebuilding this object inline, as before, would hand every
+  // row a fresh `actions` reference each time and defeat that memoisation
+  // entirely, even though nothing it points to actually changed.
   const actions = useMemo(
     () =>
-      onEdit && onDelete
-        ? { onEdit, onDelete: setConfirmEntry, onOpenSheet: setSheetEntry }
+      onEdit && onDelete && onRefer
+        ? { onEdit, onDelete: setConfirmEntry, onOpenSheet: setSheetEntry, onRefer }
         : undefined,
-    [onEdit, onDelete],
+    [onEdit, onDelete, onRefer],
   );
 
   // A swipe hands back the element it picked up, not an Entry: the hook is
@@ -282,6 +457,27 @@ export function History({ entries, syncEnabled, query = "", onEdit, onDelete }: 
       else toast.error("Couldn't copy this Entry. Select the text to copy it instead.");
     });
   }, []);
+
+  // Issue #146: which day a tap on either marker opened the picker for, or
+  // null while it's closed. Owned here for the same reason `sheetEntry` and
+  // `confirmEntry` are above — this is the one component above every marker
+  // this thread can render, so one `DatePickerSheet` instance serves both
+  // the sticky pill and however many inline separators are mounted, rather
+  // than one per marker.
+  const [datePickerDayKey, setDatePickerDayKey] = useState<string | null>(null);
+
+  // Confirming a day seeks History to it by the exact route a date
+  // Reference already uses (`DateReferenceLink`, entry-row.tsx) — `?d=` is
+  // read back by composer-page.tsx into a `seek` prop this same component
+  // already knows how to converge on (the effect above), so a tapped day
+  // and a followed Reference land through one mechanism, not two.
+  const navigate = useNavigate();
+  const handleDateConfirm = useCallback(
+    (dayKey: string) => {
+      navigate(`/composer?d=${dayKey}`);
+    },
+    [navigate],
+  );
 
   // `groupByDay` is the one genuinely O(entries.length) piece of render-body
   // work here (issue #81) — memoised so a render this component takes for
@@ -349,7 +545,20 @@ export function History({ entries, syncEnabled, query = "", onEdit, onDelete }: 
   const virtualizer = useVirtualizer({
     count: flatItems.length,
     getScrollElement: () => scrollElement,
-    estimateSize: () => ESTIMATED_ROW_HEIGHT_PX,
+    // Issue #147: a `dayReferrers` row starts at an estimate of `0`, not
+    // `ESTIMATED_ROW_HEIGHT_PX` — deliberately, and this is what actually
+    // keeps a day with nothing Referring to it showing NOTHING rather than
+    // a blank gap the size of an ordinary row. Most days have no referrer
+    // at all, so `0` is already the *correct* answer for the common case
+    // before `DayReferrersRow`'s own probe ever resolves, which sidesteps
+    // `measureElement` below entirely for that case: there is no "real
+    // measured 0" to distrust when the estimate was already 0. Only once a
+    // referrer is confirmed does this row grow — from a true `0` to a real,
+    // positive `measureElement` reading — the same "estimate, then correct
+    // once rendered" path every other row already takes, just starting
+    // from the opposite end.
+    estimateSize: (index) =>
+      flatItems[index]?.kind === "dayReferrers" ? 0 : ESTIMATED_ROW_HEIGHT_PX,
     overscan: OVERSCAN,
     // Issue #79/#83: see FlatItem's own comment — measured sizes must
     // follow the row, not the index, across a prepend.
@@ -454,6 +663,78 @@ export function History({ entries, syncEnabled, query = "", onEdit, onDelete }: 
     return () => registerScrollToNewest(null);
   }, [flatItems.length, registerScrollToNewest, virtualizer]);
 
+  // Issue #143: which Entry, if any, a seek just landed on should still be
+  // flashed — set by the seek effect below the instant it finds an "entry"
+  // kind target, and cleared by its own timer a fixed duration later (the
+  // effect just after this state). Kept separate from `seek`/`onSeekSettled`
+  // deliberately: `onSeekSettled` fires (and clears `?e=`) the instant the
+  // row is found, far sooner than a reader can register a flash, so tying
+  // the flash's lifetime to the URL param would either cut it short or hold
+  // the param open for a concern it has nothing to do with.
+  const [highlightedEntryId, setHighlightedEntryId] = useState<string | null>(null);
+  useEffect(() => {
+    if (highlightedEntryId === null) {
+      return;
+    }
+    const timer = setTimeout(() => setHighlightedEntryId(null), SEEK_HIGHLIGHT_DURATION_MS);
+    return () => clearTimeout(timer);
+  }, [highlightedEntryId]);
+
+  // A stable primitive to key the effect below on (its own comment) —
+  // `seek` itself is a fresh object every render composer-page.tsx has one
+  // active, regardless of which kind it names.
+  const seekTargetKey = !seek
+    ? null
+    : seek.kind === "day"
+      ? `d:${seek.dayKey}`
+      : `e:${seek.entryId}`;
+
+  // Issue #142/#143: "page until you arrive" — the seek's own convergence
+  // step. `seek` names a day or an Entry; this finds the matching row in
+  // `flatItems` (the one thing only History can do, since flattening and
+  // the virtualizer both live here) and reacts to whichever of the three
+  // outcomes actually holds this render:
+  //
+  // - found -> scroll to it and report the seek settled. `align: "start"`
+  //   puts the target at the top of the viewport, the same place a day
+  //   separator sits during ordinary scrolling, rather than centring an
+  //   arbitrary row. An "entry" seek additionally starts its flash — see
+  //   `highlightedEntryId`'s own comment above for why that state, and its
+  //   clearing, live apart from the rest of this.
+  // - not found, but `flatItems` might still grow (composer-page.tsx owns
+  //   `pagination`, not this component — see onSeekNeedsOlder's own doc
+  //   comment) -> ask for another older page.
+  // - not found, and composer-page.tsx's own `onSeekNeedsOlder` handler has
+  //   nothing further to fetch -> that handler calls `onSeekSettled`
+  //   itself; History never decides "give up" on its own, only "not found
+  //   yet," which is what keeps this effect from ever needing to loop.
+  //
+  // An effect, not a plain render-body call: `flatItems` only changes when
+  // `entries` actually grows a page (it's memoised on `groups`, itself
+  // memoised on `entries` — see those comments above), so gating on it
+  // here is what stops this from re-running, and re-requesting a page, on
+  // every unrelated render while a seek is in flight.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on `seekTargetKey`, not `seek` itself — composer-page.tsx hands this down as a fresh object on every render a seek is active, and depending on its identity would re-run this effect (and re-request an older page) on every unrelated re-render rather than only when the target, or the data available to search, actually changes.
+  useEffect(() => {
+    if (!seek) {
+      return;
+    }
+    const targetIndex = flatItems.findIndex((item) =>
+      seek.kind === "day"
+        ? item.kind === "separator" && item.dayKey === seek.dayKey
+        : item.kind === "entry" && item.entry.id === seek.entryId,
+    );
+    if (targetIndex === -1) {
+      onSeekNeedsOlder?.();
+      return;
+    }
+    virtualizer.scrollToIndex(targetIndex, { align: "start" });
+    if (seek.kind === "entry") {
+      setHighlightedEntryId(seek.entryId);
+    }
+    onSeekSettled?.();
+  }, [seekTargetKey, flatItems, virtualizer, onSeekNeedsOlder, onSeekSettled]);
+
   // Issue #83's bottom alignment: however much shorter the virtualized
   // list is than the viewport, floored at zero — a leading spacer that
   // pushes a short History down against the Composer instead of the
@@ -553,22 +834,71 @@ export function History({ entries, syncEnabled, query = "", onEdit, onDelete }: 
           worth 16px of jump per toggle, measured in a real browser. A
           fixed height makes the flow contribution independent of the
           contents entirely. */}
-      <div className="sticky top-0 z-10 flex h-9 items-center justify-center">
-        <span
+      <div
+        data-testid="day-pill-wrapper"
+        className="sticky top-0 z-10 flex h-9 items-center justify-center"
+      >
+        {/* Issue #146: a `<button>`, not a `<span>` — tapping this opens
+            `DatePickerSheet` seeded with the topmost visible day, the same
+            as the inline separator below. `h-9` on the wrapper above is
+            what actually guarantees ADR 0030's "must not change height":
+            an explicit CSS height on a block-level box is not derived from
+            its children, so nothing this element does can grow or shrink
+            it. `appearance-none` is the one thing still worth adding on
+            top of that guarantee, rather than relying on it alone: this
+            app's global stylesheet (`index.css`'s `@import "tailwindcss"`)
+            already resets margin/padding/border to zero on every element
+            via Tailwind's own preflight (`*, ::before, ::after { margin:
+            0; padding: 0; border: 0 solid }`), so a bare `<button>` starts
+            from the identical box the old `<span>` did before either
+            one's own utility classes (`px-3 py-0.5 border`, both below)
+            apply — but that same preflight deliberately leaves
+            `appearance: button` on button elements (so a plain, unstyled
+            button still looks like a native one by default), and that
+            native rendering is the one remaining way a browser could paint
+            this wider or taller than the specified box. `appearance-none`
+            turns that off, so what's below is the only thing drawing this
+            control in every browser, not a browser's own button chrome
+            layered underneath it. */}
+        <button
+          type="button"
+          // Gated on `topmostDayKey !== null` alone, not `showOverlayPill`
+          // too: `showOverlayPill` only decides whether this pill's own
+          // label is currently the one thing on screen naming this day (as
+          // opposed to the inline separator already doing that job right
+          // above it — see that flag's own comment). Either way the
+          // topmost day is a real one worth seeding the picker with; the
+          // `invisible` class below (`visibility: hidden`) already removes
+          // this control from hit-testing, focus order and the
+          // accessibility tree for a real pointer or keyboard user whenever
+          // it applies, so nothing here needs to re-decide that in JS.
+          onClick={() => {
+            if (topmostDayKey !== null) {
+              setDatePickerDayKey(topmostDayKey);
+            }
+          }}
           title={
             showOverlayPill && topmostDayKey !== null
               ? formatDaySeparatorTitle(topmostDayKey)
               : undefined
           }
+          aria-label={
+            showOverlayPill && topmostDayKey !== null
+              ? `Choose a date to jump to — currently showing ${
+                  formatDaySeparatorTitle(topmostDayKey) ??
+                  formatDaySeparator(topmostDayKey, todayKey)
+                }`
+              : "Choose a date to jump to"
+          }
           className={cn(
-            "rounded-full border border-border bg-muted/90 px-3 py-0.5 text-xs font-medium text-muted-foreground backdrop-blur-sm",
+            "appearance-none rounded-full border border-border bg-muted/90 px-3 py-0.5 text-xs font-medium text-muted-foreground backdrop-blur-sm",
             !showOverlayPill && "invisible",
           )}
         >
           {showOverlayPill && topmostDayKey !== null
             ? formatDaySeparator(topmostDayKey, todayKey)
             : null}
-        </span>
+        </button>
       </div>
       {/* The bottom-alignment spacer (issue #83) — see its height's own
           comment above. Also this component's own non-circular measuring
@@ -608,13 +938,41 @@ export function History({ entries, syncEnabled, query = "", onEdit, onDelete }: 
                 // moved out of flow); it still renders right where its
                 // day's Entries begin, exactly as before.
                 <div className="flex justify-center py-2">
-                  <span
+                  {/* Issue #146: same button, same height-neutrality
+                      reasoning as the always-present pill above — see its
+                      own comment. This one sits inside a virtualized row
+                      instead of the fixed-height wrapper, so here it's the
+                      row's own `measureElement` (not a fixed CSS height)
+                      that would notice any growth; `appearance-none` still
+                      applies for the same reason, so this row measures the
+                      same whether the reader has scrolled past it or not. */}
+                  <button
+                    type="button"
+                    // Same accessible name as the sticky pill above (both
+                    // markers do the same thing), which leaves nothing to
+                    // tell them apart by role/name alone once the pill is
+                    // also showing this same day — real, not hypothetical:
+                    // a short thread's pinned-to-newest scroll position can
+                    // already be past its one day separator on first paint.
+                    // `data-testid` disambiguates for the e2e suite only;
+                    // nothing in this app queries it.
+                    data-testid="day-separator"
+                    onClick={() => setDatePickerDayKey(item.dayKey)}
                     title={formatDaySeparatorTitle(item.dayKey)}
-                    className="rounded-full border border-border bg-muted/90 px-3 py-0.5 text-xs font-medium text-muted-foreground backdrop-blur-sm"
+                    aria-label={`Choose a date to jump to — currently showing ${
+                      formatDaySeparatorTitle(item.dayKey) ??
+                      formatDaySeparator(item.dayKey, todayKey)
+                    }`}
+                    className="appearance-none rounded-full border border-border bg-muted/90 px-3 py-0.5 text-xs font-medium text-muted-foreground backdrop-blur-sm"
                   >
                     {formatDaySeparator(item.dayKey, todayKey)}
-                  </span>
+                  </button>
                 </div>
+              ) : item.kind === "dayReferrers" ? (
+                // Issue #147: see `DayReferrersRow`'s own comment for why
+                // this is a row of its own rather than something folded
+                // into the separator above.
+                <DayReferrersRow dayKey={item.dayKey} probe={dayReferrers} />
               ) : (
                 // A bubble, not a row (ADR 0036). The `border-t` that used
                 // to travel with each row is gone with it: bubbles are told
@@ -635,6 +993,7 @@ export function History({ entries, syncEnabled, query = "", onEdit, onDelete }: 
                   side="out"
                   groupedWithPrevious={!item.isFirstInGroup}
                   actions={actions}
+                  highlighted={item.entry.id === highlightedEntryId}
                 />
               )}
             </div>
@@ -656,6 +1015,7 @@ export function History({ entries, syncEnabled, query = "", onEdit, onDelete }: 
           }}
           onEdit={actions.onEdit}
           onCopy={copyEntry}
+          onRefer={actions.onRefer}
           onDelete={actions.onDelete}
         />
       )}
@@ -684,6 +1044,24 @@ export function History({ entries, syncEnabled, query = "", onEdit, onDelete }: 
           }}
         />
       )}
+      {/* Issue #146: the one DatePickerSheet instance for however many day
+          markers this thread renders (the sticky pill plus one inline
+          separator per day) — same "one sheet above every row" shape as
+          EntryActionsSheet/ConfirmDialog above. Every date stays selectable
+          (date-picker-sheet.tsx's own doc comment); `handleDateConfirm`
+          navigates exactly where `DateReferenceLink` (entry-row.tsx) does,
+          so a tapped day and a followed Reference converge on the same
+          seek in composer-page.tsx rather than a second path. */}
+      <DatePickerSheet
+        open={datePickerDayKey !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDatePickerDayKey(null);
+          }
+        }}
+        initialDate={datePickerDayKey ?? undefined}
+        onConfirm={handleDateConfirm}
+      />
     </div>
   );
 }

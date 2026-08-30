@@ -11,9 +11,12 @@ concepts, use the term below rather than a synonym.
 
 ### Entry
 
-A single piece of plain text captured by the user. It is identified by an id minted on the
-Device that created it, so an Entry's identity does not depend on ever reaching another Device or
-a server. Its body can change after the fact, and an Entry can be removed from History
+A single piece of text captured by the user. Its body is plain text and stays plain text — what
+the user typed is what is stored. Reading it may pick out light emphasis, and References to a day
+or to another Entry, but never structure: an Entry has no headings, no lists and no title, because
+an Entry stays untitled and unorganized (see "note", below). It is identified by an id minted on
+the Device that created it, so an Entry's identity does not depend on ever reaching another Device
+or a server. Its body can change after the fact, and an Entry can be removed from History
 altogether. What never changes is its identity and when it was captured: editing an Entry does
 not move it in History, no matter how long ago it was captured or how recently it was last
 edited.
@@ -35,6 +38,21 @@ converge once Syncing completes.
 Narrowing a collection to the items whose text matches what you typed — Entries in History, or
 Sessions whose Conversation matches. Search reads text, not time, and it narrows the collection
 in place rather than producing a separate one.
+
+### Reference
+
+Something written inside an Entry that points at a day, or at another Entry. A Reference is text
+the user wrote rather than a property of the Entry: it lives in the body, and an Entry that Refers
+to something is in every other respect an ordinary Entry.
+
+Referring is not belonging. An Entry that Refers to yesterday was still captured today, and stays
+exactly where it was captured in History — nothing about a Reference moves an Entry, backdates it,
+or changes what a Period contains.
+
+A day can also be asked what Refers to it, so a thought captured late is reachable from the day it
+was about as well as from the day it was written. A Reference that points at nothing this Device
+can find — a day holding no Entries, an Entry that was removed or has not Synced here yet — is
+simply the words the user typed, and leads nowhere.
 
 ### Send
 

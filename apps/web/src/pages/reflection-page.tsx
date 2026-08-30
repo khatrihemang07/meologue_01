@@ -1,12 +1,13 @@
 import type { Entry } from "@meologue/core";
 import { PROTOCOL_VERSION } from "@meologue/core";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import { BackToChats } from "@/components/back-to-chats";
 import { Bubble } from "@/components/entry-bubble";
 import { GroundingDisclosure } from "@/components/grounding-disclosure";
+import { inlineProse } from "@/components/inline-prose";
 import { QuestionComposer } from "@/components/question-composer";
 import { NewSessionLink, SessionsLink } from "@/components/reflect-actions";
 import { ServerUnreachableBanner } from "@/components/server-unreachable-banner";
@@ -70,10 +71,26 @@ async function fetchSession(sessionId: string): Promise<SessionQueryData> {
 // This is also where the side asymmetry earns its keep most: Reflect is the
 // genuinely two-sided destination, and before it a Question and its Answer
 // were told apart by a saturated fill on one of them alone.
+// Issue #140: the one place an Answer's prose turns into rendered content.
+// Both the settled Answer (`GivenAnswer`, below) and the still-streaming one
+// (`LiveRunView`) call this rather than interpolating their own string —
+// before this they were two separate elements rendering the same prose,
+// so formatting one and not the other would have made the text visibly
+// reflow the instant streaming ended. Each keeps its own outer element
+// (a `Bubble` for the settled Answer, a positioned `<p>` while streaming,
+// since the two sit in different layouts) — only the prose *inside* that
+// element is shared, which is the part that has to agree.
+function answerProse(text: string): ReactNode {
+  return inlineProse(text);
+}
+
+// Neither the Question nor the Answer has a Search query to highlight (that
+// only ever applies to an Entry read back through History), so both call
+// `inlineProse`/`answerProse` with no query.
 function AskedQuestion({ text }: { text: string }) {
   return (
     <Bubble side="out" groupedWithPrevious>
-      {text}
+      {inlineProse(text)}
     </Bubble>
   );
 }
@@ -81,7 +98,7 @@ function AskedQuestion({ text }: { text: string }) {
 function GivenAnswer({ text }: { text: string }) {
   return (
     <Bubble side="in" className="whitespace-pre-wrap">
-      {text}
+      {answerProse(text)}
     </Bubble>
   );
 }
@@ -210,7 +227,9 @@ function LiveRunView({ liveRun }: { liveRun: LiveRunState }) {
         {thinking && !answering && <li className="text-sm text-muted-foreground">Thinking…</li>}
       </ul>
       {answering && (
-        <p className="mr-auto max-w-[85%] whitespace-pre-wrap text-sm text-foreground">{answer}</p>
+        <p className="mr-auto max-w-[85%] whitespace-pre-wrap text-sm text-foreground">
+          {answerProse(answer)}
+        </p>
       )}
     </div>
   );

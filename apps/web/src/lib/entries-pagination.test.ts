@@ -157,4 +157,26 @@ describe("refreshNewestEntriesPage", () => {
       queryKey: [...ENTRIES_QUERY_KEY, "search"],
     });
   });
+
+  // Issue #147: the count updates after a new Reference is captured — this
+  // is the plumbing that makes that true. A day's own "what Refers to me?"
+  // row (history.tsx) is a TanStack Query keyed on the day
+  // (`dayReferrersQueryKey`); invalidating that prefix on every local write
+  // is what lets a freshly-Sent `[[date]]` Reference, or an edit/delete
+  // that added or removed one, show up without a reload.
+  it("also invalidates the day-referrers prefix, so a new Reference is picked up", async () => {
+    const { refreshNewestEntriesPage, queryClient, ENTRIES_PAGE_SIZE } = await importFresh();
+    queryClient.setQueryData(ENTRIES_QUERY_KEY, {
+      pages: [[entry()]],
+      pageParams: [{ limit: ENTRIES_PAGE_SIZE }],
+    });
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+    const store = createFakeStore(vi.fn(async () => [entry()]));
+
+    await refreshNewestEntriesPage(store);
+
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: [...ENTRIES_QUERY_KEY, "day-referrers"],
+    });
+  });
 });

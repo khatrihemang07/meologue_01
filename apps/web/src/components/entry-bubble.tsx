@@ -171,6 +171,14 @@ export interface EntryBubbleProps {
   side: BubbleSide;
   groupedWithPrevious?: boolean;
   actions?: EntryRowActions;
+  /**
+   * Briefly flashes this bubble (issue #143) — history.tsx's own signal
+   * that a followed Entry Reference's seek just landed here, so the reader
+   * can see which row they arrived at. Defaults to false: every caller
+   * except history.tsx's own seek effect has no seek in flight and never
+   * has a reason to flash anything.
+   */
+  highlighted?: boolean;
 }
 
 export const EntryBubble = memo(function EntryBubble({
@@ -180,6 +188,7 @@ export const EntryBubble = memo(function EntryBubble({
   side,
   groupedWithPrevious = false,
   actions,
+  highlighted = false,
 }: EntryBubbleProps) {
   return (
     <Bubble
@@ -202,14 +211,29 @@ export const EntryBubble = memo(function EntryBubble({
         // selectable text rather than becoming a control, and the real,
         // tabbable <button>s are EntryHoverActions.
         ...(actions ? { [SWIPE_TARGET_ATTRIBUTE]: "", "data-entry-id": entry.id } : {}),
-        className: actions ? "touch-pan-y" : undefined,
+        className: cn(
+          actions && "touch-pan-y",
+          // Issue #143: the flash a followed Entry Reference lands on. One
+          // declaration covers both directions — the ring appears the
+          // instant `highlighted` turns true, and `transition-shadow` fades
+          // it back out over the same span once history.tsx's own timer
+          // turns `highlighted` false again, with no separate fade-out
+          // state needed here.
+          "transition-shadow duration-700",
+          highlighted && "ring-2 ring-primary/70",
+        ),
         onContextMenu: actions
           ? (event: MouseEvent) => handleRowContextMenu(event, actions, entry)
           : undefined,
       }}
       trailing={
         actions ? (
-          <EntryHoverActions entry={entry} onEdit={actions.onEdit} onDelete={actions.onDelete} />
+          <EntryHoverActions
+            entry={entry}
+            onEdit={actions.onEdit}
+            onDelete={actions.onDelete}
+            onRefer={actions.onRefer}
+          />
         ) : undefined
       }
     >

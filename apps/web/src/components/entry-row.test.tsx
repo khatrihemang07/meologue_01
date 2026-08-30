@@ -1,8 +1,12 @@
 import type { Entry } from "@meologue/core";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
+import { MemoryRouter, Outlet, Route, Routes } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as entryDayModule from "@/lib/entry-day";
+import { entryReferenceQueryKey } from "@/lib/query-keys";
+import type { EntryStoreOutletContext } from "@/pages/entry-store-layout";
 import { EntryRow } from "./entry-row";
 
 function entry(overrides: Partial<Entry>): Entry {
@@ -35,6 +39,49 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
+
+/**
+ * A date Reference's own renderer (entry-row.tsx's `DateReferenceLink`)
+ * reads `dayHasEntries` off `useEntryStore()` and resolves it through
+ * TanStack Query — this stands EntryRow up inside the same outlet-context
+ * plus router plus query-client wiring composer-page.test.tsx uses for the
+ * page above it, scoped down to a bare `<EntryRow>`.
+ */
+function renderEntryRow(
+  target: Entry,
+  overrides: Partial<EntryStoreOutletContext> = {},
+  query = "",
+  queryClient = new QueryClient(),
+) {
+  const context: EntryStoreOutletContext = {
+    entries: [],
+    pagination: { hasMore: false, fetching: false, fetchMore: vi.fn() },
+    sendEntry: vi.fn(),
+    search: vi.fn(async () => []),
+    getEntries: vi.fn(async () => []),
+    editEntry: vi.fn(),
+    removeEntry: vi.fn(),
+    disabled: false,
+    ...overrides,
+  };
+  return {
+    queryClient,
+    ...render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter>
+          <Routes>
+            <Route element={<Outlet context={context} />}>
+              <Route
+                path="/"
+                element={<EntryRow entry={target} syncEnabled={false} query={query} />}
+              />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    ),
+  };
+}
 
 describe("EntryRow", () => {
   it("renders an Entry's body plain when no query is given", () => {
@@ -135,7 +182,7 @@ describe("EntryRow", () => {
         <EntryRow
           entry={entry({ body: "hello" })}
           syncEnabled={false}
-          actions={{ onEdit: vi.fn(), onDelete: vi.fn(), onOpenSheet: vi.fn() }}
+          actions={{ onEdit: vi.fn(), onDelete: vi.fn(), onRefer: vi.fn(), onOpenSheet: vi.fn() }}
         />,
       );
 
@@ -160,12 +207,13 @@ describe("EntryRow", () => {
         <EntryRow
           entry={entry({ body: "hello" })}
           syncEnabled={false}
-          actions={{ onEdit: vi.fn(), onDelete: vi.fn(), onOpenSheet: vi.fn() }}
+          actions={{ onEdit: vi.fn(), onDelete: vi.fn(), onRefer: vi.fn(), onOpenSheet: vi.fn() }}
         />,
       );
 
       expect(screen.getByLabelText("Edit")).toBeInTheDocument();
       expect(screen.getByLabelText("Delete")).toBeInTheDocument();
+      expect(screen.getByLabelText("Refer to this Entry")).toBeInTheDocument();
     });
 
     it("calls onEdit with the whole Entry when the Edit button is pressed", () => {
@@ -176,7 +224,7 @@ describe("EntryRow", () => {
         <EntryRow
           entry={target}
           syncEnabled={false}
-          actions={{ onEdit, onDelete, onOpenSheet: vi.fn() }}
+          actions={{ onEdit, onDelete, onRefer: vi.fn(), onOpenSheet: vi.fn() }}
         />,
       );
 
@@ -203,7 +251,7 @@ describe("EntryRow", () => {
         <EntryRow
           entry={target}
           syncEnabled={false}
-          actions={{ onEdit, onDelete, onOpenSheet: vi.fn() }}
+          actions={{ onEdit, onDelete, onRefer: vi.fn(), onOpenSheet: vi.fn() }}
         />,
       );
 
@@ -211,6 +259,24 @@ describe("EntryRow", () => {
 
       expect(onDelete).toHaveBeenCalledWith(target);
       expect(onEdit).not.toHaveBeenCalled();
+    });
+
+    // Issue #144: unlike Delete, Refer calls straight through with no
+    // confirm step in between (entry-actions.tsx's own comment on why).
+    it("calls onRefer with the whole Entry when the Refer button is pressed", () => {
+      const onRefer = vi.fn();
+      const target = entry({ body: "hello" });
+      render(
+        <EntryRow
+          entry={target}
+          syncEnabled={false}
+          actions={{ onEdit: vi.fn(), onDelete: vi.fn(), onRefer, onOpenSheet: vi.fn() }}
+        />,
+      );
+
+      fireEvent.click(screen.getByLabelText("Refer to this Entry"));
+
+      expect(onRefer).toHaveBeenCalledWith(target);
     });
   });
 
@@ -229,7 +295,7 @@ describe("EntryRow", () => {
           <EntryRow
             entry={entry({ body: "hello" })}
             syncEnabled={false}
-            actions={{ onEdit: vi.fn(), onDelete: vi.fn(), onOpenSheet }}
+            actions={{ onEdit: vi.fn(), onDelete: vi.fn(), onRefer: vi.fn(), onOpenSheet }}
           />,
         );
 
@@ -261,7 +327,7 @@ describe("EntryRow", () => {
         <EntryRow
           entry={target}
           syncEnabled={false}
-          actions={{ onEdit: vi.fn(), onDelete: vi.fn(), onOpenSheet }}
+          actions={{ onEdit: vi.fn(), onDelete: vi.fn(), onRefer: vi.fn(), onOpenSheet }}
         />,
       );
 
@@ -278,7 +344,7 @@ describe("EntryRow", () => {
         <EntryRow
           entry={entry({ body: "hello" })}
           syncEnabled={false}
-          actions={{ onEdit: vi.fn(), onDelete: vi.fn(), onOpenSheet }}
+          actions={{ onEdit: vi.fn(), onDelete: vi.fn(), onRefer: vi.fn(), onOpenSheet }}
         />,
       );
 
@@ -360,6 +426,201 @@ describe("EntryRow", () => {
 
       expect(screen.getByText("goodbye")).toBeInTheDocument();
       expect(clockSpy).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  // Issue #142: a `[[YYYY-MM-DD]]` date Reference resolves through
+  // entryBodyContent's own `refs.date` renderer (entry-row.tsx's
+  // `DateReferenceLink`), which is the single choke point both this
+  // component and the Entry bubble render an Entry's body through.
+  describe("a date Reference", () => {
+    it("renders as a link to the Composer, seeking that day, once the day is confirmed to hold Entries", async () => {
+      const dayHasEntries = vi.fn(async () => true);
+      renderEntryRow(entry({ body: "see [[2026-08-28]] for context" }), { dayHasEntries });
+
+      const link = await screen.findByRole("link", { name: /2026-08-28/ });
+      expect(link).toHaveAttribute("href", "/composer?d=2026-08-28");
+      // The visible text stays the literal mark, per the "a Reference keeps
+      // its literal text" rule — only the accessible name says where it
+      // goes.
+      expect(link).toHaveTextContent("[[2026-08-28]]");
+      expect(dayHasEntries).toHaveBeenCalledWith("2026-08-28");
+    });
+
+    it("says where it goes in its accessible name, distinct from its literal visible text", async () => {
+      const dayHasEntries = vi.fn(async () => true);
+      renderEntryRow(entry({ body: "[[2026-08-28]]" }), { dayHasEntries });
+
+      const link = await screen.findByRole("link");
+      expect(link.getAttribute("aria-label")).not.toBe("[[2026-08-28]]");
+      expect(link.getAttribute("aria-label")).toMatch(/2026-08-28/);
+    });
+
+    it("renders as literal text, not a link, once the day is confirmed to hold no Entries", async () => {
+      const dayHasEntries = vi.fn(async () => false);
+      renderEntryRow(entry({ body: "see [[2026-08-28]] for context" }), { dayHasEntries });
+
+      await screen.findByText("see [[2026-08-28]] for context");
+      expect(screen.queryByRole("link", { name: /2026-08-28/ })).not.toBeInTheDocument();
+    });
+
+    it("renders as literal text while the day-has-Entries check is still resolving", () => {
+      const dayHasEntries = vi.fn(() => new Promise<boolean>(() => {})); // never resolves
+      renderEntryRow(entry({ body: "[[2026-08-28]]" }), { dayHasEntries });
+
+      expect(screen.getByText("[[2026-08-28]]")).toBeInTheDocument();
+      expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    });
+
+    it("renders as literal text, and never probes anything, when no dayHasEntries is available at all", () => {
+      renderEntryRow(entry({ body: "[[2026-08-28]]" }));
+
+      expect(screen.getByText("[[2026-08-28]]")).toBeInTheDocument();
+      expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    });
+
+    // The parser's own guarantee (inline-markdown.ts's `parseReferenceDate`)
+    // is that a shape which is not a real calendar day never becomes a
+    // DateReference node at all — asserted here end to end, through
+    // entryBodyContent, rather than only at the parser's own level.
+    it("never reaches the renderer at all when the date is not a real calendar day", () => {
+      const dayHasEntries = vi.fn(async () => true);
+      renderEntryRow(entry({ body: "[[2026-13-45]]" }), { dayHasEntries });
+
+      expect(screen.getByText("[[2026-13-45]]")).toBeInTheDocument();
+      expect(screen.queryByRole("link")).not.toBeInTheDocument();
+      expect(dayHasEntries).not.toHaveBeenCalled();
+    });
+
+    it("highlights a Search match inside the literal text of an unresolved Reference", () => {
+      renderEntryRow(entry({ body: "[[2026-13-45]]" }), {}, "2026");
+
+      expect(screen.getByText("2026", { selector: "mark" })).toBeInTheDocument();
+    });
+  });
+
+  // Issue #143: an Entry Reference's own renderer (entry-row.tsx's
+  // `EntryReferenceLink`) reads `getEntry` off `useEntryStore()` and
+  // resolves it through TanStack Query — the same shape `DateReferenceLink`
+  // already proved out above, mirrored test for test on the Entry side of
+  // ADR 0042's "one rule, four causes."
+  describe("an Entry Reference", () => {
+    const targetId = "0192abcd-1234-7890-abcd-0123456789ab";
+
+    function target(overrides: Partial<Entry> = {}): Entry {
+      return entry({
+        id: targetId,
+        body: "See you at the park tomorrow",
+        // Fixed, and far from any run date this suite will ever execute
+        // on — `formatDaySeparator` only special-cases "Today"/"Yesterday"
+        // relative to the real clock, and this test cares about the
+        // generic-date branch, not that one.
+        createdAt: "2020-01-01T09:00:00.000Z",
+        ...overrides,
+      });
+    }
+
+    it("renders a chip carrying the target's day and a snippet of its opening text, inline", async () => {
+      // Host-independent: entryDayKey's day boundary shifts with the
+      // Device's UTC offset, and this suite doesn't otherwise care which
+      // timezone the machine running it is in.
+      vi.spyOn(entryDayModule, "deviceUtcOffsetMinutes").mockReturnValue(0);
+      const getEntry = vi.fn(async () => target());
+      renderEntryRow(entry({ body: `see [[e:${targetId}]] for the plan` }), { getEntry });
+
+      const link = await screen.findByRole("link");
+      expect(link).toHaveAttribute("href", `/composer?e=${targetId}`);
+      expect(link).toHaveTextContent(/2020/);
+      expect(link).toHaveTextContent("See you at the park tomorrow");
+      expect(getEntry).toHaveBeenCalledWith(targetId);
+
+      // Inline, never a block — the real chip sits inside the Entry
+      // bubble's own body span, sharing a line box with a right-floated
+      // clock (ADR 0036); see inline-prose.test.tsx's "never renders a
+      // block element" test for the fuller version of this same guard.
+      expect(link.tagName).toBe("A");
+      for (const tag of ["div", "p", "ul", "ol", "li", "blockquote", "pre", "table"]) {
+        expect(link.querySelectorAll(tag).length).toBe(0);
+      }
+    });
+
+    it("updates the chip once the target's cache entry is invalidated, the same way an edit does", async () => {
+      const getEntry = vi
+        .fn()
+        .mockResolvedValueOnce(target({ body: "the old opening line" }))
+        .mockResolvedValueOnce(target({ body: "the edited opening line" }));
+      const { queryClient } = renderEntryRow(entry({ body: `[[e:${targetId}]]` }), { getEntry });
+
+      await screen.findByText("the old opening line");
+
+      // Stands in for what a real edit does: `refreshNewestEntriesPage`
+      // (entries-pagination.ts) invalidates this exact query key on every
+      // local write. This test only needs to prove the chip is wired to
+      // that cache entry — ADR 0042's "resolves live, not from a
+      // snapshot" — not re-exercise the write path that triggers it.
+      await queryClient.invalidateQueries({ queryKey: entryReferenceQueryKey(targetId) });
+
+      await screen.findByText("the edited opening line");
+      expect(screen.queryByText("the old opening line")).not.toBeInTheDocument();
+    });
+
+    it("renders as literal text, not a chip, once the target is confirmed unresolvable", async () => {
+      const getEntry = vi.fn(async () => undefined);
+      renderEntryRow(entry({ body: `see [[e:${targetId}]] for the plan` }), { getEntry });
+
+      await waitFor(() => expect(getEntry).toHaveBeenCalledWith(targetId));
+      expect(screen.getByText(`see [[e:${targetId}]] for the plan`)).toBeInTheDocument();
+      expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    });
+
+    it("renders as literal text while the lookup is still resolving", () => {
+      const getEntry = vi.fn(() => new Promise<Entry | undefined>(() => {})); // never resolves
+      renderEntryRow(entry({ body: `[[e:${targetId}]]` }), { getEntry });
+
+      expect(screen.getByText(`[[e:${targetId}]]`)).toBeInTheDocument();
+      expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    });
+
+    it("renders as literal text, and never probes anything, when no getEntry is available at all", () => {
+      renderEntryRow(entry({ body: `[[e:${targetId}]]` }));
+
+      expect(screen.getByText(`[[e:${targetId}]]`)).toBeInTheDocument();
+      expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    });
+
+    // The parser's own guarantee (inline-markdown.ts's `ENTRY_SHAPE`) is
+    // that a mark whose id isn't a well-formed uuid never becomes an
+    // EntryReference node at all — asserted end to end, through
+    // entryBodyContent, mirroring the malformed-date test above.
+    it("never reaches the renderer at all when the id is not a well-formed uuid", () => {
+      const getEntry = vi.fn(async () => target());
+      renderEntryRow(entry({ body: "[[e:not-a-uuid]]" }), { getEntry });
+
+      expect(screen.getByText("[[e:not-a-uuid]]")).toBeInTheDocument();
+      expect(screen.queryByRole("link")).not.toBeInTheDocument();
+      expect(getEntry).not.toHaveBeenCalled();
+    });
+
+    // The chip's snippet is a DIFFERENT Entry's words — the Search query
+    // matched this Entry's own body, never the target's — so a match that
+    // happens to also appear inside the target's snippet must not be
+    // painted. Structural, not incidental: `entryBodyContent`'s `query`
+    // never reaches `EntryReferenceLink` at all (inline-prose.tsx's
+    // `ReferenceRenderers.entry` signature carries only `entryId`/`raw`),
+    // which is what this proves.
+    it("never highlights a Search match inside the chip's snippet, but still highlights it in the surrounding text", async () => {
+      const getEntry = vi.fn(async () => target({ body: "a matching word inside the target" }));
+      renderEntryRow(
+        entry({ body: `a matching word before [[e:${targetId}]]` }),
+        { getEntry },
+        "matching",
+      );
+
+      await screen.findByText("a matching word inside the target");
+
+      const marks = screen.getAllByText("matching", { selector: "mark" });
+      expect(marks).toHaveLength(1);
+      expect(marks[0]?.closest("a")).toBeNull();
     });
   });
 });

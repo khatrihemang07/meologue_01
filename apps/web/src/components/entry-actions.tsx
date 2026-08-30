@@ -16,12 +16,16 @@
  *   regardless of how many rows exist, driven by "which Entry is open"
  *   state that lives in `history.tsx`, not here and not per-row. Since #127
  *   a leftward swipe is what opens it, and it carries Copy alongside Edit
- *   and Delete.
+ *   and Delete. Issue #144 adds Refer to both pieces — unlike Copy, it
+ *   belongs on a mouse's hover row too, since nothing native already gives
+ *   a pointer device a way to write a Reference mark.
  *
  * Neither of them deletes. Both report the choice through `onDelete` and
  * let `history.tsx` decide what it means — which is where the confirm
  * dialog issue #82 put in front of Delete actually lives, so one dialog
- * serves every row instead of one per row.
+ * serves every row instead of one per row. Refer needs no such detour: it
+ * calls straight through to `onRefer`, because putting text in the
+ * Composer cannot fail the way a delete or a clipboard write can.
  *
  * `hoverCapable()` is what lets both `entry-row.tsx` (deciding whether a
  * right-click should open the sheet) and this file split on "can this
@@ -31,7 +35,7 @@
  * touchscreen Windows laptop and a phone can both run the "web" build).
  */
 import type { Entry } from "@meologue/core";
-import { CopyIcon, PencilIcon, Trash2Icon } from "lucide-react";
+import { CopyIcon, Link2Icon, PencilIcon, Trash2Icon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
@@ -56,6 +60,16 @@ export interface EntryHoverActionsProps {
   entry: Entry;
   onEdit: (entry: Entry) => void;
   onDelete: (entry: Entry) => void;
+  /**
+   * Puts a Reference to this Entry (`[[e:<id>]]`, ADR 0042) into the
+   * Composer — issue #144's third affordance, added here alongside
+   * Edit/Delete rather than left off the way Copy was (#127's own
+   * `EntryActionsSheet` comment): Copy was withheld from a mouse because a
+   * pointer device can already select-and-copy natively, but nothing native
+   * writes a Reference mark, so there is no reason to make a mouse reach it
+   * only through the sheet.
+   */
+  onRefer: (entry: Entry) => void;
 }
 
 /**
@@ -91,7 +105,7 @@ export interface EntryHoverActionsProps {
  * current input method, so this holds even for a keyboard-only user on an
  * ordinary mouse-equipped laptop.
  */
-export function EntryHoverActions({ entry, onEdit, onDelete }: EntryHoverActionsProps) {
+export function EntryHoverActions({ entry, onEdit, onDelete, onRefer }: EntryHoverActionsProps) {
   return (
     <div
       className={cn(
@@ -118,6 +132,23 @@ export function EntryHoverActions({ entry, onEdit, onDelete }: EntryHoverActions
         }}
       >
         <PencilIcon />
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        aria-label="Refer to this Entry"
+        // Same stopPropagation reasoning as Edit above. Unlike Edit/Delete,
+        // there is nothing to report upward and wait on — inserting a
+        // Reference into the Composer can't fail the way Delete or Copy
+        // can, so this calls straight through with no requester/confirm
+        // step in between.
+        onClick={(event) => {
+          event.stopPropagation();
+          onRefer(entry);
+        }}
+      >
+        <Link2Icon />
       </Button>
       <Button
         type="button"
@@ -157,6 +188,14 @@ export interface EntryActionsSheetProps {
    */
   onCopy: (entry: Entry) => void;
   onDelete: (entry: Entry) => void;
+  /**
+   * Puts a Reference to this Entry (`[[e:<id>]]`, ADR 0042) into the
+   * Composer (issue #144) and closes the sheet. Like Copy, and unlike
+   * Delete, nothing here can fail in a way worth pausing for — there is no
+   * confirmation step, and this calls straight through rather than routing
+   * through a requester the way `onDelete` does.
+   */
+  onRefer: (entry: Entry) => void;
 }
 
 /**
@@ -186,6 +225,7 @@ export function EntryActionsSheet({
   onOpenChange,
   onEdit,
   onCopy,
+  onRefer,
   onDelete,
 }: EntryActionsSheetProps) {
   return (
@@ -221,6 +261,21 @@ export function EntryActionsSheet({
         >
           <CopyIcon />
           Copy
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="lg"
+          className="justify-start gap-2"
+          onClick={() => {
+            if (entry) {
+              onRefer(entry);
+            }
+            onOpenChange(false);
+          }}
+        >
+          <Link2Icon />
+          Refer to this Entry
         </Button>
         <Button
           type="button"

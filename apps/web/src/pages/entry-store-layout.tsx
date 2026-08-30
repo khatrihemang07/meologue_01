@@ -4,6 +4,9 @@ import { queryOptions, useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { Outlet, useOutletContext } from "react-router";
 import { type UseHistoryPagination, useHistory } from "@/hooks/use-history";
+import { dayHasEntries } from "@/lib/day-has-entries";
+import { dayReferrers } from "@/lib/day-referrers";
+import { deviceUtcOffsetMinutes } from "@/lib/entry-day";
 import { SecondTabError, StorageUnavailableError } from "@/lib/entry-store-errors";
 import { ENTRY_STORE_QUERY_KEY } from "@/lib/query-keys";
 import { createDriver } from "@/platform/sqlite-driver";
@@ -26,6 +29,71 @@ export interface EntryStoreOutletContext {
    * first.
    */
   getEntries: (ids: string[]) => Promise<Entry[]>;
+  /**
+   * Whether a local day (YYYY-MM-DD) holds at least one live Entry (issue
+   * #142) — day-has-entries.ts's own `dayHasEntries`, exposed as a context
+   * function the same way `search`/`getEntries` above are, rather than the
+   * raw store: entry-row.tsx's date-Reference link (via
+   * use-day-has-entries.ts) is this field's one caller, and it needs
+   * exactly this answer, not `EntryStore.list` itself.
+   *
+   * Optional, unlike `search`/`getEntries`: every other page that builds
+   * this context — reflection-page.tsx's and digest-reader-page.tsx's own
+   * tests among them, none of which know a date Reference exists — has no
+   * reason to supply it, and `use-day-has-entries.ts`'s own hook already
+   * treats "no probe available" the same as "still resolving": the
+   * Reference simply stays its literal text, the same "unresolved is plain
+   * text" rule inline-prose.tsx already applies to a removed Entry or a
+   * malformed mark.
+   */
+  dayHasEntries?: (dayKey: string) => Promise<boolean>;
+  /**
+   * The later Entries that Refer to a local day (YYYY-MM-DD) (issue #147,
+   * ADR 0042's own "a day can also be asked what Refers to it") —
+   * day-referrers.ts's own `dayReferrers`, exposed as a context function the
+   * same way `dayHasEntries` above is, rather than the raw store:
+   * history.tsx's own day-adjacent row (via use-day-referrers.ts) is this
+   * field's one caller, and it needs exactly this answer, not
+   * `EntryStore.search` itself (ADR 0042's "day shows what Refers to it" is
+   * two steps — narrowing with search, then confirming by parsing — and
+   * `dayReferrers` is where both live, not here).
+   *
+   * Optional, unlike `search`/`getEntries`, for the same reason
+   * `dayHasEntries` is: every other page that builds this context has no
+   * reason to supply it, and `use-day-referrers.ts`'s own hook already
+   * treats "no probe available" the same as "still resolving" — a day
+   * renders as having nothing Referring to it either way.
+   */
+  dayReferrers?: (dayKey: string) => Promise<Entry[]>;
+  /**
+   * Resolves one Entry Reference's target by id (issue #143) — the chip's
+   * own probe, `entry-row.tsx`'s `EntryReferenceLink` (via
+   * `use-entry-reference.ts`) is its one caller. Returns `undefined` for an
+   * id `getMany` doesn't hand back — a tombstoned Entry, or one that hasn't
+   * Synced to this Device yet — which is exactly the "unresolvable" case
+   * the chip renders as plain text (ADR 0042's "one rule, four causes").
+   *
+   * Built on `EntryStore.getMany`, the same primitive `getEntries` above
+   * already wraps, rather than widening `EntryStore` with a singular
+   * lookup of its own. Kept as its own field instead of reusing `getEntries`
+   * directly: `getEntries` is keyed by reflection-page.tsx's own
+   * `groundingEntriesQueryKey` — the *set* of ids one Grounding disclosure
+   * needs at once, refetched together whenever that set changes — while a
+   * chip needs its own target cached per id alone
+   * (`entryReferenceQueryKey`), so two chips pointing at the same Entry
+   * anywhere in the app share one lookup regardless of what else either of
+   * them also happens to reference. A second field is what keeps those two
+   * cache shapes independent without teaching `getEntries`'s callers about
+   * per-id caching they have no use for.
+   *
+   * Optional, unlike `getEntries`: the same reasoning as `dayHasEntries`
+   * just above — every outlet-context builder that predates this ticket
+   * (reflection-page.test.tsx and digest-reader-page.test.tsx among them)
+   * has no reason to know an Entry Reference exists, and
+   * `use-entry-reference.ts`'s own hook already treats "no probe supplied"
+   * the same as "still resolving."
+   */
+  getEntry?: (entryId: string) => Promise<Entry | undefined>;
   /** ADR 0028 — see use-history.ts's own doc comment for what these do and why removeEntry takes the whole Entry. */
   editEntry: (id: string, body: string) => void;
   removeEntry: (entry: Entry) => void;
@@ -97,6 +165,27 @@ async function noopSearch(): Promise<Entry[]> {
 }
 
 async function noopGetEntries(): Promise<Entry[]> {
+  return [];
+}
+
+// Before the store opens there are no Entries to find on any day (`entries:
+// []` above already says as much); this is the `dayHasEntries` field's own
+// stand-in for that same not-ready state.
+async function noopDayHasEntries(): Promise<boolean> {
+  return false;
+}
+
+// `getEntry`'s own not-ready stand-in, mirroring `noopDayHasEntries` just
+// above: nothing can be resolved before the store opens, and `undefined` is
+// already this field's own "unresolvable" answer, not a special case for it.
+async function noopGetEntry(): Promise<Entry | undefined> {
+  return undefined;
+}
+
+// `dayReferrers`'s own not-ready stand-in, mirroring `noopDayHasEntries`:
+// nothing has Referred to any day before the store opens, and an empty
+// array is already this field's own "nothing found" answer.
+async function noopDayReferrers(): Promise<Entry[]> {
   return [];
 }
 
@@ -267,6 +356,11 @@ export function EntryStoreLayout() {
               sendEntry,
               search: (query: string) => store.search(query),
               getEntries: (ids: string[]) => store.getMany(ids),
+              dayHasEntries: (dayKey: string) =>
+                dayHasEntries(store, dayKey, deviceUtcOffsetMinutes()),
+              dayReferrers: (dayKey: string) =>
+                dayReferrers(store, dayKey, deviceUtcOffsetMinutes()),
+              getEntry: (entryId: string) => store.getMany([entryId]).then((found) => found.at(0)),
               editEntry,
               removeEntry,
               disabled: false,
@@ -277,6 +371,9 @@ export function EntryStoreLayout() {
               sendEntry: noop,
               search: noopSearch,
               getEntries: noopGetEntries,
+              dayHasEntries: noopDayHasEntries,
+              dayReferrers: noopDayReferrers,
+              getEntry: noopGetEntry,
               editEntry: noopEdit,
               removeEntry: noopRemove,
               disabled: true,

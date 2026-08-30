@@ -45,3 +45,56 @@ export function digestAtQueryKey(period: string, date: string) {
 export function groundingEntriesQueryKey(ids: string[]) {
   return [...ENTRIES_QUERY_KEY, "grounding", ids] as const;
 }
+
+/**
+ * Issue #142: a date Reference's own "does this day have anything to link
+ * to?" check (`dayHasEntries`, day-has-entries.ts). A child of
+ * ENTRIES_QUERY_KEY, same reasoning as `groundingEntriesQueryKey` above —
+ * this reads Entries the same local store does, just keyed by day rather
+ * than by id set. Keyed on the day alone, not the Device's UTC offset too:
+ * the offset is read once per Device per session (deviceUtcOffsetMinutes,
+ * entry-day.ts) and does not vary per Reference, so folding it into the key
+ * would only ever produce one value in practice while making every day's
+ * cache entry harder to read in devtools.
+ */
+export function dayHasEntriesQueryKey(dayKey: string) {
+  return [...ENTRIES_QUERY_KEY, "day-has-entries", dayKey] as const;
+}
+
+/**
+ * Issue #143: an Entry Reference's own "what does the target look like right
+ * now?" probe (`getEntry`, entry-store-layout.tsx), which the chip
+ * (entry-row.tsx's `EntryReferenceLink`) resolves through. A child of
+ * ENTRIES_QUERY_KEY, same shape as `dayHasEntriesQueryKey` above — this
+ * reads Entries the same local store does, just keyed by the target's id
+ * rather than by day. Keyed on that id alone, so every chip anywhere in the
+ * app pointing at the same Entry shares one cache entry and the probe runs
+ * at most once per distinct target, not once per occurrence.
+ *
+ * `refreshNewestEntriesPage` (entries-pagination.ts) invalidates this same
+ * prefix on every local write, the same way it does for Search — that is
+ * what makes a chip's snippet live rather than a snapshot: editing the
+ * target invalidates its cache entry, so every mounted chip pointing at it
+ * refetches and shows the new text.
+ */
+export function entryReferenceQueryKey(entryId: string) {
+  return [...ENTRIES_QUERY_KEY, "entry-reference", entryId] as const;
+}
+
+/**
+ * Issue #147: a day's own "what Refers to me?" lookup (`dayReferrers`,
+ * day-referrers.ts) — the reverse of `dayHasEntriesQueryKey` above. A
+ * child of ENTRIES_QUERY_KEY for the same reason every sibling key here
+ * is: this reads Entries the same local store does, just by which day's
+ * text they match rather than by page, id set, or single id. Keyed on the
+ * day alone, same reasoning as `dayHasEntriesQueryKey`.
+ *
+ * `refreshNewestEntriesPage` (entries-pagination.ts) invalidates this same
+ * prefix on every local write, the same way it already does for Search and
+ * `entryReferenceQueryKey` — a new `[[date]]` Reference, or removing/editing
+ * an Entry that carried one, has to be reflected in what a day reports it's
+ * Referred by.
+ */
+export function dayReferrersQueryKey(dayKey: string) {
+  return [...ENTRIES_QUERY_KEY, "day-referrers", dayKey] as const;
+}
