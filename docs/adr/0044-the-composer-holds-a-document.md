@@ -225,6 +225,23 @@ practice: disable the mid-word inline rules (bold/italic/code) on Android only, 
 line-start rules (list/checkbox markers, which trigger on a trailing space rather than mid-word and
 are far less exposed to this class of bug).
 
+**That gate has now been run, and the fallback was not needed.** Verified on a physical Android
+device (vivo I2301, Android WebView, Gboard) against the Sandbox build, driving the on-screen
+keyboard itself — tapping its keys, so the OS opens a real composing region — rather than injecting
+text through `adb shell input text`, which commits directly and would have proved nothing about
+composition at all. Typing `foo**bar**` with no space before the marker, so the mark opens mid-word,
+produced `foo` followed by a bold `bar` with the asterisks consumed, while Gboard's own suggestion
+strip was actively offering completions across the whole run. Autocorrect was confirmed live in the
+same way: `teh` typed by key taps left the word composing with `the` offered in the strip, and
+committed cleanly on space. Bullet, ordered and checkbox rules were confirmed on the same device, as
+was ticking a rendered checkbox in History and the tick surviving a restart of the app.
+
+Two of issue #156's criteria remain genuinely unverified, and are called out rather than implied:
+**swipe typing**, and **a keyboard other than Gboard**. Neither can be driven from `adb` — swipe is a
+continuous gesture the IME interprets itself, and a second keyboard has to be installed and selected
+by hand — so both need a person at the device. Nothing found so far suggests they will fail, but that
+is an expectation, not a result.
+
 **Two NodeViews exist purely to fill in rendering `entry-schema.ts` (issue #154) never needed to
 supply, since it was built with no `EditorView` in sight.** `paragraph` and `reference` have no
 `toDOM` in the shared schema at all; `list_item` inherits a working one from `prosemirror-schema-list`
