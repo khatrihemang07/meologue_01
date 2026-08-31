@@ -10,7 +10,7 @@ import type { Entry } from "@meologue/core";
 import { type MouseEvent, memo, type ReactNode, useState } from "react";
 import { Link } from "react-router";
 import { EntryHoverActions, hoverCapable } from "@/components/entry-actions";
-import { inlineProse } from "@/components/inline-prose";
+import { entryProse } from "@/components/entry-prose";
 import { useDayHasEntries } from "@/hooks/use-day-has-entries";
 import { useEntryReference } from "@/hooks/use-entry-reference";
 import {
@@ -26,7 +26,9 @@ import { useEntryStore } from "@/pages/entry-store-layout";
 
 /**
  * One `[[YYYY-MM-DD]]` date Reference (issue #142), rendered by
- * `entryBodyContent` below wherever `inlineProse` finds one.
+ * `entryBodyContent` below wherever `entryProse` (entry-prose.tsx) finds
+ * one — `entryProse` is an Entry's own path onto `inlineProse`'s walker
+ * (issue #148), which is what actually parses the mark.
  *
  * A component of its own, not a plain render callback: `useDayHasEntries`
  * needs its own hook state per Reference, and a body can carry more than
@@ -82,7 +84,7 @@ const ENTRY_SNIPPET_MAX_LENGTH = 40;
  * prose.
  *
  * Goes through `parseInlineMarkdown`/`inlineNodesToText` (inline-markdown.ts)
- * rather than `entryBodyContent`/`inlineProse` below: those render the
+ * rather than `entryBodyContent`/`entryProse` below: those render the
  * target's own marks — bold text stays bold, a nested Reference resolves to
  * its own chip — which is right for reading that Entry on its own terms, but
  * wrong for a two-line preview sitting inside a Reference already carrying
@@ -107,11 +109,11 @@ export function entrySnippet(body: string): string {
 
 /**
  * One `[[e:<uuid>]]` Entry Reference (issue #143), rendered by
- * `entryBodyContent` below wherever `inlineProse` finds one — the Entry
- * chip's own analogue of `DateReferenceLink` just above, following the same
- * shape for the same reasons (see that component's own comment for why this
- * needs to be a component of its own, and why it reads its probe off
- * `useEntryStore()` instead of taking it as a prop).
+ * `entryBodyContent` below wherever `entryProse` (entry-prose.tsx) finds
+ * one — the Entry chip's own analogue of `DateReferenceLink` just above,
+ * following the same shape for the same reasons (see that component's own
+ * comment for why this needs to be a component of its own, and why it
+ * reads its probe off `useEntryStore()` instead of taking it as a prop).
  *
  * Resolves live, through `useEntryReference` (a TanStack Query keyed on the
  * target's id — see that hook and `entryReferenceQueryKey`'s own comments),
@@ -189,9 +191,15 @@ function EntryReferenceLink({ entryId, raw }: { entryId: string; raw: string }) 
  *
  * Shared rather than reimplemented so the *words* still cannot drift between
  * History and Grounding, which is what `EntryBody`'s own extraction was for.
+ *
+ * Renders through `entryProse` (entry-prose.tsx), an Entry's own path onto
+ * the shared walker (issue #148) — every other prose surface still calls
+ * `inlineProse` directly. `entryProse` is a pure pass-through today; the
+ * seam exists so an Entry's body can later gain block structure a Digest
+ * must never see, without touching what any other surface renders through.
  */
 export function entryBodyContent(body: string, query: string): ReactNode {
-  return inlineProse(body, query, {
+  return entryProse(body, query, {
     date: (node, key) => <DateReferenceLink key={key} date={node.date} raw={node.raw} />,
     entry: (node, key) => <EntryReferenceLink key={key} entryId={node.entryId} raw={node.raw} />,
   });
