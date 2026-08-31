@@ -33,11 +33,16 @@ describe("inlineProse", () => {
     expect(screen.getByText("code", { selector: "code" })).toBeInTheDocument();
   });
 
-  // The single most important test in this file: it guards ADR 0036's
-  // floated clock (which needs the Entry bubble to be one line box) and
-  // the Digest card's scrollHeight/lineHeight line-count clamp. Both break
-  // silently — and "passed every test, wrong on screen" — the moment a
-  // block element sneaks into an Entry's or a Digest's prose.
+  // The single most important test in this file: it guards the Digest
+  // card's scrollHeight/lineHeight line-count clamp (`useFittedDigests`,
+  // digest-page.tsx), which only means anything while the measured element
+  // is one box of uniform inline lines. That breaks silently — and "passed
+  // every test, wrong on screen" — the moment a block element sneaks into
+  // a Digest's prose. (An Entry's own prose no longer shares this
+  // constraint the same way: `entryProse`, entry-prose.tsx's seam onto
+  // this same walker, is issue #148's deliberate point where the two can
+  // diverge, and issue #149 moved the Entry bubble's clock off the float
+  // that used to require its body to stay one line box too.)
   it("never renders a block element, for any input including block-looking syntax", () => {
     const blockTags = [
       "p",

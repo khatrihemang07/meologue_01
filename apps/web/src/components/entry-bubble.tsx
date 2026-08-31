@@ -87,9 +87,11 @@ export function Bubble({
     >
       <div
         className={cn(
-          // `overflow-hidden` establishes a block formatting context, so a
-          // floated meta line is contained by the bubble rather than
-          // escaping it.
+          // `overflow-hidden` clips content to the `rounded-2xl` corners —
+          // an unbreakable long word or url in the body would otherwise
+          // square off a corner rather than being clipped by it. (It used
+          // to also contain `BubbleMeta`'s right float; issue #149 moved
+          // that onto its own row, which needs no containment of its own.)
           "max-w-full overflow-hidden rounded-2xl px-3 py-2 text-sm",
           // The reader's chosen Accent (#128), mixed against the background
           // rather than laid over it — see index.css. Before this, "out" was
@@ -112,12 +114,20 @@ export function Bubble({
 /**
  * The clock time, and the not-yet-synced marker when there is one.
  *
- * Floated right and rendered AFTER the body, which gives it WhatsApp's own
- * behaviour for free: a float is placed on the current line when there is
- * room and pushed to the next when there is not. So it reflows onto the end
- * of a long Entry's last line and drops to its own right-aligned line under
- * a short one — instead of always taking a whole line, which is what made a
- * one-word Entry cost two.
+ * Its own row below the body (issue #149), not a right float sharing the
+ * body's last line the way it used to. A float needs a line box to land
+ * on, which is what forced the body to stay unwrapped inline content (see
+ * `EntryBubble`'s own comment on the body `<p>` below) — a constraint an
+ * Entry's coming block structure (a list) cannot live with, since a list
+ * has no single line box to share a float with at all.
+ *
+ * Rendered as a block-level flex row (`display: flex` on this element
+ * makes it block-level regardless of tag) so it stacks under the `<p>`
+ * above it and needs no wrapping container of its own. `justify-end`
+ * right-aligns its contents the way the float used to for free. The small
+ * `mt-0.5` and the meta text's own `text-[10px]` are what keep this row
+ * from reading as a second, wasted line under a short Entry — it costs a
+ * sliver of height for the clock, not another full line.
  */
 export function BubbleMeta({
   createdAt,
@@ -133,7 +143,7 @@ export function BubbleMeta({
   };
 
   return (
-    <span className="float-right ml-2 inline-flex translate-y-1 items-center gap-1">
+    <span className="mt-0.5 flex items-center justify-end gap-1">
       {time !== null && (
         <time
           dateTime={createdAt}
@@ -238,10 +248,11 @@ export const EntryBubble = memo(function EntryBubble({
       }
     >
       {/*
-        Inline, not `EntryBody`'s `<p>`: `BubbleMeta` below is a right float,
-        and a float can only be placed on a line box it is in. Wrapped in a
-        block, it has no line to join and drops beneath the whole thing —
-        which is exactly what made a one-word Entry cost two lines.
+        A `<p>` of its own now (issue #149) — the body used to be unwrapped
+        inline content here, denied `EntryBody`'s own `<p>`, because
+        `BubbleMeta` below was a right float that needed a line box in the
+        body to land on. With the clock on its own row instead, nothing
+        here still requires the body to stay unwrapped.
       */}
       {/*
         The one thing text size scales (#128). `BubbleMeta` below, the day
@@ -252,12 +263,12 @@ export const EntryBubble = memo(function EntryBubble({
         words and an Answer is not, and scaling one without the other would
         put two sizes of prose in the same thread.
       */}
-      <span
+      <p
         data-slot="bubble-body"
-        className="whitespace-pre-wrap text-[calc(0.875rem*var(--entry-text-scale,1))]"
+        className="min-w-0 whitespace-pre-wrap text-[calc(0.875rem*var(--entry-text-scale,1))]"
       >
         {entryBodyContent(entry.body, query)}
-      </span>
+      </p>
       <BubbleMeta
         createdAt={entry.createdAt}
         showPendingMarker={syncEnabled && entry.seq === null}

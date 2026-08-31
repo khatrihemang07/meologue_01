@@ -535,9 +535,9 @@ describe("EntryRow", () => {
       expect(getEntry).toHaveBeenCalledWith(targetId);
 
       // Inline, never a block — the real chip sits inside the Entry
-      // bubble's own body span, sharing a line box with a right-floated
-      // clock (ADR 0036); see inline-prose.test.tsx's "never renders a
-      // block element" test for the fuller version of this same guard.
+      // bubble's own body `<p>`, among the parsed prose it's a mark in
+      // (ADR 0041); see inline-prose.test.tsx's "never renders a block
+      // element" test for the fuller version of this same guard.
       expect(link.tagName).toBe("A");
       for (const tag of ["div", "p", "ul", "ol", "li", "blockquote", "pre", "table"]) {
         expect(link.querySelectorAll(tag).length).toBe(0);

@@ -65,14 +65,25 @@ describe("EntryBubble", () => {
     expect(bubbleOf(fresh).className).toContain("mt-3");
   });
 
-  // The float is what gives the clock time WhatsApp's behaviour: it sits on
-  // the last line when there is room and drops to its own line when there is
-  // not, instead of always costing a whole line the way a block does.
-  it("floats the clock time so it can share the last line", () => {
+  // Issue #149: the clock moved off a right float (which needed the body
+  // to stay one line box) onto its own row below it, so an Entry can later
+  // hold block content without breaking the float. The meta row is a
+  // sibling of the body `<p>`, not nested inside it, and right-aligns its
+  // own contents rather than relying on float placement to do it.
+  it("puts the clock time on its own row below the body, right-aligned", () => {
     const { container } = render(<EntryBubble entry={entry()} syncEnabled={false} side="out" />);
 
+    const body = container.querySelector('[data-slot="bubble-body"]');
+    expect(body?.tagName).toBe("P");
+
     const meta = container.querySelector("time")?.parentElement;
-    expect(meta?.className).toContain("float-right");
+    expect(meta).not.toBeNull();
+    expect(meta?.className).not.toContain("float-right");
+    expect(meta?.className).toContain("justify-end");
+    // A sibling of the body, not inside it — its own row, not folded into
+    // the body's own line box.
+    expect(meta?.parentElement).toBe(body?.parentElement);
+    expect(body?.contains(meta as Node)).toBe(false);
   });
 
   it("shows the not-yet-synced marker only when Sync is on and the Entry has not landed", () => {

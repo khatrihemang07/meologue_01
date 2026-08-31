@@ -124,11 +124,12 @@ export function entrySnippet(body: string): string {
  * settled yet — into the one rule a date Reference already follows: the
  * literal text the user typed, not interactive.
  *
- * The chip itself is an inline `<a>`, `inline-flex` (never `display:block`,
- * matching `BubbleMeta`'s own floated `<span>` next door): it renders inside
- * `EntryBubble`'s `bubble-body` span, which must stay one line box for
- * `BubbleMeta`'s right-floated clock to share (ADR 0036) — the exact defect
- * that ADR records as "passed every test and was wrong on screen."
+ * The chip itself is an inline `<a>`, `inline-flex` (never `display:block`)
+ * — it renders inline, wherever the parse finds the mark, inside whichever
+ * body element the caller supplies (`EntryBody`'s `<p>` in the list,
+ * `EntryBubble`'s own `<p>` in the thread — see that file's own comment for
+ * why `BubbleMeta` no longer needs the body to stay one line box; issue
+ * #149 moved its clock off the float that used to require that).
  *
  * Deliberately renders the target's own snippet through `entrySnippet`
  * above rather than `entryBodyContent`'s `query`-aware highlighting: the
@@ -163,14 +164,18 @@ function EntryReferenceLink({ entryId, raw }: { entryId: string; raw: string }) 
     <Link
       to={`/composer?e=${entryId}`}
       aria-label={`Open Entry from ${dayLabel ?? "an earlier day"} in History`}
-      // `max-w` leaves room for the clock, and that is load-bearing rather
-      // than cosmetic. An inline-flex box is atomic: it cannot be broken
-      // across lines, so if it is allowed to grow to the full width of the
-      // body there is no space beside it for `BubbleMeta`'s right float, and
-      // the clock drops to a line of its own — ADR 0036's defect exactly,
-      // and one no test in jsdom can see because jsdom does not lay out
-      // floats. Caught by measuring a real bubble in a real browser.
-      className="mx-0.5 inline-flex max-w-[calc(100%-4.5rem)] items-baseline gap-1.5 rounded-full border border-border bg-background/60 px-2 align-baseline text-xs leading-normal underline decoration-dotted underline-offset-2"
+      // `max-w` bounds the chip so `truncate` on its snippet span has a
+      // width to truncate against, rather than growing to whatever the
+      // target's snippet measures. It used to carve out an extra 4.5rem to
+      // leave room for `BubbleMeta`'s right-floated clock on the same line
+      // (issue #149's own float removed that need): an inline-flex box is
+      // atomic and cannot be broken across lines, so with the clock still
+      // sharing the line, letting the chip grow to the body's full width
+      // left the float no room and dropped the clock to a line of its own —
+      // ADR 0036's defect exactly. The clock now sits on its own row below
+      // the body (`BubbleMeta`'s own comment), so nothing on the chip's own
+      // line still needs to be shared with it.
+      className="mx-0.5 inline-flex max-w-full items-baseline gap-1.5 rounded-full border border-border bg-background/60 px-2 align-baseline text-xs leading-normal underline decoration-dotted underline-offset-2"
     >
       {dayLabel !== null && <span className="shrink-0 font-medium">{dayLabel}</span>}
       <span className="truncate">{snippet}</span>
@@ -182,12 +187,13 @@ function EntryReferenceLink({ entryId, raw }: { entryId: string; raw: string }) 
  * An Entry's words with the Search query highlighted, as inline content and
  * nothing else — no block wrapper of its own.
  *
- * Split out of `EntryBody` for `entry-bubble.tsx`. A bubble puts its clock
- * time in a right-floated span after the text so it can share the last line,
- * and a float can only be placed on a line box it is actually in: with the
- * body wrapped in a `<p>`, the float has no line of its own to join and
- * drops beneath the whole block every time. That is what made a one-word
- * Entry cost two lines.
+ * Split out of `EntryBody` for `entry-bubble.tsx`, whose own `<p>` needs a
+ * different className than `EntryBody`'s (the text-size scale variable,
+ * not `EntryBody`'s `flex-1`) — the split is about the wrapper each surface
+ * supplies, not about staying unwrapped. (Before issue #149 it *was* the
+ * latter: a bubble's clock was a right float sharing the body's last line,
+ * which needs a line box to land on, so the body had to stay unwrapped
+ * there specifically. `BubbleMeta`'s own comment has the current shape.)
  *
  * Shared rather than reimplemented so the *words* still cannot drift between
  * History and Grounding, which is what `EntryBody`'s own extraction was for.
