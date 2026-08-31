@@ -56,6 +56,14 @@ test("a formatted Entry is no taller than a plain one, so the clock keeps its li
   await sendEntry(page, word);
   await sendEntry(page, `**${word}**`);
   await expect(page.getByText(word).first()).toBeVisible();
+  // Wait for the FORMATTED one specifically, not merely for the first Entry
+  // carrying `word` — the plain one satisfies that and arrives first, so the
+  // measurement below could run while the bold Entry was still landing and
+  // read its height as null. Typing is slower than it used to be (issue
+  // #155: `sendEntry` presses real keys now, because a bulk `fill()` cannot
+  // drive a ProseMirror `contenteditable`), which widened that window enough
+  // to matter.
+  await expect(page.locator('[data-slot="bubble-body"] strong').first()).toBeVisible();
 
   const heights = await page.evaluate((needle) => {
     const bodies = [...document.querySelectorAll('[data-slot="bubble-body"]')].filter((el) =>
