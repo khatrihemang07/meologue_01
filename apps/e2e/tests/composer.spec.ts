@@ -252,6 +252,50 @@ test("the [[ picker offers a recent day, and choosing one inserts a live Referen
   await expect(reference).toHaveAttribute("contenteditable", "false");
 });
 
+// Regression test for #155 follow-up: typing a Reference by hand, without
+// ever opening the `[[` picker's dropdown, used to leave it as inert
+// paragraph text — `entry-document.ts`'s `escapeUserText` then escaped the
+// `[[` on Send (protecting the round-trip fixpoint for ordinary prose), so
+// a hand-typed Reference could never become a chip. `composer-editor.ts`'s
+// `referenceInputRule` fixes this: it recognises a completed `[[…]]` the
+// same way the picker and `insertAtCursor` already do — reusing
+// `parseReferenceDate`/`parseReferenceEntryId` (inline-markdown.ts), the
+// SAME validation the reader's own parse path uses — so a hand-typed
+// Reference becomes a live node the instant its `]]` completes it.
+test("a hand-typed Reference becomes a live node and survives Send as a chip", async ({ page }) => {
+  const target = uniqueEntryBody("hand-typed-ref-target");
+  await page.goto("/composer");
+  await sendEntry(page, target);
+  const targetId = await waitForEntryId(target, SERVER_A_DATABASE);
+
+  const editor = composerField(page);
+  await editor.click();
+  // No picker involved: `[[e:<uuid>]]` is typed in full, character by
+  // character, exactly as a person would type it from memory.
+  await editor.pressSequentially(`see [[e:${targetId}]]`);
+
+  // Still inside the Composer, before Send: a live, non-editable Reference
+  // node exists — its own NodeView (`referenceNodeView`) is what renders
+  // `[[e:<uuid>]]` on screen, per ADR 0042 ("the characters the user
+  // typed, not interactive" — a chip deliberately shows its `raw` text
+  // rather than a resolved label). That is the distinction that matters:
+  // before this fix, the SAME on-screen characters were inert paragraph
+  // text with no node behind them at all, which `escapeUserText`
+  // (entry-document.ts) then escaped on Send so it could never resolve.
+  const reference = editor.locator("[data-reference]");
+  await expect(reference).toBeVisible();
+  await expect(reference).toHaveAttribute("contenteditable", "false");
+  await expect(reference).toHaveText(`[[e:${targetId}]]`);
+
+  await page.getByRole("button", { name: "Send" }).click();
+
+  // After Send, History renders it as a real chip — the same
+  // `/composer?e=<id>` link a picker-inserted or `insertAtCursor`-inserted
+  // Reference produces (entry-row.tsx).
+  const chip = page.locator(`a[href="/composer?e=${targetId}"]`);
+  await expect(chip.first()).toBeVisible();
+});
+
 // ADR 0044's own load-bearing rule: converting a document back to text
 // normalizes it, so an Entry opened merely to be re-read must never be
 // rewritten, must never Sync, and must never mark a Digest stale. `seq` is

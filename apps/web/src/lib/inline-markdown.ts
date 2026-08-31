@@ -82,6 +82,21 @@ export function parseReferenceDate(text: string): string | null {
 }
 
 /**
+ * A well-formed `e:<uuid>`, not merely something that starts with `e:`.
+ * `[[e:notauuid]]` fails this the same way `[[2026-13-45]]` fails
+ * `parseReferenceDate` — not a real Reference, so it renders as the
+ * characters the user typed. `referenceParser` below and
+ * `composer-editor.ts`'s hand-typed-Reference input rule both check the
+ * shape through this one function rather than each keeping its own copy of
+ * `ENTRY_SHAPE`, so a Reference cannot come to mean one thing when read and
+ * another when composed (ADR 0043's "one dialect").
+ */
+export function parseReferenceEntryId(text: string): string | null {
+  const match = ENTRY_SHAPE.exec(text);
+  return match?.[1] ?? null;
+}
+
+/**
  * `[[…]]`, ours rather than CommonMark's.
  *
  * Installed after Escape so `\[[2026-08-28]]` escapes as the user expects, and

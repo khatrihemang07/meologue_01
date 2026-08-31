@@ -1,8 +1,9 @@
 /**
  * The ProseMirror wiring issue #155 adds on top of `entrySchema`
  * (entry-schema.ts, issue #154): input rules that consume `**`/`*`/`` ` ``/
- * `- `/`1. `/`- [ ] ` as they're typed, the list Enter/lift keymap, and the
- * inline `[[` picker's own ProseMirror-side trigger detection.
+ * `- `/`1. `/`- [ ] ` as they're typed, a hand-typed `[[…]]` that completes a
+ * valid Reference, the list Enter/lift keymap, and the inline `[[` picker's
+ * own ProseMirror-side trigger detection.
  *
  * `prosemirror-markdown` is not a dependency (see entry-document.ts's own
  * module comment and ADR 0044) and none of this reaches for it —
@@ -19,7 +20,8 @@ import { liftListItem, splitListItem } from "prosemirror-schema-list";
 import { Plugin, PluginKey } from "prosemirror-state";
 import { Decoration, DecorationSet, type EditorView, type NodeView } from "prosemirror-view";
 import { derivePicker, type ReferencePickerState } from "@/lib/composer-picker";
-import { entrySchema } from "@/lib/entry-schema";
+import { entrySchema, type ReferenceAttrs } from "@/lib/entry-schema";
+import { parseReferenceDate, parseReferenceEntryId } from "@/lib/inline-markdown";
 
 // ---------------------------------------------------------------------------
 // Typed schema access
@@ -187,6 +189,44 @@ function checkboxInputRule(): InputRule {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Reference input rule: "[[YYYY-MM-DD]]"/"[[e:<uuid>]]" typed by hand
+// ---------------------------------------------------------------------------
+
+/**
+ * Converts a hand-typed `[[…]]` into a live `reference` node the instant its
+ * closing `]]` completes it, rather than requiring the `[[` picker's
+ * dropdown — before this rule, typing a Reference by hand left it as inert
+ * paragraph text, which `entry-document.ts`'s `escapeUserText` then escaped
+ * to `\[[…]]` on Send, so it could never become a chip.
+ *
+ * `inner`'s well-formedness is checked through `parseReferenceDate`/
+ * `parseReferenceEntryId` (inline-markdown.ts) — the SAME functions
+ * `referenceParser` uses to decide whether the reader's own parse path
+ * recognises a mark — rather than a second regex here that could drift
+ * from it (ADR 0044's one-grammar property). `[[not a date]]`,
+ * `[[2026-13-45]]` and `[[e:notauuid]]` all fail both checks and return
+ * `null`, which leaves the typed characters as an ordinary paragraph run:
+ * exactly the text `escapeUserText` still needs to escape for the
+ * round-trip fixpoint to hold.
+ */
+const referenceInputRule = new InputRule(/\[\[([^[\]]*)\]\]$/, (state, match, start, end) => {
+  const inner = match[1];
+  if (inner === undefined) {
+    return null;
+  }
+  const date = parseReferenceDate(inner);
+  const entryId = date === null ? parseReferenceEntryId(inner) : null;
+  if (date === null && entryId === null) {
+    return null;
+  }
+  const attrs: ReferenceAttrs =
+    date !== null
+      ? { kind: "date", raw: match[0], date, entryId: null }
+      : { kind: "entry", raw: match[0], date: null, entryId };
+  return state.tr.replaceRangeWith(start, end, referenceNodeType.create(attrs));
+});
+
 export function buildInputRules(): InputRule[] {
   return [
     strongInputRule,
@@ -195,6 +235,7 @@ export function buildInputRules(): InputRule[] {
     bulletListInputRule,
     orderedListInputRule,
     checkboxInputRule(),
+    referenceInputRule,
   ];
 }
 
