@@ -21,8 +21,10 @@
  * "interesting" bodies, however long, tends to under-sample precisely
  * because a person has to think of each case.
  */
+import type { Node as PMNode } from "prosemirror-model";
 import { describe, expect, it } from "vitest";
 import { entryDocumentToMarkdown, entryMarkdownToDocument } from "./entry-document";
+import { entrySchema } from "./entry-schema";
 
 const ENTRY_ID = "0192abcd-1234-7890-abcd-0123456789ab";
 
@@ -303,5 +305,80 @@ describe("entryDocumentToMarkdown", () => {
 
   it("emits an empty document as an empty string", () => {
     expect(roundTrip("")).toBe("");
+  });
+});
+
+/**
+ * Documents the Composer BUILDS, which the corpus above structurally cannot
+ * reach.
+ *
+ * Every case in `CORPUS` starts life as a Markdown string and is turned into
+ * a document by `entryMarkdownToDocument`. That is only half of what this
+ * serializer is asked to write. The other half is a document ProseMirror
+ * assembled from live keystrokes, and the two disagree about where a blank
+ * line lives: parsing keeps it inside the paragraph's own text (an Entry's
+ * body has always been one string, rendered `whitespace-pre-wrap`), while
+ * pressing Enter genuinely splits the block and leaves the new paragraph's
+ * text bare.
+ *
+ * The gap was not theoretical. `writeBlocks` used to return before writing
+ * any separator for a paragraph, so a live-edited document with two of them
+ * serialized to `"line oneline two"` — an Entry losing its line break the
+ * moment it was Sent — and Enter-ing out of a checklist produced
+ * `"- [ ] call mumafter"`, fusing the trailing prose onto the last item's
+ * text. The fixpoint property above passed straight through both, because
+ * the second pass reproduces the same glued output the first one did.
+ *
+ * These build their documents the way the Composer does, from schema nodes,
+ * which is the only way to see it.
+ */
+describe("documents built by editing, not by parsing", () => {
+  // `noUncheckedIndexedAccess` makes every `schema.nodes[name]` lookup
+  // optional, so these are resolved once through a helper that throws rather
+  // than sprinkling non-null assertions (which Biome's `recommended` refuses)
+  // through the cases below.
+  const nodeType = (name: string) => {
+    const type = entrySchema.nodes[name];
+    if (type === undefined) {
+      throw new Error(`entrySchema has no ${name} node`);
+    }
+    return type;
+  };
+  const para = (text: string) =>
+    nodeType("paragraph").create(null, text === "" ? null : entrySchema.text(text));
+  const doc = (...blocks: PMNode[]) => nodeType("doc").create(null, blocks);
+  const task = (text: string, checked: boolean) =>
+    nodeType("bullet_list").create(null, [nodeType("list_item").create({ checked }, para(text))]);
+
+  it("keeps the break between two paragraphs typed with Enter", () => {
+    const written = entryDocumentToMarkdown(doc(para("line one"), para("line two")));
+    expect(written).toBe("line one\n\nline two");
+    expect(roundTrip(written)).toBe(written);
+  });
+
+  it("does not fuse prose onto the list it was escaped out of", () => {
+    const written = entryDocumentToMarkdown(doc(task("call mum", false), para("after")));
+    expect(written).toBe("- [ ] call mum\n\nafter");
+    // And the prose must come back as its own block, not as more of the item.
+    const reparsed = entryMarkdownToDocument(written);
+    expect(reparsed.childCount).toBe(2);
+    expect(reparsed.child(1).type.name).toBe("paragraph");
+    expect(roundTrip(written)).toBe(written);
+  });
+
+  it("does not compound the blank line a parsed body already carries", () => {
+    // The mirror of the two cases above: here the paragraph's own text
+    // supplies the separator, so writing another one would grow the gap on
+    // every single commit — one round trip at a time.
+    for (const body of ["- a\n\nb", "x\n\ny", "- [ ] t\n\ntail"]) {
+      expect(roundTrip(body)).toBe(body);
+      expect(roundTrip(roundTrip(body))).toBe(body);
+    }
+  });
+
+  it("separates three typed paragraphs, not just the first pair", () => {
+    const written = entryDocumentToMarkdown(doc(para("a"), para("b"), para("c")));
+    expect(written).toBe("a\n\nb\n\nc");
+    expect(roundTrip(written)).toBe(written);
   });
 });

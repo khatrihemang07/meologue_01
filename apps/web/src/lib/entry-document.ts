@@ -534,11 +534,45 @@ function writeBlocks(
   continuesLine = false,
 ): void {
   blocks.forEach((block, i) => {
+    const needsSeparator = i > 0 || continuesLine;
     if (block.type.name === "paragraph") {
+      // A paragraph sibling needs a BLANK line, never a single newline: a
+      // lone `\n` is a lazy continuation, which the parser folds back into
+      // whatever block sits above it — two paragraphs come back as one, and
+      // a paragraph after a list is swallowed by that list's last item.
+      //
+      // This branch used to `return` before writing any separator at all,
+      // on the reasoning that a `list_item`'s own leading paragraph
+      // continues straight after its marker. That paragraph never reaches
+      // here — `writeListItem` writes it into its own `Writer` and passes
+      // only `rest` — so the early return was skipping the separator for
+      // every paragraph that genuinely needed one, and their text was
+      // written flush against whatever preceded it. Two lines of prose
+      // serialized to "line oneline two", and Enter-ing out of a checklist
+      // produced "- [ ] call mumafter": an Entry lost a line break, or
+      // fused two, the moment it was Sent. Found by review after the
+      // round-trip property test passed straight through it — both passes
+      // produce the same glued output, so a fixpoint check cannot see it.
+      //
+      // The separator is conditional because the two ways a document can
+      // come into being disagree about where a blank line lives. Parsing
+      // keeps it inside the paragraph's own text — `"- a\n\nb"` comes back
+      // as `[bullet_list, paragraph("\n\nb")]`, newlines and all, because
+      // an Entry's body has always been one string and the reader renders
+      // it `whitespace-pre-wrap`. Live editing does not: ProseMirror's
+      // Enter splits the block, so the new paragraph's text is bare. Adding
+      // a separator unconditionally therefore doubles the blank line on
+      // every parsed document, compounding it on each round trip; adding
+      // none at all glues the live-edited ones together. Writing it only
+      // when the paragraph does not already begin with a newline is what
+      // makes both shapes serialize to the same thing and stay there.
+      if (needsSeparator && !block.textContent.startsWith("\n")) {
+        w.write(`\n\n${indent}`);
+      }
       writeInline(block, w);
       return;
     }
-    if (i > 0 || continuesLine) {
+    if (needsSeparator) {
       const needsBlankLine = block.type.name === "ordered_list" && Number(block.attrs.order) !== 1;
       w.write(needsBlankLine ? `\n\n${indent}` : `\n${indent}`);
     }

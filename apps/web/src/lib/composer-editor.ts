@@ -131,6 +131,34 @@ const strongInputRule = markInputRule(/\*\*([^*]+)\*\*$/, requireMarkType("stron
 const emInputRule = markInputRule(/(?<!\*)\*([^*]+)\*$/, requireMarkType("em"));
 const codeInputRule = markInputRule(/`([^`]+)`$/, requireMarkType("code"));
 
+/**
+ * The underscore spellings of the same two marks, which exist for one
+ * reason: the READER already understands them.
+ *
+ * `parseEntryMarkdown` is CommonMark, so `_x_` is emphasis and `__x__` is
+ * strong whether or not the Composer has ever heard of them. Without these
+ * rules the two halves disagreed in the one way this whole change exists to
+ * prevent — a body typed as `remember _this_` showed literal underscores the
+ * entire time it was being written, then rendered italic the instant it was
+ * Sent. `escapeUserText` does not escape `_` either, so nothing downstream
+ * caught it.
+ *
+ * `(?<![\w_])` is the intraword guard, and it is not optional. CommonMark
+ * deliberately refuses `_` emphasis inside a word — that is what keeps
+ * `snake_case_var` intact — and a rule without the lookbehind would fire on
+ * the `_case_` in the middle of one, italicising a variable name as it is
+ * typed. Matching CommonMark's full left/right-flanking rules in a regex is
+ * not practical; requiring the opening `_` to follow a non-word character
+ * (or nothing) covers the cases a person actually types and errs toward
+ * leaving text alone. `__strong__` is listed first for the same
+ * keystroke-ordering reason the `*` pair needs its own lookbehind.
+ */
+const strongUnderscoreInputRule = markInputRule(
+  /(?<![\w_])__([^_]+)__$/,
+  requireMarkType("strong"),
+);
+const emUnderscoreInputRule = markInputRule(/(?<![\w_])_([^_]+)_$/, requireMarkType("em"));
+
 // ---------------------------------------------------------------------------
 // List input rules: "- ", "1. ", and "- [ ] "/"- [x] " for a checkbox
 // ---------------------------------------------------------------------------
@@ -230,7 +258,9 @@ const referenceInputRule = new InputRule(/\[\[([^[\]]*)\]\]$/, (state, match, st
 export function buildInputRules(): InputRule[] {
   return [
     strongInputRule,
+    strongUnderscoreInputRule,
     emInputRule,
+    emUnderscoreInputRule,
     codeInputRule,
     bulletListInputRule,
     orderedListInputRule,

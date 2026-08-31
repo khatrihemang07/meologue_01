@@ -532,11 +532,12 @@ export async function hoverEntryRow(page: Page, body: string): Promise<void> {
  * newline, and the chord that does send differs by build target, so a click
  * is the one gesture meaning "send" on every platform this might run against.
  *
- * `Control+a`/`Backspace` clears the seeded body before typing `newBody` —
- * `ControlOrMeta+a` (Playwright's own cross-platform select-all modifier)
- * would be the more idiomatic choice, but this suite already runs headless
- * Chromium only (see `composerField`'s own comment on why `fill()` itself is
- * avoided here for the same reason it is in `sendEntry`).
+ * `ControlOrMeta+A`/`Backspace` clears the seeded body before typing
+ * `newBody`. `ControlOrMeta` is Playwright's own cross-platform select-all
+ * modifier, so this keeps working if the suite ever runs anywhere but the
+ * headless Chromium it uses today. The clear cannot be a `fill("")` for the
+ * same reason `sendEntry` cannot use `fill()` at all — see `composerField`'s
+ * own comment: a bulk DOM write bypasses the events ProseMirror reads.
  */
 export async function editEntryViaMenu(
   page: Page,

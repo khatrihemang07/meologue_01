@@ -184,6 +184,33 @@ test("Enter on an empty task item leaves the list without stranding an item", as
   await expect(editor.locator("ul + p")).toHaveText("after");
 });
 
+/**
+ * The underscore spellings, which the READER has always understood.
+ *
+ * `parseEntryMarkdown` is CommonMark, so `_x_` and `__x__` render as
+ * emphasis and strong whether the Composer knows them or not. Before the
+ * matching input rules existed, a body typed as `remember _this_` showed
+ * literal underscores the whole time it was being written and then turned
+ * italic the moment it was Sent — precisely the "the editor lies about what
+ * you will get" complaint issue #155 exists to remove, surviving inside the
+ * fix for it. The intraword case is the one that keeps a guard honest:
+ * CommonMark refuses `_` emphasis inside a word, so a variable name must
+ * come through untouched.
+ */
+test("underscores mark emphasis, except inside a word", async ({ page }) => {
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  await editor.pressSequentially("remember _this_ and __that__ but not snake_case_var");
+
+  await expect(editor.locator("em")).toHaveText("this");
+  await expect(editor.locator("strong")).toHaveText("that");
+  // The variable name keeps its underscores and gains no formatting.
+  await expect(editor).toContainText("snake_case_var");
+  await expect(editor.locator("em")).toHaveCount(1);
+  await expect(editor.locator("strong")).toHaveCount(1);
+});
+
 test("Shift+Enter never sends, on this build the same as every other", async ({ page }) => {
   const firstLine = uniqueEntryBody("composer-shift-enter-one");
   const secondLine = uniqueEntryBody("composer-shift-enter-two");

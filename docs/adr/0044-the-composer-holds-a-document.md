@@ -59,7 +59,7 @@ syntax, free to drift apart — the drift `inline-markdown.ts`'s own module comm
 reason a Reference is defined once. `markdown-it` alone measures ~47.9 KB gzip of `prosemirror-markdown`'s
 ~61.2 KB total; refusing it is not a rounding error on top of the 68.6 KB above. `entry-document.ts`
 (issue #154) already supplies both conversions this ticket needs — `entryMarkdownToDocument` and
-`entryDocumentToMarkdown` — proven stable by a 694-case property test; this ticket calls them and
+`entryDocumentToMarkdown` — proven stable by a 691-case property test; this ticket calls them and
 writes no third.
 
 **The one-grammar property is why ProseMirror beat Lexical specifically, independent of size.**

@@ -116,7 +116,7 @@ const marks: { [name: string]: MarkSpec } = {
   // no `toDOM` cannot be rendered by an `EditorView` at all, full stop.
   // Purely additive rendering metadata: `entry-document.ts`'s conversions
   // build and read `Mark`s directly off `.type.name`/`.attrs`, never
-  // through DOM, so neither this nor its own 694-case property test is
+  // through DOM, so neither this nor its own 691-case property test is
   // touched by adding it.
   strong: {
     toDOM: () => ["strong", 0],
