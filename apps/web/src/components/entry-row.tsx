@@ -209,12 +209,27 @@ function EntryReferenceLink({ entryId, raw }: { entryId: string; raw: string }) 
  * `inlineProse` directly, and stays inline-only. `entryProse` used to be a
  * pure pass-through; issue #152 is the divergence issue #148 built this
  * seam for.
+ *
+ * `onToggleTask` (issue #153) passes straight through to `entryProse` —
+ * `undefined` here is what keeps every checkbox this renders disabled;
+ * only `EntryBubble`'s own caller (history.tsx, through composer-page.tsx)
+ * ever supplies one. `EntryBody` below, this function's other caller, never
+ * does — see its own comment for why.
  */
-export function entryBodyContent(body: string, query: string): ReactNode {
-  return entryProse(body, query, {
-    date: (node, key) => <DateReferenceLink key={key} date={node.date} raw={node.raw} />,
-    entry: (node, key) => <EntryReferenceLink key={key} entryId={node.entryId} raw={node.raw} />,
-  });
+export function entryBodyContent(
+  body: string,
+  query: string,
+  onToggleTask?: (markerFrom: number, markerTo: number) => void,
+): ReactNode {
+  return entryProse(
+    body,
+    query,
+    {
+      date: (node, key) => <DateReferenceLink key={key} date={node.date} raw={node.raw} />,
+      entry: (node, key) => <EntryReferenceLink key={key} entryId={node.entryId} raw={node.raw} />,
+    },
+    onToggleTask,
+  );
 }
 
 /**
@@ -224,6 +239,16 @@ export function entryBodyContent(body: string, query: string): ReactNode {
  * lives here too — redundant with the one on each `entryProse`-generated
  * `<p>`, kept so this element's own behaviour doesn't depend on which
  * child happens to carry it.
+ *
+ * `EntryBody` is `EntryRow`'s own body, and `EntryRow`'s one remaining
+ * caller is `grounding-disclosure.tsx` — Reflection's Grounding, which
+ * CONTEXT.md requires to stay a read-only view of what an Answer was based
+ * on (the same reason `EntryRowProps.actions` above is never wired for
+ * it). Passing no `onToggleTask` here is what keeps a checkbox rendered in
+ * Grounding disabled (issue #153): a tickable box there would let editing
+ * a past Answer relied on look possible, which must not be true. History's
+ * own thread renders through `EntryBubble` instead, not `EntryBody`, so
+ * this decision only ever governs Grounding.
  */
 export function EntryBody({ body, query }: { body: string; query: string }) {
   return <div className="min-w-0 flex-1 whitespace-pre-wrap">{entryBodyContent(body, query)}</div>;

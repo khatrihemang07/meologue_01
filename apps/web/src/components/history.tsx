@@ -65,6 +65,29 @@ interface HistoryProps {
    */
   onRefer?: (entry: Entry) => void;
   /**
+   * Toggles one of an Entry's task checkboxes (issue #153) — composer-
+   * page.tsx's own callback, which splices the tap's marker offsets into
+   * that Entry's body (`toggleTaskAt`, toggle-task.ts) and commits it
+   * through the same `editEntry` an ordinary Composer edit already uses
+   * (ADR 0043: a tick is an ordinary Entry edit, so it Syncs and marks the
+   * Period's Digest stale like any other). Forwarded straight through to
+   * every `EntryBubble` below, unchanged.
+   *
+   * Independent of the onEdit/onDelete/onRefer all-or-nothing rule above:
+   * unlike those three, there is no surface that renders `History` and
+   * deliberately wants every checkbox disabled — `grounding-disclosure.tsx`
+   * renders Entries through `EntryRow`/`EntryBody` instead of `History`
+   * entirely (see entry-row.tsx's own comment on `EntryBody`), so `History`
+   * itself has exactly one caller (composer-page.tsx's footer) and it
+   * always has an `editEntry` to build this from. Optional only so every
+   * existing test in this file that renders `<History>` with no store
+   * behind it at all keeps working: `undefined` here is what
+   * `entry-prose.tsx`'s own renderer already treats as "leave the
+   * checkbox disabled," the same fallback `actions` being `undefined`
+   * gives Edit/Delete/Refer.
+   */
+  onToggleTask?: (entry: Entry, markerFrom: number, markerTo: number) => void;
+  /**
    * Issue #147: the later Entries that Refer to a given local day
    * (day-referrers.ts's own `dayReferrers`) — read from `useEntryStore()`
    * by composer-page.tsx and handed down as a prop rather than read here
@@ -376,6 +399,7 @@ export function History({
   onEdit,
   onDelete,
   onRefer,
+  onToggleTask,
   dayReferrers,
   seek,
   onSeekNeedsOlder,
@@ -994,6 +1018,7 @@ export function History({
                   groupedWithPrevious={!item.isFirstInGroup}
                   actions={actions}
                   highlighted={item.entry.id === highlightedEntryId}
+                  onToggleTask={onToggleTask}
                 />
               )}
             </div>

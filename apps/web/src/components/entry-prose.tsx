@@ -28,8 +28,19 @@
 import type { ReactNode } from "react";
 import { type ReferenceRenderers, renderNodes } from "@/components/inline-prose";
 import type { EntryBlockNode, EntryListItem } from "@/lib/inline-markdown";
-import { parseEntryMarkdown } from "@/lib/inline-markdown";
+import { entryBlocksToText, parseEntryMarkdown } from "@/lib/inline-markdown";
 import { cn } from "@/lib/utils";
+
+/**
+ * A tap on a rendered checkbox (issue #153) — `markerFrom`/`markerTo` are
+ * handed straight through from the `EntryTaskMarker` the item carries, so
+ * the caller (entry-row.tsx's `entryBodyContent`) can splice the source
+ * string (`toggleTaskAt`, toggle-task.ts) with no re-parse of its own.
+ * Optional everywhere it's threaded below: `undefined` is what keeps a
+ * checkbox disabled rather than merely unwired — see `renderListItem`'s
+ * own comment for which callers pass one and which deliberately don't.
+ */
+type ToggleTaskHandler = (markerFrom: number, markerTo: number) => void;
 
 /**
  * Vertical rhythm shared by every top-level block this file renders —
@@ -54,6 +65,7 @@ function renderBlocks(
   query: string,
   refs: ReferenceRenderers,
   keyPrefix: string,
+  onToggleTask: ToggleTaskHandler | undefined,
 ): ReactNode[] {
   return blocks.map((block, index) => {
     const key = `${keyPrefix}${index}`;
@@ -68,7 +80,7 @@ function renderBlocks(
         return (
           <ul key={key} className={cn("list-disc space-y-0.5 pl-5", BLOCK_SPACING)}>
             {block.items.map((item, itemIndex) =>
-              renderListItem(item, query, refs, `${key}-${itemIndex}`),
+              renderListItem(item, query, refs, `${key}-${itemIndex}`, onToggleTask),
             )}
           </ul>
         );
@@ -80,7 +92,7 @@ function renderBlocks(
             className={cn("list-decimal space-y-0.5 pl-5", BLOCK_SPACING)}
           >
             {block.items.map((item, itemIndex) =>
-              renderListItem(item, query, refs, `${key}-${itemIndex}`),
+              renderListItem(item, query, refs, `${key}-${itemIndex}`, onToggleTask),
             )}
           </ol>
         );
@@ -97,32 +109,64 @@ function renderBlocks(
 
 /**
  * One `<li>`. A task item drops the marker entirely — no bullet, no literal
- * `[ ]`/`[x]` — in favour of a real, disabled `<input type="checkbox">`
- * carrying the same checked state; `disabled` rather than any read-only
- * affordance because toggling one is issue #153's job, not this one's, and
- * a control nothing yet wires up must not look interactive. The checkbox
- * sits beside its content in a flex row rather than nested inside the
- * `<li>`'s own marker box, which is what `list-none` and the negative
- * left margin below undo — a task item earns its own indicator instead of
- * competing with a bullet for the same space.
+ * `[ ]`/`[x]` — in favour of a real `<input type="checkbox">` carrying the
+ * same checked state. The checkbox sits beside its content in a flex row
+ * rather than nested inside the `<li>`'s own marker box, which is what
+ * `list-none` and the negative left margin below undo — a task item earns
+ * its own indicator instead of competing with a bullet for the same space.
+ *
+ * `onToggleTask === undefined` is what makes the checkbox disabled rather
+ * than merely un-wired (issue #153) — `entryProse`'s own doc comment on
+ * `ToggleTaskHandler` names the one caller that deliberately never passes
+ * one: `entry-row.tsx`'s `EntryBody`, Reflection's Grounding disclosure,
+ * which CONTEXT.md requires to stay a read-only view of what an Answer was
+ * based on. A tickable box there would let editing a past Answer relied on
+ * look possible, exactly the thing `EntryRowProps.actions`'s own comment
+ * already refuses for Edit/Delete/Refer — this follows the same rule for
+ * the same reason, just for a control embedded in the body instead of a
+ * button beside the row.
+ *
+ * Toggling calls `onToggleTask` with the item's own `markerFrom`/
+ * `markerTo` on `onChange` (not `onClick`): a checkbox `<input>` already
+ * fires `onChange` for both a pointer click and a Space press while
+ * focused, so this is keyboard-operable for free rather than needing a
+ * second handler wired to satisfy that separately.
+ *
+ * The accessible name is the item's own words (issue #153's own
+ * requirement), not a generic "Checked"/"Unchecked" — `entryBlocksToText`
+ * flattens exactly the way `entrySnippet` (entry-row.tsx) already does for
+ * an Entry Reference's own chip, dropping list/task markers and inline
+ * formatting so the name reads as prose. The checked/unchecked state
+ * itself does not need to be spelled out here: `role="checkbox"`'s native
+ * semantics already announce that from the element's own `checked`
+ * property. Falls back to the old "Checked"/"Unchecked" wording whenever
+ * `entryBlocksToText` flattens to `""` — defensive rather than reachable
+ * through today's dialect (every input tried while writing this — `- [ ]`
+ * alone included — either grows real text or stops being a `Task` at all,
+ * per `taskMarkerOf`'s own contract), kept because a checkbox with a blank
+ * accessible name is a worse failure than this fallback ever costs.
  */
 function renderListItem(
   item: EntryListItem,
   query: string,
   refs: ReferenceRenderers,
   key: string,
+  onToggleTask: ToggleTaskHandler | undefined,
 ): ReactNode {
-  const content = renderBlocks(item.content, query, refs, `${key}-`);
+  const content = renderBlocks(item.content, query, refs, `${key}-`, onToggleTask);
   if (item.task === undefined) {
     return <li key={key}>{content}</li>;
   }
+  const { checked, markerFrom, markerTo } = item.task;
+  const label = entryBlocksToText(item.content).trim() || (checked ? "Checked" : "Unchecked");
   return (
     <li key={key} className="-ml-5 flex list-none items-baseline gap-1.5">
       <input
         type="checkbox"
-        checked={item.task.checked}
-        disabled
-        aria-label={item.task.checked ? "Checked" : "Unchecked"}
+        checked={checked}
+        disabled={onToggleTask === undefined}
+        onChange={onToggleTask === undefined ? undefined : () => onToggleTask(markerFrom, markerTo)}
+        aria-label={label}
         className="mt-[0.2em] shrink-0 accent-current"
       />
       <div className="min-w-0 flex-1">{content}</div>
@@ -130,6 +174,11 @@ function renderListItem(
   );
 }
 
-export function entryProse(body: string, query = "", refs: ReferenceRenderers = {}): ReactNode {
-  return <>{renderBlocks(parseEntryMarkdown(body), query, refs, "")}</>;
+export function entryProse(
+  body: string,
+  query = "",
+  refs: ReferenceRenderers = {},
+  onToggleTask?: ToggleTaskHandler,
+): ReactNode {
+  return <>{renderBlocks(parseEntryMarkdown(body), query, refs, "", onToggleTask)}</>;
 }

@@ -1,5 +1,5 @@
 import type { Entry } from "@meologue/core";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { SWIPE_TARGET_ATTRIBUTE } from "@/hooks/use-swipe-actions";
 import { EntryBubble } from "./entry-bubble";
@@ -159,6 +159,37 @@ describe("EntryBubble", () => {
       const { container } = render(<EntryBubble entry={entry()} syncEnabled={false} side="out" />);
 
       expect(bubbleOf(container).firstElementChild).not.toHaveClass("ring-2");
+    });
+  });
+
+  // Issue #153: EntryBubble is where an id and a body land together, so
+  // this is where `onToggleTask`'s per-Entry closure gets built —
+  // `entry-prose.test.tsx` already covers the checkbox rendering and
+  // marker-offset behaviour this wraps; these tests only cover the wiring
+  // this file itself owns.
+  describe("onToggleTask", () => {
+    it("renders the checkbox disabled with no handler wired", () => {
+      render(
+        <EntryBubble entry={entry({ body: "- [ ] call mum" })} syncEnabled={false} side="out" />,
+      );
+
+      expect(screen.getByRole("checkbox")).toBeDisabled();
+    });
+
+    it("calls the handler with the Entry and the marker's own offsets", () => {
+      const onToggleTask = vi.fn();
+      const body = "- [ ] call mum";
+      const withTask = entry({ body });
+      render(
+        <EntryBubble entry={withTask} syncEnabled={false} side="out" onToggleTask={onToggleTask} />,
+      );
+
+      fireEvent.click(screen.getByRole("checkbox"));
+
+      expect(onToggleTask).toHaveBeenCalledTimes(1);
+      const [calledEntry, markerFrom, markerTo] = onToggleTask.mock.calls[0] ?? [];
+      expect(calledEntry).toBe(withTask);
+      expect(body.slice(markerFrom, markerTo)).toBe("[ ]");
     });
   });
 });

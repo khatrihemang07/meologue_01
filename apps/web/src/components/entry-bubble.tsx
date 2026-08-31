@@ -189,6 +189,23 @@ export interface EntryBubbleProps {
    * has a reason to flash anything.
    */
   highlighted?: boolean;
+  /**
+   * Toggles one of this Entry's task checkboxes (issue #153). Takes the
+   * whole Entry, not just the marker offsets, matching `EntryRowActions`'
+   * callbacks above — history.tsx (via composer-page.tsx) needs `entry.id`
+   * and `entry.body` to splice and commit the edit, and this bubble is
+   * where both already live, so closing over them here rather than making
+   * every caller thread the marker offsets back up to an id and a body it
+   * would otherwise have to re-look-up.
+   *
+   * Undefined by default, the same "no actions" shape `actions` above
+   * already follows: Grounding never renders `EntryBubble` at all (it
+   * renders `EntryRow`/`EntryBody` instead — see that file's own comment),
+   * so there is no read-only caller here that needs this explicitly
+   * withheld; it is simply never supplied outside history.tsx's own
+   * thread.
+   */
+  onToggleTask?: (entry: Entry, markerFrom: number, markerTo: number) => void;
 }
 
 export const EntryBubble = memo(function EntryBubble({
@@ -199,6 +216,7 @@ export const EntryBubble = memo(function EntryBubble({
   groupedWithPrevious = false,
   actions,
   highlighted = false,
+  onToggleTask,
 }: EntryBubbleProps) {
   return (
     <Bubble
@@ -275,7 +293,13 @@ export const EntryBubble = memo(function EntryBubble({
         data-slot="bubble-body"
         className="min-w-0 whitespace-pre-wrap text-[calc(0.875rem*var(--entry-text-scale,1))]"
       >
-        {entryBodyContent(entry.body, query)}
+        {entryBodyContent(
+          entry.body,
+          query,
+          onToggleTask === undefined
+            ? undefined
+            : (markerFrom, markerTo) => onToggleTask(entry, markerFrom, markerTo),
+        )}
       </div>
       <BubbleMeta
         createdAt={entry.createdAt}
