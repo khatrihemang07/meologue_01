@@ -121,6 +121,69 @@ test("- [ ] starts a checkbox, and it can be ticked while composing", async ({ p
   await expect(checkbox).toBeChecked();
 });
 
+/**
+ * The regression this exists for was invisible to every other test here,
+ * because all of them stop at ONE checkbox.
+ *
+ * `listItemNodeView`'s task branch (composer-editor.ts) used to call
+ * `dom.insertBefore(checkbox, contentDOM)` without first making sure
+ * `contentDOM` was inside `dom`. On the first task item that is harmless —
+ * it is built by converting a list item that already had its content
+ * attached — but Enter carries `checked` onto a BRAND NEW item, whose
+ * NodeView renders before anything has attached it. `insertBefore` then
+ * threw, after `dom.className` had already been set, leaving an `<li>`
+ * wearing the task class (so `list-none`, so no bullet) with neither a
+ * checkbox nor a content wrapper.
+ *
+ * The visible effect was that a checklist of more than one item could not
+ * be written at all: the second line was neither a task nor a bullet. It
+ * was found on a physical Android device, not by any test — the same way
+ * ADR 0036 records its own floated-clock defect being found.
+ */
+test("a checklist keeps its checkboxes past the first item", async ({ page }) => {
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+
+  await editor.pressSequentially("- [ ] call mum");
+  await page.keyboard.press("Enter");
+  await editor.pressSequentially("buy milk");
+  await page.keyboard.press("Enter");
+  await editor.pressSequentially("book dentist");
+
+  // Every item is a task, not just the one the input rule ran on.
+  await expect(editor.locator('input[type="checkbox"]')).toHaveCount(3);
+  await expect(editor.locator("li")).toHaveCount(3);
+
+  // Each checkbox is independently operable, which the broken markup could
+  // not be — the second and third items had no checkbox to click at all.
+  const boxes = editor.locator('input[type="checkbox"]');
+  await boxes.nth(1).click();
+  await expect(boxes.nth(0)).not.toBeChecked();
+  await expect(boxes.nth(1)).toBeChecked();
+  await expect(boxes.nth(2)).not.toBeChecked();
+
+  // And the marker characters never reappear on any line.
+  await expect(editor).not.toContainText("[");
+});
+
+test("Enter on an empty task item leaves the list without stranding an item", async ({ page }) => {
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+
+  await editor.pressSequentially("- [ ] call mum");
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Enter");
+  await editor.pressSequentially("after");
+
+  // One task survives; the emptied item is gone rather than left behind as
+  // a class-bearing shell, and the following prose is outside the list.
+  await expect(editor.locator('input[type="checkbox"]')).toHaveCount(1);
+  await expect(editor.locator("li")).toHaveCount(1);
+  await expect(editor.locator("ul + p")).toHaveText("after");
+});
+
 test("Shift+Enter never sends, on this build the same as every other", async ({ page }) => {
   const firstLine = uniqueEntryBody("composer-shift-enter-one");
   const secondLine = uniqueEntryBody("composer-shift-enter-two");

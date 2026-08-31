@@ -245,3 +245,50 @@
     @apply font-sans;
   }
 }
+
+/*
+ * The Composer's own list styling.
+ *
+ * `entry-prose.tsx` renders History's lists through React and sets their
+ * look as Tailwind classes on each element it creates (`list-disc
+ * space-y-0.5 pl-5`, and the `mt-1`/`first:mt-0` rhythm every top-level
+ * block there shares). The Composer cannot do that: ProseMirror builds
+ * `bullet_list`/`ordered_list`/`list_item` from the `toDOM` they inherit
+ * from `prosemirror-schema-list`, which emits a bare `<ul>`/`<ol>`/`<li>`
+ * with no class at all — and Tailwind's preflight resets exactly those
+ * elements to `list-style: none; padding: 0`.
+ *
+ * The result was a list that was structurally real and visually invisible:
+ * typing `- milk` consumed the marker, Enter split a genuine second item,
+ * and the field showed two bare lines. Nothing in jsdom can catch that —
+ * the document was correct — and it was found on a physical Android
+ * device, which is the same way ADR 0036 records its own floated-clock
+ * defect being found ("passed every test and was wrong on screen").
+ *
+ * These rules exist to keep the two surfaces in step, so an Entry looks
+ * the same while it is being written as it does once it has been Sent.
+ * They must be kept in step with `entry-prose.tsx` by hand; there is no
+ * mechanism that enforces it, which is why both sides carry a comment
+ * pointing at the other.
+ *
+ * Task items opt out of the marker themselves — `composer-editor.ts`'s
+ * `listItemNodeView` sets `list-none` on a checkbox item (TASK_LI_CLASS),
+ * exactly as `entry-prose.tsx`'s own `renderListItem` does — so a checkbox
+ * never renders a bullet beside it.
+ */
+@layer base {
+  .ProseMirror ul {
+    list-style: disc;
+    padding-left: 1.25rem;
+  }
+  .ProseMirror ol {
+    list-style: decimal;
+    padding-left: 1.25rem;
+  }
+  .ProseMirror li + li {
+    margin-top: 0.125rem;
+  }
+  .ProseMirror > * + * {
+    margin-top: 0.25rem;
+  }
+}

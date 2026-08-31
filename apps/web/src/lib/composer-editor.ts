@@ -496,6 +496,20 @@ export function listItemNodeView(
       });
     }
     checkbox.checked = current.attrs.checked === true;
+    // `contentDOM` has to be inside `dom` BEFORE `insertBefore` names it as
+    // the reference node, and on a freshly constructed task item it is not
+    // yet: the constructor calls `render` before anything has attached it,
+    // so this branch cannot assume the `checked === null` branch above ever
+    // ran. Without this, `insertBefore` throws `NotFoundError` mid-render —
+    // after `dom.className` was already set — and ProseMirror falls back to
+    // putting the item's content straight into `dom`. The result is an `<li>`
+    // wearing TASK_LI_CLASS (so `list-none`, so no bullet) with no checkbox
+    // and no content wrapper: a list item that is neither a task nor a
+    // bullet. That is what pressing Enter from a task item produced, which
+    // made a checklist of more than one item impossible to write.
+    if (contentDOM.parentElement !== dom) {
+      dom.appendChild(contentDOM);
+    }
     dom.insertBefore(checkbox, contentDOM);
   }
 
