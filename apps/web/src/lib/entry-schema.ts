@@ -109,8 +109,23 @@ const nodes: { [name: string]: NodeSpec } = {
 };
 
 const marks: { [name: string]: MarkSpec } = {
-  strong: {},
-  em: {},
+  // `toDOM`/`parseDOM` (issue #155): unlike the three node types reused
+  // from `prosemirror-schema-list` above, nothing upstream supplies these
+  // for a mark — a `NodeView` (this file's own `reference`/`paragraph`
+  // rendering, composer-editor.ts) has no mark equivalent, so a mark with
+  // no `toDOM` cannot be rendered by an `EditorView` at all, full stop.
+  // Purely additive rendering metadata: `entry-document.ts`'s conversions
+  // build and read `Mark`s directly off `.type.name`/`.attrs`, never
+  // through DOM, so neither this nor its own 694-case property test is
+  // touched by adding it.
+  strong: {
+    toDOM: () => ["strong", 0],
+    parseDOM: [{ tag: "strong" }, { tag: "b" }],
+  },
+  em: {
+    toDOM: () => ["em", 0],
+    parseDOM: [{ tag: "em" }, { tag: "i" }],
+  },
   // `code: true` is the flag ProseMirror's own commands use to treat a run
   // as monospace/verbatim (e.g. not auto-capitalizing, not applying other
   // input rules inside it) — it does not, by itself, exclude `strong`/`em`;
@@ -118,7 +133,11 @@ const marks: { [name: string]: MarkSpec } = {
   // `entry-document.ts`'s serializer relies on that: it treats `code` as an
   // innermost wrap around whatever `strong`/`em` are already open, not as
   // mutually exclusive with them.
-  code: { code: true },
+  code: {
+    code: true,
+    toDOM: () => ["code", 0],
+    parseDOM: [{ tag: "code" }],
+  },
 };
 
 /**

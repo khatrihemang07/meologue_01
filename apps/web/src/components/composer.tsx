@@ -1,190 +1,169 @@
+/**
+ * The Composer: where an Entry is written, and — ADR 0028 — where an
+ * existing Entry is edited. Issue #155 replaces its `<textarea>` with a
+ * ProseMirror `EditorView` holding a live document (issue #154's
+ * `entrySchema`), so formatting appears as it's typed instead of only
+ * after Send (ADR 0044).
+ *
+ * `EditorView` is wired up imperatively, in refs, rather than through a
+ * React-owned tree of its content: ProseMirror already owns its DOM once
+ * mounted (it patches its own `contenteditable` on every transaction), and
+ * fighting that with React's own reconciliation over the same nodes is
+ * exactly the kind of two-owners bug ADR 0036 already names once ("passed
+ * every test and was wrong on screen"). The view is constructed once, in
+ * the mount effect below, and never torn down for an ordinary re-render;
+ * `handleKeyDownImplRef`/`dispatchTransactionImplRef` are the seam that
+ * lets its callbacks see fresh `picker`/`editingEntry`/... closures on
+ * every render without reconstructing the view itself — assigned directly
+ * in the render body (never read back during the same render), the
+ * standard "latest callback" ref pattern.
+ *
+ * No test in this file renders `<Composer>` any more. jsdom implements no
+ * `Range`, no `Selection`, and no meaningful `getBoundingClientRect` — a
+ * ProseMirror `EditorView` cannot usefully mount in it, let alone be typed
+ * into (ADR 0044 records this, and the corresponding upstream limitation on
+ * Android). Everything here that stayed pure moved to its own module
+ * instead, where it IS still unit-tested: composer-picker.ts (the `[[`
+ * picker's own state machine and suggestion-building) and composer-send.ts
+ * (what pressing Send should do, including ADR 0044's dirty-only commit
+ * rule). Real typing, caret behaviour, the picker, and list Enter/lift live
+ * in apps/e2e/tests/composer.spec.ts instead, against a real browser.
+ */
 import type { Entry } from "@meologue/core";
 import { ArrowUp, X } from "lucide-react";
-import {
-  type ChangeEvent,
-  type KeyboardEvent,
-  type Ref,
-  useCallback,
-  useEffect,
-  useImperativeHandle,
-  useRef,
-  useState,
-} from "react";
-import { flushSync } from "react-dom";
+import { EditorState, Selection, type Transaction } from "prosemirror-state";
+import { EditorView } from "prosemirror-view";
+import { type Ref, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { entrySnippet } from "@/components/entry-row";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
+import {
+  buildComposerPlugins,
+  listItemNodeView,
+  PICKER_DISMISS_META,
+  paragraphNodeView,
+  pickerPluginKey,
+  referenceNodeType,
+  referenceNodeView,
+} from "@/lib/composer-editor";
+import {
+  buildDateSuggestions,
+  isDateModeQuery,
+  MAX_ENTRY_SUGGESTIONS,
+  type PickerItem,
+  pickerItemKey,
+  pickerItemMark,
+  type ReferencePickerState,
+} from "@/lib/composer-picker";
+import { decideSend } from "@/lib/composer-send";
 import { deviceUtcOffsetMinutes, entryDayKey, formatDaySeparator } from "@/lib/entry-day";
+import { entryDocumentToMarkdown, entryMarkdownToDocument } from "@/lib/entry-document";
+import { entrySchema, type ReferenceAttrs } from "@/lib/entry-schema";
 import { normalizeEntryBody } from "@/lib/entry-text";
 import { parseReferenceDate } from "@/lib/inline-markdown";
 import { isSubmitChord } from "@/lib/submit-chord";
 import { cn } from "@/lib/utils";
 
-/**
- * The two brackets that open a Reference (ADR 0042) — this file's own copy
- * of the literal `inline-markdown.ts`'s `referenceParser` looks for, kept
- * here rather than imported because that file exports no such constant
- * (its own scanner reads character codes, not a string) and this is the
- * only other place that needs it.
- */
-const REFERENCE_TRIGGER = "[[";
-
-/** How many recent days, and how many searched Entries, the picker shows at once — enough to be useful, small enough to stay a glance rather than a second History. */
-const MAX_DATE_SUGGESTIONS = 5;
-const MAX_ENTRY_SUGGESTIONS = 5;
+/** The Composer's own placeholder, shown by composer-editor.ts's `placeholderPlugin` and duplicated here as a literal HTML `placeholder` attribute (composer-editor.ts's `buildComposerPlugins`' own EditorView `attributes`) purely so `apps/e2e`'s `getByPlaceholder("What's on your mind?")` keeps finding this field — a `<div>` has no native `placeholder` semantics, but Playwright's own locator matches the bare attribute on any element (verified against playwright-core's `getByAttributeTextSelector`), so setting it costs nothing and keeps every existing e2e helper working unchanged. */
+const PLACEHOLDER = "What's on your mind?";
 
 /**
- * Where the inline `[[` picker (issue #144) is anchored, and what it's
- * currently narrowed to.
+ * The editable root's own Tailwind classes, appended onto ProseMirror's
+ * base `"ProseMirror"` class through the `attributes` prop rather than a
+ * React `className` — see the mount effect's own comment for why a
+ * `className` on the JSX `<div>` below would just be overwritten.
  *
- * `start` is the index in `value` immediately AFTER the triggering `[[` —
- * everything from there to the caret is `query`. Recomputed from scratch on
- * every keystroke (`derivePicker` below) rather than patched incrementally:
- * the alternative is a state machine that has to separately handle typing,
- * backspacing past the brackets, and the caret moving away, and deriving it
- * fresh from `value` and the caret position is what makes all three the
- * same code path instead of three.
- */
-interface ReferencePickerState {
-  start: number;
-  query: string;
-}
-
-/**
- * `query` narrows to dates when it could still become a valid
- * `[[YYYY-MM-DD]]` — digits and dashes only, including the empty string
- * (freshly typed `[[`, before anything narrows it either way) — and to an
- * Entry search otherwise. There is no third "ambiguous" state: the moment a
- * letter or space appears, the query cannot be a date any more (`parseReferenceDate`
- * demands exactly four digits, a dash, two digits, a dash, two digits), so
- * a query that will only ever describe an Entry search is exactly the
- * complement of this.
- */
-function isDateModeQuery(query: string): boolean {
-  return /^[0-9-]*$/.test(query);
-}
-
-/**
- * The picker's own state transition, given the textarea's latest value and
- * caret position. Pure and stateless on purpose — `handleChange` below is
- * its only caller, and keeping every rule here (rather than split across
- * onChange, onKeyDown and a closing effect) is what makes "when is the
- * picker open" answerable by reading one function.
+ * `min-h`/`max-h`/`overflow-y-auto` are what turn a `contenteditable`'s
+ * natural block growth into "one line, grows to about eight, then
+ * scrolls" — there is no `field-sizing: content` equivalent needed here
+ * the way the old `<textarea>` needed one, since a `contenteditable`'s own
+ * height already tracks its content without it.
  *
- * - No picker yet: opens one exactly when the two characters immediately
- *   before the caret are the trigger — "immediately after a freshly typed
- *   `[[`", per the ticket, not merely "a `[[` exists somewhere earlier in
- *   the line".
- * - A picker already open: stays open only while the caret is still at or
- *   after `start` AND the two characters immediately before `start` are
- *   still the trigger — either condition failing means the reader moved
- *   the caret away or backspaced through one of the brackets, and the
- *   picker has nothing left to be anchored to.
- * - A query that picks up a `]` or a newline closes the picker without
- *   opening a new one: a `]` means the reader is closing the mark by hand
- *   (typing `]]` themselves is always still possible; the picker simply
- *   stops shadowing it), and a newline means whatever was being typed
- *   inside the brackets was abandoned for a new line of prose.
+ * `leading-6` and an exact max-height, rather than a round Tailwind
+ * spacing step: the ceiling has to be a whole number of lines plus the
+ * padding and border, or the field clips its own last line horizontally
+ * through the glyphs at full height (verified against the previous 5-line
+ * ceiling this replaces — 36 (144px) was not a whole-line value and left a
+ * third of a sixth line showing). Pinning the line box at 24px also stops
+ * the count changing between the base and `md` font sizes.
+ * 8 lines x 24px + 16px padding (`py-2`) + 2px border = 210px.
+ *
+ * The focus ring is gated to hover-capable devices, mirroring
+ * entry-actions.tsx's own pointer-capability split — `:focus-visible`
+ * always matches a focused text field per spec, so on a phone tapping the
+ * Composer would otherwise paint a 3px ring around it, a browser-shaped
+ * artefact on a surface that should look like a chat input.
+ *
+ * `disabled` classes are applied directly (a plain conditional, not a
+ * `:disabled` pseudo-class): a `<div>`, unlike a real form control, never
+ * matches `:disabled` even with `aria-disabled` set.
  */
-function derivePicker(
-  text: string,
-  caret: number,
-  previous: ReferencePickerState | null,
-): ReferencePickerState | null {
-  if (previous === null) {
-    if (caret >= 2 && text.slice(caret - 2, caret) === REFERENCE_TRIGGER) {
-      return { start: caret, query: "" };
-    }
-    return null;
-  }
-  if (
-    caret < previous.start ||
-    text.slice(previous.start - 2, previous.start) !== REFERENCE_TRIGGER
-  ) {
-    return null;
-  }
-  const query = text.slice(previous.start, caret);
-  if (query.includes("]") || query.includes("\n")) {
-    return null;
-  }
-  return { start: previous.start, query };
+function hostClassName(disabled: boolean): string {
+  return cn(
+    "min-h-11 max-h-[13.125rem] w-full overflow-y-auto rounded-3xl border border-input bg-transparent px-2.5 py-2 leading-6 text-base outline-none transition-colors focus-visible:ring-0 md:text-sm [@media(hover:hover)]:focus-visible:ring-3",
+    disabled && "cursor-not-allowed bg-input/50 opacity-50",
+  );
 }
+
+const DATE_MARK_SHAPE = /^\[\[(\d{4}-\d{2}-\d{2})\]\]$/;
+const ENTRY_MARK_SHAPE = /^\[\[e:([0-9a-fA-F-]{36})\]\]$/;
 
 /**
- * Candidate days for the picker's date mode: the typed text itself, if it's
- * already a complete, real calendar date (`parseReferenceDate` — the exact
- * same validator the renderer uses, so nothing the picker offers could ever
- * render as a dead Reference later), followed by whichever of the loaded
- * recent Entries' own days contain the typed digits, newest first and
- * de-duplicated. With an empty query every recent day qualifies, which is
- * "offer recent days" for the picker's very first frame, right after `[[`.
+ * The inverse of `pickerItemMark` (composer-picker.ts): recognises the two
+ * literal shapes that function — and nothing else in this app — ever
+ * produces, and turns one back into the attrs a live `reference` node
+ * needs. Used by `insertAtCursor` below, whose only real caller
+ * (`composer-page.tsx`'s "Refer" action) always passes exactly
+ * `` `[[e:${entry.id}]]` ``. Anything that doesn't match either shape falls
+ * back to plain text in `insertAtCursor` itself — this is deliberately not
+ * a second Markdown parser (ADR 0044): it recognises two fixed literal
+ * templates, not the dialect `inline-markdown.ts` already owns.
  */
-function buildDateSuggestions(
-  query: string,
-  recentEntries: readonly Entry[],
-  offsetMinutes: number,
-): string[] {
-  const suggestions: string[] = [];
-  const seen = new Set<string>();
-
-  const typed = parseReferenceDate(query);
-  if (typed !== null) {
-    suggestions.push(typed);
-    seen.add(typed);
+function parseReferenceMarkText(raw: string): ReferenceAttrs | null {
+  const dateMatch = DATE_MARK_SHAPE.exec(raw);
+  if (dateMatch) {
+    const date = dateMatch[1];
+    if (date !== undefined && parseReferenceDate(date) !== null) {
+      return { kind: "date", raw, date, entryId: null };
+    }
+    return null;
   }
-
-  for (const candidate of recentEntries) {
-    if (suggestions.length >= MAX_DATE_SUGGESTIONS) {
-      break;
+  const entryMatch = ENTRY_MARK_SHAPE.exec(raw);
+  if (entryMatch) {
+    const entryId = entryMatch[1];
+    if (entryId !== undefined) {
+      return { kind: "entry", raw, date: null, entryId };
     }
-    const day = entryDayKey(candidate.createdAt, offsetMinutes);
-    if (day === null || seen.has(day)) {
-      continue;
-    }
-    if (query !== "" && !day.includes(query)) {
-      continue;
-    }
-    seen.add(day);
-    suggestions.push(day);
   }
-
-  return suggestions;
+  return null;
 }
 
-type PickerItem = { kind: "date"; date: string } | { kind: "entry"; entry: Entry };
-
-function pickerItemKey(item: PickerItem): string {
-  return item.kind === "date" ? `date:${item.date}` : `entry:${item.entry.id}`;
-}
-
-function pickerItemMark(item: PickerItem): string {
-  // `[[YYYY-MM-DD]]` and `[[e:<id>]]` (ADR 0042) — built here rather than
-  // imported, since inline-markdown.ts has no reason to export a
-  // constructor for the marks it only ever parses.
-  return item.kind === "date" ? `[[${item.date}]]` : `[[e:${item.entry.id}]]`;
+function referenceAttrsForItem(item: PickerItem): ReferenceAttrs {
+  return item.kind === "date"
+    ? { kind: "date", raw: pickerItemMark(item), date: item.date, entryId: null }
+    : { kind: "entry", raw: pickerItemMark(item), date: null, entryId: item.entry.id };
 }
 
 /**
  * The imperative half of ComposerProps — issue #144's "Refer" action
  * (entry-actions.tsx, via composer-page.tsx) needs to put a Reference into
- * whichever textarea is live right now, and that can't be a plain prop:
+ * whichever editor is live right now, and that can't be a plain prop:
  * unlike `onSend`/`editingEntry`, there is no piece of data the page could
  * hand down that means "and now insert this" without composer-page.tsx
  * also tracking a one-shot command has been consumed. A ref exposing a
  * single imperative method is the standard escape hatch for exactly this
  * shape of "an ancestor occasionally needs to reach into a stateful
- * descendant," and it costs nothing when unused, which the inline `[[`
- * picker's own insertion path is (it lives entirely inside this component
- * and works directly against `value`).
+ * descendant," and it costs nothing when unused.
  */
 export interface ComposerHandle {
   /**
-   * Inserts `text` at the current caret, replacing any active selection —
-   * the same primitive `<input>`/`<textarea>` typing itself uses. Works
-   * identically whether this Composer is composing a new Entry or editing
-   * one (ADR 0028): both live in the same `value` state and the same
-   * textarea, so there is nothing here that has to branch on `editingEntry`
-   * to "target the right place" — there is only ever one place.
+   * Inserts `text` at the current selection, replacing it if non-empty —
+   * the ProseMirror-transaction successor to the old `<textarea>`'s own
+   * `setSelectionRange` + `flushSync` hack (issue #155 deletes both
+   * `insertAtCursor`'s old body and the sibling `commitInsertion` helper it
+   * shared with the picker's own insertion path, below). Works identically
+   * whether this Composer is composing a new Entry or editing one (ADR
+   * 0028): both live in the same `EditorView`, so there is nothing here
+   * that has to branch on `editingEntry`.
    */
   insertAtCursor: (text: string) => void;
 }
@@ -199,49 +178,24 @@ interface ComposerProps {
   disabled?: boolean;
   /**
    * ADR 0028: when set, the Composer edits this Entry instead of composing
-   * a new one. The Composer is where editing happens rather than an inline
-   * editor on the row itself — it's already docked, already grows with
-   * content, and already survives the Android keyboard and safe areas
-   * (tickets 51, 56); an inline text box on a History row would be a second
-   * input surface that has to relearn all three from scratch for no
-   * benefit. CONTEXT.md names Composer after the *view*, not the action it
-   * performs there, so "the Composer, editing" doesn't strain that
-   * vocabulary the way a second, separately-named editor would.
+   * a new one. See composer.tsx's own git history for the fuller
+   * rationale (unchanged by issue #155): the Composer is where editing
+   * happens rather than an inline editor on the row itself.
    *
-   * Owned by the page (composer-page.tsx), not the Composer itself — same
-   * split as `onSend`/`disabled` above — because which Entry (if any) is
-   * being edited has to survive independently of whatever's mid-composition
-   * here, and a page-level `useState<Entry | null>` is the simplest thing
-   * that can hold that.
+   * Owned by the page (composer-page.tsx), not the Composer itself.
    */
   editingEntry?: Entry | null;
-  /** Commits the edit — Send, while `editingEntry` is set. Required together with `editingEntry`; see the page for what happens after (clearing `editingEntry`, which is what ends edit mode here). */
+  /** Commits the edit — Send, while `editingEntry` is set AND the document actually changed (ADR 0044's dirty-only commit rule). Required together with `editingEntry`. */
   onCommitEdit?: (id: string, body: string) => void;
-  /** Escape, or the visible Cancel control below — leaves edit mode without committing anything. */
+  /** Escape, the visible Cancel control, or Send on an Entry nobody actually edited (ADR 0044) — leaves edit mode without committing anything. */
   onCancelEdit?: () => void;
   /**
    * Recent Entries, in the store's own newest-first order — issue #144's
-   * inline `[[` picker draws its date suggestions from these (the days
-   * they fall on), rather than this component calling `useEntryStore()`
-   * itself the way `entry-row.tsx`'s Reference renderers do. Those renderers
-   * already sit inside every page that shows an Entry's body, so reaching
-   * for the outlet context costs them nothing; `composer.test.tsx`'s own
-   * harnesses render a bare `<Composer>` with no Router/Outlet above it at
-   * all; and `onSend`/`editingEntry` above already establish that this
-   * component takes what it needs as props, not hooks it reaches for on
-   * its own. composer-page.tsx passes its own `entries` (already loaded via
-   * `useEntryStore()`) straight through. Optional, and defaulting to
-   * nothing offered, because no existing harness has any reason to supply
-   * it until it actually exercises the picker.
+   * inline `[[` picker draws its date suggestions from these. See
+   * composer-picker.ts's `buildDateSuggestions`.
    */
   recentEntries?: Entry[];
-  /**
-   * Text search across History (ADR 0014/0035) — issue #144's picker calls
-   * this to find an Entry Reference's target by words typed. The very same
-   * `search` composer-page.tsx already gets from `useEntryStore()`; see
-   * `recentEntries`' own comment for why it arrives as a prop rather than a
-   * second hook call in here. Optional for the same reason.
-   */
+  /** Text search across History (ADR 0014/0035) — issue #144's picker calls this to find an Entry Reference's target by words typed. */
   searchEntries?: (query: string) => Promise<Entry[]>;
   ref?: Ref<ComposerHandle>;
 }
@@ -260,88 +214,73 @@ export function Composer({
   searchEntries,
   ref,
 }: ComposerProps) {
-  const [value, setValue] = useState("");
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const hostRef = useRef<HTMLDivElement>(null);
+  const viewRef = useRef<EditorView | null>(null);
 
-  // Whatever was mid-composition the instant edit mode started (ADR 0028) —
-  // restored when edit mode ends, whether by Cancel or by a successful
-  // commit, so starting an edit never costs the reader a draft they hadn't
-  // sent yet. A ref, not state: it's written and read at the edges of edit
-  // mode, never rendered itself, and putting it in state would mean an
-  // extra render on every edit-mode transition for a value nothing displays.
+  // Every plugin the editor needs, built exactly once per Composer
+  // instance (a lazy `useState` initializer, not a bare call in the render
+  // body) — `loadDocument` below reuses this SAME array every time it
+  // swaps the document out for a fresh `EditorState`, since plugin state
+  // (the picker's, undo history's) is meant to reset on a document swap,
+  // but the plugin OBJECTS themselves have no reason to be rebuilt.
+  const [plugins] = useState(() => buildComposerPlugins(PLACEHOLDER));
+
+  // Whatever was mid-composition the instant edit mode started (ADR 0028)
+  // — restored when edit mode ends, whether by Cancel, Escape, or a
+  // successful (dirty) commit. Holds the serialized Markdown, the same
+  // representation `onSend`/`onCommitEdit` themselves use, rather than a
+  // `Node`: it only ever needs to survive being handed back to
+  // `entryMarkdownToDocument` once, and a string is trivially copyable
+  // where a `Node` from a specific `EditorState` is not.
   const draftBeforeEditRef = useRef("");
-  // The previous render's `editingEntry.id` (or null), so the effect below
-  // can tell "just started editing," "still editing the same Entry" (e.g. a
-  // keystroke bumping some unrelated prop) and "just stopped editing" apart
-  // — `editingEntry` alone can't distinguish the middle case from the first.
+  // The previous render's `editingEntry.id` (or null) — same role as
+  // composer.tsx's pre-#155 version: lets the effect below tell "just
+  // started editing," "still editing the same Entry" and "just stopped
+  // editing" apart.
   const previousEditingIdRef = useRef<string | null>(null);
+  // ADR 0044's dirty-only commit rule: true once any transaction since the
+  // document was last (re)loaded actually changed it
+  // (`transaction.docChanged`) — reset every time `loadDocument` swaps the
+  // document out (a fresh compose, or a freshly seeded edit). `send()`
+  // reads this through `decideSend` (composer-send.ts) rather than
+  // re-deriving it from the doc itself: `docChanged` is the one signal
+  // that distinguishes "the reader clicked into the field and back out"
+  // from "the reader actually typed something," which comparing the
+  // before/after Markdown could not — a normalizing serializer could make
+  // an untouched Entry's own round-trip look identical to its original
+  // text, or, just as wrongly, look different from it.
+  const dirtyRef = useRef(false);
 
-  // The inline `[[` picker's own state (issue #144) — see
-  // ReferencePickerState's own comment. `null` means closed.
+  // Mirrors `normalizeEntryBody(entryDocumentToMarkdown(doc)) === null` —
+  // kept as React state (rather than read fresh at render time) because
+  // computing it means running the serializer, and the Send button's
+  // `disabled` prop needs a value on every render, not just the ones where
+  // a transaction happened to fire beforehand.
+  const [isEmpty, setIsEmpty] = useState(true);
+
+  // The inline `[[` picker's own state (issue #144) — mirrored from
+  // composer-editor.ts's `pickerPlugin`, which derives it fresh from the
+  // document and selection on every transaction (see that module's own
+  // comment). `null` means closed.
   const [picker, setPicker] = useState<ReferencePickerState | null>(null);
   const [highlightIndex, setHighlightIndex] = useState(0);
-  // Entries matched by `searchEntries`, for whichever query last resolved —
-  // kept separate from `picker` because it arrives asynchronously and a
+  // Entries matched by `searchEntries`, for whichever query last resolved
+  // — kept separate from `picker` because it arrives asynchronously and a
   // stale response must never overwrite a newer one (the `cancelled` flag
-  // below is what enforces that), where `picker` itself is always exactly
-  // as current as the last keystroke.
+  // below is what enforces that).
   const [entryResults, setEntryResults] = useState<Entry[]>([]);
 
-  useEffect(() => {
-    const currentId = editingEntry?.id ?? null;
-    if (currentId === previousEditingIdRef.current) {
-      return;
-    }
-    if (currentId !== null) {
-      if (previousEditingIdRef.current === null) {
-        // Entering edit mode: stash the live draft (read via the functional
-        // updater so this doesn't need `value` in the dependency array —
-        // this effect must only run on `editingEntry` changing, not on
-        // every keystroke) and seed the field with the Entry's own body.
-        setValue((current) => {
-          draftBeforeEditRef.current = current;
-          return editingEntry?.body ?? "";
-        });
-      } else {
-        // Switching which Entry is being edited without cancelling first —
-        // the History context menu allows this (nothing closes the menu's
-        // Edit choice for a second row). Reseed from the new Entry; the
-        // stashed pre-edit draft is untouched, so it's still what Cancel
-        // restores.
-        setValue(editingEntry?.body ?? "");
-      }
-    } else {
-      // Left edit mode — Cancel, or the page cleared `editingEntry` after a
-      // successful commit. Either way, restore whatever was mid-composition
-      // before, per this component's own doc comment on `editingEntry`.
-      setValue(draftBeforeEditRef.current);
-      draftBeforeEditRef.current = "";
-    }
-    previousEditingIdRef.current = currentId;
-    // Whatever the picker was anchored to belonged to the value this Entry
-    // transition just replaced wholesale — its `start` index almost
-    // certainly no longer points at a `[[` in the new text at all.
-    setPicker(null);
-  }, [editingEntry]);
-
   const dateMode = picker !== null && isDateModeQuery(picker.query);
-
   const offsetMinutes = deviceUtcOffsetMinutes();
   const dateSuggestions =
     picker !== null && dateMode
       ? buildDateSuggestions(picker.query, recentEntries ?? [], offsetMinutes)
       : [];
 
-  // Issue #144: searches History for the picker's text-mode query. A plain
-  // effect with a `cancelled` closure, not a TanStack Query call like
-  // `use-entry-search.ts`'s own `useEntrySearch` — that hook needs a
-  // `QueryClientProvider` ancestor, which every existing `composer.test.tsx`
-  // harness (and every render of this component before this ticket) has
-  // never needed to stand up, and sharing its cache with History's own
-  // search box would mean the picker's own transient, one-off lookups sit
-  // in the same cache entries as the reader's actual Search — two
-  // different questions ("what does this word match, once, right now" vs.
-  // "narrow the thread to this") that happen to call the same store method.
+  // Issue #144: searches History for the picker's text-mode query. See the
+  // pre-#155 composer.tsx for why this is a plain effect with a
+  // `cancelled` closure rather than a TanStack Query call — unchanged by
+  // this ticket.
   useEffect(() => {
     if (picker === null || dateMode) {
       setEntryResults([]);
@@ -374,197 +313,335 @@ export function Composer({
   const todayKey = entryDayKey(new Date().toISOString(), offsetMinutes) ?? "";
 
   /**
-   * Splices `text` into `value` between `start` and `end` (an empty range
-   * for a plain caret insertion), then puts the real caret right after it.
+   * Swaps the editor's document out for a fresh one built from `body`,
+   * resetting every plugin's own state along with it (the picker closes,
+   * undo history starts clean) — used on mount, on every `editingEntry`
+   * transition, and after a successful new-Entry Send. Bypasses
+   * `dispatchTransaction` entirely (`updateState`, not `dispatch`), so it
+   * also owns updating `isEmpty` itself rather than leaving that to the
+   * dispatch hook, which only ever sees a `Transaction`.
    *
-   * `flushSync` wraps the state update rather than letting it batch
-   * normally: `setSelectionRange` right after has to run against the
-   * textarea's OWN already-updated `value` — a native element's selection
-   * cannot be placed past the end of whatever text it currently holds, so
-   * setting it against the stale, pre-update DOM (what an unflushed,
-   * batched update would still show) would just clamp to the old, shorter
-   * length instead of landing where the inserted text ends. This is the
-   * one piece of DOM state (an `<textarea>`'s own caret) React does not
-   * own or reconcile, so it is the one piece this file ever reaches past
-   * React for.
-   *
-   * `el.focus()` before setting the range is what makes choosing a
-   * suggestion by clicking still work: the click already moved focus onto
-   * that `<button>`, and a caret position set on an unfocused textarea is
-   * silently discarded by every browser.
+   * The selection is placed at the END of the freshly seeded document
+   * (`Selection.atEnd`), not left to `EditorState.create`'s own default
+   * (the very start) — this is what makes `insertAtCursor`'s "Refer"
+   * action land after whatever the seeded body already says, matching the
+   * pre-#155 `<textarea>`'s own default (`el?.selectionStart ?? value.length`)
+   * for a field nothing has explicitly placed a caret into yet.
    */
-  const commitInsertion = useCallback((start: number, end: number, text: string) => {
-    const el = textareaRef.current;
-    const nextCaret = start + text.length;
-    flushSync(() => {
-      setValue((current) => `${current.slice(0, start)}${text}${current.slice(end)}`);
-    });
-    if (el) {
-      el.focus();
-      el.setSelectionRange(nextCaret, nextCaret);
-    }
-  }, []);
+  const loadDocument = useCallback(
+    (view: EditorView, body: string) => {
+      const doc = entryMarkdownToDocument(body);
+      view.updateState(
+        EditorState.create({ schema: entrySchema, doc, plugins, selection: Selection.atEnd(doc) }),
+      );
+      setIsEmpty(normalizeEntryBody(entryDocumentToMarkdown(doc)) === null);
+    },
+    [plugins],
+  );
 
   function chooseItem(item: PickerItem) {
-    if (picker === null) {
+    const view = viewRef.current;
+    if (view === null || picker === null) {
       return;
     }
     // Drops the triggering `[[` itself (`picker.start - 2`) along with
-    // whatever was typed after it, and replaces the whole span with the
-    // completed mark — never a raw uuid: `pickerItemMark` builds
-    // `[[e:<id>]]`/`[[YYYY-MM-DD]]`, and nothing in this file, or in the
-    // list rendered below, ever shows an id as text a reader would read.
-    commitInsertion(picker.start - 2, picker.start + picker.query.length, pickerItemMark(item));
-    setPicker(null);
+    // whatever was typed after it, and replaces the whole span with a
+    // live `reference` node — never a raw uuid as text: `referenceAttrsForItem`
+    // carries the id in the node's own attrs, and nothing in this file, or
+    // in the list rendered below, ever shows an id as text a reader would
+    // read.
+    const from = picker.start - 2;
+    const to = picker.start + picker.query.length;
+    const node = referenceNodeType.create(referenceAttrsForItem(item));
+    view.dispatch(view.state.tr.replaceRangeWith(from, to, node));
+    view.focus();
   }
 
-  // The "Refer" action (entry-actions.tsx, via composer-page.tsx) reaches
-  // in through this — see ComposerHandle's own comment for why it has to
-  // be imperative at all. `insertAtCursor` reads the *current* selection
-  // off the DOM node rather than assuming the caret sits at the end of
-  // `value`: a reader who chose Refer after clicking back into the middle
-  // of a longer draft should get the Reference where their caret actually
-  // was, and a real `<textarea>` keeps that position even while unfocused
-  // (opening EntryActionsSheet blurs it), which is exactly the state this
-  // reads.
-  useImperativeHandle(
-    ref,
-    () => ({
-      insertAtCursor(text: string) {
-        const el = textareaRef.current;
-        const start = el?.selectionStart ?? value.length;
-        const end = el?.selectionEnd ?? start;
-        commitInsertion(start, end, text);
-      },
-    }),
-    [value, commitInsertion],
-  );
+  function closePicker() {
+    const view = viewRef.current;
+    if (view === null) {
+      return;
+    }
+    // See composer-editor.ts's own comment on `PICKER_DISMISS_META` for
+    // why this needs to be a meta flag rather than a plain `setPicker(null)`.
+    view.dispatch(view.state.tr.setMeta(pickerPluginKey, PICKER_DISMISS_META));
+  }
 
-  const send = () => {
-    if (disabled) {
+  const send = useCallback(() => {
+    const view = viewRef.current;
+    if (disabled || view === null) {
       return;
     }
-    const body = normalizeEntryBody(value);
-    if (body === null) {
-      // Editing to empty is refused, exactly like an empty new Send — same
-      // rule, same helper, not reimplemented for this second case.
+    const rawBody = entryDocumentToMarkdown(view.state.doc);
+    const decision = decideSend({
+      editingEntryId: editingEntry?.id ?? null,
+      rawBody,
+      dirty: dirtyRef.current,
+    });
+    if (decision.kind === "refuseEmpty") {
       return;
     }
-    if (editingEntry) {
-      onCommitEdit?.(editingEntry.id, body);
+    if (decision.kind === "cancelUnchanged") {
+      // ADR 0044: nothing to write, so this leaves edit mode exactly the
+      // way Cancel does — the page's own `editingEntry` transition below
+      // is what actually restores the stashed draft.
+      onCancelEdit?.();
       return;
     }
-    // Unchanged from before ADR 0028: the raw (untrimmed) `value`, not
-    // the normalized `body` above — sendEntry (use-history.ts) does its own
-    // normalizeEntryBody() call, so this only needed `body` to decide
-    // whether to send at all.
-    onSend(value);
-    setValue("");
-  };
+    if (decision.kind === "commit") {
+      onCommitEdit?.(decision.id, decision.body);
+      return;
+    }
+    onSend(decision.body);
+    loadDocument(view, "");
+    dirtyRef.current = false;
+  }, [disabled, editingEntry, onCancelEdit, onCommitEdit, onSend, loadDocument]);
 
-  const cancelEdit = () => {
+  const cancelEdit = useCallback(() => {
     onCancelEdit?.();
-  };
+  }, [onCancelEdit]);
 
-  const handleChange = (event: ChangeEvent<HTMLTextAreaElement>) => {
-    const nextValue = event.target.value;
-    setValue(nextValue);
-    const caret = event.target.selectionStart ?? nextValue.length;
-    setPicker((previous) => derivePicker(nextValue, caret, previous));
-    setHighlightIndex(0);
-  };
-
-  const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+  // Latest-callback indirection (this file's own module comment) — reassigned
+  // every render so the mounted `EditorView`'s `handleKeyDown`/
+  // `dispatchTransaction` props always see this render's `picker`,
+  // `items`, `editingEntry`, etc. without the view itself ever being
+  // rebuilt.
+  const handleKeyDownImplRef = useRef<(view: EditorView, event: KeyboardEvent) => boolean>(
+    () => false,
+  );
+  handleKeyDownImplRef.current = (_view, event) => {
     // Checked first, and unconditionally: Cmd/Ctrl+Enter must still Send
-    // no matter what the picker is doing (issue #144's own requirement) —
-    // closing the picker here rather than leaving it for `send()`'s own
-    // `setValue("")` is what stops a picker anchored into the just-cleared
-    // draft from reopening against whatever the reader types next.
+    // no matter what the picker is doing (issue #144's own requirement).
     if (isSubmitChord(event)) {
       event.preventDefault();
-      setPicker(null);
       send();
-      return;
+      return true;
     }
     if (picker !== null) {
       if (event.key === "Escape") {
-        // Closes the picker without inserting anything (issue #144) and
-        // swallows the keystroke entirely — deliberately not falling
-        // through to the `editingEntry` Escape below in the same press.
-        // Cancelling an edit is still one more Escape away; a single
-        // keystroke should not both close a list AND leave edit mode, two
-        // unrelated things happening on the one press a reader meant for
-        // only the picker they're looking at.
+        // Closes the picker without inserting anything and swallows the
+        // keystroke entirely — deliberately not falling through to the
+        // `editingEntry` Escape below in the same press. Cancelling an
+        // edit is still one more Escape away.
         event.preventDefault();
-        setPicker(null);
-        return;
+        closePicker();
+        return true;
       }
       if (event.key === "ArrowDown") {
         event.preventDefault();
         if (items.length > 0) {
           setHighlightIndex((index) => (index + 1) % items.length);
         }
-        return;
+        return true;
       }
       if (event.key === "ArrowUp") {
         event.preventDefault();
         if (items.length > 0) {
           setHighlightIndex((index) => (index - 1 + items.length) % items.length);
         }
-        return;
+        return true;
       }
       // Plain Enter selects the highlighted suggestion instead of its usual
-      // job (send, or insert a newline) — conventional for an open
+      // job (send, or split/lift a list item) — conventional for an open
       // autocomplete list, and safe to claim here specifically because the
-      // real Send chord was already handled above, before this block ever
-      // runs. Shift+Enter is excluded for the same reason `isSubmitChord`
-      // excludes it everywhere else: it's the browser's own "definitely a
-      // newline" gesture. With nothing to select (no matches yet), Enter
-      // is left alone and falls through to its ordinary newline behaviour
-      // below — a picker with an empty list has nothing this keystroke
-      // could commit to.
+      // real Send chord was already handled above. Shift+Enter is excluded
+      // for the same reason `isSubmitChord` excludes it everywhere else.
+      // With nothing to select, Enter is left alone (returns `false`) and
+      // falls through to ProseMirror's own list/paragraph handling below —
+      // a picker with an empty list has nothing this keystroke could
+      // commit to.
       const highlighted = clampedHighlight >= 0 ? items[clampedHighlight] : undefined;
       if (event.key === "Enter" && !event.shiftKey && highlighted) {
         event.preventDefault();
         chooseItem(highlighted);
-        return;
+        return true;
       }
     }
-    // Issue #76: plain Enter is no longer Send on any platform — it falls
-    // through and lets the textarea insert its own newline, the same as
-    // every other unhandled key. Only the platform-specific chord
-    // (submit-chord.ts) sends; letting Enter through with no
-    // preventDefault() is what makes multi-line composition possible at
-    // all, since Shift+Enter was previously the *only* way to get a
-    // newline in here.
     if (event.key === "Escape" && editingEntry) {
       event.preventDefault();
       cancelEdit();
+      return true;
     }
+    // Not handled here — falls through to composer-editor.ts's own
+    // keymap plugins (list Enter/lift, then baseKeymap's ordinary
+    // paragraph split) and, for anything that isn't a keymap binding at
+    // all, prosemirror-inputrules' `handleTextInput` (the `**bold**`/`- `/
+    // etc. rules).
+    return false;
   };
+
+  const dispatchTransactionImplRef = useRef<(tr: Transaction) => void>(() => {});
+  dispatchTransactionImplRef.current = (tr) => {
+    const view = viewRef.current;
+    if (view === null) {
+      return;
+    }
+    const newState = view.state.apply(tr);
+    view.updateState(newState);
+    if (tr.docChanged) {
+      dirtyRef.current = true;
+      setIsEmpty(normalizeEntryBody(entryDocumentToMarkdown(newState.doc)) === null);
+    }
+    const nextPicker = pickerPluginKey.getState(newState) ?? null;
+    if ((nextPicker?.query ?? null) !== (picker?.query ?? null)) {
+      setHighlightIndex(0);
+    }
+    setPicker(nextPicker);
+  };
+
+  // The `disabled` prop, readable from the `EditorView`'s own `editable`/
+  // `attributes` functions — both are re-invoked on every `updateState`,
+  // but nothing forces one when `disabled` changes without a transaction
+  // (the store finishing its async open, ticket 21), so the effect below
+  // forces a resync explicitly.
+  const disabledRef = useRef(disabled);
+  disabledRef.current = disabled;
+  // Read by the `attributes` function below for the editable root's
+  // `aria-label` — kept as a ref, alongside `disabledRef`, rather than a
+  // dependency the mount effect closes over, for the same reason: the
+  // `EditorView` is built once and its `attributes` function is called
+  // fresh by ProseMirror on every `updateState`, so a ref is all a value
+  // that changes on ordinary re-renders needs.
+  const editingLabelRef = useRef(editingEntry ? "Edit Entry" : "Compose Entry");
+  editingLabelRef.current = editingEntry ? "Edit Entry" : "Compose Entry";
+
+  // Mount-only: the `EditorView` is constructed exactly once per Composer
+  // instance and lives until unmount — see this file's own module comment
+  // for why. `editingEntry`'s own initial value, if somehow already set on
+  // first mount, is picked up by the effect below rather than seeded here
+  // directly, the same way `useState("")` (this component's pre-#155
+  // shape) always started empty regardless of `editingEntry` and let its
+  // own effect do the real seeding.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: deliberately mount-only — reconstructing the EditorView on every render would lose focus and undo history for no benefit; every later change reaches it through the ref indirection above or the dedicated effects below.
+  useEffect(() => {
+    if (hostRef.current === null) {
+      return;
+    }
+    const state = EditorState.create({
+      schema: entrySchema,
+      doc: entryMarkdownToDocument(""),
+      plugins,
+    });
+    const view = new EditorView(
+      { mount: hostRef.current },
+      {
+        state,
+        editable: () => !disabledRef.current,
+        nodeViews: {
+          paragraph: () => paragraphNodeView(),
+          list_item: (node, nodeView, getPos) => listItemNodeView(node, nodeView, getPos),
+          reference: (node) => referenceNodeView(node),
+        },
+        // ProseMirror owns `view.dom`'s attributes outright once mounted
+        // (it recomputes and re-applies them from this function on every
+        // `updateState`, `class` additively onto its own base "ProseMirror"
+        // class, everything else verbatim) — setting any of these instead
+        // as a React `className`/`role`/`aria-*` prop on the JSX `<div>`
+        // below would just be overwritten the moment the view first
+        // renders, so all of it lives here instead.
+        attributes: () => ({
+          class: hostClassName(disabledRef.current),
+          role: "textbox",
+          "aria-multiline": "true",
+          "aria-label": editingLabelRef.current,
+          placeholder: PLACEHOLDER,
+          ...(disabledRef.current ? { "aria-disabled": "true" } : {}),
+        }),
+        handleKeyDown: (currentView, event) => handleKeyDownImplRef.current(currentView, event),
+        dispatchTransaction: (tr) => dispatchTransactionImplRef.current(tr),
+      },
+    );
+    viewRef.current = view;
+    return () => {
+      view.destroy();
+      viewRef.current = null;
+    };
+  }, []);
+
+  // Forces `attributes`/`editable` to re-run against the fresh `disabledRef`
+  // set just above — `updateState` with the SAME state is ProseMirror's
+  // own idiom for "resync view-level props onto the DOM without touching
+  // the document." The effect body reads `disabledRef.current`, not
+  // `disabled` itself (biome's static analysis can't see that the two move
+  // together, so it reads `disabled` as an unused dependency) — but
+  // `disabled` genuinely has to stay the dependency: it's the prop change
+  // this effect exists to react to, and dropping it (biome's own suggested
+  // fix) would mean a store finishing its async open (ticket 21) never
+  // resyncs the editable/aria-disabled state at all.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `disabled` is read through `disabledRef.current`, updated in the render body just above — see the comment above.
+  useEffect(() => {
+    const view = viewRef.current;
+    if (view !== null) {
+      view.updateState(view.state);
+    }
+  }, [disabled]);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (view === null) {
+      return;
+    }
+    const currentId = editingEntry?.id ?? null;
+    if (currentId === previousEditingIdRef.current) {
+      return;
+    }
+    if (currentId !== null) {
+      if (previousEditingIdRef.current === null) {
+        // Entering edit mode: stash the live draft and seed the field with
+        // the Entry's own body.
+        draftBeforeEditRef.current = entryDocumentToMarkdown(view.state.doc);
+      }
+      // Switching which Entry is being edited without cancelling first (the
+      // History context menu allows this) reseeds from the new Entry; the
+      // already-stashed pre-edit draft is untouched either way, so it's
+      // still what Cancel restores.
+      loadDocument(view, editingEntry?.body ?? "");
+    } else {
+      // Left edit mode — Cancel, Escape, an unchanged Send (ADR 0044), or
+      // the page cleared `editingEntry` after a successful commit. Either
+      // way, restore whatever was mid-composition before.
+      loadDocument(view, draftBeforeEditRef.current);
+      draftBeforeEditRef.current = "";
+    }
+    dirtyRef.current = false;
+    setPicker(null);
+    setHighlightIndex(0);
+    previousEditingIdRef.current = currentId;
+  }, [editingEntry, loadDocument]);
+
+  // The "Refer" action (entry-actions.tsx, via composer-page.tsx) reaches
+  // in through this — see ComposerHandle's own comment for why it has to
+  // be imperative at all.
+  useImperativeHandle(
+    ref,
+    () => ({
+      insertAtCursor(text: string) {
+        const view = viewRef.current;
+        if (view === null) {
+          return;
+        }
+        const attrs = parseReferenceMarkText(text);
+        const { from, to } = view.state.selection;
+        const tr =
+          attrs !== null
+            ? view.state.tr.replaceRangeWith(from, to, referenceNodeType.create(attrs))
+            : view.state.tr.insertText(text, from, to);
+        view.dispatch(tr);
+        view.focus();
+      },
+    }),
+    [],
+  );
 
   return (
     // Docked to Shell's composerSlot (ticket 51, #49's Discord layout) rather
-    // than scrolling with the rest of the page: a full-bleed bar so its
-    // border/background reach the window edge, with the same proportional
-    // reading column as Shell's content region nested inside (ADR 0019) so
-    // the field lines up with History above it — the two percentages must
-    // stay identical or the field stops agreeing with the thread. Its own
-    // safe-area padding is what the stand-in on Shell's scroll region
-    // existed to cover before this ticket gave the Composer a real bottom
-    // edge to own, at every width. It was briefly gated to `md` and up,
-    // because Shell's persistent `nav` was ordered after this element and
-    // owned the narrow window's bottom edge; ADR 0036 retired that nav, so
-    // there is nothing below this any more and the gate would now leave a
-    // phone's gesture bar unaccounted for. `--safe-bottom` (set by
-    // `chat-shell-layout.tsx`) is `env(safe-area-inset-bottom)` normally and
-    // 0 while a keyboard is up, since the home indicator is behind it.
+    // than scrolling with the rest of the page — unchanged by issue #155;
+    // see this component's own git history for the fuller layout rationale.
     <div className="shrink-0 border-t border-border bg-background [padding-bottom:var(--safe-bottom)]">
       {editingEntry && (
         // The visible half of "this is an edit, not a new Send" (ADR 0028).
-        // Escape (handleKeyDown above) is the keyboard half of the edit
-        // indicator. Same proportional column as the input row below so
-        // its edges line up.
+        // Escape (handleKeyDownImplRef above) is the keyboard half of the
+        // edit indicator.
         <div className="mx-auto flex w-[97%] items-center justify-between px-4 pt-2 text-xs text-muted-foreground md:w-[85%]">
           <span>Editing Entry</span>
           <div className="flex items-center gap-3">
@@ -588,10 +665,9 @@ export function Composer({
         <div className="relative min-w-0 flex-1">
           {picker !== null && (
             // Opens upward (`bottom-full`), never down: the Composer is
-            // docked to the bottom of the screen (this component's own
-            // outer comment), so a list opening below the field would be
-            // fighting the keyboard, the safe area, or simply the bottom of
-            // the window for room it doesn't have.
+            // docked to the bottom of the screen, so a list opening below
+            // the field would be fighting the keyboard, the safe area, or
+            // simply the bottom of the window for room it doesn't have.
             <div
               role="listbox"
               aria-label={dateMode ? "Days" : "Entries"}
@@ -608,11 +684,6 @@ export function Composer({
                     type="button"
                     role="option"
                     aria-selected={index === clampedHighlight}
-                    // Mouse hover moves the highlight to match, the same
-                    // convention a native `<select>` or menu follows — a
-                    // reader who switches from keyboard narrowing to
-                    // pointing at an item should see the same item Enter
-                    // would have picked.
                     onMouseEnter={() => setHighlightIndex(index)}
                     onClick={() => chooseItem(item)}
                     className={cn(
@@ -639,12 +710,6 @@ export function Composer({
                               : formatDaySeparator(day, todayKey);
                           })()}
                         </span>
-                        {/* The Entry's own opening words, never its id
-                            (ADR 0042: an id names nothing a reader can
-                            use) — the same `entrySnippet` entry-row.tsx's
-                            own chip preview uses, so a picker candidate and
-                            the chip it becomes once inserted read the same
-                            way. */}
                         <span className="line-clamp-1 text-xs text-muted-foreground">
                           {entrySnippet(item.entry.body)}
                         </span>
@@ -655,51 +720,24 @@ export function Composer({
               )}
             </div>
           )}
-          <Textarea
-            ref={textareaRef}
-            placeholder="What's on your mind?"
-            value={value}
-            onChange={handleChange}
-            onKeyDown={handleKeyDown}
-            disabled={disabled}
-            // ui/textarea.tsx already sizes to content via field-sizing:
-            // content; min-h/max-h here are what turn that unbounded growth
-            // into ticket 51's "one line, grows to about five, then scrolls."
-            // Sending clears `value`, and field-sizing shrinks the box back to
-            // min-h on its own — no row-count state to track.
-            //
-            // `leading-6` and an exact max-height, rather than `max-h-36`:
-            // the ceiling has to be a whole number of lines plus the padding
-            // and border, or the field clips its own last line horizontally
-            // through the glyphs at full height. 36 (144px) was not — it left
-            // a third of a sixth line showing. Pinning the line box at 24px
-            // also stops the count changing between the base and `md` font
-            // sizes, which is why it is set here rather than inherited.
-            // 5 lines x 24px + 16px padding + 2px border = 138px.
-            //
-            // The focus ring is gated to hover-capable devices. `:focus-visible`
-            // always matches a focused text field per spec, so on a phone
-            // tapping the Composer painted a 3px ring around it — a
-            // browser-shaped artefact on a surface that should look like a
-            // chat input. Gating on `(hover: hover)` mirrors the same
-            // pointer-capability split `entry-actions.tsx` already makes.
-            className="min-h-11 max-h-[8.625rem] w-full resize-none overflow-y-auto rounded-3xl leading-6 focus-visible:ring-0 [@media(hover:hover)]:focus-visible:ring-3"
-          />
+          {/* The `contenteditable` ProseMirror takes over on mount — see the
+              mount effect's own `attributes` function (and `hostClassName`'s
+              own comment, above) for why this element carries no
+              className/role/aria-* of its own here: ProseMirror recomputes
+              and re-applies all of it, on every `updateState`, from that
+              function instead. */}
+          <div ref={hostRef} />
         </div>
         <Button
           aria-label="Send"
           size="icon-lg"
           // Ticket 51 replaces the labelled rectangle with an icon button;
-          // aria-label keeps "Send" as the accessible name the e2e suite and
-          // composer.test.tsx already query by. size-11 (44px) meets the
-          // platform tap-target minimum the icon-lg token alone (36px)
-          // doesn't reach.
+          // aria-label keeps "Send" as the accessible name the e2e suite
+          // already queries by. size-11 (44px) meets the platform
+          // tap-target minimum the icon-lg token alone (36px) doesn't reach.
           className="size-11 shrink-0 self-end rounded-full"
           onClick={send}
-          // Empty is not sendable — `send` already refuses it (entry-text.ts
-          // rejects a blank draft), so a Send that looks live over an empty
-          // field is the button lying about what it will do.
-          disabled={disabled || value.trim() === ""}
+          disabled={disabled || isEmpty}
         >
           <ArrowUp aria-hidden="true" className="size-5" />
         </Button>

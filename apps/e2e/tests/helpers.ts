@@ -127,6 +127,19 @@ export async function waitForEntryId(
 }
 
 /**
+ * The Entry's own `seq` on the Server, right now — a snapshot, not a poll.
+ * ADR 0028: `seq` is reassigned on every write (insert OR edit), never
+ * merely on read, so it is the strongest signal composer.spec.ts's
+ * dirty-only-commit test has that "closing an unedited Entry" genuinely
+ * never wrote anything: a real (even a no-op-content) `UPDATE` would move
+ * this number, where reading — or opening the Composer and closing it
+ * again — never does.
+ */
+export function entrySeq(id: string, database: string): string | undefined {
+  return sqlScalar(database, `select seq from entries where id = ${sqlLiteral(id)};`);
+}
+
+/**
  * Waits until the Entry with this id has a non-null `deleted_at` — the
  * condition a delete's tombstone has actually reached the Server, rather
  * than assuming a fixed sleep gave it enough time. `id` (not `body`) since
@@ -305,8 +318,37 @@ export async function openDestination(
   await page.getByRole("link", { name }).click();
 }
 
+/**
+ * Issue #155's Composer field, ready to type into. `getByPlaceholder` still
+ * finds it — composer.tsx sets a literal `placeholder` HTML attribute on
+ * the `contenteditable` root purely so this locator keeps working, even
+ * though a `<div>` has no native placeholder semantics of its own (verified
+ * against playwright-core's own `getByAttributeTextSelector`, which is a
+ * plain `[placeholder=...]` attribute match, not restricted to `<input>`/
+ * `<textarea>`).
+ */
+export function composerField(page: Page): Locator {
+  return page.getByPlaceholder("What's on your mind?");
+}
+
+/**
+ * Types `body` into the Composer via real keystrokes and sends it.
+ *
+ * `pressSequentially`, not `fill()`: the field is a ProseMirror
+ * `contenteditable` now (issue #155), not a `<textarea>`, and `fill()`'s
+ * bulk DOM write bypasses the `beforeinput`/`input` events ProseMirror's
+ * `DOMObserver` and `prosemirror-inputrules`' `handleTextInput` are built
+ * to read — real per-character keystrokes are the one interaction path
+ * every part of the editor (input rules included) is guaranteed to
+ * understand correctly, which is exactly what a body containing `[[`/`- `/
+ * etc. (several specs' own bodies do) needs to land as. Every existing
+ * caller's body is one line (no `\n`), so `pressSequentially` alone — with
+ * no special-casing for Enter — is enough to reproduce it.
+ */
 export async function sendEntry(page: Page, body: string): Promise<void> {
-  await page.getByPlaceholder("What's on your mind?").fill(body);
+  const editor = composerField(page);
+  await editor.click();
+  await editor.pressSequentially(body);
   await page.getByRole("button", { name: "Send" }).click();
 }
 
@@ -357,9 +399,12 @@ export async function installDateOffset(page: Page): Promise<void> {
 
 /** Shifts every subsequent no-argument `new Date()`/`Date.now()` on this page forward by `days` — see `installDateOffset`'s own comment. */
 export async function advanceDateByDays(page: Page, days: number): Promise<void> {
-  await page.evaluate((ms) => {
-    (window as unknown as { __setDateOffsetMs: (ms: number) => void }).__setDateOffsetMs(ms);
-  }, days * 24 * 60 * 60 * 1000);
+  await page.evaluate(
+    (ms) => {
+      (window as unknown as { __setDateOffsetMs: (ms: number) => void }).__setDateOffsetMs(ms);
+    },
+    days * 24 * 60 * 60 * 1000,
+  );
 }
 
 /**
@@ -486,6 +531,12 @@ export async function hoverEntryRow(page: Page, body: string): Promise<void> {
  * Send is a click, not the keyboard: issue #76 made plain Enter insert a
  * newline, and the chord that does send differs by build target, so a click
  * is the one gesture meaning "send" on every platform this might run against.
+ *
+ * `Control+a`/`Backspace` clears the seeded body before typing `newBody` —
+ * `ControlOrMeta+a` (Playwright's own cross-platform select-all modifier)
+ * would be the more idiomatic choice, but this suite already runs headless
+ * Chromium only (see `composerField`'s own comment on why `fill()` itself is
+ * avoided here for the same reason it is in `sendEntry`).
  */
 export async function editEntryViaMenu(
   page: Page,
@@ -495,7 +546,11 @@ export async function editEntryViaMenu(
   const row = entryRow(page, currentBody);
   await row.hover();
   await row.getByRole("button", { name: "Edit" }).click();
-  await page.getByPlaceholder("What's on your mind?").fill(newBody);
+  const editor = composerField(page);
+  await editor.click();
+  await page.keyboard.press("ControlOrMeta+A");
+  await page.keyboard.press("Backspace");
+  await editor.pressSequentially(newBody);
   await page.getByRole("button", { name: "Send" }).click();
 }
 
