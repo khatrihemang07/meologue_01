@@ -68,13 +68,17 @@ describe("EntryBubble", () => {
   // Issue #149: the clock moved off a right float (which needed the body
   // to stay one line box) onto its own row below it, so an Entry can later
   // hold block content without breaking the float. The meta row is a
-  // sibling of the body `<p>`, not nested inside it, and right-aligns its
-  // own contents rather than relying on float placement to do it.
+  // sibling of the body element, not nested inside it, and right-aligns
+  // its own contents rather than relying on float placement to do it.
   it("puts the clock time on its own row below the body, right-aligned", () => {
     const { container } = render(<EntryBubble entry={entry()} syncEnabled={false} side="out" />);
 
+    // A `<div>`, not `<p>` (issue #152): the body can now render a `<ul>`/
+    // `<ol>` alongside its own `<p>`s when the Entry holds a list, and a
+    // list cannot validly nest inside a `<p>` — see entry-bubble.tsx's own
+    // comment on this element.
     const body = container.querySelector('[data-slot="bubble-body"]');
-    expect(body?.tagName).toBe("P");
+    expect(body?.tagName).toBe("DIV");
 
     const meta = container.querySelector("time")?.parentElement;
     expect(meta).not.toBeNull();

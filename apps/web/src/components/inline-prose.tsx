@@ -51,8 +51,15 @@ function renderText(text: string, query: string, keyPrefix: string): ReactNode[]
  * exhaustive over `InlineNode`, but only the type checker can see that, and a
  * `flatMap` callback with no fallthrough return reads as a bug to every linter
  * that looks at it.
+ *
+ * Exported for `entry-prose.tsx`: an Entry's block renderer (issue #152)
+ * needs this exact inline rendering — marks, References, Search
+ * highlighting — inside a `<li>`, not just inside the flat run `inlineProse`
+ * below hands its own caller. Reusing it rather than a second copy is what
+ * keeps a Reference chip, a highlighted match, and nested emphasis looking
+ * and behaving identically whether they sit in a list item or plain prose.
  */
-function renderNodes(
+export function renderNodes(
   nodes: readonly InlineNode[],
   query: string,
   refs: ReferenceRenderers,

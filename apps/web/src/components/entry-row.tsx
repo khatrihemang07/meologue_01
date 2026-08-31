@@ -20,7 +20,7 @@ import {
   formatDaySeparator,
 } from "@/lib/entry-day";
 import { formatAbsoluteTime } from "@/lib/entry-time";
-import { inlineNodesToText, parseInlineMarkdown } from "@/lib/inline-markdown";
+import { entryBlocksToText, parseEntryMarkdown } from "@/lib/inline-markdown";
 import { cn } from "@/lib/utils";
 import { useEntryStore } from "@/pages/entry-store-layout";
 
@@ -80,18 +80,21 @@ const ENTRY_SNIPPET_MAX_LENGTH = 40;
 
 /**
  * The opening of an Entry's text, flattened to one line with no formatting
- * — a chip has room for a preview, not the whole shape of the target's own
- * prose.
+ * and no list structure — a chip has room for a preview, not the whole
+ * shape of the target's own prose.
  *
- * Goes through `parseInlineMarkdown`/`inlineNodesToText` (inline-markdown.ts)
+ * Goes through `parseEntryMarkdown`/`entryBlocksToText` (inline-markdown.ts)
  * rather than `entryBodyContent`/`entryProse` below: those render the
- * target's own marks — bold text stays bold, a nested Reference resolves to
- * its own chip — which is right for reading that Entry on its own terms, but
- * wrong for a two-line preview sitting inside a Reference already carrying
- * its own formatting (the day label, the chip's border). Collapsing to
- * plain text here also means a Reference nested inside the target's body
- * never recurses into a second live lookup just to build a preview of the
- * first one.
+ * target's own marks and lists — bold text stays bold, a nested Reference
+ * resolves to its own chip, `- milk` becomes a real bullet — which is right
+ * for reading that Entry on its own terms, but wrong for a two-line preview
+ * sitting inside a Reference already carrying its own formatting (the day
+ * label, the chip's border), and `entryBlocksToText` is what keeps a `- `/
+ * `1. ` marker from leaking into that preview as a literal character
+ * instead of becoming space-joined words like the rest of the flattened
+ * text. Collapsing to plain text here also means a Reference nested inside
+ * the target's body never recurses into a second live lookup just to build
+ * a preview of the first one.
  *
  * Exported for `composer.tsx`'s own inline `[[` picker (issue #144): the
  * same "an Entry's id names nothing a reader can use" reasoning that keeps
@@ -100,7 +103,7 @@ const ENTRY_SNIPPET_MAX_LENGTH = 40;
  * the target's opening words, never its uuid, either place.
  */
 export function entrySnippet(body: string): string {
-  const flat = inlineNodesToText(parseInlineMarkdown(body)).replace(/\s+/g, " ").trim();
+  const flat = entryBlocksToText(parseEntryMarkdown(body)).replace(/\s+/g, " ").trim();
   if (flat.length <= ENTRY_SNIPPET_MAX_LENGTH) {
     return flat;
   }
@@ -184,10 +187,11 @@ function EntryReferenceLink({ entryId, raw }: { entryId: string; raw: string }) 
 }
 
 /**
- * An Entry's words with the Search query highlighted, as inline content and
- * nothing else — no block wrapper of its own.
+ * An Entry's words with the Search query highlighted, and — since issue
+ * #152 — its own block structure (a list) when it has one. No wrapper of
+ * its own here either way; the caller still supplies the box.
  *
- * Split out of `EntryBody` for `entry-bubble.tsx`, whose own `<p>` needs a
+ * Split out of `EntryBody` for `entry-bubble.tsx`, whose own wrapper needs a
  * different className than `EntryBody`'s (the text-size scale variable,
  * not `EntryBody`'s `flex-1`) — the split is about the wrapper each surface
  * supplies, not about staying unwrapped. (Before issue #149 it *was* the
@@ -196,13 +200,15 @@ function EntryReferenceLink({ entryId, raw }: { entryId: string; raw: string }) 
  * there specifically. `BubbleMeta`'s own comment has the current shape.)
  *
  * Shared rather than reimplemented so the *words* still cannot drift between
- * History and Grounding, which is what `EntryBody`'s own extraction was for.
+ * History and Grounding, which is what `EntryBody`'s own extraction was for
+ * — including inside a list item: `refs.date`/`refs.entry` below reach a
+ * Reference wherever `entryProse`'s walk finds one, list item or not.
  *
  * Renders through `entryProse` (entry-prose.tsx), an Entry's own path onto
- * the shared walker (issue #148) — every other prose surface still calls
- * `inlineProse` directly. `entryProse` is a pure pass-through today; the
- * seam exists so an Entry's body can later gain block structure a Digest
- * must never see, without touching what any other surface renders through.
+ * the shared parser (issue #148) — every other prose surface still calls
+ * `inlineProse` directly, and stays inline-only. `entryProse` used to be a
+ * pure pass-through; issue #152 is the divergence issue #148 built this
+ * seam for.
  */
 export function entryBodyContent(body: string, query: string): ReactNode {
   return entryProse(body, query, {
@@ -211,8 +217,16 @@ export function entryBodyContent(body: string, query: string): ReactNode {
   });
 }
 
+/**
+ * A `<div>`, not a `<p>` (issue #152): `entryBodyContent` can render a
+ * `<ul>`/`<ol>` alongside its own `<p>`s when the body holds a list, and a
+ * list cannot validly nest inside a `<p>`. `whitespace-pre-wrap` still
+ * lives here too — redundant with the one on each `entryProse`-generated
+ * `<p>`, kept so this element's own behaviour doesn't depend on which
+ * child happens to carry it.
+ */
 export function EntryBody({ body, query }: { body: string; query: string }) {
-  return <p className="min-w-0 flex-1 whitespace-pre-wrap">{entryBodyContent(body, query)}</p>;
+  return <div className="min-w-0 flex-1 whitespace-pre-wrap">{entryBodyContent(body, query)}</div>;
 }
 
 /**

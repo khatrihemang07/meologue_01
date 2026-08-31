@@ -248,11 +248,19 @@ export const EntryBubble = memo(function EntryBubble({
       }
     >
       {/*
-        A `<p>` of its own now (issue #149) — the body used to be unwrapped
-        inline content here, denied `EntryBody`'s own `<p>`, because
+        A block of its own now (issue #149) — the body used to be unwrapped
+        inline content here, denied `EntryBody`'s own wrapper, because
         `BubbleMeta` below was a right float that needed a line box in the
         body to land on. With the clock on its own row instead, nothing
         here still requires the body to stay unwrapped.
+
+        A `<div>`, not a `<p>` (issue #152): `entryBodyContent` can now
+        render a `<ul>`/`<ol>` alongside its own `<p>`s when the body holds
+        a list, and a list cannot validly nest inside a `<p>`. The
+        `whitespace-pre-wrap` here is redundant with the one `entryProse`
+        already puts on each generated `<p>` — kept anyway so nothing about
+        this element's own behaviour depends on which of its children
+        happens to carry it.
       */}
       {/*
         The one thing text size scales (#128). `BubbleMeta` below, the day
@@ -263,12 +271,12 @@ export const EntryBubble = memo(function EntryBubble({
         words and an Answer is not, and scaling one without the other would
         put two sizes of prose in the same thread.
       */}
-      <p
+      <div
         data-slot="bubble-body"
         className="min-w-0 whitespace-pre-wrap text-[calc(0.875rem*var(--entry-text-scale,1))]"
       >
         {entryBodyContent(entry.body, query)}
-      </p>
+      </div>
       <BubbleMeta
         createdAt={entry.createdAt}
         showPendingMarker={syncEnabled && entry.seq === null}
