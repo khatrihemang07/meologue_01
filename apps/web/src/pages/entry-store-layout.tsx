@@ -7,7 +7,11 @@ import { type UseHistoryPagination, useHistory } from "@/hooks/use-history";
 import { dayHasEntries } from "@/lib/day-has-entries";
 import { dayReferrers } from "@/lib/day-referrers";
 import { deviceUtcOffsetMinutes } from "@/lib/entry-day";
-import { SecondTabError, StorageUnavailableError } from "@/lib/entry-store-errors";
+import {
+  OpenTimeoutError,
+  SecondTabError,
+  StorageUnavailableError,
+} from "@/lib/entry-store-errors";
 import { ENTRY_STORE_QUERY_KEY } from "@/lib/query-keys";
 import { createDriver } from "@/platform/sqlite-driver";
 
@@ -154,6 +158,24 @@ function describeOpenError(error: unknown): string {
   if (error instanceof StorageUnavailableError) {
     return "meologue can't store Entries here — try a non-private window over HTTPS or localhost.";
   }
+  if (error instanceof OpenTimeoutError) {
+    // Issue #159: deliberately not the same sentence as the fallback below.
+    // A timeout is not a known failure — the store may still be opening
+    // (see SqliteWorkerDriver's own comment on why the timeout is generous)
+    // or may be stuck forever, and there is no way to tell those apart from
+    // here. Saying "couldn't open" would claim more than is actually known;
+    // this is the one branch of this function whose whole job is to make a
+    // *hung* open look different on screen from a *failed* one, so the
+    // reader isn't shown an indefinitely disabled Composer with no
+    // explanation at all.
+    console.error("meologue: opening the entry store timed out", error);
+    return "meologue is taking longer than expected to open its storage. If this doesn't resolve, try reloading.";
+  }
+  // Reached by WorkerLoadError (the worker script itself failed to load or
+  // threw at top level — issue #159) as well as anything else this
+  // function doesn't specifically recognize: `error` here is guaranteed to
+  // carry more detail than the sentence below does, so it's logged in full
+  // rather than only the generic fallback message reaching a developer.
   console.error("meologue: failed to open the entry store", error);
   return "meologue couldn't open its storage. Reloading may help.";
 }

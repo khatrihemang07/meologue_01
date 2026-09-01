@@ -12,13 +12,14 @@
  * toggling from a typed delimiter pair), not a second Markdown parser.
  */
 import { baseKeymap, chainCommands, splitBlock } from "prosemirror-commands";
-import { history, redo, undo } from "prosemirror-history";
+import { history } from "prosemirror-history";
 import { InputRule, inputRules, wrappingInputRule } from "prosemirror-inputrules";
 import { keymap } from "prosemirror-keymap";
 import type { MarkType, NodeType, Node as PMNode } from "prosemirror-model";
-import { liftListItem, splitListItem } from "prosemirror-schema-list";
+import { splitListItem } from "prosemirror-schema-list";
 import { Plugin, PluginKey } from "prosemirror-state";
 import { Decoration, DecorationSet, type EditorView, type NodeView } from "prosemirror-view";
+import { outdent, redoCommand, undoCommand } from "@/lib/composer-commands";
 import { derivePicker, type ReferencePickerState } from "@/lib/composer-picker";
 import { entrySchema, type ReferenceAttrs } from "@/lib/entry-schema";
 import { parseReferenceDate, parseReferenceEntryId } from "@/lib/inline-markdown";
@@ -270,22 +271,29 @@ export function buildInputRules(): InputRule[] {
 }
 
 // ---------------------------------------------------------------------------
-// Keymap: splitListItem / liftListItem on Enter, undo/redo, everything else
-// from prosemirror-commands' baseKeymap
+// Keymap: splitListItem / outdent on Enter, undo/redo, everything else from
+// prosemirror-commands' baseKeymap
 // ---------------------------------------------------------------------------
 
 /**
- * `chainCommands(splitListItem, liftListItem)` is the shape
+ * `chainCommands(splitListItem, outdent.run)` is the shape
  * prosemirror-schema-list's own `splitListItem` doc comment is written
  * for: on a non-empty list item it splits into the next item; on an EMPTY
  * top-level item it deliberately returns `false` ("bail out and let next
  * command handle lifting") rather than lifting itself, which is exactly
- * what makes chaining `liftListItem` right after it correct instead of
+ * what makes chaining `outdent.run` right after it correct instead of
  * redundant — Enter on an empty item then escapes the list one level, per
  * the ticket. Outside a list entirely both commands return `false` and the
  * key falls through (see this module's own comment on plugin order in
  * `buildComposerPlugins`) to `baseKeymap`'s own Enter, an ordinary
  * paragraph split.
+ *
+ * `outdent` (issue #160, composer-commands.ts) is `liftListItem(listItemNodeType)`
+ * itself, given a name and reused here rather than called a second time —
+ * one command, two callers (this binding and, eventually, a keyboard
+ * shortcut or a toolbar button), never two independent constructions of
+ * `liftListItem` that could quietly diverge if one were ever edited without
+ * the other.
  *
  * `Shift-Enter` is bound to the SAME chain, plus `splitBlock` appended as
  * its own final fallback — not left to fall through to `baseKeymap` the
@@ -307,18 +315,25 @@ export function buildInputRules(): InputRule[] {
  * inserted the same plain newline).
  */
 function listKeymap(): Plugin {
-  const listChain = chainCommands(splitListItem(listItemNodeType), liftListItem(listItemNodeType));
+  const listChain = chainCommands(splitListItem(listItemNodeType), outdent.run);
   return keymap({
     Enter: listChain,
     "Shift-Enter": chainCommands(listChain, splitBlock),
   });
 }
 
+/**
+ * `undoCommand.run`/`redoCommand.run` (issue #160, composer-commands.ts) ARE
+ * `undo`/`redo` from `prosemirror-history` — the registry wraps them rather
+ * than replacing them, so binding these chords through the registry instead
+ * of importing `undo`/`redo` here directly changes nothing about what runs,
+ * only where the name "this is the undo command" is defined.
+ */
 function historyKeymap(): Plugin {
   return keymap({
-    "Mod-z": undo,
-    "Shift-Mod-z": redo,
-    "Mod-y": redo,
+    "Mod-z": undoCommand.run,
+    "Shift-Mod-z": redoCommand.run,
+    "Mod-y": redoCommand.run,
   });
 }
 

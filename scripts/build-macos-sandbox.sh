@@ -65,10 +65,6 @@ nb_say "cargo tauri build --config tauri.sandbox.conf.json"
 (cd apps/macos && cargo tauri build --config tauri.sandbox.conf.json)
 
 nb_report_artifact "$APP" identifier "$BUNDLE_ID"
-# Own line, not inlined into nb_report_artifact: see nb_find_dmg's comment —
-# a failure inside $( ) can only abort the script from an assignment.
-DMG=$(nb_find_dmg "$DMG_DIR" "$DMG_PRODUCT")
-nb_report_artifact "$DMG" identifier "$BUNDLE_ID"
 
 nb_say "collecting into $OUT_DIR/"
 # Real bundle names kept, unlike the APKs: the .app filename is what
@@ -76,8 +72,40 @@ nb_say "collecting into $OUT_DIR/"
 # would put two indistinguishable "meologue" entries on screen. The .dmg
 # keeps its versioned name because that is the file you would hand
 # someone.
+# The .app is published BEFORE the .dmg is even looked for, and the disk
+# image is best-effort from here on. That ordering is the whole point of
+# this block, and it is worth saying why, because the obvious order caused
+# a real and expensive failure.
+#
+# `cargo tauri build` writes the .app first and the .dmg second. DMG
+# bundling fails outright whenever a stale /Volumes/meologue is still
+# mounted from a previous run — `hdiutil` will not attach a second image
+# with the same volume name. Under `set -euo pipefail` the old
+# `DMG=$(nb_find_dmg ...)` assignment sat ABOVE these publishes, so that
+# failure aborted the script here, after a completely successful compile
+# and signing, and before the .app was ever copied into $OUT_DIR.
+#
+# The result was the worst kind of build outcome: loud failure, correct
+# artifact sitting in target/, and $OUT_DIR silently still holding a
+# BUILD FROM A PREVIOUS DAY. On 2026-09-01 that shipped a .app 36 hours
+# older than the feature under test, and the stale copy was tested and
+# reported as a defect (issue #157). A build that succeeds but publishes
+# nothing is worse than one that fails.
+#
+# So: the thing that was actually built gets published unconditionally,
+# and a missing disk image is a warning, not an abort. The .dmg is a
+# convenience for handing the app to someone else; nothing in the
+# verification loop needs it.
 nb_publish "$APP" "$OUT_DIR" "$(basename "$APP")"
-nb_publish "$DMG" "$OUT_DIR" "$(basename "$DMG")"
+
+if DMG=$(nb_find_dmg "$DMG_DIR" "$DMG_PRODUCT"); then
+  nb_report_artifact "$DMG" identifier "$BUNDLE_ID"
+  nb_publish "$DMG" "$OUT_DIR" "$(basename "$DMG")"
+else
+  nb_say "WARNING: no .dmg was produced — the .app above is published and usable."
+  nb_say "  Most often a stale /Volumes/meologue is still mounted; clear it with:"
+  nb_say "    hdiutil detach /Volumes/meologue -force"
+fi
 
 cat <<NEXT
 
