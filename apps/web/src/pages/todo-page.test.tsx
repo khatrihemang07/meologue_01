@@ -68,14 +68,58 @@ function readyContext(overrides: Partial<EntryStoreOutletContext> = {}): EntrySt
   };
 }
 
+/** Every row this stub gives a rect is `ROW_HEIGHT` tall, stacked with no gaps. */
+const ROW_HEIGHT = 40;
+
 describe("TodoPage", () => {
   beforeEach(() => {
     vi.mocked(toast).mockReset();
+
+    // jsdom lays nothing out — `getBoundingClientRect` is always zero
+    // (`history.tsx`'s own comment names the identical gap) — so the drop
+    // geometry `todo-page.tsx` reads off real row rects needs a stand-in
+    // here. Each row's rect is derived purely from its position among its
+    // DOM siblings, which is all `dropIndexForPointer` ever looks at.
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      const siblings = this.parentElement ? Array.from(this.parentElement.children) : [];
+      const index = siblings.indexOf(this);
+      const top = index * ROW_HEIGHT;
+      return {
+        top,
+        bottom: top + ROW_HEIGHT,
+        left: 0,
+        right: 0,
+        width: 0,
+        height: ROW_HEIGHT,
+        x: 0,
+        y: top,
+        toJSON() {},
+      } as DOMRect;
+    });
+
+    // jsdom implements no pointer capture at all — `todo-page.tsx`'s own
+    // handlers wrap the call in a try/catch for exactly that reason
+    // (`use-swipe-actions.ts` hits the identical gap). Stubbing it here
+    // rather than leaning on that catch keeps these tests asserting the
+    // capture calls actually happen, not merely that nothing throws.
+    HTMLElement.prototype.setPointerCapture = vi.fn();
+    HTMLElement.prototype.releasePointerCapture = vi.fn();
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
   });
+
+  /** The grip handle inside the row that renders `label`. */
+  function dragHandle(label: string): HTMLElement {
+    const row = screen.getByText(label).closest("li");
+    if (!row) throw new Error(`expected a row for "${label}"`);
+    const handle = row.querySelector<HTMLElement>('[data-testid="task-drag-handle"]');
+    if (!handle) throw new Error(`expected a drag handle on "${label}"'s row`);
+    return handle;
+  }
 
   it("offers a Back control out to the root screen", () => {
     renderTodoPage(readyContext());
@@ -202,32 +246,104 @@ describe("TodoPage", () => {
   });
 
   // ADR 0050's own criterion, exercised end to end through the page rather
-  // than only against the pure `reorderedTaskOrderKey` helper
-  // (task-reorder.test.ts already covers that in isolation): dragging one
-  // row onto another calls reorderTask exactly once, with a key strictly
-  // between the two Tasks it landed among.
-  it("dragging a Task onto another calls reorderTask exactly once, with a key between its new neighbours", () => {
+  // than only against the pure `dropIndexForPointer` and
+  // `reorderedTaskOrderKey` helpers (task-drag-recognizer.test.ts and
+  // task-reorder.test.ts already cover those in isolation): dragging one
+  // row's handle onto another calls reorderTask exactly once, with a key
+  // strictly between the two Tasks it landed among. Pointer events, not
+  // native drag-and-drop — Android WebView never synthesises `dragstart`
+  // from touch input, so this has to be the same recogniser a real device
+  // would drive, not a mechanism only a mouse can trigger.
+  it("dragging a Task's handle onto another calls reorderTask exactly once, with a key between its new neighbours", () => {
     const reorderTask = vi.fn();
     const a = task({ id: "a", content: "a", orderKey: "A" });
     const b = task({ id: "b", content: "b", orderKey: "B" });
     const c = task({ id: "c", content: "c", orderKey: "C" });
     renderTodoPage(readyContext({ tasks: [a, b, c], reorderTask }));
 
-    // Dragging "a" onto "c"'s row: dropIndex resolves to "c"'s position in
-    // [b, c] (index 1), so the computed key must land strictly between "b"
-    // and "c".
-    const source = screen.getByText("a").closest("li");
-    const target = screen.getByText("c").closest("li");
-    if (!source || !target) throw new Error("expected both rows to render");
-
-    fireEvent.dragStart(source);
-    fireEvent.dragOver(target);
-    fireEvent.drop(target);
+    // "a", "b" and "c" render at DOM indices 0, 1 and 2, so the
+    // `getBoundingClientRect` stub above gives them rects 0-40, 40-80 and
+    // 80-120. Dragging "a" and releasing at y=90 lands in "c"'s top half
+    // (midpoint 100) — dropIndex 1 in the without-"a" list [b, c], strictly
+    // between "b" and "c".
+    const handle = dragHandle("a");
+    fireEvent.pointerDown(handle, { pointerId: 1, clientY: 10 });
+    fireEvent.pointerMove(handle, { pointerId: 1, clientY: 90 });
+    fireEvent.pointerUp(handle, { pointerId: 1, clientY: 90 });
 
     expect(reorderTask).toHaveBeenCalledTimes(1);
     const [draggedId, newKey] = reorderTask.mock.calls[0] as [string, string];
     expect(draggedId).toBe("a");
     expect(newKey > "B").toBe(true);
     expect(newKey < "C").toBe(true);
+  });
+
+  // The no-op this ticket's own brief names explicitly: a release back over
+  // the dragged Task's own starting slot must write nothing at all, not a
+  // `reorderTask` call whose key happens to land in the same place.
+  it("releasing the handle back where the drag began writes nothing", () => {
+    const reorderTask = vi.fn();
+    const a = task({ id: "a", content: "a", orderKey: "A" });
+    const b = task({ id: "b", content: "b", orderKey: "B" });
+    renderTodoPage(readyContext({ tasks: [a, b], reorderTask }));
+
+    // "a" sits at DOM index 0 (rect 0-40); a small move that never leaves
+    // its own slot has to resolve back to its own original index.
+    const handle = dragHandle("a");
+    fireEvent.pointerDown(handle, { pointerId: 1, clientY: 10 });
+    fireEvent.pointerMove(handle, { pointerId: 1, clientY: 20 });
+    fireEvent.pointerUp(handle, { pointerId: 1, clientY: 20 });
+
+    expect(reorderTask).not.toHaveBeenCalled();
+  });
+
+  // The system taking the gesture away is an abort, not a release —
+  // `use-swipe-actions.ts`'s own `pointercancel` path holds the identical
+  // contract for a swipe.
+  it("a pointercancel mid-drag aborts and writes nothing, even on the pointerup that follows", () => {
+    const reorderTask = vi.fn();
+    const a = task({ id: "a", content: "a", orderKey: "A" });
+    const b = task({ id: "b", content: "b", orderKey: "B" });
+    const c = task({ id: "c", content: "c", orderKey: "C" });
+    renderTodoPage(readyContext({ tasks: [a, b, c], reorderTask }));
+
+    const handle = dragHandle("a");
+    fireEvent.pointerDown(handle, { pointerId: 1, clientY: 10 });
+    fireEvent.pointerMove(handle, { pointerId: 1, clientY: 90 });
+    fireEvent.pointerCancel(handle, { pointerId: 1, clientY: 90 });
+
+    expect(reorderTask).not.toHaveBeenCalled();
+
+    // The cancel really ended the drag rather than merely pausing it — a
+    // pointerup landing afterwards must not retroactively commit anything.
+    fireEvent.pointerUp(handle, { pointerId: 1, clientY: 90 });
+    expect(reorderTask).not.toHaveBeenCalled();
+  });
+
+  // A regression test for a defect that every other test in this file, the
+  // e2e suite, and both other platforms all missed. Without
+  // `preventDefault()` here, WebKit starts its own *text selection* drag on
+  // the handle's mousedown and owns the gesture from that point on: on the
+  // macOS/WKWebView build the row's words highlighted blue as the pointer
+  // travelled and no reorder happened at all. Chromium tolerates it, so
+  // headless-Chromium e2e and jsdom both stayed green while the shipped
+  // desktop app was broken.
+  //
+  // Asserting on `defaultPrevented` rather than on a reorder, because the
+  // reorder is exactly the thing that kept working in every environment
+  // that could be tested automatically — the suppression itself is the
+  // behaviour with no other observable proxy.
+  it("suppresses the platform's own selection drag when the handle is pressed", () => {
+    const a = task({ id: "a", content: "a", orderKey: "A" });
+    const b = task({ id: "b", content: "b", orderKey: "B" });
+    renderTodoPage(readyContext({ tasks: [a, b] }));
+
+    const handle = dragHandle("a");
+    const pointerDown = new Event("pointerdown", { bubbles: true, cancelable: true });
+    Object.defineProperty(pointerDown, "pointerId", { value: 1 });
+    Object.defineProperty(pointerDown, "clientY", { value: 10 });
+    fireEvent(handle, pointerDown);
+
+    expect(pointerDown.defaultPrevented).toBe(true);
   });
 });

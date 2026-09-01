@@ -62,9 +62,44 @@ test("adding, completing (with Undo), reordering and reloading all leave Todo ex
   // Writing it the wrong way round is a test that passes for the wrong
   // reason on a broken implementation, which is why the direction is
   // spelled out rather than left to look arbitrary.
+  //
+  // Driven through `page.mouse`, not Playwright's `dragTo` — `dragTo`
+  // drives the browser's native HTML5 drag-and-drop, which is exactly the
+  // mechanism issue #168's own follow-up replaced: Android WebView never
+  // synthesises `dragstart` from touch input, so the recogniser this page
+  // uses now has to be a Pointer Events one, and the only honest way to
+  // exercise it here is the same down/move/up sequence a real pointer
+  // produces. The gesture has to originate on the grip handle, same as a
+  // real reader's finger — a pointerdown anywhere else on the row leaves
+  // the list scrolling normally instead.
   const firstRow = page.locator("li[data-task-id]", { hasText: first });
   const secondRow = page.locator("li[data-task-id]", { hasText: second });
-  await secondRow.dragTo(firstRow);
+  const secondHandle = secondRow.getByTestId("task-drag-handle");
+
+  const secondHandleBox = await secondHandle.boundingBox();
+  const firstBox = await firstRow.boundingBox();
+  if (!secondHandleBox || !firstBox) {
+    throw new Error("expected both rows' grip handle and bounding box to be measurable");
+  }
+
+  const startX = secondHandleBox.x + secondHandleBox.width / 2;
+  const startY = secondHandleBox.y + secondHandleBox.height / 2;
+  // The pointer has to land in "first"'s TOP half: `dropIndexForPointer`'s
+  // own midpoint rule reads the bottom half as "after this row," which is
+  // exactly where "second" already sits — landing there would be a
+  // correct no-op, not the swap this test is asserting.
+  const endX = firstBox.x + firstBox.width / 2;
+  const endY = firstBox.y + firstBox.height / 4;
+
+  await page.mouse.move(startX, startY);
+  await page.mouse.down();
+  // Real intermediate moves, not one jump straight to the target — the
+  // recogniser only ever sees motion through genuine `pointermove` events,
+  // the same way `use-swipe-actions.ts`'s own gesture does.
+  await page.mouse.move(startX, (startY + endY) / 2, { steps: 5 });
+  await page.mouse.move(endX, endY, { steps: 5 });
+  await page.mouse.up();
+
   await expect(rows.nth(0)).toContainText(second);
   await expect(rows.nth(1)).toContainText(first);
 

@@ -1,5 +1,5 @@
-import type { DragEvent } from "react";
-import { useState } from "react";
+import type { PointerEvent } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { BackToChats } from "@/components/back-to-chats";
 import { Shell } from "@/components/shell";
@@ -8,6 +8,7 @@ import { CompletedTasks } from "@/components/todo/completed-tasks";
 import { TaskRow } from "@/components/todo/task-row";
 import { TodoNav } from "@/components/todo/todo-nav";
 import { ConfirmDialog } from "@/components/ui/alert-dialog";
+import { dropIndexForPointer } from "@/lib/task-drag-recognizer";
 import { reorderedTaskOrderKey } from "@/lib/task-reorder";
 import { useEntryStore } from "@/pages/entry-store-layout";
 
@@ -43,81 +44,132 @@ export function TodoPage() {
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const confirmingTask = tasks.find((task) => task.id === confirmingId) ?? null;
 
-  // Drag state (ADR 0050): `draggedId` names the Task the pointer picked
-  // up, `overTarget` names where it would land if released right now —
-  // either another Task's id (insert before that row) or `"end"` (the
-  // trailing drop zone below the last row, append after everything).
-  // Neither persists anything on its own; `commitDrop` below is the one
-  // place that turns this state into the single `reorderTask` call ADR
-  // 0050 requires.
-  const [draggedId, setDraggedId] = useState<string | null>(null);
+  // Drag state (ADR 0050, and issue #168's own follow-up: native HTML5
+  // drag-and-drop never fires on Android — WebView doesn't synthesise
+  // `dragstart` from touch input — so a Pointer Events recogniser, the same
+  // shape `use-swipe-actions.ts` already uses for an Entry row's swipe,
+  // replaces it here rather than living alongside it as a second mechanism
+  // that could disagree with the first).
+  //
+  // `drag` names the Task the pointer picked up and the pointer doing the
+  // picking — the pointer id matters because a second finger landing on a
+  // different row's handle mid-drag must be ignored rather than stealing
+  // the gesture, the same "one drag at a time" rule
+  // `task-drag-recognizer.ts`'s own header explains for a second finger.
+  // `overTarget` names where a release right now would land — either
+  // another Task's id (insert before that row) or `"end"` (the trailing
+  // drop zone below the last row, append after everything). Neither
+  // persists anything on its own; `commitDrop` below is the one place that
+  // turns this state into the single `reorderTask` call ADR 0050 requires.
+  const [drag, setDrag] = useState<{ taskId: string; pointerId: number } | null>(null);
   const [overTarget, setOverTarget] = useState<string | "end" | null>(null);
+  const listRef = useRef<HTMLUListElement | null>(null);
 
-  function handleDragStart(taskId: string) {
-    return (event: DragEvent<HTMLLIElement>) => {
-      setDraggedId(taskId);
-      // Guarded rather than assumed present: real browsers always supply
-      // `dataTransfer` for a native drag event, but jsdom's synthetic one
-      // (todo-page.test.tsx's own drag simulation) does not, and this line
-      // is cosmetic — it only shapes the OS-level drag cursor — not load-
-      // bearing for anything `commitDrop` below actually does.
-      if (event.dataTransfer) {
-        event.dataTransfer.effectAllowed = "move";
+  // The one fact `dropIndexForPointer` actually needs and nothing else:
+  // where every OTHER active Task's row currently sits on screen, in DOM
+  // order, read straight off the elements rather than assumed from CSS —
+  // `history.tsx`'s own comment names the same "jsdom never lays anything
+  // out" gap this works around in the test suite via a stubbed
+  // `getBoundingClientRect`. `excludeId` is filtered out here rather than
+  // by the caller: it is never a valid drop target for itself, and
+  // excluding it here is what keeps the returned `ids`/`rects` pair
+  // aligned index-for-index with `reorderedTaskOrderKey`'s own
+  // `withoutDragged` space.
+  function measureRows(excludeId: string): { ids: string[]; rects: DOMRect[] } {
+    const container = listRef.current;
+    if (!container) return { ids: [], rects: [] };
+    const rows = Array.from(container.querySelectorAll<HTMLElement>("[data-task-id]")).filter(
+      (element) => element.dataset.taskId !== excludeId,
+    );
+    return {
+      ids: rows.map((element) => element.dataset.taskId ?? ""),
+      rects: rows.map((element) => element.getBoundingClientRect()),
+    };
+  }
+
+  function handleHandlePointerDown(taskId: string) {
+    return (event: PointerEvent<HTMLSpanElement>) => {
+      if (drag !== null) return;
+      // Verified on the macOS/WKWebView build, and invisible everywhere
+      // else: without this, pressing on the handle starts the platform's
+      // own *text selection* drag instead of ours. WebKit then owns the
+      // gesture — the row's words highlight blue as the pointer travels
+      // and no reorder happens at all. Chromium is more forgiving, so both
+      // the e2e suite (headless Chromium) and the component tests pass
+      // either way; only running the real Tauri bundle showed it.
+      //
+      // `preventDefault` on `pointerdown` is the narrow fix rather than
+      // `user-select: none` on the row, which would also stop a reader
+      // selecting a Task's text to copy it — a thing they can do today and
+      // should keep being able to do. The handle is `aria-hidden` and not
+      // focusable, so suppressing the default action here costs no focus
+      // behaviour either.
+      event.preventDefault();
+      setDrag({ taskId, pointerId: event.pointerId });
+      setOverTarget(null);
+      try {
+        event.currentTarget.setPointerCapture(event.pointerId);
+      } catch {
+        // jsdom implements no pointer capture at all (component tests
+        // stub it); a real browser can also lose the pointer between the
+        // event firing and this call — `use-swipe-actions.ts`'s own drag
+        // hits the identical case. Nothing to recover: the drag is still
+        // tracked in state above, it just isn't captured, so a pointer
+        // that strays off the handle mid-drag would stop delivering moves.
       }
     };
   }
 
-  function handleDragOverRow(taskId: string) {
-    return (event: DragEvent<HTMLLIElement>) => {
-      // A drop is refused by default on every element — preventDefault is
-      // what the browser's native drag-and-drop uses to mean "this is a
-      // valid drop target," the same native contract `onDrop` below relies
-      // on to fire at all.
-      event.preventDefault();
-      setOverTarget(taskId);
-    };
+  function handleHandlePointerMove(event: PointerEvent<HTMLSpanElement>) {
+    if (drag === null || event.pointerId !== drag.pointerId) return;
+    const originalIndex = tasks.findIndex((task) => task.id === drag.taskId);
+    const { ids, rects } = measureRows(drag.taskId);
+    const verdict = dropIndexForPointer(rects, event.clientY, originalIndex);
+    setOverTarget(verdict.kind === "moved" ? (ids[verdict.dropIndex] ?? "end") : null);
   }
 
-  function handleDropOnRow(taskId: string) {
-    return (event: DragEvent<HTMLLIElement>) => {
-      event.preventDefault();
-      commitDrop(taskId);
-    };
+  function handleHandlePointerUp(event: PointerEvent<HTMLSpanElement>) {
+    if (drag === null || event.pointerId !== drag.pointerId) return;
+    const { taskId, pointerId } = drag;
+    try {
+      event.currentTarget.releasePointerCapture(pointerId);
+    } catch {
+      // Already released, or capture never succeeded.
+    }
+    const originalIndex = tasks.findIndex((task) => task.id === taskId);
+    const { rects } = measureRows(taskId);
+    const verdict = dropIndexForPointer(rects, event.clientY, originalIndex);
+    if (verdict.kind === "moved") {
+      commitDrop(taskId, verdict.dropIndex);
+    }
+    // A release that resolved to "unchanged" writes nothing at all — not a
+    // `reorderTask` call whose key happens to land back where it started.
+    // That distinction is `dropIndexForPointer`'s own verdict, not
+    // something recomputed here from before/after keys.
+    setDrag(null);
+    setOverTarget(null);
   }
 
-  function handleDragOverEnd(event: DragEvent<HTMLLIElement>) {
-    event.preventDefault();
-    setOverTarget("end");
-  }
-
-  function handleDropAtEnd(event: DragEvent<HTMLLIElement>) {
-    event.preventDefault();
-    commitDrop("end");
-  }
-
-  function handleDragEnd() {
-    setDraggedId(null);
+  function handleHandlePointerCancel(event: PointerEvent<HTMLSpanElement>) {
+    if (drag === null || event.pointerId !== drag.pointerId) return;
+    try {
+      event.currentTarget.releasePointerCapture(drag.pointerId);
+    } catch {
+      // Already released, or capture never succeeded.
+    }
+    // The system took the gesture — an abort writes nothing, the same
+    // contract `use-swipe-actions.ts`'s own `pointercancel` path holds for
+    // a swipe.
+    setDrag(null);
     setOverTarget(null);
   }
 
   // The one write a drop produces (task-reorder.ts's `reorderedTaskOrderKey`,
-  // ADR 0050) — `target` is either the id of the row the dragged Task is
-  // dropping before, or `"end"` for the trailing zone past the last row.
-  // Both resolve to the same `dropIndex` shape that function expects:
-  // "end" means the position past every remaining Task once the dragged
-  // one is filtered out.
-  function commitDrop(target: string | "end") {
-    if (draggedId === null) {
-      return;
-    }
-    const withoutDragged = tasks.filter((task) => task.id !== draggedId);
-    const dropIndex =
-      target === "end"
-        ? withoutDragged.length
-        : withoutDragged.findIndex((task) => task.id === target);
+  // ADR 0050) — `dropIndex` is already in `reorderedTaskOrderKey`'s own
+  // `withoutDragged` space, `dropIndexForPointer`'s own return value, so
+  // there is nothing left to translate here.
+  function commitDrop(draggedId: string, dropIndex: number) {
     reorderTask(draggedId, reorderedTaskOrderKey(tasks, draggedId, dropIndex));
-    setDraggedId(null);
-    setOverTarget(null);
   }
 
   // Completing raises the same Undo-toast affordance
@@ -162,18 +214,18 @@ export function TodoPage() {
           Nothing in your Inbox. Add a Task above to get started.
         </p>
       ) : (
-        <ul className="flex flex-col">
+        <ul ref={listRef} className="flex flex-col">
           {tasks.map((task) => (
             <TaskRow
               key={task.id}
               task={task}
               onComplete={() => handleComplete(task.id, task.content)}
               onRequestDelete={() => handleRequestDelete(task.id)}
-              isDropTarget={draggedId !== null && overTarget === task.id}
-              onDragStart={handleDragStart(task.id)}
-              onDragOver={handleDragOverRow(task.id)}
-              onDrop={handleDropOnRow(task.id)}
-              onDragEnd={handleDragEnd}
+              isDropTarget={drag !== null && overTarget === task.id}
+              onHandlePointerDown={handleHandlePointerDown(task.id)}
+              onHandlePointerMove={handleHandlePointerMove}
+              onHandlePointerUp={handleHandlePointerUp}
+              onHandlePointerCancel={handleHandlePointerCancel}
             />
           ))}
           {/* The trailing drop zone — dropping past the last row appends
@@ -182,18 +234,17 @@ export function TodoPage() {
               draws then, so it costs nothing to look at otherwise. An
               `<li>`, not a `<div>`: a `<ul>`'s only valid children are list
               items, and this sits directly inside the same list every
-              `TaskRow` does. Mouse-drag-only, same as `TaskRow`'s own
-              draggable row — issue #171 (keyboard-accessible reordering,
-              named out of scope by this ticket's own brief) is where a
-              real keyboard path onto "move to the end" would land. */}
+              `TaskRow` does. It carries no pointer listeners of its own —
+              unlike the old native-DnD version, "past the last row" is a
+              geometry verdict `dropIndexForPointer` already produces from
+              the pointer's own y, not a second drop target to wire up.
+              Keyboard-accessible reordering (issue #171, named out of scope
+              by this ticket's own brief) is where a real keyboard path onto
+              "move to the end" would land. */}
           <li
             aria-hidden="true"
-            onDragOver={handleDragOverEnd}
-            onDrop={handleDropAtEnd}
             className={`h-3 border-t-2 ${
-              draggedId !== null && overTarget === "end"
-                ? "border-t-primary"
-                : "border-t-transparent"
+              drag !== null && overTarget === "end" ? "border-t-primary" : "border-t-transparent"
             }`}
           />
         </ul>

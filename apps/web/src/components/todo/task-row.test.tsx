@@ -24,10 +24,10 @@ function renderRow(overrides: Partial<Parameters<typeof TaskRow>[0]> = {}) {
     onComplete: vi.fn(),
     onRequestDelete: vi.fn(),
     isDropTarget: false,
-    onDragStart: vi.fn(),
-    onDragOver: vi.fn(),
-    onDrop: vi.fn(),
-    onDragEnd: vi.fn(),
+    onHandlePointerDown: vi.fn(),
+    onHandlePointerMove: vi.fn(),
+    onHandlePointerUp: vi.fn(),
+    onHandlePointerCancel: vi.fn(),
     ...overrides,
   };
   render(
@@ -64,25 +64,48 @@ describe("TaskRow", () => {
     expect(onRequestDelete).toHaveBeenCalledTimes(1);
   });
 
-  it("is draggable, and forwards drag events to the handlers it's given", () => {
-    const onDragStart = vi.fn();
-    const onDragOver = vi.fn();
-    const onDrop = vi.fn();
-    const onDragEnd = vi.fn();
-    renderRow({ onDragStart, onDragOver, onDrop, onDragEnd });
+  // Pointer Events, not native HTML5 drag-and-drop — issue #168's own
+  // follow-up: Android WebView never synthesises `dragstart` from touch
+  // input, so the drag has to work through the same mechanism on every
+  // device rather than one that only a mouse can trigger.
+  it("the grip handle forwards pointer events to the handlers it's given, and the row itself is not draggable", () => {
+    const onHandlePointerDown = vi.fn();
+    const onHandlePointerMove = vi.fn();
+    const onHandlePointerUp = vi.fn();
+    const onHandlePointerCancel = vi.fn();
+    renderRow({
+      onHandlePointerDown,
+      onHandlePointerMove,
+      onHandlePointerUp,
+      onHandlePointerCancel,
+    });
 
     const row = screen.getByRole("listitem");
-    expect(row).toHaveAttribute("draggable", "true");
+    expect(row).not.toHaveAttribute("draggable");
 
-    fireEvent.dragStart(row);
-    fireEvent.dragOver(row);
-    fireEvent.drop(row);
-    fireEvent.dragEnd(row);
+    const handle = screen.getByTestId("task-drag-handle");
+    fireEvent.pointerDown(handle, { pointerId: 1 });
+    fireEvent.pointerMove(handle, { pointerId: 1 });
+    fireEvent.pointerUp(handle, { pointerId: 1 });
+    fireEvent.pointerCancel(handle, { pointerId: 1 });
 
-    expect(onDragStart).toHaveBeenCalledTimes(1);
-    expect(onDragOver).toHaveBeenCalledTimes(1);
-    expect(onDrop).toHaveBeenCalledTimes(1);
-    expect(onDragEnd).toHaveBeenCalledTimes(1);
+    expect(onHandlePointerDown).toHaveBeenCalledTimes(1);
+    expect(onHandlePointerMove).toHaveBeenCalledTimes(1);
+    expect(onHandlePointerUp).toHaveBeenCalledTimes(1);
+    expect(onHandlePointerCancel).toHaveBeenCalledTimes(1);
+  });
+
+  // The handle only — a pointerdown anywhere else on the row must still let
+  // the browser scroll the list normally on touch, which is the entire
+  // reason the handle exists as a separate element rather than the row
+  // being draggable outright.
+  it("does not put pointer listeners on the row itself, only on the handle", () => {
+    const onHandlePointerDown = vi.fn();
+    renderRow({ onHandlePointerDown });
+
+    fireEvent.pointerDown(screen.getByText("buy milk"), { pointerId: 1 });
+
+    expect(onHandlePointerDown).not.toHaveBeenCalled();
   });
 
   it("draws the drop indicator only while it is the drop target", () => {
