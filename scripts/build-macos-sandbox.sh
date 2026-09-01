@@ -62,7 +62,42 @@ nb_say "building apps/web/dist/macos (build:macos)"
 pnpm --filter @meologue/web build:macos
 
 nb_say "cargo tauri build --config tauri.sandbox.conf.json"
-(cd apps/macos && cargo tauri build --config tauri.sandbox.conf.json)
+
+# `cargo tauri build` bundles the .app FIRST and the .dmg SECOND, and it
+# exits non-zero if either fails. Under `set -euo pipefail` that took the
+# whole script down — including the publish step below — even when the .app
+# itself had been built and signed perfectly, which is the overwhelmingly
+# common case: DMG bundling is what breaks, usually because a stale
+# /Volumes/meologue is still mounted and `hdiutil` will not attach a second
+# image with the same volume name.
+#
+# The consequence was the worst kind of build outcome. Loud failure, a
+# correct artifact sitting in target/, and $OUT_DIR silently still holding a
+# BUILD FROM A PREVIOUS DAY. On 2026-09-01 that shipped a .app 36 hours older
+# than the feature under test; the stale copy was then tested and reported as
+# a defect (issue #157). A build that succeeds but publishes nothing is worse
+# than one that fails outright.
+#
+# So a non-zero exit is no longer fatal on its own. It is fatal only if no
+# FRESH .app came out of it — checked by mtime against the moment the build
+# started, so a leftover .app from an earlier run can never be mistaken for
+# this run's output and republished.
+_tauri_started_at=$(date +%s)
+_tauri_status=0
+(cd apps/macos && cargo tauri build --config tauri.sandbox.conf.json) || _tauri_status=$?
+
+if [ "$_tauri_status" -ne 0 ]; then
+  _app_bin=$(find "$APP/Contents/MacOS" -maxdepth 1 -type f -perm -u+x 2>/dev/null | head -1)
+  if [ -n "$_app_bin" ] && [ "$(stat -f %m "$_app_bin")" -ge "$_tauri_started_at" ]; then
+    nb_say "WARNING: cargo tauri build exited $_tauri_status, but a fresh .app was produced and signed."
+    nb_say "  This is almost always the .dmg step, which runs AFTER the .app is complete."
+    nb_say "  Publishing the .app anyway; the disk image is a convenience, not a gate."
+    nb_say "  If a disk image is stuck, clear it with:  hdiutil detach /Volumes/meologue -force"
+  else
+    nb_say "cargo tauri build exited $_tauri_status and produced no fresh .app — aborting."
+    exit "$_tauri_status"
+  fi
+fi
 
 nb_report_artifact "$APP" identifier "$BUNDLE_ID"
 
