@@ -11,15 +11,22 @@ concepts, use the term below rather than a synonym.
 
 ### Entry
 
-A single piece of text captured by the user. Its body is plain text and stays plain text — what
-the user typed is what is stored. Reading it may pick out light emphasis, and References to a day
-or to another Entry, but never structure: an Entry has no headings, no lists and no title, because
-an Entry stays untitled and unorganized (see "note", below). It is identified by an id minted on
-the Device that created it, so an Entry's identity does not depend on ever reaching another Device
-or a server. Its body can change after the fact, and an Entry can be removed from History
-altogether. What never changes is its identity and when it was captured: editing an Entry does
-not move it in History, no matter how long ago it was captured or how recently it was last
-edited.
+A single piece of text captured by the user. Its body is Markdown: reading it picks out light
+emphasis, lists and checkboxes, and References to a day or to another Entry. An Entry stays
+untitled — it has no heading and no name, and nothing about capturing one asks the user to file it
+anywhere — but it may carry structure inside itself. A thought is often a list of things, and
+refusing lists did not keep Entries short, it only made them worse.
+
+What the user typed is what is stored, until the user edits it. Editing rewrites the body from the
+document the Composer was showing, and that normalizes formatting — one way of writing emphasis
+can come back as another. The characters change; what the Entry says does not. An Entry that is
+never edited keeps the exact characters it was captured with.
+
+It is identified by an id minted on the Device that created it, so an Entry's identity does not
+depend on ever reaching another Device or a server. Its body can change after the fact, and an
+Entry can be removed from History altogether. What never changes is its identity and when it was
+captured: editing an Entry does not move it in History, no matter how long ago it was captured or
+how recently it was last edited.
 
 ### Device
 
@@ -207,11 +214,5 @@ or an Entry. The exception stops at that layer. It does not reach upward: a Ques
 a message, an Answer is still not a message, and an Entry is still not a message, for the same
 reasons given above.
 
-### "note"
-
-A note implies something that can be retitled or organized into a document. An Entry stays
-untitled and unorganized, and it is fixed at the moment it was captured even when its body later
-changes — closer to a single fleeting thought than a document. Don't use "note" for an Entry.
-
-Unlike these two, Send and History are safe: they name the *action* and the *view*, not the
+Unlike that one, Send and History are safe: they name the *action* and the *view*, not the
 Entry itself, so they don't smuggle in the wrong properties.

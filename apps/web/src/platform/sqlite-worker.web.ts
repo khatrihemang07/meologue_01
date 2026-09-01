@@ -42,11 +42,22 @@ async function handleOpen(): Promise<void> {
     db = new pool.OpfsSAHPoolDb(DB_FILENAME);
     scope.postMessage({ type: "open", ok: true });
   } catch (error) {
+    // Issue #159: `classifyOpenError` below still only distinguishes the one
+    // DOMException name specific enough to act on (see its own comment) —
+    // that doesn't change here. What changes is that the *real* name and
+    // message this error actually carries now travel across postMessage as
+    // their own fields, instead of being discarded the moment they're
+    // reduced to "second-tab" | "unavailable". `classifyOpenFailure`
+    // (sqlite-worker-driver.ts) is where they get logged and attached to the
+    // thrown error, but they have to leave this worker intact for that to be
+    // possible at all.
+    const detail = describeError(error);
     scope.postMessage({
       type: "open",
       ok: false,
       kind: classifyOpenError(error),
-      message: describeError(error),
+      name: detail.name,
+      message: detail.message,
     });
   }
 }
@@ -70,7 +81,7 @@ function handleExecute(request: Extract<WorkerRequest, { type: "execute" }>): vo
       type: "execute",
       id: request.id,
       ok: false,
-      message: describeError(error),
+      message: describeError(error).message,
     });
   }
 }
@@ -115,6 +126,16 @@ function classifyOpenError(error: unknown): "second-tab" | "unavailable" {
     : "unavailable";
 }
 
-function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+// `DOMException` predates the convention of subclassing `Error` and is not
+// `instanceof Error` in this runtime, despite exposing the same
+// `name`/`message` shape (that shape comes from WebIDL, not ECMAScript) —
+// checked explicitly, first, so a DOMException's real detail (e.g.
+// `SecurityError: The operation is insecure` from a browser privacy mode)
+// isn't silently reduced to `String(error)`, which most engines render as
+// something far less useful than `.message` alone.
+function describeError(error: unknown): { name: string; message: string } {
+  if (error instanceof DOMException || error instanceof Error) {
+    return { name: error.name, message: error.message };
+  }
+  return { name: "UnknownError", message: String(error) };
 }

@@ -2,10 +2,13 @@
  * Renders parsed prose (ADR 0041) as React nodes — never as an HTML string,
  * so there is nothing for a sanitizer to sanitize.
  *
- * Everything emitted here is inline. There is deliberately no wrapper element:
- * the caller decides what box the prose sits in, because the Entry bubble
- * needs it to share a line box with a right-floated clock (ADR 0036) while
- * Grounding and the Digest reader each supply their own `<p>`.
+ * Everything emitted here is inline. There is deliberately no wrapper
+ * element: the caller decides what box the prose sits in — Grounding, the
+ * Digest reader, the Entry bubble (through `entryProse`, entry-prose.tsx)
+ * and everyone else each supply their own `<p>`. (Before issue #149 the
+ * Entry bubble was the one exception, sharing a line box with a
+ * right-floated clock — ADR 0036 — which needed the body to stay unwrapped
+ * there specifically; that clock now has its own row instead.)
  *
  * Search highlighting is applied *within* each text node rather than over raw
  * character offsets into the body (ADR 0041). A match is therefore found in
@@ -48,8 +51,15 @@ function renderText(text: string, query: string, keyPrefix: string): ReactNode[]
  * exhaustive over `InlineNode`, but only the type checker can see that, and a
  * `flatMap` callback with no fallthrough return reads as a bug to every linter
  * that looks at it.
+ *
+ * Exported for `entry-prose.tsx`: an Entry's block renderer (issue #152)
+ * needs this exact inline rendering — marks, References, Search
+ * highlighting — inside a `<li>`, not just inside the flat run `inlineProse`
+ * below hands its own caller. Reusing it rather than a second copy is what
+ * keeps a Reference chip, a highlighted match, and nested emphasis looking
+ * and behaving identically whether they sit in a list item or plain prose.
  */
-function renderNodes(
+export function renderNodes(
   nodes: readonly InlineNode[],
   query: string,
   refs: ReferenceRenderers,

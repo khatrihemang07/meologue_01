@@ -1,5 +1,5 @@
 import type { Entry } from "@meologue/core";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { SWIPE_TARGET_ATTRIBUTE } from "@/hooks/use-swipe-actions";
 import { EntryBubble } from "./entry-bubble";
@@ -65,14 +65,29 @@ describe("EntryBubble", () => {
     expect(bubbleOf(fresh).className).toContain("mt-3");
   });
 
-  // The float is what gives the clock time WhatsApp's behaviour: it sits on
-  // the last line when there is room and drops to its own line when there is
-  // not, instead of always costing a whole line the way a block does.
-  it("floats the clock time so it can share the last line", () => {
+  // Issue #149: the clock moved off a right float (which needed the body
+  // to stay one line box) onto its own row below it, so an Entry can later
+  // hold block content without breaking the float. The meta row is a
+  // sibling of the body element, not nested inside it, and right-aligns
+  // its own contents rather than relying on float placement to do it.
+  it("puts the clock time on its own row below the body, right-aligned", () => {
     const { container } = render(<EntryBubble entry={entry()} syncEnabled={false} side="out" />);
 
+    // A `<div>`, not `<p>` (issue #152): the body can now render a `<ul>`/
+    // `<ol>` alongside its own `<p>`s when the Entry holds a list, and a
+    // list cannot validly nest inside a `<p>` — see entry-bubble.tsx's own
+    // comment on this element.
+    const body = container.querySelector('[data-slot="bubble-body"]');
+    expect(body?.tagName).toBe("DIV");
+
     const meta = container.querySelector("time")?.parentElement;
-    expect(meta?.className).toContain("float-right");
+    expect(meta).not.toBeNull();
+    expect(meta?.className).not.toContain("float-right");
+    expect(meta?.className).toContain("justify-end");
+    // A sibling of the body, not inside it — its own row, not folded into
+    // the body's own line box.
+    expect(meta?.parentElement).toBe(body?.parentElement);
+    expect(body?.contains(meta as Node)).toBe(false);
   });
 
   it("shows the not-yet-synced marker only when Sync is on and the Entry has not landed", () => {
@@ -144,6 +159,37 @@ describe("EntryBubble", () => {
       const { container } = render(<EntryBubble entry={entry()} syncEnabled={false} side="out" />);
 
       expect(bubbleOf(container).firstElementChild).not.toHaveClass("ring-2");
+    });
+  });
+
+  // Issue #153: EntryBubble is where an id and a body land together, so
+  // this is where `onToggleTask`'s per-Entry closure gets built —
+  // `entry-prose.test.tsx` already covers the checkbox rendering and
+  // marker-offset behaviour this wraps; these tests only cover the wiring
+  // this file itself owns.
+  describe("onToggleTask", () => {
+    it("renders the checkbox disabled with no handler wired", () => {
+      render(
+        <EntryBubble entry={entry({ body: "- [ ] call mum" })} syncEnabled={false} side="out" />,
+      );
+
+      expect(screen.getByRole("checkbox")).toBeDisabled();
+    });
+
+    it("calls the handler with the Entry and the marker's own offsets", () => {
+      const onToggleTask = vi.fn();
+      const body = "- [ ] call mum";
+      const withTask = entry({ body });
+      render(
+        <EntryBubble entry={withTask} syncEnabled={false} side="out" onToggleTask={onToggleTask} />,
+      );
+
+      fireEvent.click(screen.getByRole("checkbox"));
+
+      expect(onToggleTask).toHaveBeenCalledTimes(1);
+      const [calledEntry, markerFrom, markerTo] = onToggleTask.mock.calls[0] ?? [];
+      expect(calledEntry).toBe(withTask);
+      expect(body.slice(markerFrom, markerTo)).toBe("[ ]");
     });
   });
 });

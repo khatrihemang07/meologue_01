@@ -218,6 +218,67 @@
   --entry-text-scale: 1.25;
 }
 
+/*
+ * A completed checklist item's own look (issue #163) — display only, and
+ * driven from one attribute so History and the Composer cannot draw a
+ * checked item two different ways. `lib/theme.ts`'s `applyCompletedStyle`
+ * writes `data-completed-style` onto <html>, exactly like `data-accent`/
+ * `data-text-size` above; each of the four values it can hold
+ * (`lib/settings.ts`'s `CompletedStyleId`) resolves to these same two
+ * custom properties, which the one consuming rule near the Composer's own
+ * list styling (further down this file) is the only place that reads.
+ *
+ * Deliberately NOT scoped to `:root` the way `[data-accent]`/
+ * `[data-text-size]` are above. Those two only ever apply to <html>, but a
+ * completed style also has to be demonstrable in Settings — each of the
+ * four stacked rows on that page (settings-page.tsx's `CompletedStyleRow`)
+ * renders a real sample checked item wearing this exact same attribute on
+ * a small wrapper around itself, showing what that row's OWN option looks
+ * like regardless of which one is actually selected right now. An
+ * attribute selector with no `:root` in front of it resolves the two
+ * properties from whichever ancestor carries the attribute nearest to a
+ * given checked item — <html> for a real one, that row's own wrapper for a
+ * preview — with no second, hand-maintained copy of "style id -> colour and
+ * decoration" living in TypeScript to keep in step with this file by hand.
+ *
+ * The bare `:root` default below matches `gray` (grayed out, no
+ * strikethrough) — `lib/settings.ts`'s `DEFAULT_COMPLETED_STYLE`, UpNote's
+ * own default — so a Device that has never opened Settings, or whose
+ * `data-completed-style` write hasn't landed yet for any reason, still
+ * renders the intended look rather than a fifth, undeclared one.
+ *
+ * `--checked-list-text-color` is the CSS-wide keyword `initial` for
+ * `strike` and `none` rather than a literal colour — that's what makes it
+ * a "guaranteed-invalid value" (CSS Custom Properties §Guaranteed-Invalid
+ * Value), so the consuming rule's own `var(--checked-list-text-color,
+ * var(--foreground))` falls through to the ordinary foreground colour
+ * instead of the literal keyword `inherit`, which would walk up to
+ * whatever the NEAREST ancestor's own `data-completed-style` happens to be
+ * (a real risk here specifically because a preview row can nest a local
+ * override inside the page's own, different, global choice) rather than
+ * cancelling the override outright.
+ */
+:root {
+  --checked-list-text-decoration: none;
+  --checked-list-text-color: var(--muted-foreground);
+}
+[data-completed-style="grayAndStrike"] {
+  --checked-list-text-decoration: line-through;
+  --checked-list-text-color: var(--muted-foreground);
+}
+[data-completed-style="gray"] {
+  --checked-list-text-decoration: none;
+  --checked-list-text-color: var(--muted-foreground);
+}
+[data-completed-style="strike"] {
+  --checked-list-text-decoration: line-through;
+  --checked-list-text-color: initial;
+}
+[data-completed-style="none"] {
+  --checked-list-text-decoration: none;
+  --checked-list-text-color: initial;
+}
+
 @layer base {
   /*
    * Defaults for the two custom properties Shell computes from
@@ -243,5 +304,192 @@
   }
   html {
     @apply font-sans;
+  }
+}
+
+/*
+ * The Composer's own whitespace rule.
+ *
+ * `prosemirror-view` ships a stylesheet of its own
+ * (`prosemirror-view/style/prosemirror.css`) that sets `word-wrap:
+ * break-word` and `white-space: pre-wrap`/`break-spaces` on `.ProseMirror`
+ * — but nothing in this app imports it, and nothing else here sets any of
+ * the three. Every element defaults to `white-space: normal`, which
+ * collapses runs of spaces to one and drops a trailing space entirely.
+ * That is issue #158: type two spaces between words in the Composer and
+ * only one survived on screen; type a trailing space and it vanished.
+ * Meanwhile `entry-prose.tsx` renders a Sent Entry's prose with
+ * `whitespace-pre-wrap` (the READ side), so what the Composer showed while
+ * an Entry was being written never matched what it showed once Sent — the
+ * same "the editor lies about what you will get" complaint issue #155
+ * exists to remove, surviving here in a corner that change never reached.
+ *
+ * Restated below rather than imported. Both were investigated: importing
+ * the upstream stylesheet — a CSS `@import` of the file under
+ * `node_modules`, or a side-effecting JS import of it — lands as plain,
+ * unlayered CSS, because that file never wraps its own rules in `@layer`.
+ * Cascade layers rank every unlayered normal-importance rule above EVERY
+ * layered one, unconditionally, regardless of source order or specificity
+ * — so an imported copy would sit permanently above Tailwind's own `base`
+ * layer (where preflight lives) AND above the `@layer base` rules this
+ * file already declares below, which is the opposite of how those rules
+ * are made to win: they depend on being IN `base` and coming AFTER
+ * preflight in source order, not on out-ranking it by construction. An
+ * import would also drag in rules this app has no use for and has never
+ * exercised: `.ProseMirror pre` (this schema has no `code_block` node —
+ * entry-schema.ts), the `[draggable]` selection-text rule, the
+ * `.ProseMirror-selectednode`/`li.ProseMirror-selectednode:after`
+ * NodeSelection outline (nothing here ever leaves a NodeSelection visible
+ * to a user — `referenceNodeView`'s chip is the only such node, and it is
+ * rendered `contenteditable="false"`, not selected), and
+ * `img.ProseMirror-separator`. Restating only the three declarations
+ * issue #158 actually needs keeps this file the one place that decides
+ * what the Composer's surface looks like, in the same layer and by the
+ * same mechanism as the list rules beside it — not a second, competing
+ * source of truth that happens to always win.
+ */
+@layer base {
+  .ProseMirror {
+    word-wrap: break-word;
+    white-space: pre-wrap;
+    /* biome-ignore lint/suspicious/noDuplicateProperties: deliberate fallback, matching prosemirror-view's own upstream rule — `break-spaces` wins in any browser that understands it, `pre-wrap` is what an older one falls back to instead of the property being dropped outright. */
+    white-space: break-spaces;
+  }
+}
+
+/*
+ * The Composer's own list styling.
+ *
+ * `entry-prose.tsx` renders History's lists through React and sets their
+ * look as Tailwind classes on each element it creates (`list-disc
+ * space-y-0.5 pl-5`, and the `mt-1`/`first:mt-0` rhythm every top-level
+ * block there shares). The Composer cannot do that: ProseMirror builds
+ * `bullet_list`/`ordered_list`/`list_item` from the `toDOM` they inherit
+ * from `prosemirror-schema-list`, which emits a bare `<ul>`/`<ol>`/`<li>`
+ * with no class at all — and Tailwind's preflight resets exactly those
+ * elements to `list-style: none; padding: 0`.
+ *
+ * The result was a list that was structurally real and visually invisible:
+ * typing `- milk` consumed the marker, Enter split a genuine second item,
+ * and the field showed two bare lines. Nothing in jsdom can catch that —
+ * the document was correct — and it was found on a physical Android
+ * device, which is the same way ADR 0036 records its own floated-clock
+ * defect being found ("passed every test and was wrong on screen").
+ *
+ * These rules exist to keep the two surfaces in step, so an Entry looks
+ * the same while it is being written as it does once it has been Sent.
+ * They must be kept in step with `entry-prose.tsx` by hand; there is no
+ * mechanism that enforces it, which is why both sides carry a comment
+ * pointing at the other.
+ *
+ * Task items opt out of the marker themselves — `composer-editor.ts`'s
+ * `listItemNodeView` sets `list-none` on a checkbox item (TASK_LI_CLASS),
+ * exactly as `entry-prose.tsx`'s own `renderListItem` does — so a checkbox
+ * never renders a bullet beside it.
+ *
+ * Issue #162 adds the depth cascade below: a bullet list nested inside
+ * another list — of EITHER type, an `ol` an item's sub-list sits under
+ * counts exactly the same as a `ul` does — renders disc, then circle, then
+ * square, matching Obsidian and UpNote rather than the flat "every level
+ * is a disc" a plain `.ProseMirror ul { list-style: disc }` alone would
+ * give every depth. `:is(ul, ol)` in the two cascade selectors below (not
+ * a bare `ul`) is what makes an ancestor `ol` count towards a nested `ul`'s
+ * own depth — CSS's descendant combinator already walks past any
+ * intervening element that doesn't match, `ol` included, so a bare
+ * `ul ul ul` chain would in fact still MATCH a `ul` two `ol`s down (the
+ * combinator doesn't require adjacency) — but it would still be counting
+ * only `ul` ancestors, silently under-counting a `ul` sitting under one or
+ * more `ol` ancestors and leaving it a shade too light for its real depth.
+ * `:is(ul, ol)` fixes that by counting either. The two rules rely on
+ * ordinary cascade specificity, not `!important` or source order alone,
+ * to pick the deeper one: `:is(ul, ol) :is(ul, ol) ul` (three compound
+ * selectors) is more specific than `:is(ul, ol) ul` (two), so a `ul` three
+ * levels down matches both and the square rule wins regardless of which
+ * is written first — and because that same three-selector rule also
+ * matches every `ul` FOUR OR MORE levels down (it only requires AT LEAST
+ * two list ancestors, not exactly two), depth 3 and beyond all render
+ * square, the deliberate cap the ticket asks for ("repeat ▪ beyond depth
+ * 3, as browsers do") rather than a fourth/fifth glyph this file would
+ * otherwise have to invent.
+ *
+ * Ordered lists need no equivalent cascade: `list-style: decimal` on the
+ * single `.ProseMirror ol` rule below already applies at every depth (one
+ * selector, no per-level override, unlike bullets which visibly change
+ * glyph), and "restart at 1 per level" needs no CSS at all — an `<ol>`'s
+ * own implicit item counter is scoped to that element by the HTML/CSS
+ * spec itself, so a nested `<ol>` starts counting at 1 independent of
+ * whatever number its parent list left off on, with nothing here able to
+ * override that even if it wanted to.
+ *
+ * `entry-prose.tsx`'s `renderBlocks`/`bulletListStyleClass` render the
+ * IDENTICAL disc/circle/square cascade for History, by threading a real
+ * `depth` argument through its own recursion rather than a CSS selector —
+ * see that file's own comment for why it cannot use a descendant selector
+ * the way this one does. Nothing enforces the two agree; each carries this
+ * comment pointing at the other so a change to one is a prompt to check
+ * the other, the same discipline this file's own module comment above
+ * already asks for the base ul/ol rules.
+ */
+@layer base {
+  .ProseMirror ul {
+    list-style: disc;
+    padding-left: 1.25rem;
+  }
+  .ProseMirror ol {
+    list-style: decimal;
+    padding-left: 1.25rem;
+  }
+  .ProseMirror :is(ul, ol) ul {
+    list-style: circle;
+  }
+  .ProseMirror :is(ul, ol) :is(ul, ol) ul {
+    list-style: square;
+  }
+  .ProseMirror li + li {
+    margin-top: 0.125rem;
+  }
+  .ProseMirror > * + * {
+    margin-top: 0.25rem;
+  }
+}
+
+/*
+ * A completed checklist item's own look (issue #163) — the ONE rule that
+ * consumes the two custom properties defined above, near `--entry-text-
+ * scale`. This is the only place either render path's own "what does
+ * checked look like" question gets answered, which is what makes it
+ * impossible for a checked item to look one way while being written in the
+ * Composer and another way once read back in History: both surfaces emit
+ * the exact same markup shape for a task item — a `<li>` carrying
+ * `list-none` (`TASK_LI_CLASS` in composer-editor.ts's `listItemNodeView`,
+ * the identical class list in entry-prose.tsx's `renderListItem`), holding
+ * a checked `<input type="checkbox">` immediately followed by a sibling
+ * `<div>` wrapping the item's own words — and this selector matches that
+ * shape structurally, with no class or attribute added to either `<li>`
+ * for its sake. That's deliberate: `composer-editor.ts` is off-limits to
+ * this change (another ticket is mid-edit there), and reaching its output
+ * with a selector rather than a new class is what makes that constraint
+ * cost nothing here.
+ *
+ * `li.list-none` rather than a bare `li input:checked ~ div` — every task
+ * item's own `<li>` already carries `list-none` (to drop the bullet a
+ * checkbox replaces), and scoping to it is what stops this rule from ever
+ * matching some unrelated future `<li>` that happens to contain an
+ * unrelated checked checkbox followed by a `<div>`, without requiring
+ * either render path to add a class or attribute purely for this rule's
+ * benefit.
+ *
+ * `text-decoration` on the wrapping `<div>`, not on the `<input>` or on
+ * some inner span: the CSS decorating-box behaviour draws a line-through
+ * across every descendant inline run inside that `<div>` — bold, italic,
+ * a Reference chip, Search highlighting, all of it — without this rule
+ * needing to reach inside `renderNodes`' own output to restyle any of them
+ * individually.
+ */
+@layer base {
+  li.list-none input[type="checkbox"]:checked ~ div,
+  .completed-sample {
+    text-decoration: var(--checked-list-text-decoration);
+    color: var(--checked-list-text-color, var(--foreground));
   }
 }

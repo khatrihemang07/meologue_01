@@ -1,21 +1,31 @@
 import { expect, test } from "@playwright/test";
 import { sendEntry, uniqueEntryBody } from "./helpers";
 
-// ADR 0041's guarantee, checked where it can actually fail.
+// What's guaranteed now, checked where it can actually fail.
 //
-// Formatting an Entry's body is only safe because the result stays a single
-// line box: the Entry bubble's clock is a right float, and a float can only
-// be placed on a line box it is in (ADR 0036). If anything in a body becomes
-// a block — or merely grows wide enough to leave no room beside it — the
-// clock drops to a line of its own and a one-word Entry costs two.
+// Issue #149 moved the Entry bubble's clock onto its own row, off the body's
+// last line — so ADR 0041's floated-clock guarantee this spec used to
+// describe no longer applies to an Entry at all (ADR 0043 supersedes 0041
+// for Entry bodies specifically; the Digest/Question/Answer surfaces below
+// still render inline-only, unchanged). An Entry's body may now contain a
+// real block: a bullet/ordered list, a task-list checkbox. What's still
+// guaranteed, and still worth a browser rather than jsdom to check, is
+// narrower:
 //
-// Nothing in the unit suite can see this. jsdom does not lay out floats, so
-// every one of these failures passes there. ADR 0036 already records one
-// defect of exactly this shape that "passed every test and was wrong on
-// screen; only a screenshot caught it", and building this feature produced a
-// second one: a Reference chip with no width cap grew to the full width of
-// the body and pushed the clock onto its own line, at 800 unit tests green.
-// That is why this spec measures rather than asserts on markup.
+//   1. A Reference chip must not wrap the body onto an extra line — a chip
+//      has no width cap of its own, and one that grew wider than the bubble
+//      pushed the body's own text onto a second line, at every unit test
+//      green (jsdom does not lay out anything, so it never saw this).
+//   2. The mark set ADR 0043 deliberately left OUT — headings, blockquotes,
+//      fenced code, thematic breaks, raw HTML — must render as the literal
+//      characters typed and produce no corresponding element, the same
+//      structural guarantee 0041 made, now checked against a narrower list.
+//
+// Nothing in the unit suite can see either failure: jsdom does not lay out
+// floats or wraps, and "no block element resulted" needs a real block
+// grammar this spec now depends on `parseEntryMarkdown` producing correctly.
+// That is why this spec measures/inspects rendered DOM rather than asserting
+// on markup in isolation.
 
 const NARROW = { width: 390, height: 844 };
 
@@ -46,6 +56,14 @@ test("a formatted Entry is no taller than a plain one, so the clock keeps its li
   await sendEntry(page, word);
   await sendEntry(page, `**${word}**`);
   await expect(page.getByText(word).first()).toBeVisible();
+  // Wait for the FORMATTED one specifically, not merely for the first Entry
+  // carrying `word` — the plain one satisfies that and arrives first, so the
+  // measurement below could run while the bold Entry was still landing and
+  // read its height as null. Typing is slower than it used to be (issue
+  // #155: `sendEntry` presses real keys now, because a bulk `fill()` cannot
+  // drive a ProseMirror `contenteditable`), which widened that window enough
+  // to matter.
+  await expect(page.locator('[data-slot="bubble-body"] strong').first()).toBeVisible();
 
   const heights = await page.evaluate((needle) => {
     const bodies = [...document.querySelectorAll('[data-slot="bubble-body"]')].filter((el) =>
@@ -63,27 +81,49 @@ test("a formatted Entry is no taller than a plain one, so the clock keeps its li
   expect(Math.abs((heights.formatted ?? 0) - (heights.plain ?? 0))).toBeLessThan(2);
 });
 
-test("no Entry body renders a block element, whatever is typed into it", async ({ page }) => {
+test("a list and a checkbox render as real blocks; headings/quotes/fences/rules/HTML stay literal characters", async ({
+  page,
+}) => {
   await page.setViewportSize(NARROW);
   await page.goto("/composer");
 
-  const marker = uniqueEntryBody("blk");
+  const listMarker = uniqueEntryBody("list");
+  const taskMarker = uniqueEntryBody("task");
+  await sendEntry(page, `- item ${listMarker}`);
+  await sendEntry(page, `- [ ] task ${taskMarker}`);
+
+  // ADR 0043: lists and task checkboxes are the mark set's new block
+  // structure, and they DO render as the elements they name.
+  const listItem = page.locator("li", { hasText: listMarker });
+  await expect(listItem.first()).toBeVisible();
+  await expect(page.locator('[data-slot="bubble-body"] ul', { has: listItem })).toHaveCount(1);
+
+  const taskItem = page.locator("li", { hasText: taskMarker });
+  await expect(taskItem.first()).toBeVisible();
+  await expect(taskItem.first().locator('input[type="checkbox"]')).toHaveCount(1);
+
+  const notBlockMarker = uniqueEntryBody("notblk");
   for (const body of [
-    `# heading ${marker}`,
-    `- item ${marker}`,
-    `> quote ${marker}`,
-    `\`\`\`fence ${marker}\`\`\``,
-    `<b>html</b> ${marker}`,
+    `# heading ${notBlockMarker}`,
+    `> quote ${notBlockMarker}`,
+    `\`\`\`fence ${notBlockMarker}\`\`\``,
+    `--- ${notBlockMarker}`,
   ]) {
     await sendEntry(page, body);
   }
-  await expect(page.getByText(`html`).first()).toBeVisible();
+  await expect(page.getByText(notBlockMarker).first()).toBeVisible();
 
+  const htmlMarker = uniqueEntryBody("html");
+  await sendEntry(page, `<b>html</b> ${htmlMarker}`);
+  await expect(page.getByText(htmlMarker).first()).toBeVisible();
+
+  // ADR 0043 removed headings/blockquotes/fences/thematic-breaks from the
+  // dialect (not merely filtered them after parsing) and ADR 0041's raw-HTML
+  // refusal is untouched — none of the six bodies above may have produced
+  // any of these elements anywhere in the rendered History.
   const offenders = await page.evaluate(() =>
     [...document.querySelectorAll('[data-slot="bubble-body"]')]
-      .flatMap((el) => [
-        ...el.querySelectorAll("p,div,ul,ol,li,h1,h2,h3,h4,h5,h6,blockquote,pre,hr,table"),
-      ])
+      .flatMap((el) => [...el.querySelectorAll("h1,h2,h3,h4,h5,h6,blockquote,pre,hr,table,b")])
       .map((el) => el.tagName),
   );
   expect(offenders).toEqual([]);
@@ -103,7 +143,15 @@ test("raw HTML in an Entry is shown, never rendered", async ({ page }) => {
   ).toBe(0);
 });
 
-test("a Reference chip leaves the clock its line", async ({ page }) => {
+test("a Reference chip does not wrap the body onto an extra line", async ({ page }) => {
+  // The clock is no longer a float sharing the body's own line box (issue
+  // #149 moved it to its own row), so this is no longer guarding the clock
+  // at all. What it still guards: a chip carries no width cap of its own,
+  // and one that renders wider than the bubble can push the body's text
+  // onto a second line — a real defect this spec caught once, at every unit
+  // test green, since jsdom never lays anything out. `plainH`/`chipH` below
+  // measure exactly that: a chip-bearing body should be the same height (up
+  // to its own border) as a plain one, not one line taller.
   await page.setViewportSize(NARROW);
   await page.goto("/composer");
 

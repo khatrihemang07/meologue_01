@@ -1101,9 +1101,20 @@ fn build_messages(range: &str, entries: &[DigestEntry], tz: Tz) -> Vec<ChatMessa
 /// reports for the harness tools, just with `MEOLOGUE_TZ` standing in for
 /// a Device's offset: an Entry correctly bucketed into a local day could
 /// be shown to the model labelled with the UTC day before or after it.
+///
+/// The body itself is passed through
+/// `harness::tools::indent_continuation_lines` (issue #151) so a
+/// multi-line body's lines after the first are indented two spaces — the
+/// one piece of this rendering that has nothing to do with which
+/// "local" a Period or a Device resolves, and so is shared rather than
+/// copied a third time; see that function's own doc comment.
 fn render_entry(entry: &DigestEntry, tz: Tz) -> String {
     let local_date = entry.created_at.with_timezone(&tz).date_naive();
-    format!("[{}] {}", local_date.format("%Y-%m-%d"), entry.body)
+    format!(
+        "[{}] {}",
+        local_date.format("%Y-%m-%d"),
+        crate::harness::tools::indent_continuation_lines(&entry.body)
+    )
 }
 
 // ---------------------------------------------------------------------
@@ -1683,7 +1694,97 @@ async fn regenerate_insert(
 
 #[cfg(test)]
 mod tests {
-    use super::digest_system_prompt;
+    use super::{DigestEntry, digest_system_prompt, render_entry};
+    use chrono::TimeZone;
+    use chrono_tz::Tz;
+    use uuid::Uuid;
+
+    fn entry(body: &str) -> DigestEntry {
+        DigestEntry {
+            id: Uuid::nil(),
+            body: body.to_string(),
+            created_at: Tz::UTC
+                .with_ymd_and_hms(2026, 6, 30, 12, 0, 0)
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+            seq: 1,
+        }
+    }
+
+    /// Issue #151's own byte-identical requirement: a single-line body
+    /// must render exactly as it did before this ticket.
+    #[test]
+    fn a_single_line_body_renders_unchanged() {
+        assert_eq!(
+            render_entry(&entry("hello world"), Tz::UTC),
+            "[2026-06-30] hello world"
+        );
+    }
+
+    #[test]
+    fn a_multi_line_body_has_continuation_lines_indented() {
+        assert_eq!(
+            render_entry(&entry("line one\nline two\nline three"), Tz::UTC),
+            "[2026-06-30] line one\n  line two\n  line three"
+        );
+    }
+
+    #[test]
+    fn an_empty_body_renders_unchanged() {
+        assert_eq!(render_entry(&entry(""), Tz::UTC), "[2026-06-30] ");
+    }
+
+    #[test]
+    fn a_body_of_only_newlines_indents_every_blank_continuation_line() {
+        assert_eq!(
+            render_entry(&entry("\n\n"), Tz::UTC),
+            "[2026-06-30] \n  \n  "
+        );
+    }
+
+    #[test]
+    fn a_trailing_newline_indents_the_trailing_blank_line_too() {
+        assert_eq!(
+            render_entry(&entry("first\nsecond\n"), Tz::UTC),
+            "[2026-06-30] first\n  second\n  "
+        );
+    }
+
+    #[test]
+    fn crlf_line_endings_keep_the_carriage_return_on_the_line_it_ends() {
+        assert_eq!(
+            render_entry(&entry("first\r\nsecond\r\n"), Tz::UTC),
+            "[2026-06-30] first\r\n  second\r\n  "
+        );
+    }
+
+    /// The scenario the issue names directly: two multi-line Entries on
+    /// the same day, rendered one after another the way `build_messages`
+    /// joins them, must stay distinguishable — a reader can tell exactly
+    /// where the second `[YYYY-MM-DD]` prefix starts.
+    #[test]
+    fn two_multi_line_entries_on_the_same_day_stay_distinguishable() {
+        let first = render_entry(&entry("meeting notes\n- item one\n- item two"), Tz::UTC);
+        let second = render_entry(
+            &entry("evening reflection\nstill thinking about it"),
+            Tz::UTC,
+        );
+        let joined = format!("{first}\n\n{second}");
+        assert_eq!(
+            joined,
+            "[2026-06-30] meeting notes\n  - item one\n  - item two\n\n\
+             [2026-06-30] evening reflection\n  still thinking about it"
+        );
+        // Every line that starts a new Entry begins with the date
+        // prefix; every other line is indented — so scanning for
+        // `[2026-06-30]` at column 0 finds exactly two Entries, not one
+        // run-together block.
+        let entry_starts = joined
+            .lines()
+            .filter(|line| line.starts_with("[2026-06-30]"))
+            .count();
+        assert_eq!(entry_starts, 2);
+    }
 
     // Issue #140: the Digest reader now renders the same inline formatting
     // as everywhere else, so this prompt's old claim that "the Digest is

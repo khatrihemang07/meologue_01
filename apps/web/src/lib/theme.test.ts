@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useSettingsStore } from "./settings";
-import { applyAccent, applyTextSize, applyTheme, watchSystemTheme } from "./theme";
+import {
+  applyAccent,
+  applyCompletedStyle,
+  applyTextSize,
+  applyTheme,
+  watchSystemTheme,
+} from "./theme";
 
 /** Stands in for `matchMedia("(prefers-color-scheme: dark)")` with a
  * controllable `matches` and a `change` listener the test can fire. */
@@ -120,6 +126,33 @@ describe("theme", () => {
 
       expect(document.documentElement.style.getPropertyValue("--entry-accent")).toBe("");
       expect(document.documentElement.style.getPropertyValue("--entry-text-scale")).toBe("");
+    });
+  });
+
+  // Issue #163. Same shape as `applyAccent`/`applyTextSize` above: one
+  // attribute, no colour or decoration written directly, so index.css stays
+  // the only place either value is defined.
+  describe("applyCompletedStyle", () => {
+    it("puts the chosen style on the document root", () => {
+      applyCompletedStyle("grayAndStrike");
+
+      expect(document.documentElement.dataset.completedStyle).toBe("grayAndStrike");
+    });
+
+    it("replaces a previous choice rather than accumulating", () => {
+      applyCompletedStyle("gray");
+      applyCompletedStyle("none");
+
+      expect(document.documentElement.dataset.completedStyle).toBe("none");
+    });
+
+    it("writes no decoration and no colour of its own", () => {
+      applyCompletedStyle("strike");
+
+      expect(
+        document.documentElement.style.getPropertyValue("--checked-list-text-decoration"),
+      ).toBe("");
+      expect(document.documentElement.style.getPropertyValue("--checked-list-text-color")).toBe("");
     });
   });
 });

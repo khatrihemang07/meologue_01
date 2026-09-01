@@ -1,4 +1,10 @@
-import { type AccentId, type TextSizeId, type Theme, useSettingsStore } from "@/lib/settings";
+import {
+  type AccentId,
+  type CompletedStyleId,
+  type TextSizeId,
+  type Theme,
+  useSettingsStore,
+} from "@/lib/settings";
 
 const DARK_MEDIA_QUERY = "(prefers-color-scheme: dark)";
 
@@ -40,6 +46,23 @@ export function applyAccent(accent: AccentId): void {
 /** The same, for text size — `index.css` owns the three scales. */
 export function applyTextSize(size: TextSizeId): void {
   document.documentElement.dataset.textSize = size;
+}
+
+/**
+ * Puts the chosen completed-checklist-item style on the document root
+ * (issue #163) — one attribute, exactly like `applyAccent`/`applyTextSize`
+ * above. `index.css` owns the two custom properties this drives
+ * (`--checked-list-text-decoration`/`--checked-list-text-color`) under
+ * `[data-completed-style]`, consumed by the one shared rule that matches a
+ * checked task item's own markup — the same shape both `entry-prose.tsx`'s
+ * `renderListItem` (History) and `composer-editor.ts`'s `listItemNodeView`
+ * (the Composer) already emit. Routing both surfaces through this single
+ * attribute, rather than each hard-coding what "grayed out" means, is what
+ * keeps them from drifting apart the way a task item's own styling already
+ * has once before (index.css's own comment on the Composer/History split).
+ */
+export function applyCompletedStyle(style: CompletedStyleId): void {
+  document.documentElement.dataset.completedStyle = style;
 }
 
 /**

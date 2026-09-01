@@ -7,6 +7,7 @@ import { History, type HistorySeekTarget } from "@/components/history";
 import { Shell } from "@/components/shell";
 import { useHistorySearch } from "@/hooks/use-history-search";
 import { useSyncEnabled } from "@/lib/settings";
+import { toggleTaskAt } from "@/lib/toggle-task";
 import { useEntryStore } from "@/pages/entry-store-layout";
 
 // A date Reference's own destination (issue #142): `?d=YYYY-MM-DD`, a query
@@ -177,6 +178,17 @@ export function ComposerPage() {
     setEditingEntry(null);
   }
 
+  // Issue #153: a tapped checkbox. Splices only the marker characters
+  // (`toggleTaskAt`, toggle-task.ts) and commits through the exact same
+  // `editEntry` `handleCommitEdit` above already uses for an ordinary
+  // Composer edit — ADR 0043's "a tick is an ordinary Entry edit," not a
+  // second write path. Reads `entry.body` fresh off the tap's own `entry`
+  // argument rather than looking it up in `entries`, so this is correct
+  // even if `entries` has moved on since the checkbox was rendered.
+  function handleToggleTask(entry: Entry, markerFrom: number, markerTo: number) {
+    editEntry(entry.id, toggleTaskAt(entry.body, markerFrom, markerTo));
+  }
+
   // Issue #144's "Refer" action (entry-actions.tsx, reached through
   // History's sheet or hover row) needs to reach into whichever Composer
   // is live on screen — see ComposerHandle's own comment (composer.tsx)
@@ -246,6 +258,7 @@ export function ComposerPage() {
           onEdit={setEditingEntry}
           onDelete={removeEntry}
           onRefer={handleRefer}
+          onToggleTask={handleToggleTask}
           dayReferrers={dayReferrers}
           seek={seek}
           onSeekNeedsOlder={handleSeekNeedsOlder}

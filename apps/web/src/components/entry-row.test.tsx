@@ -91,6 +91,21 @@ describe("EntryRow", () => {
     expect(screen.getByText("a recurring task")).toBeInTheDocument();
   });
 
+  // Issue #153: Grounding renders through EntryRow/EntryBody, and CONTEXT.md
+  // requires it to stay a read-only view of what an Answer was based on — a
+  // tickable checkbox there would let editing a past Answer relied on look
+  // possible. entry-row.tsx's own EntryBody never passes onToggleTask to
+  // entryBodyContent, which is what keeps this true; this is the
+  // regression test for that decision.
+  it("renders a task checkbox disabled — Grounding stays read-only", () => {
+    render(<EntryRow entry={entry({ body: "- [ ] call mum" })} syncEnabled={false} />);
+
+    const checkbox = screen.getByRole("checkbox");
+    expect(checkbox).toBeDisabled();
+    fireEvent.click(checkbox);
+    expect(checkbox).not.toBeChecked();
+  });
+
   it("highlights the query's match inside an Entry's body", () => {
     render(
       <EntryRow entry={entry({ body: "a recurring task" })} query="recur" syncEnabled={false} />,
@@ -535,9 +550,9 @@ describe("EntryRow", () => {
       expect(getEntry).toHaveBeenCalledWith(targetId);
 
       // Inline, never a block — the real chip sits inside the Entry
-      // bubble's own body span, sharing a line box with a right-floated
-      // clock (ADR 0036); see inline-prose.test.tsx's "never renders a
-      // block element" test for the fuller version of this same guard.
+      // bubble's own body `<p>`, among the parsed prose it's a mark in
+      // (ADR 0041); see inline-prose.test.tsx's "never renders a block
+      // element" test for the fuller version of this same guard.
       expect(link.tagName).toBe("A");
       for (const tag of ["div", "p", "ul", "ol", "li", "blockquote", "pre", "table"]) {
         expect(link.querySelectorAll(tag).length).toBe(0);

@@ -10,7 +10,7 @@ import type { Entry } from "@meologue/core";
 import { type MouseEvent, memo, type ReactNode, useState } from "react";
 import { Link } from "react-router";
 import { EntryHoverActions, hoverCapable } from "@/components/entry-actions";
-import { inlineProse } from "@/components/inline-prose";
+import { entryProse } from "@/components/entry-prose";
 import { useDayHasEntries } from "@/hooks/use-day-has-entries";
 import { useEntryReference } from "@/hooks/use-entry-reference";
 import {
@@ -20,13 +20,15 @@ import {
   formatDaySeparator,
 } from "@/lib/entry-day";
 import { formatAbsoluteTime } from "@/lib/entry-time";
-import { inlineNodesToText, parseInlineMarkdown } from "@/lib/inline-markdown";
+import { entryBlocksToText, parseEntryMarkdown } from "@/lib/inline-markdown";
 import { cn } from "@/lib/utils";
 import { useEntryStore } from "@/pages/entry-store-layout";
 
 /**
  * One `[[YYYY-MM-DD]]` date Reference (issue #142), rendered by
- * `entryBodyContent` below wherever `inlineProse` finds one.
+ * `entryBodyContent` below wherever `entryProse` (entry-prose.tsx) finds
+ * one — `entryProse` is an Entry's own path onto `inlineProse`'s walker
+ * (issue #148), which is what actually parses the mark.
  *
  * A component of its own, not a plain render callback: `useDayHasEntries`
  * needs its own hook state per Reference, and a body can carry more than
@@ -78,18 +80,21 @@ const ENTRY_SNIPPET_MAX_LENGTH = 40;
 
 /**
  * The opening of an Entry's text, flattened to one line with no formatting
- * — a chip has room for a preview, not the whole shape of the target's own
- * prose.
+ * and no list structure — a chip has room for a preview, not the whole
+ * shape of the target's own prose.
  *
- * Goes through `parseInlineMarkdown`/`inlineNodesToText` (inline-markdown.ts)
- * rather than `entryBodyContent`/`inlineProse` below: those render the
- * target's own marks — bold text stays bold, a nested Reference resolves to
- * its own chip — which is right for reading that Entry on its own terms, but
- * wrong for a two-line preview sitting inside a Reference already carrying
- * its own formatting (the day label, the chip's border). Collapsing to
- * plain text here also means a Reference nested inside the target's body
- * never recurses into a second live lookup just to build a preview of the
- * first one.
+ * Goes through `parseEntryMarkdown`/`entryBlocksToText` (inline-markdown.ts)
+ * rather than `entryBodyContent`/`entryProse` below: those render the
+ * target's own marks and lists — bold text stays bold, a nested Reference
+ * resolves to its own chip, `- milk` becomes a real bullet — which is right
+ * for reading that Entry on its own terms, but wrong for a two-line preview
+ * sitting inside a Reference already carrying its own formatting (the day
+ * label, the chip's border), and `entryBlocksToText` is what keeps a `- `/
+ * `1. ` marker from leaking into that preview as a literal character
+ * instead of becoming space-joined words like the rest of the flattened
+ * text. Collapsing to plain text here also means a Reference nested inside
+ * the target's body never recurses into a second live lookup just to build
+ * a preview of the first one.
  *
  * Exported for `composer.tsx`'s own inline `[[` picker (issue #144): the
  * same "an Entry's id names nothing a reader can use" reasoning that keeps
@@ -98,7 +103,7 @@ const ENTRY_SNIPPET_MAX_LENGTH = 40;
  * the target's opening words, never its uuid, either place.
  */
 export function entrySnippet(body: string): string {
-  const flat = inlineNodesToText(parseInlineMarkdown(body)).replace(/\s+/g, " ").trim();
+  const flat = entryBlocksToText(parseEntryMarkdown(body)).replace(/\s+/g, " ").trim();
   if (flat.length <= ENTRY_SNIPPET_MAX_LENGTH) {
     return flat;
   }
@@ -107,11 +112,11 @@ export function entrySnippet(body: string): string {
 
 /**
  * One `[[e:<uuid>]]` Entry Reference (issue #143), rendered by
- * `entryBodyContent` below wherever `inlineProse` finds one — the Entry
- * chip's own analogue of `DateReferenceLink` just above, following the same
- * shape for the same reasons (see that component's own comment for why this
- * needs to be a component of its own, and why it reads its probe off
- * `useEntryStore()` instead of taking it as a prop).
+ * `entryBodyContent` below wherever `entryProse` (entry-prose.tsx) finds
+ * one — the Entry chip's own analogue of `DateReferenceLink` just above,
+ * following the same shape for the same reasons (see that component's own
+ * comment for why this needs to be a component of its own, and why it
+ * reads its probe off `useEntryStore()` instead of taking it as a prop).
  *
  * Resolves live, through `useEntryReference` (a TanStack Query keyed on the
  * target's id — see that hook and `entryReferenceQueryKey`'s own comments),
@@ -122,11 +127,12 @@ export function entrySnippet(body: string): string {
  * settled yet — into the one rule a date Reference already follows: the
  * literal text the user typed, not interactive.
  *
- * The chip itself is an inline `<a>`, `inline-flex` (never `display:block`,
- * matching `BubbleMeta`'s own floated `<span>` next door): it renders inside
- * `EntryBubble`'s `bubble-body` span, which must stay one line box for
- * `BubbleMeta`'s right-floated clock to share (ADR 0036) — the exact defect
- * that ADR records as "passed every test and was wrong on screen."
+ * The chip itself is an inline `<a>`, `inline-flex` (never `display:block`)
+ * — it renders inline, wherever the parse finds the mark, inside whichever
+ * body element the caller supplies (`EntryBody`'s `<p>` in the list,
+ * `EntryBubble`'s own `<p>` in the thread — see that file's own comment for
+ * why `BubbleMeta` no longer needs the body to stay one line box; issue
+ * #149 moved its clock off the float that used to require that).
  *
  * Deliberately renders the target's own snippet through `entrySnippet`
  * above rather than `entryBodyContent`'s `query`-aware highlighting: the
@@ -161,14 +167,18 @@ function EntryReferenceLink({ entryId, raw }: { entryId: string; raw: string }) 
     <Link
       to={`/composer?e=${entryId}`}
       aria-label={`Open Entry from ${dayLabel ?? "an earlier day"} in History`}
-      // `max-w` leaves room for the clock, and that is load-bearing rather
-      // than cosmetic. An inline-flex box is atomic: it cannot be broken
-      // across lines, so if it is allowed to grow to the full width of the
-      // body there is no space beside it for `BubbleMeta`'s right float, and
-      // the clock drops to a line of its own — ADR 0036's defect exactly,
-      // and one no test in jsdom can see because jsdom does not lay out
-      // floats. Caught by measuring a real bubble in a real browser.
-      className="mx-0.5 inline-flex max-w-[calc(100%-4.5rem)] items-baseline gap-1.5 rounded-full border border-border bg-background/60 px-2 align-baseline text-xs leading-normal underline decoration-dotted underline-offset-2"
+      // `max-w` bounds the chip so `truncate` on its snippet span has a
+      // width to truncate against, rather than growing to whatever the
+      // target's snippet measures. It used to carve out an extra 4.5rem to
+      // leave room for `BubbleMeta`'s right-floated clock on the same line
+      // (issue #149's own float removed that need): an inline-flex box is
+      // atomic and cannot be broken across lines, so with the clock still
+      // sharing the line, letting the chip grow to the body's full width
+      // left the float no room and dropped the clock to a line of its own —
+      // ADR 0036's defect exactly. The clock now sits on its own row below
+      // the body (`BubbleMeta`'s own comment), so nothing on the chip's own
+      // line still needs to be shared with it.
+      className="mx-0.5 inline-flex max-w-full items-baseline gap-1.5 rounded-full border border-border bg-background/60 px-2 align-baseline text-xs leading-normal underline decoration-dotted underline-offset-2"
     >
       {dayLabel !== null && <span className="shrink-0 font-medium">{dayLabel}</span>}
       <span className="truncate">{snippet}</span>
@@ -177,28 +187,71 @@ function EntryReferenceLink({ entryId, raw }: { entryId: string; raw: string }) 
 }
 
 /**
- * An Entry's words with the Search query highlighted, as inline content and
- * nothing else — no block wrapper of its own.
+ * An Entry's words with the Search query highlighted, and — since issue
+ * #152 — its own block structure (a list) when it has one. No wrapper of
+ * its own here either way; the caller still supplies the box.
  *
- * Split out of `EntryBody` for `entry-bubble.tsx`. A bubble puts its clock
- * time in a right-floated span after the text so it can share the last line,
- * and a float can only be placed on a line box it is actually in: with the
- * body wrapped in a `<p>`, the float has no line of its own to join and
- * drops beneath the whole block every time. That is what made a one-word
- * Entry cost two lines.
+ * Split out of `EntryBody` for `entry-bubble.tsx`, whose own wrapper needs a
+ * different className than `EntryBody`'s (the text-size scale variable,
+ * not `EntryBody`'s `flex-1`) — the split is about the wrapper each surface
+ * supplies, not about staying unwrapped. (Before issue #149 it *was* the
+ * latter: a bubble's clock was a right float sharing the body's last line,
+ * which needs a line box to land on, so the body had to stay unwrapped
+ * there specifically. `BubbleMeta`'s own comment has the current shape.)
  *
  * Shared rather than reimplemented so the *words* still cannot drift between
- * History and Grounding, which is what `EntryBody`'s own extraction was for.
+ * History and Grounding, which is what `EntryBody`'s own extraction was for
+ * — including inside a list item: `refs.date`/`refs.entry` below reach a
+ * Reference wherever `entryProse`'s walk finds one, list item or not.
+ *
+ * Renders through `entryProse` (entry-prose.tsx), an Entry's own path onto
+ * the shared parser (issue #148) — every other prose surface still calls
+ * `inlineProse` directly, and stays inline-only. `entryProse` used to be a
+ * pure pass-through; issue #152 is the divergence issue #148 built this
+ * seam for.
+ *
+ * `onToggleTask` (issue #153) passes straight through to `entryProse` —
+ * `undefined` here is what keeps every checkbox this renders disabled;
+ * only `EntryBubble`'s own caller (history.tsx, through composer-page.tsx)
+ * ever supplies one. `EntryBody` below, this function's other caller, never
+ * does — see its own comment for why.
  */
-export function entryBodyContent(body: string, query: string): ReactNode {
-  return inlineProse(body, query, {
-    date: (node, key) => <DateReferenceLink key={key} date={node.date} raw={node.raw} />,
-    entry: (node, key) => <EntryReferenceLink key={key} entryId={node.entryId} raw={node.raw} />,
-  });
+export function entryBodyContent(
+  body: string,
+  query: string,
+  onToggleTask?: (markerFrom: number, markerTo: number) => void,
+): ReactNode {
+  return entryProse(
+    body,
+    query,
+    {
+      date: (node, key) => <DateReferenceLink key={key} date={node.date} raw={node.raw} />,
+      entry: (node, key) => <EntryReferenceLink key={key} entryId={node.entryId} raw={node.raw} />,
+    },
+    onToggleTask,
+  );
 }
 
+/**
+ * A `<div>`, not a `<p>` (issue #152): `entryBodyContent` can render a
+ * `<ul>`/`<ol>` alongside its own `<p>`s when the body holds a list, and a
+ * list cannot validly nest inside a `<p>`. `whitespace-pre-wrap` still
+ * lives here too — redundant with the one on each `entryProse`-generated
+ * `<p>`, kept so this element's own behaviour doesn't depend on which
+ * child happens to carry it.
+ *
+ * `EntryBody` is `EntryRow`'s own body, and `EntryRow`'s one remaining
+ * caller is `grounding-disclosure.tsx` — Reflection's Grounding, which
+ * CONTEXT.md requires to stay a read-only view of what an Answer was based
+ * on (the same reason `EntryRowProps.actions` above is never wired for
+ * it). Passing no `onToggleTask` here is what keeps a checkbox rendered in
+ * Grounding disabled (issue #153): a tickable box there would let editing
+ * a past Answer relied on look possible, which must not be true. History's
+ * own thread renders through `EntryBubble` instead, not `EntryBody`, so
+ * this decision only ever governs Grounding.
+ */
 export function EntryBody({ body, query }: { body: string; query: string }) {
-  return <p className="min-w-0 flex-1 whitespace-pre-wrap">{entryBodyContent(body, query)}</p>;
+  return <div className="min-w-0 flex-1 whitespace-pre-wrap">{entryBodyContent(body, query)}</div>;
 }
 
 /**

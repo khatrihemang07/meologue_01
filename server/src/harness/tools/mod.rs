@@ -98,7 +98,50 @@ use super::types::Tool;
 /// analogous renderer rather than sharing this one.
 pub fn render_entry(created_at: DateTime<Utc>, body: &str, utc_offset_minutes: i32) -> String {
     let local = created_at + Duration::minutes(i64::from(utc_offset_minutes));
-    format!("[{}] {}", local.format("%Y-%m-%d"), body)
+    format!(
+        "[{}] {}",
+        local.format("%Y-%m-%d"),
+        indent_continuation_lines(body)
+    )
+}
+
+/// Indents every line of `body` after the first by two spaces (issue
+/// #151), so the `[YYYY-MM-DD] ` prefix this function and `digest.rs`'s
+/// own `render_entry` each write stays the only thing that marks where
+/// one Entry ends and the next begins. Plain Enter already inserts a
+/// literal newline in the Composer, so a multi-line body is not
+/// speculative: without this, two Entries on the same day, each spanning
+/// several lines, run together into a block the model has no reliable
+/// way to split back apart.
+///
+/// Shared by both `render_entry`s (this module's and `digest.rs`'s)
+/// rather than duplicated a third time: unlike the timezone resolution
+/// the two functions deliberately keep separate (this function's own doc
+/// comment above explains why offset-vs-`Tz` must not be conflated),
+/// indentation is pure string shaping with nothing Device- or
+/// Server-specific about it, so one function serves both call sites.
+///
+/// A single-line body is returned byte-identical to `body` itself:
+/// `split('\n')` on a string with no `\n` yields exactly one element, so
+/// the loop that indents "every line but the first" never runs. A body
+/// that is empty, all-newlines, or ends in a trailing newline is handled
+/// the same way as any other multi-line body — every line after the
+/// first gets the two-space prefix, including a blank one, so the
+/// boundary rule has no silent exception. A CR before a `\n` (a CRLF
+/// body) is left attached to the line it ends, since splitting only on
+/// `\n` — never `\r\n` — keeps the inserted indent immediately after the
+/// newline the model actually sees, exactly where it needs to be to mark
+/// a new line's start regardless of which line-ending convention wrote
+/// it.
+pub(crate) fn indent_continuation_lines(body: &str) -> String {
+    let mut lines = body.split('\n');
+    let mut result = lines.next().unwrap_or("").to_string();
+    for line in lines {
+        result.push('\n');
+        result.push_str("  ");
+        result.push_str(line);
+    }
+    result
 }
 
 /// What running one tool call produced — pi's own `content`/`details` split
@@ -283,6 +326,73 @@ mod tests {
     fn west_of_utc_an_early_morning_entry_rolls_back_to_the_previous_local_day() {
         let rendered = render_entry(at(2026, 7, 1, 3, 0), "body", -480);
         assert_eq!(rendered, "[2026-06-30] body");
+    }
+
+    /// Issue #151's own byte-identical requirement: a single-line body
+    /// must render exactly as it did before this ticket.
+    #[test]
+    fn a_single_line_body_renders_unchanged() {
+        let rendered = render_entry(at(2026, 6, 30, 12, 0), "hello world", 0);
+        assert_eq!(rendered, "[2026-06-30] hello world");
+    }
+
+    #[test]
+    fn a_multi_line_body_has_continuation_lines_indented() {
+        let rendered = render_entry(at(2026, 6, 30, 12, 0), "line one\nline two\nline three", 0);
+        assert_eq!(rendered, "[2026-06-30] line one\n  line two\n  line three");
+    }
+
+    #[test]
+    fn an_empty_body_renders_unchanged() {
+        let rendered = render_entry(at(2026, 6, 30, 12, 0), "", 0);
+        assert_eq!(rendered, "[2026-06-30] ");
+    }
+
+    #[test]
+    fn a_body_of_only_newlines_indents_every_blank_continuation_line() {
+        let rendered = render_entry(at(2026, 6, 30, 12, 0), "\n\n", 0);
+        assert_eq!(rendered, "[2026-06-30] \n  \n  ");
+    }
+
+    #[test]
+    fn a_trailing_newline_indents_the_trailing_blank_line_too() {
+        let rendered = render_entry(at(2026, 6, 30, 12, 0), "first\nsecond\n", 0);
+        assert_eq!(rendered, "[2026-06-30] first\n  second\n  ");
+    }
+
+    #[test]
+    fn crlf_line_endings_keep_the_carriage_return_on_the_line_it_ends() {
+        let rendered = render_entry(at(2026, 6, 30, 12, 0), "first\r\nsecond\r\n", 0);
+        assert_eq!(rendered, "[2026-06-30] first\r\n  second\r\n  ");
+    }
+
+    /// The scenario the issue names directly: two multi-line Entries on
+    /// the same day, rendered one after another the way a tool joins its
+    /// results, must stay distinguishable — a reader can tell exactly
+    /// where the second `[YYYY-MM-DD]` prefix starts.
+    #[test]
+    fn two_multi_line_entries_on_the_same_day_stay_distinguishable() {
+        let first = render_entry(
+            at(2026, 6, 30, 9, 0),
+            "meeting notes\n- item one\n- item two",
+            0,
+        );
+        let second = render_entry(
+            at(2026, 6, 30, 21, 0),
+            "evening reflection\nstill thinking about it",
+            0,
+        );
+        let joined = format!("{first}\n\n{second}");
+        assert_eq!(
+            joined,
+            "[2026-06-30] meeting notes\n  - item one\n  - item two\n\n\
+             [2026-06-30] evening reflection\n  still thinking about it"
+        );
+        let entry_starts = joined
+            .lines()
+            .filter(|line| line.starts_with("[2026-06-30]"))
+            .count();
+        assert_eq!(entry_starts, 2);
     }
 
     struct FixedTool {

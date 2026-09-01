@@ -72,9 +72,9 @@ async function measureColumns(page: Page): Promise<Measurement> {
   // The content column is still the scroll region's first child div
   // (shell.tsx) — located from the scroll region's existing testid rather
   // than adding a new one to the column itself. The Composer's inner
-  // column has no testid either; it's the Textarea's immediate parent
-  // (composer.tsx), so the placeholder — already queried elsewhere in this
-  // suite — locates it just as directly.
+  // column has no testid either; it's the editable field's immediate
+  // parent (composer.tsx), so the placeholder — already queried elsewhere in
+  // this suite — locates it just as directly.
   //
   // `.first()` (issue #83): History virtualizes its own rows now, and the
   // subtree it renders *inside* the content column is a variable number of
@@ -94,7 +94,28 @@ async function measureColumns(page: Page): Promise<Measurement> {
       measured = await page.evaluate(() => {
         const region = document.querySelector("[data-testid='shell-scroll-region']");
         const content = region?.firstElementChild;
-        const composer = document.querySelector("textarea")?.parentElement;
+        // The Composer's own column — the row that holds the editable field
+        // AND the Send button beside it, which is the box that actually has
+        // to line up with the thread above.
+        //
+        // This used to be `querySelector("textarea")?.parentElement`, which
+        // was wrong twice over. Issue #155 replaced the `<textarea>` with a
+        // ProseMirror `contenteditable`, so the query started returning null
+        // and every measurement here came back 0 — the poll below could
+        // never resolve and these cases timed out. Fixing only that exposed
+        // the older mistake underneath: the field's immediate parent is the
+        // `flex-1` wrapper INSIDE the row, so it measures the column minus
+        // the Send button and the gap (294px against the content column's
+        // 378px at phone width). That mismatch predates issue #155 — the
+        // same element measures the same 294px on the commit this branch
+        // started from — so these assertions were failing there too, just
+        // with a different number than the one the timeout later produced.
+        //
+        // The Send button's own parent IS the row, and `aria-label="Send"`
+        // is a contract this suite already relies on elsewhere, so it
+        // locates the column without depending on Tailwind classes or on
+        // how many wrappers sit between the row and the field.
+        const composer = document.querySelector('[aria-label="Send"]')?.parentElement;
         const box = (el: Element | null | undefined) => {
           const rect = el?.getBoundingClientRect();
           return { x: rect?.x ?? 0, width: rect?.width ?? 0 };

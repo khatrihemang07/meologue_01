@@ -80,7 +80,15 @@ describe("ComposerPage", () => {
       disabled: true,
     });
 
-    expect(screen.getByPlaceholderText("What's on your mind?")).toBeDisabled();
+    // Issue #155: the Composer's field is a `contenteditable` `<div>` now,
+    // not an `<input>`/`<textarea>` — it never matches `:disabled` (jest-dom's
+    // `toBeDisabled()` only recognises real form controls), so "disabled"
+    // shows up as `aria-disabled` instead (composer.tsx's own `attributes`
+    // function on the mounted `EditorView`).
+    expect(screen.getByPlaceholderText("What's on your mind?")).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
   });
 
   it("shows the store's error message", () => {
@@ -447,7 +455,10 @@ describe("ComposerPage", () => {
       fireEvent.click(await screen.findByText("Edit"));
 
       expect(screen.getByText("Editing Entry")).toBeInTheDocument();
-      expect(screen.getByPlaceholderText("What's on your mind?")).toHaveValue("hello");
+      // Issue #155: `.toHaveValue()` only reads `<input>`/`<textarea>`; the
+      // field is a `contenteditable` `<div>` now, so its rendered text is
+      // read straight off `textContent` instead.
+      expect(screen.getByPlaceholderText("What's on your mind?").textContent).toBe("hello");
     });
 
     // Issue #82: choosing Delete opens a confirm dialog rather than
@@ -466,6 +477,45 @@ describe("ComposerPage", () => {
       fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
 
       expect(removeEntry).toHaveBeenCalledWith(oneEntry[0]);
+    });
+  });
+
+  // Issue #153: the real, end-to-end wiring for a checkbox tap — History's
+  // rendered checkbox, into this page's own `handleToggleTask`, into the
+  // same `editEntry` an ordinary Composer edit commits through (ADR 0043's
+  // "a tick is an ordinary Entry edit"). `toggle-task.test.ts` and
+  // `entry-prose.test.tsx` already cover the splice and the rendering; this
+  // is the one place that proves a real tap ends up calling `editEntry`
+  // with the right, spliced body.
+  describe("Tapping a checkbox", () => {
+    const withTask: EntryStoreOutletContext["entries"] = [
+      {
+        id: "1",
+        deviceId: "device-a",
+        body: "- [ ] call mum\n- [ ] buy milk",
+        createdAt: "2026-08-30T09:00:00.000Z",
+        seq: 1,
+        syncedAt: "now",
+        deletedAt: null,
+      },
+    ];
+
+    it("commits the toggle through editEntry, spliced, leaving the rest of the body untouched", () => {
+      const editEntry = vi.fn();
+      renderComposerPage({ ...readyContext, entries: withTask, editEntry });
+
+      fireEvent.click(screen.getByRole("checkbox", { name: "call mum" }));
+
+      expect(editEntry).toHaveBeenCalledTimes(1);
+      expect(editEntry).toHaveBeenCalledWith("1", "- [x] call mum\n- [ ] buy milk");
+    });
+
+    it("reading the page without tapping calls editEntry not at all", () => {
+      const editEntry = vi.fn();
+      renderComposerPage({ ...readyContext, entries: withTask, editEntry });
+
+      expect(screen.getAllByRole("checkbox")).toHaveLength(2);
+      expect(editEntry).not.toHaveBeenCalled();
     });
   });
 
@@ -495,7 +545,7 @@ describe("ComposerPage", () => {
       expect(screen.queryByText(referredEntry.id)).not.toBeInTheDocument();
       fireEvent.click(await screen.findByText("Refer to this Entry"));
 
-      expect(screen.getByPlaceholderText("What's on your mind?")).toHaveValue(
+      expect(screen.getByPlaceholderText("What's on your mind?").textContent).toBe(
         `[[e:${referredEntry.id}]]`,
       );
     });
@@ -515,14 +565,16 @@ describe("ComposerPage", () => {
       // Enter edit mode on the first Entry.
       swipeLeft(screen.getByText("editing this one"));
       fireEvent.click(await screen.findByText("Edit"));
-      expect(screen.getByPlaceholderText("What's on your mind?")).toHaveValue("editing this one");
+      expect(screen.getByPlaceholderText("What's on your mind?").textContent).toBe(
+        "editing this one",
+      );
 
       // Refer to the second Entry while still editing the first.
       swipeLeft(screen.getByText("hello"));
       fireEvent.click(await screen.findByText("Refer to this Entry"));
 
       expect(screen.getByText("Editing Entry")).toBeInTheDocument();
-      expect(screen.getByPlaceholderText("What's on your mind?")).toHaveValue(
+      expect(screen.getByPlaceholderText("What's on your mind?").textContent).toBe(
         "editing this one[[e:referred-entry-id-2]]",
       );
       expect(editEntry).not.toHaveBeenCalled();

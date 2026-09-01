@@ -175,6 +175,33 @@ describe("History", () => {
     expect(mark.parentElement).toHaveTextContent("a recurring task");
   });
 
+  // Issue #153: History threads `onToggleTask` straight through to every
+  // `EntryBubble` unchanged — entry-bubble.test.tsx's own `onToggleTask`
+  // suite covers the marker-offset/Entry wiring that closure builds; this
+  // only proves History itself passes the callback down, and leaves a
+  // checkbox disabled when no caller supplies one at all (every render in
+  // this file that doesn't opt in, and history.tsx's own doc comment on
+  // why that's a real, supported shape rather than an oversight).
+  it("renders a checkbox disabled when no onToggleTask is wired", () => {
+    render(<History entries={[entry({ body: "- [ ] call mum" })]} syncEnabled={false} />);
+
+    expect(screen.getByRole("checkbox")).toBeDisabled();
+  });
+
+  it("calls onToggleTask, wired through to the checkbox that rendered it", () => {
+    const onToggleTask = vi.fn();
+    const body = "- [ ] call mum";
+    const target = entry({ body });
+    render(<History entries={[target]} syncEnabled={false} onToggleTask={onToggleTask} />);
+
+    fireEvent.click(screen.getByRole("checkbox"));
+
+    expect(onToggleTask).toHaveBeenCalledTimes(1);
+    const [calledEntry, markerFrom, markerTo] = onToggleTask.mock.calls[0] ?? [];
+    expect(calledEntry).toBe(target);
+    expect(body.slice(markerFrom, markerTo)).toBe("[ ]");
+  });
+
   it("shows a not-found message, distinct from the empty-History message, once a search matches nothing", () => {
     render(<History entries={[]} syncEnabled={false} query="nothing matches this" />);
 

@@ -144,6 +144,39 @@ describe("EntryStoreLayout", () => {
     );
   });
 
+  // Issue #159, AC "a hung open and a rejected open are distinguishable on
+  // screen": OpenTimeoutError must not read the same as StorageUnavailableError's
+  // fixed sentence above — a reader whose Device is still (slowly) opening
+  // the store, and one whose Device genuinely can't, are told different
+  // things.
+  it("puts a distinct message on the outlet when opening the store times out", async () => {
+    const fresh = await importFresh();
+    const rejection = Promise.reject(new fresh.OpenTimeoutError());
+    rejection.catch(() => {});
+    createDriver.mockReturnValue(rejection);
+    activeUseEntryStore = fresh.useEntryStore;
+
+    render(
+      <QueryClientProvider client={fresh.queryClient}>
+        <MemoryRouter initialEntries={["/"]}>
+          <Routes>
+            <Route element={<fresh.EntryStoreLayout />}>
+              <Route path="/" element={<Probe />} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          "disabled:true message:meologue is taking longer than expected to open its storage. If this doesn't resolve, try reloading.",
+        ),
+      ).toBeInTheDocument(),
+    );
+  });
+
   it("renders Ready once the store opens", async () => {
     createDriver.mockResolvedValue({});
     const store = createFakeStore();
