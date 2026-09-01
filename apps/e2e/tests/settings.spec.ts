@@ -1,6 +1,7 @@
 import type { Locator, Page } from "@playwright/test";
 import { expect, test } from "@playwright/test";
-import { entrySwipeTarget, sendEntry, uniqueEntryBody } from "./helpers";
+import { SERVER_A_DATABASE } from "../servers";
+import { entrySeq, entrySwipeTarget, sendEntry, uniqueEntryBody, waitForEntryId } from "./helpers";
 
 /**
  * #128's Settings, checked where it is actually checkable.
@@ -245,4 +246,49 @@ test("an Entry's fill carries the hue of the Accent the reader chose", async ({ 
       `${accent} bubbles are ${Math.round(separation)}deg away from ${accent}`,
     ).toBeLessThan(40);
   }
+});
+
+/**
+ * Issue #163's own acceptance criterion, asserted rather than argued:
+ * "Changing the setting rewrites no Entry, triggers no Sync, and marks no
+ * Digest stale."
+ *
+ * It is true by construction — `applyCompletedStyle` writes one attribute on
+ * `<html>` and `setCompletedStyle` writes one localStorage key, and neither
+ * path can reach the Entry store — but "true by construction" is exactly the
+ * kind of claim that stops being true after an innocent refactor, silently,
+ * with nothing failing. So it gets a test.
+ *
+ * `seq` is the strongest available signal, and for the reason `entrySeq`'s
+ * own comment gives: ADR 0028 reassigns it on every write, insert or edit,
+ * and never on a read. An unchanged `seq` therefore means no UPDATE reached
+ * the Server at all — which is simultaneously the "no Entry rewritten" and
+ * the "nothing to Sync" halves of the criterion, and the "no Digest stale"
+ * half follows from ADR 0039, where staleness is triggered BY an Entry edit.
+ *
+ * All four values are exercised, not just one: the default is `gray`, so a
+ * test that only tried `gray` could pass while writing nothing simply
+ * because nothing changed.
+ */
+test("changing the completed-checklist style rewrites no Entry (#163, ADR 0028)", async ({
+  page,
+}) => {
+  const body = uniqueEntryBody("- [ ] call mum");
+  await page.goto("/composer");
+  await sendEntry(page, body);
+  const id = await waitForEntryId(body, SERVER_A_DATABASE);
+  expect(id).toBeDefined();
+  const before = entrySeq(id as string, SERVER_A_DATABASE);
+  expect(before).toBeDefined();
+
+  await openSettings(page);
+  for (const label of ["Grayed out and strikethrough", "Strikethrough", "None", "Grayed out"]) {
+    await page.getByRole("button", { name: label, exact: true }).click();
+    await expect(page.getByRole("button", { name: label, exact: true })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  }
+
+  expect(entrySeq(id as string, SERVER_A_DATABASE)).toBe(before);
 });
