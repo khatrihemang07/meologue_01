@@ -65,6 +65,66 @@ test("bold and italic stay distinct even though ** shares a character with *", a
   await expect(editor.locator("em")).toHaveText("em");
 });
 
+/**
+ * Issue #158: `.ProseMirror` carried no `white-space` rule of its own, so
+ * the field behaved like ordinary prose — plain `white-space: normal` is
+ * free to collapse a run of spaces down to one, and a browser can
+ * substitute U+00A0 in for a literal space to keep it from disappearing
+ * rather than leaving the field showing what was actually typed
+ * (ProseMirror upstream issues #981 and #598 — WebKit does this far more
+ * eagerly than Chromium). `entry-prose.tsx`'s read side has always
+ * rendered with `whitespace-pre-wrap`, so before the CSS fix the Composer
+ * could show something different from both what was typed and what
+ * History would go on to show once Sent — the exact "the editor lies
+ * about what you will get" complaint issue #155 exists to remove,
+ * surviving here in a corner that change never reached.
+ *
+ * `.textContent()`, not a Playwright text matcher: `toHaveText`/
+ * `getByText`/`hasText` all normalise internal whitespace before
+ * comparing, which would hide exactly the defect this test exists to
+ * catch. `waitForEntryId` resolving on the exact stored `body` is the same
+ * idea one layer down, at the Server rather than the DOM.
+ */
+test("two consecutive spaces survive typing, Send, and rendering in History", async ({ page }) => {
+  const marker = uniqueEntryBody("composer-whitespace-pair");
+  const body = `${marker} two  spaces here`;
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  await editor.pressSequentially(body);
+
+  await expect.poll(() => editor.locator("p").textContent()).toBe(body);
+
+  await page.getByRole("button", { name: "Send" }).click();
+  const id = await waitForEntryId(body, SERVER_A_DATABASE);
+  expect(id).toBeDefined();
+
+  const bubble = page.locator('[data-slot="bubble-body"]', { hasText: marker });
+  await expect.poll(() => bubble.textContent()).toBe(body);
+});
+
+/**
+ * The trailing-space half of the same defect, checked only "on screen" per
+ * issue #158's own acceptance criteria — not through Send. A trailing
+ * space at the very end of the WHOLE document is deliberately stripped by
+ * `normalizeEntryBody` (entry-text.ts) when a brand-new Entry is sent
+ * (`sendEntry`, use-history.ts), the same as any other leading/trailing
+ * whitespace on a draft. That trim is existing, intentional behaviour this
+ * ticket does not touch, not a regression of it — so this test stops at
+ * proving the field itself never drops the space while it's being typed,
+ * which is the part `.ProseMirror`'s missing `white-space` rule broke.
+ */
+test("a trailing space at the end of a line survives on screen", async ({ page }) => {
+  const marker = uniqueEntryBody("composer-whitespace-trailing");
+  const body = `${marker} trailing `;
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  await editor.pressSequentially(body);
+
+  await expect.poll(() => editor.locator("p").textContent()).toBe(body);
+});
+
 test("a bullet marker starts a list; Enter gives the next item; Enter on an empty item leaves the list", async ({
   page,
 }) => {

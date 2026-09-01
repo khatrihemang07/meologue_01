@@ -247,6 +247,56 @@
 }
 
 /*
+ * The Composer's own whitespace rule.
+ *
+ * `prosemirror-view` ships a stylesheet of its own
+ * (`prosemirror-view/style/prosemirror.css`) that sets `word-wrap:
+ * break-word` and `white-space: pre-wrap`/`break-spaces` on `.ProseMirror`
+ * — but nothing in this app imports it, and nothing else here sets any of
+ * the three. Every element defaults to `white-space: normal`, which
+ * collapses runs of spaces to one and drops a trailing space entirely.
+ * That is issue #158: type two spaces between words in the Composer and
+ * only one survived on screen; type a trailing space and it vanished. Meanwhile
+ * `entry-prose.tsx` renders a Sent Entry's prose with `whitespace-pre-wrap`
+ * (the READ side), so what the Composer showed while an Entry was being
+ * written never matched what it showed once Sent — the same "the editor
+ * lies about what you will get" complaint issue #155 exists to remove,
+ * surviving here in a corner that change never reached.
+ *
+ * Restated below rather than imported. Both were investigated: importing
+ * the upstream stylesheet — a CSS `@import` of the file under
+ * `node_modules`, or a side-effecting JS import of it — lands as plain,
+ * unlayered CSS, because that file never wraps its own rules in `@layer`.
+ * Cascade layers rank every unlayered normal-importance rule above EVERY
+ * layered one, unconditionally, regardless of source order or specificity
+ * — so an imported copy would sit permanently above Tailwind's own `base`
+ * layer (where preflight lives) AND above the `@layer base` rules this
+ * file already declares below, which is the opposite of how those rules
+ * are made to win: they depend on being IN `base` and coming AFTER
+ * preflight in source order, not on out-ranking it by construction. An
+ * import would also drag in rules this app has no use for and has never
+ * exercised: `.ProseMirror pre` (this schema has no `code_block` node —
+ * entry-schema.ts), the `[draggable]` selection-text rule, the
+ * `.ProseMirror-selectednode`/`li.ProseMirror-selectednode:after`
+ * NodeSelection outline (nothing here ever leaves a NodeSelection visible
+ * to a user — `referenceNodeView`'s chip is the only such node, and it is
+ * rendered `contenteditable="false"`, not selected), and
+ * `img.ProseMirror-separator`. Restating only the three declarations
+ * issue #158 actually needs keeps this file the one place that decides
+ * what the Composer's surface looks like, in the same layer and by the
+ * same mechanism as the list rules beside it — not a second, competing
+ * source of truth that happens to always win.
+ */
+@layer base {
+  .ProseMirror {
+    word-wrap: break-word;
+    white-space: pre-wrap;
+    /* biome-ignore lint/suspicious/noDuplicateProperties: deliberate fallback, matching prosemirror-view's own upstream rule — `break-spaces` wins in any browser that understands it, `pre-wrap` is what an older one falls back to instead of the property being dropped outright. */
+    white-space: break-spaces;
+  }
+}
+
+/*
  * The Composer's own list styling.
  *
  * `entry-prose.tsx` renders History's lists through React and sets their

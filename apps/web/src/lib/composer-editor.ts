@@ -164,6 +164,21 @@ const emUnderscoreInputRule = markInputRule(/(?<![\w_])_([^_]+)_$/, requireMarkT
 // List input rules: "- ", "1. ", and "- [ ] "/"- [x] " for a checkbox
 // ---------------------------------------------------------------------------
 
+/**
+ * Every regexp below that matches trailing whitespace with `\s` already
+ * tolerates U+00A0 (a non-breaking space) — `\s` in a JavaScript RegExp is
+ * defined over the Unicode `White_Space` property, which NBSP is part of,
+ * not over the literal ASCII space alone. That matters here specifically
+ * because index.css's own `.ProseMirror` rule only just started setting
+ * `white-space: pre-wrap`/`break-spaces` (issue #158, same ticket as this
+ * comment); without it, a browser is free to normalise a typed space into
+ * U+00A0 so it survives `white-space: normal` collapsing (ProseMirror
+ * upstream issues #981 and #598), and WebKit does this far more eagerly
+ * than Chromium — a rule that looks green in Chromium can be silently
+ * dead in WKWebView. Only `checkboxInputRule`'s pattern below matches a
+ * literal space with `[ xX]` — a character class, not `\s` — which is why
+ * it is the one rule that actually needed changing.
+ */
 const bulletListNodeType = requireNodeType("bullet_list");
 const orderedListNodeType = requireNodeType("ordered_list");
 const listItemNodeType = requireNodeType("list_item");
@@ -201,8 +216,30 @@ const orderedListInputRule = wrappingInputRule(
  * checkbox mark meaning nothing outside a list is not part of this
  * dialect's grammar any more than a heading is (ADR 0043).
  */
+
+/**
+ * The unchecked marker's space, in `checkboxInputRulePattern` below, is
+ * matched as a literal character class rather than `\s` — unlike every
+ * other whitespace-matching rule in this file (see the comment above
+ * `bulletListNodeType`), so it does not inherit `\s`'s built-in NBSP
+ * tolerance for free. A browser is free to normalise a typed space into
+ * U+00A0 (non-breaking) once it decides ordinary spaces might get
+ * collapsed away (ProseMirror upstream issues #981 and #598) — WebKit
+ * does this far more eagerly than Chromium — so `[ xX]` with only U+0020
+ * inside it made `- [ ] ` silently fail to become a checkbox in exactly
+ * the browsers most likely to have already substituted the space by the
+ * time this rule ever sees it. The class below adds `\u00A0` alongside
+ * the ordinary space so it accepts either character an "unchecked" box
+ * can arrive as; `xX` is unaffected since a letter is never normalised
+ * this way. Exported so a unit test (jsdom cannot mount a live
+ * `EditorView` — ADR 0044) can feed a real U+00A0 through the pattern
+ * directly rather than only through a live keystroke no test harness here
+ * can send.
+ */
+export const checkboxInputRulePattern = /^\[([ \u00A0xX])\]\s$/;
+
 function checkboxInputRule(): InputRule {
-  return new InputRule(/^\[([ xX])\]\s$/, (state, match, start, end) => {
+  return new InputRule(checkboxInputRulePattern, (state, match, start, end) => {
     const $start = state.doc.resolve(start);
     const grandParent = $start.node(-1);
     if (grandParent.type !== listItemNodeType) {
