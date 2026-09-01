@@ -1,9 +1,20 @@
 /**
  * The ProseMirror wiring issue #155 adds on top of `entrySchema`
  * (entry-schema.ts, issue #154): input rules that consume `**`/`*`/`` ` ``/
- * `- `/`1. `/`- [ ] ` as they're typed, a hand-typed `[[…]]` that completes a
- * valid Reference, the list Enter/lift keymap, and the inline `[[` picker's
- * own ProseMirror-side trigger detection.
+ * `- `/`+ `/`* `/`1. `/`1) `/`- [ ] ` as they're typed, a hand-typed `[[…]]`
+ * that completes a valid Reference, the list Enter/lift keymap, and the
+ * inline `[[` picker's own ProseMirror-side trigger detection.
+ *
+ * Issue #161 adds two things on top of that: the `*` and `1) ` spellings
+ * just listed (CommonMark accepts them as bullet/ordered markers exactly as
+ * readily as `-`/`+` and `1. ` — see `parseEntryMarkdown`, inline-markdown.ts
+ * — but until now the Composer's own input rules did not, so typing them
+ * left literal characters a Send would then have to escape rather than the
+ * list structure the reader would have understood), and a one-step `[] `/
+ * `[x] `/`[X] ` checklist trigger that skips the two-step `- ` then `[ ] `
+ * dance entirely. See the new module comment above `checklistShortcutInputRulePattern`
+ * below and ADR 0045 for the full account of why recognition and emission
+ * are allowed to diverge here.
  *
  * `prosemirror-markdown` is not a dependency (see entry-document.ts's own
  * module comment and ADR 0044) and none of this reaches for it —
@@ -18,6 +29,7 @@ import { keymap } from "prosemirror-keymap";
 import type { MarkType, NodeType, Node as PMNode } from "prosemirror-model";
 import { splitListItem } from "prosemirror-schema-list";
 import { Plugin, PluginKey } from "prosemirror-state";
+import { findWrapping } from "prosemirror-transform";
 import { Decoration, DecorationSet, type EditorView, type NodeView } from "prosemirror-view";
 import { outdent, redoCommand, undoCommand } from "@/lib/composer-commands";
 import { derivePicker, type ReferencePickerState } from "@/lib/composer-picker";
@@ -161,7 +173,10 @@ const strongUnderscoreInputRule = markInputRule(
 const emUnderscoreInputRule = markInputRule(/(?<![\w_])_([^_]+)_$/, requireMarkType("em"));
 
 // ---------------------------------------------------------------------------
-// List input rules: "- ", "1. ", and "- [ ] "/"- [x] " for a checkbox
+// List input rules: "- "/"+ "/"* ", "1. "/"1) ", and "- [ ] "/"- [x] " for a
+// checkbox (issue #161 widens the first two to match every spelling
+// `parseEntryMarkdown` already accepts, and adds the one-step checklist
+// trigger further down)
 // ---------------------------------------------------------------------------
 
 /**
@@ -183,10 +198,39 @@ const bulletListNodeType = requireNodeType("bullet_list");
 const orderedListNodeType = requireNodeType("ordered_list");
 const listItemNodeType = requireNodeType("list_item");
 
-const bulletListInputRule = wrappingInputRule(/^\s*([-+])\s$/, bulletListNodeType);
+/**
+ * `[-+*]`: CommonMark's own bullet-marker alphabet is exactly these three
+ * characters (see `entryParser`'s use of the stock `@lezer/markdown` bullet
+ * parser, inline-markdown.ts), so `parseEntryMarkdown` already turns
+ * `* milk` into a bullet list on Send — it always has. Until issue #161
+ * this rule only matched `-`/`+`, so typing `*` left a literal asterisk on
+ * screen the entire time it was being written, then a bullet the instant it
+ * was Sent: the two parse entry points ADR 0043 claims share "one dialect"
+ * actually disagreed about a real, common way to start a bullet. `* ` is
+ * also EXACTLY what `escapeUserText` (entry-document.ts) has always escaped
+ * a leading `*` to `\*` for — that escape was written for prose that merely
+ * starts with an asterisk, but it was silently carrying the entire weight
+ * of covering for this rule's own gap, since a `* milk` typed into the
+ * Composer had nowhere else to go. Verified on a real macOS build, not
+ * inferred from reading the grammar: typing `* milk` before this change
+ * left `* milk` on screen and only became a bullet after Send. ADR 0045
+ * has the full account.
+ */
+const bulletListInputRule = wrappingInputRule(/^\s*([-+*])\s$/, bulletListNodeType);
 
+/**
+ * `[.)]`: CommonMark's ordered-list marker is a run of digits followed by
+ * EITHER `.` or `)` — `orderedListStart` (inline-markdown.ts) reads the
+ * digits off whichever delimiter shows up, its own comment says so
+ * explicitly ("`1.` and `1)` both give 1") — so `1) alpha` has always
+ * become an ordered list on Send. Until issue #161 this rule only matched
+ * `.`, the same one-sided gap `bulletListInputRule` had for `*`: typing
+ * `1) alpha` left the literal text `1) alpha` on screen for as long as it
+ * was being edited, then reflowed into a numbered item the instant it was
+ * Sent. Verified on a real macOS build the same way the `*` case was.
+ */
 const orderedListInputRule = wrappingInputRule(
-  /^(\d+)\.\s$/,
+  /^(\d+)[.)]\s$/,
   orderedListNodeType,
   (match) => ({ order: Number(match[1]) }),
   // Standard prosemirror-schema-list join predicate (its own module
@@ -195,7 +239,11 @@ const orderedListInputRule = wrappingInputRule(
   // starting a second, adjacent one — matched here against the SAME
   // numbering `entryDocumentToMarkdown`'s own `markerFor` would have
   // produced for that position, so a list typed this way round-trips
-  // identically to one written by hand.
+  // identically to one written by hand. The delimiter itself (`.` vs `)`)
+  // plays no part in this predicate — `markerFor` only ever writes `N. `
+  // regardless of which one was typed (emission does not change, ADR
+  // 0045), so a `1) `/`2) `/`3) ` run joins exactly as a `1. `/`2. `/`3. `
+  // one already did.
   (match, node) => node.childCount + Number(node.attrs.order) === Number(match[1]),
 );
 
@@ -255,6 +303,122 @@ function checkboxInputRule(): InputRule {
   });
 }
 
+/**
+ * `[] `/`[x] `/`[X] ` at the very start of an ordinary paragraph: a
+ * one-step checklist trigger (issue #161), distinct from the two-step
+ * `- ` then `[ ] ` dance `checkboxInputRule` above upgrades. UpNote ships
+ * exactly this trigger (verified in its shipped bundle) and it is a real
+ * improvement in feel — a checklist is one keystroke pattern to reach for,
+ * not two, and the two-step path a person already knows (`- [ ] `, muscle
+ * memory or pasted GFM) keeps working unchanged alongside it.
+ *
+ * This is NOT `parseEntryMarkdown` symmetry the way `bulletListInputRule`'s
+ * new `*` and `orderedListInputRule`'s new `1)` are: the reader never
+ * treats a bare `[] ` outside a list item as a checkbox — GFM's own
+ * `TaskList` extension only fires inside a `ListItem` (inline-markdown.ts's
+ * own comment on `entryParser` says so), so there is no reader-side marker
+ * this rule is catching up to. It is a Composer-only convenience that
+ * produces exactly the structure `- [ ] `/`- [x] ` already produces —
+ * `bullet_list` > `list_item` with `checked` set — so nothing downstream
+ * (the serializer, the reader, the round-trip fixpoint) can tell the two
+ * paths apart once the keystrokes are done. `entryDocumentToMarkdown` still
+ * only ever emits `- [ ] `/`- [x] ` for it either way (ADR 0045): a
+ * one-step trigger on the way in does not mean a new spelling on the way
+ * out.
+ *
+ * The empty-brackets spelling is deliberately `[xX]?` here rather than
+ * reusing `checkboxInputRulePattern`'s `[  xX]` (which requires
+ * exactly one character between the brackets): `checkboxInputRulePattern`
+ * is upgrading an ALREADY-GFM `[ ]`/`[x]` a person typed or pasted, where a
+ * space between the brackets is mandatory grammar, so a bare `[]` there
+ * would be malformed input rather than the trigger this rule exists for.
+ * UpNote's trigger is the opposite shape on purpose — nothing between the
+ * brackets means unchecked, `x`/`X` means checked — mirroring how a person
+ * actually types a fresh checklist rather than how GFM spells a finished
+ * one. Only the checked spelling can carry an NBSP (a browser substituting
+ * the space before `x`/`X` cannot happen — there is no space there to
+ * substitute), so nbsp tolerance here rides entirely on the trailing `\s`
+ * before the cursor, the same free tolerance every other rule in this file
+ * gets from `\s` (see the comment above `bulletListNodeType`).
+ *
+ * Exported for the same reason `checkboxInputRulePattern` is: jsdom cannot
+ * mount a live `EditorView` (ADR 0044), so a unit test exercises this
+ * pattern (and `checklistShortcutInputRule`'s handler) directly rather than
+ * through a live keystroke, which belongs in apps/e2e's composer.spec.ts.
+ */
+export const checklistShortcutInputRulePattern = /^\[([xX]?)\]\s$/;
+
+/**
+ * The handler side of `checklistShortcutInputRulePattern` above. Unlike
+ * `bulletListInputRule`/`orderedListInputRule`, this cannot be built with
+ * `wrappingInputRule` alone: that helper's `getAttrs` only ever applies to
+ * the OUTERMOST node it wraps in (`bullet_list` here), never to the
+ * `list_item` `findWrapping` inserts underneath it to satisfy
+ * `bullet_list`'s own `"list_item+"` content expression (confirmed against
+ * `prosemirror-transform`'s own `findWrapping`/`withAttrs`, which hard-codes
+ * `attrs: null` for every wrapper besides the one actually asked for) — and
+ * `checked` is exactly the attribute that lives on that inner `list_item`,
+ * not on the `bullet_list` around it. So this rule does by hand what
+ * `wrappingInputRule` does internally (delete the matched marker, wrap the
+ * now-bare paragraph, look at what came out) and then takes the one extra
+ * step `wrappingInputRule` has no hook for: setting `checked` on the
+ * `list_item` `findWrapping` just created, the same way `checkboxInputRule`
+ * above sets it on an EXISTING one.
+ *
+ * The guard against an already-listed paragraph is deliberate and mirrors
+ * `checkboxInputRule`'s own "must already be inside a list item" check,
+ * inverted: this rule only wraps a paragraph that is NOT already a list
+ * item's child. `entrySchema` only ever nests a paragraph directly under
+ * `doc` or under `list_item` (there is no blockquote, no other container —
+ * entry-schema.ts's own module comment explains why), so "not a list
+ * item's child" and "a genuinely plain, top-level-or-nested-prose
+ * paragraph" are the same test. Without it, typing `- ` to open a bullet
+ * (leaving an empty `list_item > paragraph`) and then typing `[x] ` inside
+ * it would double-wrap that already-live item in a SECOND `bullet_list`
+ * nested inside the first, instead of falling through to
+ * `checkboxInputRule` — which is exactly the rule that already knows how
+ * to upgrade an existing item in place, and must keep being the one that
+ * does it.
+ *
+ * No attempt is made here to join a freshly-wrapped `bullet_list` into an
+ * ADJACENT one the way `wrappingInputRule`'s own built-in join (used by
+ * `bulletListInputRule`/`orderedListInputRule` above) would. That join
+ * exists for continuing a list a person is actively typing into — Enter
+ * inside a list item already keeps the whole item lineage in ONE
+ * `bullet_list` via `splitListItem` (`listKeymap` below) long before this
+ * rule ever runs again, so the case the join would cover — this exact
+ * rule firing twice back-to-back against two freshly-typed top-level
+ * paragraphs, with no Enter-inside-a-list-item in between — is not how a
+ * checklist actually gets built one item at a time, and is not part of
+ * this ticket's acceptance bar.
+ */
+function checklistShortcutInputRule(): InputRule {
+  return new InputRule(checklistShortcutInputRulePattern, (state, match, start, end) => {
+    const $before = state.doc.resolve(start);
+    if ($before.node(-1).type === listItemNodeType) {
+      return null;
+    }
+    const tr = state.tr.delete(start, end);
+    const range = tr.doc.resolve(start).blockRange();
+    if (range === null) {
+      return null;
+    }
+    const wrapping = findWrapping(range, bulletListNodeType);
+    if (wrapping === null) {
+      return null;
+    }
+    tr.wrap(range, wrapping);
+    const $wrapped = tr.doc.resolve(tr.mapping.map(start));
+    if ($wrapped.node(-1).type !== listItemNodeType) {
+      return null;
+    }
+    const marker = match[1];
+    const checked = marker !== undefined && marker.toLowerCase() === "x";
+    const itemPos = $wrapped.before(-1);
+    return tr.setNodeMarkup(itemPos, undefined, { checked });
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Reference input rule: "[[YYYY-MM-DD]]"/"[[e:<uuid>]]" typed by hand
 // ---------------------------------------------------------------------------
@@ -303,6 +467,7 @@ export function buildInputRules(): InputRule[] {
     bulletListInputRule,
     orderedListInputRule,
     checkboxInputRule(),
+    checklistShortcutInputRule(),
     referenceInputRule,
   ];
 }

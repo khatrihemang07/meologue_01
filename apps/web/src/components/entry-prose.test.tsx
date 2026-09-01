@@ -167,6 +167,29 @@ describe("entryProse", () => {
         // no-ops.
         expect(screen.getByRole("checkbox")).toBeDisabled();
       });
+
+      // Issue #163. jsdom applies no external stylesheet, so this cannot
+      // assert the actual grayed-out/struck-through look — that's what
+      // index.css's own rule does, driven by `--checked-list-text-
+      // decoration`/`--checked-list-text-color`. What CAN be pinned down
+      // here is the DOM SHAPE that rule depends on: a checked task item's
+      // `<li>` must carry `list-none` and must render its checkbox
+      // immediately followed by a sibling `<div>`, because index.css's
+      // selector (`li.list-none input[type="checkbox"]:checked ~ div`) is
+      // a structural match, not a class hook added for this feature's own
+      // sake. A refactor here that keeps every test above green while
+      // moving the checkbox inside the content `<div>`, or dropping
+      // `list-none`, would silently turn every completed checklist item's
+      // styling back off in History with nothing above to catch it.
+      it("keeps the DOM shape index.css's completed-style rule depends on", () => {
+        render(<Harness body="- [x] done" />);
+
+        const checkbox = screen.getByRole("checkbox");
+        const li = checkbox.closest("li");
+        expect(li).not.toBeNull();
+        expect(li?.classList.contains("list-none")).toBe(true);
+        expect(checkbox.nextElementSibling?.tagName).toBe("DIV");
+      });
     });
 
     it("resolves a Reference inside a list item, not just outside one", () => {

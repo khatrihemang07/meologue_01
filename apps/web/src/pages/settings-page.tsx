@@ -10,6 +10,8 @@ import { checkServerUrl, type ServerCheckResult } from "@/lib/server-check";
 import {
   ACCENTS,
   type AccentId,
+  COMPLETED_STYLES,
+  type CompletedStyleId,
   HIDEABLE_DESTINATIONS,
   type HideableDestinationId,
   normaliseServerUrl,
@@ -20,7 +22,7 @@ import {
   useSettingsStore,
 } from "@/lib/settings";
 import { useSyncStatus } from "@/lib/sync-status";
-import { applyAccent, applyTextSize, applyTheme } from "@/lib/theme";
+import { applyAccent, applyCompletedStyle, applyTextSize, applyTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import { entryStoreQueryOptions } from "@/pages/entry-store-layout";
 import { saveFile } from "@/platform/save-file";
@@ -138,6 +140,71 @@ function DestinationVisibilityRow({
   );
 }
 
+/**
+ * One row of the "Completed checklist item" section (issue #163) — a full
+ * width `aria-pressed` toggle, not a `ChoiceRow`: that control's own doc
+ * comment fixes its grid at three or five even columns, sized for a short
+ * word or a swatch, and "Grayed out and strikethrough" truncates badly at
+ * either width on a phone. A stacked row can be as wide as the whole
+ * section instead.
+ *
+ * The point of this control is "choose by looking," not "choose by
+ * reading" — so each row renders a real sample checklist item in its own
+ * style below the label, rather than describing the style in more words.
+ * That sample wears the exact markup shape a real checked task item has in
+ * both render paths (a `<li class="... list-none ...">` holding a checked
+ * `<input type="checkbox">` beside a sibling `<div>` — see
+ * `entry-prose.tsx`'s `renderListItem` and `composer-editor.ts`'s
+ * `listItemNodeView`), which is what lets `index.css`'s one shared rule
+ * (`li.list-none input[type="checkbox"]:checked ~ div`) style this sample
+ * too, with no second, hand-written mapping of style id to colour and
+ * decoration living here. `data-completed-style={option.id}` on the small
+ * wrapper around the sample is what feeds that rule THIS row's own option
+ * rather than whichever one is actually selected right now — the two
+ * custom properties the rule reads resolve from the nearest ancestor
+ * carrying the attribute, and this wrapper sits closer to the sample than
+ * `<html>` does.
+ *
+ * The sample is `aria-hidden` and its checkbox `disabled`: it exists to be
+ * looked at, not tabbed to or announced twice on top of the row's own
+ * label, which is already this `Button`'s full accessible name.
+ */
+function CompletedStyleRow({
+  option,
+  selected,
+  onSelect,
+}: {
+  option: { id: CompletedStyleId; label: string };
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <Button
+      type="button"
+      size="touch"
+      variant={selected ? "default" : "outline"}
+      aria-pressed={selected}
+      onClick={onSelect}
+      className="h-auto w-full flex-col items-start gap-1.5 px-4 py-3 text-left"
+    >
+      <span className="text-sm">{option.label}</span>
+      <div data-completed-style={option.id} aria-hidden="true" className="pointer-events-none">
+        <ul className="m-0 list-none p-0">
+          <li className="flex list-none items-baseline gap-1.5">
+            <input
+              type="checkbox"
+              checked
+              disabled
+              className="mt-[0.2em] shrink-0 accent-current"
+            />
+            <div className="min-w-0 flex-1 text-sm">Buy milk</div>
+          </li>
+        </ul>
+      </div>
+    </Button>
+  );
+}
+
 // Distinct, actionable copy per outcome (ticket 30). A failed `fetch` in a
 // browser is opaque — DNS failure, connection refused, TLS failure, CORS
 // rejection and OS cleartext blocking are all indistinguishable from
@@ -194,11 +261,13 @@ export function SettingsPage() {
   const theme = useSettingsStore((state) => state.theme);
   const accent = useSettingsStore((state) => state.accent);
   const textSize = useSettingsStore((state) => state.textSize);
+  const completedStyle = useSettingsStore((state) => state.completedStyle);
   const storedServerUrl = useSettingsStore((state) => state.serverUrl);
   const hiddenDestinations = useSettingsStore((state) => state.hiddenDestinations);
   const setStoredTheme = useSettingsStore((state) => state.setTheme);
   const setStoredAccent = useSettingsStore((state) => state.setAccent);
   const setStoredTextSize = useSettingsStore((state) => state.setTextSize);
+  const setStoredCompletedStyle = useSettingsStore((state) => state.setCompletedStyle);
   const setStoredServerUrl = useSettingsStore((state) => state.setServerUrl);
   const setStoredHiddenDestinations = useSettingsStore((state) => state.setHiddenDestinations);
   const syncStatus = useSyncStatus();
@@ -273,6 +342,15 @@ export function SettingsPage() {
   function selectTextSize(next: TextSizeId) {
     applyTextSize(next);
     setStoredTextSize(next);
+  }
+
+  // Apply first, then persist — same order as every other visible choice on
+  // this page. "Apply" here is one attribute write (`applyCompletedStyle`);
+  // it rewrites no Entry, starts no Sync, and marks no Digest stale, per
+  // ADR 0008 and this setting's own doc comment in settings.ts.
+  function selectCompletedStyle(next: CompletedStyleId) {
+    applyCompletedStyle(next);
+    setStoredCompletedStyle(next);
   }
 
   async function saveServerUrl() {
@@ -431,6 +509,29 @@ export function SettingsPage() {
             </Button>
           ))}
         </ChoiceRow>
+      </SettingsSection>
+
+      {/*
+        Issue #163. Display only, exactly like Accent and Text size above:
+        the four stacked rows below change how a checked item is PAINTED in
+        both the Composer and History, and nothing about what's stored,
+        Synced, or fed to a Digest. UpNote's companion "move completed
+        items to the bottom" is deliberately not offered here — see
+        `CompletedStyleId`'s own doc comment (settings.ts) for why that one
+        doesn't belong beside a display-only choice.
+      */}
+      <SettingsSection
+        label="Completed checklist item"
+        hint="Changes how a ticked checkbox's own words look. Nothing about what you wrote, Synced, or already summarised into a Digest changes."
+      >
+        {COMPLETED_STYLES.map((option) => (
+          <CompletedStyleRow
+            key={option.id}
+            option={option}
+            selected={completedStyle === option.id}
+            onSelect={() => selectCompletedStyle(option.id)}
+          />
+        ))}
       </SettingsSection>
 
       {/*

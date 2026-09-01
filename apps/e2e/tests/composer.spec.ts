@@ -163,6 +163,54 @@ test("a numbered marker starts an ordered list", async ({ page }) => {
   await expect(editor.locator("ol li").nth(1)).toHaveText("second");
 });
 
+/**
+ * Issue #161: `*` is a bullet marker to `parseEntryMarkdown` (CommonMark's
+ * own bullet alphabet is `-`/`+`/`*`, and `entryParser` uses the stock
+ * `@lezer/markdown` bullet parser unmodified) exactly as much as `-` and
+ * `+` already are, but `bulletListInputRule` only recognised the latter
+ * two before this ticket. Verified on a real macOS build, not just in this
+ * suite: typing `* milk` left the literal text `* milk` on screen, and
+ * only became a bullet the instant it was Sent — `escapeUserText`
+ * (entry-document.ts) has always escaped a leading `*` to `\*`, which was
+ * silently carrying the weight of this rule's own gap the whole time.
+ */
+test("a * marker starts a bullet list, the same as - and +", async ({ page }) => {
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  await editor.pressSequentially("* first");
+  await editor.press("Enter");
+  await editor.pressSequentially("second");
+
+  await expect(editor.locator("ul li")).toHaveCount(2);
+  await expect(editor.locator("ul li").nth(0)).toHaveText("first");
+  await expect(editor.locator("ul li").nth(1)).toHaveText("second");
+  // The marker itself never survives on screen — the same "no leftover
+  // syntax" check every other list/mark test in this file makes.
+  await expect(editor).not.toContainText("*");
+});
+
+/**
+ * Issue #161: CommonMark's ordered-list delimiter is `.` OR `)` — the same
+ * `orderedListStart` comment (inline-markdown.ts) that already says
+ * "`1.` and `1)` both give 1" — but `orderedListInputRule` only recognised
+ * `.` before this ticket. Verified on a real macOS build the same way `*`
+ * was: `1) alpha` stayed literal the whole time it was being typed.
+ */
+test("a 1) marker starts an ordered list, the same as 1.", async ({ page }) => {
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  await editor.pressSequentially("1) first");
+  await editor.press("Enter");
+  await editor.pressSequentially("second");
+
+  await expect(editor.locator("ol li")).toHaveCount(2);
+  await expect(editor.locator("ol li").nth(0)).toHaveText("first");
+  await expect(editor.locator("ol li").nth(1)).toHaveText("second");
+  await expect(editor).not.toContainText(")");
+});
+
 test("- [ ] starts a checkbox, and it can be ticked while composing", async ({ page }) => {
   await page.goto("/composer");
   const editor = composerField(page);
@@ -179,6 +227,58 @@ test("- [ ] starts a checkbox, and it can be ticked while composing", async ({ p
 
   await checkbox.click();
   await expect(checkbox).toBeChecked();
+});
+
+/**
+ * Issue #161's one-step checklist trigger: `[] ` at the start of a plain
+ * paragraph creates a checklist item directly, with no `- ` step in
+ * between — UpNote's own trigger (verified in its shipped bundle). This is
+ * distinct from `checkboxInputRule`'s existing two-step `- ` then `[ ] `
+ * upgrade, which the earlier test in this file still covers unchanged.
+ */
+test("[] starts a checklist item directly, with no bullet step first", async ({ page }) => {
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  await editor.pressSequentially("[] call mum");
+
+  const checkbox = editor.locator('input[type="checkbox"]');
+  await expect(checkbox).toBeVisible();
+  await expect(checkbox).not.toBeChecked();
+  await expect(editor).not.toContainText("[");
+});
+
+test("[x] and [X] start a checked checklist item directly", async ({ page }) => {
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  await editor.pressSequentially("[x] first");
+  await editor.press("Enter");
+  await editor.pressSequentially("[X] second");
+
+  const boxes = editor.locator('input[type="checkbox"]');
+  await expect(boxes).toHaveCount(2);
+  await expect(boxes.nth(0)).toBeChecked();
+  await expect(boxes.nth(1)).toBeChecked();
+  await expect(editor).not.toContainText("[");
+});
+
+/**
+ * The acceptance criterion this ticket is most explicit about for the new
+ * trigger: `[] ` only means something at the very START of a block. A
+ * checkbox outside a list is not part of this dialect (ADR 0043) any more
+ * than it was before this ticket — this rule does not change that, it only
+ * adds a faster way to reach the same structure when `[] ` genuinely opens
+ * a line.
+ */
+test("[] mid-line stays literal text, not a checklist item", async ({ page }) => {
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  await editor.pressSequentially("buy milk [] not a checkbox");
+
+  await expect(editor.locator('input[type="checkbox"]')).toHaveCount(0);
+  await expect(editor.locator("p")).toHaveText("buy milk [] not a checkbox");
 });
 
 /**

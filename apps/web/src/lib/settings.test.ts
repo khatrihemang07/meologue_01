@@ -2,7 +2,9 @@ import { PROTOCOL_VERSION } from "@meologue/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ACCENTS,
+  COMPLETED_STYLES,
   DEFAULT_ACCENT,
+  DEFAULT_COMPLETED_STYLE,
   DEFAULT_HIDDEN_DESTINATIONS,
   DEFAULT_TEXT_SIZE,
   HIDEABLE_DESTINATIONS,
@@ -32,6 +34,7 @@ describe("settings store", () => {
       serverUrl: "",
       accent: DEFAULT_ACCENT,
       textSize: DEFAULT_TEXT_SIZE,
+      completedStyle: DEFAULT_COMPLETED_STYLE,
       capabilities: null,
       serverReachable: true,
       hiddenDestinations: DEFAULT_HIDDEN_DESTINATIONS,
@@ -141,6 +144,64 @@ describe("settings store", () => {
     it("offers three sizes, with the default among them", () => {
       expect(TEXT_SIZES.map((size) => size.id)).toEqual(["small", "default", "large"]);
       expect(TEXT_SIZES.map((size) => size.id)).toContain(DEFAULT_TEXT_SIZE);
+    });
+  });
+
+  // Issue #163. Display only — the acceptance criteria this whole block
+  // proves are "persists across a restart, per-key" and "defaults to
+  // grayed out"; "changes no Entry, Syncs nothing" needs no test here
+  // because setCompletedStyle never touches the Entry store or a sync
+  // transport at all — there's nothing wired up for it to call.
+  describe("completed checklist item style", () => {
+    it("round-trips a written style, in the store and in storage", () => {
+      useSettingsStore.getState().setCompletedStyle("grayAndStrike");
+
+      expect(useSettingsStore.getState().completedStyle).toBe("grayAndStrike");
+      expect(localStorage.getItem("meologue.completed-style")).toBe("grayAndStrike");
+    });
+
+    it("does not throw when localStorage refuses the write, and still updates the store", () => {
+      vi.spyOn(localStorage, "setItem").mockImplementation(() => {
+        throw new Error("storage unavailable");
+      });
+
+      expect(() => useSettingsStore.getState().setCompletedStyle("none")).not.toThrow();
+      expect(useSettingsStore.getState().completedStyle).toBe("none");
+    });
+
+    it("offers four styles, with the default among them", () => {
+      expect(COMPLETED_STYLES.map((style) => style.id)).toEqual([
+        "grayAndStrike",
+        "gray",
+        "strike",
+        "none",
+      ]);
+      expect(COMPLETED_STYLES.map((style) => style.id)).toContain(DEFAULT_COMPLETED_STYLE);
+    });
+
+    // UpNote's own default, per the ticket this setting was built for.
+    it("defaults to grayed out, matching UpNote", () => {
+      expect(DEFAULT_COMPLETED_STYLE).toBe("gray");
+    });
+
+    it("ignores a stored id it does not recognise, rather than applying it", () => {
+      localStorage.setItem("meologue.completed-style", "highlighted");
+
+      vi.resetModules();
+      return import("./settings").then((fresh) => {
+        expect(fresh.useSettingsStore.getState().completedStyle).toBe(
+          fresh.DEFAULT_COMPLETED_STYLE,
+        );
+      });
+    });
+
+    it("reads a stored id back at load", () => {
+      localStorage.setItem("meologue.completed-style", "strike");
+
+      vi.resetModules();
+      return import("./settings").then((fresh) => {
+        expect(fresh.useSettingsStore.getState().completedStyle).toBe("strike");
+      });
     });
   });
 
@@ -479,5 +540,24 @@ describe("settings store cold start", () => {
   it("defaults serverReachable to true (optimistic)", async () => {
     const { useSettingsStore: fresh } = await import("./settings");
     expect(fresh.getState().serverReachable).toBe(true);
+  });
+
+  it("defaults the completed checklist item style to grayed out when nothing is stored", async () => {
+    const { useSettingsStore: fresh } = await import("./settings");
+    expect(fresh.getState().completedStyle).toBe("gray");
+  });
+
+  it("defaults the completed checklist item style to grayed out when localStorage throws on read", async () => {
+    vi.spyOn(localStorage, "getItem").mockImplementation(() => {
+      throw new Error("storage unavailable");
+    });
+    const { useSettingsStore: fresh } = await import("./settings");
+    expect(fresh.getState().completedStyle).toBe("gray");
+  });
+
+  it("picks up an already-stored completed checklist item style", async () => {
+    localStorage.setItem("meologue.completed-style", "none");
+    const { useSettingsStore: fresh } = await import("./settings");
+    expect(fresh.getState().completedStyle).toBe("none");
   });
 });

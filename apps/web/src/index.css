@@ -218,6 +218,67 @@
   --entry-text-scale: 1.25;
 }
 
+/*
+ * A completed checklist item's own look (issue #163) — display only, and
+ * driven from one attribute so History and the Composer cannot draw a
+ * checked item two different ways. `lib/theme.ts`'s `applyCompletedStyle`
+ * writes `data-completed-style` onto <html>, exactly like `data-accent`/
+ * `data-text-size` above; each of the four values it can hold
+ * (`lib/settings.ts`'s `CompletedStyleId`) resolves to these same two
+ * custom properties, which the one consuming rule near the Composer's own
+ * list styling (further down this file) is the only place that reads.
+ *
+ * Deliberately NOT scoped to `:root` the way `[data-accent]`/
+ * `[data-text-size]` are above. Those two only ever apply to <html>, but a
+ * completed style also has to be demonstrable in Settings — each of the
+ * four stacked rows on that page (settings-page.tsx's `CompletedStyleRow`)
+ * renders a real sample checked item wearing this exact same attribute on
+ * a small wrapper around itself, showing what that row's OWN option looks
+ * like regardless of which one is actually selected right now. An
+ * attribute selector with no `:root` in front of it resolves the two
+ * properties from whichever ancestor carries the attribute nearest to a
+ * given checked item — <html> for a real one, that row's own wrapper for a
+ * preview — with no second, hand-maintained copy of "style id -> colour and
+ * decoration" living in TypeScript to keep in step with this file by hand.
+ *
+ * The bare `:root` default below matches `gray` (grayed out, no
+ * strikethrough) — `lib/settings.ts`'s `DEFAULT_COMPLETED_STYLE`, UpNote's
+ * own default — so a Device that has never opened Settings, or whose
+ * `data-completed-style` write hasn't landed yet for any reason, still
+ * renders the intended look rather than a fifth, undeclared one.
+ *
+ * `--checked-list-text-color` is the CSS-wide keyword `initial` for
+ * `strike` and `none` rather than a literal colour — that's what makes it
+ * a "guaranteed-invalid value" (CSS Custom Properties §Guaranteed-Invalid
+ * Value), so the consuming rule's own `var(--checked-list-text-color,
+ * var(--foreground))` falls through to the ordinary foreground colour
+ * instead of the literal keyword `inherit`, which would walk up to
+ * whatever the NEAREST ancestor's own `data-completed-style` happens to be
+ * (a real risk here specifically because a preview row can nest a local
+ * override inside the page's own, different, global choice) rather than
+ * cancelling the override outright.
+ */
+:root {
+  --checked-list-text-decoration: none;
+  --checked-list-text-color: var(--muted-foreground);
+}
+[data-completed-style="grayAndStrike"] {
+  --checked-list-text-decoration: line-through;
+  --checked-list-text-color: var(--muted-foreground);
+}
+[data-completed-style="gray"] {
+  --checked-list-text-decoration: none;
+  --checked-list-text-color: var(--muted-foreground);
+}
+[data-completed-style="strike"] {
+  --checked-list-text-decoration: line-through;
+  --checked-list-text-color: initial;
+}
+[data-completed-style="none"] {
+  --checked-list-text-decoration: none;
+  --checked-list-text-color: initial;
+}
+
 @layer base {
   /*
    * Defaults for the two custom properties Shell computes from
@@ -256,12 +317,12 @@
  * the three. Every element defaults to `white-space: normal`, which
  * collapses runs of spaces to one and drops a trailing space entirely.
  * That is issue #158: type two spaces between words in the Composer and
- * only one survived on screen; type a trailing space and it vanished. Meanwhile
- * `entry-prose.tsx` renders a Sent Entry's prose with `whitespace-pre-wrap`
- * (the READ side), so what the Composer showed while an Entry was being
- * written never matched what it showed once Sent — the same "the editor
- * lies about what you will get" complaint issue #155 exists to remove,
- * surviving here in a corner that change never reached.
+ * only one survived on screen; type a trailing space and it vanished.
+ * Meanwhile `entry-prose.tsx` renders a Sent Entry's prose with
+ * `whitespace-pre-wrap` (the READ side), so what the Composer showed while
+ * an Entry was being written never matched what it showed once Sent — the
+ * same "the editor lies about what you will get" complaint issue #155
+ * exists to remove, surviving here in a corner that change never reached.
  *
  * Restated below rather than imported. Both were investigated: importing
  * the upstream stylesheet — a CSS `@import` of the file under
@@ -340,5 +401,45 @@
   }
   .ProseMirror > * + * {
     margin-top: 0.25rem;
+  }
+}
+
+/*
+ * A completed checklist item's own look (issue #163) — the ONE rule that
+ * consumes the two custom properties defined above, near `--entry-text-
+ * scale`. This is the only place either render path's own "what does
+ * checked look like" question gets answered, which is what makes it
+ * impossible for a checked item to look one way while being written in the
+ * Composer and another way once read back in History: both surfaces emit
+ * the exact same markup shape for a task item — a `<li>` carrying
+ * `list-none` (`TASK_LI_CLASS` in composer-editor.ts's `listItemNodeView`,
+ * the identical class list in entry-prose.tsx's `renderListItem`), holding
+ * a checked `<input type="checkbox">` immediately followed by a sibling
+ * `<div>` wrapping the item's own words — and this selector matches that
+ * shape structurally, with no class or attribute added to either `<li>`
+ * for its sake. That's deliberate: `composer-editor.ts` is off-limits to
+ * this change (another ticket is mid-edit there), and reaching its output
+ * with a selector rather than a new class is what makes that constraint
+ * cost nothing here.
+ *
+ * `li.list-none` rather than a bare `li input:checked ~ div` — every task
+ * item's own `<li>` already carries `list-none` (to drop the bullet a
+ * checkbox replaces), and scoping to it is what stops this rule from ever
+ * matching some unrelated future `<li>` that happens to contain an
+ * unrelated checked checkbox followed by a `<div>`, without requiring
+ * either render path to add a class or attribute purely for this rule's
+ * benefit.
+ *
+ * `text-decoration` on the wrapping `<div>`, not on the `<input>` or on
+ * some inner span: the CSS decorating-box behaviour draws a line-through
+ * across every descendant inline run inside that `<div>` — bold, italic,
+ * a Reference chip, Search highlighting, all of it — without this rule
+ * needing to reach inside `renderNodes`' own output to restyle any of them
+ * individually.
+ */
+@layer base {
+  li.list-none input[type="checkbox"]:checked ~ div {
+    text-decoration: var(--checked-list-text-decoration);
+    color: var(--checked-list-text-color, var(--foreground));
   }
 }
