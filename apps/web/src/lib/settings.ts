@@ -37,6 +37,7 @@ const LIST_WIDTH_KEY = "meologue.list-width";
 const ACCENT_KEY = "meologue.accent";
 const TEXT_SIZE_KEY = "meologue.text-size";
 const COMPLETED_STYLE_KEY = "meologue.completed-style";
+const FORMAT_BAR_VISIBLE_KEY = "meologue.format-bar-visible";
 // Issue #134. Comma-joined slugs, e.g. "reflect,digest" — deliberately not
 // a JSON blob under one key: ADR 0008's stated reasoning for "no JSON blob"
 // is that a shared shape means a corrupt or unparseable value for one
@@ -243,6 +244,52 @@ function writeStoredCompletedStyle(style: CompletedStyleId): void {
   }
 }
 
+/**
+ * Whether the Composer's format toolbar (issue #164 — bold/italic/code, the
+ * three list toggles, indent/outdent, Reference, undo/redo, in a row above
+ * the input, shown only while the Composer has focus) is switched on at
+ * all — a Device-local view preference, exactly like `AccentId`/
+ * `TextSizeId`/`CompletedStyleId` above: it is a property of how this
+ * Device draws the Composer's own chrome, never Synced, and never entering
+ * the glossary for the same reason those three don't.
+ *
+ * Off by default. UpNote's own equivalent (`FORMAT_BAR_VISIBLE` in its
+ * shipped bundle, verified the same way `DEFAULT_COMPLETED_STYLE` above
+ * was) also defaults to `false` — a toolbar most Sends never touch should
+ * not cost every reader a permanent row of vertical space in a footer that
+ * already grows to eight lines and claims the bottom safe area
+ * (composer.tsx's own layout comments). Reaching for it once, from the
+ * toggle button beside Send, is what turns it on for good.
+ *
+ * Stored as the literal strings `"true"`/`"false"` rather than reusing the
+ * `isXxxId`-against-a-list-of-known-values pattern every enum setting above
+ * uses: a boolean has no finite id list to validate against, so
+ * `readStoredFormatBarVisible` below treats anything other than the exact
+ * string `"true"` — a missing key, a hand-edited value, a corrupt one, or a
+ * stray `"1"` from some other convention — as `false`, which is also this
+ * setting's own default. Corruption and "never touched this setting"
+ * therefore degrade to the identical, safe answer, the same property
+ * `isAccentId`/`isTextSizeId` give their own callers.
+ */
+export const DEFAULT_FORMAT_BAR_VISIBLE = false;
+
+function readStoredFormatBarVisible(): boolean {
+  try {
+    return localStorage.getItem(FORMAT_BAR_VISIBLE_KEY) === "true";
+  } catch {
+    return DEFAULT_FORMAT_BAR_VISIBLE;
+  }
+}
+
+function writeStoredFormatBarVisible(visible: boolean): void {
+  try {
+    localStorage.setItem(FORMAT_BAR_VISIBLE_KEY, visible ? "true" : "false");
+  } catch {
+    // Refused write — the in-memory value below still applies for this
+    // session, same degradation every other setting here has.
+  }
+}
+
 function isHideableDestinationId(value: unknown): value is HideableDestinationId {
   return HIDEABLE_DESTINATIONS.some((destination) => destination.id === value);
 }
@@ -417,6 +464,8 @@ interface SettingsState {
   accent: AccentId;
   textSize: TextSizeId;
   completedStyle: CompletedStyleId;
+  /** Issue #164: whether the Composer's format toolbar is switched on. See `DEFAULT_FORMAT_BAR_VISIBLE`'s own doc comment above. */
+  formatBarVisible: boolean;
   serverUrl: string;
   listWidth: number;
   capabilities: ServerCapabilities | null;
@@ -446,6 +495,7 @@ interface SettingsState {
   setAccent: (accent: AccentId) => void;
   setTextSize: (size: TextSizeId) => void;
   setCompletedStyle: (style: CompletedStyleId) => void;
+  setFormatBarVisible: (visible: boolean) => void;
   setServerUrl: (url: string) => void;
   setListWidth: (width: number) => void;
   setCapabilities: (capabilities: ServerCapabilities | null) => void;
@@ -466,6 +516,7 @@ export const useSettingsStore = create<SettingsState>()((set) => ({
   accent: readStoredAccent(),
   textSize: readStoredTextSize(),
   completedStyle: readStoredCompletedStyle(),
+  formatBarVisible: readStoredFormatBarVisible(),
   serverUrl: readStoredServerUrl(),
   listWidth: readStoredListWidth(),
   capabilities: readStoredCapabilities(),
@@ -486,6 +537,10 @@ export const useSettingsStore = create<SettingsState>()((set) => ({
   setCompletedStyle: (completedStyle) => {
     writeStoredCompletedStyle(completedStyle);
     set({ completedStyle });
+  },
+  setFormatBarVisible: (formatBarVisible) => {
+    writeStoredFormatBarVisible(formatBarVisible);
+    set({ formatBarVisible });
   },
   setServerUrl: (url) => {
     const normalised = normaliseServerUrl(url);

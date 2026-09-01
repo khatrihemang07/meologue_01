@@ -31,7 +31,16 @@ import { splitListItem } from "prosemirror-schema-list";
 import { type Command, Plugin, PluginKey } from "prosemirror-state";
 import { findWrapping } from "prosemirror-transform";
 import { Decoration, DecorationSet, type EditorView, type NodeView } from "prosemirror-view";
-import { indent, outdent, redoCommand, undoCommand } from "@/lib/composer-commands";
+import {
+  bold,
+  code,
+  indent,
+  italic,
+  outdent,
+  redoCommand,
+  toggleCheckboxDone,
+  undoCommand,
+} from "@/lib/composer-commands";
 import { derivePicker, type ReferencePickerState } from "@/lib/composer-picker";
 import { entrySchema, type ReferenceAttrs } from "@/lib/entry-schema";
 import { parseReferenceDate, parseReferenceEntryId } from "@/lib/inline-markdown";
@@ -635,6 +644,67 @@ function historyKeymap(): Plugin {
   });
 }
 
+/**
+ * Issue #164's four chords — the toolbar's own eleven buttons (#164,
+ * composer-toolbar.tsx) are how every one of `composerCommands` is reached
+ * without a keyboard, but four of them are common enough, and old enough as
+ * conventions (every rich-text surface a reader has ever used binds
+ * Cmd/Ctrl-B/I), that they also get a direct chord: `bold.run`/`italic.run`/
+ * `code.run` (composer-commands.ts) are wired here exactly as `undo`/`redo`
+ * are just above — the registry owns what each action IS, this file only
+ * owns which keystroke reaches it. `Mod-Shift-Enter` is the fourth, bound to
+ * `toggleCheckboxDone.run` (composer-commands.ts) rather than a button:
+ * see that command's own doc comment for why it gets a chord and no button.
+ *
+ * `Mod-Shift-Enter` is safe to claim specifically because `isSubmitChord`
+ * (submit-chord.ts) already returns `false` whenever `event.shiftKey` is
+ * set — Shift+Enter, with or without Cmd/Ctrl, was never going to reach
+ * Send, so this chord is free to mean something else without shadowing the
+ * one Composer chord that must never move.
+ *
+ * Lists (`bulletList`/`orderedList`/`checklist`) deliberately get NO chord
+ * here, even though they're in the same registry: each already has three
+ * paths in place or on the way — a typed marker (composer-editor.ts's own
+ * input rules, above), the toolbar button, and the `/` menu #165 adds — and
+ * Todoist ships exactly this (typed marker + button + slash command, no
+ * dedicated list chord) for the same reason: a fourth path buys nothing a
+ * reader doesn't already have. Indent/outdent keep the Tab/Shift-Tab/
+ * Ctrl-]/Ctrl-[ bindings `listKeymap` above already gives them (issue #162)
+ * unchanged — they are not repeated or aliased here. The toolbar's own
+ * on/off toggle (composer-toolbar.tsx / composer.tsx) gets no chord either;
+ * it is flipped once, in Settings-adjacent reach, not a per-Entry action.
+ *
+ * A short list of chords this app can NEVER claim, recorded here because
+ * the next person adding a binding will not have just rediscovered them the
+ * way this ticket did:
+ *
+ * - `Mod-1` through `Mod-9` — every Chromium- and WebKit-based browser
+ *   reserves these for switching tabs by position; a page cannot intercept
+ *   them at all.
+ * - `Mod-l` — every mainstream browser's own "focus the address bar."
+ * - `Mod-[` / `Mod-]` — back/forward navigation, at least on macOS
+ *   Safari/Chrome (`listKeymap`'s own comment above records this in more
+ *   detail; it's why #162's indent/outdent use literal `Ctrl-`, never
+ *   `Mod-`, for exactly this pair). Whether every OTHER platform also
+ *   reserves them was not re-verified here — `Ctrl-` was already the
+ *   established answer and this ticket had no reason to relitigate it.
+ * - `Mod-t`/`Mod-w`/`Mod-n`/`Mod-r`/`Mod-d` — new tab, close tab, new
+ *   window, reload, bookmark. Never verified case-by-case against every
+ *   browser this app ships on; treated as permanently off-limits rather
+ *   than probed, on the same reasoning `isSubmitChord`'s own module comment
+ *   gives for erring toward the failure mode that gets noticed (a chord
+ *   that silently does nothing here) over the one that doesn't (a chord
+ *   that fights the browser chrome around this app).
+ */
+function formatKeymap(): Plugin {
+  return keymap({
+    "Mod-b": bold.run,
+    "Mod-i": italic.run,
+    "Mod-e": code.run,
+    "Mod-Shift-Enter": toggleCheckboxDone.run,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // The inline `[[` picker's ProseMirror-side trigger detection
 // ---------------------------------------------------------------------------
@@ -962,6 +1032,7 @@ export function buildComposerPlugins(placeholder: string): Plugin[] {
   return [
     listKeymap(),
     historyKeymap(),
+    formatKeymap(),
     keymap(baseKeymap),
     inputRules({ rules: buildInputRules() }),
     pickerPlugin(),

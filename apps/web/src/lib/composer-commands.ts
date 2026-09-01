@@ -343,6 +343,48 @@ export const checklist: ComposerCommand = {
   run: checklistRun,
 };
 
+/**
+ * Flips a task's own `checked` between `true` and `false` — issue #164's
+ * `Mod-Shift-Enter`, composer-editor.ts's own keymap. Deliberately NOT one
+ * of the eleven `composerCommands` a toolbar button reaches for: the ticket
+ * gives this action a chord and nothing else (no button, no `/` menu row),
+ * the same way `bulletList`/`orderedList`/`checklist` above get a button and
+ * no chord — the two are reached by different, non-overlapping paths, not
+ * duplicated across both. It's exported and named like the eleven anyway
+ * (rather than kept as a bare `Command` closure in composer-editor.ts) so a
+ * keyboard-shortcuts settings screen, if one is ever built, has a `label` to
+ * show without composer-editor.ts having to invent one.
+ *
+ * A no-op — `false`, nothing dispatched — outside a task item entirely:
+ * neither a plain bullet (`checked === null`) nor bare text has a checked
+ * state to flip, the same refusal `setCheckedOnEnclosingItem` itself
+ * documents for "not part of this dialect's grammar here." Pressing
+ * `Mod-Shift-Enter` in a plain paragraph therefore does exactly nothing,
+ * rather than e.g. turning it into a checked task — that's `checklist`'s
+ * job, reached a different way, and this command must not quietly do it.
+ */
+const toggleCheckboxDoneRun: Command = (state, dispatch) => {
+  const item = nearestListItem(state);
+  if (item === null || item.attrs.checked === null) {
+    return false;
+  }
+  return setCheckedOnEnclosingItem(state, dispatch, !item.attrs.checked);
+};
+
+export const toggleCheckboxDone: ComposerCommand = {
+  id: "toggleCheckboxDone",
+  label: "Toggle checkbox done",
+  isActive: (state) => {
+    const item = nearestListItem(state);
+    return item !== null && item.attrs.checked === true;
+  },
+  isEnabled: (state) => {
+    const item = nearestListItem(state);
+    return item !== null && item.attrs.checked !== null;
+  },
+  run: toggleCheckboxDoneRun,
+};
+
 // ---------------------------------------------------------------------------
 // Indent / outdent — registered here per issue #160; Tab/Shift-Tab/
 // Ctrl-]/Ctrl-[/Backspace are bound to these through composer-editor.ts's

@@ -783,3 +783,286 @@ test("opening an Entry and closing it unchanged writes nothing — ADR 0044's di
     .poll(() => entrySeq(id, SERVER_A_DATABASE), { timeout: 20_000 })
     .not.toBe(seqAfterUnchangedEdit);
 });
+
+// ---------------------------------------------------------------------------
+// Issue #164: the format toolbar and its keyboard shortcuts.
+//
+// Every button here reaches through composer-commands.ts's own registry —
+// composer-commands.test.ts already proves what each command DOES against a
+// plain `EditorState` (ADR 0044: jsdom cannot mount a live `EditorView` at
+// all). What can only be proven here, in a real browser, is that the BUTTON
+// reaches the right command, that clicking it never costs the caret its own
+// selection (composer-toolbar.tsx's own `onMouseDown` comment), and that the
+// toolbar's own visibility/pressed/disabled state genuinely tracks focus and
+// the caret rather than merely looking right in one static screenshot.
+// ---------------------------------------------------------------------------
+
+/** Focuses the Composer and switches the format toolbar on — off by default (settings.ts), so most of the specs below need this first. */
+async function enableFormatToolbar(page: Page): Promise<void> {
+  const editor = composerField(page);
+  await editor.click();
+  await page.getByRole("button", { name: "Format toolbar" }).click();
+}
+
+test("the format toolbar is off by default, shows only while the Composer has focus once switched on, and the toggle survives a reload", async ({
+  page,
+}) => {
+  await page.goto("/composer");
+  const editor = composerField(page);
+  const toolbar = page.getByRole("toolbar", { name: "Formatting" });
+  const toggle = page.getByRole("button", { name: "Format toolbar" });
+
+  // Off by default — UpNote's own equivalent also defaults off (settings.ts's
+  // own comment) — so focusing the field alone shows nothing.
+  await editor.click();
+  await expect(toolbar).toHaveCount(0);
+  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+
+  // Switching it on shows the row immediately, without blurring the editor
+  // — the toggle button gets the same caret-preserving treatment as the
+  // toolbar's own eleven buttons (composer.tsx's own comment on it), which
+  // is what makes "immediately" true rather than "after clicking back in".
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  await expect(toolbar).toBeVisible();
+  await expect(editor).toBeFocused();
+
+  // Blurring the Composer hides the row again — it shows only WHILE the
+  // Composer has focus, independent of the setting itself, which is still
+  // on underneath (the toggle's own `aria-pressed` doesn't move here).
+  await page.getByRole("button", { name: "Send" }).focus();
+  await expect(toolbar).toHaveCount(0);
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  await editor.click();
+  await expect(toolbar).toBeVisible();
+
+  // The setting itself is a Device setting (settings.ts), not component
+  // state — it survives a reload, the same way Accent/text size do
+  // (settings.spec.ts's own "persisted the same way theme is" comment).
+  await page.reload();
+  await expect(page.getByRole("button", { name: "Format toolbar" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await composerField(page).click();
+  await expect(page.getByRole("toolbar", { name: "Formatting" })).toBeVisible();
+});
+
+test("the bold, italic and code toolbar buttons apply their marks, reflect the caret's own pressed state, and never blur the editor", async ({
+  page,
+}) => {
+  await page.goto("/composer");
+  await enableFormatToolbar(page);
+  const editor = composerField(page);
+  const toolbar = page.getByRole("toolbar", { name: "Formatting" });
+  await editor.pressSequentially("word");
+  // Selects the whole word — `toggleMark` on an EMPTY selection only
+  // primes `storedMarks` for the NEXT typed character (composer-commands.ts's
+  // own `markActive` comment); a real, non-empty selection is what makes a
+  // click retroactively format text already on screen, the case that
+  // actually needs a browser to prove (`inputrules`/marks are otherwise
+  // ADR 0044's unit-test territory).
+  await editor.press("ControlOrMeta+a");
+
+  const boldButton = toolbar.getByRole("button", { name: "Bold" });
+  await expect(boldButton).toHaveAttribute("aria-pressed", "false");
+  await boldButton.click();
+  await expect(editor.locator("strong")).toHaveText("word");
+  await expect(boldButton).toHaveAttribute("aria-pressed", "true");
+  await expect(editor).toBeFocused();
+
+  const italicButton = toolbar.getByRole("button", { name: "Italic" });
+  await italicButton.click();
+  await expect(editor.locator("em")).toHaveText("word");
+  await expect(italicButton).toHaveAttribute("aria-pressed", "true");
+  await expect(editor).toBeFocused();
+
+  const codeButton = toolbar.getByRole("button", { name: "Code" });
+  await codeButton.click();
+  await expect(editor.locator("code")).toHaveText("word");
+  await expect(codeButton).toHaveAttribute("aria-pressed", "true");
+  await expect(editor).toBeFocused();
+});
+
+test("the bulletList toolbar button wraps the caret's paragraph in a bullet list, and toggles back out", async ({
+  page,
+}) => {
+  await page.goto("/composer");
+  await enableFormatToolbar(page);
+  const editor = composerField(page);
+  const toolbar = page.getByRole("toolbar", { name: "Formatting" });
+  await editor.pressSequentially("buy milk");
+
+  const bulletButton = toolbar.getByRole("button", { name: "Bullet list" });
+  await bulletButton.click();
+  await expect(editor.locator("ul > li")).toHaveText("buy milk");
+  await expect(bulletButton).toHaveAttribute("aria-pressed", "true");
+  await expect(editor).toBeFocused();
+
+  // Pressing it again lifts back out — `toggleListWrap`'s own ordinary
+  // toggle meaning (composer-commands.ts), reached identically through the
+  // button.
+  await bulletButton.click();
+  await expect(editor.locator("ul")).toHaveCount(0);
+  await expect(bulletButton).toHaveAttribute("aria-pressed", "false");
+});
+
+test("the orderedList toolbar button wraps the caret's paragraph in a numbered list", async ({
+  page,
+}) => {
+  await page.goto("/composer");
+  await enableFormatToolbar(page);
+  const editor = composerField(page);
+  const toolbar = page.getByRole("toolbar", { name: "Formatting" });
+  await editor.pressSequentially("buy milk");
+
+  const orderedButton = toolbar.getByRole("button", { name: "Numbered list" });
+  await orderedButton.click();
+  await expect(editor.locator("ol > li")).toHaveText("buy milk");
+  await expect(orderedButton).toHaveAttribute("aria-pressed", "true");
+  await expect(editor).toBeFocused();
+});
+
+test("the checklist toolbar button wraps the caret's paragraph as a task, with an independently tickable checkbox", async ({
+  page,
+}) => {
+  await page.goto("/composer");
+  await enableFormatToolbar(page);
+  const editor = composerField(page);
+  const toolbar = page.getByRole("toolbar", { name: "Formatting" });
+  await editor.pressSequentially("buy milk");
+
+  const checklistButton = toolbar.getByRole("button", { name: "Checklist" });
+  await checklistButton.click();
+  const checkbox = editor.locator('input[type="checkbox"]');
+  await expect(checkbox).toBeVisible();
+  await expect(checkbox).not.toBeChecked();
+  await expect(checklistButton).toHaveAttribute("aria-pressed", "true");
+  await expect(editor).toBeFocused();
+
+  await checkbox.click();
+  await expect(checkbox).toBeChecked();
+});
+
+test("the outdent and indent toolbar buttons lift and sink a list item, and their own enabled state tracks the caret", async ({
+  page,
+}) => {
+  await page.goto("/composer");
+  await enableFormatToolbar(page);
+  const editor = composerField(page);
+  const toolbar = page.getByRole("toolbar", { name: "Formatting" });
+  await editor.pressSequentially("- first");
+  await editor.press("Enter");
+  await editor.pressSequentially("second");
+
+  // The caret is in "second," the last item — it has a preceding sibling,
+  // so Indent can sink it under "first" (composer-commands.test.ts's own
+  // "is enabled on a list item with a preceding sibling" unit case, proven
+  // here through the button rather than the bare command).
+  const indentButton = toolbar.getByRole("button", { name: "Indent" });
+  await expect(indentButton).toBeEnabled();
+  await indentButton.click();
+  await expect(editor.locator("li li")).toHaveText("second");
+  await expect(editor).toBeFocused();
+
+  const outdentButton = toolbar.getByRole("button", { name: "Outdent" });
+  await outdentButton.click();
+  await expect(editor.locator("li li")).toHaveCount(0);
+  await expect(editor.locator("ul > li")).toHaveText(["first", "second"]);
+  await expect(editor).toBeFocused();
+});
+
+test("the Reference toolbar button inserts the same `[[` trigger a hand-typed one does, and opens the picker", async ({
+  page,
+}) => {
+  await page.goto("/composer");
+  await enableFormatToolbar(page);
+  const editor = composerField(page);
+  const toolbar = page.getByRole("toolbar", { name: "Formatting" });
+  await editor.pressSequentially("see ");
+
+  await toolbar.getByRole("button", { name: "Reference" }).click();
+  await expect(editor).toContainText("see [[");
+  await expect(page.getByRole("listbox", { name: "Days" })).toBeVisible();
+  await expect(editor).toBeFocused();
+});
+
+test("the undo and redo toolbar buttons revert and restore an edit, and are disabled when there is nothing to act on", async ({
+  page,
+}) => {
+  await page.goto("/composer");
+  await enableFormatToolbar(page);
+  const editor = composerField(page);
+  const toolbar = page.getByRole("toolbar", { name: "Formatting" });
+  const undoButton = toolbar.getByRole("button", { name: "Undo" });
+  const redoButton = toolbar.getByRole("button", { name: "Redo" });
+  await expect(undoButton).toBeDisabled();
+  await expect(redoButton).toBeDisabled();
+
+  await editor.pressSequentially("hello");
+  await expect(undoButton).toBeEnabled();
+
+  await undoButton.click();
+  await expect(editor).not.toContainText("hello");
+  await expect(redoButton).toBeEnabled();
+  await expect(editor).toBeFocused();
+
+  await redoButton.click();
+  await expect(editor).toContainText("hello");
+  await expect(editor).toBeFocused();
+});
+
+test("Mod-b, Mod-i and Mod-e apply their marks from the keyboard, with no toolbar involved", async ({
+  page,
+}) => {
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  await editor.pressSequentially("word");
+  await editor.press("ControlOrMeta+a");
+
+  await editor.press("ControlOrMeta+b");
+  await expect(editor.locator("strong")).toHaveText("word");
+
+  await editor.press("ControlOrMeta+i");
+  await expect(editor.locator("em")).toHaveText("word");
+
+  await editor.press("ControlOrMeta+e");
+  await expect(editor.locator("code")).toHaveText("word");
+});
+
+test("Mod-Shift-Enter toggles a checkbox done from the keyboard, and never sends", async ({
+  page,
+}) => {
+  const body = uniqueEntryBody("composer-toggle-checkbox-chord");
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  await editor.pressSequentially(`- [ ] ${body}`);
+
+  const checkbox = editor.locator('input[type="checkbox"]');
+  await expect(checkbox).not.toBeChecked();
+
+  await editor.press("ControlOrMeta+Shift+Enter");
+  await expect(checkbox).toBeChecked();
+
+  await editor.press("ControlOrMeta+Shift+Enter");
+  await expect(checkbox).not.toBeChecked();
+
+  // `isSubmitChord` already refuses any Enter with Shift held, on every
+  // build (submit-chord.ts) — this chord is only free to mean something
+  // else BECAUSE of that, so this is the test that would catch either one
+  // regressing into the other: nothing reached History.
+  await expect(page.locator('[data-slot="bubble-body"]', { hasText: body })).toHaveCount(0);
+});
+
+test("the submit chord still sends, even with the format toolbar switched on", async ({ page }) => {
+  const body = uniqueEntryBody("composer-toolbar-submit-chord");
+  await page.goto("/composer");
+  await enableFormatToolbar(page);
+  const editor = composerField(page);
+  await editor.pressSequentially(body);
+  await editor.press("ControlOrMeta+Enter");
+
+  await expect(page.getByText(body)).toBeVisible();
+});

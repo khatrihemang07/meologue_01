@@ -33,6 +33,7 @@ import {
   outdent,
   redoCommand,
   reference,
+  toggleCheckboxDone,
   undoCommand,
 } from "./composer-commands";
 import { entryMarkdownToDocument } from "./entry-document";
@@ -471,5 +472,42 @@ describe("undo / redo", () => {
     const redone = runCommand(redoCommand, undone.next);
     expect(redone.applied).toBe(true);
     expect(redone.next.doc.textBetween(0, redone.next.doc.content.size)).toBe("hello!");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// toggleCheckboxDone — issue #164's Mod-Shift-Enter, not one of the eleven
+// toolbar buttons (see this command's own doc comment for why).
+// ---------------------------------------------------------------------------
+
+describe("toggleCheckboxDone", () => {
+  it("is disabled, and a no-op on run, outside any task item — a plain bullet or plain text", () => {
+    const bulletDoc = docFor("- item");
+    const bulletState = stateAt(bulletDoc, { from: caretInFirstParagraph(bulletDoc) });
+    expect(toggleCheckboxDone.isEnabled(bulletState)).toBe(false);
+    expect(runCommand(toggleCheckboxDone, bulletState).applied).toBe(false);
+
+    const plainDoc = docFor("just text");
+    const plainState = stateAt(plainDoc, { from: caretInFirstParagraph(plainDoc) });
+    expect(toggleCheckboxDone.isEnabled(plainState)).toBe(false);
+    expect(runCommand(toggleCheckboxDone, plainState).applied).toBe(false);
+  });
+
+  it("is active only on an already-checked task, and flips checked false -> true -> false on run", () => {
+    const doc = docFor("- [ ] item");
+    const state = stateAt(doc, { from: caretInFirstParagraph(doc) });
+    expect(toggleCheckboxDone.isEnabled(state)).toBe(true);
+    expect(toggleCheckboxDone.isActive(state)).toBe(false);
+
+    const checked = runCommand(toggleCheckboxDone, state);
+    expect(checked.applied).toBe(true);
+    const checkedItemPos = findNodePos(checked.next.doc, "list_item");
+    expect(checked.next.doc.nodeAt(checkedItemPos)?.attrs.checked).toBe(true);
+    expect(toggleCheckboxDone.isActive(checked.next)).toBe(true);
+
+    const unchecked = runCommand(toggleCheckboxDone, checked.next);
+    expect(unchecked.applied).toBe(true);
+    const uncheckedItemPos = findNodePos(unchecked.next.doc, "list_item");
+    expect(unchecked.next.doc.nodeAt(uncheckedItemPos)?.attrs.checked).toBe(false);
   });
 });

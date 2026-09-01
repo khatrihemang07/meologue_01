@@ -30,12 +30,14 @@
  * in apps/e2e/tests/composer.spec.ts instead, against a real browser.
  */
 import type { Entry } from "@meologue/core";
-import { ArrowUp, X } from "lucide-react";
+import { ArrowUp, Type, X } from "lucide-react";
 import { EditorState, Selection, type Transaction } from "prosemirror-state";
 import { EditorView } from "prosemirror-view";
 import { type Ref, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { type CommandState, ComposerToolbar } from "@/components/composer-toolbar";
 import { entrySnippet } from "@/components/entry-row";
 import { Button } from "@/components/ui/button";
+import { type ComposerCommand, composerCommands } from "@/lib/composer-commands";
 import {
   buildComposerPlugins,
   listItemNodeView,
@@ -60,8 +62,30 @@ import { entryDocumentToMarkdown, entryMarkdownToDocument } from "@/lib/entry-do
 import { entrySchema, type ReferenceAttrs } from "@/lib/entry-schema";
 import { normalizeEntryBody } from "@/lib/entry-text";
 import { parseReferenceDate } from "@/lib/inline-markdown";
+import { useSettingsStore } from "@/lib/settings";
 import { isSubmitChord } from "@/lib/submit-chord";
 import { cn } from "@/lib/utils";
+
+/**
+ * Every `composerCommand`'s `isActive`/`isEnabled` reading against `state`,
+ * keyed by `command.id` — issue #164's toolbar (composer-toolbar.tsx) reads
+ * this to paint its own pressed/disabled state, and this is the ONE place
+ * that loop runs, rather than the toolbar re-deriving it per render: the
+ * toolbar has no `EditorState` of its own to read, only whatever this
+ * component last computed and handed it as a prop. Called from every place
+ * this file already swaps or updates the document (the mount effect,
+ * `loadDocument`, and `dispatchTransactionImplRef` below) so a caret move
+ * with no document change — e.g. leaving a bold run — still repaints the
+ * toolbar correctly, matching the ticket's own "recomputed on every
+ * transaction."
+ */
+function computeCommandStates(state: EditorState): Record<string, CommandState> {
+  const result: Record<string, CommandState> = {};
+  for (const command of composerCommands) {
+    result[command.id] = { active: command.isActive(state), enabled: command.isEnabled(state) };
+  }
+  return result;
+}
 
 /** The Composer's own placeholder, shown by composer-editor.ts's `placeholderPlugin` and duplicated here as a literal HTML `placeholder` attribute (composer-editor.ts's `buildComposerPlugins`' own EditorView `attributes`) purely so `apps/e2e`'s `getByPlaceholder("What's on your mind?")` keeps finding this field — a `<div>` has no native `placeholder` semantics, but Playwright's own locator matches the bare attribute on any element (verified against playwright-core's `getByAttributeTextSelector`), so setting it costs nothing and keeps every existing e2e helper working unchanged. */
 const PLACEHOLDER = "What's on your mind?";
@@ -264,6 +288,23 @@ export function Composer({
   // comment). `null` means closed.
   const [picker, setPicker] = useState<ReferencePickerState | null>(null);
   const [highlightIndex, setHighlightIndex] = useState(0);
+
+  // Issue #164's format toolbar. `formatBarVisible` is the Device setting
+  // (settings.ts) — off by default, flipped by the toggle button beside
+  // Send below — and `isFocused` mirrors the `EditorView`'s own DOM focus
+  // (the `handleDOMEvents` in the mount effect below), so the toolbar row
+  // is rendered only when BOTH are true: on while switched on, but still
+  // hidden the instant the Composer isn't the thing being typed into,
+  // per the ticket's own "appears only while the Composer has focus."
+  // `commandStates` is `computeCommandStates`'s own output, kept as state
+  // (rather than recomputed inline in the render body) because it depends
+  // on the live `EditorView`'s current `state`, which this component has
+  // no other way to read during a render that wasn't triggered by one of
+  // the three call sites that already set it.
+  const formatBarVisible = useSettingsStore((state) => state.formatBarVisible);
+  const setFormatBarVisible = useSettingsStore((state) => state.setFormatBarVisible);
+  const [isFocused, setIsFocused] = useState(false);
+  const [commandStates, setCommandStates] = useState<Record<string, CommandState>>({});
   // Entries matched by `searchEntries`, for whichever query last resolved
   // — kept separate from `picker` because it arrives asynchronously and a
   // stale response must never overwrite a newer one (the `cancelled` flag
@@ -331,10 +372,19 @@ export function Composer({
   const loadDocument = useCallback(
     (view: EditorView, body: string) => {
       const doc = entryMarkdownToDocument(body);
-      view.updateState(
-        EditorState.create({ schema: entrySchema, doc, plugins, selection: Selection.atEnd(doc) }),
-      );
+      const nextState = EditorState.create({
+        schema: entrySchema,
+        doc,
+        plugins,
+        selection: Selection.atEnd(doc),
+      });
+      view.updateState(nextState);
       setIsEmpty(normalizeEntryBody(entryDocumentToMarkdown(doc)) === null);
+      // A fresh document resets undo history and can move the caret out of
+      // (or into) a list/mark entirely — e.g. edit mode seeding a checklist
+      // Entry — so every command's pressed/disabled state needs recomputing
+      // here too, not just on an ordinary transaction below.
+      setCommandStates(computeCommandStates(nextState));
     },
     [plugins],
   );
@@ -400,6 +450,30 @@ export function Composer({
   const cancelEdit = useCallback(() => {
     onCancelEdit?.();
   }, [onCancelEdit]);
+
+  /**
+   * A toolbar button's own click (composer-toolbar.tsx) — runs `command`
+   * against the live view exactly the way a keymap binding does
+   * (`command.run(state, dispatch)`, composer-editor.ts's own
+   * `formatKeymap`/`historyKeymap`), then explicitly refocuses the editor.
+   * That refocus is normally a no-op: the button's own `onMouseDown`
+   * already prevented the default that would have moved focus there in the
+   * first place, so the editor never actually lost it. It's kept anyway,
+   * matching `chooseItem`/`insertAtCursor` above, as a deliberate belt over
+   * that braces alone: Android's touch event ordering is not the same
+   * guarantee a desktop `mousedown` is, and the toolbar is THE path to
+   * indent/outdent/checklist there (no shortcuts exist on that build at
+   * all, per this ticket) — so a Composer left unfocused after a tap is a
+   * real dead end on that platform.
+   */
+  const runToolbarCommand = useCallback((command: ComposerCommand) => {
+    const view = viewRef.current;
+    if (view === null) {
+      return;
+    }
+    command.run(view.state, view.dispatch);
+    view.focus();
+  }, []);
 
   // Latest-callback indirection (this file's own module comment) — reassigned
   // every render so the mounted `EditorView`'s `handleKeyDown`/
@@ -482,6 +556,12 @@ export function Composer({
       dirtyRef.current = true;
       setIsEmpty(normalizeEntryBody(entryDocumentToMarkdown(newState.doc)) === null);
     }
+    // Unconditional, unlike the `docChanged`-gated block above: the
+    // toolbar's own pressed/disabled state (composer-toolbar.tsx) can
+    // change on a transaction that never touches the document at all —
+    // the caret moving out of a bold run, or into a list item, changes
+    // what `isActive`/`isEnabled` report without changing `newState.doc`.
+    setCommandStates(computeCommandStates(newState));
     const nextPicker = pickerPluginKey.getState(newState) ?? null;
     if ((nextPicker?.query ?? null) !== (picker?.query ?? null)) {
       setHighlightIndex(0);
@@ -549,9 +629,30 @@ export function Composer({
         }),
         handleKeyDown: (currentView, event) => handleKeyDownImplRef.current(currentView, event),
         dispatchTransaction: (tr) => dispatchTransactionImplRef.current(tr),
+        // Issue #164: `isFocused` is what gates the format toolbar's own
+        // visibility (alongside the `formatBarVisible` Device setting) —
+        // see this component's own state declarations above. `setState`
+        // setters from `useState` are referentially stable across renders
+        // (unlike `handleKeyDownImplRef`/`dispatchTransactionImplRef`'s
+        // "latest callback" indirection above), so these two can close over
+        // them directly with no staleness risk, even though the view
+        // itself is built exactly once. Both return `false`: ProseMirror
+        // still runs its own default focus/blur handling (there is none to
+        // suppress here), this is purely an observer.
+        handleDOMEvents: {
+          focus: () => {
+            setIsFocused(true);
+            return false;
+          },
+          blur: () => {
+            setIsFocused(false);
+            return false;
+          },
+        },
       },
     );
     viewRef.current = view;
+    setCommandStates(computeCommandStates(state));
     return () => {
       view.destroy();
       viewRef.current = null;
@@ -657,6 +758,9 @@ export function Composer({
           </div>
         </div>
       )}
+      {formatBarVisible && isFocused && (
+        <ComposerToolbar commandStates={commandStates} onRun={runToolbarCommand} />
+      )}
       <div className="mx-auto flex w-[97%] items-end gap-2 px-4 py-2.5 md:w-[85%]">
         {/* `relative` anchors the picker (issue #144) to the field itself
             rather than to the whole docked bar, and `min-w-0` keeps this
@@ -728,6 +832,39 @@ export function Composer({
               function instead. */}
           <div ref={hostRef} />
         </div>
+        <Button
+          type="button"
+          aria-label="Format toolbar"
+          // Reflects the persisted Device setting (settings.ts), not
+          // `isFocused` — this button's own pressed state is "is the
+          // toolbar switched ON," which stays true even the instant the
+          // Composer itself isn't focused and the row is therefore not
+          // currently on screen (this file's own `formatBarVisible &&
+          // isFocused` guard above). Deliberately no keyboard chord: the
+          // ticket calls this out explicitly — UpNote's own equivalent
+          // (Cmd+Shift+A) collides with Chrome's "search tabs," and this is
+          // a switch flipped once, not a per-Entry action worth a shortcut.
+          aria-pressed={formatBarVisible}
+          variant={formatBarVisible ? "secondary" : "outline"}
+          size="icon-lg"
+          // size-11 (44px) — same tap-target override as Send, immediately
+          // below, and for the identical reason (`icon-lg` alone is 36px).
+          className="size-11 shrink-0 self-end rounded-full"
+          // Same caret-preserving trick as the toolbar's own eleven buttons
+          // (composer-toolbar.tsx's own comment): without it, clicking this
+          // WHILE typing blurs the editor (an ordinary click moves DOM
+          // focus onto whatever was clicked), `isFocused` above flips to
+          // `false`, and the row this button just switched on would fail
+          // to appear until the reader clicked back into the field —
+          // switching the toolbar on would look like it did nothing.
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => {
+            setFormatBarVisible(!formatBarVisible);
+            viewRef.current?.focus();
+          }}
+        >
+          <Type aria-hidden="true" className="size-5" />
+        </Button>
         <Button
           aria-label="Send"
           size="icon-lg"
