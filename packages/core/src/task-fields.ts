@@ -1,11 +1,13 @@
 import type { Task } from "./task-types";
 
 /**
- * Validation — and defaulting — for Task's date-shaped fields (issue
- * #169): the one place the cross-field rules on
- * `date`/`deadline`/`duration`/`priority` live, called from every
- * TaskStore implementation's setter rather than re-derived by each. A rule
- * checked in only one implementation (say, SqliteTaskStore but not
+ * Validation — and defaulting — for Task's own fields: the date-shaped
+ * ones (issue #169: `date`/`deadline`/`duration`/`priority`) and, since
+ * issue #171, the structural ones (`projectId`/`sectionId`/`parentId`,
+ * plus the nesting-depth rule that spans rows). The one place these
+ * cross-field and cross-row rules live, called from every TaskStore
+ * implementation's setter rather than re-derived by each. A rule checked
+ * in only one implementation (say, SqliteTaskStore but not
  * InMemoryTaskStore) is a rule a test running against the *other*
  * implementation would never catch breaking — exactly what
  * task-store-contract.ts's shared suite exists to prevent, and what having
@@ -154,4 +156,54 @@ export function withDefaultSchedulingFields(t: Task): Task {
  */
 export function withDefaultDateString(t: Task): Task {
   return { ...t, dateString: t.dateString ?? null };
+}
+
+/**
+ * Fills in `projectId`/`sectionId`/`parentId` where an incoming Task omits
+ * them (issue #171) — the third such `?`-optional-in-practice defaulter,
+ * mirroring withDefaultDateString and ../label-fields.ts's
+ * withDefaultLabelIds for the identical reason: all three fields are
+ * **required** on `Task` (../task-types.ts explains why), so this is
+ * purely the safety net for a Task literal or a Sync payload written
+ * before this field existed, never a licence for a local caller to stay
+ * vague. `null` for all three means Inbox, no Section, no parent — the
+ * same "nothing chosen yet" state a Task created directly in Todo starts
+ * in for `date`/`deadline`/`duration` (withDefaultSchedulingFields above).
+ */
+export function withDefaultStructureFields(t: Task): Task {
+  return {
+    ...t,
+    projectId: t.projectId ?? null,
+    sectionId: t.sectionId ?? null,
+    parentId: t.parentId ?? null,
+  };
+}
+
+/**
+ * A sub-task nests at most this many levels deep, CONTEXT.md's Sub-task
+ * entry and issue #171's acceptance criteria (top-level Task = depth 1,
+ * its sub-task = depth 2, and so on). Exported so both TaskStore
+ * implementations' setParent() walk against the identical number rather
+ * than each hard-coding `4` and risking the two drifting apart — the
+ * same "one rule, called from every implementation" reasoning this file's
+ * own header comment gives for every other assert function here.
+ */
+export const MAX_TASK_NESTING_DEPTH = 4;
+
+/**
+ * Throws if placing a Task as a child of a Task at `parentDepth` would
+ * exceed MAX_TASK_NESTING_DEPTH. `parentDepth` is the *target parent's
+ * own* depth (1 for a top-level Task, 2 for its sub-task, and so on) —
+ * this function only judges the count once it is known; walking a Task's
+ * `parentId` chain to compute it needs an async store lookup per hop, so
+ * that walk lives in each TaskStore implementation's own setParent()
+ * (mirroring assertValidDuration's own split: this module holds the pure
+ * rule, the store holds the read that feeds it).
+ */
+export function assertValidNestingDepth(parentDepth: number): void {
+  if (parentDepth >= MAX_TASK_NESTING_DEPTH) {
+    throw new Error(
+      `sub-tasks may nest at most ${MAX_TASK_NESTING_DEPTH} levels deep (parent is already at depth ${parentDepth})`,
+    );
+  }
 }

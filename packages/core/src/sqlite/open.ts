@@ -2,6 +2,7 @@ import type { SqliteDriver } from "./driver";
 import { migrate } from "./migrator";
 import { SqliteEntryStore } from "./sqlite-entry-store";
 import { SqliteLabelStore } from "./sqlite-label-store";
+import { SqliteProjectStore } from "./sqlite-project-store";
 import { SqliteTaskStore } from "./sqlite-task-store";
 
 /**
@@ -23,12 +24,14 @@ import { SqliteTaskStore } from "./sqlite-task-store";
  * *additive* field costs those callers nothing: `{ store, deviceId }`
  * destructuring keeps compiling unchanged, and a caller that wants the new
  * field just reads it too. `labelStore` (issue #170) is the second such
- * addition, following the identical rule.
+ * addition, and `projectStore` (issue #171) the third, following the
+ * identical rule.
  */
 export interface OpenedSqliteStore {
   store: SqliteEntryStore;
   taskStore: SqliteTaskStore;
   labelStore: SqliteLabelStore;
+  projectStore: SqliteProjectStore;
   deviceId: string;
 }
 
@@ -57,6 +60,10 @@ export async function open(driver: SqliteDriver): Promise<OpenedSqliteStore> {
   const store = new SqliteEntryStore(driver);
   const taskStore = new SqliteTaskStore(driver);
   const labelStore = new SqliteLabelStore(driver);
+  // Built after taskStore, not before: SqliteProjectStore's constructor
+  // takes a TaskStore collaborator for deleteSection/archiveSection's
+  // cascade (../project-store.ts's own header comment, point 3).
+  const projectStore = new SqliteProjectStore(driver, taskStore);
   const deviceId = await store.ensureDeviceId();
-  return { store, taskStore, labelStore, deviceId };
+  return { store, taskStore, labelStore, projectStore, deviceId };
 }

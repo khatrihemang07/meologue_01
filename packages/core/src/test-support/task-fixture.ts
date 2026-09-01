@@ -25,6 +25,12 @@ export function task(overrides: Partial<Task> = {}): Task {
     // Doesn't repeat — ../recurrence/'s engine is never invoked for a
     // fixture Task unless a test overrides this explicitly.
     dateString: null,
+    // In Inbox, no Section, top-level — the same "nothing chosen yet"
+    // state every other #171 field above defaults to, and what a Task
+    // created directly in Todo starts with (../task-types.ts).
+    projectId: null,
+    sectionId: null,
+    parentId: null,
     ...overrides,
   };
 }

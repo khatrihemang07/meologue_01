@@ -44,20 +44,90 @@ export interface TaskRowProps {
   /** Whether this row is the drop target of an in-progress drag — draws the "the dragged row lands here" line. Meaningless, and always `false`, on a row with no drag handlers (see below). */
   isDropTarget?: boolean;
   /**
-   * All four omitted together, never some subset, is what removes the grip
-   * handle entirely rather than rendering an inert one (issue #169's own
-   * Today view is this option's first caller: Today's order is computed
-   * from the sort chain in task-views.ts, not chosen by dragging, and a
-   * handle a reader could grab that silently did nothing would be a worse
-   * affordance than no handle at all — the same reasoning
-   * `add-task-form.tsx`'s own header gives for not building UI ahead of a
-   * feature that parses it). Inbox (`todo-page.tsx`) passes all four,
-   * unchanged from issue #168.
+   * Whether this row is the *nesting* target of an in-progress drag —
+   * issue #171's drag-to-reparent. Deliberately a second boolean rather
+   * than folding this into `isDropTarget` as a third state that string
+   * could carry: `isDropTarget`'s own top-border line means "the dragged
+   * row lands between this one and its neighbour," and `isNestTarget`
+   * means something else entirely — "the dragged row becomes this one's
+   * child" — so this row draws a **different** indicator for it (a filled
+   * highlight around the whole row, not a line above it) rather than
+   * reusing the border and leaving a reader to guess mid-drag which of
+   * two outcomes a release would produce. task-tree.tsx's own `overTarget`
+   * state never sets both together for the same row (its own `kind` tag
+   * is exactly one of `"before"`/`"nest"`/`"end"`), so this and
+   * `isDropTarget` are never simultaneously `true` here either, but each
+   * is still checked independently rather than one implying the other's
+   * falsity, so a future caller wiring only one of the two doesn't
+   * silently inherit an assumption about the other.
    */
-  onHandlePointerDown?: (event: PointerEvent<HTMLSpanElement>) => void;
-  onHandlePointerMove?: (event: PointerEvent<HTMLSpanElement>) => void;
-  onHandlePointerUp?: (event: PointerEvent<HTMLSpanElement>) => void;
-  onHandlePointerCancel?: (event: PointerEvent<HTMLSpanElement>) => void;
+  isNestTarget?: boolean;
+  /**
+   * How many levels deep this row nests — 1 for a top-level Task, up to
+   * `MAX_TASK_NESTING_DEPTH` (4, @meologue/core) for a sub-task nested to
+   * the cap (issue #171). Indentation is the only thing this changes: a
+   * fixed amount of left padding per level, so a reader can tell a
+   * sub-task from its parent by eye without this row needing to know
+   * anything about the tree above it. Defaults to 1 — every pre-#171
+   * caller (Today, and Inbox before Sections/sub-tasks existed) renders
+   * exclusively top-level Tasks and never passes this.
+   */
+  depth?: number;
+  /**
+   * All seven (the four pointer handlers below, plus the three keyboard
+   * ones) omitted together, never some subset, is what removes the grip
+   * handle entirely rather than rendering an inert one — the identical
+   * "no affordance for a gesture that can't happen here" rule issue
+   * #168's own header comment on this option already states, extended by
+   * issue #171 to the keyboard path #168 didn't yet have. Today
+   * (`today-view.tsx`) passes none of the seven — its order is computed
+   * (task-views.ts), not chosen by dragging or by the keyboard either.
+   * Inbox and a Project's own view (`todo-page.tsx`, `task-tree.tsx`)
+   * pass all seven.
+   */
+  onHandlePointerDown?: (event: PointerEvent<HTMLButtonElement>) => void;
+  onHandlePointerMove?: (event: PointerEvent<HTMLButtonElement>) => void;
+  onHandlePointerUp?: (event: PointerEvent<HTMLButtonElement>) => void;
+  onHandlePointerCancel?: (event: PointerEvent<HTMLButtonElement>) => void;
+  /**
+   * Reorders this Task one slot earlier/later among its own siblings
+   * (issue #171's keyboard acceptance criterion) — lib/task-reorder.ts's
+   * own `siblingMoveDropIndex`/`reorderedTaskOrderKey` do the actual
+   * arithmetic; this row only ever calls back with "up" or "down." `null`
+   * when there is no sibling on that side to swap with — this row shows
+   * that state by simply not moving, the same "not every gesture always
+   * does something" contract `onHandlePointerUp`'s own "unchanged" case
+   * already established for a drag that returns to its own slot.
+   */
+  onMoveUp?: () => void;
+  onMoveDown?: () => void;
+  /**
+   * Reparents this Task under its own preceding sibling (indent) or back
+   * up to its grandparent's level (outdent) — issue #171's keyboard
+   * reparent acceptance criterion. `Alt`+`ArrowRight`/`Alt`+`ArrowLeft`,
+   * not `Tab`/`Shift`+`Tab`: this codebase's outliner-style controls
+   * (this grip button is the first one) still sit inside an ordinary page
+   * a keyboard reader tabs through, and claiming `Tab` here — the
+   * convention Notion/Workflowy use for exactly this gesture — would trap
+   * that reader's focus on this one button instead of moving on to
+   * Schedule/Delete the way `Tab` does everywhere else in this app. The
+   * `Alt`-modified arrow keys cost nothing a browser or a screen reader
+   * already uses on a plain `<button>`.
+   */
+  onIndent?: () => void;
+  onOutdent?: () => void;
+  /**
+   * Every Section in this Task's own Project, offered as a quick "move to
+   * Section" control — `undefined`/empty hides the control entirely
+   * (Inbox has no Sections to offer; a Project with none yet has nothing
+   * to move into). This is the one door onto TaskStore.setSection that
+   * doesn't depend on drag-to-reparent's own pointer geometry, so a
+   * reader can file a Task into a Section even where dragging across a
+   * Section boundary isn't implemented (this ticket's own report names
+   * that gap).
+   */
+  sectionOptions?: { id: string; name: string }[];
+  onMoveToSection?: (sectionId: string | null) => void;
 }
 
 /**
@@ -91,7 +161,11 @@ export interface TaskRowProps {
  * pointerdown anywhere else on the row has to keep scrolling the list on
  * touch, which is the entire reason a grip handle exists as a separate
  * element instead of making the row itself draggable. The *keyboard* gap
- * this still leaves is issue #171's own criterion, not this ticket's.
+ * this left (issue #168's own footnote naming it as #171's criterion, not
+ * that ticket's) is what turned the handle from an `aria-hidden` `<span>`
+ * into the focusable `<button>` below: arrow keys reorder, `Alt`+arrow
+ * keys reparent — see `onMoveUp`/`onIndent`'s own doc comments
+ * (TaskRowProps) for why those specific keys.
  */
 export function TaskRow({
   task,
@@ -100,10 +174,18 @@ export function TaskRow({
   onRequestDelete,
   onOpenSchedule,
   isDropTarget = false,
+  isNestTarget = false,
+  depth = 1,
   onHandlePointerDown,
   onHandlePointerMove,
   onHandlePointerUp,
   onHandlePointerCancel,
+  onMoveUp,
+  onMoveDown,
+  onIndent,
+  onOutdent,
+  sectionOptions,
+  onMoveToSection,
 }: TaskRowProps) {
   const isRecurring = task.dateString !== null;
   // A recurring Task always shows a schedule summary line, even one with
@@ -119,26 +201,74 @@ export function TaskRow({
     onHandlePointerDown !== undefined &&
     onHandlePointerMove !== undefined &&
     onHandlePointerUp !== undefined &&
-    onHandlePointerCancel !== undefined;
+    onHandlePointerCancel !== undefined &&
+    onMoveUp !== undefined &&
+    onMoveDown !== undefined &&
+    onIndent !== undefined &&
+    onOutdent !== undefined;
   return (
     <li
       data-task-id={task.id}
       className={cn(
-        "group flex items-center gap-2 rounded-lg border-t-2 border-t-transparent px-3 py-2.5 transition-colors hover:bg-muted",
+        "group flex items-center gap-2 rounded-lg border-t-2 border-t-transparent py-2.5 pr-3 transition-colors hover:bg-muted",
         // A top border rather than a background swap for the drop
         // indicator: it reads as "the row lands between here and the row
         // above" without implying the hovered row itself is what's moving.
         isDropTarget && "border-t-primary",
+        // The nest indicator (issue #171's drag-to-reparent) is a filled
+        // ring around the *whole* row instead — never a top border, which
+        // `isDropTarget` above already claims for a different outcome
+        // ("lands between rows"). Filling the row itself, rather than a
+        // second line drawn somewhere else on it, is what reads as "the
+        // dragged row goes inside this one" instead of "next to it,"
+        // without inventing a third line position (below the row? around
+        // just the content?) a reader would have to learn separately from
+        // the first. `ring-inset` keeps the ring inside the row's own
+        // border-box rather than growing the row's footprint and shifting
+        // every row below it during a drag, which a `border`-width ring
+        // would do.
+        isNestTarget && "bg-primary/10 ring-2 ring-primary ring-inset",
       )}
+      // A fixed amount of left padding per level, on the `<li>` itself
+      // rather than a wrapper `<div>` — depth's own doc comment above.
+      // `12px` base padding (matching the row's own `pr-3`) plus `20px`
+      // per level beyond the first, so a depth-1 (top-level) Task keeps
+      // exactly the padding every pre-#171 row already had.
+      style={{ paddingLeft: `${12 + (depth - 1) * 20}px` }}
     >
       {draggable && (
-        <span
-          aria-hidden="true"
+        <button
+          type="button"
+          aria-label={`Reorder or reparent "${task.content}" — arrow keys to move, Alt+arrow keys to indent or outdent`}
           data-testid="task-drag-handle"
           onPointerDown={onHandlePointerDown}
           onPointerMove={onHandlePointerMove}
           onPointerUp={onHandlePointerUp}
           onPointerCancel={onHandlePointerCancel}
+          onKeyDown={(event) => {
+            // A real, focusable `<button>` rather than the `aria-hidden`,
+            // unfocusable `<span>` this handle used to be (issue #168's
+            // own version) — issue #171's keyboard reorder/reparent
+            // acceptance criterion needs a keyboard target to land focus
+            // on, and this is the one control already scoped to exactly
+            // this Task's own drag gesture, so it does double duty rather
+            // than this row growing a second, keyboard-only control for
+            // the identical action. `onOutdent`'s own doc comment
+            // (TaskRowProps) explains why `Alt`+arrow rather than `Tab`.
+            if (event.key === "ArrowUp" && !event.altKey) {
+              event.preventDefault();
+              onMoveUp?.();
+            } else if (event.key === "ArrowDown" && !event.altKey) {
+              event.preventDefault();
+              onMoveDown?.();
+            } else if (event.key === "ArrowRight" && event.altKey) {
+              event.preventDefault();
+              onIndent?.();
+            } else if (event.key === "ArrowLeft" && event.altKey) {
+              event.preventDefault();
+              onOutdent?.();
+            }
+          }}
           // `touch-action: none` is what makes a touch drag possible at all
           // — without it Chromium's own scroll gesture recogniser claims
           // the gesture before a second pointermove ever reaches this
@@ -148,10 +278,10 @@ export function TaskRow({
           // finger — the opposite of `use-swipe-actions.ts`'s bubble,
           // which stays `pan-y` everywhere so the thread itself keeps
           // scrolling under a swipe.
-          className="flex size-6 shrink-0 touch-none cursor-grab items-center justify-center text-muted-foreground active:cursor-grabbing"
+          className="flex size-6 shrink-0 touch-none cursor-grab items-center justify-center rounded text-muted-foreground active:cursor-grabbing"
         >
-          <GripVertical className="size-4" />
-        </span>
+          <GripVertical aria-hidden="true" className="size-4" />
+        </button>
       )}
       {/*
         `onClick`, not `onChange` — pre-#170 this was `onChange={onComplete}`.
@@ -249,6 +379,36 @@ export function TaskRow({
         >
           <CheckCheck aria-hidden="true" className="size-4" />
         </button>
+      )}
+      {/*
+        Moves this Task between the Sections of its own Project — issue
+        #171. A plain `<select>`, not a drag target: the pointer recogniser
+        (task-tree.tsx) only ever computes an insert-before/insert-after
+        position within one sibling group, and reaching across a Section
+        boundary that way is a gap this ticket's own report names rather
+        than solves (task-drag-recognizer.ts has no "onto a different
+        group" verdict at all). A `<select>` is a real, keyboard- and
+        screen-reader-reachable way to move a Task into or out of a
+        Section regardless of that gap. `sectionOptions` undefined/empty
+        hides it entirely, the identical "the affordance isn't there
+        rather than present and inert" rule `draggable` above follows.
+      */}
+      {sectionOptions !== undefined && sectionOptions.length > 0 && (
+        <select
+          aria-label={`Move "${task.content}" to a Section`}
+          value={task.sectionId ?? ""}
+          onChange={(event) =>
+            onMoveToSection?.(event.target.value === "" ? null : event.target.value)
+          }
+          className="shrink-0 rounded-md border border-border bg-background px-1 py-1 text-muted-foreground text-xs"
+        >
+          <option value="">No Section</option>
+          {sectionOptions.map((section) => (
+            <option key={section.id} value={section.id}>
+              {section.name}
+            </option>
+          ))}
+        </select>
       )}
       <button
         type="button"

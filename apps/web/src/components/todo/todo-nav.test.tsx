@@ -44,4 +44,21 @@ describe("TodoNav", () => {
     expect(screen.getByRole("link", { name: "Today" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("link", { name: "Inbox" })).not.toHaveAttribute("aria-current");
   });
+
+  // Issue #171's own proof of ADR 0049's prediction a second time — see
+  // todo-nav.tsx's own comment on VIEWS.
+  it("offers Projects as a third real link", () => {
+    renderAt("/todo/inbox");
+
+    expect(screen.getByRole("link", { name: "Projects" })).toHaveAttribute(
+      "href",
+      "/todo/projects",
+    );
+  });
+
+  it("marks Projects current while viewing a single Project's own screen too", () => {
+    renderAt("/todo/projects/some-project-id");
+
+    expect(screen.getByRole("link", { name: "Projects" })).toHaveAttribute("aria-current", "page");
+  });
 });

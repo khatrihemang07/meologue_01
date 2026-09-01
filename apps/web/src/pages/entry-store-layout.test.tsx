@@ -40,6 +40,15 @@ function createFakeStore(): EntryStore {
 function createFakeTaskStore(): TaskStore {
   return {
     list: vi.fn(async () => []),
+    // Issue #171's four structural queries — this fake exercises none of
+    // them either (see this function's own comment on the #169/#170
+    // methods just below for why that's fine), but TASK_STORE_METHODS
+    // type-checks against a real TaskStore, so every implementation, this
+    // fake included, must carry all twenty-one.
+    listByProject: vi.fn(async () => []),
+    listChildren: vi.fn(async () => []),
+    listInSection: vi.fn(async () => []),
+    listDescendants: vi.fn(async () => []),
     listCompleted: vi.fn(async () => []),
     get: vi.fn(async () => undefined),
     upsert: vi.fn(async () => {}),
@@ -66,6 +75,11 @@ function createFakeTaskStore(): TaskStore {
     advanceRecurring: vi.fn(async () => {}),
     completeForever: vi.fn(async () => {}),
     postpone: vi.fn(async () => {}),
+    // Issue #171's three structural setters — same "this fake exercises
+    // none of them" reasoning as setDate/etc. above.
+    setProject: vi.fn(async () => {}),
+    setSection: vi.fn(async () => {}),
+    setParent: vi.fn(async () => {}),
   };
 }
 

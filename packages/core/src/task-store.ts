@@ -25,6 +25,61 @@ export interface TaskStore {
    */
   list(): Promise<Task[]>;
   /**
+   * Active, top-level (`parentId === null`) Tasks belonging to
+   * `projectId`, or Inbox when `projectId` is `null` (../project-
+   * types.ts's own header comment: Inbox is `projectId === null`, not a
+   * row with an id), in the identical (orderKey, id) order list() itself
+   * uses. This is what issue #171's "opening a project lists its tasks,
+   * reusing the list Inbox already uses" needs and list() above cannot
+   * give: list() stays the *global* feed every cross-project view (Today,
+   * search) already depends on, so its meaning is unchanged rather than
+   * narrowed to "Inbox" now that Tasks can live elsewhere. Excludes
+   * sub-tasks deliberately — a Project or Inbox's own list is the
+   * top-level rows; a Task's sub-tasks are reached through listChildren()
+   * below once a reader expands it, the same "core returns the flat rows,
+   * the caller groups them" split group-today-tasks.ts already uses for
+   * Today.
+   */
+  listByProject(projectId: string | null): Promise<Task[]>;
+  /**
+   * Active, direct sub-tasks of `parentId`, in their own (orderKey, id)
+   * order — issue #171's "sub-tasks keep their own order regardless of
+   * any sorting or grouping applied to the list above them" is true here
+   * because this query is untouched by whatever sort or grouping a caller
+   * applied to the *parent's* own list; it always returns children sorted
+   * by their own manual order. Excludes completed sub-tasks, mirroring
+   * list()'s own "active" scope — a completed sub-task is reached through
+   * listCompleted() and filtered by `parentId` the same way a completed
+   * top-level Task already is.
+   */
+  listChildren(parentId: string): Promise<Task[]>;
+  /**
+   * Active and completed Tasks (tombstones excluded) directly filed in
+   * Section `sectionId` — a Section's own top-level members, before
+   * ../project-store.ts's deleteSection/archiveSection walk each one's
+   * descendants via listDescendants() below. Deliberately includes
+   * completed Tasks, unlike listByProject/listChildren above: both of
+   * deleteSection's and archiveSection's contracts are explicit that a
+   * completed Task inside the Section is still in scope ("completed ones
+   * included").
+   */
+  listInSection(sectionId: string): Promise<Task[]>;
+  /**
+   * Every descendant of `id` — children, grandchildren, and so on down to
+   * the four-level nesting cap (../task-fields.ts's
+   * MAX_TASK_NESTING_DEPTH) — active and completed alike, tombstones
+   * excluded, in no particular order. Exists for
+   * ../project-store.ts's deleteSection/archiveSection: "destroys every
+   * Task inside a Section" has to reach a sub-task nested under one of the
+   * Section's own Tasks too, even though that sub-task's own `sectionId`
+   * is typically left `null` rather than mirroring its ancestor's
+   * (../task-types.ts's `sectionId` doc comment) — walking descendants by
+   * `parentId` is what makes "in this Section" include them despite that.
+   * Bounded to at most three hops given the nesting cap, regardless of how
+   * many Tasks a Project holds.
+   */
+  listDescendants(id: string): Promise<Task[]>;
+  /**
    * Completed Tasks, newest completion first (`completedAt` descending),
    * ties broken by id descending — the same "time-ordered id, so an
    * ascending tie-break would misorder a same-millisecond pair" reasoning
@@ -46,13 +101,30 @@ export interface TaskStore {
    * know it must also no-op against a tombstone (below) — get that wrong
    * and a stale local completion can resurrect a Task someone else
    * deleted. No-op against a tombstone.
+   *
+   * **Cascades to every active sub-task, at every depth** (CONTEXT.md's
+   * Sub-task entry: "Completing a parent completes its sub-tasks along
+   * with it"). An already-completed sub-task is left exactly as it is —
+   * its own `completedAt` is a real historical fact this method must not
+   * overwrite with the parent's own completion time, which is also why
+   * this cascade never runs the other way: **completing every sub-task
+   * does not complete the parent** (CONTEXT.md, again), because the
+   * parent may still name work its sub-tasks don't cover, and because
+   * inventing that reverse behaviour is exactly what CLAUDE.md's brief
+   * warns against. completeForever() and advanceRecurring()'s "ended"
+   * outcome are both completion events too — they set `completedAt` for
+   * real — and cascade identically, for the same reason.
    */
   complete(id: string, completedAt: string): Promise<void>;
   /**
    * Clears `completedAt` and clears `seq` — the mirror of complete(),
    * carrying the same no-op-against-a-tombstone guarantee for the same
    * reason: undoing a completion is still a local mutation that must not
-   * bring a deleted Task back.
+   * bring a deleted Task back. Deliberately does **not** cascade to
+   * sub-tasks — CONTEXT.md names only one direction ("completing a parent
+   * completes its sub-tasks"), and reopening every sub-task a parent's
+   * completion once cascaded to would be a second, unasked-for behaviour
+   * complete()'s own doc comment refuses to invent.
    */
   uncomplete(id: string): Promise<void>;
   /**
@@ -135,6 +207,53 @@ export interface TaskStore {
    * tombstone.
    */
   setLabelIds(id: string, labelIds: string[]): Promise<void>;
+  /**
+   * Changes `projectId` and clears `seq` — moves a Task into `projectId`,
+   * or back to Inbox when `projectId` is `null`. **Also clears
+   * `sectionId` back to `null`**, unconditionally: a Section belongs to
+   * exactly one Project (../project-types.ts's `Section.projectId`), so a
+   * `sectionId` naming a Section in the *old* Project can never validly
+   * survive a move to a new one — Todoist's own "move to project"
+   * unassigns any Section for the identical reason. A caller that wants
+   * the Task filed into a Section of the *new* Project calls setSection()
+   * as a deliberate second step, exactly as setTaskDate's own doc comment
+   * (apps/web's use-tasks.ts) already documents a similar two-step
+   * pattern for `date`/`duration`. No validation of `projectId` itself
+   * against ProjectStore — this is the identical accepted, transient
+   * dangling-reference state `labelIds`' own doc comment names, applied
+   * here for the same reason: cross-store validation would need the
+   * non-atomic multi-table write ../order-key.ts's header comment
+   * explains this codebase's stores are built to avoid. No-op against a
+   * tombstone.
+   */
+  setProject(id: string, projectId: string | null): Promise<void>;
+  /**
+   * Changes `sectionId` and clears `seq`. `null` files the Task back to
+   * "no Section" within whichever Project it already has. No validation
+   * against ProjectStore — mirrors setProject's own doc comment on why a
+   * dangling or cross-Project `sectionId` is an accepted, transient state
+   * rather than something this setter reaches across stores to refuse.
+   * No-op against a tombstone.
+   */
+  setSection(id: string, sectionId: string | null): Promise<void>;
+  /**
+   * Changes `parentId` and clears `seq` — reparents a Task under
+   * `parentId`, or back to top-level when `parentId` is `null`. Refuses
+   * (throws) three shapes CLAUDE.md's brief calls out as invariants a
+   * test must be able to prove rather than a caller being trusted to
+   * avoid: `parentId === id` (a Task cannot be its own parent);
+   * `parentId` naming an id that isn't a live Task (unlike
+   * `projectId`/`sectionId` above, `parentId` names a row in this *same*
+   * table, so — unlike a cross-store reference — validating it costs
+   * nothing extra and a caller-supplied nonexistent parent is a bug, not a
+   * legitimate race); and a `parentId` that would place this Task beyond
+   * the four-level nesting cap (../task-fields.ts's
+   * assertValidNestingDepth) — which the same walk also catches as a
+   * cycle if `parentId` turns out to already be a descendant of `id`,
+   * since walking upward from a descendant necessarily passes back through
+   * `id` itself. No-op against a tombstone.
+   */
+  setParent(id: string, parentId: string | null): Promise<void>;
   /**
    * Advances a recurring Task to its next occurrence (issue #170's
    * recurrence engine, ../recurrence/) instead of completing it — a

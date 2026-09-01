@@ -74,6 +74,143 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
     expect(await store.listCompleted()).toEqual([]);
   });
 
+  describe("listByProject() — issue #171", () => {
+    it("returns only active, top-level Tasks in the given Project, in orderKey order", async () => {
+      await store.upsert([
+        task({ id: "b", projectId: "project-1", orderKey: "b", seq: 1 }),
+        task({ id: "a", projectId: "project-1", orderKey: "a", seq: 1 }),
+        task({ id: "other-project", projectId: "project-2", seq: 1 }),
+        task({ id: "inbox", projectId: null, seq: 1 }),
+      ]);
+
+      expect((await store.listByProject("project-1")).map((t) => t.id)).toEqual(["a", "b"]);
+    });
+
+    // `null` is Inbox (../project-types.ts's own header comment) — the
+    // one case listByProject exists to answer that list() alone cannot,
+    // now that a Task can also live in a named Project.
+    it("returns Inbox Tasks — projectId null — when passed null", async () => {
+      await store.upsert([
+        task({ id: "inbox-task", projectId: null, seq: 1 }),
+        task({ id: "project-task", projectId: "project-1", seq: 1 }),
+      ]);
+
+      expect((await store.listByProject(null)).map((t) => t.id)).toEqual(["inbox-task"]);
+    });
+
+    it("excludes a sub-task even when it shares the Project", async () => {
+      await store.upsert([
+        task({ id: "parent", projectId: "project-1", seq: 1 }),
+        task({ id: "child", projectId: "project-1", parentId: "parent", seq: 1 }),
+      ]);
+
+      expect((await store.listByProject("project-1")).map((t) => t.id)).toEqual(["parent"]);
+    });
+
+    it("excludes a completed Task", async () => {
+      await store.upsert([task({ id: "a", projectId: "project-1", seq: 1 })]);
+      await store.complete("a", "2026-01-05T00:00:00.000Z");
+
+      expect(await store.listByProject("project-1")).toEqual([]);
+    });
+  });
+
+  describe("listChildren() — issue #171", () => {
+    // "Sub-tasks keep their own order regardless of any sorting or
+    // grouping applied to the list above them" (CONTEXT.md's Sub-task
+    // entry) — this is what makes that true structurally: listChildren's
+    // own orderKey sort is untouched by whatever order the parent's own
+    // list happens to be in.
+    it("returns active, direct sub-tasks in their own orderKey order", async () => {
+      await store.upsert([
+        task({ id: "parent", seq: 1 }),
+        task({ id: "child-b", parentId: "parent", orderKey: "b", seq: 1 }),
+        task({ id: "child-a", parentId: "parent", orderKey: "a", seq: 1 }),
+      ]);
+
+      expect((await store.listChildren("parent")).map((t) => t.id)).toEqual(["child-a", "child-b"]);
+    });
+
+    it("excludes a grandchild — only direct children", async () => {
+      await store.upsert([
+        task({ id: "parent", seq: 1 }),
+        task({ id: "child", parentId: "parent", seq: 1 }),
+        task({ id: "grandchild", parentId: "child", seq: 1 }),
+      ]);
+
+      expect((await store.listChildren("parent")).map((t) => t.id)).toEqual(["child"]);
+    });
+
+    it("excludes a completed sub-task", async () => {
+      await store.upsert([
+        task({ id: "parent", seq: 1 }),
+        task({ id: "child", parentId: "parent", seq: 1 }),
+      ]);
+      await store.complete("child", "2026-01-05T00:00:00.000Z");
+
+      expect(await store.listChildren("parent")).toEqual([]);
+    });
+  });
+
+  describe("listInSection() — issue #171", () => {
+    // Deliberately includes completed Tasks, unlike listByProject/
+    // listChildren above — see TaskStore.listInSection's own doc comment
+    // for why deleteSection/archiveSection need that.
+    it("returns active and completed Tasks filed in the Section, excluding a different one", async () => {
+      await store.upsert([
+        task({ id: "active", sectionId: "section-1", seq: 1 }),
+        task({ id: "done", sectionId: "section-1", seq: 1 }),
+        task({ id: "elsewhere", sectionId: "section-2", seq: 1 }),
+      ]);
+      await store.complete("done", "2026-01-05T00:00:00.000Z");
+
+      expect((await store.listInSection("section-1")).map((t) => t.id).sort()).toEqual([
+        "active",
+        "done",
+      ]);
+    });
+
+    it("excludes a tombstoned Task", async () => {
+      await store.upsert([task({ id: "a", sectionId: "section-1", seq: 1 })]);
+      await store.remove("a");
+
+      expect(await store.listInSection("section-1")).toEqual([]);
+    });
+  });
+
+  describe("listDescendants() — issue #171", () => {
+    it("returns every descendant at every depth, active and completed alike", async () => {
+      await store.upsert([
+        task({ id: "root", seq: 1 }),
+        task({ id: "child", parentId: "root", seq: 1 }),
+        task({ id: "grandchild", parentId: "child", seq: 1 }),
+        task({ id: "unrelated", seq: 1 }),
+      ]);
+      await store.complete("grandchild", "2026-01-05T00:00:00.000Z");
+
+      expect((await store.listDescendants("root")).map((t) => t.id).sort()).toEqual([
+        "child",
+        "grandchild",
+      ]);
+    });
+
+    it("excludes a tombstoned descendant", async () => {
+      await store.upsert([
+        task({ id: "root", seq: 1 }),
+        task({ id: "child", parentId: "root", seq: 1 }),
+      ]);
+      await store.remove("child");
+
+      expect(await store.listDescendants("root")).toEqual([]);
+    });
+
+    it("returns an empty array for a Task with no sub-tasks", async () => {
+      await store.upsert([task({ id: "a", seq: 1 })]);
+
+      expect(await store.listDescendants("a")).toEqual([]);
+    });
+  });
+
   describe("complete() / uncomplete()", () => {
     it("complete() sets completedAt and clears seq, making the Task pending again", async () => {
       const synced = task({ id: "a", seq: 5, syncedAt: "2026-01-01T00:00:00.000Z" });
@@ -110,6 +247,57 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
 
       const [found] = await store.list();
       expect(found).toMatchObject({ id: "a", content: "buy milk", orderKey: "m" });
+    });
+
+    // CONTEXT.md's Sub-task entry: "Completing a parent completes its
+    // sub-tasks along with it" — proven down every level, not just the
+    // first, since a shallow implementation (cascade one level, forget to
+    // recurse) would still pass a single-level test.
+    it("completing a parent completes its active sub-tasks, recursively down every level", async () => {
+      await store.upsert([
+        task({ id: "parent", seq: 1 }),
+        task({ id: "child", parentId: "parent", seq: 1 }),
+        task({ id: "grandchild", parentId: "child", seq: 1 }),
+      ]);
+
+      await store.complete("parent", "2026-01-05T00:00:00.000Z");
+
+      expect(await store.get("child")).toMatchObject({
+        completedAt: "2026-01-05T00:00:00.000Z",
+        seq: null,
+      });
+      expect(await store.get("grandchild")).toMatchObject({
+        completedAt: "2026-01-05T00:00:00.000Z",
+        seq: null,
+      });
+    });
+
+    it("does not overwrite a sub-task that was already completed on its own", async () => {
+      await store.upsert([
+        task({ id: "parent", seq: 1 }),
+        task({ id: "child", parentId: "parent", seq: 1 }),
+      ]);
+      await store.complete("child", "2026-01-01T00:00:00.000Z");
+
+      await store.complete("parent", "2026-01-05T00:00:00.000Z");
+
+      const child = await store.get("child");
+      expect(child?.completedAt).toBe("2026-01-01T00:00:00.000Z");
+    });
+
+    // The rule's other half, named explicitly by CONTEXT.md and issue
+    // #171's acceptance criteria — not a bidirectional cascade, and no
+    // such behaviour should be invented.
+    it("completing every sub-task does not complete the parent", async () => {
+      await store.upsert([
+        task({ id: "parent", seq: 1 }),
+        task({ id: "only-child", parentId: "parent", seq: 1 }),
+      ]);
+
+      await store.complete("only-child", "2026-01-05T00:00:00.000Z");
+
+      const parent = await store.get("parent");
+      expect(parent?.completedAt).toBeNull();
     });
   });
 
@@ -334,6 +522,127 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
     });
   });
 
+  describe("setProject() — issue #171", () => {
+    it("changes projectId and clears seq", async () => {
+      await store.upsert([task({ id: "a", seq: 5 })]);
+
+      await store.setProject("a", "project-1");
+
+      expect(await store.get("a")).toMatchObject({ projectId: "project-1", seq: null });
+    });
+
+    it("clears projectId back to Inbox", async () => {
+      await store.upsert([task({ id: "a", projectId: "project-1", seq: 5 })]);
+
+      await store.setProject("a", null);
+
+      expect(await store.get("a")).toMatchObject({ projectId: null, seq: null });
+    });
+
+    // A Section belongs to exactly one Project (../project-types.ts's
+    // Section.projectId doc comment) — TaskStore.setProject's own doc
+    // comment explains why a sectionId from the old Project can't validly
+    // survive the move.
+    it("clears sectionId unconditionally when the project changes", async () => {
+      await store.upsert([
+        task({ id: "a", projectId: "project-1", sectionId: "section-1", seq: 5 }),
+      ]);
+
+      await store.setProject("a", "project-2");
+
+      expect(await store.get("a")).toMatchObject({ projectId: "project-2", sectionId: null });
+    });
+  });
+
+  describe("setSection() — issue #171", () => {
+    it("changes sectionId and clears seq", async () => {
+      await store.upsert([task({ id: "a", seq: 5 })]);
+
+      await store.setSection("a", "section-1");
+
+      expect(await store.get("a")).toMatchObject({ sectionId: "section-1", seq: null });
+    });
+
+    it("clears sectionId back to null", async () => {
+      await store.upsert([task({ id: "a", sectionId: "section-1", seq: 5 })]);
+
+      await store.setSection("a", null);
+
+      expect(await store.get("a")).toMatchObject({ sectionId: null, seq: null });
+    });
+  });
+
+  describe("setParent() — issue #171", () => {
+    it("changes parentId and clears seq", async () => {
+      await store.upsert([task({ id: "parent", seq: 1 }), task({ id: "child", seq: 5 })]);
+
+      await store.setParent("child", "parent");
+
+      expect(await store.get("child")).toMatchObject({ parentId: "parent", seq: null });
+    });
+
+    it("clears parentId back to top-level", async () => {
+      await store.upsert([
+        task({ id: "parent", seq: 1 }),
+        task({ id: "child", parentId: "parent", seq: 5 }),
+      ]);
+
+      await store.setParent("child", null);
+
+      expect(await store.get("child")).toMatchObject({ parentId: null, seq: null });
+    });
+
+    it("refuses a Task becoming its own parent", async () => {
+      await store.upsert([task({ id: "a", seq: 1 })]);
+
+      await expect(store.setParent("a", "a")).rejects.toThrow();
+    });
+
+    it("refuses a parentId that does not exist", async () => {
+      await store.upsert([task({ id: "a", seq: 1 })]);
+
+      await expect(store.setParent("a", "never-seen")).rejects.toThrow();
+    });
+
+    // Walking up from `b`'s own new parent (`a`) would pass back through
+    // `a` itself — the exact shape a cycle takes.
+    it("refuses a parentId that would create a cycle", async () => {
+      await store.upsert([task({ id: "a", seq: 1 }), task({ id: "b", parentId: "a", seq: 1 })]);
+
+      await expect(store.setParent("a", "b")).rejects.toThrow();
+    });
+
+    // The four-level nesting cap (CONTEXT.md's Sub-task entry, issue
+    // #171's acceptance criteria). level1-level4 are wired up directly via
+    // upsert(), which does not itself validate depth (mirroring every
+    // other #169/#171 field) — this test exercises only setParent's own
+    // enforcement, not upsert's.
+    it("refuses nesting a fifth level deep", async () => {
+      await store.upsert([
+        task({ id: "level1", seq: 1 }),
+        task({ id: "level2", parentId: "level1", seq: 1 }),
+        task({ id: "level3", parentId: "level2", seq: 1 }),
+        task({ id: "level4", parentId: "level3", seq: 1 }),
+        task({ id: "level5-candidate", seq: 1 }),
+      ]);
+
+      await expect(store.setParent("level5-candidate", "level4")).rejects.toThrow();
+    });
+
+    it("accepts nesting exactly four levels deep — the cap is inclusive", async () => {
+      await store.upsert([
+        task({ id: "level1", seq: 1 }),
+        task({ id: "level2", parentId: "level1", seq: 1 }),
+        task({ id: "level3", parentId: "level2", seq: 1 }),
+        task({ id: "level4-candidate", seq: 1 }),
+      ]);
+
+      await store.setParent("level4-candidate", "level3");
+
+      expect(await store.get("level4-candidate")).toMatchObject({ parentId: "level3" });
+    });
+  });
+
   // Store-level mechanics only — every grammar form and every anchor's
   // computed date lives in ../recurrence/recurrence.test.ts's own
   // table-driven spec, "large enough to be the specification" on its
@@ -499,7 +808,7 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
 
     // Every local mutation against a tombstone is a no-op — no
     // resurrection, no matter which door a caller tries.
-    it("complete(), uncomplete(), rename(), reorder(), the four #169 setters, setLabelIds(), advanceRecurring(), completeForever() and postpone() are all no-ops against a tombstone", async () => {
+    it("complete(), uncomplete(), rename(), reorder(), the four #169 setters, setLabelIds(), the three #171 setters, advanceRecurring(), completeForever() and postpone() are all no-ops against a tombstone", async () => {
       await store.upsert([task({ id: "a", content: "something", seq: 1, orderKey: "m" })]);
       await store.remove("a");
 
@@ -515,6 +824,12 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
       await store.setDuration("a", 30);
       await store.setPriority("a", 4);
       await store.setLabelIds("a", ["work"]);
+      await store.setProject("a", "some-project");
+      await store.setSection("a", "some-section");
+      // setParent's own no-op check runs before its parent-existence
+      // check, so this doesn't throw even though "not-a-real-parent" was
+      // never created.
+      await store.setParent("a", "not-a-real-parent");
       // advanceRecurring's own no-op check runs before its "no
       // dateString" throw for the identical reason — the tombstoned Task
       // above was never given one either.

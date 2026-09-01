@@ -194,19 +194,29 @@ const CHUNK_BUDGETS = {
   "src/pages/sessions-page.tsx": { ceilingBytes: 26_000, baselineBytes: 20_088 },
   // Measured 13,586 bytes gzip (own chunk + 3 shared).
   "src/pages/settings-page.tsx": { ceilingBytes: 17_600, baselineBytes: 13_586 },
-  // Todo — both `/todo/inbox` (issue #168) and `/todo/today` (issue #169),
-  // since `App.tsx` points two `<Route>` elements at the one lazily-
+  // Todo — `/todo/inbox` (issue #168), `/todo/today` (issue #169) and,
+  // since issue #171, `/todo/projects` and `/todo/projects/:projectId`,
+  // since `App.tsx` points four `<Route>` elements at the one lazily-
   // imported `TodoPage`, switched by its own `view` prop, rather than a
-  // second `import("@/pages/...")` for Today. Measured 43,623 bytes gzip
-  // (own chunk + 7 shared).
+  // second `import("@/pages/...")` per view. Re-measured 2026-09-02
+  // against a clean `vite build --mode android`, immediately after #171's
+  // own Projects/Sections UI landed (task-tree.tsx, task-list.tsx,
+  // project-view.tsx, projects-view.tsx, use-projects.ts — all new,
+  // first-party weight, not a shared dependency moving in): 43,623 grew to
+  // 51,254 bytes gzip (own chunk + 7 shared), a real ~17% increase this
+  // ticket's own brief predicted ("Todo's route budget will grow").
+  // `ceilingBytes` raised to keep the same ~30% headroom over that fresh
+  // baseline every other budget in this table carries, not because the
+  // build actually failed against the old 56,700 ceiling (it still had
+  // 5,446 bytes of headroom left) — the point is a ceiling that reflects
+  // what this route honestly costs now, not one quietly eaten down to a
+  // sliver by an increase nobody recorded.
   //
-  // Most of that is shared, not Todo's own: `date-picker-sheet` (~20.8 KB,
-  // react-day-picker) is the single largest part, reached because #169's
-  // schedule sheet reuses the app's existing date UI rather than building
-  // a second one. That reuse is the right call and this number is the
-  // honest price of it — worth knowing before #170 and #171 add a parser
-  // and a projects view on top.
-  "src/pages/todo-page.tsx": { ceilingBytes: 56_700, baselineBytes: 43_623 },
+  // Most of the *shared* portion, not Todo's own code, is still
+  // `date-picker-sheet` (~20.8 KB, react-day-picker) — issue #169's
+  // schedule sheet reusing the app's existing date UI rather than
+  // building a second one, unchanged by this ticket.
+  "src/pages/todo-page.tsx": { ceilingBytes: 67_000, baselineBytes: 51_254 },
 };
 
 /**

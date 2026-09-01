@@ -14,10 +14,11 @@
  * under ADR 0007, before ADR 0028 gave it a real use).
  *
  * Date, deadline, duration and priority (issue #169) are on the type
- * below. Project, section and parent are still deliberately excluded —
- * those land in issue #171 behind their own migration, sequenced apart on
- * purpose, so each migration's blast radius is the one thing it's
- * actually adding.
+ * below, and so, since issue #171, are `projectId`, `sectionId` and
+ * `parentId` — sequenced behind their own migration (version 9,
+ * ../sqlite/migrations/index.ts) rather than folded into an earlier one,
+ * so each migration's blast radius stays the one thing it's actually
+ * adding.
  */
 export type Task = {
   id: string;
@@ -201,6 +202,58 @@ export type Task = {
    * such key, not a licence for a local caller to stay vague.
    */
   dateString: string | null;
+  /**
+   * The Project (../project-types.ts) this Task lives in, or `null` for
+   * Inbox — CONTEXT.md's Inbox entry: "Inbox is not a container the way a
+   * Project is — it names the absence of one." There is no sentinel id for
+   * Inbox to point at; `null` *is* Inbox, the identical "absence, not a
+   * value" encoding this field's neighbours below use for "no parent"/"no
+   * Section." Required, like every field above it and for the identical
+   * reason (Task.priority's own doc comment): a Task literal that omits
+   * this key is a caller declining to say where the Task lives, not a
+   * Task that lives nowhere in particular.
+   *
+   * Moving a Task between Projects is TaskStore.setProject
+   * (../task-store.ts), which also clears `sectionId` back to `null` —
+   * see that method's own doc comment for why a Section from the old
+   * Project can't validly survive the move.
+   */
+  projectId: string | null;
+  /**
+   * The Section (../project-types.ts) this Task sits in, or `null` for
+   * "no Section" — CONTEXT.md's Section entry: "A Task sits in at most one
+   * Section." Meaningful only alongside a non-null `projectId`: Inbox has
+   * no Sections (Section.projectId is required, never Inbox), but this
+   * store does not itself enforce that a Task's `sectionId` and
+   * `projectId` agree with each other — see TaskStore.setProject's own
+   * doc comment for what it does instead, and ../label-types.ts's
+   * `labelIds` doc comment for the general "a dangling or inconsistent
+   * cross-reference is an accepted, transient state, not something this
+   * store reaches across tables to enforce" reasoning this follows.
+   * Required and nullable, like every field above it.
+   */
+  sectionId: string | null;
+  /**
+   * The Task this one is a sub-task of, or `null` for a top-level Task
+   * (CONTEXT.md's Sub-task entry: "A Task whose parent is another Task").
+   * Nesting is capped at four levels, enforced by TaskStore.setParent
+   * (../task-store.ts) walking the target parent's own ancestor chain
+   * before writing — not by this field's type, which cannot express a
+   * rule that spans rows, and not by a caller being trusted to count
+   * levels itself (CLAUDE.md's brief: "make it a property of the store
+   * that a test can prove"). Required and nullable, like every field
+   * above it.
+   *
+   * A sub-task is a full Task in every other respect — CONTEXT.md is
+   * explicit — so nothing about `date`, `deadline`, `priority`,
+   * `labelIds`, `dateString` or any other field above changes meaning
+   * once a Task carries a non-null `parentId`. The one behaviour that
+   * *does* cross the parent/child boundary is completion:
+   * TaskStore.complete's own doc comment explains why completing a parent
+   * cascades to its active sub-tasks and completing every sub-task never
+   * cascades back up.
+   */
+  parentId: string | null;
 };
 
 /**

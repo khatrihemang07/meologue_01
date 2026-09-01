@@ -38,6 +38,12 @@ function task(overrides: Partial<Task> = {}): Task {
     // fixture uses for these two issue #170 fields.
     labelIds: [],
     dateString: null,
+    // In Inbox, no Section, top-level — the same "nothing chosen yet"
+    // state every other #171 field above defaults to, and what a Task
+    // created directly in Todo starts with (@meologue/core's task-types.ts).
+    projectId: null,
+    sectionId: null,
+    parentId: null,
     ...overrides,
   };
 }
@@ -47,6 +53,30 @@ function createFakeStore(): TaskStore {
   let completed: Task[] = [];
   return {
     list: vi.fn(async () => active),
+    // Issue #171's four structural queries — this fake never needs to
+    // observe them either (no test here exercises Project/Section/
+    // sub-task scoping; that lives in todo-page.test.tsx and
+    // packages/core's own contract suite), so each is just the same
+    // filter its real SqliteTaskStore/InMemoryTaskStore sibling applies,
+    // enough to satisfy the TaskStore interface.
+    listByProject: vi.fn(async (projectId: string | null) =>
+      active.filter((t) => t.parentId === null && t.projectId === projectId),
+    ),
+    listChildren: vi.fn(async (parentId: string) => active.filter((t) => t.parentId === parentId)),
+    listInSection: vi.fn(async (sectionId: string) =>
+      [...active, ...completed].filter((t) => t.sectionId === sectionId),
+    ),
+    listDescendants: vi.fn(async (id: string) => {
+      const all = [...active, ...completed];
+      const descendants: Task[] = [];
+      let frontier = [id];
+      while (frontier.length > 0) {
+        const children = all.filter((t) => t.parentId !== null && frontier.includes(t.parentId));
+        descendants.push(...children);
+        frontier = children.map((t) => t.id);
+      }
+      return descendants;
+    }),
     listCompleted: vi.fn(async () => completed),
     get: vi.fn(async (id: string) => active.find((t) => t.id === id)),
     upsert: vi.fn(async (incoming: Task[]) => {
@@ -129,6 +159,22 @@ function createFakeStore(): TaskStore {
       active = active.map((t) =>
         t.id === id && t.date !== null ? { ...t, date: tomorrowOf(today), seq: null } : t,
       );
+    }),
+    // Issue #171's three structural setters — mirrored loosely rather
+    // than replicating the real stores' own cycle/depth-cap validation
+    // (packages/core/src/task-store-contract.ts already proves that): this
+    // fake only needs to make the write visible to a caller that reads
+    // `active` back afterwards.
+    setProject: vi.fn(async (id: string, projectId: string | null) => {
+      active = active.map((t) =>
+        t.id === id ? { ...t, projectId, sectionId: null, seq: null } : t,
+      );
+    }),
+    setSection: vi.fn(async (id: string, sectionId: string | null) => {
+      active = active.map((t) => (t.id === id ? { ...t, sectionId, seq: null } : t));
+    }),
+    setParent: vi.fn(async (id: string, parentId: string | null) => {
+      active = active.map((t) => (t.id === id ? { ...t, parentId, seq: null } : t));
     }),
   };
 }

@@ -1,10 +1,21 @@
-import type { Entry, EntryStore, Label, LabelStore, Task, TaskStore } from "@meologue/core";
+import type {
+  Entry,
+  EntryStore,
+  Label,
+  LabelStore,
+  Project,
+  ProjectStore,
+  Section,
+  Task,
+  TaskStore,
+} from "@meologue/core";
 import { open } from "@meologue/core";
 import { queryOptions, useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { Outlet, useOutletContext } from "react-router";
 import { type UseHistoryPagination, useHistory } from "@/hooks/use-history";
 import { useLabels } from "@/hooks/use-labels";
+import { type AddProjectOverrides, useProjects } from "@/hooks/use-projects";
 import { type AddTaskOverrides, useTasks } from "@/hooks/use-tasks";
 import { dayHasEntries } from "@/lib/day-has-entries";
 import { dayReferrers } from "@/lib/day-referrers";
@@ -149,6 +160,14 @@ export interface EntryStoreOutletContext {
   setTaskDeadline: (id: string, deadline: string | null) => void;
   setTaskDuration: (id: string, duration: number | null) => void;
   setTaskPriority: (id: string, priority: number) => void;
+  /** A Project's own top-level Tasks (`null` for Inbox) — use-tasks.ts's own `listTasksInProject` doc comment. */
+  listTasksInProject: (projectId: string | null) => Promise<Task[]>;
+  /** A Task's own direct sub-tasks — use-tasks.ts's own `listTaskChildren` doc comment. */
+  listTaskChildren: (parentId: string) => Promise<Task[]>;
+  /** A Section's own direct members — use-tasks.ts's own `listTasksInSection` doc comment. */
+  listTasksInSection: (sectionId: string) => Promise<Task[]>;
+  /** Every descendant of a Task — use-tasks.ts's own `listTaskDescendants` doc comment. */
+  listTaskDescendants: (id: string) => Promise<Task[]>;
   /** Issue #170's three recurrence methods — use-tasks.ts's own UseTasksResult doc comments carry the full reasoning for each. */
   advanceRecurringTask: (id: string) => void;
   completeForeverTask: (id: string) => void;
@@ -163,6 +182,38 @@ export interface EntryStoreOutletContext {
    */
   labels: Label[];
   resolveLabelIds: (names: string[]) => Promise<string[]>;
+  /**
+   * Todo's Projects and Sections (issue #171) — the Project-shaped sibling
+   * of `labels`/`tasks` above, built the same way for the same reason:
+   * `useProjects` (use-projects.ts) runs once, here, above every route
+   * this layout wraps. See use-projects.ts's own `UseProjectsResult` doc
+   * comments for what each field does — this context simply forwards all
+   * of them, exactly as it already does for Tasks and Labels.
+   */
+  projects: Project[];
+  addProject: (name: string, overrides?: AddProjectOverrides) => void;
+  renameProject: (id: string, name: string) => void;
+  setProjectColour: (id: string, colour: string) => void;
+  setProjectDescription: (id: string, description: string | null) => void;
+  setProjectFavourite: (id: string, favourite: boolean) => void;
+  archiveProject: (id: string) => void;
+  unarchiveProject: (id: string) => void;
+  setProjectParent: (id: string, parentId: string | null) => Promise<void>;
+  reorderProject: (id: string, orderKey: string) => void;
+  listSections: (projectId: string) => Promise<Section[]>;
+  addSection: (projectId: string, name: string) => Promise<void>;
+  renameSection: (id: string, name: string) => void;
+  setSectionDescription: (id: string, description: string | null) => void;
+  reorderSection: (id: string, orderKey: string) => void;
+  deleteSection: (id: string) => void;
+  archiveSection: (id: string) => void;
+  unarchiveSection: (id: string) => void;
+  /** Moves a Task into `projectId` (or back to Inbox for `null`) — TaskStore.setProject's own doc comment, via use-tasks.ts's `setTaskProject`. */
+  setTaskProject: (id: string, projectId: string | null) => void;
+  /** Files a Task into `sectionId`, or clears it for `null` — TaskStore.setSection's own doc comment, via use-tasks.ts's `setTaskSection`. */
+  setTaskSection: (id: string, sectionId: string | null) => void;
+  /** Reparents a Task under `parentId`, or to top-level for `null` — use-tasks.ts's own `setTaskParent` doc comment on why this returns a Promise unlike every other Task mutator on this context. */
+  setTaskParent: (id: string, parentId: string | null) => Promise<void>;
   disabled: boolean;
   message?: string;
 }
@@ -312,6 +363,26 @@ function noopSetTaskDuration(_id: string, _duration: number | null) {}
 
 function noopSetTaskPriority(_id: string, _priority: number) {}
 
+// `listTasksInProject`/`listTaskChildren`'s own not-ready stand-ins,
+// mirroring `noopGetEntries`: nothing can be resolved before the store
+// opens, and an empty array is already each field's own "nothing found"
+// answer.
+async function noopListTasksInProject(_projectId: string | null): Promise<Task[]> {
+  return [];
+}
+
+async function noopListTaskChildren(_parentId: string): Promise<Task[]> {
+  return [];
+}
+
+async function noopListTasksInSection(_sectionId: string): Promise<Task[]> {
+  return [];
+}
+
+async function noopListTaskDescendants(_id: string): Promise<Task[]> {
+  return [];
+}
+
 // Issue #170's three recurrence methods — same not-ready reasoning.
 function noopAdvanceRecurringTask(_id: string) {}
 
@@ -319,12 +390,62 @@ function noopCompleteForeverTask(_id: string) {}
 
 function noopPostponeTask(_id: string) {}
 
+// Issue #171's three structural Task setters — same not-ready reasoning.
+function noopSetTaskProject(_id: string, _projectId: string | null) {}
+
+function noopSetTaskSection(_id: string, _sectionId: string | null) {}
+
+async function noopSetTaskParent(_id: string, _parentId: string | null): Promise<void> {}
+
 // `labels`'s own not-ready stand-in, mirroring `noopGetEntries`: nothing
 // can be resolved before the store opens, and an empty array is already
 // this field's own "nothing found" answer.
 async function noopResolveLabelIds(_names: string[]): Promise<string[]> {
   return [];
 }
+
+// Todo's Projects and Sections (issue #171) — same not-ready reasoning as
+// `noopAddTask`/`noopRemoveTask` above: `projects: []` below has nothing
+// to act on regardless, but every field `EntryStoreOutletContext` declares
+// still has to exist.
+function noopAddProject(_name: string, _overrides?: AddProjectOverrides) {}
+
+function noopRenameProject(_id: string, _name: string) {}
+
+function noopSetProjectColour(_id: string, _colour: string) {}
+
+function noopSetProjectDescription(_id: string, _description: string | null) {}
+
+function noopSetProjectFavourite(_id: string, _favourite: boolean) {}
+
+function noopArchiveProject(_id: string) {}
+
+function noopUnarchiveProject(_id: string) {}
+
+async function noopSetProjectParent(_id: string, _parentId: string | null): Promise<void> {}
+
+function noopReorderProject(_id: string, _orderKey: string) {}
+
+// `listSections`'s own not-ready stand-in, mirroring `noopGetEntries`:
+// nothing can be resolved before the store opens, and an empty array is
+// already this field's own "nothing found" answer.
+async function noopListSections(_projectId: string): Promise<Section[]> {
+  return [];
+}
+
+async function noopAddSection(_projectId: string, _name: string): Promise<void> {}
+
+function noopRenameSection(_id: string, _name: string) {}
+
+function noopSetSectionDescription(_id: string, _description: string | null) {}
+
+function noopReorderSection(_id: string, _orderKey: string) {}
+
+function noopDeleteSection(_id: string) {}
+
+function noopArchiveSection(_id: string) {}
+
+function noopUnarchiveSection(_id: string) {}
 
 function noopFetchMore() {}
 
@@ -375,6 +496,15 @@ function deferUntilOpen(promise: Promise<{ store: EntryStore; deviceId: string }
 // see `defer-store.ts`'s own doc comment.
 const TASK_STORE_METHODS: StoreMethodNames<TaskStore> = {
   list: true,
+  // Issue #171's four structural queries, added to TaskStore alongside
+  // `projectId`/`sectionId`/`parentId` themselves — the identical
+  // compile-time checkpoint this registry exists for (see this registry's
+  // own comment below on setDate/etc.) applies to these four exactly as
+  // it does to every setter.
+  listByProject: true,
+  listChildren: true,
+  listInSection: true,
+  listDescendants: true,
   listCompleted: true,
   get: true,
   upsert: true,
@@ -405,6 +535,11 @@ const TASK_STORE_METHODS: StoreMethodNames<TaskStore> = {
   advanceRecurring: true,
   completeForever: true,
   postpone: true,
+  // Issue #171's three structural setters — the identical compile-time
+  // checkpoint as every setter above.
+  setProject: true,
+  setSection: true,
+  setParent: true,
 };
 
 function deferTaskStoreUntilOpen(
@@ -433,6 +568,46 @@ function deferLabelStoreUntilOpen(
   promise: Promise<{ labelStore: LabelStore; deviceId: string }>,
 ): LabelStore {
   return deferStore(promise, ({ labelStore }) => labelStore, LABEL_STORE_METHODS);
+}
+
+// Projects and Sections (issue #171) — a fourth deferred facade over the
+// same open promise, same reasoning as TASK_STORE_METHODS's own comment:
+// this is the compile-time checkpoint that fails `tsc -b` the moment
+// ProjectStore grows a method this registry doesn't also list.
+const PROJECT_STORE_METHODS: StoreMethodNames<ProjectStore> = {
+  listProjects: true,
+  getProject: true,
+  upsertProjects: true,
+  renameProject: true,
+  setProjectColour: true,
+  setProjectDescription: true,
+  setProjectFavourite: true,
+  archiveProject: true,
+  unarchiveProject: true,
+  setProjectParent: true,
+  reorderProject: true,
+  removeProject: true,
+  pendingProjects: true,
+  getProjectCursor: true,
+  setProjectCursor: true,
+  listSections: true,
+  getSection: true,
+  addSection: true,
+  renameSection: true,
+  setSectionDescription: true,
+  reorderSection: true,
+  deleteSection: true,
+  archiveSection: true,
+  unarchiveSection: true,
+  pendingSections: true,
+  getSectionCursor: true,
+  setSectionCursor: true,
+};
+
+function deferProjectStoreUntilOpen(
+  promise: Promise<{ projectStore: ProjectStore; deviceId: string }>,
+): ProjectStore {
+  return deferStore(promise, ({ projectStore }) => projectStore, PROJECT_STORE_METHODS);
 }
 
 /**
@@ -512,6 +687,7 @@ export function EntryStoreLayout() {
       store: EntryStore;
       taskStore: TaskStore;
       labelStore: LabelStore;
+      projectStore: ProjectStore;
       deviceId: string;
     }) => void;
     let reject!: (reason: unknown) => void;
@@ -519,6 +695,7 @@ export function EntryStoreLayout() {
       store: EntryStore;
       taskStore: TaskStore;
       labelStore: LabelStore;
+      projectStore: ProjectStore;
       deviceId: string;
     }>((res, rej) => {
       resolve = res;
@@ -558,10 +735,17 @@ export function EntryStoreLayout() {
   // `useLabels`'s own equivalent (issue #170) — a third facade over the
   // same one open.
   const pendingLabelStore = useMemo(() => deferLabelStoreUntilOpen(deferred.promise), [deferred]);
+  // `useProjects`'s own equivalent (issue #171) — a fourth facade over the
+  // same one open.
+  const pendingProjectStore = useMemo(
+    () => deferProjectStoreUntilOpen(deferred.promise),
+    [deferred],
+  );
 
   const store = data?.store ?? pendingStore;
   const taskStore = data?.taskStore ?? pendingTaskStore;
   const labelStore = data?.labelStore ?? pendingLabelStore;
+  const projectStore = data?.projectStore ?? pendingProjectStore;
   const deviceId = data?.deviceId ?? "";
 
   const { entries, pagination, sendEntry, editEntry, removeEntry } = useHistory(store, deviceId);
@@ -578,11 +762,38 @@ export function EntryStoreLayout() {
     setTaskDeadline,
     setTaskDuration,
     setTaskPriority,
+    listTasksInProject,
+    listTaskChildren,
+    listTasksInSection,
+    listTaskDescendants,
     advanceRecurringTask,
     completeForeverTask,
     postponeTask,
+    setTaskProject,
+    setTaskSection,
+    setTaskParent,
   } = useTasks(taskStore, deviceId);
   const { labels, resolveLabelIds } = useLabels(labelStore, deviceId);
+  const {
+    projects,
+    addProject,
+    renameProject,
+    setProjectColour,
+    setProjectDescription,
+    setProjectFavourite,
+    archiveProject,
+    unarchiveProject,
+    setProjectParent,
+    reorderProject,
+    listSections,
+    addSection,
+    renameSection,
+    setSectionDescription,
+    reorderSection,
+    deleteSection,
+    archiveSection,
+    unarchiveSection,
+  } = useProjects(projectStore, deviceId);
 
   return (
     <Outlet
@@ -613,11 +824,36 @@ export function EntryStoreLayout() {
               setTaskDeadline,
               setTaskDuration,
               setTaskPriority,
+              listTasksInProject,
+              listTaskChildren,
+              listTasksInSection,
+              listTaskDescendants,
               advanceRecurringTask,
               completeForeverTask,
               postponeTask,
+              setTaskProject,
+              setTaskSection,
+              setTaskParent,
               labels,
               resolveLabelIds,
+              projects,
+              addProject,
+              renameProject,
+              setProjectColour,
+              setProjectDescription,
+              setProjectFavourite,
+              archiveProject,
+              unarchiveProject,
+              setProjectParent,
+              reorderProject,
+              listSections,
+              addSection,
+              renameSection,
+              setSectionDescription,
+              reorderSection,
+              deleteSection,
+              archiveSection,
+              unarchiveSection,
               disabled: false,
             } satisfies EntryStoreOutletContext)
           : ({
@@ -643,11 +879,36 @@ export function EntryStoreLayout() {
               setTaskDeadline: noopSetTaskDeadline,
               setTaskDuration: noopSetTaskDuration,
               setTaskPriority: noopSetTaskPriority,
+              listTasksInProject: noopListTasksInProject,
+              listTaskChildren: noopListTaskChildren,
+              listTasksInSection: noopListTasksInSection,
+              listTaskDescendants: noopListTaskDescendants,
               advanceRecurringTask: noopAdvanceRecurringTask,
               completeForeverTask: noopCompleteForeverTask,
               postponeTask: noopPostponeTask,
+              setTaskProject: noopSetTaskProject,
+              setTaskSection: noopSetTaskSection,
+              setTaskParent: noopSetTaskParent,
               labels: [],
               resolveLabelIds: noopResolveLabelIds,
+              projects: [],
+              addProject: noopAddProject,
+              renameProject: noopRenameProject,
+              setProjectColour: noopSetProjectColour,
+              setProjectDescription: noopSetProjectDescription,
+              setProjectFavourite: noopSetProjectFavourite,
+              archiveProject: noopArchiveProject,
+              unarchiveProject: noopUnarchiveProject,
+              setProjectParent: noopSetProjectParent,
+              reorderProject: noopReorderProject,
+              listSections: noopListSections,
+              addSection: noopAddSection,
+              renameSection: noopRenameSection,
+              setSectionDescription: noopSetSectionDescription,
+              reorderSection: noopReorderSection,
+              deleteSection: noopDeleteSection,
+              archiveSection: noopArchiveSection,
+              unarchiveSection: noopUnarchiveSection,
               disabled: true,
               message,
             } satisfies EntryStoreOutletContext)

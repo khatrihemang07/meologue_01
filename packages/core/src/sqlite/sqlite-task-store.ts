@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
 import { withDefaultLabelIds } from "../label-fields";
 import { nextOccurrence, tomorrowOf } from "../recurrence";
@@ -6,10 +6,12 @@ import {
   assertValidDate,
   assertValidDeadline,
   assertValidDuration,
+  assertValidNestingDepth,
   assertValidPriority,
   hasTime,
   withDefaultDateString,
   withDefaultSchedulingFields,
+  withDefaultStructureFields,
 } from "../task-fields";
 import type { TaskStore } from "../task-store";
 import type { Task } from "../task-types";
@@ -46,6 +48,62 @@ export class SqliteTaskStore implements TaskStore {
       .from(tasks)
       .where(and(isNull(tasks.completedAt), isNull(tasks.deletedAt)))
       .orderBy(tasks.orderKey, tasks.id);
+  }
+
+  // See TaskStore.listByProject's own doc comment for why this stays a
+  // separate query rather than narrowing list() above. `tasks_project_id_idx`
+  // (../schema.ts) is what makes the `project_id = ?` filter cheap.
+  async listByProject(projectId: string | null): Promise<Task[]> {
+    return this.db
+      .select()
+      .from(tasks)
+      .where(
+        and(
+          isNull(tasks.completedAt),
+          isNull(tasks.deletedAt),
+          isNull(tasks.parentId),
+          projectId === null ? isNull(tasks.projectId) : eq(tasks.projectId, projectId),
+        ),
+      )
+      .orderBy(tasks.orderKey, tasks.id);
+  }
+
+  // See TaskStore.listChildren's own doc comment. `tasks_parent_id_idx`
+  // (../schema.ts) is what makes the `parent_id = ?` filter cheap.
+  async listChildren(parentId: string): Promise<Task[]> {
+    return this.db
+      .select()
+      .from(tasks)
+      .where(and(isNull(tasks.completedAt), isNull(tasks.deletedAt), eq(tasks.parentId, parentId)))
+      .orderBy(tasks.orderKey, tasks.id);
+  }
+
+  // See TaskStore.listInSection's own doc comment for why both active and
+  // completed Tasks are included here, unlike listByProject/listChildren
+  // above.
+  async listInSection(sectionId: string): Promise<Task[]> {
+    return this.db
+      .select()
+      .from(tasks)
+      .where(and(isNull(tasks.deletedAt), eq(tasks.sectionId, sectionId)));
+  }
+
+  // See TaskStore.listDescendants' own doc comment. A breadth-first walk:
+  // each pass fetches every live child of the current frontier in one
+  // query (`parent_id IN (...)`), bounded to at most three passes by the
+  // four-level nesting cap, regardless of how many Tasks a Project holds.
+  async listDescendants(id: string): Promise<Task[]> {
+    const descendants: Task[] = [];
+    let frontier = [id];
+    while (frontier.length > 0) {
+      const children = await this.db
+        .select()
+        .from(tasks)
+        .where(and(isNull(tasks.deletedAt), inArray(tasks.parentId, frontier)));
+      descendants.push(...children);
+      frontier = children.map((c) => c.id);
+    }
+    return descendants;
   }
 
   async listCompleted(): Promise<Task[]> {
@@ -87,11 +145,16 @@ export class SqliteTaskStore implements TaskStore {
     // withDefaultDateString (../task-fields.ts) is a third such
     // defaulter, kept separate again for the same reason: `null` means
     // "doesn't repeat" (issue #170's recurrence engine), not a
-    // scheduling rule.
+    // scheduling rule. withDefaultStructureFields (issue #171) is a
+    // fourth, for `projectId`/`sectionId`/`parentId` — `null` means
+    // Inbox/no Section/top-level, kept separate for the identical reason
+    // the others are: it doesn't share a ticket, module, or default
+    // rationale with any of the three before it.
     const normalized = newTasks
       .map(withDefaultSchedulingFields)
       .map(withDefaultLabelIds)
-      .map(withDefaultDateString);
+      .map(withDefaultDateString)
+      .map(withDefaultStructureFields);
     // A single statement (mirrors SqliteEntryStore.upsert — see ADR
     // 0007): SQLite's native upsert applies each conflicting row's own
     // `excluded` values, so this stays correct for a batch of unrelated
@@ -116,6 +179,9 @@ export class SqliteTaskStore implements TaskStore {
           priority: sql`excluded.priority`,
           labelIds: sql`excluded.label_ids`,
           dateString: sql`excluded.date_string`,
+          projectId: sql`excluded.project_id`,
+          sectionId: sql`excluded.section_id`,
+          parentId: sql`excluded.parent_id`,
         },
       });
     for (const t of normalized) {
@@ -123,8 +189,29 @@ export class SqliteTaskStore implements TaskStore {
     }
   }
 
+  // Reads the Task first, like setDuration/postpone below, so the
+  // cascade below only runs against a live Task's own children — not
+  // when updateIfLive would have silently no-opped against a tombstone.
   async complete(id: string, completedAt: string): Promise<void> {
+    const current = await this.get(id);
+    if (current === undefined) {
+      return;
+    }
     await this.updateIfLive(id, { completedAt, seq: null, syncedAt: null });
+    await this.completeChildren(id, completedAt);
+  }
+
+  // Completing a parent completes its sub-tasks along with it
+  // (TaskStore.complete's own doc comment) — recurses through complete()
+  // itself, not a flat loop, so a grandchild is reached too, bounded by
+  // the four-level nesting cap. Only active children are touched: an
+  // already-completed child keeps its own honest `completedAt` (see that
+  // same doc comment).
+  private async completeChildren(parentId: string, completedAt: string): Promise<void> {
+    const children = await this.listChildren(parentId);
+    for (const child of children) {
+      await this.complete(child.id, completedAt);
+    }
   }
 
   async uncomplete(id: string): Promise<void> {
@@ -201,6 +288,63 @@ export class SqliteTaskStore implements TaskStore {
     await this.updateIfLive(id, { labelIds, seq: null, syncedAt: null });
   }
 
+  // See TaskStore.setProject's own doc comment for why `sectionId` is
+  // cleared unconditionally alongside `projectId`.
+  async setProject(id: string, projectId: string | null): Promise<void> {
+    await this.updateIfLive(id, { projectId, sectionId: null, seq: null, syncedAt: null });
+  }
+
+  async setSection(id: string, sectionId: string | null): Promise<void> {
+    await this.updateIfLive(id, { sectionId, seq: null, syncedAt: null });
+  }
+
+  // See TaskStore.setParent's own doc comment for the three shapes this
+  // refuses. Reads the target Task first, mirroring setDuration above:
+  // "no-op against a tombstone" for `id` itself is unconditional, checked
+  // before any of `parentId`'s own validation runs.
+  async setParent(id: string, parentId: string | null): Promise<void> {
+    const current = await this.get(id);
+    if (current === undefined) {
+      return;
+    }
+    if (parentId !== null) {
+      if (parentId === id) {
+        throw new Error(`Task ${id} cannot be its own parent`);
+      }
+      let cursor = await this.get(parentId);
+      if (cursor === undefined) {
+        throw new Error(`setParent: parent Task ${parentId} does not exist or is tombstoned`);
+      }
+      // depth starts at 1 — `parentId`'s own depth (1 = top-level) — and
+      // this walk both counts it and, by checking for `id` along the way,
+      // catches a cycle: `parentId` can only be a legal target if `id`
+      // is not already one of its own ancestors.
+      let depth = 1;
+      const visited = new Set<string>([parentId]);
+      while (cursor.parentId !== null) {
+        if (cursor.parentId === id) {
+          throw new Error(
+            `setParent: Task ${id} is already an ancestor of ${parentId} — this would create a cycle`,
+          );
+        }
+        if (visited.has(cursor.parentId)) {
+          throw new Error(
+            `setParent: ${parentId}'s own ancestor chain already cycles at ${cursor.parentId}`,
+          );
+        }
+        visited.add(cursor.parentId);
+        const next = await this.get(cursor.parentId);
+        if (next === undefined) {
+          break;
+        }
+        cursor = next;
+        depth++;
+      }
+      assertValidNestingDepth(depth);
+    }
+    await this.updateIfLive(id, { parentId, seq: null, syncedAt: null });
+  }
+
   // See TaskStore.advanceRecurring's own doc comment for the full
   // reasoning; this is its mechanics. Reads the Task first (mirrors
   // setDuration's own reasoning above): "no-op against a tombstone" has
@@ -229,8 +373,11 @@ export class SqliteTaskStore implements TaskStore {
     }
     if (outcome.kind === "ended") {
       // The bounded rule's window has passed — files as an ordinary
-      // completed Task, exactly like completeForever() below.
+      // completed Task, exactly like completeForever() below, cascading
+      // to active sub-tasks for the identical reason (TaskStore.complete's
+      // own doc comment).
       await this.updateIfLive(id, { completedAt, dateString: null, seq: null, syncedAt: null });
+      await this.completeChildren(id, completedAt);
       return;
     }
     // `completedAt` is deliberately absent from this patch — a recurring
@@ -240,9 +387,15 @@ export class SqliteTaskStore implements TaskStore {
   }
 
   // See TaskStore.completeForever's own doc comment for the full
-  // reasoning; this is its mechanics.
+  // reasoning; this is its mechanics. Reads the Task first, like
+  // complete() above, so the cascade only runs against a live Task.
   async completeForever(id: string, completedAt: string): Promise<void> {
+    const current = await this.get(id);
+    if (current === undefined) {
+      return;
+    }
     await this.updateIfLive(id, { completedAt, dateString: null, seq: null, syncedAt: null });
+    await this.completeChildren(id, completedAt);
   }
 
   // See TaskStore.postpone's own doc comment for the full reasoning;
@@ -310,7 +463,7 @@ export class SqliteTaskStore implements TaskStore {
     // match list()'s own order (order_key asc, id asc), mirroring
     // SqliteEntryStore.search's "same order as list()" guarantee.
     const result = await this.driver.execute(
-      `SELECT tasks.id, tasks.device_id, tasks.content, tasks.completed_at, tasks.order_key, tasks.created_at, tasks.seq, tasks.synced_at, tasks.deleted_at, tasks.date, tasks.deadline, tasks.duration, tasks.priority, tasks.label_ids, tasks.date_string
+      `SELECT tasks.id, tasks.device_id, tasks.content, tasks.completed_at, tasks.order_key, tasks.created_at, tasks.seq, tasks.synced_at, tasks.deleted_at, tasks.date, tasks.deadline, tasks.duration, tasks.priority, tasks.label_ids, tasks.date_string, tasks.project_id, tasks.section_id, tasks.parent_id
        FROM tasks_fts
        JOIN tasks ON tasks.id = tasks_fts.id
        WHERE tasks_fts MATCH ? AND tasks.deleted_at IS NULL AND tasks.completed_at IS NULL
@@ -403,8 +556,8 @@ function toPrefixMatchQuery(text: string): string {
 // rowToEntry — a row that doesn't match the shape this query asked for
 // throws instead of silently mis-mapping a value into the wrong field.
 function rowToTask(row: unknown): Task {
-  if (!Array.isArray(row) || row.length !== 15) {
-    throw new Error(`sqlite search expected a 15-column tasks row, got ${JSON.stringify(row)}`);
+  if (!Array.isArray(row) || row.length !== 18) {
+    throw new Error(`sqlite search expected an 18-column tasks row, got ${JSON.stringify(row)}`);
   }
   const [
     id,
@@ -422,6 +575,9 @@ function rowToTask(row: unknown): Task {
     priority,
     labelIdsJson,
     dateString,
+    projectId,
+    sectionId,
+    parentId,
   ] = row as [
     string,
     string,
@@ -437,6 +593,9 @@ function rowToTask(row: unknown): Task {
     number | null,
     number,
     string,
+    string | null,
+    string | null,
+    string | null,
     string | null,
   ];
   return {
@@ -459,5 +618,8 @@ function rowToTask(row: unknown): Task {
     // the one place in this store that has to do the JSON.parse itself.
     labelIds: JSON.parse(labelIdsJson) as string[],
     dateString,
+    projectId,
+    sectionId,
+    parentId,
   };
 }

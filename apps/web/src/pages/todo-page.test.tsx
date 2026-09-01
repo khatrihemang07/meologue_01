@@ -1,4 +1,5 @@
 import type { Task } from "@meologue/core";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Link, MemoryRouter, Outlet, Route, Routes } from "react-router";
 import { toast } from "sonner";
@@ -7,7 +8,17 @@ import { localDayKey } from "@/components/date-picker-sheet";
 import type { EntryStoreOutletContext } from "@/pages/entry-store-layout";
 import { TodoPage } from "./todo-page";
 
-vi.mock("sonner", () => ({ toast: vi.fn() }));
+// `toast` is both callable (the Undo toast, todo-page.tsx's own
+// `handleComplete`) and carries an `.error` method (task-tree.tsx's own
+// reparent-refused toast, issue #171) — mirroring history.test.tsx's own
+// `vi.mock("sonner", ...)` shape rather than the plain-callable one this
+// file used before #171 ever called `toast.error`.
+vi.mock("sonner", () => {
+  const toast = vi.fn() as unknown as typeof import("sonner").toast;
+  // biome-ignore lint/suspicious/noExplicitAny: attaching a mock method to a mock function, the same shape sonner's own `toast` carries in production (a callable object with `.error`/`.success` etc as properties).
+  (toast as any).error = vi.fn();
+  return { toast };
+});
 
 function task(overrides: Partial<Task> = {}): Task {
   return {
@@ -31,6 +42,12 @@ function task(overrides: Partial<Task> = {}): Task {
     // fixture uses for these two issue #170 fields.
     labelIds: [],
     dateString: null,
+    // In Inbox, no Section, top-level — the same "nothing chosen yet"
+    // state every other #171 field above defaults to, and what a Task
+    // created directly in Todo starts with (@meologue/core's task-types.ts).
+    projectId: null,
+    sectionId: null,
+    parentId: null,
     ...overrides,
   };
 }
@@ -39,23 +56,32 @@ function task(overrides: Partial<Task> = {}): Task {
 // runs useHistory/useTasks) — stubbing it with a bare Outlet lets these
 // tests exercise TodoPage in isolation with a context of their own
 // choosing, the same technique composer-page.test.tsx already uses for the
-// Entry half of this same context.
+// Entry half of this same context. Wrapped in a fresh QueryClientProvider,
+// same reasoning composer-page.test.tsx's own `renderComposerPage` gives:
+// issue #171 is what first made TodoPage call `useQuery` directly (`
+// scopedTasksQuery`/`sectionsQuery`, todo-page.tsx), not only through
+// context-supplied functions the way it did before.
 function renderTodoPage(context: EntryStoreOutletContext, initialPath = "/todo/inbox") {
+  const queryClient = new QueryClient();
   return render(
-    <MemoryRouter initialEntries={[initialPath]}>
-      {/* A real link to a non-`/todo/*` route (ADR 0049's own suggested
-          test shape: "navigate to `/composer` ... through the router") —
-          TodoPage itself has no reason to link to Composer, so this is the
-          test's own way out, not a control this ticket adds to the page. */}
-      <Link to="/composer">Leave Todo</Link>
-      <Routes>
-        <Route element={<Outlet context={context} />}>
-          <Route path="/todo/inbox" element={<TodoPage />} />
-          <Route path="/todo/today" element={<TodoPage view="today" />} />
-          <Route path="/composer" element={<p>Composer</p>} />
-        </Route>
-      </Routes>
-    </MemoryRouter>,
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={[initialPath]}>
+        {/* A real link to a non-`/todo/*` route (ADR 0049's own suggested
+            test shape: "navigate to `/composer` ... through the router") —
+            TodoPage itself has no reason to link to Composer, so this is the
+            test's own way out, not a control this ticket adds to the page. */}
+        <Link to="/composer">Leave Todo</Link>
+        <Routes>
+          <Route element={<Outlet context={context} />}>
+            <Route path="/todo/inbox" element={<TodoPage />} />
+            <Route path="/todo/today" element={<TodoPage view="today" />} />
+            <Route path="/todo/projects" element={<TodoPage view="projects" />} />
+            <Route path="/todo/projects/:projectId" element={<TodoPage view="project" />} />
+            <Route path="/composer" element={<p>Composer</p>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
   );
 }
 
@@ -80,14 +106,62 @@ function readyContext(overrides: Partial<EntryStoreOutletContext> = {}): EntrySt
     setTaskDeadline: vi.fn(),
     setTaskDuration: vi.fn(),
     setTaskPriority: vi.fn(),
+    listTasksInProject: vi.fn(async () => []),
+    listTaskChildren: vi.fn(async () => []),
+    listTasksInSection: vi.fn(async () => []),
+    listTaskDescendants: vi.fn(async () => []),
     advanceRecurringTask: vi.fn(),
     completeForeverTask: vi.fn(),
     postponeTask: vi.fn(),
+    setTaskProject: vi.fn(),
+    setTaskSection: vi.fn(),
+    setTaskParent: vi.fn(async () => {}),
     labels: [],
     resolveLabelIds: vi.fn(async () => []),
+    projects: [],
+    addProject: vi.fn(),
+    renameProject: vi.fn(),
+    setProjectColour: vi.fn(),
+    setProjectDescription: vi.fn(),
+    setProjectFavourite: vi.fn(),
+    archiveProject: vi.fn(),
+    unarchiveProject: vi.fn(),
+    setProjectParent: vi.fn(async () => {}),
+    reorderProject: vi.fn(),
+    listSections: vi.fn(async () => []),
+    addSection: vi.fn(async () => {}),
+    renameSection: vi.fn(),
+    setSectionDescription: vi.fn(),
+    reorderSection: vi.fn(),
+    deleteSection: vi.fn(),
+    archiveSection: vi.fn(),
+    unarchiveSection: vi.fn(),
     disabled: false,
     ...overrides,
   };
+}
+
+// Inbox no longer reads its list off `tasks` directly (todo-page.tsx's own
+// doc comment: `tasks` stayed the flat, cross-Project feed once a Task
+// could live somewhere other than Inbox) — it reads `listTasksInProject
+// (null)` instead, through TaskList/TaskTree's own `useQuery`. A test that
+// wants Inbox to render a given set of Tasks has to supply both: `tasks`
+// itself, so `confirmingTask`/`schedulingTask`'s own by-id lookup (still
+// against the flat array — every Task anywhere is still in it) can find
+// the row a reader just acted on, and `listTasksInProject` for what
+// actually renders. This helper keeps that pairing from being repeated,
+// and drifting, at every call site below.
+function inboxContext(
+  tasksList: Task[],
+  overrides: Partial<EntryStoreOutletContext> = {},
+): EntryStoreOutletContext {
+  return readyContext({
+    tasks: tasksList,
+    listTasksInProject: vi.fn(async (projectId: string | null) =>
+      projectId === null ? tasksList : [],
+    ),
+    ...overrides,
+  });
 }
 
 /** Every row this stub gives a rect is `ROW_HEIGHT` tall, stacked with no gaps. */
@@ -96,10 +170,11 @@ const ROW_HEIGHT = 40;
 describe("TodoPage", () => {
   beforeEach(() => {
     vi.mocked(toast).mockReset();
+    vi.mocked(toast.error).mockReset();
 
     // jsdom lays nothing out — `getBoundingClientRect` is always zero
     // (`history.tsx`'s own comment names the identical gap) — so the drop
-    // geometry `todo-page.tsx` reads off real row rects needs a stand-in
+    // geometry `task-tree.tsx` reads off real row rects needs a stand-in
     // here. Each row's rect is derived purely from its position among its
     // DOM siblings, which is all `dropIndexForPointer` ever looks at.
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
@@ -121,7 +196,7 @@ describe("TodoPage", () => {
       } as DOMRect;
     });
 
-    // jsdom implements no pointer capture at all — `todo-page.tsx`'s own
+    // jsdom implements no pointer capture at all — `task-tree.tsx`'s own
     // handlers wrap the call in a try/catch for exactly that reason
     // (`use-swipe-actions.ts` hits the identical gap). Stubbing it here
     // rather than leaning on that catch keeps these tests asserting the
@@ -170,24 +245,26 @@ describe("TodoPage", () => {
   });
 
   it("reads an empty Inbox as a real state, not a blank panel", () => {
-    renderTodoPage(readyContext({ tasks: [] }));
+    renderTodoPage(inboxContext([]));
 
     expect(screen.getByText(/Nothing in your Inbox/)).toBeInTheDocument();
   });
 
-  it("lists active Tasks", () => {
-    renderTodoPage(readyContext({ tasks: [task({ id: "a", content: "call mum" })] }));
+  it("lists active Tasks", async () => {
+    renderTodoPage(inboxContext([task({ id: "a", content: "call mum" })]));
 
-    expect(screen.getByText("call mum")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("call mum")).toBeInTheDocument());
     expect(screen.queryByText(/Nothing in your Inbox/)).not.toBeInTheDocument();
   });
 
   // Inbox is the undated capture bucket (issue #169: "a Task created in
   // Todo starts undated"), so the date this passes is explicitly null
-  // rather than absent — see TodoPage's own `captureDate`.
-  it("adds a Task through the form, undated, when the reader is in Inbox", async () => {
+  // rather than absent — see TodoPage's own `captureDate`. `projectId` is
+  // `null` too (issue #171's own extension of the identical rule) — Inbox
+  // is unfiled by definition, so a Task captured there inherits no Project.
+  it("adds a Task through the form, undated and unfiled, when the reader is in Inbox", async () => {
     const addTask = vi.fn();
-    renderTodoPage(readyContext({ addTask }));
+    renderTodoPage(inboxContext([], { addTask }));
 
     fireEvent.change(screen.getByLabelText("Add a Task"), { target: { value: "call mum" } });
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
@@ -199,7 +276,7 @@ describe("TodoPage", () => {
     await waitFor(() =>
       expect(addTask).toHaveBeenCalledWith(
         "call mum",
-        expect.objectContaining({ date: null, dateString: null, labelIds: [] }),
+        expect.objectContaining({ date: null, dateString: null, labelIds: [], projectId: null }),
       ),
     );
   });
@@ -252,17 +329,14 @@ describe("TodoPage", () => {
   // The completion toast mirrors register-service-worker.web.ts's own
   // `toast(..., { action: { label, onClick } })` shape — this is the
   // Undo affordance the ticket's own brief points at.
-  it("completes a Task and offers an Undo toast wired to uncompleteTask", () => {
+  it("completes a Task and offers an Undo toast wired to uncompleteTask", async () => {
     const completeTask = vi.fn();
     const uncompleteTask = vi.fn();
     renderTodoPage(
-      readyContext({
-        tasks: [task({ id: "a", content: "call mum" })],
-        completeTask,
-        uncompleteTask,
-      }),
+      inboxContext([task({ id: "a", content: "call mum" })], { completeTask, uncompleteTask }),
     );
 
+    await waitFor(() => expect(screen.getByText("call mum")).toBeInTheDocument());
     fireEvent.click(screen.getByRole("checkbox", { name: "call mum" }));
 
     expect(completeTask).toHaveBeenCalledWith("a");
@@ -295,10 +369,11 @@ describe("TodoPage", () => {
     expect(uncompleteTask).toHaveBeenCalledWith("a");
   });
 
-  it("deletes a Task only after confirming, mirroring sessions-page.tsx's ConfirmDialog", () => {
+  it("deletes a Task only after confirming, mirroring sessions-page.tsx's ConfirmDialog", async () => {
     const removeTask = vi.fn();
-    renderTodoPage(readyContext({ tasks: [task({ id: "a", content: "call mum" })], removeTask }));
+    renderTodoPage(inboxContext([task({ id: "a", content: "call mum" })], { removeTask }));
 
+    await waitFor(() => expect(screen.getByText("call mum")).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: 'Delete "call mum"' }));
     expect(removeTask).not.toHaveBeenCalled();
     expect(screen.getByRole("alertdialog")).toBeInTheDocument();
@@ -308,10 +383,11 @@ describe("TodoPage", () => {
     expect(removeTask).toHaveBeenCalledWith("a");
   });
 
-  it("cancelling the delete confirmation leaves the Task untouched", () => {
+  it("cancelling the delete confirmation leaves the Task untouched", async () => {
     const removeTask = vi.fn();
-    renderTodoPage(readyContext({ tasks: [task({ id: "a", content: "call mum" })], removeTask }));
+    renderTodoPage(inboxContext([task({ id: "a", content: "call mum" })], { removeTask }));
 
+    await waitFor(() => expect(screen.getByText("call mum")).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: 'Delete "call mum"' }));
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
@@ -327,22 +403,30 @@ describe("TodoPage", () => {
   // native drag-and-drop — Android WebView never synthesises `dragstart`
   // from touch input, so this has to be the same recogniser a real device
   // would drive, not a mechanism only a mouse can trigger.
-  it("dragging a Task's handle onto another calls reorderTask exactly once, with a key between its new neighbours", () => {
+  it("dragging a Task's handle onto another calls reorderTask exactly once, with a key between its new neighbours", async () => {
     const reorderTask = vi.fn();
     const a = task({ id: "a", content: "a", orderKey: "A" });
     const b = task({ id: "b", content: "b", orderKey: "B" });
     const c = task({ id: "c", content: "c", orderKey: "C" });
-    renderTodoPage(readyContext({ tasks: [a, b, c], reorderTask }));
+    renderTodoPage(inboxContext([a, b, c], { reorderTask }));
+
+    await waitFor(() => expect(screen.getByText("a")).toBeInTheDocument());
 
     // "a", "b" and "c" render at DOM indices 0, 1 and 2, so the
     // `getBoundingClientRect` stub above gives them rects 0-40, 40-80 and
-    // 80-120. Dragging "a" and releasing at y=90 lands in "c"'s top half
-    // (midpoint 100) — dropIndex 1 in the without-"a" list [b, c], strictly
-    // between "b" and "c".
+    // 80-120. Inbox is a top-level sibling group (depth 1), so nesting is
+    // offered here (issue #171's drag-to-reparent) — "c"'s own reorder
+    // ("before it") band is only its top quarter, y=[80, 90)
+    // (`task-drag-recognizer.ts`'s own `REORDER_EDGE_FRACTION`), not the
+    // full top half a pre-#171 midpoint split would have given it.
+    // Dragging "a" and releasing at y=85 lands there — dropIndex 1 in the
+    // without-"a" list [b, c], strictly between "b" and "c" — without
+    // straying into "c"'s own nest band (y=[90, 110)), which this same
+    // gesture at the old y=90 now would.
     const handle = dragHandle("a");
     fireEvent.pointerDown(handle, { pointerId: 1, clientY: 10 });
-    fireEvent.pointerMove(handle, { pointerId: 1, clientY: 90 });
-    fireEvent.pointerUp(handle, { pointerId: 1, clientY: 90 });
+    fireEvent.pointerMove(handle, { pointerId: 1, clientY: 85 });
+    fireEvent.pointerUp(handle, { pointerId: 1, clientY: 85 });
 
     expect(reorderTask).toHaveBeenCalledTimes(1);
     const [draggedId, newKey] = reorderTask.mock.calls[0] as [string, string];
@@ -354,11 +438,13 @@ describe("TodoPage", () => {
   // The no-op this ticket's own brief names explicitly: a release back over
   // the dragged Task's own starting slot must write nothing at all, not a
   // `reorderTask` call whose key happens to land in the same place.
-  it("releasing the handle back where the drag began writes nothing", () => {
+  it("releasing the handle back where the drag began writes nothing", async () => {
     const reorderTask = vi.fn();
     const a = task({ id: "a", content: "a", orderKey: "A" });
     const b = task({ id: "b", content: "b", orderKey: "B" });
-    renderTodoPage(readyContext({ tasks: [a, b], reorderTask }));
+    renderTodoPage(inboxContext([a, b], { reorderTask }));
+
+    await waitFor(() => expect(screen.getByText("a")).toBeInTheDocument());
 
     // "a" sits at DOM index 0 (rect 0-40); a small move that never leaves
     // its own slot has to resolve back to its own original index.
@@ -373,12 +459,14 @@ describe("TodoPage", () => {
   // The system taking the gesture away is an abort, not a release —
   // `use-swipe-actions.ts`'s own `pointercancel` path holds the identical
   // contract for a swipe.
-  it("a pointercancel mid-drag aborts and writes nothing, even on the pointerup that follows", () => {
+  it("a pointercancel mid-drag aborts and writes nothing, even on the pointerup that follows", async () => {
     const reorderTask = vi.fn();
     const a = task({ id: "a", content: "a", orderKey: "A" });
     const b = task({ id: "b", content: "b", orderKey: "B" });
     const c = task({ id: "c", content: "c", orderKey: "C" });
-    renderTodoPage(readyContext({ tasks: [a, b, c], reorderTask }));
+    renderTodoPage(inboxContext([a, b, c], { reorderTask }));
+
+    await waitFor(() => expect(screen.getByText("a")).toBeInTheDocument());
 
     const handle = dragHandle("a");
     fireEvent.pointerDown(handle, { pointerId: 1, clientY: 10 });
@@ -406,10 +494,12 @@ describe("TodoPage", () => {
   // reorder is exactly the thing that kept working in every environment
   // that could be tested automatically — the suppression itself is the
   // behaviour with no other observable proxy.
-  it("suppresses the platform's own selection drag when the handle is pressed", () => {
+  it("suppresses the platform's own selection drag when the handle is pressed", async () => {
     const a = task({ id: "a", content: "a", orderKey: "A" });
     const b = task({ id: "b", content: "b", orderKey: "B" });
-    renderTodoPage(readyContext({ tasks: [a, b] }));
+    renderTodoPage(inboxContext([a, b]));
+
+    await waitFor(() => expect(screen.getByText("a")).toBeInTheDocument());
 
     const handle = dragHandle("a");
     const pointerDown = new Event("pointerdown", { bubbles: true, cancelable: true });
@@ -418,6 +508,61 @@ describe("TodoPage", () => {
     fireEvent(handle, pointerDown);
 
     expect(pointerDown.defaultPrevented).toBe(true);
+  });
+
+  // Issue #171's keyboard reorder, exercised end to end through the page —
+  // lib/task-reorder.test.ts already covers `siblingMoveDropIndex`'s own
+  // arithmetic in isolation.
+  it("ArrowDown on the handle moves a Task one slot later and writes exactly one reorderTask call", async () => {
+    const reorderTask = vi.fn();
+    const a = task({ id: "a", content: "a", orderKey: "A" });
+    const b = task({ id: "b", content: "b", orderKey: "B" });
+    renderTodoPage(inboxContext([a, b], { reorderTask }));
+
+    await waitFor(() => expect(screen.getByText("a")).toBeInTheDocument());
+    fireEvent.keyDown(dragHandle("a"), { key: "ArrowDown" });
+
+    expect(reorderTask).toHaveBeenCalledTimes(1);
+    const [draggedId, newKey] = reorderTask.mock.calls[0] as [string, string];
+    expect(draggedId).toBe("a");
+    expect(newKey > "B").toBe(true);
+  });
+
+  // Issue #171's keyboard reparent — indenting the second Task under the
+  // first, then appending it to whatever that Task's own children already
+  // are (task-tree.tsx's own `handleIndent` doc comment).
+  it("Alt+ArrowRight on the handle reparents a Task under its preceding sibling", async () => {
+    const setTaskParent = vi.fn(async () => {});
+    const reorderTask = vi.fn();
+    const a = task({ id: "a", content: "a", orderKey: "A" });
+    const b = task({ id: "b", content: "b", orderKey: "B" });
+    renderTodoPage(inboxContext([a, b], { setTaskParent, reorderTask }));
+
+    await waitFor(() => expect(screen.getByText("b")).toBeInTheDocument());
+    fireEvent.keyDown(dragHandle("b"), { key: "ArrowRight", altKey: true });
+
+    await waitFor(() => expect(setTaskParent).toHaveBeenCalledWith("b", "a"));
+  });
+
+  // The store throws on the four-level cap or a cycle (TaskStore.setParent's
+  // own doc comment) — this ticket's own brief: "decide what the UI does
+  // with that and make it legible." A toast, not a swallowed rejection.
+  it("shows a toast, rather than a swallowed error, when reparenting is refused", async () => {
+    const setTaskParent = vi.fn(async () => {
+      throw new Error("sub-tasks may nest at most 4 levels deep (parent is already at depth 4)");
+    });
+    const a = task({ id: "a", content: "a", orderKey: "A" });
+    const b = task({ id: "b", content: "b", orderKey: "B" });
+    renderTodoPage(inboxContext([a, b], { setTaskParent }));
+
+    await waitFor(() => expect(screen.getByText("b")).toBeInTheDocument());
+    fireEvent.keyDown(dragHandle("b"), { key: "ArrowRight", altKey: true });
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        expect.stringContaining("Sub-tasks only nest four levels deep"),
+      ),
+    );
   });
 });
 
@@ -478,20 +623,16 @@ describe("TodoPage — Today", () => {
   });
 });
 
-// Issue #169: the schedule sheet is one instance shared by both views
+// Issue #169: the schedule sheet is one instance shared by every view
 // (todo-page.tsx's own doc comment on `schedulingId`) — exercised once
 // from Inbox here, since task-schedule-sheet.test.tsx already covers the
 // sheet's own picker behaviour in isolation.
 describe("TodoPage — scheduling", () => {
-  it("opens the schedule sheet for the tapped Task, and a picker action calls the context's setter", () => {
+  it("opens the schedule sheet for the tapped Task, and a picker action calls the context's setter", async () => {
     const setTaskPriority = vi.fn();
-    renderTodoPage(
-      readyContext({
-        tasks: [task({ id: "a", content: "call mum" })],
-        setTaskPriority,
-      }),
-    );
+    renderTodoPage(inboxContext([task({ id: "a", content: "call mum" })], { setTaskPriority }));
 
+    await waitFor(() => expect(screen.getByText("call mum")).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: 'Schedule "call mum"' }));
     expect(screen.getByText('Schedule "call mum"')).toBeInTheDocument();
 
@@ -501,12 +642,124 @@ describe("TodoPage — scheduling", () => {
     expect(setTaskPriority).toHaveBeenCalledWith("a", 4);
   });
 
-  it("closing the sheet leaves no Task being scheduled", () => {
-    renderTodoPage(readyContext({ tasks: [task({ id: "a", content: "call mum" })] }));
+  it("closing the sheet leaves no Task being scheduled", async () => {
+    renderTodoPage(inboxContext([task({ id: "a", content: "call mum" })]));
 
+    await waitFor(() => expect(screen.getByText("call mum")).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: 'Schedule "call mum"' }));
     fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
 
     expect(screen.queryByText('Schedule "call mum"')).not.toBeInTheDocument();
+  });
+});
+
+// Issue #171's own two new views — Projects (the list) and one Project's
+// own screen, both reached through the same `TodoPage` lazy chunk
+// (this file's own top comment on `renderTodoPage`).
+describe("TodoPage — Projects", () => {
+  it("lists every Project and adds a new one through the form", () => {
+    const addProject = vi.fn();
+    renderTodoPage(
+      readyContext({
+        projects: [
+          {
+            id: "p1",
+            deviceId: "device-a",
+            name: "Groceries",
+            colour: "#DC4C3E",
+            favourite: false,
+            archived: false,
+            parentId: null,
+            description: null,
+            orderKey: "A",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            seq: 1,
+            syncedAt: "2026-01-01T00:00:00.000Z",
+            deletedAt: null,
+          },
+        ],
+        addProject,
+      }),
+      "/todo/projects",
+    );
+
+    expect(screen.getByRole("link", { name: "Groceries" })).toHaveAttribute(
+      "href",
+      "/todo/projects/p1",
+    );
+
+    fireEvent.change(screen.getByLabelText("New Project's name"), {
+      target: { value: "Errands" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+    expect(addProject).toHaveBeenCalledWith(
+      "Errands",
+      expect.objectContaining({ colour: expect.any(String) }),
+    );
+  });
+
+  it("opening a Project lists its own Tasks, reusing Inbox's own list", async () => {
+    const project = {
+      id: "p1",
+      deviceId: "device-a",
+      name: "Groceries",
+      colour: "#DC4C3E",
+      favourite: false,
+      archived: false,
+      parentId: null,
+      description: null,
+      orderKey: "A",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      seq: 1,
+      syncedAt: "2026-01-01T00:00:00.000Z",
+      deletedAt: null,
+    };
+    const projectTask = task({ id: "a", content: "buy milk", projectId: "p1" });
+    renderTodoPage(
+      readyContext({
+        projects: [project],
+        tasks: [projectTask],
+        listTasksInProject: vi.fn(async (projectId: string | null) =>
+          projectId === "p1" ? [projectTask] : [],
+        ),
+      }),
+      "/todo/projects/p1",
+    );
+
+    await waitFor(() => expect(screen.getByText("buy milk")).toBeInTheDocument());
+    // The identical row markup Inbox renders — a real checkbox naming the
+    // Task's own words, not a second, Project-specific list component.
+    expect(screen.getByRole("checkbox", { name: "buy milk" })).toBeInTheDocument();
+  });
+
+  it("adding a Task from a Project's own view inherits that Project", async () => {
+    const project = {
+      id: "p1",
+      deviceId: "device-a",
+      name: "Groceries",
+      colour: "#DC4C3E",
+      favourite: false,
+      archived: false,
+      parentId: null,
+      description: null,
+      orderKey: "A",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      seq: 1,
+      syncedAt: "2026-01-01T00:00:00.000Z",
+      deletedAt: null,
+    };
+    const addTask = vi.fn();
+    renderTodoPage(readyContext({ projects: [project], addTask }), "/todo/projects/p1");
+
+    fireEvent.change(screen.getByLabelText("Add a Task"), { target: { value: "buy milk" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+    await waitFor(() =>
+      expect(addTask).toHaveBeenCalledWith(
+        "buy milk",
+        expect.objectContaining({ projectId: "p1" }),
+      ),
+    );
   });
 });

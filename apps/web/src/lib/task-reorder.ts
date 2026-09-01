@@ -36,3 +36,39 @@ export function reorderedTaskOrderKey(tasks: Task[], draggedId: string, dropInde
   const after = withoutDragged[clampedIndex]?.orderKey ?? null;
   return orderKeyBetween(before, after);
 }
+
+/**
+ * The keyboard path onto the identical `reorderedTaskOrderKey` computation
+ * above (issue #171's own brief: "reach the same `reorderedTaskOrderKey`
+ * computation rather than inventing a second ordering rule") — this
+ * function is the one new piece of arithmetic keyboard reordering actually
+ * needs: translating "move up" / "move down" against a sibling's own
+ * `currentIndex` into the `dropIndex` `reorderedTaskOrderKey` expects, in
+ * that function's own `withoutDragged` space.
+ *
+ * Removing the dragged Task at `currentIndex` shifts every later sibling
+ * one index earlier — so swapping it with its predecessor (`"up"`) lands
+ * it at `currentIndex - 1` in the `withoutDragged` list, and swapping it
+ * with its successor (`"down"`) lands it at `currentIndex + 1` (not `+2`:
+ * the successor itself moves to `currentIndex` once the dragged Task is
+ * removed, and inserting one slot after that successor is `currentIndex +
+ * 1`, one past where the successor now sits).
+ *
+ * Returns `null`, not a clamped boundary value, when there is nothing to
+ * swap with — the first sibling has no "up," the last has no "down" —
+ * mirroring `dropIndexForPointer`'s own `"unchanged"` verdict
+ * (task-drag-recognizer.ts): a caller that got `null` writes nothing at
+ * all, rather than calling `reorderedTaskOrderKey` with an index that
+ * would compute a key sorting to the exact same place at the cost of an
+ * unnecessary write and a bumped `seq`.
+ */
+export function siblingMoveDropIndex(
+  currentIndex: number,
+  siblingCount: number,
+  direction: "up" | "down",
+): number | null {
+  if (direction === "up") {
+    return currentIndex <= 0 ? null : currentIndex - 1;
+  }
+  return currentIndex >= siblingCount - 1 ? null : currentIndex + 1;
+}

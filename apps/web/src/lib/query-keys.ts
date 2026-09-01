@@ -124,6 +124,43 @@ export const TASKS_QUERY_KEY = ["tasks"] as const;
 export const COMPLETED_TASKS_QUERY_KEY = [...TASKS_QUERY_KEY, "completed"] as const;
 
 /**
+ * A Project's own top-level Tasks (TaskStore.listByProject(projectId)),
+ * `projectId: null` meaning Inbox — issue #171. A child of TASKS_QUERY_KEY,
+ * not a sibling, for the same reason COMPLETED_TASKS_QUERY_KEY is: any
+ * write that changes what belongs in one Project's list (a completion, a
+ * move, a delete) already invalidates the bare TASKS_QUERY_KEY prefix via
+ * tasks-refresh.ts's `refreshTasks`, and TanStack's default prefix match
+ * catches every `tasksInProjectQueryKey(...)` entry the same way it
+ * already catches COMPLETED_TASKS_QUERY_KEY — no second invalidation call
+ * needed anywhere a Task write already happens.
+ *
+ * Not eagerly loaded the way `tasks`/`completedTasks` are: Inbox used to
+ * read the flat, cross-Project `tasks` array directly (issue #168), but
+ * that reads every Task in every Project once Tasks can live in one
+ * (TaskStore.list()'s own doc comment on why its meaning stays global
+ * rather than narrowing to "Inbox"). TodoPage's own Inbox/Project views
+ * key a `useQuery` on this instead, per whichever scope is currently open
+ * — the same "page-scoped, not app-wide" reasoning `sectionsQueryKey`
+ * above already carries for a Project's own Sections.
+ */
+export function tasksInProjectQueryKey(projectId: string | null) {
+  return [...TASKS_QUERY_KEY, "project", projectId] as const;
+}
+
+/**
+ * A Task's own direct sub-tasks (TaskStore.listChildren(parentId)) —
+ * issue #171. A child of TASKS_QUERY_KEY for the identical reason
+ * `tasksInProjectQueryKey` above is: every Task write already invalidates
+ * the bare prefix, so a sub-task list needs no bespoke invalidation of its
+ * own. Keyed per parent, not eagerly loaded, mirroring
+ * `tasksInProjectQueryKey`: a sub-task list is only ever read by whichever
+ * Task's own row is currently rendering its children.
+ */
+export function taskChildrenQueryKey(parentId: string) {
+  return [...TASKS_QUERY_KEY, "children", parentId] as const;
+}
+
+/**
  * Issue #170: every active Label (LabelStore.list()), read by
  * use-labels.ts. A flat key, unpaginated and with no completed sibling —
  * mirroring TASKS_QUERY_KEY's own reasoning rather than
@@ -131,3 +168,30 @@ export const COMPLETED_TASKS_QUERY_KEY = [...TASKS_QUERY_KEY, "completed"] as co
  * second key to distinguish.
  */
 export const LABELS_QUERY_KEY = ["labels"] as const;
+
+/**
+ * Issue #171: every active Project (ProjectStore.listProjects()), read by
+ * use-projects.ts. Flat and unpaginated, mirroring LABELS_QUERY_KEY —
+ * `listProjects()` already returns every Project regardless of `archived`
+ * (that store's own doc comment: "a personal Project list is small"), so
+ * there is no second, archived-only key the way COMPLETED_TASKS_QUERY_KEY
+ * exists for Tasks.
+ */
+export const PROJECTS_QUERY_KEY = ["projects"] as const;
+
+/**
+ * A Project's own Sections (ProjectStore.listSections(projectId)) — keyed
+ * per Project rather than loaded eagerly and flat the way `projects`/
+ * `tasks`/`labels` are, because a Section is only ever read by whichever
+ * one Project's own view is open (use-projects.ts's own `listSections`
+ * doc comment), the same "page-scoped, not app-wide" reasoning
+ * `dayHasEntriesQueryKey`/`entryReferenceQueryKey` above already carry for
+ * an Entry Reference. Every Section mutation invalidates the bare
+ * `["sections"]` prefix rather than one Project's own key specifically
+ * (use-projects.ts) — cheap and correct at this app's personal scale, and
+ * simpler than threading which Project a given Section write belongs to
+ * through every mutation's own success handler.
+ */
+export function sectionsQueryKey(projectId: string) {
+  return ["sections", projectId] as const;
+}

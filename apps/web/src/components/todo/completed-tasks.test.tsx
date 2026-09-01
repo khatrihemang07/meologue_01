@@ -27,6 +27,12 @@ function task(overrides: Partial<Task> = {}): Task {
     // fixture uses for these two issue #170 fields.
     labelIds: [],
     dateString: null,
+    // In Inbox, no Section, top-level — the same "nothing chosen yet"
+    // state every other #171 field above defaults to, and what a Task
+    // created directly in Todo starts with (@meologue/core's task-types.ts).
+    projectId: null,
+    sectionId: null,
+    parentId: null,
     ...overrides,
   };
 }

@@ -27,6 +27,12 @@ function task(overrides: Partial<Task> = {}): Task {
     // fixture uses for these two issue #170 fields.
     labelIds: [],
     dateString: null,
+    // In Inbox, no Section, top-level — the same "nothing chosen yet"
+    // state every other #171 field above defaults to, and what a Task
+    // created directly in Todo starts with (@meologue/core's task-types.ts).
+    projectId: null,
+    sectionId: null,
+    parentId: null,
     ...overrides,
   };
 }
@@ -43,6 +49,10 @@ function renderRow(overrides: Partial<Parameters<typeof TaskRow>[0]> = {}) {
     onHandlePointerMove: vi.fn(),
     onHandlePointerUp: vi.fn(),
     onHandlePointerCancel: vi.fn(),
+    onMoveUp: vi.fn(),
+    onMoveDown: vi.fn(),
+    onIndent: vi.fn(),
+    onOutdent: vi.fn(),
     ...overrides,
   };
   render(
@@ -182,6 +192,44 @@ describe("TaskRow", () => {
     expect(onHandlePointerCancel).toHaveBeenCalledTimes(1);
   });
 
+  // Issue #171's keyboard reorder — the handle is a real, focusable
+  // `<button>` for exactly this reason (its own doc comment).
+  it("ArrowUp/ArrowDown on the handle call onMoveUp/onMoveDown", () => {
+    const onMoveUp = vi.fn();
+    const onMoveDown = vi.fn();
+    renderRow({ onMoveUp, onMoveDown });
+
+    const handle = screen.getByTestId("task-drag-handle");
+    fireEvent.keyDown(handle, { key: "ArrowUp" });
+    fireEvent.keyDown(handle, { key: "ArrowDown" });
+
+    expect(onMoveUp).toHaveBeenCalledTimes(1);
+    expect(onMoveDown).toHaveBeenCalledTimes(1);
+  });
+
+  // Issue #171's keyboard reparent — `Alt`+arrow, not a plain arrow (which
+  // this file's own test above already claims for reorder) and not `Tab`
+  // (onOutdent's own doc comment, TaskRowProps, on why).
+  it("Alt+ArrowRight/Alt+ArrowLeft on the handle call onIndent/onOutdent", () => {
+    const onIndent = vi.fn();
+    const onOutdent = vi.fn();
+    const onMoveUp = vi.fn();
+    renderRow({ onIndent, onOutdent, onMoveUp });
+
+    const handle = screen.getByTestId("task-drag-handle");
+    fireEvent.keyDown(handle, { key: "ArrowRight", altKey: true });
+    fireEvent.keyDown(handle, { key: "ArrowLeft", altKey: true });
+    // A plain, unmodified ArrowRight/ArrowLeft is not reorder or reparent
+    // — only ArrowUp/ArrowDown (unmodified) and Alt+ArrowRight/ArrowLeft
+    // are ever recognised, so a stray ArrowLeft with no modifier must do
+    // nothing at all.
+    fireEvent.keyDown(handle, { key: "ArrowRight" });
+
+    expect(onIndent).toHaveBeenCalledTimes(1);
+    expect(onOutdent).toHaveBeenCalledTimes(1);
+    expect(onMoveUp).not.toHaveBeenCalled();
+  });
+
   // The handle only — a pointerdown anywhere else on the row must still let
   // the browser scroll the list normally on touch, which is the entire
   // reason the handle exists as a separate element rather than the row
@@ -199,6 +247,28 @@ describe("TaskRow", () => {
     renderRow({ isDropTarget: true });
 
     expect(screen.getByRole("listitem")).toHaveClass("border-t-primary");
+  });
+
+  // Issue #171's drag-to-reparent: nesting draws a genuinely different
+  // indicator from ordinary reordering, not the same top border reused —
+  // a reader mid-drag has to be able to tell "lands between rows" from
+  // "lands inside this row" without waiting to see what happens on
+  // release (this ticket's own brief names conflating the two as a real
+  // risk).
+  it("draws a distinct row-highlight indicator, not the reorder line, while it is the nest target", () => {
+    renderRow({ isNestTarget: true });
+
+    const row = screen.getByRole("listitem");
+    expect(row).toHaveClass("ring-primary");
+    expect(row).not.toHaveClass("border-t-primary");
+  });
+
+  it("draws neither indicator when the row is neither the reorder nor the nest target", () => {
+    renderRow({ isDropTarget: false, isNestTarget: false });
+
+    const row = screen.getByRole("listitem");
+    expect(row).not.toHaveClass("border-t-primary");
+    expect(row).not.toHaveClass("ring-primary");
   });
 
   // Issue #169: the schedule button is the one door onto Date/Deadline/
@@ -244,6 +314,38 @@ describe("TaskRow", () => {
   // Issue #169's Today view is the first caller with no drag handlers at
   // all — TaskRow's own doc comment on onHandlePointerDown explains why an
   // inert handle would be worse than none.
+  // Issue #171: moving a Task between Sections without needing the
+  // pointer recogniser's own drag geometry (task-row.tsx's own doc
+  // comment on `sectionOptions` names why that gap exists).
+  it("offers a Section select only when sectionOptions is given, and calls onMoveToSection", () => {
+    const onMoveToSection = vi.fn();
+    renderRow({
+      task: task({ content: "call mum", sectionId: "s1" }),
+      sectionOptions: [
+        { id: "s1", name: "Errands" },
+        { id: "s2", name: "Later" },
+      ],
+      onMoveToSection,
+    });
+
+    const select = screen.getByRole("combobox", { name: 'Move "call mum" to a Section' });
+    expect(select).toHaveValue("s1");
+
+    fireEvent.change(select, { target: { value: "s2" } });
+    expect(onMoveToSection).toHaveBeenCalledWith("s2");
+
+    fireEvent.change(select, { target: { value: "" } });
+    expect(onMoveToSection).toHaveBeenCalledWith(null);
+  });
+
+  it("renders no Section select when sectionOptions is not given", () => {
+    renderRow({ task: task({ content: "call mum" }) });
+
+    expect(
+      screen.queryByRole("combobox", { name: 'Move "call mum" to a Section' }),
+    ).not.toBeInTheDocument();
+  });
+
   it("renders no drag handle when no drag handlers are given", () => {
     renderRow({
       onHandlePointerDown: undefined,

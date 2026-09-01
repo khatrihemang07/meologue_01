@@ -1,6 +1,6 @@
 import type { Task } from "@meologue/core";
 import { describe, expect, it } from "vitest";
-import { reorderedTaskOrderKey } from "./task-reorder";
+import { reorderedTaskOrderKey, siblingMoveDropIndex } from "./task-reorder";
 
 function task(overrides: Partial<Task> = {}): Task {
   return {
@@ -25,6 +25,12 @@ function task(overrides: Partial<Task> = {}): Task {
     // fixture uses for these two issue #170 fields.
     labelIds: [],
     dateString: null,
+    // In Inbox, no Section, top-level — the same "nothing chosen yet"
+    // state every other #171 field above defaults to, and what a Task
+    // created directly in Todo starts with (@meologue/core's task-types.ts).
+    projectId: null,
+    sectionId: null,
+    parentId: null,
     ...overrides,
   };
 }
@@ -81,5 +87,50 @@ describe("reorderedTaskOrderKey", () => {
 
     expect(() => reorderedTaskOrderKey([a], "a", -5)).not.toThrow();
     expect(() => reorderedTaskOrderKey([a], "a", 99)).not.toThrow();
+  });
+
+  it("moving a keyboard-reordered Task up or down and applying the result lands it where dragging would", () => {
+    // The whole point of siblingMoveDropIndex (below): a keyboard move and
+    // a pointer drag that land the same Task in the same slot must produce
+    // the identical orderKey, because both go through this one function.
+    const a = task({ id: "a", orderKey: "A" });
+    const b = task({ id: "b", orderKey: "B" });
+    const c = task({ id: "c", orderKey: "C" });
+    const tasks = [a, b, c];
+
+    // "c" moved up once should land strictly between "a" and "b" — the
+    // same slot dragging "c" to index 1 already covers above.
+    const upIndex = siblingMoveDropIndex(2, 3, "up");
+    expect(upIndex).toBe(1);
+    const upKey = reorderedTaskOrderKey(tasks, "c", upIndex as number);
+    expect(upKey > "A").toBe(true);
+    expect(upKey < "B").toBe(true);
+
+    // "a" moved down once should land strictly between "b" and "c".
+    const downIndex = siblingMoveDropIndex(0, 3, "down");
+    expect(downIndex).toBe(1);
+    const downKey = reorderedTaskOrderKey(tasks, "a", downIndex as number);
+    expect(downKey > "B").toBe(true);
+    expect(downKey < "C").toBe(true);
+  });
+});
+
+describe("siblingMoveDropIndex", () => {
+  it("returns null rather than a boundary index for the first sibling moving up", () => {
+    expect(siblingMoveDropIndex(0, 3, "up")).toBeNull();
+  });
+
+  it("returns null rather than a boundary index for the last sibling moving down", () => {
+    expect(siblingMoveDropIndex(2, 3, "down")).toBeNull();
+  });
+
+  it("returns null for the only sibling in either direction", () => {
+    expect(siblingMoveDropIndex(0, 1, "up")).toBeNull();
+    expect(siblingMoveDropIndex(0, 1, "down")).toBeNull();
+  });
+
+  it("moves a middle sibling one slot in either direction", () => {
+    expect(siblingMoveDropIndex(1, 4, "up")).toBe(0);
+    expect(siblingMoveDropIndex(1, 4, "down")).toBe(2);
   });
 });

@@ -9,6 +9,9 @@ export { DEFAULT_LABEL_COLOUR, isValidLabelColour, LABEL_COLOURS } from "./label
 export type { LabelStore } from "./label-store";
 export type { Label } from "./label-types";
 export { compareByOrder, orderKeyBetween } from "./order-key";
+export { MAX_SECTIONS_PER_PROJECT } from "./project-fields";
+export type { ProjectStore } from "./project-store";
+export type { Project, Section } from "./project-types";
 export { PROTOCOL_VERSION, SYNC_BATCH_SIZE, SYNC_INTERVAL_MS } from "./protocol";
 export { englishQuickAddLanguage } from "./quick-add/en";
 export type { QuickAddLanguage } from "./quick-add/language";
@@ -45,7 +48,7 @@ export { toPositionalRow, toPositionalRows } from "./sqlite/row-mapping";
 export type { EntryPage, EntryStore } from "./store";
 export type { SyncEngineOptions, SyncTransport } from "./sync-engine";
 export { sync } from "./sync-engine";
-export { hasTime } from "./task-fields";
+export { hasTime, MAX_TASK_NESTING_DEPTH } from "./task-fields";
 export type { TaskStore } from "./task-store";
 export type { Task } from "./task-types";
 export { storedPriorityOf, uiPriorityOf } from "./task-types";

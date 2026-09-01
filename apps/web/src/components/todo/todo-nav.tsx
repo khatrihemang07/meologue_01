@@ -1,4 +1,4 @@
-import { CalendarCheck, ListTodo } from "lucide-react";
+import { CalendarCheck, FolderKanban, ListTodo } from "lucide-react";
 import { NavLink } from "react-router";
 import { cn } from "@/lib/utils";
 
@@ -12,17 +12,24 @@ import { cn } from "@/lib/utils";
  * which is the whole of what ADR 0049 argues does not reopen ADR 0036's
  * removal of the app-wide persistent nav.
  *
- * Two rows: Inbox (issue #168), and Today (issue #169) — a second, co-equal
- * query over the same Tasks (ADR 0049's "Today alone is enough to make
- * navigation a question this ADR has to answer"). Landing Today here is
- * exactly the proof this ADR asked for: a second row appended to `VIEWS`
- * below, nothing else in this component touched — "adding a view is adding
- * a row to a list," this ticket's own brief, held in practice rather than
- * only argued in the ADR that predicted it.
+ * Three rows: Inbox (issue #168), Today (issue #169) and Projects (issue
+ * #171) — each a second, co-equal way into the same Tasks (ADR 0049's
+ * "Today alone is enough to make navigation a question this ADR has to
+ * answer"). Landing Projects here is exactly the proof this ADR asked for
+ * a second time: a third row appended to `VIEWS` below, nothing else in
+ * this component touched — "adding a view is adding a row to a list,"
+ * this ticket's own brief, held in practice rather than only argued in
+ * the ADR that predicted it. `/todo/projects` names the list of every
+ * Project (`projects-view.tsx`); a single Project's own screen
+ * (`/todo/projects/:projectId`, `project-view.tsx`) has no row of its own
+ * here — the same reason `/reflect/:sessionId` isn't a `Nav`
+ * destination (nav.tsx) either: a reader reaches it by opening a specific
+ * Project, not by picking it from this bar.
  */
 const VIEWS = [
   { to: "/todo/inbox", label: "Inbox", Icon: ListTodo },
   { to: "/todo/today", label: "Today", Icon: CalendarCheck },
+  { to: "/todo/projects", label: "Projects", Icon: FolderKanban },
 ] as const;
 
 export function TodoNav() {

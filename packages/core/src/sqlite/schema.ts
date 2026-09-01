@@ -47,9 +47,9 @@ export const entries = sqliteTable(
  * describes, made permanent rather than provisional, because collaboration
  * was never even sketched the way editing was before ADR 0028 landed.
  *
- * Date, deadline, duration and priority were added by issue #169; project,
- * section and parent are deliberately still excluded, and land in #171
- * behind its own migration — sequencing the tickets this way keeps each
+ * Date, deadline, duration and priority were added by issue #169;
+ * `projectId`/`sectionId`/`parentId` by issue #171, behind their own
+ * migration (version 9) — sequencing the tickets this way keeps each
  * migration's blast radius to the one thing it's actually adding.
  */
 export const tasks = sqliteTable(
@@ -116,6 +116,23 @@ export const tasks = sqliteTable(
     // NOT NULL DEFAULT: "doesn't repeat" is the absence of a rule, not a
     // concrete value the way "no priority" is a real priority level.
     dateString: text("date_string"),
+    // `null` is Inbox — there is no `projects` row for it (../project-
+    // types.ts's own header comment). Nullable with no DEFAULT, the same
+    // shape `date`/`deadline`/`duration` take: a pre-#171 row backfilled
+    // by migration 9 below gets `null` from `ALTER TABLE ADD COLUMN`'s own
+    // implicit default, which happens to be exactly the right value
+    // (every Task that existed before Projects did was, in effect,
+    // already in Inbox).
+    projectId: text("project_id"),
+    // At most one Section (CONTEXT.md's Section entry) — see
+    // ../task-types.ts's own doc comment for why this store does not
+    // itself check that `sectionId` and `projectId` agree.
+    sectionId: text("section_id"),
+    // The parent Task, or null for a top-level Task (CONTEXT.md's Sub-task
+    // entry). Nesting depth is enforced by SqliteTaskStore.setParent
+    // walking this column, not by a CHECK constraint SQLite has no way to
+    // express across rows.
+    parentId: text("parent_id"),
   },
   (table) => [
     // Supports list()'s actual query: `WHERE completed_at IS NULL AND
@@ -128,6 +145,107 @@ export const tasks = sqliteTable(
     // walking rows that are already coming back in the wanted order,
     // which is a different job than making the filter itself indexed.
     index("tasks_order_key_id_idx").on(table.orderKey, table.id),
+    // Supports listByProject() — a plain index on the column its own
+    // WHERE clause filters by, the same "cheap to apply while already
+    // walking in the wanted order" reasoning above applies once combined
+    // with the index above for the final ORDER BY.
+    index("tasks_project_id_idx").on(table.projectId),
+    // Supports listChildren()/listDescendants() — both filter by
+    // `parent_id`, issue #171's own new query shape this table never had
+    // before sub-tasks existed.
+    index("tasks_parent_id_idx").on(table.parentId),
+    // Supports listInSection() — the direct-membership half of
+    // deleteSection()/archiveSection()'s cascade (../project-store.ts).
+    index("tasks_section_id_idx").on(table.sectionId),
+  ],
+);
+
+/**
+ * Mirrors the `Project` type (../project-types.ts) exactly (issue #171) —
+ * the same "second/third/fourth root noun gets its own table" reasoning
+ * `tasks`' and `labels`' own comments above give, applied again. No
+ * collaboration column, for the identical reason `tasks`' own comment
+ * refuses one.
+ */
+export const projects = sqliteTable(
+  "projects",
+  {
+    id: text("id").primaryKey(),
+    deviceId: text("device_id").notNull(),
+    name: text("name").notNull(),
+    // A hex from label-colors.ts's shared label/project/filter palette —
+    // see ../project-fields.ts's assertValidProjectColour.
+    colour: text("colour").notNull(),
+    favourite: integer("favourite", { mode: "boolean" }).notNull().default(false),
+    // Metadata-only — deliberately does not cascade to this Project's own
+    // Tasks or Sections. See ../project-types.ts's `Project.archived` doc
+    // comment for the contrast with `sections.archived` below.
+    archived: integer("archived", { mode: "boolean" }).notNull().default(false),
+    // The Project this one nests under, or null for top-level — no depth
+    // cap, unlike `tasks.parentId` above.
+    parentId: text("parent_id"),
+    description: text("description"),
+    // Fractional index (../order-key.ts) among siblings sharing the same
+    // `parentId` — reused, not reinvented, exactly as `tasks.orderKey` is.
+    orderKey: text("order_key").notNull(),
+    createdAt: text("created_at").notNull(),
+    seq: integer("seq"),
+    syncedAt: text("synced_at"),
+    // Tombstone (ADR 0028's rule, applied to Projects) — identical
+    // representation to every other table's `deleted_at` above.
+    deletedAt: text("deleted_at"),
+  },
+  (table) => [
+    // Supports listProjects()'s ORDER BY and setProjectParent()'s cycle
+    // walk — mirrors `tasks_order_key_id_idx` above.
+    index("projects_order_key_id_idx").on(table.orderKey, table.id),
+    // Supports setProjectParent()'s ancestor walk and a future
+    // per-parent listing, mirroring `tasks_parent_id_idx` above.
+    index("projects_parent_id_idx").on(table.parentId),
+  ],
+);
+
+/**
+ * Mirrors the `Section` type (../project-types.ts) exactly (issue #171).
+ * Folded into `ProjectStore` rather than getting its own store class — see
+ * ../project-store.ts's own header comment for why — but that is a
+ * store-shape decision, not a schema one: `sections` is still its own
+ * table, exactly as `labels` is its own table despite `Label` never
+ * nesting either.
+ */
+export const sections = sqliteTable(
+  "sections",
+  {
+    id: text("id").primaryKey(),
+    deviceId: text("device_id").notNull(),
+    // Required — a Section always belongs to a real Project, never Inbox
+    // (../project-types.ts's `Section.projectId` doc comment).
+    projectId: text("project_id").notNull(),
+    name: text("name").notNull(),
+    description: text("description"),
+    // Fractional index among siblings sharing the same `projectId` —
+    // Sections are flat (CONTEXT.md), so there is only ever one sibling
+    // group per Project, unlike `projects.orderKey` above.
+    orderKey: text("order_key").notNull(),
+    // Archiving completes every Task inside this Section and keeps this
+    // flag set; unarchiving clears it without touching a single Task
+    // (../project-store.ts's archiveSection/unarchiveSection).
+    archived: integer("archived", { mode: "boolean" }).notNull().default(false),
+    createdAt: text("created_at").notNull(),
+    seq: integer("seq"),
+    syncedAt: text("synced_at"),
+    // Tombstone for the Section itself — never what "deleting a Section
+    // destroys every Task inside it" means; that's each of those Tasks'
+    // own `deleted_at` on the `tasks` table above, set by
+    // ../project-store.ts's deleteSection calling TaskStore.remove() for
+    // each one it finds.
+    deletedAt: text("deleted_at"),
+  },
+  (table) => [
+    // Supports listSections()'s actual query — `WHERE project_id = ? AND
+    // deleted_at IS NULL ORDER BY order_key ASC, id ASC` — and addSection's
+    // twenty-cap count, both scoped by `project_id` first.
+    index("sections_project_id_order_key_id_idx").on(table.projectId, table.orderKey, table.id),
   ],
 );
 

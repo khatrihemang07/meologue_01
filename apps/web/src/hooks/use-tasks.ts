@@ -26,6 +26,28 @@ export interface AddTaskOverrides {
   labelIds?: string[];
   /** `Task.dateString` — the canonical recurrence phrase quick-add-task.ts resolved, or `null` for a Task that doesn't repeat. */
   dateString?: string | null;
+  /**
+   * The Project a new Task is filed into (issue #171) — `null` for Inbox.
+   * The identical "default is inherited from origin" rule `date` above
+   * already carries (todo-page.tsx's `captureDate`), applied to structure
+   * rather than schedule: a Task added while standing in a Project's own
+   * view inherits that Project, exactly as one added from Today inherits
+   * today's date and one added from Inbox inherits nothing. `null` by
+   * default, matching a Task created directly in Todo with no Project
+   * context at all (issue #169's own "starts undated" precedent, applied
+   * here to "starts unfiled").
+   */
+  projectId?: string | null;
+  /**
+   * The Section a new Task is filed into within `projectId` (issue #171)
+   * — `null` for "no Section," the state every Task in Inbox is
+   * structurally stuck at (Section.projectId is required, never Inbox —
+   * ../../packages/core/src/project-types.ts's own doc comment). Set only
+   * when the reader added the Task from inside a specific Section's own
+   * add affordance; a Project's own top-level add field leaves this
+   * `null` the same way it leaves `parentId` below `null`.
+   */
+  sectionId?: string | null;
 }
 
 export interface UseTasksResult {
@@ -73,6 +95,32 @@ export interface UseTasksResult {
   /** Sets a Task's stored `priority` (1-4) — callers pass `storedPriorityOf(uiPriority)`, never the UI number directly (task-types.ts's own warning against open-coding the inversion). */
   setTaskPriority: (id: string, priority: number) => void;
   /**
+   * A Project's own top-level Tasks (TaskStore.listByProject), `null` for
+   * Inbox — issue #171's own replacement for reading the flat `tasks`
+   * array above once Tasks can live in more than one place. An async
+   * function rather than eagerly-loaded state, mirroring `resolveLabelIds`
+   * on the Labels hook: TodoPage wraps this in its own `useQuery`, keyed
+   * by query-keys.ts's `tasksInProjectQueryKey`, so it stays live off the
+   * same TASKS_QUERY_KEY invalidation every other write here already
+   * triggers.
+   */
+  listTasksInProject: (projectId: string | null) => Promise<Task[]>;
+  /** A Task's own direct sub-tasks (TaskStore.listChildren) — the identical "async function, page keys its own query" shape as `listTasksInProject` above, via query-keys.ts's `taskChildrenQueryKey`. */
+  listTaskChildren: (parentId: string) => Promise<Task[]>;
+  /**
+   * A Section's own direct members, active and completed alike
+   * (TaskStore.listInSection) — this exists for exactly one caller, the
+   * Section delete confirmation (issue #171's own acceptance criterion:
+   * "names the count"), which needs the true number ProjectStore.deleteSection
+   * is about to destroy rather than an approximation. Combined with
+   * `listTaskDescendants` below the same way ProjectStore.deleteSection's
+   * own doc comment describes its cascade, so the confirmation's own
+   * count and the deletion it confirms can never quietly disagree.
+   */
+  listTasksInSection: (sectionId: string) => Promise<Task[]>;
+  /** Every descendant of a Task, at any depth (TaskStore.listDescendants) — see `listTasksInSection` above for its one caller and why. */
+  listTaskDescendants: (id: string) => Promise<Task[]>;
+  /**
    * Advances a recurring Task to its next occurrence instead of completing
    * it (issue #170, TaskStore.advanceRecurring's own doc comment) — the
    * one door todo-page.tsx's `handleComplete` goes through for a Task
@@ -99,6 +147,22 @@ export interface UseTasksResult {
    * Task with a `date`.
    */
   postponeTask: (id: string) => void;
+  /** Moves a Task into `projectId` (or back to Inbox for `null`) — TaskStore.setProject's own doc comment. Also clears the Task's `sectionId`, since a Section belongs to exactly one Project. */
+  setTaskProject: (id: string, projectId: string | null) => void;
+  /** Files a Task into `sectionId` within whichever Project it already has, or clears it back to "no Section" for `null` — TaskStore.setSection's own doc comment. */
+  setTaskSection: (id: string, sectionId: string | null) => void;
+  /**
+   * Reparents a Task under `parentId`, or back to top-level for `null` —
+   * TaskStore.setParent's own doc comment names three shapes it refuses
+   * (self-parenting, an unknown parent, and the four-level nesting cap).
+   * Unlike every other setter on this interface, this one returns the
+   * write's own Promise rather than firing-and-forgetting it: a keyboard
+   * indent/drag-to-reparent gesture that walks into the depth cap needs a
+   * legible outcome on screen (issue #171's brief), which means the
+   * caller has to be able to `catch` this rather than have the failure
+   * disappear into a mutation's own internal error state.
+   */
+  setTaskParent: (id: string, parentId: string | null) => Promise<void>;
 }
 
 /**
@@ -204,6 +268,26 @@ export function useTasks(taskStore: TaskStore, deviceId: string): UseTasksResult
       priority: overrides.priority ?? 1,
       labelIds: overrides.labelIds ?? [],
       dateString: overrides.dateString ?? null,
+      // Issue #171's own three structural fields, following the identical
+      // "the view a reader is standing in is the context" rule `date`
+      // above already states and already learned the hard way (this
+      // function's own comment on why an undated Today Task used to
+      // vanish): `projectId` is `overrides.projectId ?? null` because a
+      // Task added from Inbox is unfiled and one added from a Project's
+      // own view inherits that Project — todo-page.tsx's own caller is
+      // what decides which, the same way it already decides `captureDate`.
+      // `sectionId` mirrors it for a Section's own add affordance.
+      //
+      // `parentId` is always `null` here, never an override — a new Task
+      // is never minted as anyone's sub-task directly. Nesting one under
+      // an existing Task is a deliberate, separate act (keyboard
+      // indent/outdent onto TaskStore.setParent, todo-page.tsx) reached
+      // after the Task already exists, exactly as dragging a freshly
+      // added Task under a sibling is a second gesture in Todoist itself,
+      // never something the add field predicts on a reader's behalf.
+      projectId: overrides.projectId ?? null,
+      sectionId: overrides.sectionId ?? null,
+      parentId: null,
     });
   }
 
@@ -309,6 +393,22 @@ export function useTasks(taskStore: TaskStore, deviceId: string): UseTasksResult
     setPriorityMutation.mutate({ id, priority });
   }
 
+  function listTasksInProject(projectId: string | null): Promise<Task[]> {
+    return taskStore.listByProject(projectId);
+  }
+
+  function listTaskChildren(parentId: string): Promise<Task[]> {
+    return taskStore.listChildren(parentId);
+  }
+
+  function listTasksInSection(sectionId: string): Promise<Task[]> {
+    return taskStore.listInSection(sectionId);
+  }
+
+  function listTaskDescendants(id: string): Promise<Task[]> {
+    return taskStore.listDescendants(id);
+  }
+
   // Issue #170's three recurrence methods, and `completedAt`/`today`
   // supplied here — the identical `new Date().toISOString()`/day-key
   // pattern completeTaskMutation/setTaskDate's own picker-facing callers
@@ -343,6 +443,55 @@ export function useTasks(taskStore: TaskStore, deviceId: string): UseTasksResult
     postponeMutation.mutate(id);
   }
 
+  // Issue #171's three structural setters. `setTaskProject`/`setTaskSection`
+  // follow every setter above's fire-and-forget shape: neither one can
+  // meaningfully fail against a live Task (TaskStore.setProject/setSection's
+  // own doc comments — a dangling or cross-Project reference is an
+  // accepted, transient state, not a refusal). `setTaskParent` is
+  // deliberately different — see its own doc comment below.
+  const setProjectMutation = useMutation({
+    mutationFn: ({ id, projectId }: { id: string; projectId: string | null }) =>
+      taskStore.setProject(id, projectId),
+    onSuccess: afterLocalWrite,
+  });
+
+  function setTaskProject(id: string, projectId: string | null) {
+    setProjectMutation.mutate({ id, projectId });
+  }
+
+  const setSectionMutation = useMutation({
+    mutationFn: ({ id, sectionId }: { id: string; sectionId: string | null }) =>
+      taskStore.setSection(id, sectionId),
+    onSuccess: afterLocalWrite,
+  });
+
+  function setTaskSection(id: string, sectionId: string | null) {
+    setSectionMutation.mutate({ id, sectionId });
+  }
+
+  // TaskStore.setParent throws on the three shapes its own doc comment
+  // names — most reachably from the UI, the four-level nesting cap
+  // (MAX_TASK_NESTING_DEPTH, @meologue/core) a keyboard indent or a
+  // drag-to-reparent can genuinely walk a reader into. `mutateAsync`,
+  // not `mutate`, and the resulting Promise handed back to the caller
+  // unmutated: every other mutation in this file swallows its own
+  // rejection into TanStack Query's own mutation.error state, which is
+  // the right call when nothing on screen needs to react to a failure —
+  // but 171-brief.md's own brief is explicit that a caller here must
+  // "decide what the UI does with that and make it legible rather than a
+  // swallowed exception," and the caller (todo-page.tsx's keyboard
+  // handler) is what owns that decision, not this hook. Swallowing it
+  // here would be exactly the silent failure that brief warns against.
+  const setParentMutation = useMutation({
+    mutationFn: ({ id, parentId }: { id: string; parentId: string | null }) =>
+      taskStore.setParent(id, parentId),
+    onSuccess: afterLocalWrite,
+  });
+
+  function setTaskParent(id: string, parentId: string | null): Promise<void> {
+    return setParentMutation.mutateAsync({ id, parentId });
+  }
+
   return {
     tasks,
     completedTasks,
@@ -356,8 +505,15 @@ export function useTasks(taskStore: TaskStore, deviceId: string): UseTasksResult
     setTaskDeadline,
     setTaskDuration,
     setTaskPriority,
+    listTasksInProject,
+    listTaskChildren,
+    listTasksInSection,
+    listTaskDescendants,
     advanceRecurringTask,
     completeForeverTask,
     postponeTask,
+    setTaskProject,
+    setTaskSection,
+    setTaskParent,
   };
 }

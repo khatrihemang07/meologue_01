@@ -4,6 +4,7 @@ import tasksTable from "./0002_tasks_table.sql?raw";
 import taskSchedulingFields from "./0003_task_scheduling_fields.sql?raw";
 import labelsTable from "./0004_labels_table.sql?raw";
 import taskRecurrenceString from "./0005_task_recurrence_string.sql?raw";
+import projectsSections from "./0006_projects_sections.sql?raw";
 import entriesSearchIndex from "./entries_search_index.sql?raw";
 import tasksSearchIndex from "./tasks_search_index.sql?raw";
 
@@ -113,6 +114,23 @@ export interface Migration {
  * here even though it was written after — version numbers are the
  * ledger key (../migrator.ts), not file-write order, and 7 was already
  * reserved for it before this file's own labels-only version 8 landed.
+ *
+ * `0006_projects_sections` (version 9, issue #171) adds two new,
+ * representable-in-../schema.ts tables (`projects`, `sections`) and three
+ * more `ALTER TABLE tasks ADD` columns (`project_id`, `section_id`,
+ * `parent_id`), plus indexes on all of it. Hand-written rather than run
+ * through `drizzle-kit generate`, for the identical reason every migration
+ * since `0004_labels_table` has been: `generate` still diffs against the
+ * stale `0003` snapshot (this comment's own "**Do not 'true `meta/` back
+ * up`'**" paragraph above hasn't changed since it was written), so a real
+ * `generate` run today would re-emit versions 6-8's own DDL a second time
+ * under a colliding `0004_*`/`0006_*` filename rather than emitting only
+ * what's new here. `CREATE TABLE IF NOT EXISTS` covers the two new tables
+ * (representable, idempotent the ordinary way, migration 4's own
+ * template); the three `ADD COLUMN` statements lean on ../migrator.ts's
+ * `duplicate column name` swallow, migration 6's template. All of this
+ * migration's `CREATE INDEX` statements are `IF NOT EXISTS` for the same
+ * reason every other index-creating statement in this file is.
  */
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, sql: initial },
@@ -123,4 +141,5 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 6, sql: taskSchedulingFields },
   { version: 7, sql: taskRecurrenceString },
   { version: 8, sql: labelsTable },
+  { version: 9, sql: projectsSections },
 ];
