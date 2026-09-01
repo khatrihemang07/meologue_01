@@ -489,7 +489,12 @@ describe("SettingsPage", () => {
       vi.stubGlobal(
         "fetch",
         vi.fn(async () =>
-          healthResponse(PROTOCOL_VERSION, { reflect: true, digest: false, embeddings: true }),
+          healthResponse(PROTOCOL_VERSION, {
+            reflect: true,
+            digest: false,
+            embeddings: true,
+            todo: true,
+          }),
         ),
       );
 

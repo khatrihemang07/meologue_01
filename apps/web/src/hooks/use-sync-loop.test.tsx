@@ -1,4 +1,4 @@
-import type { Entry, EntryStore } from "@meologue/core";
+import type { Entry, EntryStore, TaskStore } from "@meologue/core";
 import { QueryClientProvider, queryOptions } from "@tanstack/react-query";
 import { act, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -49,6 +49,43 @@ function createFakeStore(): EntryStore {
     edit: vi.fn(async () => {}),
     remove: vi.fn(async () => {}),
     getMany: vi.fn(async () => []),
+  };
+}
+
+// Issue #172 / ADR 0051 — see sync-runner.test.ts's own
+// createFakeTaskStore for why a bare stub is enough: `sync()` itself is
+// mocked (`syncMock` above), so nothing here exercises real TaskStore
+// behaviour, only that SyncLoop hands one through to requestSync.
+function createFakeTaskStore(): TaskStore {
+  return {
+    list: vi.fn(async () => []),
+    listByProject: vi.fn(async () => []),
+    listChildren: vi.fn(async () => []),
+    listInSection: vi.fn(async () => []),
+    listDescendants: vi.fn(async () => []),
+    listCompleted: vi.fn(async () => []),
+    get: vi.fn(async () => undefined),
+    upsert: vi.fn(async () => {}),
+    complete: vi.fn(async () => {}),
+    uncomplete: vi.fn(async () => {}),
+    rename: vi.fn(async () => {}),
+    reorder: vi.fn(async () => {}),
+    setDate: vi.fn(async () => {}),
+    setDeadline: vi.fn(async () => {}),
+    setDuration: vi.fn(async () => {}),
+    setPriority: vi.fn(async () => {}),
+    setLabelIds: vi.fn(async () => {}),
+    setProject: vi.fn(async () => {}),
+    setSection: vi.fn(async () => {}),
+    setParent: vi.fn(async () => {}),
+    advanceRecurring: vi.fn(async () => {}),
+    completeForever: vi.fn(async () => {}),
+    postpone: vi.fn(async () => {}),
+    remove: vi.fn(async () => {}),
+    pending: vi.fn(async () => []),
+    getCursor: vi.fn(async () => 0),
+    setCursor: vi.fn(async () => {}),
+    search: vi.fn(async () => []),
   };
 }
 
@@ -104,20 +141,31 @@ describe("SyncLoop", () => {
 
   it("syncs once the store resolves, when a Server URL is configured", async () => {
     const store = createFakeStore();
-    openEntryStoreMock.mockResolvedValue({ store, deviceId: "device-a" });
+    openEntryStoreMock.mockResolvedValue({
+      store,
+      taskStore: createFakeTaskStore(),
+      deviceId: "device-a",
+    });
     useSettingsStore.getState().setServerUrl("https://server.example");
 
     await renderSyncLoop();
 
     await waitFor(() => expect(syncMock).toHaveBeenCalledTimes(1));
     expect(syncMock).toHaveBeenCalledWith(expect.objectContaining({ store, deviceId: "device-a" }));
+    expect(syncMock).toHaveBeenCalledWith(
+      expect.objectContaining({ taskStore: expect.anything() }),
+    );
   });
 
   // ADR 0011: sync is opt-in. The gate is checked live, at the moment of
   // this first attempt — no need to wait out further poll intervals to
   // prove it never fires.
   it("does not sync once the store resolves, with no Server URL configured", async () => {
-    openEntryStoreMock.mockResolvedValue({ store: createFakeStore(), deviceId: "device-a" });
+    openEntryStoreMock.mockResolvedValue({
+      store: createFakeStore(),
+      taskStore: createFakeTaskStore(),
+      deviceId: "device-a",
+    });
 
     await renderSyncLoop();
     await waitFor(() => expect(openEntryStoreMock).toHaveBeenCalled());
@@ -128,7 +176,11 @@ describe("SyncLoop", () => {
   });
 
   it("does not sync once the store resolves, while the app is hidden", async () => {
-    openEntryStoreMock.mockResolvedValue({ store: createFakeStore(), deviceId: "device-a" });
+    openEntryStoreMock.mockResolvedValue({
+      store: createFakeStore(),
+      taskStore: createFakeTaskStore(),
+      deviceId: "device-a",
+    });
     useSettingsStore.getState().setServerUrl("https://server.example");
     isTabVisibleMock.mockReturnValue(false);
 
@@ -141,7 +193,11 @@ describe("SyncLoop", () => {
 
   it("subscribes to wake events once, and syncs again right away on a wake signal", async () => {
     const store = createFakeStore();
-    openEntryStoreMock.mockResolvedValue({ store, deviceId: "device-a" });
+    openEntryStoreMock.mockResolvedValue({
+      store,
+      taskStore: createFakeTaskStore(),
+      deviceId: "device-a",
+    });
     useSettingsStore.getState().setServerUrl("https://server.example");
 
     await renderSyncLoop();
@@ -159,7 +215,11 @@ describe("SyncLoop", () => {
   // signal alone doesn't guarantee the app is actually foregrounded.
   it("does not sync on a wake signal that arrives while the app is hidden", async () => {
     const store = createFakeStore();
-    openEntryStoreMock.mockResolvedValue({ store, deviceId: "device-a" });
+    openEntryStoreMock.mockResolvedValue({
+      store,
+      taskStore: createFakeTaskStore(),
+      deviceId: "device-a",
+    });
     useSettingsStore.getState().setServerUrl("https://server.example");
 
     await renderSyncLoop();
@@ -180,7 +240,11 @@ describe("SyncLoop", () => {
   // lib/sync-runner.test.ts for the focused version of this behaviour.
   it("runs sync again for a wake signal that arrives mid-flight, rather than dropping it", async () => {
     const store = createFakeStore();
-    openEntryStoreMock.mockResolvedValue({ store, deviceId: "device-a" });
+    openEntryStoreMock.mockResolvedValue({
+      store,
+      taskStore: createFakeTaskStore(),
+      deviceId: "device-a",
+    });
     useSettingsStore.getState().setServerUrl("https://server.example");
     let resolveSync: () => void = () => {};
     syncMock.mockImplementationOnce(
@@ -213,7 +277,11 @@ describe("SyncLoop", () => {
 
     it("polls again on the interval while visible", async () => {
       const store = createFakeStore();
-      openEntryStoreMock.mockResolvedValue({ store, deviceId: "device-a" });
+      openEntryStoreMock.mockResolvedValue({
+        store,
+        taskStore: createFakeTaskStore(),
+        deviceId: "device-a",
+      });
       useSettingsStore.getState().setServerUrl("https://server.example");
 
       await renderSyncLoop();
@@ -228,7 +296,11 @@ describe("SyncLoop", () => {
     });
 
     it("never syncs across several poll intervals with no Server URL configured", async () => {
-      openEntryStoreMock.mockResolvedValue({ store: createFakeStore(), deviceId: "device-a" });
+      openEntryStoreMock.mockResolvedValue({
+        store: createFakeStore(),
+        taskStore: createFakeTaskStore(),
+        deviceId: "device-a",
+      });
 
       await renderSyncLoop();
       await act(() => vi.advanceTimersByTimeAsync(20_000));

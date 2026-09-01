@@ -178,7 +178,7 @@ describe("ChatList", () => {
     it("locks only the Destination a configured Server reports it cannot serve", () => {
       useSettingsStore.setState({
         serverUrl: "https://server.example",
-        capabilities: { reflect: true, digest: false, embeddings: true },
+        capabilities: { reflect: true, digest: false, embeddings: true, todo: true },
       });
 
       renderAt("/");

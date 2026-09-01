@@ -390,7 +390,7 @@ describe("settings store", () => {
   // Issue #133.
   describe("capabilities", () => {
     it("round-trips a written capability report, in the store and in storage", () => {
-      const capabilities = { reflect: true, digest: false, embeddings: true };
+      const capabilities = { reflect: true, digest: false, embeddings: true, todo: true };
 
       useSettingsStore.getState().setCapabilities(capabilities);
 
@@ -403,7 +403,7 @@ describe("settings store", () => {
     it("clears the stored report when set back to null (unknown)", () => {
       useSettingsStore
         .getState()
-        .setCapabilities({ reflect: true, digest: true, embeddings: true });
+        .setCapabilities({ reflect: true, digest: true, embeddings: true, todo: true });
 
       useSettingsStore.getState().setCapabilities(null);
 
@@ -415,7 +415,7 @@ describe("settings store", () => {
       vi.spyOn(localStorage, "setItem").mockImplementation(() => {
         throw new Error("storage unavailable");
       });
-      const capabilities = { reflect: false, digest: true, embeddings: false };
+      const capabilities = { reflect: false, digest: true, embeddings: false, todo: true };
 
       expect(() => useSettingsStore.getState().setCapabilities(capabilities)).not.toThrow();
       expect(useSettingsStore.getState().capabilities).toEqual(capabilities);
@@ -424,7 +424,7 @@ describe("settings store", () => {
 
   describe("refreshCapabilities", () => {
     it("stores the server's capability report and marks the server reachable", async () => {
-      const capabilities = { reflect: true, digest: false, embeddings: false };
+      const capabilities = { reflect: true, digest: false, embeddings: false, todo: true };
       vi.stubGlobal(
         "fetch",
         vi.fn(async () => healthResponse(capabilities)),
@@ -448,7 +448,7 @@ describe("settings store", () => {
       useSettingsStore.getState().setServerUrl("https://server.example");
       useSettingsStore
         .getState()
-        .setCapabilities({ reflect: true, digest: true, embeddings: true });
+        .setCapabilities({ reflect: true, digest: true, embeddings: true, todo: true });
 
       await refreshCapabilities();
 
@@ -461,7 +461,7 @@ describe("settings store", () => {
     // quiet for a moment says nothing about what it could serve the last
     // time it answered.
     it("marks the server unreachable on a network failure, without touching a known capability report", async () => {
-      const capabilities = { reflect: true, digest: true, embeddings: false };
+      const capabilities = { reflect: true, digest: true, embeddings: false, todo: true };
       useSettingsStore.getState().setServerUrl("https://server.example");
       useSettingsStore.getState().setCapabilities(capabilities);
       vi.stubGlobal(
@@ -482,7 +482,7 @@ describe("settings store", () => {
       vi.stubGlobal("fetch", fetchMock);
       useSettingsStore
         .getState()
-        .setCapabilities({ reflect: true, digest: true, embeddings: true });
+        .setCapabilities({ reflect: true, digest: true, embeddings: true, todo: true });
       useSettingsStore.getState().setServerReachable(false);
 
       await refreshCapabilities();

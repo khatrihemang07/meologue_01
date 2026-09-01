@@ -384,11 +384,29 @@ export interface components {
          *       embed config is resolvable, so a chat-only Server still reports
          *       `reflect: true` while `embeddings: false` — exactly the Server on
          *       which `reflect.rs`'s tool loop quietly omits `similar_entries`.
+         *     - `todo` — issue #172 / ADR 0051 — is **unconditionally `true`**, not
+         *       read off any `LlmConfig`. Task Sync has no model behind it and no
+         *       configuration that can disable it: any Server that answers
+         *       `/v1/health` at all is one that runs `sync_handler` and speaks
+         *       `PROTOCOL_VERSION` 5 (or the transitional 4), so it always accepts
+         *       Tasks the moment it accepts Entries. This is deliberately unlike the
+         *       three capabilities above, all of which name a real "maybe not" —
+         *       `todo` names a "yes, structurally." It is reported anyway, rather
+         *       than left off `HealthCapabilities` entirely, because it exists for a
+         *       *different* reader than `chat-list.tsx`'s lock check
+         *       (`apps/web/src/components/chat-list.tsx`'s own header comment: Todo's
+         *       row is never locked by this field, since Todo works fully offline
+         *       like Composer): issue #175's Digest and Reflection coverage of Tasks
+         *       is what actually consults it, to tell "this Server has never heard of
+         *       Tasks" (an old build, protocol 4 behaviour) apart from "this Server
+         *       has Tasks but nothing configured to talk about them," which no other
+         *       field here can distinguish.
          */
         HealthCapabilities: {
             digest: boolean;
             embeddings: boolean;
             reflect: boolean;
+            todo: boolean;
         };
         HealthResponse: {
             capabilities?: null | components["schemas"]["HealthCapabilities"];
@@ -642,11 +660,147 @@ export interface components {
             protocol_version: number;
             /** Format: int64 */
             since_seq: number;
+            /**
+             * Format: int64
+             * @description The Task stream's own Cursor (ADR 0051), alongside `since_seq`
+             *     above — two independent streams, two independent watermarks, never
+             *     one shared number (see `TASK_SYNC_INSERT_LOCK_KEY`'s doc comment
+             *     for the identical reasoning applied to the advisory lock).
+             *     `#[serde(default)]`, not because a v5 Device ever omits it, but
+             *     because a v4 Device's request body — built against the pre-#172
+             *     wire shape — genuinely has no such key at all
+             *     (`PROTOCOL_VERSION`'s own doc comment on the dual-version window).
+             *     Deserializing that body must not fail just because Sync grew a
+             *     second stream; defaulting to 0 is exactly "this Device has never
+             *     synced a Task", which is true of every v4 Device by construction.
+             */
+            since_task_seq?: number;
+            /**
+             * @description The Task stream's own pending pushes, alongside `entries` above —
+             *     `#[serde(default)]` for the identical reason `since_task_seq` is: a
+             *     v4 Device's request body has no `tasks` key, and an empty default
+             *     is exactly what "this build has never pushed a Task, because it has
+             *     no idea Tasks exist" means. `run_sync` additionally never *acts* on
+             *     this even when a v4 body somehow carried one (see its own doc
+             *     comment) — belt and braces, since a real v4 build could never
+             *     construct such a request in the first place.
+             */
+            tasks?: components["schemas"]["TaskInput"][];
         };
         SyncResponse: {
             /** Format: int64 */
             cursor: number;
             entries: components["schemas"]["EntryOutput"][];
+            /** Format: int64 */
+            task_cursor: number;
+            /**
+             * @description The Task stream's own pull, alongside `entries` above — one
+             *     endpoint, one round trip (ADR 0051's own Alternatives section: a
+             *     separate `/v1/tasks/sync` was rejected precisely because it opens a
+             *     window where an Entry references a Task that hasn't arrived yet).
+             *     Always present on the wire, unlike the request fields above:
+             *     nothing about the *response* shape needs to tolerate an old
+             *     Device — a v4 Device simply never reads a JSON key its own build
+             *     predates, the same way it already ignores any other field it
+             *     doesn't recognise. `run_sync` sets this to `[]` when
+             *     `protocol_version < 5`, not because serde can't populate it, but
+             *     because a v4 Device asked for Entries only and returning Tasks it
+             *     has no representation for — and never requested — would be
+             *     answering a question it didn't ask (see `run_sync`'s own doc
+             *     comment).
+             */
+            tasks: components["schemas"]["TaskOutput"][];
+        };
+        /**
+         * @description The Task-shaped sibling of `EntryInput` (ADR 0047's second root noun,
+         *     ADR 0051's second Sync stream). Deliberately no collaboration column —
+         *     see `../migrations/0010_create_tasks.sql`'s own header comment, which
+         *     mirrors `../../packages/core/src/task-types.ts`'s refusal exactly.
+         *
+         *     `project_id`/`section_id`/`parent_id` are plain `Option<Uuid>`, not
+         *     validated against anything: Projects, Sections and Labels do not sync
+         *     in this ticket (issue #172's own scope decision, recorded in ADR 0051),
+         *     so a Task can arrive here naming a Project this Server has never heard
+         *     of. That is an accepted, transient state carried straight through — the
+         *     identical "dangling cross-reference is not this store's problem to fix"
+         *     rule `../../packages/core/src/task-types.ts`'s own `projectId`/
+         *     `labelIds` doc comments already state for the client side, applied here
+         *     because there is genuinely nothing more this Server could check: it
+         *     never reads a `projects` or `labels` table at all.
+         */
+        TaskInput: {
+            /** Format: date-time */
+            completed_at?: string | null;
+            content: string;
+            /** Format: date-time */
+            created_at: string;
+            /**
+             * @description Floating (`../../packages/core/src/task-types.ts`'s `date` doc
+             *     comment: never a `Z`, never an offset) — kept as a plain string
+             *     rather than `DateTime<Utc>` for exactly that reason, the same way
+             *     `dateString`/`deadline` below are.
+             */
+            date?: string | null;
+            date_string?: string | null;
+            deadline?: string | null;
+            /**
+             * Format: date-time
+             * @description Tombstone — see `EntryInput::deleted_at`'s own doc comment; the
+             *     identical representation, reused for the identical reason (ADR
+             *     0028, applied to Tasks by ADR 0047).
+             */
+            deleted_at?: string | null;
+            /** Format: uuid */
+            device_id: string;
+            /** Format: int32 */
+            duration?: number | null;
+            /** Format: uuid */
+            id: string;
+            label_ids: string[];
+            order_key: string;
+            /** Format: uuid */
+            parent_id?: string | null;
+            /** Format: int32 */
+            priority: number;
+            /** Format: uuid */
+            project_id?: string | null;
+            /** Format: uuid */
+            section_id?: string | null;
+        };
+        /**
+         * @description The Task-shaped sibling of `EntryOutput` — see `TaskInput`'s own doc
+         *     comment for the fields it shares; this adds only `seq`, exactly as
+         *     `EntryOutput` adds `seq` to `EntryInput`.
+         */
+        TaskOutput: {
+            /** Format: date-time */
+            completed_at?: string | null;
+            content: string;
+            /** Format: date-time */
+            created_at: string;
+            date?: string | null;
+            date_string?: string | null;
+            deadline?: string | null;
+            /** Format: date-time */
+            deleted_at?: string | null;
+            /** Format: uuid */
+            device_id: string;
+            /** Format: int32 */
+            duration?: number | null;
+            /** Format: uuid */
+            id: string;
+            label_ids: string[];
+            order_key: string;
+            /** Format: uuid */
+            parent_id?: string | null;
+            /** Format: int32 */
+            priority: number;
+            /** Format: uuid */
+            project_id?: string | null;
+            /** Format: uuid */
+            section_id?: string | null;
+            /** Format: int64 */
+            seq: number;
         };
     };
     responses: never;
@@ -936,7 +1090,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Entries accepted; every Entry after since_seq is returned */
+            /** @description Entries (and, from protocol 5, Tasks) accepted; every change after since_seq/since_task_seq is returned */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -945,7 +1099,7 @@ export interface operations {
                     "application/json": components["schemas"]["SyncResponse"];
                 };
             };
-            /** @description protocol_version is not one this server understands */
+            /** @description protocol_version is outside the range this server understands */
             426: {
                 headers: {
                     [name: string]: unknown;

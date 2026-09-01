@@ -34,7 +34,7 @@ export function SyncLoop() {
       // doesn't reliably flip that when backgrounded — the whole reason the
       // wake-signals platform seam exists.
       if (opened && isTabVisible()) {
-        await requestSync(opened.store, opened.deviceId);
+        await requestSync(opened.store, opened.taskStore, opened.deviceId);
       }
       return null;
     },
@@ -63,7 +63,7 @@ export function SyncLoop() {
       if (!isTabVisible()) {
         return;
       }
-      void requestSync(opened.store, opened.deviceId);
+      void requestSync(opened.store, opened.taskStore, opened.deviceId);
     });
   }, [opened]);
 

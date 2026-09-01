@@ -1,4 +1,4 @@
-import type { EntryStore } from "@meologue/core";
+import type { EntryStore, TaskStore } from "@meologue/core";
 import { sync } from "@meologue/core";
 import { refreshNewestEntriesPage } from "@/lib/entries-pagination";
 import { useSettingsStore } from "@/lib/settings";
@@ -15,13 +15,17 @@ let rerunRequested = false;
 // also recorded to `sync-status.ts` so the ambient indicator and Settings'
 // detail can both show it, and it keeps retrying on the next trigger either
 // way.
-async function runSyncOnce(store: EntryStore, deviceId: string): Promise<void> {
+async function runSyncOnce(
+  store: EntryStore,
+  taskStore: TaskStore,
+  deviceId: string,
+): Promise<void> {
   const serverUrl = useSettingsStore.getState().serverUrl;
   if (serverUrl === "") {
     return;
   }
   try {
-    await sync({ store, transport: syncTransport, deviceId });
+    await sync({ store, taskStore, transport: syncTransport, deviceId });
     // Issue #79: refreshes the newest loaded page only, not every page the
     // reader has scrolled back through — see refreshNewestEntriesPage's own
     // doc comment (entries-pagination.ts) for why a whole-key invalidation
@@ -47,7 +51,11 @@ async function runSyncOnce(store: EntryStore, deviceId: string): Promise<void> {
  * tick. Instead, an overlapping caller schedules exactly one more run right
  * after the current one finishes.
  */
-export function requestSync(store: EntryStore, deviceId: string): Promise<void> {
+export function requestSync(
+  store: EntryStore,
+  taskStore: TaskStore,
+  deviceId: string,
+): Promise<void> {
   if (syncInFlight) {
     rerunRequested = true;
     return syncInFlight;
@@ -55,7 +63,7 @@ export function requestSync(store: EntryStore, deviceId: string): Promise<void> 
   syncInFlight = (async () => {
     do {
       rerunRequested = false;
-      await runSyncOnce(store, deviceId);
+      await runSyncOnce(store, taskStore, deviceId);
     } while (rerunRequested);
   })().finally(() => {
     syncInFlight = null;

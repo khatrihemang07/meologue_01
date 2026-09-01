@@ -1,4 +1,4 @@
-import type { Entry, EntryStore } from "@meologue/core";
+import type { Entry, EntryStore, TaskStore } from "@meologue/core";
 import { mintId } from "@meologue/core";
 import { useInfiniteQuery, useMutation } from "@tanstack/react-query";
 import {
@@ -79,7 +79,11 @@ export interface UseHistoryResult {
  * An Entry renders from the local write immediately; nothing here waits on
  * the network.
  */
-export function useHistory(store: EntryStore, deviceId: string): UseHistoryResult {
+export function useHistory(
+  store: EntryStore,
+  taskStore: TaskStore,
+  deviceId: string,
+): UseHistoryResult {
   const entriesQuery = useInfiniteQuery({
     queryKey: ENTRIES_QUERY_KEY,
     // The first page ever fetched asks for the newest ENTRIES_PAGE_SIZE
@@ -138,7 +142,7 @@ export function useHistory(store: EntryStore, deviceId: string): UseHistoryResul
   // shares this same reasoning with).
   const afterLocalWrite = async () => {
     await refreshNewestEntriesPage(store);
-    void requestSync(store, deviceId);
+    void requestSync(store, taskStore, deviceId);
   };
 
   const sendEntryMutation = useMutation({

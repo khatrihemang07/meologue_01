@@ -329,7 +329,7 @@
         },
         "responses": {
           "200": {
-            "description": "Entries accepted; every Entry after since_seq is returned",
+            "description": "Entries (and, from protocol 5, Tasks) accepted; every change after since_seq/since_task_seq is returned",
             "content": {
               "application/json": {
                 "schema": {
@@ -339,7 +339,7 @@
             }
           },
           "426": {
-            "description": "protocol_version is not one this server understands"
+            "description": "protocol_version is outside the range this server understands"
           }
         }
       }
@@ -526,11 +526,12 @@
       },
       "HealthCapabilities": {
         "type": "object",
-        "description": "Which Server-backed features this Server can actually serve right now,\nderived from the same configuration `main.rs` already used to decide\nwhether `/v1/reflect`, `/v1/digests/*` and the embedding worker exist at\nall (issue #133). Reported alongside `HealthResponse` rather than left\nfor a Device to infer from probing each route in turn: a Device that only\nasked \"does `/v1/reflect` 404\" would still show a working-looking\nReflect row on a Server that has the route but no model behind it, since\n`router_with_digests` only ever gates *registration*, not per-request\nconfiguration checks.\n\n- `reflect` mirrors `reflect.is_some()` — the exact condition\n  `router_with_digests` gates `/v1/reflect`, `/v1/sessions*` and\n  `/v1/models` on.\n- `digest` mirrors `digests_enabled` — the exact bool `main.rs` computes\n  from `LlmConfig::digest_worker_config().is_some()` and\n  `router_with_digests` gates `/v1/digests/*` on.\n- `embeddings` reports whether Reflection's own embed client resolved\n  (`ReflectState::embed_client`). Issue #130: `reflect_config()` now\n  needs chat alone and hands back `None` for the embed half when no\n  embed config is resolvable, so a chat-only Server still reports\n  `reflect: true` while `embeddings: false` — exactly the Server on\n  which `reflect.rs`'s tool loop quietly omits `similar_entries`.",
+        "description": "Which Server-backed features this Server can actually serve right now,\nderived from the same configuration `main.rs` already used to decide\nwhether `/v1/reflect`, `/v1/digests/*` and the embedding worker exist at\nall (issue #133). Reported alongside `HealthResponse` rather than left\nfor a Device to infer from probing each route in turn: a Device that only\nasked \"does `/v1/reflect` 404\" would still show a working-looking\nReflect row on a Server that has the route but no model behind it, since\n`router_with_digests` only ever gates *registration*, not per-request\nconfiguration checks.\n\n- `reflect` mirrors `reflect.is_some()` — the exact condition\n  `router_with_digests` gates `/v1/reflect`, `/v1/sessions*` and\n  `/v1/models` on.\n- `digest` mirrors `digests_enabled` — the exact bool `main.rs` computes\n  from `LlmConfig::digest_worker_config().is_some()` and\n  `router_with_digests` gates `/v1/digests/*` on.\n- `embeddings` reports whether Reflection's own embed client resolved\n  (`ReflectState::embed_client`). Issue #130: `reflect_config()` now\n  needs chat alone and hands back `None` for the embed half when no\n  embed config is resolvable, so a chat-only Server still reports\n  `reflect: true` while `embeddings: false` — exactly the Server on\n  which `reflect.rs`'s tool loop quietly omits `similar_entries`.\n- `todo` — issue #172 / ADR 0051 — is **unconditionally `true`**, not\n  read off any `LlmConfig`. Task Sync has no model behind it and no\n  configuration that can disable it: any Server that answers\n  `/v1/health` at all is one that runs `sync_handler` and speaks\n  `PROTOCOL_VERSION` 5 (or the transitional 4), so it always accepts\n  Tasks the moment it accepts Entries. This is deliberately unlike the\n  three capabilities above, all of which name a real \"maybe not\" —\n  `todo` names a \"yes, structurally.\" It is reported anyway, rather\n  than left off `HealthCapabilities` entirely, because it exists for a\n  *different* reader than `chat-list.tsx`'s lock check\n  (`apps/web/src/components/chat-list.tsx`'s own header comment: Todo's\n  row is never locked by this field, since Todo works fully offline\n  like Composer): issue #175's Digest and Reflection coverage of Tasks\n  is what actually consults it, to tell \"this Server has never heard of\n  Tasks\" (an old build, protocol 4 behaviour) apart from \"this Server\n  has Tasks but nothing configured to talk about them,\" which no other\n  field here can distinguish.",
         "required": [
           "reflect",
           "digest",
-          "embeddings"
+          "embeddings",
+          "todo"
         ],
         "properties": {
           "digest": {
@@ -540,6 +541,9 @@
             "type": "boolean"
           },
           "reflect": {
+            "type": "boolean"
+          },
+          "todo": {
             "type": "boolean"
           }
         }
@@ -836,6 +840,18 @@
           "since_seq": {
             "type": "integer",
             "format": "int64"
+          },
+          "since_task_seq": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The Task stream's own Cursor (ADR 0051), alongside `since_seq`\nabove — two independent streams, two independent watermarks, never\none shared number (see `TASK_SYNC_INSERT_LOCK_KEY`'s doc comment\nfor the identical reasoning applied to the advisory lock).\n`#[serde(default)]`, not because a v5 Device ever omits it, but\nbecause a v4 Device's request body — built against the pre-#172\nwire shape — genuinely has no such key at all\n(`PROTOCOL_VERSION`'s own doc comment on the dual-version window).\nDeserializing that body must not fail just because Sync grew a\nsecond stream; defaulting to 0 is exactly \"this Device has never\nsynced a Task\", which is true of every v4 Device by construction."
+          },
+          "tasks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskInput"
+            },
+            "description": "The Task stream's own pending pushes, alongside `entries` above —\n`#[serde(default)]` for the identical reason `since_task_seq` is: a\nv4 Device's request body has no `tasks` key, and an empty default\nis exactly what \"this build has never pushed a Task, because it has\nno idea Tasks exist\" means. `run_sync` additionally never *acts* on\nthis even when a v4 body somehow carried one (see its own doc\ncomment) — belt and braces, since a real v4 build could never\nconstruct such a request in the first place."
           }
         }
       },
@@ -843,7 +859,9 @@
         "type": "object",
         "required": [
           "entries",
-          "cursor"
+          "cursor",
+          "tasks",
+          "task_cursor"
         ],
         "properties": {
           "cursor": {
@@ -855,6 +873,232 @@
             "items": {
               "$ref": "#/components/schemas/EntryOutput"
             }
+          },
+          "task_cursor": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "tasks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskOutput"
+            },
+            "description": "The Task stream's own pull, alongside `entries` above — one\nendpoint, one round trip (ADR 0051's own Alternatives section: a\nseparate `/v1/tasks/sync` was rejected precisely because it opens a\nwindow where an Entry references a Task that hasn't arrived yet).\nAlways present on the wire, unlike the request fields above:\nnothing about the *response* shape needs to tolerate an old\nDevice — a v4 Device simply never reads a JSON key its own build\npredates, the same way it already ignores any other field it\ndoesn't recognise. `run_sync` sets this to `[]` when\n`protocol_version < 5`, not because serde can't populate it, but\nbecause a v4 Device asked for Entries only and returning Tasks it\nhas no representation for — and never requested — would be\nanswering a question it didn't ask (see `run_sync`'s own doc\ncomment)."
+          }
+        }
+      },
+      "TaskInput": {
+        "type": "object",
+        "description": "The Task-shaped sibling of `EntryInput` (ADR 0047's second root noun,\nADR 0051's second Sync stream). Deliberately no collaboration column —\nsee `../migrations/0010_create_tasks.sql`'s own header comment, which\nmirrors `../../packages/core/src/task-types.ts`'s refusal exactly.\n\n`project_id`/`section_id`/`parent_id` are plain `Option<Uuid>`, not\nvalidated against anything: Projects, Sections and Labels do not sync\nin this ticket (issue #172's own scope decision, recorded in ADR 0051),\nso a Task can arrive here naming a Project this Server has never heard\nof. That is an accepted, transient state carried straight through — the\nidentical \"dangling cross-reference is not this store's problem to fix\"\nrule `../../packages/core/src/task-types.ts`'s own `projectId`/\n`labelIds` doc comments already state for the client side, applied here\nbecause there is genuinely nothing more this Server could check: it\nnever reads a `projects` or `labels` table at all.",
+        "required": [
+          "id",
+          "device_id",
+          "content",
+          "order_key",
+          "created_at",
+          "priority",
+          "label_ids"
+        ],
+        "properties": {
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "content": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Floating (`../../packages/core/src/task-types.ts`'s `date` doc\ncomment: never a `Z`, never an offset) — kept as a plain string\nrather than `DateTime<Utc>` for exactly that reason, the same way\n`dateString`/`deadline` below are."
+          },
+          "date_string": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deadline": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deleted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Tombstone — see `EntryInput::deleted_at`'s own doc comment; the\nidentical representation, reused for the identical reason (ADR\n0028, applied to Tasks by ADR 0047)."
+          },
+          "device_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "duration": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "label_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "order_key": {
+            "type": "string"
+          },
+          "parent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "priority": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "project_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "section_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        }
+      },
+      "TaskOutput": {
+        "type": "object",
+        "description": "The Task-shaped sibling of `EntryOutput` — see `TaskInput`'s own doc\ncomment for the fields it shares; this adds only `seq`, exactly as\n`EntryOutput` adds `seq` to `EntryInput`.",
+        "required": [
+          "id",
+          "device_id",
+          "content",
+          "order_key",
+          "created_at",
+          "seq",
+          "priority",
+          "label_ids"
+        ],
+        "properties": {
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "content": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "date": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "date_string": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deadline": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deleted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "device_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "duration": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "label_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "order_key": {
+            "type": "string"
+          },
+          "parent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "priority": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "project_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "section_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "seq": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       }

@@ -32,11 +32,29 @@ const SERVICE_MARKER: &str = "meologue-server";
 ///   embed config is resolvable, so a chat-only Server still reports
 ///   `reflect: true` while `embeddings: false` — exactly the Server on
 ///   which `reflect.rs`'s tool loop quietly omits `similar_entries`.
+/// - `todo` — issue #172 / ADR 0051 — is **unconditionally `true`**, not
+///   read off any `LlmConfig`. Task Sync has no model behind it and no
+///   configuration that can disable it: any Server that answers
+///   `/v1/health` at all is one that runs `sync_handler` and speaks
+///   `PROTOCOL_VERSION` 5 (or the transitional 4), so it always accepts
+///   Tasks the moment it accepts Entries. This is deliberately unlike the
+///   three capabilities above, all of which name a real "maybe not" —
+///   `todo` names a "yes, structurally." It is reported anyway, rather
+///   than left off `HealthCapabilities` entirely, because it exists for a
+///   *different* reader than `chat-list.tsx`'s lock check
+///   (`apps/web/src/components/chat-list.tsx`'s own header comment: Todo's
+///   row is never locked by this field, since Todo works fully offline
+///   like Composer): issue #175's Digest and Reflection coverage of Tasks
+///   is what actually consults it, to tell "this Server has never heard of
+///   Tasks" (an old build, protocol 4 behaviour) apart from "this Server
+///   has Tasks but nothing configured to talk about them," which no other
+///   field here can distinguish.
 #[derive(Debug, Clone, Copy, Serialize, ToSchema)]
 pub struct HealthCapabilities {
     pub reflect: bool,
     pub digest: bool,
     pub embeddings: bool,
+    pub todo: bool,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -81,6 +99,9 @@ pub async fn health_handler(
         reflect: reflect.is_some(),
         digest,
         embeddings: reflect.as_ref().is_some_and(|state| state.embed_client.is_some()),
+        // See HealthCapabilities::todo's own doc comment for why this is a
+        // bare `true` rather than reading anything off `LlmConfig`.
+        todo: true,
     };
 
     Json(HealthResponse {

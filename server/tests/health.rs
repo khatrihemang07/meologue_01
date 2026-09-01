@@ -191,6 +191,13 @@ async fn it_reports_every_capability_off_when_unconfigured() {
     assert_eq!(capabilities["reflect"], false);
     assert_eq!(capabilities["digest"], false);
     assert_eq!(capabilities["embeddings"], false);
+    // Issue #172 / ADR 0051: `todo` is the one capability that is not read
+    // off `LlmConfig` at all — see `HealthCapabilities::todo`'s own doc
+    // comment. Asserted `true` in the single most "everything off" config
+    // this file has, specifically to prove it really is unconditional
+    // rather than only true whenever something else happens to be
+    // configured too.
+    assert_eq!(capabilities["todo"], true);
 }
 
 #[tokio::test]
@@ -206,6 +213,7 @@ async fn it_reports_reflect_and_digest_on_with_no_embed_client() {
     assert_eq!(capabilities["reflect"], true);
     assert_eq!(capabilities["digest"], true);
     assert_eq!(capabilities["embeddings"], false);
+    assert_eq!(capabilities["todo"], true);
 }
 
 #[tokio::test]
@@ -220,4 +228,5 @@ async fn it_reports_embeddings_on_only_once_an_embed_client_resolved() {
     // client resolved and still have no Digest worker running.
     assert_eq!(capabilities["digest"], false);
     assert_eq!(capabilities["embeddings"], true);
+    assert_eq!(capabilities["todo"], true);
 }

@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { compareByOrder, orderKeyBetween } from "./order-key";
+import type { SyncTransport } from "./sync-engine";
+import { sync } from "./sync-engine";
 import type { Task } from "./task-types";
+import { InMemoryEntryStore } from "./test-support/in-memory-entry-store";
 import { InMemoryTaskStore } from "./test-support/in-memory-task-store";
 import { task } from "./test-support/task-fixture";
+import type { WireTaskOutput } from "./wire";
 
 /**
  * The test ADR 0050 exists to justify: two Devices reordering a shared
@@ -208,6 +212,124 @@ describe("Task order convergence (ADR 0050)", () => {
     const item3A = finalA.find((t) => t.id === "item-3");
     expect(item3A?.orderKey).toBe(bTargetKey);
     expect(item3A?.orderKey).not.toBe(aTargetKey);
+  });
+});
+
+/**
+ * The counterpart to the ordering-convergence test above, for a plain
+ * content edit rather than a drag — issue #172 / ADR 0051's own
+ * acceptance bar: "a Task edited on two stores while both are pending
+ * converges to one value after both sync." Where the tests above exercise
+ * `InMemoryTaskStore` directly against a hand-rolled `syncOnce` (there was
+ * no real Task wire protocol yet when ADR 0050 landed — this file's own
+ * header comment on `FakeTaskServer`), this exercises the real, now-wired
+ * `sync()` (../sync-engine.ts) against a fake transport shaped exactly
+ * like the real `/v1/sync` contract (`WireSyncResponse`) — proving the
+ * actual mapping and upsert path this ticket built, not only the
+ * store-level behaviour underneath it.
+ */
+class FakeSyncServer {
+  private readonly taskRows = new Map<string, { task: WireTaskOutput; seq: number }>();
+  private taskSeq = 0;
+
+  // A compacted change log keyed by Task id (ADR 0028, reused for Tasks by
+  // ADR 0047) — the identical shape server/src/sync.rs's own `insert_tasks`
+  // implements: each push overwrites the current row for a given id
+  // wholesale and hands it a fresh, monotonically increasing seq. There is
+  // no per-field merge and no memory of the row it replaced, which is
+  // exactly what makes this last-write-wins-by-arrival rather than
+  // "cleverest edit wins."
+  transport: SyncTransport = async (request) => {
+    // `tasks`/`since_task_seq` are optional on WireSyncRequest solely to
+    // tolerate a v4 Device's request body, which has no such keys at all
+    // (server/src/sync.rs's own SyncRequest doc comment) — this Device
+    // always sends both, since it's this ticket's own real sync() engine,
+    // but the wire type has to admit the v4 case regardless.
+    const pushedTasks = request.tasks ?? [];
+    const sinceTaskSeq = request.since_task_seq ?? 0;
+    for (const t of pushedTasks) {
+      this.taskSeq += 1;
+      this.taskRows.set(t.id, { task: { ...t, seq: this.taskSeq }, seq: this.taskSeq });
+    }
+    const tasks = [...this.taskRows.values()]
+      .filter((row) => row.seq > sinceTaskSeq)
+      .map((row) => row.task);
+    const taskCursor = tasks.reduce((max, t) => Math.max(max, t.seq), sinceTaskSeq);
+    // This test never touches the Entry stream — entries always empty,
+    // the Entry Cursor never advances past whatever this Device already
+    // claims. One endpoint carries both streams regardless (ADR 0051), so
+    // a real WireSyncResponse still has to answer both.
+    return { entries: [], cursor: request.since_seq, tasks, task_cursor: taskCursor };
+  };
+}
+
+describe("Task content convergence (issue #172 / ADR 0051)", () => {
+  it("a Task renamed on two stores while both are pending converges to one value after both sync", async () => {
+    const server = new FakeSyncServer();
+    const entryStoreA = new InMemoryEntryStore();
+    const entryStoreB = new InMemoryEntryStore();
+    const taskStoreA = new InMemoryTaskStore();
+    const taskStoreB = new InMemoryTaskStore();
+    const taskId = "shared-task";
+
+    const syncA = () =>
+      sync({
+        store: entryStoreA,
+        taskStore: taskStoreA,
+        transport: server.transport,
+        deviceId: "device-a",
+      });
+    const syncB = () =>
+      sync({
+        store: entryStoreB,
+        taskStore: taskStoreB,
+        transport: server.transport,
+        deviceId: "device-b",
+      });
+
+    // Seed: Device A creates the Task and syncs it up; Device B then pulls
+    // that same, already-converged Task down — the common ancestor both
+    // Devices' offline edits diverge from.
+    await taskStoreA.upsert([task({ id: taskId, content: "buy milk", seq: null })]);
+    await syncA();
+    await syncB();
+    expect((await taskStoreB.get(taskId))?.content).toBe("buy milk");
+
+    // Both Devices, independently and offline, rename the *same* Task to
+    // two different things.
+    await taskStoreA.rename(taskId, "buy milk and eggs");
+    await taskStoreB.rename(taskId, "buy oat milk");
+
+    // Fractional-index reasoning doesn't apply to a content edit — there
+    // is exactly one `content` column, so this is a genuine collision on
+    // one field, not two independent writes the way reordering two
+    // different Tasks is. Both renames are pending until synced.
+    expect((await taskStoreA.pending()).map((t) => t.id)).toEqual([taskId]);
+    expect((await taskStoreB.pending()).map((t) => t.id)).toEqual([taskId]);
+
+    // A syncs first, then B — B's push is the one that arrives at the
+    // server last, so ADR 0028's last-write-wins-by-arrival (reused for
+    // Tasks by ADR 0047, not reinvented) makes B's rename the one that
+    // survives. A second round each so both Devices actually observe the
+    // final, converged state — mirrors this file's own ordering-
+    // convergence tests above.
+    await syncA();
+    await syncB();
+    await syncA();
+    await syncB();
+
+    const finalA = await taskStoreA.get(taskId);
+    const finalB = await taskStoreB.get(taskId);
+
+    // Converged: both Devices agree —
+    expect(finalA?.content).toBe(finalB?.content);
+    // — and it's specifically B's rename that won, not some third value
+    // and not "both preserved" (which isn't coherent for one Task with one
+    // `content` column). A merge that silently discarded A's edit is
+    // exactly last-write-wins working as designed for a genuinely
+    // contested field, not a bug this ticket owes a fix for.
+    expect(finalA?.content).toBe("buy oat milk");
+    expect(finalA?.content).not.toBe("buy milk and eggs");
   });
 });
 

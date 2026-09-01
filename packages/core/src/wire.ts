@@ -10,6 +10,9 @@ export type WireSyncRequest = components["schemas"]["SyncRequest"];
 export type WireSyncResponse = components["schemas"]["SyncResponse"];
 export type WireEntryInput = components["schemas"]["EntryInput"];
 export type WireEntryOutput = components["schemas"]["EntryOutput"];
+// Issue #172 / ADR 0051: Sync's second entity stream.
+export type WireTaskInput = components["schemas"]["TaskInput"];
+export type WireTaskOutput = components["schemas"]["TaskOutput"];
 export type WireSessionResponse = components["schemas"]["SessionResponse"];
 export type WireSessionTurn = components["schemas"]["SessionTurnRow"];
 export type WireSessionSummary = components["schemas"]["SessionRow"];

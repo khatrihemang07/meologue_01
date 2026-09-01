@@ -1,4 +1,4 @@
-import type { Entry, EntryPage, EntryStore } from "@meologue/core";
+import type { Entry, EntryPage, EntryStore, TaskStore } from "@meologue/core";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
@@ -51,6 +51,43 @@ function createFakeStore(): EntryStore {
   };
 }
 
+// Issue #172 / ADR 0051: useHistory takes a TaskStore purely to hand it
+// through to requestSync (mocked above via `requestSyncMock`) — nothing
+// in useHistory.ts itself ever calls a method on it, so a bare stub is
+// enough for every test in this file.
+function createFakeTaskStore(): TaskStore {
+  return {
+    list: vi.fn(async () => []),
+    listByProject: vi.fn(async () => []),
+    listChildren: vi.fn(async () => []),
+    listInSection: vi.fn(async () => []),
+    listDescendants: vi.fn(async () => []),
+    listCompleted: vi.fn(async () => []),
+    get: vi.fn(async () => undefined),
+    upsert: vi.fn(async () => {}),
+    complete: vi.fn(async () => {}),
+    uncomplete: vi.fn(async () => {}),
+    rename: vi.fn(async () => {}),
+    reorder: vi.fn(async () => {}),
+    setDate: vi.fn(async () => {}),
+    setDeadline: vi.fn(async () => {}),
+    setDuration: vi.fn(async () => {}),
+    setPriority: vi.fn(async () => {}),
+    setLabelIds: vi.fn(async () => {}),
+    setProject: vi.fn(async () => {}),
+    setSection: vi.fn(async () => {}),
+    setParent: vi.fn(async () => {}),
+    advanceRecurring: vi.fn(async () => {}),
+    completeForever: vi.fn(async () => {}),
+    postpone: vi.fn(async () => {}),
+    remove: vi.fn(async () => {}),
+    pending: vi.fn(async () => []),
+    getCursor: vi.fn(async () => 0),
+    setCursor: vi.fn(async () => {}),
+    search: vi.fn(async () => []),
+  };
+}
+
 describe("useHistory", () => {
   beforeEach(() => {
     localStorage.clear();
@@ -59,11 +96,12 @@ describe("useHistory", () => {
 
   async function renderUseHistory(store: EntryStore, deviceId = "device-a") {
     const fresh = await importFresh();
+    const taskStore = createFakeTaskStore();
     const wrapper = ({ children }: { children: ReactNode }) => (
       <QueryClientProvider client={fresh.queryClient}>{children}</QueryClientProvider>
     );
     const rendered = renderHook<ReturnType<typeof UseHistory>, void>(
-      () => (fresh.useHistory as typeof UseHistory)(store, deviceId),
+      () => (fresh.useHistory as typeof UseHistory)(store, taskStore, deviceId),
       { wrapper },
     );
     return { fresh, ...rendered };
@@ -119,7 +157,9 @@ describe("useHistory", () => {
 
     act(() => result.current.sendEntry("hello"));
 
-    await waitFor(() => expect(requestSyncMock).toHaveBeenCalledWith(store, "device-a"));
+    await waitFor(() =>
+      expect(requestSyncMock).toHaveBeenCalledWith(store, expect.anything(), "device-a"),
+    );
   });
 
   describe("editEntry (ADR 0028)", () => {
@@ -131,7 +171,9 @@ describe("useHistory", () => {
       act(() => result.current.editEntry("1", "an edited body"));
 
       await waitFor(() => expect(store.edit).toHaveBeenCalledWith("1", "an edited body"));
-      await waitFor(() => expect(requestSyncMock).toHaveBeenCalledWith(store, "device-a"));
+      await waitFor(() =>
+        expect(requestSyncMock).toHaveBeenCalledWith(store, expect.anything(), "device-a"),
+      );
     });
 
     it("trims the body the same way sendEntry does", async () => {
@@ -165,7 +207,9 @@ describe("useHistory", () => {
       act(() => result.current.removeEntry(entry({ id: "7" })));
 
       await waitFor(() => expect(store.remove).toHaveBeenCalledWith("7"));
-      await waitFor(() => expect(requestSyncMock).toHaveBeenCalledWith(store, "device-a"));
+      await waitFor(() =>
+        expect(requestSyncMock).toHaveBeenCalledWith(store, expect.anything(), "device-a"),
+      );
     });
 
     // Issue #82 removed the Undo toast and its restore mutation: with a

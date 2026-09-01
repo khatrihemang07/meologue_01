@@ -6,7 +6,7 @@ use crate::llm::ModelInfo;
 use crate::models::ModelsResponse;
 use crate::reflect::{ReflectRequest, ReflectResponse};
 use crate::sessions::{SessionResponse, SessionRow, SessionTurnRow};
-use crate::sync::{EntryInput, EntryOutput, SyncRequest, SyncResponse};
+use crate::sync::{EntryInput, EntryOutput, SyncRequest, SyncResponse, TaskInput, TaskOutput};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -29,6 +29,8 @@ use crate::sync::{EntryInput, EntryOutput, SyncRequest, SyncResponse};
         SyncResponse,
         EntryInput,
         EntryOutput,
+        TaskInput,
+        TaskOutput,
         ReflectRequest,
         ReflectResponse,
         SessionResponse,

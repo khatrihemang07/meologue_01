@@ -748,7 +748,11 @@ export function EntryStoreLayout() {
   const projectStore = data?.projectStore ?? pendingProjectStore;
   const deviceId = data?.deviceId ?? "";
 
-  const { entries, pagination, sendEntry, editEntry, removeEntry } = useHistory(store, deviceId);
+  const { entries, pagination, sendEntry, editEntry, removeEntry } = useHistory(
+    store,
+    taskStore,
+    deviceId,
+  );
   const {
     tasks,
     completedTasks,

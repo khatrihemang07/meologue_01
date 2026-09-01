@@ -1,4 +1,4 @@
-import type { Entry, EntryStore } from "@meologue/core";
+import type { Entry, EntryStore, TaskStore } from "@meologue/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ENTRIES_QUERY_KEY } from "@/lib/query-keys";
 import { useSettingsStore } from "@/lib/settings";
@@ -45,6 +45,44 @@ function createFakeStore(): EntryStore {
   };
 }
 
+// Issue #172 / ADR 0051: requestSync carries both streams — a bare stub
+// suffices here, since `sync()` itself is mocked (`syncMock` above) and
+// every test in this file is only checking that `requestSync` coalesces
+// calls and reports status correctly, not exercising real TaskStore
+// behaviour.
+function createFakeTaskStore(): TaskStore {
+  return {
+    list: vi.fn(async () => []),
+    listByProject: vi.fn(async () => []),
+    listChildren: vi.fn(async () => []),
+    listInSection: vi.fn(async () => []),
+    listDescendants: vi.fn(async () => []),
+    listCompleted: vi.fn(async () => []),
+    get: vi.fn(async () => undefined),
+    upsert: vi.fn(async () => {}),
+    complete: vi.fn(async () => {}),
+    uncomplete: vi.fn(async () => {}),
+    rename: vi.fn(async () => {}),
+    reorder: vi.fn(async () => {}),
+    setDate: vi.fn(async () => {}),
+    setDeadline: vi.fn(async () => {}),
+    setDuration: vi.fn(async () => {}),
+    setPriority: vi.fn(async () => {}),
+    setLabelIds: vi.fn(async () => {}),
+    setProject: vi.fn(async () => {}),
+    setSection: vi.fn(async () => {}),
+    setParent: vi.fn(async () => {}),
+    advanceRecurring: vi.fn(async () => {}),
+    completeForever: vi.fn(async () => {}),
+    postpone: vi.fn(async () => {}),
+    remove: vi.fn(async () => {}),
+    pending: vi.fn(async () => []),
+    getCursor: vi.fn(async () => 0),
+    setCursor: vi.fn(async () => {}),
+    search: vi.fn(async () => []),
+  };
+}
+
 describe("requestSync", () => {
   beforeEach(() => {
     localStorage.clear();
@@ -55,19 +93,23 @@ describe("requestSync", () => {
   it("runs a sync when a Server URL is configured", async () => {
     const { requestSync } = await importFresh();
     const store = createFakeStore();
+    const taskStore = createFakeTaskStore();
 
-    await requestSync(store, "device-a");
+    await requestSync(store, taskStore, "device-a");
 
     expect(syncMock).toHaveBeenCalledTimes(1);
-    expect(syncMock).toHaveBeenCalledWith(expect.objectContaining({ store, deviceId: "device-a" }));
+    expect(syncMock).toHaveBeenCalledWith(
+      expect.objectContaining({ store, taskStore, deviceId: "device-a" }),
+    );
   });
 
   it("does nothing with no Server URL configured (ADR 0011)", async () => {
     useSettingsStore.getState().setServerUrl("");
     const { requestSync } = await importFresh();
     const store = createFakeStore();
+    const taskStore = createFakeTaskStore();
 
-    await requestSync(store, "device-a");
+    await requestSync(store, taskStore, "device-a");
 
     expect(syncMock).not.toHaveBeenCalled();
   });
@@ -75,6 +117,7 @@ describe("requestSync", () => {
   it("coalesces concurrent callers into a single in-flight sync", async () => {
     const { requestSync } = await importFresh();
     const store = createFakeStore();
+    const taskStore = createFakeTaskStore();
     let resolveSync: () => void = () => {};
     syncMock.mockImplementationOnce(
       () =>
@@ -83,8 +126,8 @@ describe("requestSync", () => {
         }),
     );
 
-    const first = requestSync(store, "device-a");
-    const second = requestSync(store, "device-a");
+    const first = requestSync(store, taskStore, "device-a");
+    const second = requestSync(store, taskStore, "device-a");
     expect(syncMock).toHaveBeenCalledTimes(1);
 
     resolveSync();
@@ -99,6 +142,7 @@ describe("requestSync", () => {
   it("runs once more for a caller that arrives mid-flight, rather than dropping it", async () => {
     const { requestSync } = await importFresh();
     const store = createFakeStore();
+    const taskStore = createFakeTaskStore();
     let resolveFirst: () => void = () => {};
     syncMock.mockImplementationOnce(
       () =>
@@ -107,11 +151,11 @@ describe("requestSync", () => {
         }),
     );
 
-    const first = requestSync(store, "device-a");
+    const first = requestSync(store, taskStore, "device-a");
     expect(syncMock).toHaveBeenCalledTimes(1);
 
     // Arrives while the first run is still in flight.
-    const second = requestSync(store, "device-a");
+    const second = requestSync(store, taskStore, "device-a");
     resolveFirst();
     await Promise.all([first, second]);
 
@@ -121,6 +165,7 @@ describe("requestSync", () => {
   it("never runs two syncs concurrently, even across a mid-flight rerun", async () => {
     const { requestSync } = await importFresh();
     const store = createFakeStore();
+    const taskStore = createFakeTaskStore();
     let concurrent = 0;
     let maxConcurrent = 0;
     syncMock.mockImplementation(async () => {
@@ -130,8 +175,8 @@ describe("requestSync", () => {
       concurrent--;
     });
 
-    const first = requestSync(store, "device-a");
-    const second = requestSync(store, "device-a");
+    const first = requestSync(store, taskStore, "device-a");
+    const second = requestSync(store, taskStore, "device-a");
     await Promise.all([first, second]);
 
     expect(maxConcurrent).toBe(1);
@@ -146,8 +191,9 @@ describe("requestSync", () => {
     it("records a successful attempt", async () => {
       const { requestSync, useSyncStatusStore } = await importFresh();
       const store = createFakeStore();
+      const taskStore = createFakeTaskStore();
 
-      await requestSync(store, "device-a");
+      await requestSync(store, taskStore, "device-a");
 
       expect(useSyncStatusStore.getState().lastAttempt).toEqual({
         url: "https://server.example",
@@ -158,10 +204,11 @@ describe("requestSync", () => {
     it("records a failed attempt with the error's reason, without throwing out of requestSync", async () => {
       const { requestSync, useSyncStatusStore } = await importFresh();
       const store = createFakeStore();
+      const taskStore = createFakeTaskStore();
       const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
       syncMock.mockRejectedValueOnce(new Error("sync request failed with status 500"));
 
-      await expect(requestSync(store, "device-a")).resolves.toBeUndefined();
+      await expect(requestSync(store, taskStore, "device-a")).resolves.toBeUndefined();
 
       expect(useSyncStatusStore.getState().lastAttempt).toEqual({
         url: "https://server.example",
@@ -174,13 +221,14 @@ describe("requestSync", () => {
     it("clears a recorded failure once a later attempt succeeds", async () => {
       const { requestSync, useSyncStatusStore } = await importFresh();
       const store = createFakeStore();
+      const taskStore = createFakeTaskStore();
       vi.spyOn(console, "error").mockImplementation(() => {});
       syncMock.mockRejectedValueOnce(new Error("boom"));
 
-      await requestSync(store, "device-a");
+      await requestSync(store, taskStore, "device-a");
       expect(useSyncStatusStore.getState().lastAttempt?.outcome).toBe("failing");
 
-      await requestSync(store, "device-a");
+      await requestSync(store, taskStore, "device-a");
 
       expect(useSyncStatusStore.getState().lastAttempt).toEqual({
         url: "https://server.example",
@@ -192,8 +240,9 @@ describe("requestSync", () => {
       useSettingsStore.getState().setServerUrl("");
       const { requestSync, useSyncStatusStore } = await importFresh();
       const store = createFakeStore();
+      const taskStore = createFakeTaskStore();
 
-      await requestSync(store, "device-a");
+      await requestSync(store, taskStore, "device-a");
 
       expect(useSyncStatusStore.getState().lastAttempt).toBeNull();
     });
@@ -222,6 +271,7 @@ describe("requestSync", () => {
     it("on success, refreshes only the newest loaded page, leaving older loaded pages untouched", async () => {
       const { requestSync, queryClient } = await importFresh();
       const store = createFakeStore();
+      const taskStore = createFakeTaskStore();
       const boundary = { createdAt: "2026-01-05T00:00:00.000Z", id: "boundary" };
       const pageOne = [entry({ id: "old-1" })];
       const pageTwo = [entry({ id: "old-2" })];
@@ -232,7 +282,7 @@ describe("requestSync", () => {
       const refreshedPageOne = [entry({ id: "old-1" }), entry({ id: "new-from-sync" })];
       (store.list as ReturnType<typeof vi.fn>).mockResolvedValueOnce(refreshedPageOne);
 
-      await requestSync(store, "device-a");
+      await requestSync(store, taskStore, "device-a");
 
       // Bounded by the second page's own cursor, not a fixed page size —
       // see refreshNewestEntriesPage's own doc comment for why.
@@ -246,10 +296,11 @@ describe("requestSync", () => {
     it("leaves the entries cache untouched when sync fails", async () => {
       const { requestSync } = await importFresh();
       const store = createFakeStore();
+      const taskStore = createFakeTaskStore();
       vi.spyOn(console, "error").mockImplementation(() => {});
       syncMock.mockRejectedValueOnce(new Error("boom"));
 
-      await requestSync(store, "device-a");
+      await requestSync(store, taskStore, "device-a");
 
       // list() is never called by requestSync's own refresh path when
       // sync() itself throws first — the refresh only runs after a
