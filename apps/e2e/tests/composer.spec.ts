@@ -1,3 +1,4 @@
+import type { Locator, Page } from "@playwright/test";
 import { expect, test } from "@playwright/test";
 import { SERVER_A_DATABASE } from "../servers";
 import {
@@ -26,6 +27,28 @@ import {
  * same reasoning, which is why `sendEntry`/`editEntryViaMenu` themselves
  * switched to the same technique for every other spec in this suite.
  */
+
+/**
+ * Move the caret to the start of its line AND wait for the editor to know
+ * it. See the long note at the Backspace test's own call site for why the
+ * second half is load-bearing rather than a sleep — in short, a caret move
+ * reaches ProseMirror's state a task later than the keypress that caused
+ * it, and a command reading the selection in between gets the old one.
+ */
+async function caretToStartOfLine(page: Page, editor: Locator): Promise<void> {
+  await editor.press("Home");
+  await expect
+    .poll(async () =>
+      page.evaluate(() => {
+        const selection = window.getSelection();
+        return selection === null ? -1 : selection.anchorOffset;
+      }),
+    )
+    .toBe(0);
+  // One more turn of the event loop after the DOM selection has settled, so
+  // DOMObserver's flush of that `selectionchange` has actually run.
+  await page.waitForTimeout(50);
+}
 
 test("typing consumes the marker characters and applies the formatting", async ({ page }) => {
   await page.goto("/composer");
@@ -436,7 +459,22 @@ test("Backspace at the very start of a list item lifts it out one level, and out
   // Backspace only lifts at the very START of an item's own paragraph —
   // move there explicitly rather than relying on wherever typing left the
   // caret.
-  await editor.press("Home");
+  //
+  // `caretToStartOfLine` rather than a bare `press("Home")`, and the wait
+  // inside it is not padding. ProseMirror does not learn about a caret move
+  // from the keypress that caused it: the browser moves the DOM selection,
+  // fires `selectionchange`, and `DOMObserver` flushes that into editor
+  // state on a LATER task. Playwright can press the next key inside that
+  // window, and then every command in the Backspace chain reads a stale
+  // selection — `liftAtStartOfListItem` sees `parentOffset` still at the end
+  // of the word, declines, `baseKeymap`'s own chain declines for the same
+  // reason, nothing calls `preventDefault`, and the BROWSER performs a
+  // native contenteditable Backspace from the real DOM position. That
+  // merged the two items' paragraphs into `<p>topmid</p>` — a shape no
+  // command here would ever produce. Verified by instrumenting the command
+  // and reading the page console: it was invoked with `parentOffset: 3`
+  // while the DOM selection was at 0.
+  await caretToStartOfLine(page, editor);
   await editor.press("Backspace");
 
   // Lifted one level, not merged into "top"'s own text: "mid" is once

@@ -191,13 +191,31 @@ function CompletedStyleRow({
       <div data-completed-style={option.id} aria-hidden="true" className="pointer-events-none">
         <ul className="m-0 list-none p-0">
           <li className="flex list-none items-baseline gap-1.5">
-            <input
-              type="checkbox"
-              checked
-              disabled
-              className="mt-[0.2em] shrink-0 accent-current"
-            />
-            <div className="min-w-0 flex-1 text-sm">Buy milk</div>
+            {/*
+             * A drawn box, deliberately NOT an `<input type="checkbox">`.
+             * This preview is decorative — it illustrates what a finished
+             * item looks like; there is nothing here to tick. A real form
+             * control was a genuine defect, and `settings.spec.ts` caught
+             * it: that suite's touch-target sweep finds controls with the
+             * CSS selector `fieldset input`, which `aria-hidden` does not
+             * exclude, and reported a 13px-tall, unnamed, focusable,
+             * tabbable checkbox in each of these four rows. Four extra tab
+             * stops that announce nothing, inside a button that is itself
+             * the control. A `<span>` cannot be focused, cannot be tabbed
+             * to, and cannot be mistaken for something to click.
+             *
+             * `border-current` rather than a fixed colour: these rows
+             * render on both the `default` and `outline` Button variants,
+             * whose foregrounds differ, and the box has to stay visible on
+             * each. The sample TEXT beside it deliberately does not inherit
+             * that — it wears `.completed-sample`, which reads the same two
+             * custom properties the real render paths read, so the preview
+             * is showing the actual styling rather than an imitation of it.
+             */}
+            <span className="mt-[0.2em] flex size-3.5 shrink-0 items-center justify-center rounded-[3px] border border-current text-[0.6rem] leading-none">
+              ✓
+            </span>
+            <div className="completed-sample min-w-0 flex-1 text-sm">Buy milk</div>
           </li>
         </ul>
       </div>

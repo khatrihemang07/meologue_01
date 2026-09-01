@@ -487,7 +487,8 @@
  * individually.
  */
 @layer base {
-  li.list-none input[type="checkbox"]:checked ~ div {
+  li.list-none input[type="checkbox"]:checked ~ div,
+  .completed-sample {
     text-decoration: var(--checked-list-text-decoration);
     color: var(--checked-list-text-color, var(--foreground));
   }
