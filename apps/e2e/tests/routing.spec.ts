@@ -42,22 +42,26 @@ test("/settings loads directly, survives a hard reload, and Back reaches a worki
   await expect(page.getByText(body)).toBeVisible();
 });
 
-// ADR 0036's headline shape: `/` is a list of exactly four rows you navigate
+// ADR 0036's headline shape: `/` is a list of exactly five rows you navigate
 // away from, and opening one is a full-bleed push. The count is asserted
 // here for the same reason the retired `nav.test.tsx` asserted it — every
-// ADR since 0018 has kept it inside Material 3's three-to-five bound, and
-// ADR 0036 declined to add a fifth for Reflect's Sessions.
-test("the root screen is a list of four destinations, each of which opens", async ({ page }) => {
+// ADR since 0018 kept it at four, inside Material 3's three-to-five bound,
+// until issue #168's Todo (ADR 0047) actually reached the fifth slot ADR
+// 0036 declined to give Reflect's Sessions.
+test("the root screen is a list of five destinations, each of which opens", async ({ page }) => {
   await page.setViewportSize(NARROW);
   await page.goto("/");
 
   const rows = page.getByRole("navigation", { name: "Chats" }).getByRole("link");
-  await expect(rows).toHaveCount(4);
+  await expect(rows).toHaveCount(5);
 
   for (const [name, url] of [
     ["Composer", "/composer"],
     ["Reflect", "/reflect"],
     ["Digest", "/digest"],
+    // `/todo` itself redirects to `/todo/inbox` (App.tsx) — the URL this
+    // opens onto, not the row's own `to`.
+    ["Todo", "/todo/inbox"],
     ["Settings", "/settings"],
   ] as const) {
     await page.goto("/");

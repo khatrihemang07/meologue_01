@@ -1,9 +1,10 @@
-import type { Entry, EntryStore } from "@meologue/core";
+import type { Entry, EntryStore, Task, TaskStore } from "@meologue/core";
 import { open } from "@meologue/core";
 import { queryOptions, useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { Outlet, useOutletContext } from "react-router";
 import { type UseHistoryPagination, useHistory } from "@/hooks/use-history";
+import { useTasks } from "@/hooks/use-tasks";
 import { dayHasEntries } from "@/lib/day-has-entries";
 import { dayReferrers } from "@/lib/day-referrers";
 import { deferStore, type StoreMethodNames } from "@/lib/defer-store";
@@ -102,6 +103,32 @@ export interface EntryStoreOutletContext {
   /** ADR 0028 — see use-history.ts's own doc comment for what these do and why removeEntry takes the whole Entry. */
   editEntry: (id: string, body: string) => void;
   removeEntry: (entry: Entry) => void;
+  /**
+   * Todo's Tasks (issue #168, ADR 0047) — the Task-shaped sibling of
+   * `entries`/`pagination`/`sendEntry`/`editEntry`/`removeEntry` above,
+   * built the same way for the same reason: `useTasks` (use-tasks.ts) runs
+   * once, here, above every route this layout wraps, rather than each Todo
+   * view opening its own subscription to the same TaskStore. `/todo` and
+   * `/todo/inbox` are routed under this layout (App.tsx) precisely so this
+   * field exists for them, the same way `entries` exists for `/`.
+   *
+   * Not optional, unlike `dayHasEntries`/`dayReferrers`/`getEntry` further
+   * up: those are optional because most of this context's builders
+   * (reflection-page.test.tsx and friends) predate the Reference features
+   * that need them and have nothing to supply. Every builder of this
+   * context is this file's own two `satisfies` literals below, and both
+   * supply a real value (the not-ready stand-ins just beneath this
+   * interface), so there is no caller this field could be missing for.
+   */
+  tasks: Task[];
+  /** Completed Tasks, newest first — TaskStore.listCompleted(), the other half of `tasks` above. */
+  completedTasks: Task[];
+  addTask: (content: string) => void;
+  completeTask: (id: string) => void;
+  uncompleteTask: (id: string) => void;
+  renameTask: (id: string, content: string) => void;
+  reorderTask: (id: string, orderKey: string) => void;
+  removeTask: (id: string) => void;
   disabled: boolean;
   message?: string;
 }
@@ -223,6 +250,23 @@ function noopEdit(_id: string, _body: string) {}
 
 function noopRemove(_entry: Entry) {}
 
+// Todo's own not-ready stand-ins (issue #168), same reasoning as
+// `noopEdit`/`noopRemove` just above: the Inbox rendered while `disabled`
+// is true has no Tasks to act on (`tasks: []` below), but every field
+// `EntryStoreOutletContext` declares still has to exist so `useEntryStore`
+// never returns a shape a page has to null-check.
+function noopAddTask(_content: string) {}
+
+function noopCompleteTask(_id: string) {}
+
+function noopUncompleteTask(_id: string) {}
+
+function noopRenameTask(_id: string, _content: string) {}
+
+function noopReorderTask(_id: string, _orderKey: string) {}
+
+function noopRemoveTask(_id: string) {}
+
 function noopFetchMore() {}
 
 // Mirrors `entries: []` just above: nothing to page through before the
@@ -266,18 +310,47 @@ function deferUntilOpen(promise: Promise<{ store: EntryStore; deviceId: string }
   return deferStore(promise, ({ store }) => store, ENTRY_STORE_METHODS);
 }
 
+// Issue #168's own reason #167 pulled `deferStore` out of `deferUntilOpen`
+// in the first place: a second deferred facade, over the identical open
+// promise, needs nothing but a second `select` and a second method list —
+// see `defer-store.ts`'s own doc comment.
+const TASK_STORE_METHODS: StoreMethodNames<TaskStore> = {
+  list: true,
+  listCompleted: true,
+  get: true,
+  upsert: true,
+  complete: true,
+  uncomplete: true,
+  rename: true,
+  reorder: true,
+  remove: true,
+  pending: true,
+  getCursor: true,
+  setCursor: true,
+  search: true,
+};
+
+function deferTaskStoreUntilOpen(
+  promise: Promise<{ taskStore: TaskStore; deviceId: string }>,
+): TaskStore {
+  return deferStore(promise, ({ taskStore }) => taskStore, TASK_STORE_METHODS);
+}
+
 /**
- * The composition root for ADR 0001 and ADR 0013: opens the Entry store and
- * runs `useHistory` exactly once, above the routes that read from it — `/`,
- * `/reflect` and `/digest` (ticket 27, extended by ADR 0020 and issue #71;
- * issue #75 deleted `/history`, once a fourth), which all render whatever
- * this layout puts on the outlet context rather than each owning their own
- * store. Settings is a sibling route outside this layout, not a child of it
- * (ADR 0008): it must stay usable even when the store below never reaches
- * "ready", and the only way to guarantee that structurally is to keep it
- * off this component's subtree entirely — unchanged by issue #75 moving
- * Settings into the persistent Nav, since that only changed how a reader
- * reaches `/settings`, not where the route sits in this tree.
+ * The composition root for ADR 0001, ADR 0013 and ADR 0047: opens the Entry
+ * store and the Task store together (one `open()` call, one shared
+ * `SqliteDriver` — ADR 0047's own "no second OPFS lock" decision), and runs
+ * `useHistory` and `useTasks` exactly once each, above the routes that read
+ * from them — `/`, `/reflect`, `/digest`, `/todo` and `/todo/inbox` (ticket
+ * 27, extended by ADR 0020, issue #71 and issue #168; issue #75 deleted
+ * `/history`, once a fourth), which all render whatever this layout puts on
+ * the outlet context rather than each owning their own store. Settings is a
+ * sibling route outside this layout, not a child of it (ADR 0008): it must
+ * stay usable even when the store below never reaches "ready", and the only
+ * way to guarantee that structurally is to keep it off this component's
+ * subtree entirely — unchanged by issue #75 moving Settings into the
+ * persistent Nav, since that only changed how a reader reaches `/settings`,
+ * not where the route sits in this tree.
  *
  * Opening happens through a TanStack Query query rather than a hand-rolled
  * module-scope promise: its cache gives the same single-open guarantee —
@@ -308,14 +381,14 @@ function deferUntilOpen(promise: Promise<{ store: EntryStore; deviceId: string }
  *
  * The fix keeps this component's *own* type constant across every render —
  * `<Outlet>` is always the direct, only thing it returns — by calling
- * `useHistory` unconditionally instead of only once `data` exists.
- * `useHistory` needs a real `EntryStore` synchronously, so before `data`
- * resolves it's handed `deferUntilOpen`'s facade instead of the real one;
- * once `data` resolves, it's handed the real store directly. Either way,
- * `useHistory`'s own hook calls (an infinite query, three mutations) run in
- * the same order on every render, so nothing about *this* component's
- * position or type ever changes — its child routes never lose their state
- * to an internal remount again.
+ * `useHistory` and `useTasks` unconditionally instead of only once `data`
+ * exists. Each needs its own store synchronously, so before `data` resolves
+ * they're handed `deferUntilOpen`'s and `deferTaskStoreUntilOpen`'s facades
+ * instead of the real ones; once `data` resolves, each is handed its real
+ * store directly. Either way, both hooks' own calls run in the same order
+ * on every render, so nothing about *this* component's position or type
+ * ever changes — its child routes never lose their state to an internal
+ * remount again.
  */
 export function EntryStoreLayout() {
   const { data, error } = useQuery(entryStoreQueryOptions);
@@ -336,12 +409,14 @@ export function EntryStoreLayout() {
   // `useState`'s lazy initializer runs exactly once per mount, so `deferred`
   // is a stable object for this component's whole lifetime.
   const [deferred] = useState(() => {
-    let resolve!: (value: { store: EntryStore; deviceId: string }) => void;
+    let resolve!: (value: { store: EntryStore; taskStore: TaskStore; deviceId: string }) => void;
     let reject!: (reason: unknown) => void;
-    const promise = new Promise<{ store: EntryStore; deviceId: string }>((res, rej) => {
-      resolve = res;
-      reject = rej;
-    });
+    const promise = new Promise<{ store: EntryStore; taskStore: TaskStore; deviceId: string }>(
+      (res, rej) => {
+        resolve = res;
+        reject = rej;
+      },
+    );
     // A rejection here (the store failed to open) is already surfaced via
     // `message` above — this only stops it from also logging as an
     // unhandled rejection for the common case where nothing ever calls the
@@ -369,11 +444,26 @@ export function EntryStoreLayout() {
   // attempt that starts before the store opens complete against the real
   // store once it does, with no manual retry.
   const pendingStore = useMemo(() => deferUntilOpen(deferred.promise), [deferred]);
+  // `useTasks`'s own equivalent, over the exact same `deferred.promise` —
+  // one open, two facades reaching into it (`deferStore`'s own doc comment
+  // on `select`).
+  const pendingTaskStore = useMemo(() => deferTaskStoreUntilOpen(deferred.promise), [deferred]);
 
   const store = data?.store ?? pendingStore;
+  const taskStore = data?.taskStore ?? pendingTaskStore;
   const deviceId = data?.deviceId ?? "";
 
   const { entries, pagination, sendEntry, editEntry, removeEntry } = useHistory(store, deviceId);
+  const {
+    tasks,
+    completedTasks,
+    addTask,
+    completeTask,
+    uncompleteTask,
+    renameTask,
+    reorderTask,
+    removeTask,
+  } = useTasks(taskStore, deviceId);
 
   return (
     <Outlet
@@ -392,6 +482,14 @@ export function EntryStoreLayout() {
               getEntry: (entryId: string) => store.getMany([entryId]).then((found) => found.at(0)),
               editEntry,
               removeEntry,
+              tasks,
+              completedTasks,
+              addTask,
+              completeTask,
+              uncompleteTask,
+              renameTask,
+              reorderTask,
+              removeTask,
               disabled: false,
             } satisfies EntryStoreOutletContext)
           : ({
@@ -405,6 +503,14 @@ export function EntryStoreLayout() {
               getEntry: noopGetEntry,
               editEntry: noopEdit,
               removeEntry: noopRemove,
+              tasks: [],
+              completedTasks: [],
+              addTask: noopAddTask,
+              completeTask: noopCompleteTask,
+              uncompleteTask: noopUncompleteTask,
+              renameTask: noopRenameTask,
+              reorderTask: noopReorderTask,
+              removeTask: noopRemoveTask,
               disabled: true,
               message,
             } satisfies EntryStoreOutletContext)
@@ -413,7 +519,7 @@ export function EntryStoreLayout() {
   );
 }
 
-/** Read by `/` and `/reflect` (`/digest` reads nothing from the store — see this file's own comment above) — anything rendered outside EntryStoreLayout's Outlet must not call this. */
+/** Read by `/`, `/reflect`, `/todo` and `/todo/inbox` (`/digest` reads nothing from the store — see this file's own comment above) — anything rendered outside EntryStoreLayout's Outlet must not call this. */
 export function useEntryStore(): EntryStoreOutletContext {
   return useOutletContext<EntryStoreOutletContext>();
 }

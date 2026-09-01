@@ -98,3 +98,27 @@ export function entryReferenceQueryKey(entryId: string) {
 export function dayReferrersQueryKey(dayKey: string) {
   return [...ENTRIES_QUERY_KEY, "day-referrers", dayKey] as const;
 }
+
+/**
+ * Issue #168: Todo's active Tasks (TaskStore.list(), ADR 0047), read by
+ * use-tasks.ts. Unlike ENTRIES_QUERY_KEY, this has no paging sibling —
+ * TaskStore.list() returns the whole active list in one call, because Todo
+ * has nothing like History's fifty-at-a-time window (issue #79) to key a
+ * page around; see tasks-refresh.ts's own header for why that absence is
+ * what makes its refresh function simpler than refreshNewestEntriesPage,
+ * not merely a smaller copy of it.
+ */
+export const TASKS_QUERY_KEY = ["tasks"] as const;
+
+/**
+ * Completed Tasks (TaskStore.listCompleted()), the other half of Todo's
+ * Inbox (issue #168's own acceptance criterion that a completed Task stays
+ * "findable and restorable afterwards," not just for the toast's
+ * lifetime). A child of TASKS_QUERY_KEY, not a sibling — completing or
+ * uncompleting a Task moves it between the active and completed lists at
+ * once, so tasks-refresh.ts's single invalidateQueries({ queryKey:
+ * TASKS_QUERY_KEY }) call (TanStack's default array-prefix match) already
+ * catches this key too, the same way digestAtQueryKey rides along with
+ * digestQueryKey's own invalidation above.
+ */
+export const COMPLETED_TASKS_QUERY_KEY = [...TASKS_QUERY_KEY, "completed"] as const;

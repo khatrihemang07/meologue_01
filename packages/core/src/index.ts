@@ -4,6 +4,7 @@ export type { ExportManifest, ExportManifestEntry } from "./export/manifest";
 export type { LocalParts } from "./export/offset";
 export { toLocalParts } from "./export/offset";
 export { mintId } from "./id";
+export { compareByOrder, orderKeyBetween } from "./order-key";
 export { PROTOCOL_VERSION, SYNC_BATCH_SIZE, SYNC_INTERVAL_MS } from "./protocol";
 export type {
   CheckServerOptions,
@@ -19,6 +20,8 @@ export { toPositionalRow, toPositionalRows } from "./sqlite/row-mapping";
 export type { EntryPage, EntryStore } from "./store";
 export type { SyncEngineOptions, SyncTransport } from "./sync-engine";
 export { sync } from "./sync-engine";
+export type { TaskStore } from "./task-store";
+export type { Task } from "./task-types";
 export type { Entry } from "./types";
 export type {
   WireDigest,

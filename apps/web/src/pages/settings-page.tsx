@@ -553,13 +553,13 @@ export function SettingsPage() {
       </SettingsSection>
 
       {/*
-        Issue #134. Composer, Reflect and Digest only — Settings is never
+        Issue #134, extended to Todo by issue #168. Settings is never
         offered a control here, because ADR 0008/0009 make it the recovery
         route when the Entry store won't open or the Server URL is wrong,
         and a control that could hide the way out of every other problem
         this page fixes would defeat the point of it. `HIDEABLE_DESTINATIONS`
-        (settings.ts) is the whole list this maps over, so there is no
-        fourth row to accidentally add one to.
+        (settings.ts) is the whole list this maps over, so a fifth row added
+        there in some future version shows up here with no further change.
 
         This toggle reaches no Server and starts no request — it is a
         `localStorage` write, full stop. In particular it cannot stop a
@@ -570,7 +570,7 @@ export function SettingsPage() {
       */}
       <SettingsSection
         label="Chat list"
-        hint="Hides the row only — the Destination itself keeps working. A hidden Composer, Reflect or Digest still opens at its own address, its Entries still appear in Reflection's Grounding, are still summarised into Digests, are still included in an Export, and still Sync to every other Device."
+        hint="Hides the row only — the Destination itself keeps working. A hidden Composer, Reflect, Digest or Todo still opens at its own address; a hidden Entry-backed row still appears in Reflection's Grounding, is still summarised into Digests, is still included in an Export, and still Syncs to every other Device — Todo has no Server-side counterpart to any of that, but hiding its row is exactly as reversible."
       >
         {HIDEABLE_DESTINATIONS.map((destination) => (
           <DestinationVisibilityRow

@@ -23,6 +23,13 @@ describe("migrate", () => {
       ["entries_fts_idx"],
       ["kv"],
       ["meologue_migrations"],
+      ["tasks"],
+      ["tasks_fts"],
+      ["tasks_fts_config"],
+      ["tasks_fts_content"],
+      ["tasks_fts_data"],
+      ["tasks_fts_docsize"],
+      ["tasks_fts_idx"],
     ]);
   });
 
@@ -33,7 +40,7 @@ describe("migrate", () => {
     await migrate(driver);
 
     const result = await driver.execute("SELECT version FROM meologue_migrations", [], "all");
-    expect(result.rows).toEqual([[1], [2], [3]]);
+    expect(result.rows).toEqual([[1], [2], [3], [4], [5]]);
   });
 
   it("backfills Entries that existed before the search index migration shipped", async () => {
@@ -125,7 +132,7 @@ describe("migrate", () => {
     await expect(migrate(driver)).resolves.toBeUndefined();
 
     const ledger = await driver.execute("SELECT version FROM meologue_migrations", [], "all");
-    expect(ledger.rows).toEqual([[1], [2], [3]]);
+    expect(ledger.rows).toEqual([[1], [2], [3], [4], [5]]);
 
     // The store isn't just "didn't throw" — it's actually usable: a write
     // that touches the new column succeeds.

@@ -1,6 +1,7 @@
 import type { SqliteDriver } from "./driver";
 import { migrate } from "./migrator";
 import { SqliteEntryStore } from "./sqlite-entry-store";
+import { SqliteTaskStore } from "./sqlite-task-store";
 
 /**
  * What open() hands back once a Device's database is migrated and ready.
@@ -24,31 +25,34 @@ import { SqliteEntryStore } from "./sqlite-entry-store";
  */
 export interface OpenedSqliteStore {
   store: SqliteEntryStore;
+  taskStore: SqliteTaskStore;
   deviceId: string;
 }
 
 /**
- * Opens the SQLite EntryStore behind a driver (ADR 0007): applies any
- * migrations not yet recorded in the ledger, then resolves this Device's
- * id, minting one on first run. Prefer this over constructing
- * SqliteEntryStore directly — a store that hasn't been migrated can't be
- * queried.
+ * Opens the SQLite EntryStore and TaskStore behind a driver (ADR 0007):
+ * applies any migrations not yet recorded in the ledger, then resolves
+ * this Device's id, minting one on first run. Prefer this over
+ * constructing SqliteEntryStore or SqliteTaskStore directly — a store
+ * that hasn't been migrated can't be queried.
  *
  * This is the composition root for every store this driver's database
  * holds, not just the Entry one — migrate() already applies every
  * migration in MIGRATIONS (../migrations/index.ts) in one pass, regardless
- * of which future store owns the table a given migration creates, so
- * adding TaskStore's tables costs this function nothing beyond the two
- * lines a second store construction always would: `new SqliteTaskStore(driver)`
- * and one more field on the object below. `deviceId` is resolved once,
- * here, and is not re-derived per store: it names the Device the whole
- * database belongs to (kv's own doc comment in ../schema.ts), not
- * something specific to Entries, so a second store shares this exact
- * value rather than asking `ensureDeviceId()` again or minting its own.
+ * of which store owns the table a given migration creates, so TaskStore's
+ * tables (migrations 4 and 5, issue #168) needed nothing new here beyond
+ * the two lines this file's own comment above predicted: `new
+ * SqliteTaskStore(driver)` and one more field on the object below.
+ * `deviceId` is resolved once, here, and is not re-derived per store: it
+ * names the Device the whole database belongs to (kv's own doc comment in
+ * ../schema.ts), not something specific to Entries, so TaskStore shares
+ * this exact value rather than asking `ensureDeviceId()` again or minting
+ * its own.
  */
 export async function open(driver: SqliteDriver): Promise<OpenedSqliteStore> {
   await migrate(driver);
   const store = new SqliteEntryStore(driver);
+  const taskStore = new SqliteTaskStore(driver);
   const deviceId = await store.ensureDeviceId();
-  return { store, deviceId };
+  return { store, taskStore, deviceId };
 }

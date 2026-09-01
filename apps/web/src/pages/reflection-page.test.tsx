@@ -27,6 +27,14 @@ const defaultEntryStoreContext: EntryStoreOutletContext = {
   search: vi.fn(async () => []),
   getEntries: vi.fn(async () => []),
   pagination: { hasMore: false, fetching: false, fetchMore: vi.fn() },
+  tasks: [],
+  completedTasks: [],
+  addTask: vi.fn(),
+  completeTask: vi.fn(),
+  uncompleteTask: vi.fn(),
+  renameTask: vi.fn(),
+  reorderTask: vi.fn(),
+  removeTask: vi.fn(),
   disabled: false,
 };
 

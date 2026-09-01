@@ -243,11 +243,12 @@ describe("settings store", () => {
       expect(useSettingsStore.getState().hiddenDestinations).toEqual(new Set(["digest"]));
     });
 
-    it("offers exactly the three hideable Destinations — Settings is never among them", () => {
+    it("offers exactly the four hideable Destinations — Settings is never among them", () => {
       expect(HIDEABLE_DESTINATIONS.map((destination) => destination.id)).toEqual([
         "composer",
         "reflect",
         "digest",
+        "todo",
       ]);
     });
 

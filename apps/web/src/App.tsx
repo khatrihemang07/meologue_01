@@ -1,5 +1,5 @@
 import { lazy, Suspense } from "react";
-import { BrowserRouter, Route, Routes } from "react-router";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router";
 import { Toaster } from "@/components/ui/sonner";
 import { ChatListPage } from "@/pages/chat-list-page";
 import { ChatShellLayout } from "@/pages/chat-shell-layout";
@@ -34,6 +34,7 @@ const DigestPage = lazy(() =>
 const DigestReaderPage = lazy(() =>
   import("@/pages/digest-reader-page").then((m) => ({ default: m.DigestReaderPage })),
 );
+const TodoPage = lazy(() => import("@/pages/todo-page").then((m) => ({ default: m.TodoPage })));
 const SettingsPage = lazy(() =>
   import("@/pages/settings-page").then((m) => ({ default: m.SettingsPage })),
 );
@@ -44,19 +45,25 @@ const SettingsPage = lazy(() =>
 // resolution falls back to the app shell the same way. No route segment
 // below may ever contain a "." — Capacitor's fallback check treats a dot in
 // the last path segment as a request for a real file, not the app shell.
+// `/todo` and `/todo/inbox` (issue #168) are both static literal segments,
+// trivially safe under that rule the same obvious way `/composer` already
+// is — unlike `/reflect/:sessionId` and `/digest/:period/:date` just below,
+// neither carries a dynamic segment that would need its own argument for
+// why a "." can never land in it.
 //
-// EntryStoreLayout wraps `/`, `/reflect` and `/digest` (ticket 27, extended
-// by ADR 0020 and issue #71; narrowed from four routes to these three by
-// issue #75, which deleted `/history` outright — no redirect, since the
-// Composer at `/` already renders the identical History component with the
-// identical props, and a second door onto the same room added nothing this
-// layout needed to keep open). All three read the Entry store and History
-// through it, opened and synced exactly once. Digest is the odd one out
-// among them — CONTEXT.md's Digest entry is explicit that it lives only on
-// the Server, so this page reads no Entry directly the way Composer/Reflect
-// do — but it still belongs inside this layout rather than beside it,
-// because the layout is what drives Sync: a reader parked on `/digest` must
-// not stop syncing just because that page itself never touches an Entry.
+// EntryStoreLayout wraps `/`, `/reflect`, `/digest`, `/todo` and
+// `/todo/inbox` (ticket 27, extended by ADR 0020, issue #71 and issue #168;
+// briefly narrowed by issue #75, which deleted `/history` outright — no
+// redirect, since the Composer at `/` already renders the identical History
+// component with the identical props, and a second door onto the same room
+// added nothing this layout needed to keep open). All of them read the
+// Entry store, and now the Task store (ADR 0047), through it, opened and
+// synced exactly once. Digest is the odd one out among them —
+// CONTEXT.md's Digest entry is explicit that it lives only on the Server,
+// so this page reads no Entry directly the way Composer/Reflect/Todo do —
+// but it still belongs inside this layout rather than beside it, because
+// the layout is what drives Sync: a reader parked on `/digest` must not
+// stop syncing just because that page itself never touches an Entry.
 //
 // Settings is a sibling, not a child of that layout — ADR 0008/0009 require
 // it to stay usable and reachable even when the store never reaches
@@ -88,8 +95,10 @@ function App() {
               route none of the independence ADR 0008/0009 require. */}
           <Route element={<ChatShellLayout />}>
             {/* `/` is the root screen, and it is not the Composer any more:
-                a list of four rows you navigate away from (ADR 0036),
-                superseding ADR 0030's persistent nav in its strongest form.
+                a list of five rows you navigate away from (ADR 0036),
+                superseding ADR 0030's persistent nav in its strongest form —
+                issue #168's Todo row is the fifth, ADR 0049 is the argument
+                for why its own internal navigation doesn't reopen ADR 0036.
                 It sits outside EntryStoreLayout deliberately — the list names
                 destinations rather than reading any of them, so it renders
                 whether or not the store ever opens, the same guarantee
@@ -120,6 +129,17 @@ function App() {
               something dotted into either segment. */}
               <Route path="/digest" element={<DigestPage />} />
               <Route path="/digest/:period/:date" element={<DigestReaderPage />} />
+              {/* Todo (issue #168): `/todo` itself redirects rather than
+              rendering anything of its own, so a bookmark or a reload of the
+              bare Destination lands somewhere real — the same reason
+              `/reflect` (a fresh Session) needed no redirect but a bare
+              `/todo` does, since Todo has no "fresh, undirected" view the
+              way a new Session is. `/todo/inbox` is the one view this ticket
+              adds; ADR 0049 is explicit that a further view (`/todo/today`,
+              issue #169) is a sibling route added the same way, not a
+              restructuring of this one. */}
+              <Route path="/todo" element={<Navigate to="/todo/inbox" replace />} />
+              <Route path="/todo/inbox" element={<TodoPage />} />
             </Route>
             {/* A sibling of EntryStoreLayout's children above, not nested under
               it — see this file's own top comment for why that has to hold

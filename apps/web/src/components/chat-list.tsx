@@ -1,4 +1,12 @@
-import { CalendarDays, Lightbulb, Lock, Settings as SettingsIcon, SquarePen } from "lucide-react";
+import {
+  CalendarDays,
+  Lightbulb,
+  ListTodo,
+  Lock,
+  Settings as SettingsIcon,
+  SquarePen,
+} from "lucide-react";
+import { useEffect } from "react";
 import { NavLink } from "react-router";
 import {
   type HideableDestinationId,
@@ -9,33 +17,48 @@ import {
 import { cn } from "@/lib/utils";
 
 /**
- * The four rows the root screen is made of (ADR 0036). The same four
- * destinations ADR 0018 first bounded to Material 3's three-to-five and
- * every ADR since has kept — the membership of `DESTINATIONS` itself does
- * not change here, only the shape they are shown in. Issue #134 lets a
- * reader hide Composer, Reflect or Digest from the *rendered* list without
- * touching this array — see `useDestinations()` below for where that
- * filter actually happens.
+ * The five rows the root screen is made of (ADR 0036). Four of them were
+ * ADR 0018's original bound, Material 3's three-to-five, and every ADR
+ * since had kept the membership there unchanged — until Todo (issue #168,
+ * ADR 0047), the first Destination to actually reach that fifth slot.
+ * Unlike Reflect's Sessions, which ADR 0036 explicitly declined to promote
+ * to a row of its own, Todo is not a second view onto something another
+ * Destination already shows — it is a second root noun with its own
+ * lifecycle, and a full-bleed row is what every other root noun here
+ * already gets. Issue #134 lets a reader hide Composer, Reflect, Digest or
+ * Todo from the *rendered* list without touching this array — see
+ * `useDestinations()` below for where that filter actually happens.
  *
  * `end` on Composer alone: every other route is a prefix of deeper routes
- * (`/reflect/list`, `/digest/:period/:date`) that should still mark their
- * own row as current, while `/composer` has no children to match.
+ * (`/reflect/list`, `/digest/:period/:date`, `/todo/inbox`) that should
+ * still mark their own row as current, while `/composer` has no children to
+ * match.
  *
  * `requiresSync` marks the Destinations that have nothing to show without
  * a Server. Only Reflection and Digest do: both are written by the Server
- * and neither exists locally. **Composer is deliberately not one of them.**
- * meologue is a local-first log (CONTEXT.md's own opening line) — an Entry
- * is captured, searched, edited and Exported on the Device whether or not
- * Sync is on, so `composer-page.tsx` keeps its thread and its input fully
- * working with an unset Server URL and shows only a Sync-off note beside
- * them. Locking that row would claim the one Destination that always works
- * is unavailable, and since an unset Server URL is the *default* (ADR 0011)
- * it would greet every fresh install with four locked rows.
+ * and neither exists locally. **Composer and Todo are deliberately not
+ * among them.** meologue is a local-first log (CONTEXT.md's own opening
+ * line) — an Entry is captured, searched, edited and Exported on the
+ * Device whether or not Sync is on, so `composer-page.tsx` keeps its
+ * thread and its input fully working with an unset Server URL and shows
+ * only a Sync-off note beside them. Todo is the second Destination that
+ * works fully offline, for the same underlying reason: a Task's own store
+ * sits on the same local `SqliteDriver` an Entry's does (ADR 0047), and a
+ * personal task list has no technical dependency on a Server to add,
+ * complete or reorder a Task — Todoist itself is offline-first, and issue
+ * #168's own acceptance criterion is "Todo is fully usable with Sync off."
+ * Locking either row would claim a Destination that always works is
+ * unavailable, and since an unset Server URL is the *default* (ADR 0011)
+ * it would greet every fresh install with three locked rows out of five
+ * instead of two.
  *
  * `capability` names which key of `ServerCapabilities` (`@meologue/core`)
  * a Destination reads to decide it's locked, once Sync is on. Settings has
  * neither flag: it configures the Server itself and must never lock (issue
- * #133 — it is the only way out of every other locked row).
+ * #133 — it is the only way out of every other locked row). Todo has
+ * neither either, for the reason just above: there is no
+ * `ServerCapabilities` key to gate it on, because nothing about Todo ever
+ * depends on what the Server can serve.
  */
 const DESTINATIONS = [
   {
@@ -64,6 +87,15 @@ const DESTINATIONS = [
     summary: "What the Server wrote about a stretch of time",
     requiresSync: true,
     capability: "digest",
+  },
+  {
+    to: "/todo",
+    label: "Todo",
+    Icon: ListTodo,
+    end: false,
+    summary: "Add, complete and reorder your Tasks",
+    requiresSync: false,
+    capability: undefined,
   },
   {
     to: "/settings",
@@ -127,7 +159,7 @@ function useDestinations() {
     if (destination.to === "/settings") {
       return true;
     }
-    // Every other `to` in `DESTINATIONS` is one of the three literal
+    // Every other `to` in `DESTINATIONS` is one of the four literal
     // hideable routes, so the slug this slice produces is always a real
     // `HideableDestinationId` — the cast repeats what `DESTINATIONS`'s own
     // `as const` already guarantees rather than asserting something new.
@@ -166,6 +198,38 @@ function useDestinations() {
  */
 export function ChatList() {
   const destinations = useDestinations();
+
+  // Issue #168: the only prefetch anywhere in this app, and deliberately
+  // narrow rather than a general "warm every row's chunk" mechanism —
+  // Composer, Reflect, Digest and Settings already shipped behind
+  // `React.lazy` (issue #150) with no prefetch at all, and this doesn't
+  // reopen that call for them. Todo earns its own: Inbox's drag-to-reorder
+  // (ADR 0050) is the first per-pointer-movement gesture on any root-screen
+  // Destination, and a gesture reads as broken the moment it's mid-motion
+  // when the browser is still parsing and evaluating the code that has to
+  // answer the next `pointermove` — a cost typing into the Composer or
+  // waiting on a Reflect answer never pays, since neither has a frame
+  // budget to miss. Firing the dynamic `import()` the instant the row is
+  // on screen, rather than waiting for the tap that opens it, is what
+  // spends that parse-and-eval cost before the first drag can ever start.
+  //
+  // A bare side effect, not a hover- or pointerdown-triggered one: the
+  // smallest mechanism that's still honest about what it's for. Hovering
+  // first would still race a fast tap-through on a touch device, which has
+  // no hover at all; this instead accepts paying the fetch unconditionally
+  // whenever the row is visible, on the same reasoning `App.tsx`'s own
+  // lazy split already accepts paying `/`'s cold-start weight
+  // unconditionally rather than trying to predict who needs what. Safe to
+  // re-run on every render (`todoVisible` toggling is the only thing that
+  // re-fires it): the browser's own module cache makes a repeated
+  // `import()` of an already-fetched specifier a no-op, not a second
+  // request.
+  const todoVisible = destinations.some((destination) => destination.to === "/todo");
+  useEffect(() => {
+    if (todoVisible) {
+      void import("@/pages/todo-page");
+    }
+  }, [todoVisible]);
 
   return (
     <nav aria-label="Chats" className="flex flex-col">

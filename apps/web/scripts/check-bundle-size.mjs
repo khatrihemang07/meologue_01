@@ -172,6 +172,13 @@ const CHUNK_BUDGETS = {
   "src/pages/sessions-page.tsx": { ceilingBytes: 2_450, baselineBytes: 1_886 },
   // Measured 8,561 bytes gzip.
   "src/pages/settings-page.tsx": { ceilingBytes: 11_100, baselineBytes: 8_561 },
+  // Todo's Inbox (issue #168) — the internal nav, the add/complete/delete/
+  // reorder UI and task-reorder.ts's own logic, statically imported into
+  // this one chunk rather than split further, the same "everything behind
+  // one lazy boundary" shape every other Destination's own page chunk
+  // already has. Measured 2026-09-01 against a clean `vite build --mode
+  // android`, 2,237 bytes gzip.
+  "src/pages/todo-page.tsx": { ceilingBytes: 2_900, baselineBytes: 2_237 },
 };
 
 /**

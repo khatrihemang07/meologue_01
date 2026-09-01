@@ -312,7 +312,7 @@ export async function closeDevices(devices: TwoDevices): Promise<void> {
  */
 export async function openDestination(
   page: Page,
-  name: "Composer" | "Reflect" | "Digest" | "Settings",
+  name: "Composer" | "Reflect" | "Digest" | "Todo" | "Settings",
 ): Promise<void> {
   await page.goto("/");
   await page.getByRole("link", { name }).click();

@@ -1,4 +1,4 @@
-import type { EntryStore } from "@meologue/core";
+import type { EntryStore, TaskStore } from "@meologue/core";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import { useEffect } from "react";
@@ -29,6 +29,29 @@ function createFakeStore(): EntryStore {
     edit: vi.fn(async () => {}),
     remove: vi.fn(async () => {}),
     getMany: vi.fn(async () => []),
+  };
+}
+
+// Issue #168: `open()` now resolves `{ store, taskStore, deviceId }` — every
+// `openMock.mockResolvedValue` below needs a real (if empty) TaskStore
+// alongside the EntryStore, or `useTasks` (called unconditionally inside
+// EntryStoreLayout, the same issue #110 reasoning `useHistory` already has)
+// finds nothing behind `data.taskStore` once `data` resolves.
+function createFakeTaskStore(): TaskStore {
+  return {
+    list: vi.fn(async () => []),
+    listCompleted: vi.fn(async () => []),
+    get: vi.fn(async () => undefined),
+    upsert: vi.fn(async () => {}),
+    complete: vi.fn(async () => {}),
+    uncomplete: vi.fn(async () => {}),
+    rename: vi.fn(async () => {}),
+    reorder: vi.fn(async () => {}),
+    remove: vi.fn(async () => {}),
+    pending: vi.fn(async () => []),
+    getCursor: vi.fn(async () => 0),
+    setCursor: vi.fn(async () => {}),
+    search: vi.fn(async () => []),
   };
 }
 
@@ -180,7 +203,8 @@ describe("EntryStoreLayout", () => {
   it("renders Ready once the store opens", async () => {
     createDriver.mockResolvedValue({});
     const store = createFakeStore();
-    openMock.mockResolvedValue({ store, deviceId: "device-a" });
+    const taskStore = createFakeTaskStore();
+    openMock.mockResolvedValue({ store, taskStore, deviceId: "device-a" });
 
     await renderLayout();
 
@@ -242,7 +266,8 @@ describe("EntryStoreLayout", () => {
       }),
     );
     const store = createFakeStore();
-    openMock.mockResolvedValue({ store, deviceId: "device-a" });
+    const taskStore = createFakeTaskStore();
+    openMock.mockResolvedValue({ store, taskStore, deviceId: "device-a" });
 
     const fresh = await importFresh();
     activeUseEntryStore = fresh.useEntryStore;

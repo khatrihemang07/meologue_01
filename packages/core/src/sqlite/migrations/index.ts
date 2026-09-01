@@ -1,6 +1,8 @@
 import initial from "./0000_initial.sql?raw";
 import entryDeletedAt from "./0001_entry_deleted_at.sql?raw";
+import tasksTable from "./0002_tasks_table.sql?raw";
 import entriesSearchIndex from "./entries_search_index.sql?raw";
+import tasksSearchIndex from "./tasks_search_index.sql?raw";
 
 export interface Migration {
   version: number;
@@ -34,10 +36,21 @@ export interface Migration {
  * this migration shipped; `WHERE id NOT IN (...)` is the guard that keeps
  * re-running it from duplicating index rows, since the runner wraps
  * nothing in a transaction and relies on every statement being safe to
- * re-run on its own.
+ * re-run on its own. `tasks_search_index` (version 5, issue #168) is the
+ * same exception for the same reason, mirrored exactly, including its own
+ * `WHERE id NOT IN (...)` backfill guard — a second FTS5 table for a
+ * second root noun (ADR 0047), not a reason to invent a second technique.
+ *
+ * `0002_tasks_table` (version 4, issue #168) is a real `drizzle-kit
+ * generate` output — the `tasks` table is representable in ../schema.ts,
+ * unlike the FTS5 tables above — hand-edited only to add `IF NOT EXISTS`
+ * to its `CREATE TABLE` and `CREATE INDEX`, the same treatment migration 1
+ * got.
  */
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, sql: initial },
   { version: 2, sql: entriesSearchIndex },
   { version: 3, sql: entryDeletedAt },
+  { version: 4, sql: tasksTable },
+  { version: 5, sql: tasksSearchIndex },
 ];
