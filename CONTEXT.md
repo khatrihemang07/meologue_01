@@ -17,6 +17,12 @@ untitled — it has no heading and no name, and nothing about capturing one asks
 anywhere — but it may carry structure inside itself. A thought is often a list of things, and
 refusing lists did not keep Entries short, it only made them worse.
 
+A checkbox line in an Entry's body may also hold a task reference: it points at a Task rather
+than standing alone. What appears there — the wording, and whether it reads as done — is a cache
+written from the Task, never a fact the Entry holds in its own right. The Task owns its text and
+its completion; ticking the checkbox is something a reader does to the Task, and the Entry's own
+characters simply follow along afterward.
+
 What the user typed is what is stored, until the user edits it. Editing rewrites the body from the
 document the Composer was showing, and that normalizes formatting — one way of writing emphasis
 can come back as another. The characters change; what the Entry says does not. An Entry that is
@@ -40,11 +46,18 @@ The full, ordered collection of a user's Entries, as seen from a given Device. T
 show slightly different Histories at any given moment if one hasn't finished Syncing, but they
 converge once Syncing completes.
 
+Each day in History opens with that day's Day block, listing whatever Tasks are dated or
+deadlined then. The block is rendered alongside the day's Entries, not held as part of History
+itself — it reflects Tasks that live elsewhere, and moving one from day to day moves it between
+blocks without touching any Entry that mentions it.
+
 ### Search
 
-Narrowing a collection to the items whose text matches what you typed — Entries in History, or
-Sessions whose Conversation matches. Search reads text, not time, and it narrows the collection
-in place rather than producing a separate one.
+Narrowing a collection to the items whose text matches what you typed — Entries in History,
+Sessions whose Conversation matches, or Tasks in Todo. Search reads text, not time, and it
+narrows the collection in place rather than producing a separate one. Todo's Search is its own
+instance of this over Tasks, not an extension of the Search that already covers Entries and
+Sessions — narrowing one collection never reaches into another.
 
 ### Reference
 
@@ -69,8 +82,8 @@ Send is what the user does; the Entry is what results.
 ### Destination
 
 One of the app's top-level views, reachable directly by its own URL and listed as a row on the
-root screen: Composer, Reflection, Digest, and Settings (ADR 0036). Settings is a Destination
-like the other three even though it configures the app rather than showing Entries.
+root screen: Composer, Reflection, Digest, Todo, and Settings (ADR 0036, ADR 0049). Settings is a
+Destination like the others even though it configures the app rather than showing Entries.
 
 ### Composer
 
@@ -189,6 +202,99 @@ The stretch of time a Digest covers: a day, a week, or a month. Period is what m
 one concept at three settings rather than three separate concepts — a daily, a weekly, and a
 monthly Digest all work the same way, differing only in the Period each one covers.
 
+### Task
+
+A Task is a second root noun beside Entry — the first local, Synced, non-Entry thing meologue
+holds. It has its own identity and its own lifecycle: it is not a property of anything else, and
+nothing else is authoritative over what it says.
+
+Every checkbox written in an Entry is a Task; there is no separate act of promoting one. A Task
+created in Todo, by contrast, creates no Entry — History stays the collection of things the user
+actually wrote, not everything the user is tracking. The Task owns its text: whichever surface a
+Task started life on, there is exactly one copy of what it says and one copy of whether it is
+done.
+
+### Todo
+
+The fifth Destination (ADR 0036, ADR 0049): the view where the user manages Tasks — creating
+them, dating them, organizing them into Projects and Sections, and marking them done. Todo shows
+a Task regardless of whether it began there or as a checkbox inside an Entry.
+
+### Project
+
+A named container a Task can live in. Projects nest, so a Project can hold other Projects as well
+as Tasks.
+
+### Section
+
+A flat division inside a Project, for grouping the Tasks within it. A Task sits in at most one
+Section.
+
+### Sub-task
+
+A Task whose parent is another Task. A sub-task is a full Task in every other respect — it can
+carry its own Date, Priority and Labels, and can have sub-tasks of its own. Completing a parent
+completes its sub-tasks along with it; completing every sub-task does not complete the parent,
+because the parent may still name work its sub-tasks don't cover.
+
+### Label
+
+A name the user attaches to a Task, freely, across Projects — a way of grouping Tasks that cuts
+across where they live rather than following it.
+
+### Filter
+
+A saved query over Tasks.
+
+### Priority
+
+One of four levels a Task can carry, p1 the most urgent. Priority is a tie-break inside a day, not
+a global rank: it decides which of two Tasks due the same day comes first, not whether an urgent
+Task due next week outranks an ordinary one due today.
+
+### Date
+
+When the user plans to do a Task. Optional — a Task need not carry one. A Date may carry a time as
+well as a day, and that time is floating: 9am means 9am wherever the Device reading it happens to
+be, not 9am in some fixed timezone.
+
+### Deadline
+
+The hard cutoff by which a Task must be done. Date-only — no time, no recurrence — and independent
+of Date: a Task may carry a Date, a Deadline, both, or neither, and a Deadline does not imply the
+user plans to work on the Task before it, only that it must be finished by then.
+
+### Duration
+
+How long a Task is expected to take. A Duration requires a Date that carries a time, because there
+is nothing to measure a length from otherwise.
+
+### Recurrence
+
+A Task that comes back. What the user typed to describe the pattern is what is stored, unchanged;
+the next Date is re-derived from that text each time the Task is completed, rather than computed
+once and fixed as a schedule.
+
+### Inbox
+
+Where a Task with no Project lives. Inbox is not a container the way a Project is — it names the
+absence of one, not a place a Task is filed.
+
+### Occurrence
+
+One instance of a recurring Task, recorded as finished. An Occurrence is a record of work already
+done, not a Task in its own right: it cannot be reopened and cannot be rescheduled, unlike the
+recurring Task itself, which carries on to its next Date.
+
+### Day block
+
+The list of Tasks dated or deadlined on a given day, shown at the start of that day in History. A
+Day block is a rendering, not a record: nothing about it is stored, so re-dating a Task moves it
+from one Day block to another while whatever Reference to it sits in an Entry stays exactly where
+it was written. A Day block is invisible to Export, to Digest grounding, and to embeddings — none
+of them read it, because there is nothing there to read beyond a Task that already exists
+somewhere else.
+
 ## Terms we avoid
 
 ### "message"
@@ -216,3 +322,22 @@ reasons given above.
 
 Unlike that one, Send and History are safe: they name the *action* and the *view*, not the
 Entry itself, so they don't smuggle in the wrong properties.
+
+### "Project" — admitted, with a note
+
+"Project" is a heavy word for what this app holds: a personal list of Tasks, not a deliverable
+with a deadline, a budget, and other people depending on it. The honest objection is that
+meologue has no projects in the sense the word usually carries — nothing here is staffed, planned
+across a calendar, or judged done against a scope someone signed off on. A plainer word would
+describe the thing more honestly, the way this glossary asks every other term to.
+
+It is admitted anyway, on a different ground than the rest of this glossary is chosen on. Every
+other term earns its place by describing this domain correctly. "Project" earns its place by
+matching a source this build will be read against for years: parity with Todoist means every
+design question meologue answers gets checked against Todoist's own help center and developer
+docs, over and over, for as long as the feature keeps growing. In that specific and recurring
+situation, a term that matches the source you are reading is worth more than a term that matches
+the app you are building — because the cost of a slightly wrong word is a note like this one,
+paid once, while the cost of a coined word is translating between two vocabularies every time the
+two are compared, paid forever. So "Project" stays "Project," not because it is the right word for
+a personal list, but because it is the wrong word that saves the most future work.

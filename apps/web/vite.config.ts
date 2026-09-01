@@ -130,7 +130,17 @@ export default defineConfig(({ mode }) => {
     // Nested under the same `target` used for the platform-file alias above,
     // so each target's bundle lands in its own directory and a build for one
     // target can never overwrite another's (ticket 17).
-    build: { outDir: `dist/${target}` },
+    //
+    // `manifest: true` (issue #167) emits `.vite/manifest.json` alongside the
+    // bundle, mapping every source module Rollup turned into its own chunk
+    // to that chunk's current, content-hashed filename. check-bundle-size.mjs
+    // reads it to find each lazy chunk by the one name that's stable across
+    // a rebuild — the source path — rather than a hashed filename that
+    // changes every time. Left on for every target, not just android's: it
+    // costs one small JSON file nothing else reads, and scoping it to one
+    // mode here would just be one more thing to remember to extend when a
+    // second target eventually wants the same check.
+    build: { outDir: `dist/${target}`, manifest: true },
     resolve: {
       alias: [
         {

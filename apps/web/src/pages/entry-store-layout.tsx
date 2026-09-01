@@ -6,6 +6,7 @@ import { Outlet, useOutletContext } from "react-router";
 import { type UseHistoryPagination, useHistory } from "@/hooks/use-history";
 import { dayHasEntries } from "@/lib/day-has-entries";
 import { dayReferrers } from "@/lib/day-referrers";
+import { deferStore, type StoreMethodNames } from "@/lib/defer-store";
 import { deviceUtcOffsetMinutes } from "@/lib/entry-day";
 import {
   OpenTimeoutError,
@@ -234,29 +235,35 @@ const notReadyPagination: UseHistoryPagination = {
   fetchMore: noopFetchMore,
 };
 
-// Issue #110's fix: forwards every `EntryStore` call to whatever
-// `openEntryStore()` eventually resolves to, so `useHistory` (below) has a
-// real `EntryStore` to call from this layout's very first render — not just
-// once `data` exists. Built once per mount from `promise` (itself the same
-// cached open, deduplicated by TanStack Query — see this file's own doc
-// comment on `entryStoreQueryOptions`), so a call made before the store
-// opens simply waits for that same open to finish rather than failing or
-// silently doing nothing; a call made after just resolves the already-kept
-// promise immediately. Nothing here ever opens a second store: this reaches
-// the store exclusively through the query cache, the same single door
-// `entryStoreQueryOptions`'s own comment already guarantees.
+// Issue #110's fix, now built on `deferStore` (`@/lib/defer-store.ts`,
+// issue #167) rather than nine hand-written forwarding methods: forwards
+// every `EntryStore` call to whatever `openEntryStore()` eventually
+// resolves to, so `useHistory` (below) has a real `EntryStore` to call from
+// this layout's very first render — not just once `data` exists. Nothing
+// here ever opens a second store: `promise` is always the same cached
+// open, deduplicated by TanStack Query (see this file's own doc comment on
+// `entryStoreQueryOptions`), so this reaches the store exclusively through
+// the query cache, the same single door that comment already guarantees.
+//
+// `ENTRY_STORE_METHODS` below is the part `deferStore` type-checks against
+// `EntryStore` itself (see `StoreMethodNames`'s own doc comment) — a method
+// added to `EntryStore` and not listed here fails to compile, rather than
+// silently returning `undefined` the one time a caller races the store's
+// own open.
+const ENTRY_STORE_METHODS: StoreMethodNames<EntryStore> = {
+  list: true,
+  upsert: true,
+  pending: true,
+  getCursor: true,
+  setCursor: true,
+  search: true,
+  edit: true,
+  remove: true,
+  getMany: true,
+};
+
 function deferUntilOpen(promise: Promise<{ store: EntryStore; deviceId: string }>): EntryStore {
-  return {
-    list: (page) => promise.then(({ store }) => store.list(page)),
-    upsert: (entries) => promise.then(({ store }) => store.upsert(entries)),
-    pending: () => promise.then(({ store }) => store.pending()),
-    getCursor: () => promise.then(({ store }) => store.getCursor()),
-    setCursor: (seq) => promise.then(({ store }) => store.setCursor(seq)),
-    search: (query) => promise.then(({ store }) => store.search(query)),
-    edit: (id, body) => promise.then(({ store }) => store.edit(id, body)),
-    remove: (id) => promise.then(({ store }) => store.remove(id)),
-    getMany: (ids) => promise.then(({ store }) => store.getMany(ids)),
-  };
+  return deferStore(promise, ({ store }) => store, ENTRY_STORE_METHODS);
 }
 
 /**
