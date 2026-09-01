@@ -344,8 +344,9 @@ export const checklist: ComposerCommand = {
 };
 
 // ---------------------------------------------------------------------------
-// Indent / outdent — registered, per issue #160, but bound to no chord yet;
-// Tab/Shift-Tab bindings are issue #162's, not this one's.
+// Indent / outdent — registered here per issue #160; Tab/Shift-Tab/
+// Ctrl-]/Ctrl-[/Backspace are bound to these through composer-editor.ts's
+// `listKeymap()`, per issue #162.
 // ---------------------------------------------------------------------------
 
 const indentRun = sinkListItem(listItemNodeType);

@@ -26,12 +26,13 @@
  * from leaking into this file too.
  */
 import type { Node as PMNode } from "prosemirror-model";
-import { EditorState, type Transaction } from "prosemirror-state";
+import { EditorState, TextSelection, type Transaction } from "prosemirror-state";
 import { describe, expect, it } from "vitest";
 import {
   buildInputRules,
   checkboxInputRulePattern,
   checklistShortcutInputRulePattern,
+  liftAtStartOfListItem,
 } from "./composer-editor";
 import { entryMarkdownToDocument } from "./entry-document";
 import { entrySchema } from "./entry-schema";
@@ -294,5 +295,152 @@ describe("checklistShortcutInputRule (via buildInputRules)", () => {
     // (empty) leading paragraph.
     expect(item?.childCount).toBe(1);
     expect(item?.firstChild?.type.name).toBe("paragraph");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// liftAtStartOfListItem (Backspace's gated outdent, issue #162)
+// ---------------------------------------------------------------------------
+
+/** An `EditorState` with the caret/selection placed explicitly — mirrors composer-commands.test.ts's own `stateAt`, duplicated here rather than imported: that module deliberately never imports FROM this one (its own module comment), so the reverse import would be the one direction that actually IS allowed, but a two-line helper is cheaper than adding a cross-file dependency for it. */
+function stateAt(doc: PMNode, selection: { from: number; to?: number }): EditorState {
+  return EditorState.create({
+    schema: entrySchema,
+    doc,
+    selection: TextSelection.create(doc, selection.from, selection.to ?? selection.from),
+  });
+}
+
+/** Runs `liftAtStartOfListItem` with a `dispatch` that captures the transaction, returning both whether it applied and the resulting state (only meaningful when it did). */
+function runLift(state: EditorState): { applied: boolean; next: EditorState } {
+  let captured: Transaction | null = null;
+  const applied = liftAtStartOfListItem(state, (tr) => {
+    captured = tr;
+  });
+  return { applied, next: captured === null ? state : state.apply(captured) };
+}
+
+function countNodesOfType(doc: PMNode, nodeName: string): number {
+  let count = 0;
+  doc.descendants((node) => {
+    if (node.type.name === nodeName) {
+      count += 1;
+    }
+  });
+  return count;
+}
+
+/** `entrySchema.nodes` is indexed by plain `string` (composer-editor.ts's own `requireNodeType` doc comment has the full account), so under this repo's `noUncheckedIndexedAccess` every access types as possibly `undefined` even though, for these two fixtures below, it never actually is — a small local copy of that same throw-on-typo pattern, scoped to just the two node types these fixtures build by hand. */
+function requireNodeType(name: "list_item" | "paragraph" | "bullet_list" | "doc") {
+  const type = entrySchema.nodes[name];
+  if (type === undefined) {
+    throw new Error(`entrySchema has no "${name}" node type`);
+  }
+  return type;
+}
+
+describe("liftAtStartOfListItem", () => {
+  it("lifts a top-level item out of its list at the very start of its paragraph", () => {
+    const doc = entryMarkdownToDocument("- item");
+    const state = stateAt(doc, { from: startOfFirstParagraph(doc) });
+    const { applied, next } = runLift(state);
+    expect(applied).toBe(true);
+    expect(countNodesOfType(next.doc, "bullet_list")).toBe(0);
+    expect(countNodesOfType(next.doc, "list_item")).toBe(0);
+  });
+
+  it("does nothing when the selection is not collapsed", () => {
+    const doc = entryMarkdownToDocument("- item");
+    const from = startOfFirstParagraph(doc);
+    const state = stateAt(doc, { from, to: from + 2 });
+    expect(liftAtStartOfListItem(state)).toBe(false);
+  });
+
+  it("does nothing mid-paragraph, even inside a list item", () => {
+    const doc = entryMarkdownToDocument("- milk");
+    // One character in, not at the very start.
+    const state = stateAt(doc, { from: startOfFirstParagraph(doc) + 1 });
+    expect(liftAtStartOfListItem(state)).toBe(false);
+  });
+
+  it("does nothing at the start of an item's SECOND paragraph — only the first paragraph's start lifts", () => {
+    // `entryMarkdownToDocument`'s own dialect has no "two paragraphs, one
+    // list item" spelling (a blank line inside a list item's markdown
+    // starts a new list item, not a second paragraph in the same one), so
+    // this fixture is built directly off `entrySchema` rather than parsed,
+    // the same way this module's own `list_item` content spec
+    // (`"paragraph block*"`) allows in principle even though nothing in
+    // this codebase's writer path produces it today.
+    const item = requireNodeType("list_item").create({ checked: null }, [
+      requireNodeType("paragraph").create(null, entrySchema.text("first")),
+      requireNodeType("paragraph").create(null, entrySchema.text("second")),
+    ]);
+    const list = requireNodeType("bullet_list").create(null, [item]);
+    const doc = requireNodeType("doc").create(null, [list]);
+
+    let secondParagraphStart: number | null = null;
+    let seen = 0;
+    doc.descendants((node, pos) => {
+      if (node.type.name === "paragraph") {
+        seen += 1;
+        if (seen === 2) {
+          secondParagraphStart = pos + 1;
+        }
+      }
+    });
+    if (secondParagraphStart === null) {
+      throw new Error("fixture has no second paragraph");
+    }
+
+    const state = stateAt(doc, { from: secondParagraphStart });
+    expect(liftAtStartOfListItem(state)).toBe(false);
+  });
+
+  it("does nothing outside any list at all", () => {
+    const doc = emptyDoc();
+    const state = stateAt(doc, { from: startOfFirstParagraph(doc) });
+    expect(liftAtStartOfListItem(state)).toBe(false);
+  });
+
+  it("lifts a nested (depth-2) item back to depth 1, not out of the list entirely", () => {
+    // Build "first" / "second" sunk under "first" directly rather than via
+    // indent, so this fixture doesn't depend on `indent`'s own behaviour
+    // staying correct for this test to mean anything.
+    const inner = requireNodeType("bullet_list").create(null, [
+      requireNodeType("list_item").create({ checked: null }, [
+        requireNodeType("paragraph").create(null, entrySchema.text("second")),
+      ]),
+    ]);
+    const outerItem = requireNodeType("list_item").create({ checked: null }, [
+      requireNodeType("paragraph").create(null, entrySchema.text("first")),
+      inner,
+    ]);
+    const doc = requireNodeType("doc").create(null, [
+      requireNodeType("bullet_list").create(null, [outerItem]),
+    ]);
+
+    let innerParagraphStart: number | null = null;
+    doc.descendants((node, pos) => {
+      if (
+        innerParagraphStart === null &&
+        node.type.name === "paragraph" &&
+        node.textContent === "second"
+      ) {
+        innerParagraphStart = pos + 1;
+      }
+    });
+    if (innerParagraphStart === null) {
+      throw new Error("fixture has no nested paragraph");
+    }
+
+    expect(countNodesOfType(doc, "bullet_list")).toBe(2);
+    const state = stateAt(doc, { from: innerParagraphStart });
+    const { applied, next } = runLift(state);
+    expect(applied).toBe(true);
+    // Lifted one level, not all the way out: "second" is now a sibling
+    // list_item of "first" in the SAME (outer) bullet_list, so there is
+    // exactly one bullet_list left, not zero.
+    expect(countNodesOfType(next.doc, "bullet_list")).toBe(1);
+    expect(countNodesOfType(next.doc, "list_item")).toBe(2);
   });
 });

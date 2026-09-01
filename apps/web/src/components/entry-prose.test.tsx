@@ -72,6 +72,79 @@ describe("entryProse", () => {
       expect(nestedList).toHaveTextContent("nested");
     });
 
+    // Issue #162: the read side's own disc/circle/square cascade —
+    // `renderBlocks`'s `depth` argument, threaded through `renderListItem`
+    // back into `renderBlocks` for each nested list, must land on the
+    // right class at each of three depths, and repeat the third (square)
+    // rather than inventing a fourth glyph for a fourth level. Asserts
+    // the CLASS rather than the computed `list-style-type` — jsdom applies
+    // no stylesheet, so `getComputedStyle` would report nothing useful
+    // either way, and the class is what index.css's own comment (pointing
+    // back at this file) says the two render paths must agree on.
+    it("cascades bullet glyph disc -> circle -> square by nesting depth, capped at three", () => {
+      const { container } = render(<Harness body={"- one\n  - two\n    - three\n      - four"} />);
+
+      const lists = Array.from(container.querySelectorAll("ul"));
+      expect(lists).toHaveLength(4);
+      expect(lists[0]?.classList.contains("list-disc")).toBe(true);
+      expect(lists[1]?.classList.contains("list-[circle]")).toBe(true);
+      expect(lists[2]?.classList.contains("list-[square]")).toBe(true);
+      // Depth 4 repeats depth 3's square rather than growing a new glyph.
+      expect(lists[3]?.classList.contains("list-[square]")).toBe(true);
+    });
+
+    // Ordered lists never vary their glyph by depth (always decimal), and
+    // each nested `<ol>` restarts its own numbering at 1 — both are plain
+    // browser default behaviour for `list-style: decimal` and a fresh
+    // `<ol>` element respectively, per index.css's own comment on why no
+    // depth-cascade CSS or JS is needed for the ordered case, unlike the
+    // bullet one just above.
+    it("keeps ordered lists decimal at every depth, restarting at 1 per level", () => {
+      const { container } = render(<Harness body={"1. one\n   1. two\n      1. three"} />);
+
+      const lists = Array.from(container.querySelectorAll("ol"));
+      expect(lists).toHaveLength(3);
+      for (const list of lists) {
+        expect(list.classList.contains("list-decimal")).toBe(true);
+        // No explicit start marker was given at any level in the source,
+        // so each restarts at 1 independent of its own nesting depth —
+        // `entry-prose.tsx` always renders the `<ol>`'s `start` attribute
+        // (React renders an explicit prop even at its default), so this
+        // checks the VALUE rather than whether the attribute is present.
+        expect(list.getAttribute("start")).toBe("1");
+      }
+    });
+
+    // The model already allows a checklist nested under an ordered item
+    // and vice versa (entry-schema.ts's `list_item` content, "paragraph
+    // block*", makes no distinction by parent list type) — this pins down
+    // that the READ side actually renders that mix rather than merely
+    // permitting it structurally.
+    it("renders a checklist nested under an ordered item", () => {
+      const { container } = render(<Harness body={"1. plan\n   - [ ] pack bags"} />);
+
+      const orderedList = container.querySelector("ol");
+      expect(orderedList).not.toBeNull();
+      const checkbox = screen.getByRole("checkbox");
+      expect(checkbox.closest("ol")).toBe(orderedList);
+      expect(orderedList?.querySelector("ul input[type='checkbox']")).toBe(checkbox);
+    });
+
+    it("renders an ordered list nested under a checklist item", () => {
+      const { container } = render(
+        <Harness body={"- [ ] plan\n  1. pack bags\n  2. book flight"} />,
+      );
+
+      const bulletList = container.querySelector("ul");
+      const nestedOrdered = bulletList?.querySelector("ol");
+      expect(nestedOrdered).not.toBeNull();
+      const nestedItems = nestedOrdered?.querySelectorAll(":scope > li") ?? [];
+      expect(Array.from(nestedItems).map((li) => li.textContent)).toEqual([
+        "pack bags",
+        "book flight",
+      ]);
+    });
+
     describe("task-list checkboxes", () => {
       it("renders `- [ ]` as an unchecked, disabled checkbox", () => {
         render(<Harness body="- [ ] call mum" />);

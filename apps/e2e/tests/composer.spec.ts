@@ -345,6 +345,222 @@ test("Enter on an empty task item leaves the list without stranding an item", as
 });
 
 /**
+ * Issue #162: nesting already worked in the parser, the schema, the
+ * serializer, and the reader — the Composer was the one place it could not
+ * be REACHED, because `sinkListItem`/`liftListItem` (prosemirror-schema-
+ * list) were registered in composer-commands.ts's own registry but never
+ * bound to a key. The next several tests are the keyboard side of that:
+ * `Tab`/`Shift-Tab` and their `Ctrl-]`/`Ctrl-[` aliases (`listKeymap()`,
+ * composer-editor.ts), and the gated `Backspace` lift beside them. None of
+ * this is reachable through jsdom (ADR 0044 — no live `EditorView`), which
+ * is why it lives here and not in composer-editor.test.ts.
+ */
+test("Tab indents a list item, up to three levels deep", async ({ page }) => {
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  await editor.pressSequentially("- top");
+  await editor.press("Enter");
+  await editor.pressSequentially("mid");
+  // Sinks "mid" under its preceding sibling "top" — a nested <ul>, one
+  // level deep.
+  await editor.press("Tab");
+  await editor.press("Enter");
+  await editor.pressSequentially("deep");
+  // "deep" is now "mid"'s own preceding-sibling-less item at "mid"'s
+  // depth; sinking it nests it under "mid" in turn — a THIRD <ul>.
+  await editor.press("Tab");
+
+  await expect(editor.locator("li")).toHaveCount(3);
+  await expect(editor.locator("ul > li", { hasText: "top" })).toHaveCount(1);
+  await expect(editor.locator("ul ul > li", { hasText: "mid" })).toHaveCount(1);
+  await expect(editor.locator("ul ul ul > li", { hasText: "deep" })).toHaveCount(1);
+});
+
+test("Shift-Tab outdents a nested list item back up one level", async ({ page }) => {
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  await editor.pressSequentially("- top");
+  await editor.press("Enter");
+  await editor.pressSequentially("mid");
+  await editor.press("Tab");
+  await expect(editor.locator("ul ul > li", { hasText: "mid" })).toHaveCount(1);
+
+  await editor.press("Shift+Tab");
+
+  // Back to one flat list — "mid" is a top-level sibling of "top" again,
+  // not nested under it.
+  await expect(editor.locator("ul ul")).toHaveCount(0);
+  await expect(editor.locator("ul > li")).toHaveCount(2);
+  await expect(editor.locator("ul > li").nth(1)).toHaveText("mid");
+});
+
+/**
+ * `Ctrl-]`/`Ctrl-[`, not `Cmd-]`/`Cmd-[`: literal Control on every
+ * platform, deliberately (composer-editor.ts's own `listKeymap` comment —
+ * `Cmd-]` is already browser-forward navigation on macOS, and Todoist
+ * ships `Control+]` everywhere for exactly this reason). Playwright's
+ * `BracketRight`/`BracketLeft` key codes are what a physical `]`/`[` key
+ * reports regardless of layout-driven shifting, matching the literal
+ * `Ctrl-]`/`Ctrl-[` chord `prosemirror-keymap` parses these bindings as.
+ */
+test("Ctrl-] and Ctrl-[ indent and outdent, the same as Tab and Shift-Tab", async ({ page }) => {
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  await editor.pressSequentially("- top");
+  await editor.press("Enter");
+  await editor.pressSequentially("mid");
+
+  await editor.press("Control+BracketRight");
+  await expect(editor.locator("ul ul > li", { hasText: "mid" })).toHaveCount(1);
+
+  await editor.press("Control+BracketLeft");
+  await expect(editor.locator("ul ul")).toHaveCount(0);
+  await expect(editor.locator("ul > li")).toHaveCount(2);
+});
+
+test("Backspace at the very start of a list item lifts it out one level, and out of the list entirely at the top", async ({
+  page,
+}) => {
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  await editor.pressSequentially("- top");
+  await editor.press("Enter");
+  await editor.pressSequentially("mid");
+  await editor.press("Tab");
+  await expect(editor.locator("ul ul > li", { hasText: "mid" })).toHaveCount(1);
+
+  // Backspace only lifts at the very START of an item's own paragraph —
+  // move there explicitly rather than relying on wherever typing left the
+  // caret.
+  await editor.press("Home");
+  await editor.press("Backspace");
+
+  // Lifted one level, not merged into "top"'s own text: "mid" is once
+  // again a top-level sibling of "top", still its own separate item.
+  await expect(editor.locator("ul ul")).toHaveCount(0);
+  await expect(editor.locator("ul > li")).toHaveCount(2);
+  await expect(editor.locator("ul > li").nth(1)).toHaveText("mid");
+
+  // At the top level — no further list to lift into — the same gesture
+  // leaves the list entirely, per the ticket's own acceptance criterion:
+  // "mid" becomes plain prose after a now single-item list, not merged
+  // into "top" and not stranded as an empty item.
+  await editor.press("Home");
+  await editor.press("Backspace");
+
+  await expect(editor.locator("ul > li")).toHaveCount(1);
+  await expect(editor.locator("ul > li").first()).toHaveText("top");
+  await expect(editor.locator("ul + p", { hasText: "mid" })).toBeVisible();
+});
+
+/**
+ * The accessibility regression this ticket most explicitly guards against:
+ * a Composer that swallows Tab unconditionally traps keyboard focus inside
+ * itself (WCAG 2.1.2), unable to hand it back to the rest of the page. Tab
+ * indents ONLY when the caret is inside a list item — `sinkListItem` has
+ * nothing to sink in plain prose, returns `false`, and `listKeymap`'s own
+ * comment on this binding records that `false` reaching
+ * `prosemirror-keymap` here is what lets the browser's native Tab (move
+ * focus to the next focusable element) run unopposed. The Send button is
+ * the next focusable element after the field in composer.tsx's own DOM
+ * order whenever the Composer isn't mid-edit, which this test isn't.
+ */
+test("Tab outside a list still moves focus out of the Composer, not swallowed as a keyboard trap", async ({
+  page,
+}) => {
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  await editor.pressSequentially("plain prose, no list here");
+  await expect(editor).toBeFocused();
+
+  await editor.press("Tab");
+
+  await expect(editor).not.toBeFocused();
+  await expect(page.getByRole("button", { name: "Send" })).toBeFocused();
+});
+
+test("a nested list survives Send and reloads at the same depth", async ({ page }) => {
+  const top = uniqueEntryBody("composer-nest-top");
+  const mid = uniqueEntryBody("composer-nest-mid");
+  const deep = uniqueEntryBody("composer-nest-deep");
+
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  await editor.pressSequentially(`- ${top}`);
+  await editor.press("Enter");
+  await editor.pressSequentially(mid);
+  await editor.press("Tab");
+  await editor.press("Enter");
+  await editor.pressSequentially(deep);
+  await editor.press("Tab");
+  await page.getByRole("button", { name: "Send" }).click();
+
+  const bubble = page.locator('[data-slot="bubble-body"]', { hasText: top });
+  await expect(bubble).toBeVisible();
+  await expect(bubble.locator("ul > li", { hasText: top })).toHaveCount(1);
+  await expect(bubble.locator("ul ul > li", { hasText: mid })).toHaveCount(1);
+  await expect(bubble.locator("ul ul ul > li", { hasText: deep })).toHaveCount(1);
+
+  await page.reload();
+
+  // The exact same three-level shape, read back from a fresh parse of the
+  // Sent body — not merely "still visible," which a flattened list would
+  // also satisfy.
+  const bubbleAfterReload = page.locator('[data-slot="bubble-body"]', { hasText: top });
+  await expect(bubbleAfterReload).toBeVisible();
+  await expect(bubbleAfterReload.locator("ul > li", { hasText: top })).toHaveCount(1);
+  await expect(bubbleAfterReload.locator("ul ul > li", { hasText: mid })).toHaveCount(1);
+  await expect(bubbleAfterReload.locator("ul ul ul > li", { hasText: deep })).toHaveCount(1);
+});
+
+/**
+ * "A checklist can nest under an ordered item and vice versa — the model
+ * already allows mixed types" (the ticket's own acceptance criterion,
+ * true at the schema level: `list_item.checked`, entry-schema.ts, carries
+ * no restriction tied to which list type encloses it). What this test
+ * pins down is narrower and honest about what typing alone can actually
+ * reach: `sinkListItem` (prosemirror-schema-list) always nests a new list
+ * of the SAME type as the item's own current list — verified by reading
+ * its source, not assumed — so Tab alone can never turn an item typed
+ * under `1. ` into a `<ul>`. `checkboxInputRule`'s own guard
+ * (composer-editor.ts), by contrast, checks only "is the caret inside SOME
+ * list_item," never which type of list that item belongs to — so an item
+ * nested under an ordered item, itself still technically an `<ol>`, can
+ * freely become a task the same way a bullet item can, and
+ * `listItemNodeView`'s task rendering (checkbox, `list-none`) does not
+ * vary with the parent list's type either. That is the reachable, typed
+ * proof this ticket's "mixed types" criterion actually has, short of
+ * seeding a document some other way than the Composer's own input rules.
+ */
+test("a checklist item nests under an ordered item", async ({ page }) => {
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  await editor.pressSequentially("1. plan");
+  await editor.press("Enter");
+  // Sinks the fresh, still-empty second ordered item under "plan" before
+  // it has any content of its own to convert.
+  await editor.press("Tab");
+  await editor.pressSequentially("[ ] pack bags");
+
+  const checkbox = editor.locator('input[type="checkbox"]');
+  await expect(checkbox).toBeVisible();
+  await expect(checkbox).not.toBeChecked();
+  await expect(editor).not.toContainText("[");
+
+  await expect(editor.locator("ol > li", { hasText: "plan" })).toHaveCount(1);
+  // The checkbox lives inside a SECOND, nested list, not beside "plan" in
+  // its own outer one.
+  await expect(editor.locator("ol ol").locator('input[type="checkbox"]')).toHaveCount(1);
+});
+
+/**
  * The underscore spellings, which the READER has always understood.
  *
  * `parseEntryMarkdown` is CommonMark, so `_x_` and `__x__` render as

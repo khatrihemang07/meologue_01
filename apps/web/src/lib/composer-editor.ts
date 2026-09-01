@@ -28,10 +28,10 @@ import { InputRule, inputRules, wrappingInputRule } from "prosemirror-inputrules
 import { keymap } from "prosemirror-keymap";
 import type { MarkType, NodeType, Node as PMNode } from "prosemirror-model";
 import { splitListItem } from "prosemirror-schema-list";
-import { Plugin, PluginKey } from "prosemirror-state";
+import { type Command, Plugin, PluginKey } from "prosemirror-state";
 import { findWrapping } from "prosemirror-transform";
 import { Decoration, DecorationSet, type EditorView, type NodeView } from "prosemirror-view";
-import { outdent, redoCommand, undoCommand } from "@/lib/composer-commands";
+import { indent, outdent, redoCommand, undoCommand } from "@/lib/composer-commands";
 import { derivePicker, type ReferencePickerState } from "@/lib/composer-picker";
 import { entrySchema, type ReferenceAttrs } from "@/lib/entry-schema";
 import { parseReferenceDate, parseReferenceEntryId } from "@/lib/inline-markdown";
@@ -516,11 +516,107 @@ export function buildInputRules(): InputRule[] {
  * `<textarea>` did for both (issue #76: neither one ever sent, and both
  * inserted the same plain newline).
  */
+/**
+ * Backspace lifts a list item out one level, but ONLY at the very start of
+ * the item's FIRST paragraph — issue #162. Unlike Tab/Ctrl-]'s indent
+ * below, this cannot simply bind straight to `outdent.run`
+ * (`liftListItem(listItemNodeType)`, composer-commands.ts): that command's
+ * own applicability check is only "is the caret inside a list item
+ * somewhere," true for every position in a multi-paragraph item, not just
+ * its edge. Backspace deleting a character mid-paragraph, or joining a
+ * second paragraph back into an item's first one, must keep behaving
+ * exactly as `baseKeymap` already makes it behave — only the one boundary
+ * case (caret at offset 0 of the item's opening paragraph) is this
+ * ticket's "lift it out" gesture, matching what every editor in this space
+ * (Notion, Obsidian, UpNote) does with Backspace there.
+ *
+ * `entrySchema`'s `list_item` content is `"paragraph block*"`
+ * (entry-schema.ts) — a required leading `paragraph`, then any number of
+ * further blocks (a nested `bullet_list`/`ordered_list`, or in principle a
+ * second `paragraph`). That leading paragraph is always `list_item`'s
+ * direct child (never itself wrapped in something else), so "the very
+ * start of the item's first paragraph" is exactly: an empty selection,
+ * `$from.parentOffset === 0` (nothing before the caret in its immediate
+ * textblock), the node one depth up is a `list_item`, and the caret's
+ * textblock is that `list_item`'s child index 0 — index 0 rather than any
+ * later paragraph is what makes this "first paragraph" rather than
+ * "any paragraph," so Backspace at the start of a SECOND paragraph inside
+ * one item still falls through to `baseKeymap`'s `joinBackward`, joining
+ * it into the first paragraph, exactly as today.
+ *
+ * Registered as its own `Backspace` binding in THIS plugin rather than
+ * built with `chainCommands` alongside `baseKeymap`'s
+ * `deleteSelection, joinBackward, selectNodeBackward` — like `Enter`
+ * above, "chained before" those three is accomplished by plugin order
+ * (`buildComposerPlugins`'s own comment): this plugin runs first, and
+ * returning `false` here (selection non-empty, caret mid-item, or no list
+ * at all) lets `keymap(baseKeymap)`'s own `Backspace` run unopposed,
+ * exactly the same fallthrough `listChain`'s `Enter` binding relies on.
+ *
+ * Exported (unlike `listKeymap`/`historyKeymap` themselves) so
+ * composer-editor.test.ts can exercise its gating directly against a plain
+ * `EditorState` — the same "no `EditorView`" constraint ADR 0044 and this
+ * file's own module comment already document, and the same reason
+ * composer-commands.ts exports `indent`/`outdent` rather than keeping
+ * `sinkListItem`/`liftListItem` private to a keymap closure.
+ */
+export const liftAtStartOfListItem: Command = (state, dispatch) => {
+  const { $from, empty } = state.selection;
+  if (!empty || $from.parentOffset !== 0) {
+    return false;
+  }
+  const itemDepth = $from.depth - 1;
+  if (itemDepth < 0 || $from.node(itemDepth).type !== listItemNodeType) {
+    return false;
+  }
+  if ($from.index(itemDepth) !== 0) {
+    return false;
+  }
+  return outdent.run(state, dispatch);
+};
+
+/**
+ * Tab/Shift-Tab indent/outdent a list item (`indent`/`outdent`, issue
+ * #160's registry — composer-commands.ts, themselves
+ * `sinkListItem(listItemNodeType)`/`liftListItem(listItemNodeType)`) — but
+ * ONLY when the caret is inside a list item. That gating needs no extra
+ * code here: `sinkListItem`/`liftListItem` already return `false` outside
+ * one (both walk the selection's own ancestors the same way this module's
+ * `nearestListItem`, composer-commands.ts, does, and find nothing to
+ * sink/lift), which — same fallthrough mechanism as `Enter`/`Backspace`
+ * above — means `false` here reaches `prosemirror-keymap`'s handler,
+ * `preventDefault()` is never called, and the browser's own native Tab
+ * (move focus to the next focusable element) runs unopposed. This is the
+ * one binding in this file where "does nothing" is load-bearing rather
+ * than incidental: a Composer that swallowed Tab unconditionally would be
+ * a keyboard trap (WCAG 2.1.2), unable to hand focus back to the rest of
+ * the page at all from inside a list. See composer.spec.ts's own
+ * "Tab outside a list still moves focus" e2e case, which exists
+ * specifically to catch a regression here.
+ *
+ * `Ctrl-]`/`Ctrl-[` are unconditional aliases for the same two commands —
+ * deliberately bound to literal `Ctrl-`, NOT `Mod-` (which
+ * `prosemirror-keymap` resolves to `Cmd-` on macOS, `Ctrl-` elsewhere).
+ * `Cmd-]` is already browser-forward navigation on macOS Safari/Chrome, so
+ * `Mod-]` here would either lose to the browser or silently hijack a
+ * shortcut people already have muscle memory for outside this app. Todoist
+ * ships indent as `Control+]`/`Control+[` on EVERY platform, macOS
+ * included, for exactly this reason — one chord, not a per-platform pair,
+ * at the documented cost (their own docs) that it has no dedicated key on
+ * keyboard layouts without bracket keys. That tradeoff is accepted here
+ * deliberately, not an oversight: it is the same chord Tab/Shift-Tab
+ * already cover for anyone on a layout where it doesn't work.
+ */
 function listKeymap(): Plugin {
   const listChain = chainCommands(splitListItem(listItemNodeType), outdent.run);
   return keymap({
     Enter: listChain,
     "Shift-Enter": chainCommands(listChain, splitBlock),
+    Backspace: liftAtStartOfListItem,
+    Tab: indent.run,
+    "Shift-Tab": outdent.run,
+    "Ctrl-]": indent.run,
+    "Ctrl-[": outdent.run,
   });
 }
 
@@ -854,7 +950,8 @@ export function referenceNodeView(node: PMNode): NodeView {
 
 /**
  * Every plugin the Composer's `EditorView` needs, in the order that makes
- * `listKeymap`'s Enter binding take priority over `baseKeymap`'s own: two
+ * `listKeymap`'s Enter AND Backspace bindings take priority over
+ * `baseKeymap`'s own (issue #162 added the latter): two
  * separate `keymap()` plugins bound to the same key chain automatically —
  * ProseMirror tries each plugin's `handleKeyDown` prop in order and moves
  * to the next only if the current one returns `false` — so `listKeymap`

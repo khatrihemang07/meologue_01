@@ -386,6 +386,49 @@
  * `listItemNodeView` sets `list-none` on a checkbox item (TASK_LI_CLASS),
  * exactly as `entry-prose.tsx`'s own `renderListItem` does — so a checkbox
  * never renders a bullet beside it.
+ *
+ * Issue #162 adds the depth cascade below: a bullet list nested inside
+ * another list — of EITHER type, an `ol` an item's sub-list sits under
+ * counts exactly the same as a `ul` does — renders disc, then circle, then
+ * square, matching Obsidian and UpNote rather than the flat "every level
+ * is a disc" a plain `.ProseMirror ul { list-style: disc }` alone would
+ * give every depth. `:is(ul, ol)` in the two cascade selectors below (not
+ * a bare `ul`) is what makes an ancestor `ol` count towards a nested `ul`'s
+ * own depth — CSS's descendant combinator already walks past any
+ * intervening element that doesn't match, `ol` included, so a bare
+ * `ul ul ul` chain would in fact still MATCH a `ul` two `ol`s down (the
+ * combinator doesn't require adjacency) — but it would still be counting
+ * only `ul` ancestors, silently under-counting a `ul` sitting under one or
+ * more `ol` ancestors and leaving it a shade too light for its real depth.
+ * `:is(ul, ol)` fixes that by counting either. The two rules rely on
+ * ordinary cascade specificity, not `!important` or source order alone,
+ * to pick the deeper one: `:is(ul, ol) :is(ul, ol) ul` (three compound
+ * selectors) is more specific than `:is(ul, ol) ul` (two), so a `ul` three
+ * levels down matches both and the square rule wins regardless of which
+ * is written first — and because that same three-selector rule also
+ * matches every `ul` FOUR OR MORE levels down (it only requires AT LEAST
+ * two list ancestors, not exactly two), depth 3 and beyond all render
+ * square, the deliberate cap the ticket asks for ("repeat ▪ beyond depth
+ * 3, as browsers do") rather than a fourth/fifth glyph this file would
+ * otherwise have to invent.
+ *
+ * Ordered lists need no equivalent cascade: `list-style: decimal` on the
+ * single `.ProseMirror ol` rule below already applies at every depth (one
+ * selector, no per-level override, unlike bullets which visibly change
+ * glyph), and "restart at 1 per level" needs no CSS at all — an `<ol>`'s
+ * own implicit item counter is scoped to that element by the HTML/CSS
+ * spec itself, so a nested `<ol>` starts counting at 1 independent of
+ * whatever number its parent list left off on, with nothing here able to
+ * override that even if it wanted to.
+ *
+ * `entry-prose.tsx`'s `renderBlocks`/`bulletListStyleClass` render the
+ * IDENTICAL disc/circle/square cascade for History, by threading a real
+ * `depth` argument through its own recursion rather than a CSS selector —
+ * see that file's own comment for why it cannot use a descendant selector
+ * the way this one does. Nothing enforces the two agree; each carries this
+ * comment pointing at the other so a change to one is a prompt to check
+ * the other, the same discipline this file's own module comment above
+ * already asks for the base ul/ol rules.
  */
 @layer base {
   .ProseMirror ul {
@@ -395,6 +438,12 @@
   .ProseMirror ol {
     list-style: decimal;
     padding-left: 1.25rem;
+  }
+  .ProseMirror :is(ul, ol) ul {
+    list-style: circle;
+  }
+  .ProseMirror :is(ul, ol) :is(ul, ol) ul {
+    list-style: square;
   }
   .ProseMirror li + li {
     margin-top: 0.125rem;

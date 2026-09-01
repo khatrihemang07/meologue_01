@@ -54,11 +54,67 @@ type ToggleTaskHandler = (markerFrom: number, markerTo: number) => void;
 const BLOCK_SPACING = "first:mt-0 mt-1";
 
 /**
+ * The disc → circle → square cascade for a NESTED bullet list, issue #162
+ * — the read-side twin of index.css's `.ProseMirror ul` / `:is(ul, ol) ul`
+ * / `:is(ul, ol) :is(ul, ol) ul` cascade (that file's own comment, above
+ * its `@layer base` block, has the full account of why an ancestor `ol`
+ * counts towards a `ul`'s depth exactly the same as an ancestor `ul`
+ * does). This file cannot reach for a descendant CSS selector the way that
+ * one does: `entryProse` returns a bare `Fragment` with no wrapper element
+ * (this file's own module comment above), so there is nothing to scope
+ * `ul ul`/`ul ul ul` selectors to that wouldn't ALSO catch some unrelated
+ * list elsewhere on the page — Search's own result list, a future
+ * Settings page list, anything else that happens to nest a `<ul>` inside
+ * another. `depth` is threaded through `renderBlocks`/`renderListItem`'s
+ * own recursion instead, purely in TypeScript, so the class this function
+ * returns is scoped by construction to exactly the lists this module
+ * itself renders.
+ *
+ * `depth` here is "how many lists deep is this `<ul>` sitting," 1 for a
+ * top-level list, exactly the value `renderBlocks` computes as
+ * `depth + 1` when it encounters a `bulletList`/`orderedList` block — see
+ * that function's own comment on why the increment happens for BOTH list
+ * kinds even though only a bullet list's own glyph ever varies with it.
+ * Capped at square for depth 3 and beyond ("repeat ▪ beyond depth 3, as
+ * browsers do" — the ticket's own words), the same cap index.css's own
+ * `:is(ul, ol) :is(ul, ol) ul` rule produces for free by matching "at
+ * least two list ancestors" rather than "exactly two."
+ *
+ * Tailwind ships `list-disc` as a named utility but has no built-in
+ * `list-circle`/`list-square` — arbitrary-value syntax (`list-[circle]`,
+ * `list-[square]`) reaches the same underlying `list-style-type` property
+ * Tailwind's own `list-disc` compiles to, so the three depths differ only
+ * in this one class, not in mechanism.
+ */
+function bulletListStyleClass(depth: number): string {
+  if (depth <= 1) {
+    return "list-disc";
+  }
+  if (depth === 2) {
+    return "list-[circle]";
+  }
+  return "list-[square]";
+}
+
+/**
  * A block's own React output, recursively — the same function renders
  * `Document`-level blocks and a `ListItem`'s own nested `content`, since
  * both are just `EntryBlockNode[]`. `first:mt-0` therefore resets per
  * container: the first block inside a list item gets no top margin of its
  * own, exactly like the first block of the Entry as a whole.
+ *
+ * `depth` (issue #162) counts list nesting, not recursion in general —
+ * `entryProse` starts it at `0` (no list yet), and it only advances, by
+ * exactly 1, at the point a `bulletList`/`orderedList` block is actually
+ * rendered; the two recursive calls below hand each new list's items that
+ * incremented value, so a further-nested list found inside one of them
+ * advances again from there rather than from `0`. `orderedList` computes
+ * and threads the same incremented depth as `bulletList` even though
+ * `list-decimal` never varies with it (index.css's own comment on why an
+ * `ol` needs no depth cascade of its own) — an `ol` still has to advance
+ * the counter for whatever list-of-either-kind nests INSIDE it to see the
+ * right depth, exactly what index.css's `:is(ul, ol)` selectors count on
+ * the CSS side.
  */
 function renderBlocks(
   blocks: readonly EntryBlockNode[],
@@ -66,6 +122,7 @@ function renderBlocks(
   refs: ReferenceRenderers,
   keyPrefix: string,
   onToggleTask: ToggleTaskHandler | undefined,
+  depth: number,
 ): ReactNode[] {
   return blocks.map((block, index) => {
     const key = `${keyPrefix}${index}`;
@@ -76,15 +133,21 @@ function renderBlocks(
             {renderNodes(block.children, query, refs, `${key}-`)}
           </p>
         );
-      case "bulletList":
+      case "bulletList": {
+        const listDepth = depth + 1;
         return (
-          <ul key={key} className={cn("list-disc space-y-0.5 pl-5", BLOCK_SPACING)}>
+          <ul
+            key={key}
+            className={cn(bulletListStyleClass(listDepth), "space-y-0.5 pl-5", BLOCK_SPACING)}
+          >
             {block.items.map((item, itemIndex) =>
-              renderListItem(item, query, refs, `${key}-${itemIndex}`, onToggleTask),
+              renderListItem(item, query, refs, `${key}-${itemIndex}`, onToggleTask, listDepth),
             )}
           </ul>
         );
-      case "orderedList":
+      }
+      case "orderedList": {
+        const listDepth = depth + 1;
         return (
           <ol
             key={key}
@@ -92,10 +155,11 @@ function renderBlocks(
             className={cn("list-decimal space-y-0.5 pl-5", BLOCK_SPACING)}
           >
             {block.items.map((item, itemIndex) =>
-              renderListItem(item, query, refs, `${key}-${itemIndex}`, onToggleTask),
+              renderListItem(item, query, refs, `${key}-${itemIndex}`, onToggleTask, listDepth),
             )}
           </ol>
         );
+      }
       default:
         // Exhaustive over EntryBlockNode's three kinds — `satisfies never`
         // is what makes a fourth kind a compile error here rather than a
@@ -152,8 +216,9 @@ function renderListItem(
   refs: ReferenceRenderers,
   key: string,
   onToggleTask: ToggleTaskHandler | undefined,
+  depth: number,
 ): ReactNode {
-  const content = renderBlocks(item.content, query, refs, `${key}-`, onToggleTask);
+  const content = renderBlocks(item.content, query, refs, `${key}-`, onToggleTask, depth);
   if (item.task === undefined) {
     return <li key={key}>{content}</li>;
   }
@@ -180,5 +245,5 @@ export function entryProse(
   refs: ReferenceRenderers = {},
   onToggleTask?: ToggleTaskHandler,
 ): ReactNode {
-  return <>{renderBlocks(parseEntryMarkdown(body), query, refs, "", onToggleTask)}</>;
+  return <>{renderBlocks(parseEntryMarkdown(body), query, refs, "", onToggleTask, 0)}</>;
 }
