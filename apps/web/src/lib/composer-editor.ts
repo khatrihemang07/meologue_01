@@ -21,6 +21,15 @@
  * `markInputRule` below is a small, hand-written replacement for the one
  * piece of that package's `inputrules.ts` this file actually needed (mark
  * toggling from a typed delimiter pair), not a second Markdown parser.
+ *
+ * Issue #165 adds `slashPlugin`'s own trigger detection for the `/` menu —
+ * built as a second, sibling plugin to `pickerPlugin` rather than folded
+ * into it (composer-slash.ts's own module comment explains why the two
+ * triggers are a shared SHAPE but not a shared GRAMMAR) — and registers it
+ * immediately after `pickerPlugin` in `buildComposerPlugins`, an ordering
+ * `slashPlugin`'s own comment explains is load-bearing: it is what lets the
+ * `/` menu read the Reference picker's already-computed state for the same
+ * transaction and defer to it, per ADR 0046.
  */
 import { baseKeymap, chainCommands, splitBlock } from "prosemirror-commands";
 import { history } from "prosemirror-history";
@@ -42,6 +51,7 @@ import {
   undoCommand,
 } from "@/lib/composer-commands";
 import { derivePicker, type ReferencePickerState } from "@/lib/composer-picker";
+import { deriveSlashMenu, type SlashMenuState } from "@/lib/composer-slash";
 import { entrySchema, type ReferenceAttrs } from "@/lib/entry-schema";
 import { parseReferenceDate, parseReferenceEntryId } from "@/lib/inline-markdown";
 
@@ -794,6 +804,72 @@ export function pickerPlugin(): Plugin<ReferencePickerState | null> {
 }
 
 // ---------------------------------------------------------------------------
+// The `/` menu's ProseMirror-side trigger detection (issue #165)
+// ---------------------------------------------------------------------------
+
+export const slashPluginKey = new PluginKey<SlashMenuState | null>("composer-slash");
+
+/**
+ * Same role as `PICKER_DISMISS_META` above, for the `/` menu — composer.tsx's
+ * Escape handler and its own "zero matches" effect both need to force this
+ * plugin's derived state closed without an accompanying document change,
+ * for the identical reason `pickerPluginKey`'s own comment already gives:
+ * this plugin's state is recomputed fresh from the doc and selection on
+ * every transaction, so a transaction carrying neither would otherwise just
+ * re-derive the same open state right back.
+ */
+export const SLASH_DISMISS_META = "dismiss";
+
+/**
+ * Recomputes the `/` menu's state from scratch on every transaction —
+ * `pickerPlugin`'s own shape immediately above, reused for the reasons
+ * that function's comment already gives, with one addition: the Reference
+ * picker always wins. `slashPlugin` MUST be registered after `pickerPlugin()`
+ * in `buildComposerPlugins` below, specifically so that
+ * `pickerPluginKey.getState(newState)` here reads that plugin's OWN
+ * freshly-computed state for THIS transaction, not last transaction's —
+ * `EditorState.apply` computes each plugin's state field in registration
+ * order, threading the in-progress `newState` through every later field's
+ * own `apply` call, so a plugin registered later can depend on one
+ * registered earlier within the very same transaction. Without this check,
+ * typing `/[[` — a `/` immediately followed by a hand-typed Reference
+ * trigger — would open both menus on the same keystroke: the ticket's own
+ * "both menus must never be open at once, and typing `[[` must still open
+ * the Reference picker" requirement, enforced here at the SOURCE rather
+ * than by composer.tsx picking one of two open menus to render. Forcing it
+ * closed here means every other reader of `slashPluginKey`'s state
+ * (composer.tsx's keydown handling, its own listbox) can trust "non-null"
+ * to mean "safe to show," with no second check needed anywhere else.
+ */
+export function slashPlugin(): Plugin<SlashMenuState | null> {
+  return new Plugin<SlashMenuState | null>({
+    key: slashPluginKey,
+    state: {
+      init: (): SlashMenuState | null => null,
+      apply(tr, previous, _oldState, newState): SlashMenuState | null {
+        if (tr.getMeta(slashPluginKey) === SLASH_DISMISS_META) {
+          return null;
+        }
+        if (pickerPluginKey.getState(newState) !== null) {
+          return null;
+        }
+        const { $from } = newState.selection;
+        if (!$from.parent.isTextblock) {
+          return null;
+        }
+        const blockStart = $from.start();
+        const text = textBlockPlainText($from.parent);
+        const caret = $from.parentOffset;
+        const relativePrevious =
+          previous === null ? null : { start: previous.start - blockStart, query: previous.query };
+        const next = deriveSlashMenu(text, caret, relativePrevious);
+        return next === null ? null : { start: next.start + blockStart, query: next.query };
+      },
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
 // The empty-document placeholder
 // ---------------------------------------------------------------------------
 
@@ -1036,6 +1112,9 @@ export function buildComposerPlugins(placeholder: string): Plugin[] {
     keymap(baseKeymap),
     inputRules({ rules: buildInputRules() }),
     pickerPlugin(),
+    // Registered after pickerPlugin() — slashPlugin()'s own comment
+    // explains why the order is load-bearing, not incidental.
+    slashPlugin(),
     placeholderPlugin(placeholder),
     history(),
   ];

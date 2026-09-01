@@ -46,6 +46,8 @@ import {
   pickerPluginKey,
   referenceNodeType,
   referenceNodeView,
+  SLASH_DISMISS_META,
+  slashPluginKey,
 } from "@/lib/composer-editor";
 import {
   buildDateSuggestions,
@@ -57,6 +59,7 @@ import {
   type ReferencePickerState,
 } from "@/lib/composer-picker";
 import { decideSend } from "@/lib/composer-send";
+import { buildSlashMenuItems, filterSlashItems, type SlashMenuState } from "@/lib/composer-slash";
 import { deviceUtcOffsetMinutes, entryDayKey, formatDaySeparator } from "@/lib/entry-day";
 import { entryDocumentToMarkdown, entryMarkdownToDocument } from "@/lib/entry-document";
 import { entrySchema, type ReferenceAttrs } from "@/lib/entry-schema";
@@ -86,6 +89,19 @@ function computeCommandStates(state: EditorState): Record<string, CommandState> 
   }
   return result;
 }
+
+/**
+ * The `/` menu's seven rows (issue #165), reordered from `composerCommands`
+ * once at module load — `buildSlashMenuItems` (composer-slash.ts) throws
+ * immediately if `composerCommands` is ever missing one of the seven ids it
+ * expects, so a typo here fails at import time rather than showing up as a
+ * silently short menu. Computed here, at module scope, rather than with a
+ * `useState`/`useMemo` inside `Composer` itself: `composerCommands` is a
+ * static top-level array that never changes across renders or across
+ * Composer instances, so there is nothing for either hook to memoize
+ * against that a plain module-level constant doesn't already give for free.
+ */
+const slashCommandItems = buildSlashMenuItems(composerCommands);
 
 /** The Composer's own placeholder, shown by composer-editor.ts's `placeholderPlugin` and duplicated here as a literal HTML `placeholder` attribute (composer-editor.ts's `buildComposerPlugins`' own EditorView `attributes`) purely so `apps/e2e`'s `getByPlaceholder("What's on your mind?")` keeps finding this field — a `<div>` has no native `placeholder` semantics, but Playwright's own locator matches the bare attribute on any element (verified against playwright-core's `getByAttributeTextSelector`), so setting it costs nothing and keeps every existing e2e helper working unchanged. */
 const PLACEHOLDER = "What's on your mind?";
@@ -289,6 +305,16 @@ export function Composer({
   const [picker, setPicker] = useState<ReferencePickerState | null>(null);
   const [highlightIndex, setHighlightIndex] = useState(0);
 
+  // The `/` menu's own state (issue #165) — same mirrored-from-a-plugin
+  // shape as `picker`/`highlightIndex` just above, and mutually exclusive
+  // with it in practice: composer-editor.ts's `slashPlugin` forces its own
+  // derived state closed for any transaction where `pickerPluginKey` is
+  // already open (see that plugin's own comment for why, and ADR 0046 for
+  // the ticket-level reasoning), so at most one of `picker`/`slashMenu` is
+  // ever non-null on a given render. `null` means closed.
+  const [slashMenu, setSlashMenu] = useState<SlashMenuState | null>(null);
+  const [slashHighlightIndex, setSlashHighlightIndex] = useState(0);
+
   // Issue #164's format toolbar. `formatBarVisible` is the Device setting
   // (settings.ts) — off by default, flipped by the toggle button beside
   // Send below — and `isFocused` mirrors the `EditorView`'s own DOM focus
@@ -353,6 +379,41 @@ export function Composer({
   const clampedHighlight = items.length === 0 ? -1 : Math.min(highlightIndex, items.length - 1);
   const todayKey = entryDayKey(new Date().toISOString(), offsetMinutes) ?? "";
 
+  // The `/` menu's own filtered rows — `filterSlashItems` (composer-slash.ts)
+  // is a pure substring filter with no knowledge of `EditorState` at all,
+  // so this is plain derived data, computed inline rather than kept as its
+  // own `useState` the way `entryResults` above has to be (that one arrives
+  // asynchronously from `searchEntries`; this one is synchronous on every
+  // render).
+  const filteredSlashItems =
+    slashMenu === null ? [] : filterSlashItems(slashCommandItems, slashMenu.query);
+  const clampedSlashHighlight =
+    filteredSlashItems.length === 0
+      ? -1
+      : Math.min(slashHighlightIndex, filteredSlashItems.length - 1);
+
+  // The ticket's own "zero matches dismisses" rule: unlike the `[[` picker,
+  // which shows "No matching Entry" and stays open no matter how narrow the
+  // query gets, a `/` query that matches nothing closes this menu outright
+  // and leaves the typed text exactly where it is — the same "you were
+  // writing, and the menu interrupted you" rule Escape and the space-dismiss
+  // built into `deriveSlashMenu` both already follow. Reached through the
+  // identical dismiss-meta transaction Escape uses (`SLASH_DISMISS_META`)
+  // rather than a bespoke path, so every reader of `slashMenu` still only
+  // ever has one way to observe "closed." `viewRef`/`slashPluginKey` are
+  // deliberately left out of the dependency array: refs are exempt from
+  // React's dependency rules (they never change identity), and the plugin
+  // key is a stable module-level constant — the effect's own real
+  // dependency is "did the menu's derived state or match count change,"
+  // which `slashMenu`/`filteredSlashItems.length` already capture exactly.
+  useEffect(() => {
+    const view = viewRef.current;
+    if (view === null || slashMenu === null || filteredSlashItems.length > 0) {
+      return;
+    }
+    view.dispatch(view.state.tr.setMeta(slashPluginKey, SLASH_DISMISS_META));
+  }, [slashMenu, filteredSlashItems.length]);
+
   /**
    * Swaps the editor's document out for a fresh one built from `body`,
    * resetting every plugin's own state along with it (the picker closes,
@@ -415,6 +476,43 @@ export function Composer({
     // See composer-editor.ts's own comment on `PICKER_DISMISS_META` for
     // why this needs to be a meta flag rather than a plain `setPicker(null)`.
     view.dispatch(view.state.tr.setMeta(pickerPluginKey, PICKER_DISMISS_META));
+  }
+
+  /**
+   * Choosing a `/` menu row (issue #165): deletes the triggering `/`
+   * itself (`slashMenu.start - 1`) along with whatever was typed after it,
+   * THEN runs the chosen command against the resulting caret position —
+   * `chooseItem`'s own two-step shape just above, except the "act" step
+   * here is an arbitrary registry command rather than always inserting a
+   * `reference` node. This is also why choosing "Reference" specifically
+   * needs no special case: `reference.run` (composer-commands.ts) always
+   * types the same two `[[` characters a hand-typed trigger would, which
+   * land exactly where the deleted `/` span used to be — `pickerPluginKey`'s
+   * own trigger detection (composer-editor.ts) opens the Reference picker
+   * on the very next transaction with nothing more required here. One menu
+   * hands off cleanly to the other; there is no second insertion path for
+   * the same action.
+   */
+  function chooseSlashItem(command: ComposerCommand) {
+    const view = viewRef.current;
+    if (view === null || slashMenu === null) {
+      return;
+    }
+    const from = slashMenu.start - 1;
+    const to = slashMenu.start + slashMenu.query.length;
+    view.dispatch(view.state.tr.delete(from, to));
+    command.run(view.state, view.dispatch);
+    view.focus();
+  }
+
+  function closeSlashMenu() {
+    const view = viewRef.current;
+    if (view === null) {
+      return;
+    }
+    // See composer-editor.ts's own comment on `SLASH_DISMISS_META` for why
+    // this needs to be a meta flag rather than a plain `setSlashMenu(null)`.
+    view.dispatch(view.state.tr.setMeta(slashPluginKey, SLASH_DISMISS_META));
   }
 
   const send = useCallback(() => {
@@ -531,6 +629,41 @@ export function Composer({
         return true;
       }
     }
+    // Mutually exclusive with the `picker !== null` block above by
+    // construction (composer-editor.ts's `slashPlugin` never leaves both
+    // non-null at once — see its own comment), so this block's own four
+    // key bindings mirror the picker's above with no risk of the two
+    // fighting over the same keystroke.
+    if (slashMenu !== null) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeSlashMenu();
+        return true;
+      }
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        if (filteredSlashItems.length > 0) {
+          setSlashHighlightIndex((index) => (index + 1) % filteredSlashItems.length);
+        }
+        return true;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        if (filteredSlashItems.length > 0) {
+          setSlashHighlightIndex(
+            (index) => (index - 1 + filteredSlashItems.length) % filteredSlashItems.length,
+          );
+        }
+        return true;
+      }
+      const highlightedCommand =
+        clampedSlashHighlight >= 0 ? filteredSlashItems[clampedSlashHighlight] : undefined;
+      if (event.key === "Enter" && !event.shiftKey && highlightedCommand) {
+        event.preventDefault();
+        chooseSlashItem(highlightedCommand);
+        return true;
+      }
+    }
     if (event.key === "Escape" && editingEntry) {
       event.preventDefault();
       cancelEdit();
@@ -567,6 +700,11 @@ export function Composer({
       setHighlightIndex(0);
     }
     setPicker(nextPicker);
+    const nextSlashMenu = slashPluginKey.getState(newState) ?? null;
+    if ((nextSlashMenu?.query ?? null) !== (slashMenu?.query ?? null)) {
+      setSlashHighlightIndex(0);
+    }
+    setSlashMenu(nextSlashMenu);
   };
 
   // The `disabled` prop, readable from the `EditorView`'s own `editable`/
@@ -707,6 +845,8 @@ export function Composer({
     dirtyRef.current = false;
     setPicker(null);
     setHighlightIndex(0);
+    setSlashMenu(null);
+    setSlashHighlightIndex(0);
     previousEditingIdRef.current = currentId;
   }, [editingEntry, loadDocument]);
 
@@ -819,6 +959,51 @@ export function Composer({
                         </span>
                       </>
                     )}
+                  </button>
+                ))
+              )}
+            </div>
+          )}
+          {slashMenu !== null && (
+            // Same "opens upward" reasoning as the `[[` picker just above,
+            // and never simultaneously rendered with it — see `slashMenu`'s
+            // own state declaration comment for why at most one of the two
+            // is ever non-null. `min-h-11` (44px) on every row, below, is
+            // this menu's own tap-target floor: unlike the `[[` picker's
+            // two-line rows (a day or an Entry snippet, usually tall enough
+            // on their own), a bare one-word label like "Bold" would
+            // otherwise size to a single short line of text with nothing
+            // else forcing it past the 44px minimum a touch target needs.
+            <div
+              role="listbox"
+              aria-label="Commands"
+              className="absolute bottom-full left-0 z-20 mb-2 max-h-56 w-full max-w-xs overflow-y-auto rounded-lg border border-border bg-popover p-1 shadow-md"
+            >
+              {filteredSlashItems.length === 0 ? (
+                // Reachable only for the single render between the query
+                // narrowing to zero matches and the effect above (this
+                // file's own "zero matches dismisses" comment) dispatching
+                // the meta transaction that closes this menu outright —
+                // unlike the `[[` picker's "No matching Entry", this text
+                // is never meant to linger on screen.
+                <p className="px-2 py-1.5 text-xs text-muted-foreground">No matching command</p>
+              ) : (
+                filteredSlashItems.map((command, index) => (
+                  <button
+                    key={command.id}
+                    type="button"
+                    role="option"
+                    aria-selected={index === clampedSlashHighlight}
+                    onMouseEnter={() => setSlashHighlightIndex(index)}
+                    onClick={() => chooseSlashItem(command)}
+                    className={cn(
+                      "flex min-h-11 w-full items-center rounded-md px-2 text-left text-sm",
+                      index === clampedSlashHighlight
+                        ? "bg-accent text-accent-foreground"
+                        : "hover:bg-accent/50",
+                    )}
+                  >
+                    {command.label}
                   </button>
                 ))
               )}

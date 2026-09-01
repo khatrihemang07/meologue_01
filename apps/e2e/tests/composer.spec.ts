@@ -1066,3 +1066,241 @@ test("the submit chord still sends, even with the format toolbar switched on", a
 
   await expect(page.getByText(body)).toBeVisible();
 });
+
+// ---------------------------------------------------------------------------
+// Issue #165: the `/` menu. composer-slash.test.ts already proves
+// `deriveSlashMenu`/`filterSlashItems`/`buildSlashMenuItems` directly
+// against plain strings (ADR 0044: jsdom cannot mount a ProseMirror
+// `EditorView` at all). What can only be proven here, in a real browser, is
+// that the ProseMirror-side plugin wiring (composer-editor.ts's
+// `slashPlugin`) and composer.tsx's own keyboard handling actually produce
+// the behaviour that pure logic describes — real keystrokes, real caret
+// position, and the mutual-exclusion with the `[[` picker ADR 0046 records.
+// ---------------------------------------------------------------------------
+
+test("/ at the very start of a block opens the slash menu, offering all seven items", async ({
+  page,
+}) => {
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  await editor.pressSequentially("/");
+
+  await expect(page.getByRole("listbox", { name: "Commands" })).toBeVisible();
+  await expect(page.getByRole("option")).toHaveText([
+    "Checklist",
+    "Bullet list",
+    "Numbered list",
+    "Bold",
+    "Italic",
+    "Code",
+    "Reference",
+  ]);
+});
+
+test("/ typed immediately after whitespace also opens the slash menu", async ({ page }) => {
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  await editor.pressSequentially("buy milk /");
+
+  await expect(page.getByRole("listbox", { name: "Commands" })).toBeVisible();
+});
+
+test("/ never opens the slash menu mid-word — and/or types cleanly, with no menu ever appearing", async ({
+  page,
+}) => {
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  const listbox = page.getByRole("listbox", { name: "Commands" });
+
+  // The "/" in "and/or" sits directly after "d" — never at a block start
+  // and never after whitespace — so the menu must not appear at any point
+  // while typing straight through it, character by character (this is the
+  // ticket's own headline example, and the whole reason Obsidian's
+  // position-gated rule was chosen over UpNote's fire-anywhere one).
+  await editor.pressSequentially("and/or");
+  await expect(listbox).toBeHidden();
+  await expect(editor).toContainText("and/or");
+});
+
+test("the slash menu narrows to the typed query as it's typed — /che matches only Checklist", async ({
+  page,
+}) => {
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  await editor.pressSequentially("/che");
+
+  await expect(page.getByRole("option")).toHaveText(["Checklist"]);
+});
+
+test("the slash menu's filter matches a substring in the MIDDLE of a label, not just a prefix", async ({
+  page,
+}) => {
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  // "list" is a substring of "Checklist", "Bullet list" AND "Numbered
+  // list" — none of the three STARTS with it, so all three matching proves
+  // this is unanchored substring matching, not a prefix match. Also proves
+  // case-insensitivity, since the query is typed here in lower case against
+  // mixed-case labels.
+  await editor.pressSequentially("/list");
+
+  await expect(page.getByRole("option")).toHaveText(["Checklist", "Bullet list", "Numbered list"]);
+});
+
+test("the slash menu's filter is accent-insensitive", async ({ page }) => {
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  // No letter in "Reference" itself carries an accent — this only matches
+  // because the accent is stripped from the QUERY before comparing.
+  await editor.pressSequentially("/réf");
+
+  await expect(page.getByRole("option")).toHaveText(["Reference"]);
+});
+
+test("a space typed after / dismisses the slash menu and leaves the typed text exactly where it is", async ({
+  page,
+}) => {
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  const listbox = page.getByRole("listbox", { name: "Commands" });
+
+  await editor.pressSequentially("/bo");
+  await expect(listbox).toBeVisible();
+  await editor.pressSequentially(" ld");
+
+  await expect(listbox).toBeHidden();
+  // Dismissing never touches the document — the reader was writing, and
+  // the menu interrupted them, not the other way round.
+  await expect(editor).toContainText("/bo ld");
+});
+
+test("a query that matches nothing dismisses the slash menu outright, leaving the query text untouched", async ({
+  page,
+}) => {
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  const listbox = page.getByRole("listbox", { name: "Commands" });
+
+  await editor.pressSequentially("/che");
+  await expect(listbox).toBeVisible();
+  // "chk" matches nothing — this is a SUBSTRING filter, not a fuzzy one, so
+  // narrowing "che" to "chk" loses the one match "che" already had rather
+  // than keeping it via a skipped-character match.
+  await editor.pressSequentially("k");
+
+  await expect(listbox).toBeHidden();
+  await expect(editor).toContainText("/chek");
+});
+
+test("arrow keys move the highlighted row and wrap at both ends", async ({ page }) => {
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  await editor.pressSequentially("/");
+
+  const options = page.getByRole("option");
+  await expect(options).toHaveCount(7);
+  await expect(options.nth(0)).toHaveAttribute("aria-selected", "true");
+
+  // Wraps UP from the first row straight to the last.
+  await editor.press("ArrowUp");
+  await expect(options.nth(6)).toHaveAttribute("aria-selected", "true");
+
+  // Wraps back DOWN from the last row to the first.
+  await editor.press("ArrowDown");
+  await expect(options.nth(0)).toHaveAttribute("aria-selected", "true");
+
+  await editor.press("ArrowDown");
+  await expect(options.nth(1)).toHaveAttribute("aria-selected", "true");
+});
+
+test("Enter applies the highlighted command and removes the /query, the same action the toolbar's own button runs", async ({
+  page,
+}) => {
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  await editor.pressSequentially("buy milk /che");
+  await expect(page.getByRole("option")).toHaveText(["Checklist"]);
+
+  await editor.press("Enter");
+
+  await expect(page.getByRole("listbox", { name: "Commands" })).toBeHidden();
+  // The "/che" span is gone entirely — never left behind as text — and the
+  // paragraph became a checklist item, the exact same
+  // `checklist.run` (composer-commands.ts) the Checklist toolbar button
+  // itself runs.
+  await expect(editor).not.toContainText("/che");
+  await expect(editor.locator('input[type="checkbox"]')).toBeVisible();
+  await expect(editor.locator("li")).toContainText("buy milk");
+});
+
+test("choosing Reference from the slash menu hands off to the [[ picker, with no separate insertion path", async ({
+  page,
+}) => {
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  await editor.pressSequentially("see /ref");
+  await expect(page.getByRole("option")).toHaveText(["Reference"]);
+
+  await editor.press("Enter");
+
+  // The Reference toolbar button test above already proves `reference.run`
+  // types a literal `[[`; here that lands where "/ref" used to be, and the
+  // SAME trigger-detection that opens the `[[` picker for hand-typed text
+  // opens it here too, with nothing in this feature aware that it just
+  // handed off from one menu to the other.
+  await expect(page.getByRole("listbox", { name: "Commands" })).toBeHidden();
+  await expect(page.getByRole("listbox", { name: "Days" })).toBeVisible();
+  await expect(editor).toContainText("see [[");
+});
+
+test("Escape dismisses the slash menu and leaves the typed text exactly where it is", async ({
+  page,
+}) => {
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  await editor.pressSequentially("/che");
+  const listbox = page.getByRole("listbox", { name: "Commands" });
+  await expect(listbox).toBeVisible();
+
+  await editor.press("Escape");
+
+  await expect(listbox).toBeHidden();
+  await expect(editor).toContainText("/che");
+});
+
+test("[[ still opens the Reference picker, and the / menu and the [[ picker are never both open at once", async ({
+  page,
+}) => {
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  const slashListbox = page.getByRole("listbox", { name: "Commands" });
+  const referenceListbox = page.getByRole("listbox", { name: "Days" });
+
+  // Typing "/" opens the slash menu first — its own query then grows to
+  // "[[" as the next two characters land, and the instant that query
+  // COMPLETES a Reference trigger, the Reference picker takes over and the
+  // slash menu closes on that same keystroke (composer-editor.ts's
+  // `slashPlugin`, and ADR 0046).
+  await editor.pressSequentially("/");
+  await expect(slashListbox).toBeVisible();
+  await editor.pressSequentially("[[");
+
+  await expect(referenceListbox).toBeVisible();
+  await expect(slashListbox).toBeHidden();
+
+  await editor.press("Escape");
+  await expect(referenceListbox).toBeHidden();
+});
