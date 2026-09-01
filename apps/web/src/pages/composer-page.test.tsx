@@ -52,6 +52,10 @@ const readyContext: EntryStoreOutletContext = {
   renameTask: vi.fn(),
   reorderTask: vi.fn(),
   removeTask: vi.fn(),
+  setTaskDate: vi.fn(),
+  setTaskDeadline: vi.fn(),
+  setTaskDuration: vi.fn(),
+  setTaskPriority: vi.fn(),
   disabled: false,
 };
 
@@ -93,6 +97,10 @@ describe("ComposerPage", () => {
       renameTask: vi.fn(),
       reorderTask: vi.fn(),
       removeTask: vi.fn(),
+      setTaskDate: vi.fn(),
+      setTaskDeadline: vi.fn(),
+      setTaskDuration: vi.fn(),
+      setTaskPriority: vi.fn(),
       disabled: true,
     });
 
@@ -124,6 +132,10 @@ describe("ComposerPage", () => {
       renameTask: vi.fn(),
       reorderTask: vi.fn(),
       removeTask: vi.fn(),
+      setTaskDate: vi.fn(),
+      setTaskDeadline: vi.fn(),
+      setTaskDuration: vi.fn(),
+      setTaskPriority: vi.fn(),
       disabled: true,
       message: "meologue couldn't open its storage. Reloading may help.",
     });
@@ -160,6 +172,10 @@ describe("ComposerPage", () => {
       renameTask: vi.fn(),
       reorderTask: vi.fn(),
       removeTask: vi.fn(),
+      setTaskDate: vi.fn(),
+      setTaskDeadline: vi.fn(),
+      setTaskDuration: vi.fn(),
+      setTaskPriority: vi.fn(),
       disabled: false,
     });
 
@@ -215,6 +231,10 @@ describe("ComposerPage", () => {
       renameTask: vi.fn(),
       reorderTask: vi.fn(),
       removeTask: vi.fn(),
+      setTaskDate: vi.fn(),
+      setTaskDeadline: vi.fn(),
+      setTaskDuration: vi.fn(),
+      setTaskPriority: vi.fn(),
       disabled: false,
     });
 
@@ -315,6 +335,10 @@ describe("ComposerPage", () => {
         renameTask: vi.fn(),
         reorderTask: vi.fn(),
         removeTask: vi.fn(),
+        setTaskDate: vi.fn(),
+        setTaskDeadline: vi.fn(),
+        setTaskDuration: vi.fn(),
+        setTaskPriority: vi.fn(),
         disabled: false,
       });
 
@@ -371,6 +395,10 @@ describe("ComposerPage", () => {
         renameTask: vi.fn(),
         reorderTask: vi.fn(),
         removeTask: vi.fn(),
+        setTaskDate: vi.fn(),
+        setTaskDeadline: vi.fn(),
+        setTaskDuration: vi.fn(),
+        setTaskPriority: vi.fn(),
         disabled: false,
       });
 
@@ -431,6 +459,10 @@ describe("ComposerPage", () => {
         renameTask: vi.fn(),
         reorderTask: vi.fn(),
         removeTask: vi.fn(),
+        setTaskDate: vi.fn(),
+        setTaskDeadline: vi.fn(),
+        setTaskDuration: vi.fn(),
+        setTaskPriority: vi.fn(),
         disabled: false,
       });
 
@@ -487,6 +519,10 @@ describe("ComposerPage", () => {
           renameTask: vi.fn(),
           reorderTask: vi.fn(),
           removeTask: vi.fn(),
+          setTaskDate: vi.fn(),
+          setTaskDeadline: vi.fn(),
+          setTaskDuration: vi.fn(),
+          setTaskPriority: vi.fn(),
           disabled: false,
         },
         "/?q=wor",

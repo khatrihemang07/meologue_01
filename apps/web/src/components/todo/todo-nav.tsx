@@ -1,4 +1,4 @@
-import { ListTodo } from "lucide-react";
+import { CalendarCheck, ListTodo } from "lucide-react";
 import { NavLink } from "react-router";
 import { cn } from "@/lib/utils";
 
@@ -12,11 +12,18 @@ import { cn } from "@/lib/utils";
  * which is the whole of what ADR 0049 argues does not reopen ADR 0036's
  * removal of the app-wide persistent nav.
  *
- * One row today (Inbox). Issue #169's Today is a second row added to
- * `VIEWS` below — adding a view is adding a row to a list, per this
- * ticket's own brief, not restructuring this component.
+ * Two rows: Inbox (issue #168), and Today (issue #169) — a second, co-equal
+ * query over the same Tasks (ADR 0049's "Today alone is enough to make
+ * navigation a question this ADR has to answer"). Landing Today here is
+ * exactly the proof this ADR asked for: a second row appended to `VIEWS`
+ * below, nothing else in this component touched — "adding a view is adding
+ * a row to a list," this ticket's own brief, held in practice rather than
+ * only argued in the ADR that predicted it.
  */
-const VIEWS = [{ to: "/todo/inbox", label: "Inbox", Icon: ListTodo }] as const;
+const VIEWS = [
+  { to: "/todo/inbox", label: "Inbox", Icon: ListTodo },
+  { to: "/todo/today", label: "Today", Icon: CalendarCheck },
+] as const;
 
 export function TodoNav() {
   return (

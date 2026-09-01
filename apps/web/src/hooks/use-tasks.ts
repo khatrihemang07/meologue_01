@@ -1,5 +1,5 @@
 import type { Task, TaskStore } from "@meologue/core";
-import { mintId, orderKeyBetween } from "@meologue/core";
+import { hasTime, mintId, orderKeyBetween } from "@meologue/core";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { COMPLETED_TASKS_QUERY_KEY, TASKS_QUERY_KEY } from "@/lib/query-keys";
 import { refreshTasks } from "@/lib/tasks-refresh";
@@ -10,7 +10,12 @@ export interface UseTasksResult {
   /** Completed Tasks, newest completion first — TaskStore.listCompleted(). */
   completedTasks: Task[];
   /** Creates a Task from plain text, appended to the end of the active list. Ignores blank input, mirroring sendEntry. */
-  addTask: (content: string) => void;
+  /**
+   * Captures a new Task. `date` is the *view's* own context, not a
+   * scheduling gesture — see `addTask`'s implementation for why the
+   * caller supplies it rather than this hook assuming undated.
+   */
+  addTask: (content: string, date?: string | null) => void;
   completeTask: (id: string) => void;
   uncompleteTask: (id: string) => void;
   /** Changes a Task's content. Ignores blank input, mirroring editEntry. */
@@ -18,6 +23,28 @@ export interface UseTasksResult {
   /** Writes the one `orderKey` a drag computed (task-reorder.ts's `reorderedTaskOrderKey`) — see TaskStore.reorder's own doc comment for why this never touches a sibling's row. */
   reorderTask: (id: string, orderKey: string) => void;
   removeTask: (id: string) => void;
+  /**
+   * Sets a Task's `date` (issue #169) — the one door every picker in Todo
+   * goes through, rather than each calling `TaskStore.setDate` directly.
+   * Dropping to an undated or all-day value while `duration` still holds a
+   * value from an earlier timed `date` is this function's own job to fix,
+   * not the store's: TaskStore.setDuration's own doc comment is explicit
+   * that "requires a date that carries a time" is checked against the
+   * Task's *current* `date` at the moment `setDuration` runs, and
+   * `setDate` "does not need a mirror-image check … changing `date` never
+   * touches `duration`'s stored value" — meaning the store leaves an
+   * inconsistent row (a `duration` sitting on an all-day Task) exactly as
+   * valid as any other write, and expects the caller who just removed the
+   * time to also clear it. This hook is that caller for every picker in
+   * the app, so it happens here once rather than once per picker.
+   */
+  setTaskDate: (id: string, date: string | null) => void;
+  /** Sets a Task's `deadline` (issue #169) — TaskStore.setDeadline throws on a timed value; DatePickerSheet only ever hands this a bare day, so that refusal is never reachable from a picker. */
+  setTaskDeadline: (id: string, deadline: string | null) => void;
+  /** Sets a Task's `duration` in minutes (issue #169) — TaskStore.setDuration throws without a timed `date` or above 1440; the picker that calls this disables itself rather than relying on the throw (task-schedule-sheet.tsx). */
+  setTaskDuration: (id: string, duration: number | null) => void;
+  /** Sets a Task's stored `priority` (1-4) — callers pass `storedPriorityOf(uiPriority)`, never the UI number directly (task-types.ts's own warning against open-coding the inversion). */
+  setTaskPriority: (id: string, priority: number) => void;
 }
 
 /**
@@ -69,16 +96,14 @@ export function useTasks(taskStore: TaskStore, deviceId: string): UseTasksResult
     onSuccess: afterLocalWrite,
   });
 
-  function addTask(content: string) {
+  function addTask(content: string, date: string | null = null) {
     const trimmed = content.trim();
     if (trimmed === "") {
       return;
     }
     // Appended to the end of the active list — orderKeyBetween(lastKey,
     // null) sorts after every existing Task (order-key.ts's own doc
-    // comment). A Task created in Todo is undated (the plan's own "default
-    // date is inherited from origin" rule), so "the end" is the only
-    // position that means anything without a due date to sort by yet.
+    // comment).
     addTaskMutation.mutate({
       id: mintId(),
       deviceId,
@@ -89,6 +114,34 @@ export function useTasks(taskStore: TaskStore, deviceId: string): UseTasksResult
       seq: null,
       syncedAt: null,
       deletedAt: null,
+      // The **date is inherited from the origin** — the plan's own rule,
+      // and Todoist's own context inheritance. `date` defaults to null, so
+      // a Task captured in Inbox starts undated: Inbox is the capture
+      // bucket, where a reader jots something down before deciding when,
+      // or whether, to schedule it, and that is issue #169's "a Task
+      // created in Todo starts undated."
+      //
+      // Today passes today's own day instead, and it has to. Adding a Task
+      // while standing on Today and having it appear nowhere is not a
+      // subtle failure — verified on the built app before this argument
+      // was written: the row simply never appeared, because an undated
+      // Task is by definition absent from every day-keyed view
+      // (task-views.ts). The view a reader is looking at *is* the context
+      // the rule inherits from; treating "created in Todo" as one
+      // undifferentiated origin is what made a Task vanish as it was typed.
+      //
+      // Deadline, duration and priority are not inherited and stay empty:
+      // Today is a view over *dates*, so a date is the only thing standing
+      // in it actually says about a new Task. Priority is stored 1, UI p4
+      // — "no priority" (see uiPriorityOf's own doc comment for why that
+      // isn't 0). Task.date/deadline/duration/priority are required,
+      // non-optional fields precisely so this call site has to say all of
+      // this explicitly instead of an omitted key quietly picking a
+      // default on its behalf.
+      date,
+      deadline: null,
+      duration: null,
+      priority: 1,
     });
   }
 
@@ -142,6 +195,58 @@ export function useTasks(taskStore: TaskStore, deviceId: string): UseTasksResult
     removeTaskMutation.mutate(id);
   }
 
+  const setDateMutation = useMutation({
+    mutationFn: ({ id, date }: { id: string; date: string | null }) => taskStore.setDate(id, date),
+    onSuccess: afterLocalWrite,
+  });
+
+  const setDurationMutation = useMutation({
+    mutationFn: ({ id, duration }: { id: string; duration: number | null }) =>
+      taskStore.setDuration(id, duration),
+    onSuccess: afterLocalWrite,
+  });
+
+  function setTaskDate(id: string, date: string | null) {
+    setDateMutation.mutate({ id, date });
+    // See UseTasksResult.setTaskDate's own doc comment for why this
+    // follow-up write exists. `tasks` (this closure's own active list) is
+    // read synchronously here rather than after `setDateMutation` settles:
+    // the two writes race against the same row regardless of ordering —
+    // TaskStore's per-field setters clear `seq` independently, and no
+    // Sync exists yet to interleave with (issue #172) — so there is no
+    // correctness reason to wait, only latency to lose by doing so.
+    if (!hasTime(date)) {
+      const current = tasks.find((t) => t.id === id);
+      if (current !== undefined && current.duration !== null) {
+        setDurationMutation.mutate({ id, duration: null });
+      }
+    }
+  }
+
+  const setDeadlineMutation = useMutation({
+    mutationFn: ({ id, deadline }: { id: string; deadline: string | null }) =>
+      taskStore.setDeadline(id, deadline),
+    onSuccess: afterLocalWrite,
+  });
+
+  function setTaskDeadline(id: string, deadline: string | null) {
+    setDeadlineMutation.mutate({ id, deadline });
+  }
+
+  function setTaskDuration(id: string, duration: number | null) {
+    setDurationMutation.mutate({ id, duration });
+  }
+
+  const setPriorityMutation = useMutation({
+    mutationFn: ({ id, priority }: { id: string; priority: number }) =>
+      taskStore.setPriority(id, priority),
+    onSuccess: afterLocalWrite,
+  });
+
+  function setTaskPriority(id: string, priority: number) {
+    setPriorityMutation.mutate({ id, priority });
+  }
+
   return {
     tasks,
     completedTasks,
@@ -151,5 +256,9 @@ export function useTasks(taskStore: TaskStore, deviceId: string): UseTasksResult
     renameTask,
     reorderTask,
     removeTask,
+    setTaskDate,
+    setTaskDeadline,
+    setTaskDuration,
+    setTaskPriority,
   };
 }

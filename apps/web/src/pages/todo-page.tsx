@@ -2,33 +2,67 @@ import type { PointerEvent } from "react";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { BackToChats } from "@/components/back-to-chats";
+import { localDayKey } from "@/components/date-picker-sheet";
 import { Shell } from "@/components/shell";
 import { AddTaskForm } from "@/components/todo/add-task-form";
 import { CompletedTasks } from "@/components/todo/completed-tasks";
 import { TaskRow } from "@/components/todo/task-row";
+import { TaskScheduleSheet } from "@/components/todo/task-schedule-sheet";
+import { TodayView } from "@/components/todo/today-view";
 import { TodoNav } from "@/components/todo/todo-nav";
 import { ConfirmDialog } from "@/components/ui/alert-dialog";
 import { dropIndexForPointer } from "@/lib/task-drag-recognizer";
 import { reorderedTaskOrderKey } from "@/lib/task-reorder";
 import { useEntryStore } from "@/pages/entry-store-layout";
 
+export interface TodoPageProps {
+  /**
+   * Which of Todo's two views to render (issue #169) — a prop, not a
+   * second lazily-imported page component, so `App.tsx` keeps exactly one
+   * dynamic `import("@/pages/todo-page")` regardless of how many `/todo/*`
+   * routes exist. Two Route elements pointing at the same lazy component
+   * with different props is what keeps this a one-chunk feature the way
+   * `apps/web/scripts/check-bundle-size.mjs`'s own per-chunk budget
+   * expects — a second chunk here would need a second budget entry this
+   * ticket's brief never asked for ("update the Todo chunk's budget,"
+   * singular). Defaults to "inbox" so every pre-#169 caller — this file's
+   * own tests among them — that renders `<TodoPage />` with no props at
+   * all keeps working unchanged.
+   */
+  view?: "inbox" | "today";
+}
+
 /**
- * Inbox — Todo's one view for this ticket (issue #168; ADR 0049 names it as
- * the first of several `/todo/*` routes rather than the whole of Todo).
- * Lists active Tasks in `(orderKey, id)` order (TaskStore.list()'s own
- * guarantee), with the ordinary CRUD-plus-reorder set the ticket's
- * acceptance criteria name: add, complete (with an Undo toast and a
- * durable Completed section — see the comment on `handleComplete` below),
- * uncomplete, delete (behind the shared `ConfirmDialog`, same as
- * `sessions-page.tsx`/`history.tsx`), and drag-to-reorder.
+ * Todo's two views (issue #168's Inbox, issue #169's Today) — ADR 0049
+ * names both as `/todo/*` routes rendered through this one lazy chunk, and
+ * this component is the seam that picks between them via `view` rather
+ * than each view owning its own page module. Inbox lists every active
+ * Task in `(orderKey, id)` order (TaskStore.list()'s own guarantee) with
+ * the ordinary CRUD-plus-reorder set issue #168's acceptance criteria
+ * name: add, complete (with an Undo toast and a durable Completed section
+ * — see the comment on `handleComplete` below), uncomplete, delete (behind
+ * the shared `ConfirmDialog`, same as `sessions-page.tsx`/`history.tsx`),
+ * and drag-to-reorder. Today (`components/todo/today-view.tsx`) is a
+ * second, co-equal query over the same Tasks, with no drag-to-reorder of
+ * its own — task-views.ts's `today()` computes its order, so there's
+ * nothing for a drag to mean there the way there is in Inbox.
  *
  * Renders through `Shell` the same way every other Destination does,
  * `composerSlot={<TodoNav />}` docking Todo's own internal navigation at
- * the pane's bottom edge — the one row that view offers today is exactly
- * where the reader already is (ADR 0049), and #169's Today will be a
- * second row there, not a restructuring of this page.
+ * the pane's bottom edge, regardless of which view is open — the nav's own
+ * job is showing a reader where else in Todo they can go, which is exactly
+ * as true from Today as it is from Inbox.
+ *
+ * The Add form, the Completed disclosure, the delete confirmation, and the
+ * schedule sheet (issue #169's pickers) are all owned here, once, and
+ * shared by both views rather than each growing its own copy: deleting or
+ * scheduling a Task is the identical act regardless of which view's row a
+ * reader tapped it from.
+ *
+ * The Add form is shared too, but it is **not** context-free — see
+ * `captureDate` below.
  */
-export function TodoPage() {
+export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   const {
     tasks,
     completedTasks,
@@ -39,10 +73,49 @@ export function TodoPage() {
     removeTask,
     disabled,
     message,
+    setTaskDate,
+    setTaskDeadline,
+    setTaskDuration,
+    setTaskPriority,
   } = useEntryStore();
+
+  // The date a Task captured *from this view* inherits — the plan's
+  // "default date is inherited from origin" rule, which is Todoist's own
+  // context inheritance. Inbox is the undated capture bucket (issue #169's
+  // "a Task created in Todo starts undated"), so it inherits nothing;
+  // Today inherits today.
+  //
+  // Not a nicety. With Inbox's rule applied to both views, typing a Task
+  // while standing on Today made it disappear as it was added — it was
+  // created undated, and an undated Task is by definition absent from
+  // every day-keyed view (task-views.ts). That was verified on the built
+  // app, not reasoned about: the row simply never appeared. "Created in
+  // Todo" is not one origin; the view a reader is standing in is the
+  // context, and this is the line that says so.
+  //
+  // `localDayKey`, not `new Date().toISOString()`: Task.date is a floating
+  // local day (its own doc comment in packages/core), and an ISO instant
+  // would put a Task captured late in the evening onto tomorrow for any
+  // reader east of UTC — the same reason `today-view.tsx` reads the
+  // current day through this function rather than off an instant.
+  const captureDate = view === "today" ? localDayKey(new Date()) : null;
 
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const confirmingTask = tasks.find((task) => task.id === confirmingId) ?? null;
+
+  // The one TaskScheduleSheet instance for the whole page (this
+  // component's own doc comment) — `schedulingId` names which Task it's
+  // currently open for, `null` meaning closed. Looked up fresh from
+  // `tasks` on every render (`schedulingTask` below) rather than a
+  // snapshot captured when the sheet opened, so a picker's own write is
+  // visible in the sheet the instant the next render lands (TanStack
+  // Query's cache update after `afterLocalWrite`, use-tasks.ts).
+  const [schedulingId, setSchedulingId] = useState<string | null>(null);
+  const schedulingTask = tasks.find((task) => task.id === schedulingId) ?? null;
+
+  function handleOpenSchedule(taskId: string) {
+    setSchedulingId(taskId);
+  }
 
   // Drag state (ADR 0050, and issue #168's own follow-up: native HTML5
   // drag-and-drop never fires on Android — WebView doesn't synthesise
@@ -204,12 +277,22 @@ export function TodoPage() {
 
   return (
     <Shell title="Todo" back={<BackToChats />} message={message} composerSlot={<TodoNav />}>
-      <AddTaskForm onAdd={addTask} disabled={disabled} />
+      <AddTaskForm onAdd={(content) => addTask(content, captureDate)} disabled={disabled} />
 
-      {tasks.length === 0 ? (
-        // A real state, not a blank panel (this ticket's own acceptance
+      {view === "today" ? (
+        <TodayView
+          tasks={tasks}
+          onComplete={handleComplete}
+          onRequestDelete={handleRequestDelete}
+          onOpenSchedule={handleOpenSchedule}
+          onSetDate={setTaskDate}
+        />
+      ) : tasks.length === 0 ? (
+        // A real state, not a blank panel (issue #168's own acceptance
         // criterion) — the same posture `sessions-page.tsx`'s own empty
-        // state takes rather than leaving a bare scroll region.
+        // state takes rather than leaving a bare scroll region. Today's
+        // own empty state (`today-view.tsx`) reads differently on
+        // purpose — see that file's own comment.
         <p className="px-3 py-6 text-center text-muted-foreground text-sm">
           Nothing in your Inbox. Add a Task above to get started.
         </p>
@@ -221,6 +304,7 @@ export function TodoPage() {
               task={task}
               onComplete={() => handleComplete(task.id, task.content)}
               onRequestDelete={() => handleRequestDelete(task.id)}
+              onOpenSchedule={() => handleOpenSchedule(task.id)}
               isDropTarget={drag !== null && overTarget === task.id}
               onHandlePointerDown={handleHandlePointerDown(task.id)}
               onHandlePointerMove={handleHandlePointerMove}
@@ -250,7 +334,30 @@ export function TodoPage() {
         </ul>
       )}
 
-      <CompletedTasks tasks={completedTasks} onUncomplete={uncompleteTask} />
+      {/* The Completed disclosure is Inbox-specific — Today's own Tasks
+          are never completed *from* Today in a way that would need a
+          second copy of this list; completing a Task from either view
+          moves it into the identical shared `completedTasks`, and this is
+          Todo's one door onto it, the same reasoning `handleComplete`'s
+          own doc comment gives for the schedule sheet being shared rather
+          than per-view. */}
+      {view === "inbox" && <CompletedTasks tasks={completedTasks} onUncomplete={uncompleteTask} />}
+
+      {schedulingTask !== null && (
+        <TaskScheduleSheet
+          task={schedulingTask}
+          open={true}
+          onOpenChange={(open) => {
+            if (!open) {
+              setSchedulingId(null);
+            }
+          }}
+          onSetDate={setTaskDate}
+          onSetDeadline={setTaskDeadline}
+          onSetDuration={setTaskDuration}
+          onSetPriority={setTaskPriority}
+        />
+      )}
 
       <ConfirmDialog
         open={confirmingTask !== null}

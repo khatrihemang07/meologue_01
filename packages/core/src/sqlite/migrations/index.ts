@@ -1,6 +1,7 @@
 import initial from "./0000_initial.sql?raw";
 import entryDeletedAt from "./0001_entry_deleted_at.sql?raw";
 import tasksTable from "./0002_tasks_table.sql?raw";
+import taskSchedulingFields from "./0003_task_scheduling_fields.sql?raw";
 import entriesSearchIndex from "./entries_search_index.sql?raw";
 import tasksSearchIndex from "./tasks_search_index.sql?raw";
 
@@ -46,6 +47,21 @@ export interface Migration {
  * unlike the FTS5 tables above — hand-edited only to add `IF NOT EXISTS`
  * to its `CREATE TABLE` and `CREATE INDEX`, the same treatment migration 1
  * got.
+ *
+ * `0003_task_scheduling_fields` (version 6, issue #169) is four more
+ * `ALTER TABLE ADD COLUMN` statements, unedited `drizzle-kit generate`
+ * output — no hand-editing needed this time, because `ADD COLUMN` already
+ * gets its idempotence from ../migrator.ts's `duplicate column name` swallow
+ * rather than from `IF NOT EXISTS` (SQLite has no such form for it), the
+ * same way migration 3 does. Deliberately relying on that swallow again
+ * here rather than reinventing a guard: a process that dies after adding,
+ * say, `date` and `deadline` but before `duration` and `priority` re-runs
+ * this migration from its first statement on restart (migrate() reruns a
+ * migration wholesale until every one of its statements has landed and the
+ * ledger row is written — see ../migrator.ts), and the two already-added
+ * columns throw exactly the swallowed error while the remaining two land
+ * for real. Versions 4 and 5 were already spent by issue #168, which is why
+ * this is 6.
  */
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, sql: initial },
@@ -53,4 +69,5 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 3, sql: entryDeletedAt },
   { version: 4, sql: tasksTable },
   { version: 5, sql: tasksSearchIndex },
+  { version: 6, sql: taskSchedulingFields },
 ];

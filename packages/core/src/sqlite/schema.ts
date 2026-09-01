@@ -47,11 +47,10 @@ export const entries = sqliteTable(
  * describes, made permanent rather than provisional, because collaboration
  * was never even sketched the way editing was before ADR 0028 landed.
  *
- * Deliberately excludes date, priority, deadline, duration, project,
- * section and parent fields too — issue #169 and #171 add those, each
- * behind its own migration, on purpose: sequencing the tickets this way
- * keeps each migration's blast radius to the one thing it's actually
- * adding.
+ * Date, deadline, duration and priority were added by issue #169; project,
+ * section and parent are deliberately still excluded, and land in #171
+ * behind its own migration — sequencing the tickets this way keeps each
+ * migration's blast radius to the one thing it's actually adding.
  */
 export const tasks = sqliteTable(
   "tasks",
@@ -72,6 +71,29 @@ export const tasks = sqliteTable(
     // as `entries.deletedAt` above, for the same reason: "removed" has to
     // travel to another Device as a row with a `seq`, not as an absence.
     deletedAt: text("deleted_at"),
+    // When the user plans to do the Task (../task-types.ts's own comment
+    // has the full reasoning). `YYYY-MM-DD` or floating `YYYY-MM-DDTHH:MM`
+    // — never a `Z`, never an offset, unlike `created_at` above, which is a
+    // real UTC instant.
+    date: text("date"),
+    // The hard cutoff, date-only — no time, no recurrence, ever (issue
+    // #169). Independent of `date`: a Task may carry either, both, or
+    // neither.
+    deadline: text("deadline"),
+    // Minutes; requires `date` to carry a time (there's nothing to measure
+    // a length from otherwise) and is capped at 1440 (24 hours). Both
+    // rules are enforced in ../task-fields.ts, not here — a column
+    // constraint can't express "requires another column to have a
+    // particular shape."
+    duration: integer("duration"),
+    // 1-4, stored inverted against the UI's p1-p4 naming (Todoist's own API
+    // does the same) — see ../task-types.ts's uiPriorityOf/storedPriorityOf
+    // for the one named place that inversion lives. Not nullable: "no
+    // priority" is priority 1 (UI p4), a real level rather than an absence,
+    // so every Task — including one migrated in from before this column
+    // existed — gets a default rather than a gap the app has to keep
+    // special-casing.
+    priority: integer("priority").notNull().default(1),
   },
   (table) => [
     // Supports list()'s actual query: `WHERE completed_at IS NULL AND

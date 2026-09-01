@@ -40,7 +40,7 @@ describe("migrate", () => {
     await migrate(driver);
 
     const result = await driver.execute("SELECT version FROM meologue_migrations", [], "all");
-    expect(result.rows).toEqual([[1], [2], [3], [4], [5]]);
+    expect(result.rows).toEqual([[1], [2], [3], [4], [5], [6]]);
   });
 
   it("backfills Entries that existed before the search index migration shipped", async () => {
@@ -132,7 +132,7 @@ describe("migrate", () => {
     await expect(migrate(driver)).resolves.toBeUndefined();
 
     const ledger = await driver.execute("SELECT version FROM meologue_migrations", [], "all");
-    expect(ledger.rows).toEqual([[1], [2], [3], [4], [5]]);
+    expect(ledger.rows).toEqual([[1], [2], [3], [4], [5], [6]]);
 
     // The store isn't just "didn't throw" — it's actually usable: a write
     // that touches the new column succeeds.

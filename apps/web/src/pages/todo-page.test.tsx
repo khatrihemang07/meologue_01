@@ -3,6 +3,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { Link, MemoryRouter, Outlet, Route, Routes } from "react-router";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { localDayKey } from "@/components/date-picker-sheet";
 import type { EntryStoreOutletContext } from "@/pages/entry-store-layout";
 import { TodoPage } from "./todo-page";
 
@@ -19,6 +20,12 @@ function task(overrides: Partial<Task> = {}): Task {
     seq: 1,
     syncedAt: "2026-01-01T00:00:00.000Z",
     deletedAt: null,
+    // Undated, no deadline, no duration, priority 1 ("no priority") — the
+    // same default packages/core/src/test-support/task-fixture.ts uses.
+    date: null,
+    deadline: null,
+    duration: null,
+    priority: 1,
     ...overrides,
   };
 }
@@ -39,6 +46,7 @@ function renderTodoPage(context: EntryStoreOutletContext, initialPath = "/todo/i
       <Routes>
         <Route element={<Outlet context={context} />}>
           <Route path="/todo/inbox" element={<TodoPage />} />
+          <Route path="/todo/today" element={<TodoPage view="today" />} />
           <Route path="/composer" element={<p>Composer</p>} />
         </Route>
       </Routes>
@@ -63,6 +71,10 @@ function readyContext(overrides: Partial<EntryStoreOutletContext> = {}): EntrySt
     renameTask: vi.fn(),
     reorderTask: vi.fn(),
     removeTask: vi.fn(),
+    setTaskDate: vi.fn(),
+    setTaskDeadline: vi.fn(),
+    setTaskDuration: vi.fn(),
+    setTaskPriority: vi.fn(),
     disabled: false,
     ...overrides,
   };
@@ -160,14 +172,33 @@ describe("TodoPage", () => {
     expect(screen.queryByText(/Nothing in your Inbox/)).not.toBeInTheDocument();
   });
 
-  it("adds a Task through the form", () => {
+  // Inbox is the undated capture bucket (issue #169: "a Task created in
+  // Todo starts undated"), so the date this passes is explicitly null
+  // rather than absent — see TodoPage's own `captureDate`.
+  it("adds a Task through the form, undated, when the reader is in Inbox", () => {
     const addTask = vi.fn();
     renderTodoPage(readyContext({ addTask }));
 
     fireEvent.change(screen.getByLabelText("Add a Task"), { target: { value: "call mum" } });
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
 
-    expect(addTask).toHaveBeenCalledWith("call mum");
+    expect(addTask).toHaveBeenCalledWith("call mum", null);
+  });
+
+  // The regression this exists for was found by running the built app, not
+  // by any test: with Inbox's undated rule applied to Today as well, a Task
+  // typed while standing on Today was created undated and therefore absent
+  // from every day-keyed view — so it vanished the instant it was added.
+  // The plan's "default date is inherited from origin" rule (Todoist's own
+  // context inheritance) is what fixes it, and the origin is the *view*.
+  it("adds a Task dated today when the reader is standing in Today", () => {
+    const addTask = vi.fn();
+    renderTodoPage(readyContext({ addTask }), "/todo/today");
+
+    fireEvent.change(screen.getByLabelText("Add a Task"), { target: { value: "call mum" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+    expect(addTask).toHaveBeenCalledWith("call mum", localDayKey(new Date()));
   });
 
   it("disables the Add form while the store isn't ready", () => {
@@ -345,5 +376,95 @@ describe("TodoPage", () => {
     fireEvent(handle, pointerDown);
 
     expect(pointerDown.defaultPrevented).toBe(true);
+  });
+});
+
+// Issue #169: `view="today"` is the same lazy chunk rendering a second,
+// co-equal view over the same Tasks — TodoPage's own doc comment on its
+// `view` prop explains why this is a prop rather than a second page
+// module.
+describe("TodoPage — Today", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 8, 2, 12, 0)); // Sep 2, 2026, local noon
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("renders Today's own content instead of Inbox's list", () => {
+    renderTodoPage(
+      readyContext({ tasks: [task({ id: "a", content: "call mum", date: "2026-09-02" })] }),
+      "/todo/today",
+    );
+
+    expect(screen.getByText("Due today (1)")).toBeInTheDocument();
+    expect(screen.queryByText(/Nothing in your Inbox/)).not.toBeInTheDocument();
+  });
+
+  it("still offers the Add form and Todo's own nav from Today", () => {
+    renderTodoPage(readyContext(), "/todo/today");
+
+    expect(screen.getByLabelText("Add a Task")).toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "Todo" })).toBeInTheDocument();
+  });
+
+  it("reads a fully clear Today as an achievement", () => {
+    renderTodoPage(readyContext({ tasks: [] }), "/todo/today");
+
+    expect(screen.getByText("All caught up")).toBeInTheDocument();
+  });
+
+  it("completing a Task from Today raises the same Undo toast Inbox does", () => {
+    const completeTask = vi.fn();
+    renderTodoPage(
+      readyContext({
+        tasks: [task({ id: "a", content: "call mum", date: "2026-09-02" })],
+        completeTask,
+      }),
+      "/todo/today",
+    );
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "call mum" }));
+
+    expect(completeTask).toHaveBeenCalledWith("a");
+    expect(toast).toHaveBeenCalledWith(
+      'Completed "call mum"',
+      expect.objectContaining({ action: expect.objectContaining({ label: "Undo" }) }),
+    );
+  });
+});
+
+// Issue #169: the schedule sheet is one instance shared by both views
+// (todo-page.tsx's own doc comment on `schedulingId`) — exercised once
+// from Inbox here, since task-schedule-sheet.test.tsx already covers the
+// sheet's own picker behaviour in isolation.
+describe("TodoPage — scheduling", () => {
+  it("opens the schedule sheet for the tapped Task, and a picker action calls the context's setter", () => {
+    const setTaskPriority = vi.fn();
+    renderTodoPage(
+      readyContext({
+        tasks: [task({ id: "a", content: "call mum" })],
+        setTaskPriority,
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: 'Schedule "call mum"' }));
+    expect(screen.getByText('Schedule "call mum"')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "P1" }));
+
+    // storedPriorityOf(1) === 4.
+    expect(setTaskPriority).toHaveBeenCalledWith("a", 4);
+  });
+
+  it("closing the sheet leaves no Task being scheduled", () => {
+    renderTodoPage(readyContext({ tasks: [task({ id: "a", content: "call mum" })] }));
+
+    fireEvent.click(screen.getByRole("button", { name: 'Schedule "call mum"' }));
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+
+    expect(screen.queryByText('Schedule "call mum"')).not.toBeInTheDocument();
   });
 });

@@ -1,4 +1,11 @@
 import { compareByOrder } from "../order-key";
+import {
+  assertValidDate,
+  assertValidDeadline,
+  assertValidDuration,
+  assertValidPriority,
+  withDefaultSchedulingFields,
+} from "../task-fields";
 import type { TaskStore } from "../task-store";
 import type { Task } from "../task-types";
 
@@ -48,8 +55,14 @@ export class InMemoryTaskStore implements TaskStore {
   }
 
   async upsert(tasks: Task[]): Promise<void> {
+    // withDefaultSchedulingFields — see SqliteTaskStore.upsert's identical
+    // call for why: a caller that omits date/deadline/duration/priority
+    // (Task.priority's own doc comment on why that key is TS-optional)
+    // must not leave this store holding a Task whose priority is actually
+    // `undefined`, which would silently break every reader that treats
+    // Task.priority as always concretely present.
     for (const t of tasks) {
-      this.tasks.set(t.id, t);
+      this.tasks.set(t.id, withDefaultSchedulingFields(t));
     }
   }
 
@@ -74,6 +87,35 @@ export class InMemoryTaskStore implements TaskStore {
    */
   async reorder(id: string, orderKey: string): Promise<void> {
     this.applyIfLive(id, { orderKey, seq: null, syncedAt: null });
+  }
+
+  async setDate(id: string, date: string | null): Promise<void> {
+    assertValidDate(date);
+    this.applyIfLive(id, { date, seq: null, syncedAt: null });
+  }
+
+  async setDeadline(id: string, deadline: string | null): Promise<void> {
+    assertValidDeadline(deadline);
+    this.applyIfLive(id, { deadline, seq: null, syncedAt: null });
+  }
+
+  // Mirrors SqliteTaskStore.setDuration's ordering — a no-op against an
+  // unknown or tombstoned id happens before validation runs, not after,
+  // because "no-op against a tombstone" is unconditional (see
+  // TaskStore.setDuration's doc comment) and there's no `date` to validate
+  // a duration against for a Task that isn't live in the first place.
+  async setDuration(id: string, duration: number | null): Promise<void> {
+    const existing = this.tasks.get(id);
+    if (existing === undefined || existing.deletedAt !== null) {
+      return;
+    }
+    assertValidDuration(duration, existing.date);
+    this.applyIfLive(id, { duration, seq: null, syncedAt: null });
+  }
+
+  async setPriority(id: string, priority: number): Promise<void> {
+    assertValidPriority(priority);
+    this.applyIfLive(id, { priority, seq: null, syncedAt: null });
   }
 
   /**

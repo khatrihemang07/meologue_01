@@ -14,6 +14,14 @@ function task(overrides: Partial<Task> = {}): Task {
     seq: 1,
     syncedAt: "2026-01-01T00:00:00.000Z",
     deletedAt: null,
+    // Undated, no deadline, no duration, priority 1 ("no priority") — the
+    // same default packages/core/src/test-support/task-fixture.ts uses,
+    // so a test that wants a scheduled Task says so explicitly via
+    // `overrides` rather than this fixture guessing at one.
+    date: null,
+    deadline: null,
+    duration: null,
+    priority: 1,
     ...overrides,
   };
 }
@@ -23,6 +31,7 @@ function renderRow(overrides: Partial<Parameters<typeof TaskRow>[0]> = {}) {
     task: task(),
     onComplete: vi.fn(),
     onRequestDelete: vi.fn(),
+    onOpenSchedule: vi.fn(),
     isDropTarget: false,
     onHandlePointerDown: vi.fn(),
     onHandlePointerMove: vi.fn(),
@@ -112,5 +121,59 @@ describe("TaskRow", () => {
     renderRow({ isDropTarget: true });
 
     expect(screen.getByRole("listitem")).toHaveClass("border-t-primary");
+  });
+
+  // Issue #169: the schedule button is the one door onto Date/Deadline/
+  // Duration/Priority pickers from any row, in either Inbox or Today
+  // (TaskRow's own doc comment on `onOpenSchedule`).
+  it("the schedule button calls onOpenSchedule", () => {
+    const onOpenSchedule = vi.fn();
+    renderRow({ task: task({ content: "call mum" }), onOpenSchedule });
+
+    fireEvent.click(screen.getByRole("button", { name: 'Schedule "call mum"' }));
+
+    expect(onOpenSchedule).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows no schedule summary for a Task with no date, deadline or priority set", () => {
+    renderRow({ task: task({ content: "call mum" }) });
+
+    expect(screen.queryByText(/Due/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^P[1-4]$/)).not.toBeInTheDocument();
+  });
+
+  it("summarises an all-day date, a deadline and a non-default priority", () => {
+    renderRow({
+      task: task({
+        content: "call mum",
+        date: "2026-09-03",
+        deadline: "2026-09-10",
+        priority: 4, // stored 4 is UI P1 — uiPriorityOf's own inversion.
+      }),
+    });
+
+    expect(screen.getByText("Sep 3")).toBeInTheDocument();
+    expect(screen.getByText("Due Sep 10")).toBeInTheDocument();
+    expect(screen.getByText("P1")).toBeInTheDocument();
+  });
+
+  it("summarises a timed date with its time of day", () => {
+    renderRow({ task: task({ content: "call mum", date: "2026-09-03T09:30" }) });
+
+    expect(screen.getByText("Sep 3, 9:30 AM")).toBeInTheDocument();
+  });
+
+  // Issue #169's Today view is the first caller with no drag handlers at
+  // all — TaskRow's own doc comment on onHandlePointerDown explains why an
+  // inert handle would be worse than none.
+  it("renders no drag handle when no drag handlers are given", () => {
+    renderRow({
+      onHandlePointerDown: undefined,
+      onHandlePointerMove: undefined,
+      onHandlePointerUp: undefined,
+      onHandlePointerCancel: undefined,
+    });
+
+    expect(screen.queryByTestId("task-drag-handle")).not.toBeInTheDocument();
   });
 });

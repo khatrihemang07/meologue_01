@@ -77,6 +77,46 @@ export interface TaskStore {
    */
   reorder(id: string, orderKey: string): Promise<void>;
   /**
+   * Sets `date` and clears `seq` (issue #169) — mirrors rename()'s doc
+   * comment for why this is its own method rather than upsert() with a
+   * mutated Task: ./task-fields.ts's assertValidDate is what refuses a
+   * `Z`-suffixed or otherwise malformed string here, and a caller building
+   * its own patch object has no way to know it must call through that (or
+   * must no-op against a tombstone, the same trap every setter here
+   * guards against). `null` clears the date — a Task returning to Inbox's
+   * undated state, the same state one created directly in Todo starts in.
+   * No-op against a tombstone.
+   */
+  setDate(id: string, date: string | null): Promise<void>;
+  /**
+   * Sets `deadline` and clears `seq`. Refuses (throws) a `deadline`
+   * carrying anything but `YYYY-MM-DD` — ./task-fields.ts's
+   * assertValidDeadline — because a Deadline is date-only by definition
+   * (CONTEXT.md's Deadline entry), not a looser shape this store happens
+   * to also accept and coerce. `null` clears the deadline. No-op against a
+   * tombstone.
+   */
+  setDeadline(id: string, deadline: string | null): Promise<void>;
+  /**
+   * Sets `duration` (minutes) and clears `seq`. Refuses (throws) a
+   * duration on a Task whose *current* `date` doesn't carry a time, and
+   * refuses one over 1440 (24 hours) — ./task-fields.ts's
+   * assertValidDuration. Checked against the Task's current `date`, not a
+   * `date` this same call might also be setting: change both by calling
+   * setDate() then setDuration(), in that order. `null` clears the
+   * duration. No-op against a tombstone.
+   */
+  setDuration(id: string, duration: number | null): Promise<void>;
+  /**
+   * Sets `priority` and clears `seq`. Refuses (throws) anything outside
+   * 1-4 — ./task-fields.ts's assertValidPriority. Unlike the other three
+   * setters above, there is no `null` case: `priority` isn't nullable (see
+   * Task.priority's own doc comment, ./task-types.ts, on what "no
+   * priority" means instead of an absent value). No-op against a
+   * tombstone.
+   */
+  setPriority(id: string, priority: number): Promise<void>;
+  /**
    * Tombstone, never a hard delete (ADR 0028's rule, applied to Tasks).
    * `seq IS NULL` means "no acknowledgement from the server yet," which
    * also covers "pushed, but the response was lost" — a window this

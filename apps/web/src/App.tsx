@@ -45,15 +45,16 @@ const SettingsPage = lazy(() =>
 // resolution falls back to the app shell the same way. No route segment
 // below may ever contain a "." — Capacitor's fallback check treats a dot in
 // the last path segment as a request for a real file, not the app shell.
-// `/todo` and `/todo/inbox` (issue #168) are both static literal segments,
-// trivially safe under that rule the same obvious way `/composer` already
-// is — unlike `/reflect/:sessionId` and `/digest/:period/:date` just below,
-// neither carries a dynamic segment that would need its own argument for
-// why a "." can never land in it.
+// `/todo`, `/todo/inbox` (issue #168) and `/todo/today` (issue #169) are
+// all static literal segments, trivially safe under that rule the same
+// obvious way `/composer` already is — unlike `/reflect/:sessionId` and
+// `/digest/:period/:date` just below, none carries a dynamic segment that
+// would need its own argument for why a "." can never land in it.
 //
-// EntryStoreLayout wraps `/`, `/reflect`, `/digest`, `/todo` and
-// `/todo/inbox` (ticket 27, extended by ADR 0020, issue #71 and issue #168;
-// briefly narrowed by issue #75, which deleted `/history` outright — no
+// EntryStoreLayout wraps `/`, `/reflect`, `/digest`, `/todo`,
+// `/todo/inbox` and `/todo/today` (ticket 27, extended by ADR 0020, issue
+// #71, issue #168 and issue #169; briefly narrowed by issue #75, which
+// deleted `/history` outright — no
 // redirect, since the Composer at `/` already renders the identical History
 // component with the identical props, and a second door onto the same room
 // added nothing this layout needed to keep open). All of them read the
@@ -134,12 +135,16 @@ function App() {
               bare Destination lands somewhere real — the same reason
               `/reflect` (a fresh Session) needed no redirect but a bare
               `/todo` does, since Todo has no "fresh, undirected" view the
-              way a new Session is. `/todo/inbox` is the one view this ticket
-              adds; ADR 0049 is explicit that a further view (`/todo/today`,
-              issue #169) is a sibling route added the same way, not a
-              restructuring of this one. */}
+              way a new Session is. `/todo/inbox` is the one view issue #168
+              added; `/todo/today` (issue #169) is exactly the sibling route
+              ADR 0049 named in advance — one more `<Route>` line, both
+              pointing at the same lazily-imported `TodoPage`
+              (`todo-page.tsx`'s own doc comment on its `view` prop explains
+              why that's one dynamic chunk, not two) rather than two
+              separately-imported page components. */}
               <Route path="/todo" element={<Navigate to="/todo/inbox" replace />} />
               <Route path="/todo/inbox" element={<TodoPage />} />
+              <Route path="/todo/today" element={<TodoPage view="today" />} />
             </Route>
             {/* A sibling of EntryStoreLayout's children above, not nested under
               it — see this file's own top comment for why that has to hold

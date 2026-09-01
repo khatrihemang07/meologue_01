@@ -11,6 +11,14 @@ export function task(overrides: Partial<Task> = {}): Task {
     seq: null,
     syncedAt: null,
     deletedAt: null,
+    // Undated, no deadline, no duration, priority 1 ("no priority",
+    // ../task-types.ts's uiPriorityOf/storedPriorityOf) — the same state
+    // a Task created directly in Todo starts in, and the migration
+    // default every pre-#169 row got (../sqlite/schema.ts).
+    date: null,
+    deadline: null,
+    duration: null,
+    priority: 1,
     ...overrides,
   };
 }

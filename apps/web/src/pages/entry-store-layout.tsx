@@ -123,12 +123,31 @@ export interface EntryStoreOutletContext {
   tasks: Task[];
   /** Completed Tasks, newest first — TaskStore.listCompleted(), the other half of `tasks` above. */
   completedTasks: Task[];
-  addTask: (content: string) => void;
+  /**
+   * Captures a new Task, inheriting `date` from the view the reader is
+   * standing in (`todo-page.tsx`'s `captureDate`) — the plan's "default
+   * date is inherited from origin" rule. Omitting `date` means undated,
+   * which is Inbox's own behaviour.
+   */
+  addTask: (content: string, date?: string | null) => void;
   completeTask: (id: string) => void;
   uncompleteTask: (id: string) => void;
   renameTask: (id: string, content: string) => void;
   reorderTask: (id: string, orderKey: string) => void;
   removeTask: (id: string) => void;
+  /**
+   * The four scheduling setters issue #169 adds (use-tasks.ts's own doc
+   * comments carry the reasoning each individually needs — the duration/
+   * date coupling in particular). Grouped under `tasks`/`addTask`/etc.
+   * above rather than a nested object: every other Task mutation on this
+   * context is a flat, top-level field, and a `scheduling: {...}` bag here
+   * would be the one field on this interface that reads differently from
+   * its neighbours for no reason a caller benefits from.
+   */
+  setTaskDate: (id: string, date: string | null) => void;
+  setTaskDeadline: (id: string, deadline: string | null) => void;
+  setTaskDuration: (id: string, duration: number | null) => void;
+  setTaskPriority: (id: string, priority: number) => void;
   disabled: boolean;
   message?: string;
 }
@@ -255,7 +274,7 @@ function noopRemove(_entry: Entry) {}
 // is true has no Tasks to act on (`tasks: []` below), but every field
 // `EntryStoreOutletContext` declares still has to exist so `useEntryStore`
 // never returns a shape a page has to null-check.
-function noopAddTask(_content: string) {}
+function noopAddTask(_content: string, _date?: string | null) {}
 
 function noopCompleteTask(_id: string) {}
 
@@ -266,6 +285,17 @@ function noopRenameTask(_id: string, _content: string) {}
 function noopReorderTask(_id: string, _orderKey: string) {}
 
 function noopRemoveTask(_id: string) {}
+
+// Issue #169's four setters — the not-ready stand-ins for a Today view or a
+// picker mounted before the store opens, same reasoning as
+// noopAddTask/noopReorderTask above.
+function noopSetTaskDate(_id: string, _date: string | null) {}
+
+function noopSetTaskDeadline(_id: string, _deadline: string | null) {}
+
+function noopSetTaskDuration(_id: string, _duration: number | null) {}
+
+function noopSetTaskPriority(_id: string, _priority: number) {}
 
 function noopFetchMore() {}
 
@@ -328,6 +358,16 @@ const TASK_STORE_METHODS: StoreMethodNames<TaskStore> = {
   getCursor: true,
   setCursor: true,
   search: true,
+  // Issue #169's four setters, added to TaskStore alongside the scheduling
+  // fields themselves — this is the compile-time checkpoint this registry
+  // exists for (StoreMethodNames's own doc comment): a method added to
+  // TaskStore and not listed here fails `tsc -b` right at this line,
+  // rather than silently resolving to `undefined` through `deferStore` the
+  // one time a picker calls it before the store finishes opening.
+  setDate: true,
+  setDeadline: true,
+  setDuration: true,
+  setPriority: true,
 };
 
 function deferTaskStoreUntilOpen(
@@ -463,6 +503,10 @@ export function EntryStoreLayout() {
     renameTask,
     reorderTask,
     removeTask,
+    setTaskDate,
+    setTaskDeadline,
+    setTaskDuration,
+    setTaskPriority,
   } = useTasks(taskStore, deviceId);
 
   return (
@@ -490,6 +534,10 @@ export function EntryStoreLayout() {
               renameTask,
               reorderTask,
               removeTask,
+              setTaskDate,
+              setTaskDeadline,
+              setTaskDuration,
+              setTaskPriority,
               disabled: false,
             } satisfies EntryStoreOutletContext)
           : ({
@@ -511,6 +559,10 @@ export function EntryStoreLayout() {
               renameTask: noopRenameTask,
               reorderTask: noopReorderTask,
               removeTask: noopRemoveTask,
+              setTaskDate: noopSetTaskDate,
+              setTaskDeadline: noopSetTaskDeadline,
+              setTaskDuration: noopSetTaskDuration,
+              setTaskPriority: noopSetTaskPriority,
               disabled: true,
               message,
             } satisfies EntryStoreOutletContext)

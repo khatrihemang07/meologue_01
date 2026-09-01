@@ -1,5 +1,12 @@
 import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
+import {
+  assertValidDate,
+  assertValidDeadline,
+  assertValidDuration,
+  assertValidPriority,
+  withDefaultSchedulingFields,
+} from "../task-fields";
 import type { TaskStore } from "../task-store";
 import type { Task } from "../task-types";
 import type { SqliteDriver } from "./driver";
@@ -63,13 +70,20 @@ export class SqliteTaskStore implements TaskStore {
     if (newTasks.length === 0) {
       return;
     }
+    // withDefaultSchedulingFields fills date/deadline/duration/priority
+    // in for a caller that omits them (Task.priority's own doc comment on
+    // why that key is TS-optional at all) — done once here, before the
+    // insert, rather than trusted to drizzle's own handling of a missing
+    // object key, so the row this statement actually writes is never in
+    // doubt.
+    const normalized = newTasks.map(withDefaultSchedulingFields);
     // A single statement (mirrors SqliteEntryStore.upsert — see ADR
     // 0007): SQLite's native upsert applies each conflicting row's own
     // `excluded` values, so this stays correct for a batch of unrelated
     // Tasks, not just a single one.
     await this.db
       .insert(tasks)
-      .values(newTasks)
+      .values(normalized)
       .onConflictDoUpdate({
         target: tasks.id,
         set: {
@@ -81,9 +95,13 @@ export class SqliteTaskStore implements TaskStore {
           seq: sql`excluded.seq`,
           syncedAt: sql`excluded.synced_at`,
           deletedAt: sql`excluded.deleted_at`,
+          date: sql`excluded.date`,
+          deadline: sql`excluded.deadline`,
+          duration: sql`excluded.duration`,
+          priority: sql`excluded.priority`,
         },
       });
-    for (const t of newTasks) {
+    for (const t of normalized) {
       await this.indexForSearch(t);
     }
   }
@@ -123,6 +141,38 @@ export class SqliteTaskStore implements TaskStore {
    */
   async reorder(id: string, orderKey: string): Promise<void> {
     await this.updateIfLive(id, { orderKey, seq: null, syncedAt: null });
+  }
+
+  async setDate(id: string, date: string | null): Promise<void> {
+    assertValidDate(date);
+    await this.updateIfLive(id, { date, seq: null, syncedAt: null });
+  }
+
+  async setDeadline(id: string, deadline: string | null): Promise<void> {
+    assertValidDeadline(deadline);
+    await this.updateIfLive(id, { deadline, seq: null, syncedAt: null });
+  }
+
+  // Reads the Task's current `date` first, unlike every other setter here
+  // — assertValidDuration's "requires a timed date" rule spans two
+  // columns, so there's nothing to validate against without a read. This
+  // is also why an unknown or tombstoned id no-ops *before* validation
+  // runs rather than after: "no-op against a tombstone" is unconditional
+  // for every mutator on this store (see TaskStore.setDuration's doc
+  // comment), and a row that doesn't exist has no `date` to validate
+  // against in the first place.
+  async setDuration(id: string, duration: number | null): Promise<void> {
+    const current = await this.get(id);
+    if (current === undefined) {
+      return;
+    }
+    assertValidDuration(duration, current.date);
+    await this.updateIfLive(id, { duration, seq: null, syncedAt: null });
+  }
+
+  async setPriority(id: string, priority: number): Promise<void> {
+    assertValidPriority(priority);
+    await this.updateIfLive(id, { priority, seq: null, syncedAt: null });
   }
 
   /**
@@ -175,7 +225,7 @@ export class SqliteTaskStore implements TaskStore {
     // match list()'s own order (order_key asc, id asc), mirroring
     // SqliteEntryStore.search's "same order as list()" guarantee.
     const result = await this.driver.execute(
-      `SELECT tasks.id, tasks.device_id, tasks.content, tasks.completed_at, tasks.order_key, tasks.created_at, tasks.seq, tasks.synced_at, tasks.deleted_at
+      `SELECT tasks.id, tasks.device_id, tasks.content, tasks.completed_at, tasks.order_key, tasks.created_at, tasks.seq, tasks.synced_at, tasks.deleted_at, tasks.date, tasks.deadline, tasks.duration, tasks.priority
        FROM tasks_fts
        JOIN tasks ON tasks.id = tasks_fts.id
        WHERE tasks_fts MATCH ? AND tasks.deleted_at IS NULL AND tasks.completed_at IS NULL
@@ -268,20 +318,51 @@ function toPrefixMatchQuery(text: string): string {
 // rowToEntry — a row that doesn't match the shape this query asked for
 // throws instead of silently mis-mapping a value into the wrong field.
 function rowToTask(row: unknown): Task {
-  if (!Array.isArray(row) || row.length !== 9) {
-    throw new Error(`sqlite search expected a 9-column tasks row, got ${JSON.stringify(row)}`);
+  if (!Array.isArray(row) || row.length !== 13) {
+    throw new Error(`sqlite search expected a 13-column tasks row, got ${JSON.stringify(row)}`);
   }
-  const [id, deviceId, content, completedAt, orderKey, createdAt, seq, syncedAt, deletedAt] =
-    row as [
-      string,
-      string,
-      string,
-      string | null,
-      string,
-      string,
-      number | null,
-      string | null,
-      string | null,
-    ];
-  return { id, deviceId, content, completedAt, orderKey, createdAt, seq, syncedAt, deletedAt };
+  const [
+    id,
+    deviceId,
+    content,
+    completedAt,
+    orderKey,
+    createdAt,
+    seq,
+    syncedAt,
+    deletedAt,
+    date,
+    deadline,
+    duration,
+    priority,
+  ] = row as [
+    string,
+    string,
+    string,
+    string | null,
+    string,
+    string,
+    number | null,
+    string | null,
+    string | null,
+    string | null,
+    string | null,
+    number | null,
+    number,
+  ];
+  return {
+    id,
+    deviceId,
+    content,
+    completedAt,
+    orderKey,
+    createdAt,
+    seq,
+    syncedAt,
+    deletedAt,
+    date,
+    deadline,
+    duration,
+    priority,
+  };
 }

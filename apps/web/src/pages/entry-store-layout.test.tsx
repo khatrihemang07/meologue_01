@@ -52,6 +52,14 @@ function createFakeTaskStore(): TaskStore {
     getCursor: vi.fn(async () => 0),
     setCursor: vi.fn(async () => {}),
     search: vi.fn(async () => []),
+    // Issue #169's four setters — this fake exercises none of them (this
+    // file's tests only cover opening the store, not scheduling), but
+    // TASK_STORE_METHODS above type-checks against a real TaskStore, so
+    // every implementation, this fake included, must carry all thirteen.
+    setDate: vi.fn(async () => {}),
+    setDeadline: vi.fn(async () => {}),
+    setDuration: vi.fn(async () => {}),
+    setPriority: vi.fn(async () => {}),
   };
 }
 

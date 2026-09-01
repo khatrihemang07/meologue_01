@@ -30,6 +30,10 @@ const defaultEntryStoreContext: EntryStoreOutletContext = {
   renameTask: vi.fn(),
   reorderTask: vi.fn(),
   removeTask: vi.fn(),
+  setTaskDate: vi.fn(),
+  setTaskDeadline: vi.fn(),
+  setTaskDuration: vi.fn(),
+  setTaskPriority: vi.fn(),
   disabled: false,
 };
 

@@ -166,6 +166,136 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
     });
   });
 
+  describe("setDate()", () => {
+    it("changes date and clears seq", async () => {
+      await store.upsert([task({ id: "a", seq: 5 })]);
+
+      await store.setDate("a", "2026-01-05");
+
+      const [found] = await store.list();
+      expect(found).toMatchObject({ id: "a", date: "2026-01-05", seq: null });
+    });
+
+    it("accepts a floating timed date (no Z, no offset)", async () => {
+      await store.upsert([task({ id: "a", seq: 5 })]);
+
+      await store.setDate("a", "2026-01-05T09:00");
+
+      const [found] = await store.list();
+      expect(found).toMatchObject({ id: "a", date: "2026-01-05T09:00" });
+    });
+
+    it("clears the date back to null — a Task returning to Inbox's undated state", async () => {
+      await store.upsert([task({ id: "a", date: "2026-01-05", seq: 5 })]);
+
+      await store.setDate("a", null);
+
+      const [found] = await store.list();
+      expect(found).toMatchObject({ id: "a", date: null, seq: null });
+    });
+
+    it("refuses a date carrying a UTC Z or an offset — that's a different encoding than the floating one this field stores", async () => {
+      await store.upsert([task({ id: "a", seq: 1 })]);
+
+      await expect(store.setDate("a", "2026-01-05T09:00:00.000Z")).rejects.toThrow();
+    });
+  });
+
+  describe("setDeadline()", () => {
+    it("changes deadline and clears seq", async () => {
+      await store.upsert([task({ id: "a", seq: 5 })]);
+
+      await store.setDeadline("a", "2026-01-10");
+
+      const [found] = await store.list();
+      expect(found).toMatchObject({ id: "a", deadline: "2026-01-10", seq: null });
+    });
+
+    it("clears the deadline back to null", async () => {
+      await store.upsert([task({ id: "a", deadline: "2026-01-10", seq: 5 })]);
+
+      await store.setDeadline("a", null);
+
+      const [found] = await store.list();
+      expect(found).toMatchObject({ id: "a", deadline: null, seq: null });
+    });
+
+    // A Deadline is date-only by definition (CONTEXT.md's Deadline entry)
+    // — this is the store-level refusal ../task-fields.ts's
+    // assertValidDeadline exists for, and the one the issue calls out as
+    // the most likely to get silently bypassed.
+    it("refuses a deadline carrying a time", async () => {
+      await store.upsert([task({ id: "a", seq: 1 })]);
+
+      await expect(store.setDeadline("a", "2026-01-10T09:00")).rejects.toThrow();
+    });
+  });
+
+  describe("setDuration()", () => {
+    it("changes duration (minutes) and clears seq, given a Task with a timed date", async () => {
+      await store.upsert([task({ id: "a", date: "2026-01-05T09:00", seq: 5 })]);
+
+      await store.setDuration("a", 30);
+
+      const [found] = await store.list();
+      expect(found).toMatchObject({ id: "a", duration: 30, seq: null });
+    });
+
+    it("clears the duration back to null", async () => {
+      await store.upsert([task({ id: "a", date: "2026-01-05T09:00", duration: 30, seq: 5 })]);
+
+      await store.setDuration("a", null);
+
+      const [found] = await store.list();
+      expect(found).toMatchObject({ id: "a", duration: null, seq: null });
+    });
+
+    it("refuses a duration on a Task with no date at all", async () => {
+      await store.upsert([task({ id: "a", date: null, seq: 1 })]);
+
+      await expect(store.setDuration("a", 30)).rejects.toThrow();
+    });
+
+    it("refuses a duration on an all-day Task — there's nothing to measure a length from without a time", async () => {
+      await store.upsert([task({ id: "a", date: "2026-01-05", seq: 1 })]);
+
+      await expect(store.setDuration("a", 30)).rejects.toThrow();
+    });
+
+    it("refuses a duration over 24 hours (1440 minutes)", async () => {
+      await store.upsert([task({ id: "a", date: "2026-01-05T09:00", seq: 1 })]);
+
+      await expect(store.setDuration("a", 1441)).rejects.toThrow();
+    });
+
+    it("accepts exactly 1440 minutes — the cap is inclusive", async () => {
+      await store.upsert([task({ id: "a", date: "2026-01-05T09:00", seq: 1 })]);
+
+      await store.setDuration("a", 1440);
+
+      const [found] = await store.list();
+      expect(found).toMatchObject({ duration: 1440 });
+    });
+  });
+
+  describe("setPriority()", () => {
+    it("changes priority and clears seq", async () => {
+      await store.upsert([task({ id: "a", seq: 5 })]);
+
+      await store.setPriority("a", 4);
+
+      const [found] = await store.list();
+      expect(found).toMatchObject({ id: "a", priority: 4, seq: null });
+    });
+
+    it("refuses a priority outside 1-4", async () => {
+      await store.upsert([task({ id: "a", seq: 1 })]);
+
+      await expect(store.setPriority("a", 0)).rejects.toThrow();
+      await expect(store.setPriority("a", 5)).rejects.toThrow();
+    });
+  });
+
   describe("remove() — tombstone, not hard delete", () => {
     it("removes a Task from list(), listCompleted(), get() and search()", async () => {
       await store.upsert([task({ id: "a", content: "a recurring task", seq: 1 })]);
@@ -205,7 +335,7 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
 
     // Every local mutation against a tombstone is a no-op — no
     // resurrection, no matter which door a caller tries.
-    it("complete(), uncomplete(), rename() and reorder() are all no-ops against a tombstone", async () => {
+    it("complete(), uncomplete(), rename(), reorder() and the four #169 setters are all no-ops against a tombstone", async () => {
       await store.upsert([task({ id: "a", content: "something", seq: 1, orderKey: "m" })]);
       await store.remove("a");
 
@@ -213,6 +343,13 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
       await store.uncomplete("a");
       await store.rename("a", "trying to bring it back");
       await store.reorder("a", orderKeyBetween(null, "m"));
+      await store.setDate("a", "2026-01-05");
+      await store.setDeadline("a", "2026-01-10");
+      // setDuration's own no-op check runs before its date-shape
+      // validation (its doc comment explains why), so this doesn't throw
+      // even though the live Task above was never given a timed date.
+      await store.setDuration("a", 30);
+      await store.setPriority("a", 4);
 
       expect(await store.list()).toEqual([]);
       expect(await store.listCompleted()).toEqual([]);

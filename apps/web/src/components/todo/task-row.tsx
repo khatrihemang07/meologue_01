@@ -1,24 +1,49 @@
 import type { Task } from "@meologue/core";
-import { GripVertical, Trash2 } from "lucide-react";
+import { uiPriorityOf } from "@meologue/core";
+import { CalendarClock, GripVertical, Trash2 } from "lucide-react";
 import type { PointerEvent } from "react";
+import { formatDay, formatTaskDate } from "@/lib/format-task-date";
 import { cn } from "@/lib/utils";
 
 export interface TaskRowProps {
   task: Task;
   onComplete: () => void;
   onRequestDelete: () => void;
-  /** Whether this row is the drop target of an in-progress drag — draws the "the dragged row lands here" line. */
-  isDropTarget: boolean;
-  onHandlePointerDown: (event: PointerEvent<HTMLSpanElement>) => void;
-  onHandlePointerMove: (event: PointerEvent<HTMLSpanElement>) => void;
-  onHandlePointerUp: (event: PointerEvent<HTMLSpanElement>) => void;
-  onHandlePointerCancel: (event: PointerEvent<HTMLSpanElement>) => void;
+  /**
+   * Opens the schedule picker (issue #169's `TaskScheduleSheet`) for this
+   * Task — every one of Date/Deadline/Duration/Priority is reachable from
+   * here, in both Inbox and Today, since both render this same row. See
+   * this ticket's own brief: "pickers, not text parsing," and this is the
+   * one door onto them a reader always has, regardless of which view
+   * they're looking at a Task from.
+   */
+  onOpenSchedule: () => void;
+  /** Whether this row is the drop target of an in-progress drag — draws the "the dragged row lands here" line. Meaningless, and always `false`, on a row with no drag handlers (see below). */
+  isDropTarget?: boolean;
+  /**
+   * All four omitted together, never some subset, is what removes the grip
+   * handle entirely rather than rendering an inert one (issue #169's own
+   * Today view is this option's first caller: Today's order is computed
+   * from the sort chain in task-views.ts, not chosen by dragging, and a
+   * handle a reader could grab that silently did nothing would be a worse
+   * affordance than no handle at all — the same reasoning
+   * `add-task-form.tsx`'s own header gives for not building UI ahead of a
+   * feature that parses it). Inbox (`todo-page.tsx`) passes all four,
+   * unchanged from issue #168.
+   */
+  onHandlePointerDown?: (event: PointerEvent<HTMLSpanElement>) => void;
+  onHandlePointerMove?: (event: PointerEvent<HTMLSpanElement>) => void;
+  onHandlePointerUp?: (event: PointerEvent<HTMLSpanElement>) => void;
+  onHandlePointerCancel?: (event: PointerEvent<HTMLSpanElement>) => void;
 }
 
 /**
- * One active Task in Inbox — a checkbox (completing, ADR 0047's own
- * "completing is not a delete" distinction from an Entry's), the Task's
- * `content`, a drag handle, and a Delete button behind the shared
+ * One active Task, in Inbox or in Today (issue #169 — both views render
+ * this same row rather than each growing its own) — a checkbox
+ * (completing, ADR 0047's own "completing is not a delete" distinction
+ * from an Entry's), the Task's `content`, a compact schedule summary when
+ * it has one, a drag handle, a Schedule button opening `TaskScheduleSheet`
+ * (issue #169's pickers), and a Delete button behind the shared
  * `ConfirmDialog` (`todo-page.tsx` owns the one dialog instance, the same
  * "one instance for however many rows" rule `sessions-page.tsx`'s own
  * `SessionRow` follows).
@@ -49,12 +74,19 @@ export function TaskRow({
   task,
   onComplete,
   onRequestDelete,
-  isDropTarget,
+  onOpenSchedule,
+  isDropTarget = false,
   onHandlePointerDown,
   onHandlePointerMove,
   onHandlePointerUp,
   onHandlePointerCancel,
 }: TaskRowProps) {
+  const hasSchedule = task.date !== null || task.deadline !== null || task.priority !== 1;
+  const draggable =
+    onHandlePointerDown !== undefined &&
+    onHandlePointerMove !== undefined &&
+    onHandlePointerUp !== undefined &&
+    onHandlePointerCancel !== undefined;
   return (
     <li
       data-task-id={task.id}
@@ -66,26 +98,28 @@ export function TaskRow({
         isDropTarget && "border-t-primary",
       )}
     >
-      <span
-        aria-hidden="true"
-        data-testid="task-drag-handle"
-        onPointerDown={onHandlePointerDown}
-        onPointerMove={onHandlePointerMove}
-        onPointerUp={onHandlePointerUp}
-        onPointerCancel={onHandlePointerCancel}
-        // `touch-action: none` is what makes a touch drag possible at all —
-        // without it Chromium's own scroll gesture recogniser claims the
-        // gesture before a second pointermove ever reaches this handler,
-        // exactly as `pane-divider.tsx`'s own comment on its handle
-        // explains. Scoped to the handle rather than the row (or the list)
-        // is what keeps the rest of Inbox scrollable with a finger — the
-        // opposite of `use-swipe-actions.ts`'s bubble, which stays
-        // `pan-y` everywhere so the thread itself keeps scrolling under a
-        // swipe.
-        className="flex size-6 shrink-0 touch-none cursor-grab items-center justify-center text-muted-foreground active:cursor-grabbing"
-      >
-        <GripVertical className="size-4" />
-      </span>
+      {draggable && (
+        <span
+          aria-hidden="true"
+          data-testid="task-drag-handle"
+          onPointerDown={onHandlePointerDown}
+          onPointerMove={onHandlePointerMove}
+          onPointerUp={onHandlePointerUp}
+          onPointerCancel={onHandlePointerCancel}
+          // `touch-action: none` is what makes a touch drag possible at all
+          // — without it Chromium's own scroll gesture recogniser claims
+          // the gesture before a second pointermove ever reaches this
+          // handler, exactly as `pane-divider.tsx`'s own comment on its
+          // handle explains. Scoped to the handle rather than the row (or
+          // the list) is what keeps the rest of Inbox scrollable with a
+          // finger — the opposite of `use-swipe-actions.ts`'s bubble,
+          // which stays `pan-y` everywhere so the thread itself keeps
+          // scrolling under a swipe.
+          className="flex size-6 shrink-0 touch-none cursor-grab items-center justify-center text-muted-foreground active:cursor-grabbing"
+        >
+          <GripVertical className="size-4" />
+        </span>
+      )}
       <input
         type="checkbox"
         checked={false}
@@ -93,28 +127,51 @@ export function TaskRow({
         aria-label={task.content}
         className="shrink-0 accent-current"
       />
-      <span className="min-w-0 flex-1 truncate text-sm">{task.content}</span>
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="truncate text-sm">{task.content}</span>
+        {/* A compact schedule summary, present only once there's something
+            to summarise (issue #169) — Date, then Deadline, then Priority
+            (never "no priority", the same restraint the sort chain itself
+            applies: a level that means "nothing chosen" doesn't deserve a
+            badge). `formatTaskDate`/`formatDay` (lib/format-task-date.ts)
+            are the same functions `TaskScheduleSheet` reads a Task's
+            current value through, so this row can never show a date in
+            words that disagree with what the picker itself would say. */}
+        {hasSchedule && (
+          <span className="flex flex-wrap gap-x-2 text-muted-foreground text-xs">
+            {task.date !== null && <span>{formatTaskDate(task.date)}</span>}
+            {task.deadline !== null && <span>Due {formatDay(task.deadline)}</span>}
+            {task.priority !== 1 && <span>P{uiPriorityOf(task.priority)}</span>}
+          </span>
+        )}
+      </span>
       {/*
-        Revealed on hover or focus on a pointer device, always present on a
-        touch one — the same split `entry-actions.tsx` already makes for an
-        Entry row's Edit/Delete, and made here for the same reason: a
-        destructive control sitting permanently beside a checkbox is both
-        visual noise on every row and a mis-tap away from destroying a Task.
-
-        It diverges from that file in one way, deliberately. An Entry's
-        hover actions are `hidden` outright outside `(hover: hover)` because
-        a touch device reaches the identical actions through
-        `EntryActionsSheet` instead. Todo has no such sheet yet, so hiding
-        this button on touch would leave a phone with no way to delete a
-        Task at all. Base state is therefore visible, and `(hover: hover)`
-        is what *takes it away* at rest — the inverse of the Entry row's
-        rule, arriving at the same result on both device classes.
+        Both this Schedule button and the Delete button below follow the
+        same visibility rule, revealed on hover or focus on a pointer
+        device, always present on a touch one — the same split
+        `entry-actions.tsx` already makes for an Entry row's Edit/Delete.
+        Todo has no `EntryActionsSheet`-equivalent sheet a touch reader
+        could reach either through instead, so base state is visible and
+        `(hover: hover)` is what *takes each away* at rest — the inverse of
+        the Entry row's rule, arriving at the same result on both device
+        classes.
 
         `opacity`, not `display`, on the hover-capable path, for
-        `entry-actions.tsx`'s own reason: the button stays in the layout and
-        in the tab order, so `focus-visible` can bring it back for a
+        `entry-actions.tsx`'s own reason: each button stays in the layout
+        and in the tab order, so `focus-visible` can bring it back for a
         keyboard user who never hovers anything.
       */}
+      <button
+        type="button"
+        aria-label={`Schedule "${task.content}"`}
+        onClick={onOpenSchedule}
+        className={cn(
+          "flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
+          "[@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:focus-visible:opacity-100",
+        )}
+      >
+        <CalendarClock aria-hidden="true" className="size-4" />
+      </button>
       <button
         type="button"
         aria-label={`Delete "${task.content}"`}

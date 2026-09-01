@@ -100,11 +100,16 @@ if (gzipBytes > CEILING_BYTES) {
 // boundary, alongside ComposerPage, ReflectionPage and the rest — so every
 // byte of it ships in its own chunk, never this one, and the ceiling above
 // stays silent no matter how large that chunk grows. This section gives
-// every lazy chunk a budget of its own, set *before* the code that fills it
+// every lazy route a budget of its own, set *before* the code that fills it
 // is written, by someone who cannot yet see what shape that growth will
-// take. A chunk that shows up in a build with no budget entry fails the
+// take. A route that shows up in a build with no budget entry fails the
 // check outright, naming itself and asking for one — that is the whole
 // point: a new lazy route cannot land, let alone grow, unmeasured.
+//
+// A route is measured as its own chunk **plus every shared chunk it
+// statically imports**, minus what the cold start already fetched — see
+// routeFiles() for why measuring a chunk alone turned out to measure the
+// wrong thing, and what issue #169 did to expose it.
 //
 // Lazy chunks are discovered from dist/<target>/.vite/manifest.json
 // (`build.manifest: true`, vite.config.ts), not hard-coded: Rollup
@@ -130,13 +135,17 @@ if (gzipBytes > CEILING_BYTES) {
 // source-path key at all (only a synthetic `_entry-store-layout-<hash>.js`
 // one) — exactly the signal this script relies on to tell a lazy chunk
 // from an eager one. Its weight already rides on cold start the same way
-// the entry chunk's own does; ENTRY_CHUNK_BASELINE_BYTES/CEILING_BYTES
-// above have never counted it either, since they measure only the one
-// `<script type="module">` file, not that file's own static imports.
-// Extending that ceiling to cover a chunk's full static dependency graph
-// is a real gap, but a different one — out of scope here, which only adds
-// a budget for chunks that were previously unmeasured *entirely*, not for
-// widening a measurement that already exists.
+// the entry chunk's own does, so it is excluded from the route budgets
+// below *and* subtracted from every route's own total (`alreadyEager`),
+// rather than billed to whichever route happens to be measured.
+//
+// The entry ceiling above still measures only the one
+// `<script type="module">` file, not that file's own static imports — so
+// this chunk's bytes are counted by neither check. That remains a real
+// gap. It is narrower than it was: the route budgets below now walk a
+// route's full static import graph (routeFiles()), so the same blind spot
+// no longer exists past `/`. Closing it for the entry chunk means deciding
+// what a cold start's honest total is, which is its own change.
 //
 // Vendor dynamic imports (four @capacitor `web.js` shims, one per native
 // plugin's browser fallback) are excluded too: `isDynamicEntry` is true
@@ -149,36 +158,55 @@ if (gzipBytes > CEILING_BYTES) {
 const CHUNK_BUDGET_KEY_PREFIX = "src/";
 
 /**
- * A ceiling and a measured baseline for every lazy chunk that exists
- * today — the same shape ENTRY_CHUNK_BASELINE_BYTES/CEILING_BYTES above
- * carry for the entry chunk: ~30% headroom over a real, measured number,
- * not a round guess. Measured 2026-09-01 against a clean `vite build --mode
- * android`, gzip via the same gzipSync() this script already uses for the
- * entry chunk (Vite's own build-log gzip figures use a different setting
- * and don't quite match these).
+ * A ceiling and a measured baseline for every lazy **route** — the same
+ * shape ENTRY_CHUNK_BASELINE_BYTES/CEILING_BYTES above carry for the entry
+ * chunk: ~30% headroom over a real, measured number, not a round guess.
+ * Re-measured 2026-09-02 against a clean `vite build --mode android`, gzip
+ * via the same gzipSync() this script uses for the entry chunk (Vite's own
+ * build-log gzip figures use a different setting and don't quite match
+ * these).
+ *
+ * **Every number here changed on 2026-09-02, and the mechanism is why.**
+ * These used to measure a route's own chunk *alone*, and issue #169 showed
+ * that was measuring the wrong thing: adding `date-picker-sheet.tsx` to
+ * Todo made Rollup lift that module into a shared chunk, and
+ * `composer-page` promptly "improved" from 104,000 to 83,685 gzip bytes
+ * while shipping precisely as much code as before — with ~20 KB landing in
+ * a chunk that had no budget at all. A per-chunk number tracks where
+ * Rollup put code; what is worth protecting is what a reader must download
+ * to open a screen. The baselines below are that instead (routeFiles()),
+ * so they are several times larger than the ones they replace without a
+ * single byte having been added.
  */
 const CHUNK_BUDGETS = {
   // ComposerPage carries ProseMirror plus the markdown-blocks/WYSIWYG
-  // composer (issues #148-#166) — the largest chunk in the app by a wide
-  // margin, and expected to stay that way. Measured 104,000 bytes gzip.
-  "src/pages/composer-page.tsx": { ceilingBytes: 135_000, baselineBytes: 104_000 },
-  // Measured 2,393 bytes gzip.
-  "src/pages/digest-page.tsx": { ceilingBytes: 3_100, baselineBytes: 2_393 },
-  // Measured 1,628 bytes gzip.
-  "src/pages/digest-reader-page.tsx": { ceilingBytes: 2_100, baselineBytes: 1_628 },
-  // Measured 5,194 bytes gzip.
-  "src/pages/reflection-page.tsx": { ceilingBytes: 6_750, baselineBytes: 5_194 },
-  // Measured 1,886 bytes gzip.
-  "src/pages/sessions-page.tsx": { ceilingBytes: 2_450, baselineBytes: 1_886 },
-  // Measured 8,561 bytes gzip.
-  "src/pages/settings-page.tsx": { ceilingBytes: 11_100, baselineBytes: 8_561 },
-  // Todo's Inbox (issue #168) — the internal nav, the add/complete/delete/
-  // reorder UI and task-reorder.ts's own logic, statically imported into
-  // this one chunk rather than split further, the same "everything behind
-  // one lazy boundary" shape every other Destination's own page chunk
-  // already has. Measured 2026-09-01 against a clean `vite build --mode
-  // android`, 2,237 bytes gzip.
-  "src/pages/todo-page.tsx": { ceilingBytes: 2_900, baselineBytes: 2_237 },
+  // composer (issues #148-#166) — much the largest route in the app, and
+  // expected to stay that way. Measured 128,032 bytes gzip across its own
+  // chunk and 10 shared ones.
+  "src/pages/composer-page.tsx": { ceilingBytes: 166_000, baselineBytes: 128_032 },
+  // Measured 9,269 bytes gzip (own chunk + 6 shared).
+  "src/pages/digest-page.tsx": { ceilingBytes: 12_000, baselineBytes: 9_269 },
+  // Measured 8,333 bytes gzip (own chunk + 6 shared).
+  "src/pages/digest-reader-page.tsx": { ceilingBytes: 10_800, baselineBytes: 8_333 },
+  // Measured 29,316 bytes gzip (own chunk + 10 shared).
+  "src/pages/reflection-page.tsx": { ceilingBytes: 38_000, baselineBytes: 29_316 },
+  // Measured 20,088 bytes gzip (own chunk + 6 shared).
+  "src/pages/sessions-page.tsx": { ceilingBytes: 26_000, baselineBytes: 20_088 },
+  // Measured 13,586 bytes gzip (own chunk + 3 shared).
+  "src/pages/settings-page.tsx": { ceilingBytes: 17_600, baselineBytes: 13_586 },
+  // Todo — both `/todo/inbox` (issue #168) and `/todo/today` (issue #169),
+  // since `App.tsx` points two `<Route>` elements at the one lazily-
+  // imported `TodoPage`, switched by its own `view` prop, rather than a
+  // second `import("@/pages/...")` for Today. Measured 43,623 bytes gzip
+  // (own chunk + 7 shared).
+  //
+  // Most of that is shared, not Todo's own: `date-picker-sheet` (~20.8 KB,
+  // react-day-picker) is the single largest part, reached because #169's
+  // schedule sheet reuses the app's existing date UI rather than building
+  // a second one. That reuse is the right call and this number is the
+  // honest price of it — worth knowing before #170 and #171 add a parser
+  // and a projects view on top.
+  "src/pages/todo-page.tsx": { ceilingBytes: 56_700, baselineBytes: 43_623 },
 };
 
 /**
@@ -197,11 +225,67 @@ function readLazyChunksFromManifest(distDir) {
     return undefined;
   }
   const manifest = JSON.parse(manifestJson);
-  return Object.entries(manifest)
+  const chunks = Object.entries(manifest)
     .filter(
       ([key, entry]) => entry.isDynamicEntry === true && key.startsWith(CHUNK_BUDGET_KEY_PREFIX),
     )
     .map(([key, entry]) => ({ name: key, file: entry.file }));
+  return { chunks, manifest };
+}
+
+/**
+ * Every file a route actually has to fetch to run: its own chunk plus the
+ * shared chunks it statically imports, transitively, minus whatever the
+ * cold start already paid for.
+ *
+ * Measuring a route chunk *alone* looked right and was not, and issue #169
+ * is what exposed it. Adding `date-picker-sheet.tsx` to Todo made Rollup
+ * pull that module out of `composer-page`'s chunk into a shared one — so
+ * `composer-page` "improved" from 104,000 to 83,685 gzip bytes while
+ * shipping exactly as much code as before, and ~20 KB moved into a chunk
+ * with no budget at all. Both halves of that are wrong in the same way: a
+ * per-chunk number measures where Rollup happened to put code, and the
+ * thing worth protecting is what a reader has to download to open a
+ * screen.
+ *
+ * `imports` is the manifest's static-import edge list, so this walk
+ * follows exactly what the browser must fetch before the route's own
+ * module can evaluate. `dynamicImports` is deliberately NOT followed: a
+ * chunk behind a further dynamic `import()` is by definition not paid for
+ * at route load, which is the whole reason to put one there.
+ *
+ * `alreadyEager` holds the entry chunk and every `<link rel="modulepreload">`
+ * in index.html — weight the cold start already fetched before any route
+ * was chosen (this section's own comment on `entry-store-layout.tsx`
+ * covers why that chunk is one of them). Counting it again here would bill
+ * every route for bytes none of them caused.
+ *
+ * A shared chunk reachable from two routes is counted in *both*, which is
+ * the honest answer to "what does opening this route cost from cold" for
+ * each of them independently, and errs toward over-reporting rather than
+ * letting weight hide in a chunk each route assumes the other paid for.
+ */
+function routeFiles(manifest, chunkKey, alreadyEager) {
+  const files = new Set();
+  const seen = new Set();
+  const walk = (key) => {
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    const entry = manifest[key];
+    if (!entry) {
+      return;
+    }
+    if (!alreadyEager.has(entry.file)) {
+      files.add(entry.file);
+    }
+    for (const imported of entry.imports ?? []) {
+      walk(imported);
+    }
+  };
+  walk(chunkKey);
+  return [...files];
 }
 
 /**
@@ -229,7 +313,7 @@ function readLazyChunksFallback(distDir, entryChunkFile, indexHtmlText) {
     ),
   );
   const assetsDir = path.join(distDir, "assets");
-  return readdirSync(assetsDir)
+  const chunks = readdirSync(assetsDir)
     .filter((file) => file.endsWith(".js"))
     .map((file) => `assets/${file}`)
     .filter((file) => file !== entryChunkFile && !preloaded.has(file))
@@ -237,22 +321,54 @@ function readLazyChunksFallback(distDir, entryChunkFile, indexHtmlText) {
       name: path.basename(file).replace(/-[A-Za-z0-9_-]{8,}\.js$/, ""),
       file,
     }));
+  // No manifest means no import graph to walk, so each chunk can only be
+  // measured alone — the weaker number this whole fallback is, named here
+  // rather than left to look equivalent to the manifest path's.
+  return { chunks, manifest: undefined };
 }
 
-const lazyChunks =
+const { chunks: lazyChunks, manifest } =
   readLazyChunksFromManifest(distDir) ??
   readLazyChunksFallback(distDir, entryChunkSrc.replace(/^\//, ""), indexHtml);
+
+// What the cold start already fetched before any route was chosen: the one
+// `<script type="module">` entry chunk, plus every chunk index.html
+// modulepreloads. See routeFiles() for why a route must not be billed for
+// these a second time.
+const alreadyEager = new Set([
+  entryChunkSrc.replace(/^\//, ""),
+  ...[...indexHtml.matchAll(/<link rel="modulepreload"[^>]+href="([^"]+)"/g)].map((match) =>
+    match[1].replace(/^\//, ""),
+  ),
+]);
 
 let anyChunkFailed = false;
 
 for (const chunk of lazyChunks) {
-  const chunkPath = path.join(distDir, chunk.file);
-  const chunkRaw = readFileSync(chunkPath);
-  const chunkGzipBytes = gzipSync(chunkRaw).length;
+  // The route's whole cost, not just its own chunk's — see routeFiles()
+  // for what issue #169 taught about the difference. Without a manifest
+  // there is no import graph to walk, so the fallback path measures the
+  // chunk alone and says so in its output.
+  const files = manifest ? routeFiles(manifest, chunk.name, alreadyEager) : [chunk.file];
+  let chunkRawBytes = 0;
+  let chunkGzipBytes = 0;
+  for (const file of files) {
+    const raw = readFileSync(path.join(distDir, file));
+    chunkRawBytes += raw.length;
+    // Each file gzipped on its own, then summed, rather than gzipping the
+    // concatenation: that is what the browser actually receives, one
+    // compressed response per file, with no shared dictionary between
+    // them. Concatenating first would report a smaller, unachievable
+    // number.
+    chunkGzipBytes += gzipSync(raw).length;
+  }
   const budget = CHUNK_BUDGETS[chunk.name];
+  const shared = files.length - 1;
 
-  console.log(`check-bundle-size: lazy chunk ${chunk.name} (${path.basename(chunk.file)})`);
-  console.log(`  raw:  ${chunkRaw.length.toLocaleString()} bytes`);
+  console.log(
+    `check-bundle-size: route ${chunk.name} (${path.basename(chunk.file)}${shared > 0 ? ` + ${shared} shared` : ""})`,
+  );
+  console.log(`  raw:  ${chunkRawBytes.toLocaleString()} bytes`);
   if (budget) {
     console.log(
       `  gzip: ${chunkGzipBytes.toLocaleString()} bytes (ceiling ${budget.ceilingBytes.toLocaleString()}, baseline ${budget.baselineBytes.toLocaleString()})`,

@@ -29,4 +29,19 @@ describe("TodoNav", () => {
 
     expect(screen.getByRole("link", { name: "Inbox" })).toHaveAttribute("aria-current", "page");
   });
+
+  // Issue #169's own proof of ADR 0049's prediction — see todo-nav.tsx's
+  // own comment on VIEWS.
+  it("offers Today as a second real link", () => {
+    renderAt("/todo/inbox");
+
+    expect(screen.getByRole("link", { name: "Today" })).toHaveAttribute("href", "/todo/today");
+  });
+
+  it("marks Today current while it's the open view, and Inbox no longer current", () => {
+    renderAt("/todo/today");
+
+    expect(screen.getByRole("link", { name: "Today" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "Inbox" })).not.toHaveAttribute("aria-current");
+  });
 });

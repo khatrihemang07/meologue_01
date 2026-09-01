@@ -20,8 +20,12 @@ export { toPositionalRow, toPositionalRows } from "./sqlite/row-mapping";
 export type { EntryPage, EntryStore } from "./store";
 export type { SyncEngineOptions, SyncTransport } from "./sync-engine";
 export { sync } from "./sync-engine";
+export { hasTime } from "./task-fields";
 export type { TaskStore } from "./task-store";
 export type { Task } from "./task-types";
+export { storedPriorityOf, uiPriorityOf } from "./task-types";
+export type { TodayView } from "./task-views";
+export { compareForToday, today } from "./task-views";
 export type { Entry } from "./types";
 export type {
   WireDigest,
