@@ -94,6 +94,28 @@ export const tasks = sqliteTable(
     // existed — gets a default rather than a gap the app has to keep
     // special-casing.
     priority: integer("priority").notNull().default(1),
+    // The Labels attached to this Task (issue #170), as a JSON array of
+    // Label ids — ../task-types.ts's `labelIds` doc comment has the full
+    // reasoning for why this is a serialised column on the Task's own
+    // row rather than a `task_labels` join table. `{ mode: "json" }` is
+    // drizzle-orm's own (de)serialisation for a JSON-shaped column,
+    // rather than this store hand-rolling `JSON.parse`/`JSON.stringify`
+    // at every read and write the way the FTS5 tables' raw-SQL paths have
+    // to (search() below still does, for the one query that bypasses
+    // drizzle entirely). `NOT NULL DEFAULT '[]'` for the same reason
+    // `priority` above is `NOT NULL DEFAULT 1`: "no Labels" is a concrete
+    // value, not a gap every reader has to treat as "maybe absent, maybe
+    // just not loaded yet."
+    labelIds: text("label_ids", { mode: "json" }).notNull().default("[]").$type<string[]>(),
+    // The literal recurrence rule the user typed (issue #170's recurrence
+    // engine, ../recurrence/), or null for a Task that doesn't repeat —
+    // ../task-types.ts's `dateString` doc comment has the full reasoning
+    // for why this column, not `date`, is the thing ../recurrence/'s
+    // engine treats as the truth. Nullable with no DEFAULT, the same
+    // shape `date`/`deadline`/`duration` above take, not `priority`'s
+    // NOT NULL DEFAULT: "doesn't repeat" is the absence of a rule, not a
+    // concrete value the way "no priority" is a real priority level.
+    dateString: text("date_string"),
   },
   (table) => [
     // Supports list()'s actual query: `WHERE completed_at IS NULL AND
@@ -106,6 +128,46 @@ export const tasks = sqliteTable(
     // walking rows that are already coming back in the wanted order,
     // which is a different job than making the filter itself indexed.
     index("tasks_order_key_id_idx").on(table.orderKey, table.id),
+  ],
+);
+
+/**
+ * Mirrors the `Label` type (../label-types.ts) exactly (issue #170) — the
+ * same "second root noun gets its own table" reasoning `tasks`' own
+ * comment above gives for Task-vs-Entry, applied a third time. No
+ * `order_key` column: unlike `tasks`, nothing asks for a manual Label
+ * order (../label-store.ts's own header comment explains why list()
+ * sorts alphabetically instead), so there's no fractional index for a
+ * column to encode.
+ */
+export const labels = sqliteTable(
+  "labels",
+  {
+    id: text("id").primaryKey(),
+    deviceId: text("device_id").notNull(),
+    name: text("name").notNull(),
+    // A hex string from label-colors.ts's LABEL_COLOURS, validated by
+    // ../label-fields.ts's assertValidLabelColour before any write
+    // reaches this column — not a CHECK constraint, because the palette
+    // itself is application data that can gain a swatch without a
+    // migration, the same reasoning ../task-fields.ts gives for keeping
+    // `priority`'s 1-4 range out of SQL.
+    colour: text("colour").notNull(),
+    createdAt: text("created_at").notNull(),
+    seq: integer("seq"),
+    syncedAt: text("synced_at"),
+    // Tombstone (ADR 0028's rule, applied to Labels) — identical
+    // representation to `entries.deletedAt`/`tasks.deletedAt` above.
+    deletedAt: text("deleted_at"),
+  },
+  (table) => [
+    // Supports list()'s actual query — see ../label-store.ts's own
+    // comment for why alphabetical, not orderKey, is this table's
+    // ordering. SQLite collates `name` byte-wise by default; the store's
+    // `list()` does the case-insensitive comparison in JS rather than
+    // relying on a `COLLATE NOCASE` index, so this index still serves the
+    // query even though it isn't the exact sort the caller sees.
+    index("labels_name_id_idx").on(table.name, table.id),
   ],
 );
 

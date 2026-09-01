@@ -31,6 +31,11 @@ const defaultEntryStoreContext: EntryStoreOutletContext = {
   setTaskDeadline: vi.fn(),
   setTaskDuration: vi.fn(),
   setTaskPriority: vi.fn(),
+  advanceRecurringTask: vi.fn(),
+  completeForeverTask: vi.fn(),
+  postponeTask: vi.fn(),
+  labels: [],
+  resolveLabelIds: vi.fn(async () => []),
   disabled: false,
 };
 

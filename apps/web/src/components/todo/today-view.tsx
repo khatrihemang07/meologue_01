@@ -24,19 +24,35 @@ import { groupTodayTasks, type TodayGrouping } from "@/lib/group-today-tasks";
 export interface TodayViewProps {
   /** Every active Task (TaskStore.list()'s result) — today() does its own filtering; this component never pre-narrows it. */
   tasks: Task[];
-  onComplete: (id: string, content: string) => void;
+  /** `dateString` rides along so todo-page.tsx's own `handleComplete` can decide between `completeTask` and `advanceRecurringTask` — this component has no TaskStore access of its own to decide with. */
+  onComplete: (id: string, content: string, dateString: string | null) => void;
+  /** Shift+Click on a recurring Task's checkbox, or its touch-reachable button (task-row.tsx's own doc comments) — "Complete and archive recurring task," ending the series. */
+  onCompleteForever: (id: string, content: string) => void;
   onRequestDelete: (id: string) => void;
   onOpenSchedule: (id: string) => void;
   /** Rescheduling only ever calls this — see the Overdue section's own comment on why Reschedule touches `date` and never `deadline`. */
   onSetDate: (id: string, date: string | null) => void;
+  /**
+   * Moves one overdue Task to tomorrow (TaskStore.postpone's own doc
+   * comment) — the Overdue section's own "Postpone to tomorrow" button
+   * below calls this once per overdue Task, mirroring the existing bulk
+   * Reschedule button's identical `for (const task of overdue)` shape.
+   * Works on any overdue Task, not only a recurring one (postpone's own
+   * mechanics have nothing recurrence-specific about them), but issue
+   * #170 is what asks for it to be reachable here at all: "postponing an
+   * overdue recurring task moves it to tomorrow."
+   */
+  onPostpone: (id: string) => void;
 }
 
 export function TodayView({
   tasks,
   onComplete,
+  onCompleteForever,
   onRequestDelete,
   onOpenSchedule,
   onSetDate,
+  onPostpone,
 }: TodayViewProps) {
   const [grouping, setGrouping] = useState<TodayGrouping>("none");
   const [reschedulingOverdue, setReschedulingOverdue] = useState(false);
@@ -75,14 +91,39 @@ export function TodayView({
         <section>
           <header className="flex items-center justify-between px-3 py-2">
             <h2 className="font-medium text-sm">Overdue ({overdue.length})</h2>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={() => setReschedulingOverdue(true)}
-            >
-              Reschedule
-            </Button>
+            <div className="flex gap-2">
+              {/*
+                A quick, one-tap nudge beside the arbitrary-date Reschedule
+                picker — "postponing an overdue recurring task moves it to
+                tomorrow" (issue #170) doesn't need a calendar opened for
+                a destination that's always the same day. Real
+                `TaskStore.postpone`, not `onSetDate(task.id, tomorrow)`
+                computed by hand here: that store method already knows how
+                to preserve a timed Task's own time-of-day across the move
+                (its own doc comment), which this component would
+                otherwise have to re-derive per Task.
+              */}
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  for (const task of overdue) {
+                    onPostpone(task.id);
+                  }
+                }}
+              >
+                Postpone to tomorrow
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => setReschedulingOverdue(true)}
+              >
+                Reschedule
+              </Button>
+            </div>
           </header>
           {/*
             Always chronological, even though `todo-page.tsx`'s Inbox
@@ -102,7 +143,8 @@ export function TodayView({
               <TaskRow
                 key={task.id}
                 task={task}
-                onComplete={() => onComplete(task.id, task.content)}
+                onComplete={() => onComplete(task.id, task.content, task.dateString)}
+                onCompleteForever={() => onCompleteForever(task.id, task.content)}
                 onRequestDelete={() => onRequestDelete(task.id)}
                 onOpenSchedule={() => onOpenSchedule(task.id)}
               />
@@ -145,7 +187,8 @@ export function TodayView({
                   <TaskRow
                     key={task.id}
                     task={task}
-                    onComplete={() => onComplete(task.id, task.content)}
+                    onComplete={() => onComplete(task.id, task.content, task.dateString)}
+                    onCompleteForever={() => onCompleteForever(task.id, task.content)}
                     onRequestDelete={() => onRequestDelete(task.id)}
                     onOpenSchedule={() => onOpenSchedule(task.id)}
                   />

@@ -1,9 +1,13 @@
+import { withDefaultLabelIds } from "../label-fields";
 import { compareByOrder } from "../order-key";
+import { nextOccurrence, tomorrowOf } from "../recurrence";
 import {
   assertValidDate,
   assertValidDeadline,
   assertValidDuration,
   assertValidPriority,
+  hasTime,
+  withDefaultDateString,
   withDefaultSchedulingFields,
 } from "../task-fields";
 import type { TaskStore } from "../task-store";
@@ -62,7 +66,10 @@ export class InMemoryTaskStore implements TaskStore {
     // `undefined`, which would silently break every reader that treats
     // Task.priority as always concretely present.
     for (const t of tasks) {
-      this.tasks.set(t.id, withDefaultSchedulingFields(t));
+      this.tasks.set(
+        t.id,
+        withDefaultDateString(withDefaultLabelIds(withDefaultSchedulingFields(t))),
+      );
     }
   }
 
@@ -116,6 +123,63 @@ export class InMemoryTaskStore implements TaskStore {
   async setPriority(id: string, priority: number): Promise<void> {
     assertValidPriority(priority);
     this.applyIfLive(id, { priority, seq: null, syncedAt: null });
+  }
+
+  // Mirrors SqliteTaskStore.setLabelIds — see TaskStore.setLabelIds's own
+  // doc comment for why this replaces the array wholesale.
+  async setLabelIds(id: string, labelIds: string[]): Promise<void> {
+    this.applyIfLive(id, { labelIds, seq: null, syncedAt: null });
+  }
+
+  // Mirrors SqliteTaskStore.advanceRecurring — see TaskStore.advanceRecurring's
+  // own doc comment for the full reasoning. "No-op against a tombstone"
+  // is checked here the same way setDuration's own no-op check is: before
+  // either throw below becomes reachable.
+  async advanceRecurring(id: string, completedAt: string): Promise<void> {
+    const existing = this.tasks.get(id);
+    if (existing === undefined || existing.deletedAt !== null) {
+      return;
+    }
+    if (existing.dateString === null || existing.dateString === undefined) {
+      throw new Error(
+        `advanceRecurring called on Task ${id}, which has no recurrence (dateString is null)`,
+      );
+    }
+    const now = completedAt.slice(0, 10);
+    const outcome = nextOccurrence(existing.dateString, { dueDate: existing.date, now });
+    if (outcome.kind === "refused") {
+      throw new Error(
+        `Task ${id}'s stored recurrence "${existing.dateString}" no longer parses: ${outcome.reason}`,
+      );
+    }
+    if (outcome.kind === "ended") {
+      this.applyIfLive(id, { completedAt, dateString: null, seq: null, syncedAt: null });
+      return;
+    }
+    // `completedAt` is deliberately absent — a recurring Task never
+    // enters the completed list; only `date` moves.
+    this.applyIfLive(id, { date: outcome.date, seq: null, syncedAt: null });
+  }
+
+  // Mirrors SqliteTaskStore.completeForever — see TaskStore.completeForever's own doc comment.
+  async completeForever(id: string, completedAt: string): Promise<void> {
+    this.applyIfLive(id, { completedAt, dateString: null, seq: null, syncedAt: null });
+  }
+
+  // Mirrors SqliteTaskStore.postpone — see TaskStore.postpone's own doc
+  // comment. Reads the Task first, the same as setDuration/
+  // advanceRecurring above, to know whether `date` carries a time-of-day
+  // to preserve on the new day.
+  async postpone(id: string, today: string): Promise<void> {
+    const existing = this.tasks.get(id);
+    if (existing === undefined || existing.deletedAt !== null || existing.date === null) {
+      return;
+    }
+    const tomorrow = tomorrowOf(today);
+    const nextDate = hasTime(existing.date)
+      ? `${tomorrow}T${existing.date.slice(11, 16)}`
+      : tomorrow;
+    this.applyIfLive(id, { date: nextDate, seq: null, syncedAt: null });
   }
 
   /**

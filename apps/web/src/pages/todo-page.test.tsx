@@ -1,5 +1,5 @@
 import type { Task } from "@meologue/core";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Link, MemoryRouter, Outlet, Route, Routes } from "react-router";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -26,6 +26,11 @@ function task(overrides: Partial<Task> = {}): Task {
     deadline: null,
     duration: null,
     priority: 1,
+    // No Labels, doesn't repeat — the same "concrete value, not a gap"
+    // default packages/core/src/test-support/task-fixture.ts's own
+    // fixture uses for these two issue #170 fields.
+    labelIds: [],
+    dateString: null,
     ...overrides,
   };
 }
@@ -75,6 +80,11 @@ function readyContext(overrides: Partial<EntryStoreOutletContext> = {}): EntrySt
     setTaskDeadline: vi.fn(),
     setTaskDuration: vi.fn(),
     setTaskPriority: vi.fn(),
+    advanceRecurringTask: vi.fn(),
+    completeForeverTask: vi.fn(),
+    postponeTask: vi.fn(),
+    labels: [],
+    resolveLabelIds: vi.fn(async () => []),
     disabled: false,
     ...overrides,
   };
@@ -175,14 +185,23 @@ describe("TodoPage", () => {
   // Inbox is the undated capture bucket (issue #169: "a Task created in
   // Todo starts undated"), so the date this passes is explicitly null
   // rather than absent — see TodoPage's own `captureDate`.
-  it("adds a Task through the form, undated, when the reader is in Inbox", () => {
+  it("adds a Task through the form, undated, when the reader is in Inbox", async () => {
     const addTask = vi.fn();
     renderTodoPage(readyContext({ addTask }));
 
     fireEvent.change(screen.getByLabelText("Add a Task"), { target: { value: "call mum" } });
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
 
-    expect(addTask).toHaveBeenCalledWith("call mum", null);
+    // handleAdd (todo-page.tsx) awaits resolveLabelIds before calling
+    // addTask — issue #170's own async label-resolution step, invisible
+    // here since "call mum" carries no `%label` token to resolve, but
+    // still a real microtask this assertion has to wait past.
+    await waitFor(() =>
+      expect(addTask).toHaveBeenCalledWith(
+        "call mum",
+        expect.objectContaining({ date: null, dateString: null, labelIds: [] }),
+      ),
+    );
   });
 
   // The regression this exists for was found by running the built app, not
@@ -191,14 +210,37 @@ describe("TodoPage", () => {
   // from every day-keyed view — so it vanished the instant it was added.
   // The plan's "default date is inherited from origin" rule (Todoist's own
   // context inheritance) is what fixes it, and the origin is the *view*.
-  it("adds a Task dated today when the reader is standing in Today", () => {
+  it("adds a Task dated today when the reader is standing in Today", async () => {
     const addTask = vi.fn();
     renderTodoPage(readyContext({ addTask }), "/todo/today");
 
     fireEvent.change(screen.getByLabelText("Add a Task"), { target: { value: "call mum" } });
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
 
-    expect(addTask).toHaveBeenCalledWith("call mum", localDayKey(new Date()));
+    await waitFor(() =>
+      expect(addTask).toHaveBeenCalledWith(
+        "call mum",
+        expect.objectContaining({ date: localDayKey(new Date()) }),
+      ),
+    );
+  });
+
+  // The plain-text token's own date is what wins once the reader typed
+  // one — captureDate ("Today") is only the fallback quick-add-task.ts's
+  // own `??` reaches for when nothing in the line resolved a date at all.
+  it("a date the reader typed overrides the view's own inherited date", async () => {
+    const addTask = vi.fn();
+    renderTodoPage(readyContext({ addTask }), "/todo/today");
+
+    fireEvent.change(screen.getByLabelText("Add a Task"), {
+      target: { value: "call mum tomorrow" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+    await waitFor(() => expect(addTask).toHaveBeenCalled());
+    const [content, overrides] = addTask.mock.calls[0] as [string, { date: string | null }];
+    expect(content).toBe("call mum");
+    expect(overrides.date).not.toBe(localDayKey(new Date()));
   });
 
   it("disables the Add form while the store isn't ready", () => {

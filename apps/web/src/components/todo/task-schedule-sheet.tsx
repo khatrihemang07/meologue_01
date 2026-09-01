@@ -187,6 +187,22 @@ export function TaskScheduleSheet({
                 className="w-fit rounded-md border border-border bg-background px-2 py-1 text-sm"
               />
             )}
+            {/*
+              Read-only, deliberately — this file's own header comment
+              draws the line at "pickers, not text parsing," and a
+              recurrence rule is text by definition (CONTEXT.md's
+              Recurrence entry, issue #170): the add field
+              (add-task-form.tsx) is where one is typed, parsed and
+              demotable, and that's the one door onto creating or
+              changing one. What belongs here is only "show the reader
+              what they typed" — `task.dateString` rendered verbatim,
+              never re-derived through ../recurrence/'s engine, so this
+              sheet can never disagree with the row it opened from
+              (task-row.tsx shows the identical string).
+            */}
+            {task.dateString !== null && (
+              <p className="text-muted-foreground text-sm">Repeats: {task.dateString}</p>
+            )}
           </section>
 
           <section className="flex flex-col gap-2 px-1">

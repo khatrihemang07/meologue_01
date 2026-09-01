@@ -17,6 +17,11 @@ function task(overrides: Partial<Task> = {}): Task {
     deadline: null,
     duration: null,
     priority: 1,
+    // No Labels, doesn't repeat — the same "concrete value, not a gap"
+    // default packages/core/src/test-support/task-fixture.ts's own
+    // fixture uses for these two issue #170 fields.
+    labelIds: [],
+    dateString: null,
     ...overrides,
   };
 }

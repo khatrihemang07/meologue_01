@@ -1,10 +1,14 @@
 import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
+import { withDefaultLabelIds } from "../label-fields";
+import { nextOccurrence, tomorrowOf } from "../recurrence";
 import {
   assertValidDate,
   assertValidDeadline,
   assertValidDuration,
   assertValidPriority,
+  hasTime,
+  withDefaultDateString,
   withDefaultSchedulingFields,
 } from "../task-fields";
 import type { TaskStore } from "../task-store";
@@ -75,8 +79,19 @@ export class SqliteTaskStore implements TaskStore {
     // why that key is TS-optional at all) — done once here, before the
     // insert, rather than trusted to drizzle's own handling of a missing
     // object key, so the row this statement actually writes is never in
-    // doubt.
-    const normalized = newTasks.map(withDefaultSchedulingFields);
+    // doubt. withDefaultLabelIds (../label-fields.ts) does the identical
+    // job for `labelIds` (issue #170) — a separate function, not folded
+    // into withDefaultSchedulingFields, because the two fields don't
+    // share a ticket, a module, or a reason to default: `labelIds`
+    // defaults to `[]` for "no Labels yet," not for a scheduling rule.
+    // withDefaultDateString (../task-fields.ts) is a third such
+    // defaulter, kept separate again for the same reason: `null` means
+    // "doesn't repeat" (issue #170's recurrence engine), not a
+    // scheduling rule.
+    const normalized = newTasks
+      .map(withDefaultSchedulingFields)
+      .map(withDefaultLabelIds)
+      .map(withDefaultDateString);
     // A single statement (mirrors SqliteEntryStore.upsert — see ADR
     // 0007): SQLite's native upsert applies each conflicting row's own
     // `excluded` values, so this stays correct for a batch of unrelated
@@ -99,6 +114,8 @@ export class SqliteTaskStore implements TaskStore {
           deadline: sql`excluded.deadline`,
           duration: sql`excluded.duration`,
           priority: sql`excluded.priority`,
+          labelIds: sql`excluded.label_ids`,
+          dateString: sql`excluded.date_string`,
         },
       });
     for (const t of normalized) {
@@ -175,6 +192,74 @@ export class SqliteTaskStore implements TaskStore {
     await this.updateIfLive(id, { priority, seq: null, syncedAt: null });
   }
 
+  // Replaces `labelIds` wholesale — see TaskStore.setLabelIds's own doc
+  // comment for why there's no addLabel/removeLabel pair. No validation
+  // beyond the array shape TypeScript already gives: an id naming a
+  // Label that's been removed is an accepted, transient state (this
+  // file's own header comment, and ../label-store.ts's remove()).
+  async setLabelIds(id: string, labelIds: string[]): Promise<void> {
+    await this.updateIfLive(id, { labelIds, seq: null, syncedAt: null });
+  }
+
+  // See TaskStore.advanceRecurring's own doc comment for the full
+  // reasoning; this is its mechanics. Reads the Task first (mirrors
+  // setDuration's own reasoning above): "no-op against a tombstone" has
+  // to be checked before either throw below becomes reachable, and
+  // there's no `dateString` to re-parse for a row that isn't live in the
+  // first place.
+  async advanceRecurring(id: string, completedAt: string): Promise<void> {
+    const current = await this.get(id);
+    if (current === undefined) {
+      return;
+    }
+    if (current.dateString === null || current.dateString === undefined) {
+      throw new Error(
+        `advanceRecurring called on Task ${id}, which has no recurrence (dateString is null)`,
+      );
+    }
+    // ../task-views.ts's today() reads `now` the identical way — only the
+    // calendar day matters to ../recurrence/'s engine, never the exact
+    // instant a completion happened at.
+    const now = completedAt.slice(0, 10);
+    const outcome = nextOccurrence(current.dateString, { dueDate: current.date, now });
+    if (outcome.kind === "refused") {
+      throw new Error(
+        `Task ${id}'s stored recurrence "${current.dateString}" no longer parses: ${outcome.reason}`,
+      );
+    }
+    if (outcome.kind === "ended") {
+      // The bounded rule's window has passed — files as an ordinary
+      // completed Task, exactly like completeForever() below.
+      await this.updateIfLive(id, { completedAt, dateString: null, seq: null, syncedAt: null });
+      return;
+    }
+    // `completedAt` is deliberately absent from this patch — a recurring
+    // Task never enters the completed list (TaskStore.advanceRecurring's
+    // own doc comment); only `date` moves.
+    await this.updateIfLive(id, { date: outcome.date, seq: null, syncedAt: null });
+  }
+
+  // See TaskStore.completeForever's own doc comment for the full
+  // reasoning; this is its mechanics.
+  async completeForever(id: string, completedAt: string): Promise<void> {
+    await this.updateIfLive(id, { completedAt, dateString: null, seq: null, syncedAt: null });
+  }
+
+  // See TaskStore.postpone's own doc comment for the full reasoning;
+  // this is its mechanics. Reads the Task first, the same as
+  // setDuration/advanceRecurring above, to know whether `date` carries a
+  // time-of-day to preserve on the new day — postpone has no rule of its
+  // own to re-parse, but it still needs the Task's *current* shape.
+  async postpone(id: string, today: string): Promise<void> {
+    const current = await this.get(id);
+    if (current === undefined || current.date === null) {
+      return;
+    }
+    const tomorrow = tomorrowOf(today);
+    const nextDate = hasTime(current.date) ? `${tomorrow}T${current.date.slice(11, 16)}` : tomorrow;
+    await this.updateIfLive(id, { date: nextDate, seq: null, syncedAt: null });
+  }
+
   /**
    * Removes a Task from Todo locally — mirrors SqliteEntryStore.remove's
    * doc comment for why this can't just be "build a mutated Task and
@@ -225,7 +310,7 @@ export class SqliteTaskStore implements TaskStore {
     // match list()'s own order (order_key asc, id asc), mirroring
     // SqliteEntryStore.search's "same order as list()" guarantee.
     const result = await this.driver.execute(
-      `SELECT tasks.id, tasks.device_id, tasks.content, tasks.completed_at, tasks.order_key, tasks.created_at, tasks.seq, tasks.synced_at, tasks.deleted_at, tasks.date, tasks.deadline, tasks.duration, tasks.priority
+      `SELECT tasks.id, tasks.device_id, tasks.content, tasks.completed_at, tasks.order_key, tasks.created_at, tasks.seq, tasks.synced_at, tasks.deleted_at, tasks.date, tasks.deadline, tasks.duration, tasks.priority, tasks.label_ids, tasks.date_string
        FROM tasks_fts
        JOIN tasks ON tasks.id = tasks_fts.id
        WHERE tasks_fts MATCH ? AND tasks.deleted_at IS NULL AND tasks.completed_at IS NULL
@@ -318,8 +403,8 @@ function toPrefixMatchQuery(text: string): string {
 // rowToEntry — a row that doesn't match the shape this query asked for
 // throws instead of silently mis-mapping a value into the wrong field.
 function rowToTask(row: unknown): Task {
-  if (!Array.isArray(row) || row.length !== 13) {
-    throw new Error(`sqlite search expected a 13-column tasks row, got ${JSON.stringify(row)}`);
+  if (!Array.isArray(row) || row.length !== 15) {
+    throw new Error(`sqlite search expected a 15-column tasks row, got ${JSON.stringify(row)}`);
   }
   const [
     id,
@@ -335,6 +420,8 @@ function rowToTask(row: unknown): Task {
     deadline,
     duration,
     priority,
+    labelIdsJson,
+    dateString,
   ] = row as [
     string,
     string,
@@ -349,6 +436,8 @@ function rowToTask(row: unknown): Task {
     string | null,
     number | null,
     number,
+    string,
+    string | null,
   ];
   return {
     id,
@@ -364,5 +453,11 @@ function rowToTask(row: unknown): Task {
     deadline,
     duration,
     priority,
+    // This query runs through this.driver.execute directly rather than
+    // drizzle's query builder, so none of drizzle's `{ mode: "json" }`
+    // handling (../schema.ts's `labelIds` column) applies here — this is
+    // the one place in this store that has to do the JSON.parse itself.
+    labelIds: JSON.parse(labelIdsJson) as string[],
+    dateString,
   };
 }

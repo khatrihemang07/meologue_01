@@ -1,4 +1,5 @@
 import type { Task, TaskStore } from "@meologue/core";
+import { nextOccurrence, tomorrowOf } from "@meologue/core";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
@@ -32,6 +33,11 @@ function task(overrides: Partial<Task> = {}): Task {
     deadline: null,
     duration: null,
     priority: 1,
+    // No Labels, doesn't repeat — the same "concrete value, not a gap"
+    // default packages/core/src/test-support/task-fixture.ts's own
+    // fixture uses for these two issue #170 fields.
+    labelIds: [],
+    dateString: null,
     ...overrides,
   };
 }
@@ -87,6 +93,42 @@ function createFakeStore(): TaskStore {
     }),
     setPriority: vi.fn(async (id: string, priority: number) => {
       active = active.map((t) => (t.id === id ? { ...t, priority, seq: null } : t));
+    }),
+    setLabelIds: vi.fn(async (id: string, labelIds: string[]) => {
+      active = active.map((t) => (t.id === id ? { ...t, labelIds, seq: null } : t));
+    }),
+    // Issue #170's three recurrence methods — mirrored closely enough
+    // against packages/core's own SqliteTaskStore/InMemoryTaskStore
+    // mechanics (../../packages/core/src/sqlite/sqlite-task-store.ts) that
+    // this suite's own recurrence tests below exercise real behaviour
+    // rather than a stub that always no-ops.
+    advanceRecurring: vi.fn(async (id: string, completedAt: string) => {
+      const found = active.find((t) => t.id === id);
+      if (found === undefined || found.dateString === null) return;
+      const outcome = nextOccurrence(found.dateString, {
+        dueDate: found.date,
+        now: completedAt.slice(0, 10),
+      });
+      if (outcome.kind === "occurrence") {
+        active = active.map((t) => (t.id === id ? { ...t, date: outcome.date, seq: null } : t));
+        return;
+      }
+      // "refused" or "ended" both file the Task as an ordinary completed
+      // one — the same fallback advanceRecurring's own doc comment
+      // (task-store.ts) gives for a bounded rule that has run out.
+      active = active.filter((t) => t.id !== id);
+      completed = [{ ...found, completedAt, dateString: null, seq: null }, ...completed];
+    }),
+    completeForever: vi.fn(async (id: string, completedAt: string) => {
+      const found = active.find((t) => t.id === id);
+      if (!found) return;
+      active = active.filter((t) => t.id !== id);
+      completed = [{ ...found, completedAt, dateString: null, seq: null }, ...completed];
+    }),
+    postpone: vi.fn(async (id: string, today: string) => {
+      active = active.map((t) =>
+        t.id === id && t.date !== null ? { ...t, date: tomorrowOf(today), seq: null } : t,
+      );
     }),
   };
 }
@@ -220,5 +262,100 @@ describe("useTasks", () => {
 
     await waitFor(() => expect(store.remove).toHaveBeenCalledWith("a"));
     await waitFor(() => expect(result.current.tasks).toEqual([]));
+  });
+
+  it("adds a Task carrying overrides — labelIds and dateString among them", async () => {
+    const store = createFakeStore();
+    const { result } = await renderUseTasks(store);
+
+    act(() =>
+      result.current.addTask("pay rent", {
+        date: "2026-09-05",
+        deadline: "2026-09-10",
+        duration: 30,
+        priority: 4,
+        labelIds: ["label-1"],
+        dateString: "every month",
+      }),
+    );
+
+    await waitFor(() => expect(result.current.tasks).toHaveLength(1));
+    const added = result.current.tasks[0];
+    expect(added).toMatchObject({
+      content: "pay rent",
+      date: "2026-09-05",
+      deadline: "2026-09-10",
+      duration: 30,
+      priority: 4,
+      labelIds: ["label-1"],
+      dateString: "every month",
+    });
+  });
+
+  it("omitted overrides default to the same undated, un-repeating state a bare addTask always has", async () => {
+    const store = createFakeStore();
+    const { result } = await renderUseTasks(store);
+
+    act(() => result.current.addTask("call mum"));
+
+    await waitFor(() => expect(result.current.tasks).toHaveLength(1));
+    expect(result.current.tasks[0]).toMatchObject({
+      date: null,
+      deadline: null,
+      duration: null,
+      priority: 1,
+      labelIds: [],
+      dateString: null,
+    });
+  });
+
+  describe("recurrence", () => {
+    it("advanceRecurringTask moves a recurring Task's date forward without completing it", async () => {
+      const store = createFakeStore();
+      await store.upsert([task({ id: "a", date: "2026-01-01", dateString: "every month" })]);
+      const { result } = await renderUseTasks(store);
+      await waitFor(() => expect(result.current.tasks).toHaveLength(1));
+
+      act(() => result.current.advanceRecurringTask("a"));
+
+      await waitFor(() =>
+        expect(store.advanceRecurring).toHaveBeenCalledWith("a", expect.any(String)),
+      );
+      // Never enters completedTasks — TaskStore.advanceRecurring's own
+      // doc comment: "the checkbox does not un-tick itself."
+      await waitFor(() => expect(result.current.tasks).toHaveLength(1));
+      expect(result.current.completedTasks).toEqual([]);
+      expect(result.current.tasks[0]?.date).not.toBe("2026-01-01");
+    });
+
+    it("completeForeverTask ends the series and files it as an ordinary completed Task", async () => {
+      const store = createFakeStore();
+      await store.upsert([
+        task({ id: "a", content: "pay rent", date: "2026-09-01", dateString: "every month" }),
+      ]);
+      const { result } = await renderUseTasks(store);
+      await waitFor(() => expect(result.current.tasks).toHaveLength(1));
+
+      act(() => result.current.completeForeverTask("a"));
+
+      await waitFor(() => expect(result.current.tasks).toEqual([]));
+      await waitFor(() => expect(result.current.completedTasks).toHaveLength(1));
+      expect(result.current.completedTasks[0]).toMatchObject({
+        content: "pay rent",
+        dateString: null,
+      });
+    });
+
+    it("postponeTask moves an overdue Task's date to tomorrow", async () => {
+      const store = createFakeStore();
+      await store.upsert([task({ id: "a", date: "2020-01-01" })]);
+      const { result } = await renderUseTasks(store);
+      await waitFor(() => expect(result.current.tasks).toHaveLength(1));
+
+      act(() => result.current.postponeTask("a"));
+
+      await waitFor(() => expect(store.postpone).toHaveBeenCalledWith("a", expect.any(String)));
+      await waitFor(() => expect(result.current.tasks[0]?.date).not.toBe("2020-01-01"));
+    });
   });
 });

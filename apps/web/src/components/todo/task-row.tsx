@@ -1,13 +1,36 @@
 import type { Task } from "@meologue/core";
 import { uiPriorityOf } from "@meologue/core";
-import { CalendarClock, GripVertical, Trash2 } from "lucide-react";
-import type { PointerEvent } from "react";
+import { CalendarClock, CheckCheck, GripVertical, Trash2 } from "lucide-react";
+import type { MouseEvent, PointerEvent } from "react";
 import { formatDay, formatTaskDate } from "@/lib/format-task-date";
 import { cn } from "@/lib/utils";
 
 export interface TaskRowProps {
   task: Task;
+  /**
+   * Completes this Task — for a recurring one (`task.dateString !== null`),
+   * the caller's own job is to call `advanceRecurringTask` here instead of
+   * `completeTask` (TaskStore.advanceRecurring's own doc comment: the
+   * checkbox never "un-ticks itself," and the Task never enters the
+   * completed list), not this component's — this row has no TaskStore
+   * access of its own and never branches on `dateString` to decide which
+   * mutation a plain tap means. It only ever decides between calling THIS
+   * and calling `onCompleteForever` below, based on the gesture.
+   */
   onComplete: () => void;
+  /**
+   * Ends a recurring Task's series (TaskStore.completeForever's own doc
+   * comment — "Complete and archive recurring task", the domain decision
+   * this whole programme has to get right: not "complete this
+   * occurrence"). Reached two ways, both wired here rather than left to a
+   * caller to remember: Shift+Click on the checkbox (Todoist's own
+   * documented gesture for this exact action) on a pointer device, and a
+   * dedicated button — visible only on a recurring Task, and only this
+   * button gets the touch-reachable treatment `entry-actions.tsx`'s own
+   * hover/focus split already gives Schedule/Delete below, since a
+   * touch reader has no Shift key to hold at all.
+   */
+  onCompleteForever: () => void;
   onRequestDelete: () => void;
   /**
    * Opens the schedule picker (issue #169's `TaskScheduleSheet`) for this
@@ -73,6 +96,7 @@ export interface TaskRowProps {
 export function TaskRow({
   task,
   onComplete,
+  onCompleteForever,
   onRequestDelete,
   onOpenSchedule,
   isDropTarget = false,
@@ -81,7 +105,16 @@ export function TaskRow({
   onHandlePointerUp,
   onHandlePointerCancel,
 }: TaskRowProps) {
-  const hasSchedule = task.date !== null || task.deadline !== null || task.priority !== 1;
+  const isRecurring = task.dateString !== null;
+  // A recurring Task always shows a schedule summary line, even one with
+  // no `date` of its own yet (../recurrence/'s engine failing to resolve
+  // an initial occurrence — quick-add-task.ts's own defensive fallback —
+  // is the one case that could leave `date: null` here) — the reader
+  // still typed a recurrence rule, and hiding the one line that would
+  // show it back to them (`dateString !== null` below) reads as "nothing
+  // was understood" when something was.
+  const hasSchedule =
+    task.date !== null || task.deadline !== null || task.priority !== 1 || isRecurring;
   const draggable =
     onHandlePointerDown !== undefined &&
     onHandlePointerMove !== undefined &&
@@ -120,28 +153,62 @@ export function TaskRow({
           <GripVertical className="size-4" />
         </span>
       )}
+      {/*
+        `onClick`, not `onChange` — pre-#170 this was `onChange={onComplete}`.
+        `MouseEvent`'s own `shiftKey` is what Shift+Click on a recurring
+        Task's checkbox (`onCompleteForever`'s own doc comment) needs to
+        read, and only a `click` handler carries it directly rather than
+        through a `change` event's own, less direct relationship to
+        whichever click caused it. `checked={false}` never actually changes
+        (a completed Task, recurring or not, leaves this list rather than
+        rendering ticked — TaskStore.advanceRecurring's own doc comment:
+        "the checkbox does not un-tick itself"), so `readOnly` rather than a
+        real `onChange` is the honest description of what this control is:
+        a button shaped like a checkbox, not a real toggle.
+      */}
       <input
         type="checkbox"
         checked={false}
-        onChange={onComplete}
+        readOnly
+        onClick={(event: MouseEvent<HTMLInputElement>) => {
+          // Shift+Click on a recurring Task's checkbox is Todoist's own
+          // documented "Complete and archive recurring task" — ends the
+          // series, not "complete this occurrence" (this file's own
+          // `onCompleteForever` doc comment). Meaningless on a
+          // non-recurring Task, so the modifier is simply ignored there
+          // and an ordinary complete happens instead — no extra gesture
+          // a reader could stumble into by accident.
+          if (isRecurring && event.shiftKey) {
+            onCompleteForever();
+          } else {
+            onComplete();
+          }
+        }}
         aria-label={task.content}
         className="shrink-0 accent-current"
       />
       <span className="flex min-w-0 flex-1 flex-col">
         <span className="truncate text-sm">{task.content}</span>
         {/* A compact schedule summary, present only once there's something
-            to summarise (issue #169) — Date, then Deadline, then Priority
-            (never "no priority", the same restraint the sort chain itself
-            applies: a level that means "nothing chosen" doesn't deserve a
-            badge). `formatTaskDate`/`formatDay` (lib/format-task-date.ts)
-            are the same functions `TaskScheduleSheet` reads a Task's
-            current value through, so this row can never show a date in
-            words that disagree with what the picker itself would say. */}
+            to summarise (issue #169, extended by #170's recurrence line) —
+            Date, then Deadline, then Priority (never "no priority", the
+            same restraint the sort chain itself applies: a level that
+            means "nothing chosen" doesn't deserve a badge), then the
+            recurrence rule exactly as typed. `formatTaskDate`/`formatDay`
+            (lib/format-task-date.ts) are the same functions
+            `TaskScheduleSheet` reads a Task's current value through, so
+            this row can never show a date in words that disagree with
+            what the picker itself would say. `dateString` is rendered
+            verbatim, never re-derived through ../recurrence/'s engine —
+            "the string is the truth" (task-types.ts's own doc comment on
+            `Task.dateString`) means the reader sees exactly what they
+            typed here too, not this row's own paraphrase of it. */}
         {hasSchedule && (
           <span className="flex flex-wrap gap-x-2 text-muted-foreground text-xs">
             {task.date !== null && <span>{formatTaskDate(task.date)}</span>}
             {task.deadline !== null && <span>Due {formatDay(task.deadline)}</span>}
             {task.priority !== 1 && <span>P{uiPriorityOf(task.priority)}</span>}
+            {task.dateString !== null && <span>{task.dateString}</span>}
           </span>
         )}
       </span>
@@ -161,6 +228,28 @@ export function TaskRow({
         and in the tab order, so `focus-visible` can bring it back for a
         keyboard user who never hovers anything.
       */}
+      {/*
+        Touch-reachable "Complete and archive recurring task" (this file's
+        own `onCompleteForever` doc comment) — Shift+Click has no
+        equivalent on a touch device at all, so a Task with no pointer
+        (mouse/trackpad) attached would otherwise have no way to reach
+        this action short of completing every future occurrence one at a
+        time. Rendered only for a recurring Task (`isRecurring`); every
+        other row keeps exactly the two buttons it had before this ticket.
+      */}
+      {isRecurring && (
+        <button
+          type="button"
+          aria-label={`Complete and archive recurring task "${task.content}"`}
+          onClick={onCompleteForever}
+          className={cn(
+            "flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
+            "[@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:focus-visible:opacity-100",
+          )}
+        >
+          <CheckCheck aria-hidden="true" className="size-4" />
+        </button>
+      )}
       <button
         type="button"
         aria-label={`Schedule "${task.content}"`}

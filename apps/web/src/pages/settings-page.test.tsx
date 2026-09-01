@@ -391,6 +391,43 @@ describe("SettingsPage", () => {
     expect(screen.getByLabelText(/server url/i)).toHaveValue("https://phone.example:41207");
   });
 
+  describe("smart date recognition", () => {
+    it("is on by default", () => {
+      renderPage();
+
+      expect(screen.getByRole("switch", { name: "Smart date recognition" })).toHaveAttribute(
+        "aria-checked",
+        "true",
+      );
+    });
+
+    it("turns off on click, and persists it", () => {
+      renderPage();
+
+      fireEvent.click(screen.getByRole("switch", { name: "Smart date recognition" }));
+
+      expect(screen.getByRole("switch", { name: "Smart date recognition" })).toHaveAttribute(
+        "aria-checked",
+        "false",
+      );
+      expect(useSettingsStore.getState().smartDatesEnabled).toBe(false);
+      expect(localStorage.getItem("meologue.smart-dates-enabled")).toBe("false");
+    });
+
+    it("turns on again on a second click", () => {
+      useSettingsStore.setState({ smartDatesEnabled: false });
+      renderPage();
+
+      fireEvent.click(screen.getByRole("switch", { name: "Smart date recognition" }));
+
+      expect(screen.getByRole("switch", { name: "Smart date recognition" })).toHaveAttribute(
+        "aria-checked",
+        "true",
+      );
+      expect(useSettingsStore.getState().smartDatesEnabled).toBe(true);
+    });
+  });
+
   describe("server reachability", () => {
     it("reports no server configured on mount, and makes no request", async () => {
       const fetchMock = vi.fn(async () => healthResponse(PROTOCOL_VERSION));

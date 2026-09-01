@@ -4,8 +4,33 @@ export type { ExportManifest, ExportManifestEntry } from "./export/manifest";
 export type { LocalParts } from "./export/offset";
 export { toLocalParts } from "./export/offset";
 export { mintId } from "./id";
+export type { LabelColour } from "./label-colors";
+export { DEFAULT_LABEL_COLOUR, isValidLabelColour, LABEL_COLOURS } from "./label-colors";
+export type { LabelStore } from "./label-store";
+export type { Label } from "./label-types";
 export { compareByOrder, orderKeyBetween } from "./order-key";
 export { PROTOCOL_VERSION, SYNC_BATCH_SIZE, SYNC_INTERVAL_MS } from "./protocol";
+export { englishQuickAddLanguage } from "./quick-add/en";
+export type { QuickAddLanguage } from "./quick-add/language";
+export { demoteQuickAddToken, parseQuickAdd } from "./quick-add/parse-quick-add";
+export type {
+  QuickAddOptions,
+  QuickAddResult,
+  QuickAddSpan,
+  QuickAddToken,
+  QuickAddTokenKind,
+} from "./quick-add/types";
+export type {
+  MonthDay,
+  RecurrenceFrequency,
+  RecurrenceOutcome,
+  RecurrenceParseResult,
+  RecurrenceReference,
+  RecurrenceRule,
+  RecurrenceUnit,
+  Weekday,
+} from "./recurrence";
+export { nextOccurrence, parseRecurrence, tomorrowOf } from "./recurrence";
 export type {
   CheckServerOptions,
   ServerCapabilities,

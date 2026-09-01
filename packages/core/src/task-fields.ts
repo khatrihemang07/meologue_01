@@ -138,3 +138,20 @@ export function withDefaultSchedulingFields(t: Task): Task {
     priority: t.priority ?? 1,
   };
 }
+
+/**
+ * Fills in `dateString` where an incoming Task omits it — issue #170's
+ * recurrence engine (../recurrence/). A separate function from
+ * withDefaultSchedulingFields above, on purpose, mirroring
+ * ../label-fields.ts's withDefaultLabelIds rather than being folded into
+ * the #169 defaulter: `dateString` doesn't share a ticket, a module, or a
+ * reason to default with `date`/`deadline`/`duration`/`priority` — it
+ * defaults to `null` for "doesn't repeat," not for a scheduling rule, and
+ * the two `?`-optional fields on Task (this one and `labelIds`) each got
+ * `?`-optional for a different reason of their own (see this field's own
+ * doc comment in ../task-types.ts), which is reason enough to keep their
+ * defaulters apart too rather than implying they're one concern.
+ */
+export function withDefaultDateString(t: Task): Task {
+  return { ...t, dateString: t.dateString ?? null };
+}

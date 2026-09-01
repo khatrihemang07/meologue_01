@@ -22,6 +22,7 @@ describe("migrate", () => {
       ["entries_fts_docsize"],
       ["entries_fts_idx"],
       ["kv"],
+      ["labels"],
       ["meologue_migrations"],
       ["tasks"],
       ["tasks_fts"],
@@ -40,7 +41,11 @@ describe("migrate", () => {
     await migrate(driver);
 
     const result = await driver.execute("SELECT version FROM meologue_migrations", [], "all");
-    expect(result.rows).toEqual([[1], [2], [3], [4], [5], [6]]);
+    // version 7 is packages/core/src/recurrence/'s own migration
+    // (../migrations/index.ts's own comment on MIGRATIONS has the full
+    // story of why it's sequenced before the labels migration's own
+    // version 8 despite landing after it in this tree).
+    expect(result.rows).toEqual([[1], [2], [3], [4], [5], [6], [7], [8]]);
   });
 
   it("backfills Entries that existed before the search index migration shipped", async () => {
@@ -132,7 +137,7 @@ describe("migrate", () => {
     await expect(migrate(driver)).resolves.toBeUndefined();
 
     const ledger = await driver.execute("SELECT version FROM meologue_migrations", [], "all");
-    expect(ledger.rows).toEqual([[1], [2], [3], [4], [5], [6]]);
+    expect(ledger.rows).toEqual([[1], [2], [3], [4], [5], [6], [7], [8]]);
 
     // The store isn't just "didn't throw" — it's actually usable: a write
     // that touches the new column succeeds.

@@ -117,6 +117,88 @@ export interface TaskStore {
    */
   setPriority(id: string, priority: number): Promise<void>;
   /**
+   * Sets `labelIds` and clears `seq` — mirrors the other #169-era setters
+   * above for the same reason: a caller building its own patch object
+   * has no way to know it must no-op against a tombstone, and this is
+   * where that guarantee lives instead. Replaces the array wholesale
+   * (there is no `addLabel`/`removeLabel` pair): the caller already has
+   * the Task's current `labelIds` from list()/get() by the time it's
+   * showing a label picker, so "read, splice, write back the whole
+   * array" costs it nothing extra and keeps this store from needing to
+   * define what "add an id already present" or "remove one that isn't"
+   * mean. See ../task-types.ts's own doc comment on `labelIds` for why a
+   * Task carries this as a plain array rather than through a join table.
+   * No validation beyond the array shape itself: a `labelId` naming a
+   * Label that doesn't exist, or that's since been removed, is an
+   * accepted, transient state (../label-store.ts's remove() doc comment
+   * explains why), not something this setter refuses. No-op against a
+   * tombstone.
+   */
+  setLabelIds(id: string, labelIds: string[]): Promise<void>;
+  /**
+   * Advances a recurring Task to its next occurrence (issue #170's
+   * recurrence engine, ../recurrence/) instead of completing it — a
+   * recurring Task's checkbox never "un-ticks itself," and the Task never
+   * enters the completed list (CONTEXT.md's Recurrence entry): only
+   * `date` moves, `completedAt` stays null. `dateString` is re-parsed
+   * fresh on every call, via ../recurrence/'s nextOccurrence, rather than
+   * incrementing whatever `date` already holds — the string, not the
+   * date it last resolved to, is what this project treats as the truth.
+   *
+   * `completedAt` is a real timestamp, exactly like complete()'s own
+   * parameter above — this is a completion event even though it doesn't
+   * set the `completedAt` column — and its first ten characters become
+   * the recurrence engine's floating "now," the identical technique
+   * ../task-views.ts's today() uses to derive a day-granular boundary
+   * from a full timestamp.
+   *
+   * A bounded rule (a `starting`/`ending`/`for` clause whose window has
+   * elapsed — ../recurrence/'s `{ kind: "ended" }` outcome) has no next
+   * occurrence: this method then behaves like completeForever() below —
+   * sets `completedAt` for real and clears `dateString` — because a
+   * recurrence that has run out *is* an ordinary completed Task from that
+   * point on, not a Task waiting for a next date it will never get.
+   *
+   * Throws if the Task has no `dateString` (a caller error: this method
+   * is only for a Task the caller already knows is recurring) or if
+   * `dateString` no longer parses (../recurrence/'s `{ kind: "refused" }`
+   * outcome — data that reached this Device already corrupted, rather
+   * than something this method can silently paper over). No-op against a
+   * tombstone or an unknown id — checked before either throw becomes
+   * reachable, the same ordering setDuration's own doc comment explains
+   * for the identical reason. Clears `seq`.
+   */
+  advanceRecurring(id: string, completedAt: string): Promise<void>;
+  /**
+   * Ends a recurring Task's series and files it as an ordinary completed
+   * Task — Shift+Click on a recurring task's checkbox ("Complete and
+   * archive recurring task"), the end of the series, not "complete this
+   * occurrence" (CONTEXT.md's Recurrence entry). Sets `completedAt` for
+   * real — the one door through which a Task that carries a `dateString`
+   * is allowed into listCompleted() — and clears `dateString` so a later
+   * uncomplete() can't resurrect a recurrence the user deliberately
+   * ended. `date` is left exactly as it was: the last occurrence a
+   * completed Task carries is exactly as meaningful a record as it is
+   * for a Task that was never recurring at all. No-op against a
+   * tombstone, clears `seq`.
+   */
+  completeForever(id: string, completedAt: string): Promise<void>;
+  /**
+   * Moves an overdue Task to tomorrow. "Postponing an overdue recurring
+   * task moves it to tomorrow" is this method's motivating case, but the
+   * mechanics don't depend on recurrence at all — it's a plain one-day
+   * shift of `date`, never a call into ../recurrence/'s engine, which is
+   * exactly why a Task with no `dateString` can use it too. `today` is a
+   * floating date-or-datetime string in ../task-views.ts's today()'s own
+   * encoding — only its first ten characters matter, the calendar day
+   * "tomorrow" is computed from (../recurrence/'s tomorrowOf). Preserves
+   * whichever shape `date` already had: a timed `date` keeps its
+   * time-of-day on the new day; an all-day `date` stays all-day. No-op
+   * against a tombstone or a Task with no `date` at all — there is
+   * nothing to postpone. Clears `seq`.
+   */
+  postpone(id: string, today: string): Promise<void>;
+  /**
    * Tombstone, never a hard delete (ADR 0028's rule, applied to Tasks).
    * `seq IS NULL` means "no acknowledgement from the server yet," which
    * also covers "pushed, but the response was lost" — a window this

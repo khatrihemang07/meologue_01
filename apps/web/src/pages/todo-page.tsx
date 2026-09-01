@@ -11,6 +11,7 @@ import { TaskScheduleSheet } from "@/components/todo/task-schedule-sheet";
 import { TodayView } from "@/components/todo/today-view";
 import { TodoNav } from "@/components/todo/todo-nav";
 import { ConfirmDialog } from "@/components/ui/alert-dialog";
+import type { QuickAddTaskFields } from "@/lib/quick-add-task";
 import { dropIndexForPointer } from "@/lib/task-drag-recognizer";
 import { reorderedTaskOrderKey } from "@/lib/task-reorder";
 import { useEntryStore } from "@/pages/entry-store-layout";
@@ -77,6 +78,10 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     setTaskDeadline,
     setTaskDuration,
     setTaskPriority,
+    advanceRecurringTask,
+    completeForeverTask,
+    postponeTask,
+    resolveLabelIds,
   } = useEntryStore();
 
   // The date a Task captured *from this view* inherits — the plan's
@@ -261,9 +266,40 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   // `uncomplete()` just clears `completedAt` and clears `seq` the same way
   // any other edit does, and it Syncs like any other write. There is
   // nothing here for "permanently diverges" to mean.
-  function handleComplete(taskId: string, content: string) {
+  // `dateString` decides which mutation "completing" actually means
+  // (issue #170): a recurring Task (`dateString !== null`) never enters
+  // the completed list at all (TaskStore.advanceRecurring's own doc
+  // comment — "the checkbox does not un-tick itself"), so there is
+  // nothing here for the Undo toast to reverse and none is offered; the
+  // row itself already shows the next occurrence the moment this
+  // component re-renders.
+  function handleComplete(taskId: string, content: string, dateString: string | null) {
+    if (dateString !== null) {
+      advanceRecurringTask(taskId);
+      return;
+    }
     completeTask(taskId);
     toast(`Completed "${content}"`, {
+      action: {
+        label: "Undo",
+        onClick: () => uncompleteTask(taskId),
+      },
+    });
+  }
+
+  // Ends a recurring Task's series (TaskStore.completeForever's own doc
+  // comment) — reached via Shift+Click on the checkbox or the touch-
+  // reachable button (task-row.tsx). Undo is still offered — `uncomplete()`
+  // clears `completedAt` unconditionally — but it only restores an
+  // ordinary, non-recurring active Task: `completeForever` also clears
+  // `dateString` for good, and undoing a completion has never been this
+  // programme's mechanism for restoring a rule that was deliberately
+  // ended (`uncomplete`'s own doc comment never claims otherwise). The
+  // toast's own wording says so, rather than promising more than Undo
+  // actually gives back.
+  function handleCompleteForever(taskId: string, content: string) {
+    completeForeverTask(taskId);
+    toast(`Completed "${content}" — the recurrence has ended`, {
       action: {
         label: "Undo",
         onClick: () => uncompleteTask(taskId),
@@ -275,17 +311,40 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     setConfirmingId(taskId);
   }
 
+  // The add field's own parse (add-task-form.tsx, quick-add-task.ts)
+  // resolves everything except `labelIds` — a `%label` name needs a
+  // LabelStore round trip (use-labels.ts's `resolveLabelIds`) this
+  // function is what awaits before a Task literal can be built at all.
+  // `fields.date` overrides `captureDate` only when the reader actually
+  // typed a date/time token or a recurrence resolved one (quick-add-
+  // task.ts's own doc comment on why `??` — not the view's own inherited
+  // date — is the fallback direction): what was typed always wins over
+  // what the view merely suggested.
+  async function handleAdd(fields: QuickAddTaskFields) {
+    const labelIds = await resolveLabelIds(fields.labelNames);
+    addTask(fields.content, {
+      date: fields.date ?? captureDate,
+      deadline: fields.deadline,
+      duration: fields.duration,
+      priority: fields.priority,
+      dateString: fields.dateString,
+      labelIds,
+    });
+  }
+
   return (
     <Shell title="Todo" back={<BackToChats />} message={message} composerSlot={<TodoNav />}>
-      <AddTaskForm onAdd={(content) => addTask(content, captureDate)} disabled={disabled} />
+      <AddTaskForm onAdd={handleAdd} disabled={disabled} />
 
       {view === "today" ? (
         <TodayView
           tasks={tasks}
           onComplete={handleComplete}
+          onCompleteForever={handleCompleteForever}
           onRequestDelete={handleRequestDelete}
           onOpenSchedule={handleOpenSchedule}
           onSetDate={setTaskDate}
+          onPostpone={postponeTask}
         />
       ) : tasks.length === 0 ? (
         // A real state, not a blank panel (issue #168's own acceptance
@@ -302,7 +361,8 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
             <TaskRow
               key={task.id}
               task={task}
-              onComplete={() => handleComplete(task.id, task.content)}
+              onComplete={() => handleComplete(task.id, task.content, task.dateString)}
+              onCompleteForever={() => handleCompleteForever(task.id, task.content)}
               onRequestDelete={() => handleRequestDelete(task.id)}
               onOpenSchedule={() => handleOpenSchedule(task.id)}
               isDropTarget={drag !== null && overTarget === task.id}

@@ -141,6 +141,36 @@ function DestinationVisibilityRow({
 }
 
 /**
+ * The "Smart date recognition" row (issue #170) — a single independent
+ * on/off fact, the same shape `DestinationVisibilityRow` above is, so it
+ * reuses that control's exact `role="switch"`/`aria-checked` pattern
+ * rather than `ChoiceRow`'s mutually-exclusive-options one. Not built on
+ * `DestinationVisibilityRow` itself: that component's own copy
+ * ("Hidden"/"Visible", "`${label}` in the chat list") is specific to
+ * hiding a Destination's row, and bending it to a second, unrelated
+ * on/off setting via extra props would cost more legibility than the few
+ * duplicated lines below save.
+ */
+function SmartDatesRow({ enabled, onToggle }: { enabled: boolean; onToggle: () => void }) {
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <span className="text-sm">Smart date recognition</span>
+      <Button
+        type="button"
+        size="touch"
+        variant={enabled ? "default" : "outline"}
+        role="switch"
+        aria-checked={enabled}
+        aria-label="Smart date recognition"
+        onClick={onToggle}
+      >
+        {enabled ? "On" : "Off"}
+      </Button>
+    </div>
+  );
+}
+
+/**
  * One row of the "Completed checklist item" section (issue #163) — a full
  * width `aria-pressed` toggle, not a `ChoiceRow`: that control's own doc
  * comment fixes its grid at three or five even columns, sized for a short
@@ -280,12 +310,14 @@ export function SettingsPage() {
   const accent = useSettingsStore((state) => state.accent);
   const textSize = useSettingsStore((state) => state.textSize);
   const completedStyle = useSettingsStore((state) => state.completedStyle);
+  const smartDatesEnabled = useSettingsStore((state) => state.smartDatesEnabled);
   const storedServerUrl = useSettingsStore((state) => state.serverUrl);
   const hiddenDestinations = useSettingsStore((state) => state.hiddenDestinations);
   const setStoredTheme = useSettingsStore((state) => state.setTheme);
   const setStoredAccent = useSettingsStore((state) => state.setAccent);
   const setStoredTextSize = useSettingsStore((state) => state.setTextSize);
   const setStoredCompletedStyle = useSettingsStore((state) => state.setCompletedStyle);
+  const setStoredSmartDatesEnabled = useSettingsStore((state) => state.setSmartDatesEnabled);
   const setStoredServerUrl = useSettingsStore((state) => state.setServerUrl);
   const setStoredHiddenDestinations = useSettingsStore((state) => state.setHiddenDestinations);
   const syncStatus = useSyncStatus();
@@ -369,6 +401,15 @@ export function SettingsPage() {
   function selectCompletedStyle(next: CompletedStyleId) {
     applyCompletedStyle(next);
     setStoredCompletedStyle(next);
+  }
+
+  // No `applyX` step, unlike selectCompletedStyle/selectTextSize above:
+  // there is no on-screen paint for a `localStorage` write to drive
+  // immediately (add-task-form.tsx reads this setting itself, the next
+  // time it renders), the same reasoning toggleDestinationHidden's own
+  // comment gives for its identical one-line body.
+  function toggleSmartDatesEnabled() {
+    setStoredSmartDatesEnabled(!smartDatesEnabled);
   }
 
   async function saveServerUrl() {
@@ -580,6 +621,25 @@ export function SettingsPage() {
             onToggle={() => toggleDestinationHidden(destination.id)}
           />
         ))}
+      </SettingsSection>
+
+      {/*
+        Issue #170. Off stops only the eager/natural-language family the
+        add field's quick-add parser runs on ordinary words with no marker
+        typed on purpose — `monday`, `5pm`, `monthly`, Todoist's own
+        documented "Create **monthly** report" false positive
+        (packages/core/src/quick-add/types.ts's own QuickAddTokenKind doc
+        comment names the family exactly). `#project`, `%label`, `p1`,
+        `!reminder`, `{deadline}`, `for 45min` and the rest of the
+        sigil-marked family keep working regardless: a reader who typed an
+        explicit marker asked for that word to mean something, so there is
+        no false-positive risk this setting exists to let them turn off.
+      */}
+      <SettingsSection
+        label="Todo"
+        hint="Off still recognises #project, %label, p1-p4, !reminder, {deadline} and for 45min in the add field — only words like monday, 5pm or monthly stop being read as dates."
+      >
+        <SmartDatesRow enabled={smartDatesEnabled} onToggle={toggleSmartDatesEnabled} />
       </SettingsSection>
 
       <SettingsSection label="Server URL">

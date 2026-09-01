@@ -19,6 +19,12 @@ export function task(overrides: Partial<Task> = {}): Task {
     deadline: null,
     duration: null,
     priority: 1,
+    // No Labels — the same "concrete value, not a gap" default every
+    // pre-#170 row gets from the migration (../sqlite/schema.ts).
+    labelIds: [],
+    // Doesn't repeat — ../recurrence/'s engine is never invoked for a
+    // fixture Task unless a test overrides this explicitly.
+    dateString: null,
     ...overrides,
   };
 }

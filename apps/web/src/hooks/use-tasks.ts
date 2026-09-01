@@ -4,18 +4,45 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { COMPLETED_TASKS_QUERY_KEY, TASKS_QUERY_KEY } from "@/lib/query-keys";
 import { refreshTasks } from "@/lib/tasks-refresh";
 
+/**
+ * Everything about a new Task beyond its `content` that a caller might
+ * already know — the view's own inherited `date` (todo-page.tsx's
+ * `captureDate`), and, since issue #170, whatever quick-add-task.ts's
+ * `taskFieldsFromQuickAdd` resolved out of what the reader actually typed
+ * (add-task-form.tsx). A plain options object rather than five positional
+ * parameters: every field here is independently optional (a caller with
+ * nothing more to say than "add this text" — every pre-#170 call site,
+ * and this file's own tests — passes none of them), which a positional
+ * signature has no way to express past the first optional parameter
+ * without every caller learning the full parameter order to skip earlier
+ * ones with `undefined`.
+ */
+export interface AddTaskOverrides {
+  /** The Task's `date` — the view's own inherited date if the reader typed no date/time token of their own, or `taskFieldsFromQuickAdd`'s resolved `date` (an explicit token, or a recognised recurrence's first occurrence) if they did. Undated (`null`) by default, matching a Task created directly in Todo (issue #169's own acceptance criterion). */
+  date?: string | null;
+  deadline?: string | null;
+  duration?: number | null;
+  priority?: number;
+  labelIds?: string[];
+  /** `Task.dateString` — the canonical recurrence phrase quick-add-task.ts resolved, or `null` for a Task that doesn't repeat. */
+  dateString?: string | null;
+}
+
 export interface UseTasksResult {
   /** Active Tasks, in (orderKey, id) order — TaskStore.list()'s own guarantee (ADR 0050). */
   tasks: Task[];
   /** Completed Tasks, newest completion first — TaskStore.listCompleted(). */
   completedTasks: Task[];
-  /** Creates a Task from plain text, appended to the end of the active list. Ignores blank input, mirroring sendEntry. */
   /**
-   * Captures a new Task. `date` is the *view's* own context, not a
-   * scheduling gesture — see `addTask`'s implementation for why the
-   * caller supplies it rather than this hook assuming undated.
+   * Creates a Task from plain text, appended to the end of the active
+   * list. Ignores blank input, mirroring sendEntry. `overrides` is the
+   * *view's* own context plus, since issue #170, whatever the reader's
+   * own typed line resolved to — see `addTask`'s implementation for why
+   * every field defaults to the same "nothing" a Task created directly in
+   * Todo starts with, rather than this hook assuming a caller always has
+   * an opinion.
    */
-  addTask: (content: string, date?: string | null) => void;
+  addTask: (content: string, overrides?: AddTaskOverrides) => void;
   completeTask: (id: string) => void;
   uncompleteTask: (id: string) => void;
   /** Changes a Task's content. Ignores blank input, mirroring editEntry. */
@@ -45,6 +72,33 @@ export interface UseTasksResult {
   setTaskDuration: (id: string, duration: number | null) => void;
   /** Sets a Task's stored `priority` (1-4) — callers pass `storedPriorityOf(uiPriority)`, never the UI number directly (task-types.ts's own warning against open-coding the inversion). */
   setTaskPriority: (id: string, priority: number) => void;
+  /**
+   * Advances a recurring Task to its next occurrence instead of completing
+   * it (issue #170, TaskStore.advanceRecurring's own doc comment) — the
+   * one door todo-page.tsx's `handleComplete` goes through for a Task
+   * whose `dateString` isn't `null`, in place of `completeTask` above. A
+   * recurring Task's checkbox never "un-ticks itself": the row leaves
+   * Today's view or re-renders in place with the next date, and it never
+   * enters `completedTasks`.
+   */
+  advanceRecurringTask: (id: string) => void;
+  /**
+   * Ends a recurring Task's series and files it as an ordinary completed
+   * Task — Shift+Click on a recurring Task's checkbox (task-row.tsx), or
+   * its touch-reachable "Complete and archive recurring task" button.
+   * TaskStore.completeForever's own doc comment has the full reasoning.
+   */
+  completeForeverTask: (id: string) => void;
+  /**
+   * Moves an overdue Task to tomorrow (TaskStore.postpone's own doc
+   * comment) — wired into Today's Overdue section as a quick action
+   * beside the existing arbitrary-date Reschedule picker
+   * (today-view.tsx), for the "postponing an overdue recurring task moves
+   * it to tomorrow" case issue #170 names, though the underlying method
+   * has nothing recurrence-specific about it and works on any overdue
+   * Task with a `date`.
+   */
+  postponeTask: (id: string) => void;
 }
 
 /**
@@ -96,7 +150,7 @@ export function useTasks(taskStore: TaskStore, deviceId: string): UseTasksResult
     onSuccess: afterLocalWrite,
   });
 
-  function addTask(content: string, date: string | null = null) {
+  function addTask(content: string, overrides: AddTaskOverrides = {}) {
     const trimmed = content.trim();
     if (trimmed === "") {
       return;
@@ -130,18 +184,26 @@ export function useTasks(taskStore: TaskStore, deviceId: string): UseTasksResult
       // the rule inherits from; treating "created in Todo" as one
       // undifferentiated origin is what made a Task vanish as it was typed.
       //
-      // Deadline, duration and priority are not inherited and stay empty:
-      // Today is a view over *dates*, so a date is the only thing standing
-      // in it actually says about a new Task. Priority is stored 1, UI p4
-      // — "no priority" (see uiPriorityOf's own doc comment for why that
-      // isn't 0). Task.date/deadline/duration/priority are required,
-      // non-optional fields precisely so this call site has to say all of
-      // this explicitly instead of an omitted key quietly picking a
-      // default on its behalf.
-      date,
-      deadline: null,
-      duration: null,
-      priority: 1,
+      // Since issue #170, `overrides.date` can also carry an explicit
+      // date/time token the reader typed, or a recognised recurrence's
+      // first occurrence (quick-add-task.ts's `taskFieldsFromQuickAdd`) —
+      // todo-page.tsx's own onAdd is what decides, per call, whether what
+      // was typed should win over the view's inherited date; this
+      // function only ever writes whatever single value it's handed.
+      //
+      // Every field below is `Task`'s own required, non-optional shape
+      // (task-types.ts's own comment on why) stated explicitly at this
+      // call site rather than left to an omitted key's default — `?? `'s
+      // right-hand side is that explicit "nothing" state for a caller
+      // (every pre-#170 one, and this file's own tests) with no overrides
+      // of its own to give: undated, no deadline, no duration, priority 1
+      // ("no priority"), no Labels, no recurrence.
+      date: overrides.date ?? null,
+      deadline: overrides.deadline ?? null,
+      duration: overrides.duration ?? null,
+      priority: overrides.priority ?? 1,
+      labelIds: overrides.labelIds ?? [],
+      dateString: overrides.dateString ?? null,
     });
   }
 
@@ -247,6 +309,40 @@ export function useTasks(taskStore: TaskStore, deviceId: string): UseTasksResult
     setPriorityMutation.mutate({ id, priority });
   }
 
+  // Issue #170's three recurrence methods, and `completedAt`/`today`
+  // supplied here — the identical `new Date().toISOString()`/day-key
+  // pattern completeTaskMutation/setTaskDate's own picker-facing callers
+  // already use above — rather than asked of every caller: a component
+  // reaching for "complete this recurring Task" has no reason to think
+  // about what timestamp that means any more than completeTask's own
+  // caller does.
+  const advanceRecurringMutation = useMutation({
+    mutationFn: (id: string) => taskStore.advanceRecurring(id, new Date().toISOString()),
+    onSuccess: afterLocalWrite,
+  });
+
+  function advanceRecurringTask(id: string) {
+    advanceRecurringMutation.mutate(id);
+  }
+
+  const completeForeverMutation = useMutation({
+    mutationFn: (id: string) => taskStore.completeForever(id, new Date().toISOString()),
+    onSuccess: afterLocalWrite,
+  });
+
+  function completeForeverTask(id: string) {
+    completeForeverMutation.mutate(id);
+  }
+
+  const postponeMutation = useMutation({
+    mutationFn: (id: string) => taskStore.postpone(id, new Date().toISOString()),
+    onSuccess: afterLocalWrite,
+  });
+
+  function postponeTask(id: string) {
+    postponeMutation.mutate(id);
+  }
+
   return {
     tasks,
     completedTasks,
@@ -260,5 +356,8 @@ export function useTasks(taskStore: TaskStore, deviceId: string): UseTasksResult
     setTaskDeadline,
     setTaskDuration,
     setTaskPriority,
+    advanceRecurringTask,
+    completeForeverTask,
+    postponeTask,
   };
 }

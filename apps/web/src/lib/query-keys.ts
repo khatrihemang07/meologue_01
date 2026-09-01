@@ -122,3 +122,12 @@ export const TASKS_QUERY_KEY = ["tasks"] as const;
  * digestQueryKey's own invalidation above.
  */
 export const COMPLETED_TASKS_QUERY_KEY = [...TASKS_QUERY_KEY, "completed"] as const;
+
+/**
+ * Issue #170: every active Label (LabelStore.list()), read by
+ * use-labels.ts. A flat key, unpaginated and with no completed sibling —
+ * mirroring TASKS_QUERY_KEY's own reasoning rather than
+ * COMPLETED_TASKS_QUERY_KEY's: a Label has no active/completed split for a
+ * second key to distinguish.
+ */
+export const LABELS_QUERY_KEY = ["labels"] as const;

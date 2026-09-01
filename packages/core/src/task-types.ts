@@ -103,6 +103,104 @@ export type Task = {
    * arriving over Sync, not a licence for local callers to stay vague.
    */
   priority: number;
+  /**
+   * The Labels (../label-types.ts) attached to this Task, as an ordered
+   * array of Label ids — CONTEXT.md's Label entry ("a name the user
+   * attaches to a Task, freely, across Projects"), issue #170. Required,
+   * like every field above it, never `?`-optional: "no Labels" is `[]`,
+   * a real and common state, not an absence this type should let a
+   * caller omit and have silently default (Task.priority's own doc
+   * comment makes the identical argument for why "no priority" is a
+   * concrete level rather than a missing key).
+   *
+   * **Why an array on the Task's own row, and not a `task_labels` join
+   * table — the obvious relational design for a many-to-many
+   * relationship.** Three constraints this codebase already lives under
+   * make the join table the wrong choice here, not merely a less tidy
+   * one:
+   *
+   * 1. *The migrator has no transactions*
+   *    (../sqlite/migrator.ts's own header comment explains why:
+   *    Tauri's connection pool can hand `BEGIN` and the next statement to
+   *    different connections). A join table split across two tables
+   *    means writing a Task's Labels is two non-atomic statements — the
+   *    Task's own row, then a batch of join rows — with no rollback if
+   *    the process dies between them. A single JSON column on the Task's
+   *    own row is one statement, so there's no window where a crash
+   *    leaves the two halves of "this Task's Labels" disagreeing with
+   *    each other.
+   * 2. *Sync is row-level last-write-wins on whole rows* (ADR 0028): two
+   *    Devices that each change a Task while offline converge to
+   *    whichever row's `seq` was reassigned most recently, no per-field
+   *    merge. A join table has no "whole row" for a Task's Labels to be
+   *    — it's N independent rows, each with its own conflict outcome —
+   *    so an offline label change and an offline content edit on the
+   *    same Task, synced from two different Devices, could converge to a
+   *    content edit that kept the *old* Labels or a Label change that
+   *    reverted unrelated content, depending on arrival order per table.
+   *    A JSON column folds into the Task's own row, so it converges with
+   *    everything else on that row under the identical, already-relied-
+   *    upon rule: whichever version of the whole Task arrived last wins,
+   *    consistently, for every field including this one.
+   * 3. *A Task travels as one row over the wire* (TaskStore's own
+   *    upsert()/pending() contract, ../task-store.ts): the moment Labels
+   *    get a Sync stream of their own, a join-table design means a Task
+   *    and its label associations are two independent streams that can
+   *    arrive out of order relative to each other, and a receiving
+   *    Device has no way to know it's seen a consistent snapshot of
+   *    both. A Task carrying its own `labelIds` needs nothing extra to
+   *    stay consistent: whichever version of the Task row arrived last
+   *    already has the right answer baked in.
+   *
+   * A second-order benefit, not the deciding one: array order is
+   * preserved for free, so "the order Labels were added in" needs no
+   * extra column the way a join table would need one to avoid an
+   * arbitrary row order.
+   *
+   * The cost accepted knowingly: a `labelId` here can go dangling if the
+   * Label it names is later removed (../label-store.ts's remove() does
+   * not reach across stores to clean this up either — see its own doc
+   * comment). That is deliberate, not an oversight: cleaning it up would
+   * need a cross-store write with the identical non-atomicity problem
+   * this design exists to avoid, for a case a reading layer can already
+   * handle safely by treating an id with no matching live Label as
+   * "filter it out" rather than an error.
+   */
+  labelIds: string[];
+  /**
+   * The literal recurrence rule the user typed — `"every 3 months"`,
+   * `"every! monday"` — or `null` for a Task that doesn't repeat
+   * (CONTEXT.md's Recurrence entry, issue #170's recurrence engine,
+   * ../recurrence/). The string is the truth and `date` is a consequence
+   * of it, never the other way round: ../recurrence/'s nextOccurrence is
+   * a pure function of this string plus a reference date, re-run fresh
+   * on every completion (../task-store.ts's advanceRecurring), rather
+   * than a schedule computed once when the rule was typed and then just
+   * incremented. That is the identical principle this project already
+   * holds for an Entry's body, arrived at independently — see
+   * ../recurrence/recurrence.ts's own module doc comment for the worked
+   * example (a yearly task completed eighteen months late) that a
+   * "compute once, increment forever" design would get wrong.
+   *
+   * **Required and nullable, like every field above it.** It shipped
+   * `?`-optional for one round, on the reasoning that making it required
+   * would force an edit to `apps/web`'s `addTask` — a file the half of
+   * #170 that added this field was scoped away from. That is a fact about
+   * how the work was divided, not a fact about the field, and a type is
+   * the wrong place to record a scope boundary: the boundary dissolves
+   * when the two halves land together, while the weakened type would have
+   * outlived it. The rule ../types.ts states for `Entry.deletedAt` holds
+   * here unchanged — every caller says explicitly rather than letting an
+   * omission default silently — and `date`/`deadline`/`duration`/
+   * `priority`/`labelIds` above all obey it.
+   *
+   * ../task-fields.ts's withDefaultDateString still normalises a missing
+   * value to `null` on every write, exactly as withDefaultSchedulingFields
+   * does for the fields above: that is the safety net for a Task arriving
+   * over Sync from a Device on an older build, whose JSON genuinely has no
+   * such key, not a licence for a local caller to stay vague.
+   */
+  dateString: string | null;
 };
 
 /**

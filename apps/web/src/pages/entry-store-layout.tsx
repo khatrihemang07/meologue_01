@@ -1,10 +1,11 @@
-import type { Entry, EntryStore, Task, TaskStore } from "@meologue/core";
+import type { Entry, EntryStore, Label, LabelStore, Task, TaskStore } from "@meologue/core";
 import { open } from "@meologue/core";
 import { queryOptions, useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { Outlet, useOutletContext } from "react-router";
 import { type UseHistoryPagination, useHistory } from "@/hooks/use-history";
-import { useTasks } from "@/hooks/use-tasks";
+import { useLabels } from "@/hooks/use-labels";
+import { type AddTaskOverrides, useTasks } from "@/hooks/use-tasks";
 import { dayHasEntries } from "@/lib/day-has-entries";
 import { dayReferrers } from "@/lib/day-referrers";
 import { deferStore, type StoreMethodNames } from "@/lib/defer-store";
@@ -129,7 +130,7 @@ export interface EntryStoreOutletContext {
    * date is inherited from origin" rule. Omitting `date` means undated,
    * which is Inbox's own behaviour.
    */
-  addTask: (content: string, date?: string | null) => void;
+  addTask: (content: string, overrides?: AddTaskOverrides) => void;
   completeTask: (id: string) => void;
   uncompleteTask: (id: string) => void;
   renameTask: (id: string, content: string) => void;
@@ -148,6 +149,20 @@ export interface EntryStoreOutletContext {
   setTaskDeadline: (id: string, deadline: string | null) => void;
   setTaskDuration: (id: string, duration: number | null) => void;
   setTaskPriority: (id: string, priority: number) => void;
+  /** Issue #170's three recurrence methods — use-tasks.ts's own UseTasksResult doc comments carry the full reasoning for each. */
+  advanceRecurringTask: (id: string) => void;
+  completeForeverTask: (id: string) => void;
+  postponeTask: (id: string) => void;
+  /**
+   * Todo's Labels (issue #170) — the Label-shaped sibling of `tasks`
+   * above, built the same way for the same reason: `useLabels`
+   * (use-labels.ts) runs once, here, above every route this layout wraps.
+   * `resolveLabelIds` is what add-task-form.tsx's own caller
+   * (todo-page.tsx) awaits before it can build a Task literal carrying
+   * real `labelIds` at all — see that hook's own doc comment.
+   */
+  labels: Label[];
+  resolveLabelIds: (names: string[]) => Promise<string[]>;
   disabled: boolean;
   message?: string;
 }
@@ -274,7 +289,7 @@ function noopRemove(_entry: Entry) {}
 // is true has no Tasks to act on (`tasks: []` below), but every field
 // `EntryStoreOutletContext` declares still has to exist so `useEntryStore`
 // never returns a shape a page has to null-check.
-function noopAddTask(_content: string, _date?: string | null) {}
+function noopAddTask(_content: string, _overrides?: AddTaskOverrides) {}
 
 function noopCompleteTask(_id: string) {}
 
@@ -296,6 +311,20 @@ function noopSetTaskDeadline(_id: string, _deadline: string | null) {}
 function noopSetTaskDuration(_id: string, _duration: number | null) {}
 
 function noopSetTaskPriority(_id: string, _priority: number) {}
+
+// Issue #170's three recurrence methods — same not-ready reasoning.
+function noopAdvanceRecurringTask(_id: string) {}
+
+function noopCompleteForeverTask(_id: string) {}
+
+function noopPostponeTask(_id: string) {}
+
+// `labels`'s own not-ready stand-in, mirroring `noopGetEntries`: nothing
+// can be resolved before the store opens, and an empty array is already
+// this field's own "nothing found" answer.
+async function noopResolveLabelIds(_names: string[]): Promise<string[]> {
+  return [];
+}
 
 function noopFetchMore() {}
 
@@ -368,12 +397,42 @@ const TASK_STORE_METHODS: StoreMethodNames<TaskStore> = {
   setDeadline: true,
   setDuration: true,
   setPriority: true,
+  // Issue #170 adds setLabelIds alongside the Labels feature itself, and
+  // its recurrence engine adds three more (../../packages/core/
+  // src/task-store.ts's own doc comments have the full reasoning for
+  // each): the identical compile-time checkpoint applies to all four.
+  setLabelIds: true,
+  advanceRecurring: true,
+  completeForever: true,
+  postpone: true,
 };
 
 function deferTaskStoreUntilOpen(
   promise: Promise<{ taskStore: TaskStore; deviceId: string }>,
 ): TaskStore {
   return deferStore(promise, ({ taskStore }) => taskStore, TASK_STORE_METHODS);
+}
+
+// Labels (issue #170) — a third deferred facade over the same open
+// promise, same reasoning as TASK_STORE_METHODS's own comment: this is
+// the compile-time checkpoint that fails `tsc -b` the moment LabelStore
+// grows a method this registry doesn't also list.
+const LABEL_STORE_METHODS: StoreMethodNames<LabelStore> = {
+  list: true,
+  get: true,
+  upsert: true,
+  rename: true,
+  setColour: true,
+  remove: true,
+  pending: true,
+  getCursor: true,
+  setCursor: true,
+};
+
+function deferLabelStoreUntilOpen(
+  promise: Promise<{ labelStore: LabelStore; deviceId: string }>,
+): LabelStore {
+  return deferStore(promise, ({ labelStore }) => labelStore, LABEL_STORE_METHODS);
 }
 
 /**
@@ -449,14 +508,22 @@ export function EntryStoreLayout() {
   // `useState`'s lazy initializer runs exactly once per mount, so `deferred`
   // is a stable object for this component's whole lifetime.
   const [deferred] = useState(() => {
-    let resolve!: (value: { store: EntryStore; taskStore: TaskStore; deviceId: string }) => void;
+    let resolve!: (value: {
+      store: EntryStore;
+      taskStore: TaskStore;
+      labelStore: LabelStore;
+      deviceId: string;
+    }) => void;
     let reject!: (reason: unknown) => void;
-    const promise = new Promise<{ store: EntryStore; taskStore: TaskStore; deviceId: string }>(
-      (res, rej) => {
-        resolve = res;
-        reject = rej;
-      },
-    );
+    const promise = new Promise<{
+      store: EntryStore;
+      taskStore: TaskStore;
+      labelStore: LabelStore;
+      deviceId: string;
+    }>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
     // A rejection here (the store failed to open) is already surfaced via
     // `message` above — this only stops it from also logging as an
     // unhandled rejection for the common case where nothing ever calls the
@@ -485,12 +552,16 @@ export function EntryStoreLayout() {
   // store once it does, with no manual retry.
   const pendingStore = useMemo(() => deferUntilOpen(deferred.promise), [deferred]);
   // `useTasks`'s own equivalent, over the exact same `deferred.promise` —
-  // one open, two facades reaching into it (`deferStore`'s own doc comment
-  // on `select`).
+  // one open, three facades reaching into it (`deferStore`'s own doc
+  // comment on `select`).
   const pendingTaskStore = useMemo(() => deferTaskStoreUntilOpen(deferred.promise), [deferred]);
+  // `useLabels`'s own equivalent (issue #170) — a third facade over the
+  // same one open.
+  const pendingLabelStore = useMemo(() => deferLabelStoreUntilOpen(deferred.promise), [deferred]);
 
   const store = data?.store ?? pendingStore;
   const taskStore = data?.taskStore ?? pendingTaskStore;
+  const labelStore = data?.labelStore ?? pendingLabelStore;
   const deviceId = data?.deviceId ?? "";
 
   const { entries, pagination, sendEntry, editEntry, removeEntry } = useHistory(store, deviceId);
@@ -507,7 +578,11 @@ export function EntryStoreLayout() {
     setTaskDeadline,
     setTaskDuration,
     setTaskPriority,
+    advanceRecurringTask,
+    completeForeverTask,
+    postponeTask,
   } = useTasks(taskStore, deviceId);
+  const { labels, resolveLabelIds } = useLabels(labelStore, deviceId);
 
   return (
     <Outlet
@@ -538,6 +613,11 @@ export function EntryStoreLayout() {
               setTaskDeadline,
               setTaskDuration,
               setTaskPriority,
+              advanceRecurringTask,
+              completeForeverTask,
+              postponeTask,
+              labels,
+              resolveLabelIds,
               disabled: false,
             } satisfies EntryStoreOutletContext)
           : ({
@@ -563,6 +643,11 @@ export function EntryStoreLayout() {
               setTaskDeadline: noopSetTaskDeadline,
               setTaskDuration: noopSetTaskDuration,
               setTaskPriority: noopSetTaskPriority,
+              advanceRecurringTask: noopAdvanceRecurringTask,
+              completeForeverTask: noopCompleteForeverTask,
+              postponeTask: noopPostponeTask,
+              labels: [],
+              resolveLabelIds: noopResolveLabelIds,
               disabled: true,
               message,
             } satisfies EntryStoreOutletContext)

@@ -22,6 +22,11 @@ function task(overrides: Partial<Task> = {}): Task {
     deadline: null,
     duration: null,
     priority: 1,
+    // No Labels, doesn't repeat — the same "concrete value, not a gap"
+    // default packages/core/src/test-support/task-fixture.ts's own
+    // fixture uses for these two issue #170 fields.
+    labelIds: [],
+    dateString: null,
     ...overrides,
   };
 }
@@ -30,6 +35,7 @@ function renderRow(overrides: Partial<Parameters<typeof TaskRow>[0]> = {}) {
   const props = {
     task: task(),
     onComplete: vi.fn(),
+    onCompleteForever: vi.fn(),
     onRequestDelete: vi.fn(),
     onOpenSchedule: vi.fn(),
     isDropTarget: false,
@@ -62,6 +68,78 @@ describe("TaskRow", () => {
     fireEvent.click(screen.getByRole("checkbox"));
 
     expect(onComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it("ticking a recurring Task's checkbox still calls onComplete, not onCompleteForever", () => {
+    // A recurring Task's own checkbox is still an ordinary tap most of the
+    // time — Shift+Click is the one exception (the next test) — advancing
+    // to the next occurrence, not ending the series (TaskStore.
+    // advanceRecurring's own doc comment, and todo-page.tsx's own
+    // handleComplete, which is what actually decides between complete()
+    // and advanceRecurring() based on `dateString`; this row only ever
+    // decides between onComplete and onCompleteForever).
+    const onComplete = vi.fn();
+    const onCompleteForever = vi.fn();
+    renderRow({ task: task({ dateString: "every month" }), onComplete, onCompleteForever });
+
+    fireEvent.click(screen.getByRole("checkbox"));
+
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    expect(onCompleteForever).not.toHaveBeenCalled();
+  });
+
+  it("Shift+Click on a recurring Task's checkbox calls onCompleteForever, not onComplete", () => {
+    // Todoist's own documented gesture for "Complete and archive recurring
+    // task" — the end of the series, never "complete this occurrence"
+    // (BRIEF.md's own "Domain decisions you must not re-derive").
+    const onComplete = vi.fn();
+    const onCompleteForever = vi.fn();
+    renderRow({ task: task({ dateString: "every month" }), onComplete, onCompleteForever });
+
+    fireEvent.click(screen.getByRole("checkbox"), { shiftKey: true });
+
+    expect(onCompleteForever).toHaveBeenCalledTimes(1);
+    expect(onComplete).not.toHaveBeenCalled();
+  });
+
+  it("Shift+Click on a non-recurring Task's checkbox is an ordinary complete", () => {
+    // The modifier is meaningless without a series to end — ignored rather
+    // than doing nothing, so an accidental Shift held down never silently
+    // eats the tap.
+    const onComplete = vi.fn();
+    const onCompleteForever = vi.fn();
+    renderRow({ task: task({ dateString: null }), onComplete, onCompleteForever });
+
+    fireEvent.click(screen.getByRole("checkbox"), { shiftKey: true });
+
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    expect(onCompleteForever).not.toHaveBeenCalled();
+  });
+
+  it("shows a touch-reachable 'Complete and archive' button only for a recurring Task", () => {
+    const onCompleteForever = vi.fn();
+    renderRow({
+      task: task({ content: "pay rent", dateString: "every month" }),
+      onCompleteForever,
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: 'Complete and archive recurring task "pay rent"' }),
+    );
+
+    expect(onCompleteForever).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders no 'Complete and archive' button for a non-recurring Task", () => {
+    renderRow({ task: task({ content: "pay rent", dateString: null }) });
+
+    expect(screen.queryByRole("button", { name: /Complete and archive/ })).not.toBeInTheDocument();
+  });
+
+  it("shows the recurrence exactly as typed, not a paraphrase", () => {
+    renderRow({ task: task({ dateString: "every other monday" }) });
+
+    expect(screen.getByText("every other monday")).toBeInTheDocument();
   });
 
   it("the delete button calls onRequestDelete, not the store directly", () => {

@@ -18,6 +18,11 @@ function task(overrides: Partial<Task> = {}): Task {
     deadline: null,
     duration: null,
     priority: 1,
+    // No Labels, doesn't repeat — the same "concrete value, not a gap"
+    // default packages/core/src/test-support/task-fixture.ts's own
+    // fixture uses for these two issue #170 fields.
+    labelIds: [],
+    dateString: null,
     ...overrides,
   };
 }
@@ -26,9 +31,11 @@ function renderTodayView(overrides: Partial<Parameters<typeof TodayView>[0]> = {
   const props = {
     tasks: [] as Task[],
     onComplete: vi.fn(),
+    onCompleteForever: vi.fn(),
     onRequestDelete: vi.fn(),
     onOpenSchedule: vi.fn(),
     onSetDate: vi.fn(),
+    onPostpone: vi.fn(),
     ...overrides,
   };
   render(<TodayView {...props} />);
@@ -103,7 +110,7 @@ describe("TodayView", () => {
     expect(earlyIndex).toBeLessThan(lateIndex);
   });
 
-  it("completing a row calls onComplete with the Task's id and content", () => {
+  it("completing a row calls onComplete with the Task's id, content and dateString", () => {
     const onComplete = vi.fn();
     renderTodayView({
       tasks: [task({ id: "a", content: "call mum", date: "2026-09-02" })],
@@ -112,7 +119,24 @@ describe("TodayView", () => {
 
     fireEvent.click(screen.getByRole("checkbox", { name: "call mum" }));
 
-    expect(onComplete).toHaveBeenCalledWith("a", "call mum");
+    expect(onComplete).toHaveBeenCalledWith("a", "call mum", null);
+  });
+
+  it("Shift+Click on a recurring row calls onCompleteForever with its id and content", () => {
+    const onComplete = vi.fn();
+    const onCompleteForever = vi.fn();
+    renderTodayView({
+      tasks: [
+        task({ id: "a", content: "pay rent", date: "2026-09-02", dateString: "every month" }),
+      ],
+      onComplete,
+      onCompleteForever,
+    });
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "pay rent" }), { shiftKey: true });
+
+    expect(onCompleteForever).toHaveBeenCalledWith("a", "pay rent");
+    expect(onComplete).not.toHaveBeenCalled();
   });
 
   it("renders no drag handle anywhere — Today's order is computed, not dragged", () => {
@@ -152,6 +176,37 @@ describe("TodayView", () => {
       expect(onSetDate).toHaveBeenCalledTimes(2);
       expect(onSetDate).toHaveBeenCalledWith("a", expect.any(String));
       expect(onSetDate).toHaveBeenCalledWith("b", expect.any(String));
+    });
+  });
+
+  describe("Postpone to tomorrow", () => {
+    it("offers the action only when something is overdue", () => {
+      renderTodayView({ tasks: [task({ id: "a", content: "a", date: "2026-09-02" })] });
+
+      expect(
+        screen.queryByRole("button", { name: "Postpone to tomorrow" }),
+      ).not.toBeInTheDocument();
+    });
+
+    // Issue #170's own case: "postponing an overdue recurring task moves it
+    // to tomorrow" — but postpone's own mechanics have nothing recurrence-
+    // specific about them, so a non-recurring overdue Task is postponed
+    // exactly the same way, in the same one-tap action.
+    it("postpones every overdue Task, recurring or not, with one tap and no picker", () => {
+      const onPostpone = vi.fn();
+      renderTodayView({
+        tasks: [
+          task({ id: "a", content: "a", date: "2026-08-30", dateString: "every month" }),
+          task({ id: "b", content: "b", deadline: "2026-08-31" }),
+        ],
+        onPostpone,
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Postpone to tomorrow" }));
+
+      expect(onPostpone).toHaveBeenCalledTimes(2);
+      expect(onPostpone).toHaveBeenCalledWith("a");
+      expect(onPostpone).toHaveBeenCalledWith("b");
     });
   });
 

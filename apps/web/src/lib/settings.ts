@@ -38,6 +38,7 @@ const ACCENT_KEY = "meologue.accent";
 const TEXT_SIZE_KEY = "meologue.text-size";
 const COMPLETED_STYLE_KEY = "meologue.completed-style";
 const FORMAT_BAR_VISIBLE_KEY = "meologue.format-bar-visible";
+const SMART_DATES_ENABLED_KEY = "meologue.smart-dates-enabled";
 // Issue #134. Comma-joined slugs, e.g. "reflect,digest" — deliberately not
 // a JSON blob under one key: ADR 0008's stated reasoning for "no JSON blob"
 // is that a shared shape means a corrupt or unparseable value for one
@@ -292,6 +293,55 @@ function writeStoredFormatBarVisible(visible: boolean): void {
   }
 }
 
+/**
+ * Issue #170: whether Todo's add field runs the eager/natural-language
+ * family of its quick-add parser at all — `QuickAddOptions.smartDates`
+ * (packages/core/src/quick-add/types.ts), a caller-side switch rather
+ * than something the parser itself is ever asked to guess at. Off turns
+ * off `monday`, `5pm`, `monthly` and the rest of the family that infers
+ * meaning from ordinary words with no marker the reader typed on purpose
+ * — that type's own doc comment names this exactly as the family Todoist's
+ * "Create **monthly** report" false positive belongs to. Sigil-marked
+ * tokens (`#project`, `%label`, `p1`, `!reminder`, `{deadline}`,
+ * `for 45min`, a leading `* `, `//`) are unaffected either way: a reader
+ * who typed an explicit marker asked for that word to mean something, so
+ * there is no false-positive risk this setting exists to let them turn
+ * off.
+ *
+ * On by default — `QuickAddOptions.smartDates`'s own default, matched here
+ * rather than diverging from it: the parser's own answer to "what happens
+ * if a caller says nothing" and this setting's own default answer to the
+ * identical question should be the same value, not two independent
+ * decisions that happen to currently agree.
+ *
+ * Stored as the literal strings `"true"`/`"false"`, mirroring
+ * `readStoredFormatBarVisible`'s own reasoning above: a boolean has no
+ * finite id list `isCompletedStyleId`-style validation could check
+ * against, so a missing key, a hand-edited value, or a stray `"1"` from
+ * some other convention all read the same way — `true`, since that's also
+ * this setting's own default, so corruption and "never touched this
+ * setting" degrade to the identical, safe answer.
+ */
+export const DEFAULT_SMART_DATES_ENABLED = true;
+
+function readStoredSmartDatesEnabled(): boolean {
+  try {
+    const stored = localStorage.getItem(SMART_DATES_ENABLED_KEY);
+    return stored === null ? DEFAULT_SMART_DATES_ENABLED : stored === "true";
+  } catch {
+    return DEFAULT_SMART_DATES_ENABLED;
+  }
+}
+
+function writeStoredSmartDatesEnabled(enabled: boolean): void {
+  try {
+    localStorage.setItem(SMART_DATES_ENABLED_KEY, enabled ? "true" : "false");
+  } catch {
+    // Refused write — the in-memory value below still applies for this
+    // session, same degradation every other setting here has.
+  }
+}
+
 function isHideableDestinationId(value: unknown): value is HideableDestinationId {
   return HIDEABLE_DESTINATIONS.some((destination) => destination.id === value);
 }
@@ -468,6 +518,8 @@ interface SettingsState {
   completedStyle: CompletedStyleId;
   /** Issue #164: whether the Composer's format toolbar is switched on. See `DEFAULT_FORMAT_BAR_VISIBLE`'s own doc comment above. */
   formatBarVisible: boolean;
+  /** Issue #170: whether Todo's add field runs its quick-add parser's eager/natural-language family. See `DEFAULT_SMART_DATES_ENABLED`'s own doc comment above. */
+  smartDatesEnabled: boolean;
   serverUrl: string;
   listWidth: number;
   capabilities: ServerCapabilities | null;
@@ -498,6 +550,7 @@ interface SettingsState {
   setTextSize: (size: TextSizeId) => void;
   setCompletedStyle: (style: CompletedStyleId) => void;
   setFormatBarVisible: (visible: boolean) => void;
+  setSmartDatesEnabled: (enabled: boolean) => void;
   setServerUrl: (url: string) => void;
   setListWidth: (width: number) => void;
   setCapabilities: (capabilities: ServerCapabilities | null) => void;
@@ -519,6 +572,7 @@ export const useSettingsStore = create<SettingsState>()((set) => ({
   textSize: readStoredTextSize(),
   completedStyle: readStoredCompletedStyle(),
   formatBarVisible: readStoredFormatBarVisible(),
+  smartDatesEnabled: readStoredSmartDatesEnabled(),
   serverUrl: readStoredServerUrl(),
   listWidth: readStoredListWidth(),
   capabilities: readStoredCapabilities(),
@@ -543,6 +597,10 @@ export const useSettingsStore = create<SettingsState>()((set) => ({
   setFormatBarVisible: (formatBarVisible) => {
     writeStoredFormatBarVisible(formatBarVisible);
     set({ formatBarVisible });
+  },
+  setSmartDatesEnabled: (smartDatesEnabled) => {
+    writeStoredSmartDatesEnabled(smartDatesEnabled);
+    set({ smartDatesEnabled });
   },
   setServerUrl: (url) => {
     const normalised = normaliseServerUrl(url);

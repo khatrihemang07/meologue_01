@@ -56,6 +56,11 @@ const readyContext: EntryStoreOutletContext = {
   setTaskDeadline: vi.fn(),
   setTaskDuration: vi.fn(),
   setTaskPriority: vi.fn(),
+  advanceRecurringTask: vi.fn(),
+  completeForeverTask: vi.fn(),
+  postponeTask: vi.fn(),
+  labels: [],
+  resolveLabelIds: vi.fn(async () => []),
   disabled: false,
 };
 
@@ -101,6 +106,11 @@ describe("ComposerPage", () => {
       setTaskDeadline: vi.fn(),
       setTaskDuration: vi.fn(),
       setTaskPriority: vi.fn(),
+      advanceRecurringTask: vi.fn(),
+      completeForeverTask: vi.fn(),
+      postponeTask: vi.fn(),
+      labels: [],
+      resolveLabelIds: vi.fn(async () => []),
       disabled: true,
     });
 
@@ -136,6 +146,11 @@ describe("ComposerPage", () => {
       setTaskDeadline: vi.fn(),
       setTaskDuration: vi.fn(),
       setTaskPriority: vi.fn(),
+      advanceRecurringTask: vi.fn(),
+      completeForeverTask: vi.fn(),
+      postponeTask: vi.fn(),
+      labels: [],
+      resolveLabelIds: vi.fn(async () => []),
       disabled: true,
       message: "meologue couldn't open its storage. Reloading may help.",
     });
@@ -176,6 +191,11 @@ describe("ComposerPage", () => {
       setTaskDeadline: vi.fn(),
       setTaskDuration: vi.fn(),
       setTaskPriority: vi.fn(),
+      advanceRecurringTask: vi.fn(),
+      completeForeverTask: vi.fn(),
+      postponeTask: vi.fn(),
+      labels: [],
+      resolveLabelIds: vi.fn(async () => []),
       disabled: false,
     });
 
@@ -235,6 +255,11 @@ describe("ComposerPage", () => {
       setTaskDeadline: vi.fn(),
       setTaskDuration: vi.fn(),
       setTaskPriority: vi.fn(),
+      advanceRecurringTask: vi.fn(),
+      completeForeverTask: vi.fn(),
+      postponeTask: vi.fn(),
+      labels: [],
+      resolveLabelIds: vi.fn(async () => []),
       disabled: false,
     });
 
@@ -339,6 +364,11 @@ describe("ComposerPage", () => {
         setTaskDeadline: vi.fn(),
         setTaskDuration: vi.fn(),
         setTaskPriority: vi.fn(),
+        advanceRecurringTask: vi.fn(),
+        completeForeverTask: vi.fn(),
+        postponeTask: vi.fn(),
+        labels: [],
+        resolveLabelIds: vi.fn(async () => []),
         disabled: false,
       });
 
@@ -399,6 +429,11 @@ describe("ComposerPage", () => {
         setTaskDeadline: vi.fn(),
         setTaskDuration: vi.fn(),
         setTaskPriority: vi.fn(),
+        advanceRecurringTask: vi.fn(),
+        completeForeverTask: vi.fn(),
+        postponeTask: vi.fn(),
+        labels: [],
+        resolveLabelIds: vi.fn(async () => []),
         disabled: false,
       });
 
@@ -463,6 +498,11 @@ describe("ComposerPage", () => {
         setTaskDeadline: vi.fn(),
         setTaskDuration: vi.fn(),
         setTaskPriority: vi.fn(),
+        advanceRecurringTask: vi.fn(),
+        completeForeverTask: vi.fn(),
+        postponeTask: vi.fn(),
+        labels: [],
+        resolveLabelIds: vi.fn(async () => []),
         disabled: false,
       });
 
@@ -523,6 +563,11 @@ describe("ComposerPage", () => {
           setTaskDeadline: vi.fn(),
           setTaskDuration: vi.fn(),
           setTaskPriority: vi.fn(),
+          advanceRecurringTask: vi.fn(),
+          completeForeverTask: vi.fn(),
+          postponeTask: vi.fn(),
+          labels: [],
+          resolveLabelIds: vi.fn(async () => []),
           disabled: false,
         },
         "/?q=wor",

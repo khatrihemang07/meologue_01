@@ -6,6 +6,7 @@ import {
   DEFAULT_ACCENT,
   DEFAULT_COMPLETED_STYLE,
   DEFAULT_HIDDEN_DESTINATIONS,
+  DEFAULT_SMART_DATES_ENABLED,
   DEFAULT_TEXT_SIZE,
   HIDEABLE_DESTINATIONS,
   normaliseServerUrl,
@@ -201,6 +202,65 @@ describe("settings store", () => {
       vi.resetModules();
       return import("./settings").then((fresh) => {
         expect(fresh.useSettingsStore.getState().completedStyle).toBe("strike");
+      });
+    });
+  });
+
+  // Issue #170.
+  describe("smart date recognition", () => {
+    it("round-trips a written value, in the store and in storage", () => {
+      useSettingsStore.getState().setSmartDatesEnabled(false);
+
+      expect(useSettingsStore.getState().smartDatesEnabled).toBe(false);
+      expect(localStorage.getItem("meologue.smart-dates-enabled")).toBe("false");
+    });
+
+    it("does not throw when localStorage refuses the write, and still updates the store", () => {
+      vi.spyOn(localStorage, "setItem").mockImplementation(() => {
+        throw new Error("storage unavailable");
+      });
+
+      expect(() => useSettingsStore.getState().setSmartDatesEnabled(false)).not.toThrow();
+      expect(useSettingsStore.getState().smartDatesEnabled).toBe(false);
+    });
+
+    it("defaults to on, matching QuickAddOptions.smartDates' own default", () => {
+      expect(DEFAULT_SMART_DATES_ENABLED).toBe(true);
+    });
+
+    it("reads a stored 'false' back at load", () => {
+      localStorage.setItem("meologue.smart-dates-enabled", "false");
+
+      vi.resetModules();
+      return import("./settings").then((fresh) => {
+        expect(fresh.useSettingsStore.getState().smartDatesEnabled).toBe(false);
+      });
+    });
+
+    // Mirrors formatBarVisible's own convention (settings.ts's
+    // readStoredFormatBarVisible doc comment): a boolean has no finite id
+    // list to validate a stored value against, so anything other than the
+    // exact string "true" — no key at all, or a hand-edited/corrupt one —
+    // degrades to the same default this setting already has.
+    it("treats a hand-edited value that isn't 'true' as off, not as a parse error", () => {
+      localStorage.setItem("meologue.smart-dates-enabled", "yes-please");
+
+      vi.resetModules();
+      return import("./settings").then((fresh) => {
+        expect(fresh.useSettingsStore.getState().smartDatesEnabled).toBe(false);
+      });
+    });
+
+    it("degrades to the default when localStorage throws on read", () => {
+      vi.spyOn(localStorage, "getItem").mockImplementation(() => {
+        throw new Error("storage unavailable");
+      });
+
+      vi.resetModules();
+      return import("./settings").then((fresh) => {
+        expect(fresh.useSettingsStore.getState().smartDatesEnabled).toBe(
+          fresh.DEFAULT_SMART_DATES_ENABLED,
+        );
       });
     });
   });

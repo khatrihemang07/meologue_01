@@ -2,6 +2,8 @@ import initial from "./0000_initial.sql?raw";
 import entryDeletedAt from "./0001_entry_deleted_at.sql?raw";
 import tasksTable from "./0002_tasks_table.sql?raw";
 import taskSchedulingFields from "./0003_task_scheduling_fields.sql?raw";
+import labelsTable from "./0004_labels_table.sql?raw";
+import taskRecurrenceString from "./0005_task_recurrence_string.sql?raw";
 import entriesSearchIndex from "./entries_search_index.sql?raw";
 import tasksSearchIndex from "./tasks_search_index.sql?raw";
 
@@ -62,6 +64,55 @@ export interface Migration {
  * columns throw exactly the swallowed error while the remaining two land
  * for real. Versions 4 and 5 were already spent by issue #168, which is why
  * this is 6.
+ *
+ * `0004_labels_table` (version 8, issue #170's Labels half) is a real
+ * `drizzle-kit generate`-shaped migration, hand-written rather than
+ * actually run through `drizzle-kit generate`: issue #170 split into a
+ * parser agent and a recurrence-engine agent working the same tree at
+ * the same time, the latter owning migration version 7 (below) and its
+ * own `ALTER TABLE tasks ADD date_string` — running `generate` here would
+ * stamp a `meta/_journal.json` entry with no way to know whether the
+ * sibling agent's own `generate` run already claimed that slot at the
+ * same moment. Hand-writing the SQL and leaving `meta/` untouched avoids
+ * that collision entirely; `meta/` staying behind schema.ts is exactly
+ * the state `entries_search_index` and `tasks_search_index` already leave
+ * it in indefinitely, for their own reason (see this comment's earlier
+ * paragraph).
+ *
+ * **Do not "true `meta/` back up" with a `drizzle-kit generate` run.** An
+ * earlier draft of this comment claimed such a run would produce no diff.
+ * It was tried, once both halves of #170 had landed, and that is false:
+ * `generate` diffs schema.ts against the last *snapshot* it wrote
+ * (`0003`), not against the migrations actually registered below, so it
+ * emits a fresh migration re-creating the `labels` table and re-adding
+ * `label_ids` and `date_string` — a verbatim duplicate of versions 7 and
+ * 8, numbered `0004_*` so it also collides with `0004_labels_table.sql`'s
+ * own filename. Registering that would apply the same DDL twice; not
+ * registering it leaves a `_journal.json` entry naming a migration this
+ * file never runs. Both are worse than the drift.
+ *
+ * `meta/` is drizzle-kit's own bookkeeping and nothing at runtime reads
+ * it — ../migrator.ts's ledger table is the only thing that decides what
+ * has been applied, and MIGRATIONS below is the only list it walks. The
+ * drift costs a future `generate` run its usefulness for these tables,
+ * which is a real cost and is why it is written down here rather than
+ * left to be rediscovered.
+ * This file follows migration 6's own template: `CREATE TABLE IF NOT
+ * EXISTS` for the new `labels` table (representable, so idempotent the
+ * ordinary way) and an `ALTER TABLE tasks ADD label_ids` that leans on
+ * the `duplicate column name` swallow (../migrator.ts) the same way
+ * migration 6's four `ADD COLUMN` statements do.
+ *
+ * `0005_task_recurrence_string` (version 7, issue #170's recurrence-
+ * engine half) is the sibling migration `0004_labels_table`'s own doc
+ * comment above describes: a single `ALTER TABLE tasks ADD date_string`,
+ * hand-written for the identical reason (a concurrent `generate` run
+ * against a `meta/` neither agent could see the other's changes to would
+ * risk numbering the same journal slot twice), leaning on the same
+ * `duplicate column name` swallow. It's sequenced *before* version 8
+ * here even though it was written after — version numbers are the
+ * ledger key (../migrator.ts), not file-write order, and 7 was already
+ * reserved for it before this file's own labels-only version 8 landed.
  */
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, sql: initial },
@@ -70,4 +121,6 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 4, sql: tasksTable },
   { version: 5, sql: tasksSearchIndex },
   { version: 6, sql: taskSchedulingFields },
+  { version: 7, sql: taskRecurrenceString },
+  { version: 8, sql: labelsTable },
 ];

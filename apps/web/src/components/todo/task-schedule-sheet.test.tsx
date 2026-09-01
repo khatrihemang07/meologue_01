@@ -18,6 +18,11 @@ function task(overrides: Partial<Task> = {}): Task {
     deadline: null,
     duration: null,
     priority: 1,
+    // No Labels, doesn't repeat — the same "concrete value, not a gap"
+    // default packages/core/src/test-support/task-fixture.ts's own
+    // fixture uses for these two issue #170 fields.
+    labelIds: [],
+    dateString: null,
     ...overrides,
   };
 }
@@ -58,6 +63,18 @@ describe("TaskScheduleSheet", () => {
     renderSheet({ content: "call mum" });
 
     expect(screen.getByText('Schedule "call mum"')).toBeInTheDocument();
+  });
+
+  it("shows a recurring Task's dateString exactly as typed", () => {
+    renderSheet({ dateString: "every other monday" });
+
+    expect(screen.getByText("Repeats: every other monday")).toBeInTheDocument();
+  });
+
+  it("shows nothing for a non-recurring Task", () => {
+    renderSheet({ dateString: null });
+
+    expect(screen.queryByText(/Repeats:/)).not.toBeInTheDocument();
   });
 
   describe("Date", () => {
