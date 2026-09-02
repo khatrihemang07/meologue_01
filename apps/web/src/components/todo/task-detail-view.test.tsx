@@ -16,7 +16,6 @@ function task(overrides: Partial<Task> = {}): Task {
     deletedAt: null,
     date: null,
     deadline: null,
-    duration: null,
     priority: 1,
     labelIds: [],
     dateString: null,
@@ -260,7 +259,7 @@ describe("TaskDetailView", () => {
     expect(screen.getByText(/Description and comments aren't built yet/)).toBeInTheDocument();
   });
 
-  it("shows no duration control anywhere — Task.duration is being removed in a concurrent ticket", () => {
+  it("shows no duration control anywhere — Task.duration was removed in #179", () => {
     renderView();
 
     expect(screen.queryByText(/[Dd]uration/)).not.toBeInTheDocument();
