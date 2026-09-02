@@ -38,11 +38,10 @@ function task(overrides: Partial<Task> = {}): Task {
     seq: 1,
     syncedAt: "2026-01-01T00:00:00.000Z",
     deletedAt: null,
-    // Undated, no deadline, no duration, priority 1 ("no priority") — the
+    // Undated, no deadline, priority 1 ("no priority") — the
     // same default packages/core/src/test-support/task-fixture.ts uses.
     date: null,
     deadline: null,
-    duration: null,
     priority: 1,
     // No Labels, doesn't repeat — the same "concrete value, not a gap"
     // default packages/core/src/test-support/task-fixture.ts's own
@@ -118,7 +117,7 @@ function createFakeStore(): TaskStore {
     getCursor: vi.fn(async () => 0),
     setCursor: vi.fn(async () => {}),
     search: vi.fn(async () => []),
-    // Issue #169's four setters — this fake never needs to observe their
+    // Issue #169's three setters — this fake never needs to observe their
     // effect (no test here exercises the picker path; that lives in
     // task-row.test.tsx and today-view.test.tsx), so each just mutates
     // `active` the same shape complete()/uncomplete() above do, enough to
@@ -128,9 +127,6 @@ function createFakeStore(): TaskStore {
     }),
     setDeadline: vi.fn(async (id: string, deadline: string | null) => {
       active = active.map((t) => (t.id === id ? { ...t, deadline, seq: null } : t));
-    }),
-    setDuration: vi.fn(async (id: string, duration: number | null) => {
-      active = active.map((t) => (t.id === id ? { ...t, duration, seq: null } : t));
     }),
     setPriority: vi.fn(async (id: string, priority: number) => {
       active = active.map((t) => (t.id === id ? { ...t, priority, seq: null } : t));
@@ -282,7 +278,7 @@ describe("useTasks", () => {
     await waitFor(() => expect(result.current.tasks).toHaveLength(2));
     expect(store.upsert).toHaveBeenLastCalledWith([
       // Issue #169's own acceptance criterion: a Task created in Todo
-      // starts undated, with no deadline, no duration, and priority 1
+      // starts undated, with no deadline, and priority 1
       // ("no priority") — asserted explicitly here rather than trusted,
       // since addTask states this as a decision at its own call site.
       expect.objectContaining({
@@ -291,7 +287,6 @@ describe("useTasks", () => {
         completedAt: null,
         date: null,
         deadline: null,
-        duration: null,
         priority: 1,
       }),
     ]);
@@ -547,7 +542,6 @@ describe("useTasks", () => {
       result.current.addTask("pay rent", {
         date: "2026-09-05",
         deadline: "2026-09-10",
-        duration: 30,
         priority: 4,
         labelIds: ["label-1"],
         dateString: "every month",
@@ -560,7 +554,6 @@ describe("useTasks", () => {
       content: "pay rent",
       date: "2026-09-05",
       deadline: "2026-09-10",
-      duration: 30,
       priority: 4,
       labelIds: ["label-1"],
       dateString: "every month",
@@ -577,7 +570,6 @@ describe("useTasks", () => {
     expect(result.current.tasks[0]).toMatchObject({
       date: null,
       deadline: null,
-      duration: null,
       priority: 1,
       labelIds: [],
       dateString: null,

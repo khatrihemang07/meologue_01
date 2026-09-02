@@ -5,7 +5,6 @@ import { nextOccurrence, tomorrowOf } from "../recurrence";
 import {
   assertValidDate,
   assertValidDeadline,
-  assertValidDuration,
   assertValidNestingDepth,
   assertValidPriority,
   hasTime,
@@ -132,7 +131,7 @@ export class SqliteTaskStore implements TaskStore {
     if (newTasks.length === 0) {
       return;
     }
-    // withDefaultSchedulingFields fills date/deadline/duration/priority
+    // withDefaultSchedulingFields fills date/deadline/priority
     // in for a caller that omits them (Task.priority's own doc comment on
     // why that key is TS-optional at all) — done once here, before the
     // insert, rather than trusted to drizzle's own handling of a missing
@@ -175,7 +174,6 @@ export class SqliteTaskStore implements TaskStore {
           deletedAt: sql`excluded.deleted_at`,
           date: sql`excluded.date`,
           deadline: sql`excluded.deadline`,
-          duration: sql`excluded.duration`,
           priority: sql`excluded.priority`,
           labelIds: sql`excluded.label_ids`,
           dateString: sql`excluded.date_string`,
@@ -189,7 +187,7 @@ export class SqliteTaskStore implements TaskStore {
     }
   }
 
-  // Reads the Task first, like setDuration/postpone below, so the
+  // Reads the Task first, like setParent/postpone below, so the
   // cascade below only runs against a live Task's own children — not
   // when updateIfLive would have silently no-opped against a tombstone.
   async complete(id: string, completedAt: string): Promise<void> {
@@ -257,23 +255,6 @@ export class SqliteTaskStore implements TaskStore {
     await this.updateIfLive(id, { deadline, seq: null, syncedAt: null });
   }
 
-  // Reads the Task's current `date` first, unlike every other setter here
-  // — assertValidDuration's "requires a timed date" rule spans two
-  // columns, so there's nothing to validate against without a read. This
-  // is also why an unknown or tombstoned id no-ops *before* validation
-  // runs rather than after: "no-op against a tombstone" is unconditional
-  // for every mutator on this store (see TaskStore.setDuration's doc
-  // comment), and a row that doesn't exist has no `date` to validate
-  // against in the first place.
-  async setDuration(id: string, duration: number | null): Promise<void> {
-    const current = await this.get(id);
-    if (current === undefined) {
-      return;
-    }
-    assertValidDuration(duration, current.date);
-    await this.updateIfLive(id, { duration, seq: null, syncedAt: null });
-  }
-
   async setPriority(id: string, priority: number): Promise<void> {
     assertValidPriority(priority);
     await this.updateIfLive(id, { priority, seq: null, syncedAt: null });
@@ -299,7 +280,7 @@ export class SqliteTaskStore implements TaskStore {
   }
 
   // See TaskStore.setParent's own doc comment for the three shapes this
-  // refuses. Reads the target Task first, mirroring setDuration above:
+  // refuses. Reads the target Task first, mirroring complete above:
   // "no-op against a tombstone" for `id` itself is unconditional, checked
   // before any of `parentId`'s own validation runs.
   async setParent(id: string, parentId: string | null): Promise<void> {
@@ -347,7 +328,7 @@ export class SqliteTaskStore implements TaskStore {
 
   // See TaskStore.advanceRecurring's own doc comment for the full
   // reasoning; this is its mechanics. Reads the Task first (mirrors
-  // setDuration's own reasoning above): "no-op against a tombstone" has
+  // setParent's own reasoning above): "no-op against a tombstone" has
   // to be checked before either throw below becomes reachable, and
   // there's no `dateString` to re-parse for a row that isn't live in the
   // first place.
@@ -400,7 +381,7 @@ export class SqliteTaskStore implements TaskStore {
 
   // See TaskStore.postpone's own doc comment for the full reasoning;
   // this is its mechanics. Reads the Task first, the same as
-  // setDuration/advanceRecurring above, to know whether `date` carries a
+  // setParent/advanceRecurring above, to know whether `date` carries a
   // time-of-day to preserve on the new day — postpone has no rule of its
   // own to re-parse, but it still needs the Task's *current* shape.
   async postpone(id: string, today: string): Promise<void> {
@@ -463,7 +444,7 @@ export class SqliteTaskStore implements TaskStore {
     // match list()'s own order (order_key asc, id asc), mirroring
     // SqliteEntryStore.search's "same order as list()" guarantee.
     const result = await this.driver.execute(
-      `SELECT tasks.id, tasks.device_id, tasks.content, tasks.completed_at, tasks.order_key, tasks.created_at, tasks.seq, tasks.synced_at, tasks.deleted_at, tasks.date, tasks.deadline, tasks.duration, tasks.priority, tasks.label_ids, tasks.date_string, tasks.project_id, tasks.section_id, tasks.parent_id
+      `SELECT tasks.id, tasks.device_id, tasks.content, tasks.completed_at, tasks.order_key, tasks.created_at, tasks.seq, tasks.synced_at, tasks.deleted_at, tasks.date, tasks.deadline, tasks.priority, tasks.label_ids, tasks.date_string, tasks.project_id, tasks.section_id, tasks.parent_id
        FROM tasks_fts
        JOIN tasks ON tasks.id = tasks_fts.id
        WHERE tasks_fts MATCH ? AND tasks.deleted_at IS NULL AND tasks.completed_at IS NULL
@@ -556,8 +537,8 @@ function toPrefixMatchQuery(text: string): string {
 // rowToEntry — a row that doesn't match the shape this query asked for
 // throws instead of silently mis-mapping a value into the wrong field.
 function rowToTask(row: unknown): Task {
-  if (!Array.isArray(row) || row.length !== 18) {
-    throw new Error(`sqlite search expected an 18-column tasks row, got ${JSON.stringify(row)}`);
+  if (!Array.isArray(row) || row.length !== 17) {
+    throw new Error(`sqlite search expected a 17-column tasks row, got ${JSON.stringify(row)}`);
   }
   const [
     id,
@@ -571,7 +552,6 @@ function rowToTask(row: unknown): Task {
     deletedAt,
     date,
     deadline,
-    duration,
     priority,
     labelIdsJson,
     dateString,
@@ -590,7 +570,6 @@ function rowToTask(row: unknown): Task {
     string | null,
     string | null,
     string | null,
-    number | null,
     number,
     string,
     string | null,
@@ -610,7 +589,6 @@ function rowToTask(row: unknown): Task {
     deletedAt,
     date,
     deadline,
-    duration,
     priority,
     // This query runs through this.driver.execute directly rather than
     // drizzle's query builder, so none of drizzle's `{ mode: "json" }`

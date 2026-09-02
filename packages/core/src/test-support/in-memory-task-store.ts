@@ -4,7 +4,6 @@ import { nextOccurrence, tomorrowOf } from "../recurrence";
 import {
   assertValidDate,
   assertValidDeadline,
-  assertValidDuration,
   assertValidNestingDepth,
   assertValidPriority,
   hasTime,
@@ -108,7 +107,7 @@ export class InMemoryTaskStore implements TaskStore {
 
   async upsert(tasks: Task[]): Promise<void> {
     // withDefaultSchedulingFields — see SqliteTaskStore.upsert's identical
-    // call for why: a caller that omits date/deadline/duration/priority
+    // call for why: a caller that omits date/deadline/priority
     // (Task.priority's own doc comment on why that key is TS-optional)
     // must not leave this store holding a Task whose priority is actually
     // `undefined`, which would silently break every reader that treats
@@ -174,20 +173,6 @@ export class InMemoryTaskStore implements TaskStore {
     this.applyIfLive(id, { deadline, seq: null, syncedAt: null });
   }
 
-  // Mirrors SqliteTaskStore.setDuration's ordering — a no-op against an
-  // unknown or tombstoned id happens before validation runs, not after,
-  // because "no-op against a tombstone" is unconditional (see
-  // TaskStore.setDuration's doc comment) and there's no `date` to validate
-  // a duration against for a Task that isn't live in the first place.
-  async setDuration(id: string, duration: number | null): Promise<void> {
-    const existing = this.tasks.get(id);
-    if (existing === undefined || existing.deletedAt !== null) {
-      return;
-    }
-    assertValidDuration(duration, existing.date);
-    this.applyIfLive(id, { duration, seq: null, syncedAt: null });
-  }
-
   async setPriority(id: string, priority: number): Promise<void> {
     assertValidPriority(priority);
     this.applyIfLive(id, { priority, seq: null, syncedAt: null });
@@ -212,7 +197,7 @@ export class InMemoryTaskStore implements TaskStore {
 
   // Mirrors SqliteTaskStore.setParent — see TaskStore.setParent's own doc
   // comment for the three shapes this refuses. Reads the target Task
-  // first, the same as setDuration/advanceRecurring above: "no-op against
+  // first, the same as complete/advanceRecurring above: "no-op against
   // a tombstone" for `id` itself is unconditional, checked before any of
   // `parentId`'s own validation runs.
   async setParent(id: string, parentId: string | null): Promise<void> {
@@ -260,7 +245,7 @@ export class InMemoryTaskStore implements TaskStore {
 
   // Mirrors SqliteTaskStore.advanceRecurring — see TaskStore.advanceRecurring's
   // own doc comment for the full reasoning. "No-op against a tombstone"
-  // is checked here the same way setDuration's own no-op check is: before
+  // is checked here the same way setParent's own no-op check is: before
   // either throw below becomes reachable.
   async advanceRecurring(id: string, completedAt: string): Promise<void> {
     const existing = this.tasks.get(id);
@@ -307,7 +292,7 @@ export class InMemoryTaskStore implements TaskStore {
   }
 
   // Mirrors SqliteTaskStore.postpone — see TaskStore.postpone's own doc
-  // comment. Reads the Task first, the same as setDuration/
+  // comment. Reads the Task first, the same as setParent/
   // advanceRecurring above, to know whether `date` carries a time-of-day
   // to preserve on the new day.
   async postpone(id: string, today: string): Promise<void> {

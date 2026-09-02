@@ -387,7 +387,6 @@ describe("backfillTasksFromHistory", () => {
       deletedAt: null,
       date: null,
       deadline: null,
-      duration: null,
       priority: 1,
       labelIds: [],
       dateString: null,

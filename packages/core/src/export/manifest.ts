@@ -4,11 +4,16 @@ import { formatUtcOffset } from "./offset";
 
 /**
  * Bumped whenever the manifest's shape changes in a way a reader (or a
- * future importer) needs to know about — issue #175 bumps it from 1 to 2
- * because `tasks`/`task_count` below are new top-level keys, exactly the
- * kind of shape change this comment already asks a bump for.
+ * future importer) needs to know about — issue #175 bumped it from 1 to 2
+ * because `tasks`/`task_count` below were new top-level keys, exactly the
+ * kind of shape change this comment already asks a bump for. Issue #179
+ * bumps it again, from 2 to 3: `ExportManifestTask` no longer carries
+ * `duration` — the field exists nowhere in the product any more (it served
+ * calendar and time-blocking views this app never built), so an export
+ * written under schema 3 simply has one fewer key per Task row than one
+ * written under schema 2.
  */
-export const EXPORT_SCHEMA_VERSION = 2;
+export const EXPORT_SCHEMA_VERSION = 3;
 
 export interface ExportManifestEntry {
   id: string;
@@ -51,7 +56,6 @@ export interface ExportManifestTask {
   synced_at: string | null;
   date: string | null;
   deadline: string | null;
-  duration: number | null;
   priority: number;
   label_ids: string[];
   date_string: string | null;
@@ -135,7 +139,6 @@ export function buildManifest(
       synced_at: task.syncedAt,
       date: task.date,
       deadline: task.deadline,
-      duration: task.duration,
       priority: task.priority,
       label_ids: task.labelIds,
       date_string: task.dateString,

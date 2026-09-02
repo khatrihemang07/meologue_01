@@ -419,53 +419,6 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
     });
   });
 
-  describe("setDuration()", () => {
-    it("changes duration (minutes) and clears seq, given a Task with a timed date", async () => {
-      await store.upsert([task({ id: "a", date: "2026-01-05T09:00", seq: 5 })]);
-
-      await store.setDuration("a", 30);
-
-      const [found] = await store.list();
-      expect(found).toMatchObject({ id: "a", duration: 30, seq: null });
-    });
-
-    it("clears the duration back to null", async () => {
-      await store.upsert([task({ id: "a", date: "2026-01-05T09:00", duration: 30, seq: 5 })]);
-
-      await store.setDuration("a", null);
-
-      const [found] = await store.list();
-      expect(found).toMatchObject({ id: "a", duration: null, seq: null });
-    });
-
-    it("refuses a duration on a Task with no date at all", async () => {
-      await store.upsert([task({ id: "a", date: null, seq: 1 })]);
-
-      await expect(store.setDuration("a", 30)).rejects.toThrow();
-    });
-
-    it("refuses a duration on an all-day Task — there's nothing to measure a length from without a time", async () => {
-      await store.upsert([task({ id: "a", date: "2026-01-05", seq: 1 })]);
-
-      await expect(store.setDuration("a", 30)).rejects.toThrow();
-    });
-
-    it("refuses a duration over 24 hours (1440 minutes)", async () => {
-      await store.upsert([task({ id: "a", date: "2026-01-05T09:00", seq: 1 })]);
-
-      await expect(store.setDuration("a", 1441)).rejects.toThrow();
-    });
-
-    it("accepts exactly 1440 minutes — the cap is inclusive", async () => {
-      await store.upsert([task({ id: "a", date: "2026-01-05T09:00", seq: 1 })]);
-
-      await store.setDuration("a", 1440);
-
-      const [found] = await store.list();
-      expect(found).toMatchObject({ duration: 1440 });
-    });
-  });
-
   describe("setPriority()", () => {
     it("changes priority and clears seq", async () => {
       await store.upsert([task({ id: "a", seq: 5 })]);
@@ -808,7 +761,7 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
 
     // Every local mutation against a tombstone is a no-op — no
     // resurrection, no matter which door a caller tries.
-    it("complete(), uncomplete(), rename(), reorder(), the four #169 setters, setLabelIds(), the three #171 setters, advanceRecurring(), completeForever() and postpone() are all no-ops against a tombstone", async () => {
+    it("complete(), uncomplete(), rename(), reorder(), the three #169 setters, setLabelIds(), the three #171 setters, advanceRecurring(), completeForever() and postpone() are all no-ops against a tombstone", async () => {
       await store.upsert([task({ id: "a", content: "something", seq: 1, orderKey: "m" })]);
       await store.remove("a");
 
@@ -818,10 +771,6 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
       await store.reorder("a", orderKeyBetween(null, "m"));
       await store.setDate("a", "2026-01-05");
       await store.setDeadline("a", "2026-01-10");
-      // setDuration's own no-op check runs before its date-shape
-      // validation (its doc comment explains why), so this doesn't throw
-      // even though the live Task above was never given a timed date.
-      await store.setDuration("a", 30);
       await store.setPriority("a", 4);
       await store.setLabelIds("a", ["work"]);
       await store.setProject("a", "some-project");

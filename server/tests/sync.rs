@@ -509,7 +509,6 @@ fn task(id: Uuid, device_id: Uuid, content: &str) -> Value {
         "deleted_at": Value::Null,
         "date": Value::Null,
         "deadline": Value::Null,
-        "duration": Value::Null,
         "priority": 1,
         "label_ids": Value::Array(vec![]),
         "date_string": Value::Null,

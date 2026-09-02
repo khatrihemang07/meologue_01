@@ -5,7 +5,7 @@
  * here as data, not as a regex or a branch buried in the engine
  * (./rules.ts) — the engine's rule functions take a `QuickAddLanguage`
  * and build their patterns from it at call time, so nothing about
- * *which* words mean "tomorrow" or "for" is hard-coded outside this
+ * *which* words mean "tomorrow" or "next" is hard-coded outside this
  * shape.
  *
  * **What a second language would actually have to supply, honestly.**
@@ -61,10 +61,6 @@ export interface QuickAddLanguage {
   nextWord: string;
   /** Arithmetic unit word (lower-cased, singular or plural) to the unit it names. */
   arithmeticUnits: Readonly<Record<string, "days" | "weeks" | "months" | "years">>;
-  /** The word introducing a duration — `"for"` for English's `for 45min`. */
-  durationWord: string;
-  /** Duration unit word (lower-cased) to whether it means minutes or hours. */
-  durationUnits: Readonly<Record<string, "minutes" | "hours">>;
   /**
    * Bare single-word recurrence keywords this parser merely *flags* as
    * recurrence-shaped, without attempting to resolve them — see

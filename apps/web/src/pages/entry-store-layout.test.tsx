@@ -79,7 +79,6 @@ function createFakeTaskStore(): TaskStore {
     // all seventeen.
     setDate: vi.fn(async () => {}),
     setDeadline: vi.fn(async () => {}),
-    setDuration: vi.fn(async () => {}),
     setPriority: vi.fn(async () => {}),
     setLabelIds: vi.fn(async () => {}),
     advanceRecurring: vi.fn(async () => {}),

@@ -1,0 +1,17 @@
+-- Issue #179: Duration is gone from the product entirely — it exists to
+-- serve calendar and time-blocking views this app is not building, so it
+-- is a field with nowhere to be. `0010_create_tasks.sql`'s own `duration`
+-- column goes with it.
+--
+-- A new migration, not an edit to `0010`: `sqlx::migrate!()` (server/src/
+-- main.rs) checksums every applied migration, so rewriting one already
+-- shipped would fail on any database that has already run it — the exact
+-- reason `packages/core/src/sqlite/migrations/`'s own convention (append,
+-- never edit) exists on the client side too.
+--
+-- This is a distinct concept from `packages/core/src/recurrence/rule.ts`'s
+-- `durationBound` — a recurrence's own end bound (`every day for 3 weeks`)
+-- — which shares nothing but the English word and is untouched by this
+-- migration: it is never a column on `tasks`, only a fact folded into
+-- `date_string`, the recurrence rule as typed.
+alter table tasks drop column duration;

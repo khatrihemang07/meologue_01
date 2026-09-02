@@ -47,10 +47,14 @@ export const entries = sqliteTable(
  * describes, made permanent rather than provisional, because collaboration
  * was never even sketched the way editing was before ADR 0028 landed.
  *
- * Date, deadline, duration and priority were added by issue #169;
+ * Date, deadline and priority were added by issue #169;
  * `projectId`/`sectionId`/`parentId` by issue #171, behind their own
  * migration (version 9) — sequencing the tickets this way keeps each
- * migration's blast radius to the one thing it's actually adding.
+ * migration's blast radius to the one thing it's actually adding. Duration
+ * (also added by #169) was removed again by issue #179: it existed to
+ * serve calendar and time-blocking views this app never built, so it had
+ * nowhere to be. Migration 10 (../sqlite/migrations/index.ts) drops the
+ * column; this table no longer declares it.
  */
 export const tasks = sqliteTable(
   "tasks",
@@ -80,12 +84,6 @@ export const tasks = sqliteTable(
     // #169). Independent of `date`: a Task may carry either, both, or
     // neither.
     deadline: text("deadline"),
-    // Minutes; requires `date` to carry a time (there's nothing to measure
-    // a length from otherwise) and is capped at 1440 (24 hours). Both
-    // rules are enforced in ../task-fields.ts, not here — a column
-    // constraint can't express "requires another column to have a
-    // particular shape."
-    duration: integer("duration"),
     // 1-4, stored inverted against the UI's p1-p4 naming (Todoist's own API
     // does the same) — see ../task-types.ts's uiPriorityOf/storedPriorityOf
     // for the one named place that inversion lives. Not nullable: "no
@@ -112,13 +110,13 @@ export const tasks = sqliteTable(
     // ../task-types.ts's `dateString` doc comment has the full reasoning
     // for why this column, not `date`, is the thing ../recurrence/'s
     // engine treats as the truth. Nullable with no DEFAULT, the same
-    // shape `date`/`deadline`/`duration` above take, not `priority`'s
+    // shape `date`/`deadline` above take, not `priority`'s
     // NOT NULL DEFAULT: "doesn't repeat" is the absence of a rule, not a
     // concrete value the way "no priority" is a real priority level.
     dateString: text("date_string"),
     // `null` is Inbox — there is no `projects` row for it (../project-
     // types.ts's own header comment). Nullable with no DEFAULT, the same
-    // shape `date`/`deadline`/`duration` take: a pre-#171 row backfilled
+    // shape `date`/`deadline` take: a pre-#171 row backfilled
     // by migration 9 below gets `null` from `ALTER TABLE ADD COLUMN`'s own
     // implicit default, which happens to be exactly the right value
     // (every Task that existed before Projects did was, in effect,

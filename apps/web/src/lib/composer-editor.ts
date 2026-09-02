@@ -58,8 +58,9 @@ import { parseReferenceDate, parseReferenceEntryId } from "@/lib/inline-markdown
 import {
   type DemotedSignature,
   parseWithDemotions,
-  QUICK_ADD_HIGHLIGHT_CLASS,
+  quickAddHighlightClass,
   tokenAtOffset,
+  tokenHighlightState,
   tokenSignature,
 } from "@/lib/quick-add-highlight";
 import { useSettingsStore } from "@/lib/settings";
@@ -985,15 +986,21 @@ function activeChecklistItem($from: ResolvedPos): { itemPos: number; blockStart:
 
 /**
  * Live highlighting on a checkbox line as you type — `- [ ] buy milk
- * tomorrow p1 #Shopping` — reusing #170's own parser and demotion rules
- * (`quick-add-highlight.ts`) unchanged, per the ticket's own "reuse that
- * logic; do not write a second parser integration." What differs from
- * `add-task-form.tsx` is only the rendering surface: that file paints a
- * `pointer-events-none` backdrop `<div>` behind a real `<input>`, because a
- * native text field has nowhere to attach "this run is highlighted" other
- * than a second, hand-synchronized layer; a ProseMirror document has
- * exactly that attachment point built in — `Decoration.inline`, the same
- * mechanism `placeholderPlugin` (below) already uses for its own widget.
+ * tomorrow p1 #Shopping` — reusing #170's own parser and demotion rules,
+ * and issue #179's own three-state live treatment
+ * (`quick-add-highlight.ts`'s `tokenHighlightState`/`quickAddHighlightClass`),
+ * per the ticket's own "reuse that logic; do not write a second parser
+ * integration." What differs from `add-task-form.tsx` is only the
+ * rendering surface: that file paints a `pointer-events-none` backdrop
+ * `<div>` behind a real `<input>`, because a native text field has nowhere
+ * to attach "this run is highlighted, in this state" other than a second,
+ * hand-synchronized layer; a ProseMirror document has exactly that
+ * attachment point built in — `Decoration.inline`, the same mechanism
+ * `placeholderPlugin` (below) already uses for its own widget. The caret
+ * offset `tokenHighlightState` needs comes for free here, unlike
+ * add-task-form.tsx's own dedicated `caretOffset` state: `state.selection`
+ * is already part of the `EditorState` `decorations(state)` is called
+ * with, so there's no separate event to track it through.
  *
  * State tracks the ONE checklist line the caret is currently inside, the
  * same "one open thing at a time" shape `pickerPlugin`/`slashPlugin`
@@ -1052,11 +1059,31 @@ export function checklistHighlightPlugin(): Plugin<ChecklistHighlightState | nul
         const $blockStart = state.doc.resolve(active.blockStart);
         const text = textBlockPlainText($blockStart.parent);
         const result = parseWithDemotions(text, quickAddOptionsNow(), active.demoted);
-        const decorations = result.tokens.map((token) =>
-          Decoration.inline(active.blockStart + token.start, active.blockStart + token.end, {
-            class: QUICK_ADD_HIGHLIGHT_CLASS,
-          }),
-        );
+        // A collapsed selection's own position, relative to this line's
+        // own start — `null` for a range selection (nothing is "the
+        // caret sitting inside one token" when more than one character is
+        // selected), mirroring add-task-form.tsx's own `caretOffset` doc
+        // comment for the identical reason.
+        const caretOffset = state.selection.empty
+          ? state.selection.$from.pos - active.blockStart
+          : null;
+        const decorations = result.tokens.flatMap((token) => {
+          const className = quickAddHighlightClass(
+            token.kind,
+            tokenHighlightState(token, caretOffset),
+          );
+          if (className === undefined) {
+            // "unresolved" (quick-add-highlight.ts's own doc comment):
+            // left as plain, unstyled text — no Decoration at all, rather
+            // than one carrying an empty class.
+            return [];
+          }
+          return [
+            Decoration.inline(active.blockStart + token.start, active.blockStart + token.end, {
+              class: className,
+            }),
+          ];
+        });
         return DecorationSet.create(state.doc, decorations);
       },
       handleClick(view, pos) {

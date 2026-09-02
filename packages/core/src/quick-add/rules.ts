@@ -5,14 +5,13 @@ import {
   matchTimeForms,
   resolveWholePhrase,
 } from "./date-rules";
-import type { QuickAddLanguage } from "./language";
 import type { QuickAddToken } from "./types";
 
 /**
  * The sigil-marked rules (issue #170's Part A) — every one of these is
  * always active, regardless of `QuickAddOptions.smartDates`, because the
  * user typed an explicit marker on purpose: `#`, `/`, `%`, `p1`-`p4`,
- * `!`, `{}`, `for`, a leading `* `, `//`. See ./types.ts's
+ * `!`, `{}`, a leading `* `, `//`. See ./types.ts's
  * `QuickAddTokenKind` doc comment for why that's the line
  * `smartDates` draws, and ./date-rules.ts for the family it turns off.
  */
@@ -108,40 +107,6 @@ export function matchPriority(input: string): QuickAddToken[] {
       end: match.index + match[0].length,
       raw: match[0],
       priority: storedPriorityOf(uiPriority),
-    });
-  }
-  return tokens;
-}
-
-/**
- * `for 45min` — a duration, in minutes. Deliberately not capped at 1440
- * here (../task-fields.ts's assertValidDuration owns that rule; this
- * module's own header comment explains why it isn't re-derived here) and
- * deliberately grouped with the sigil family, not the eager one, even
- * though it infers meaning from an ordinary preposition ("for") rather
- * than punctuation: the word alone is ambiguous ("wait for me"), but
- * "for" immediately followed by a number and a unit word is not — the
- * false-positive risk `smartDates` exists to let a user turn off doesn't
- * apply here the way it does to a bare "monday" or "monthly", so this
- * stays on regardless of that setting.
- */
-export function matchDuration(input: string, language: QuickAddLanguage): QuickAddToken[] {
-  const unitAlt = Object.keys(language.durationUnits)
-    .sort((a, b) => b.length - a.length)
-    .join("|");
-  const regex = new RegExp(`\\b${language.durationWord}\\s+(\\d+)\\s*(${unitAlt})\\b`, "gi");
-  const tokens: QuickAddToken[] = [];
-  for (const match of input.matchAll(regex)) {
-    const amount = Number(match[1]);
-    // biome-ignore lint/style/noNonNullAssertion: the alternation is built from this exact table's own keys
-    const unit = language.durationUnits[match[2]!.toLowerCase()]!;
-    const minutes = unit === "hours" ? amount * 60 : amount;
-    tokens.push({
-      kind: "duration",
-      start: match.index,
-      end: match.index + match[0].length,
-      raw: match[0],
-      minutes,
     });
   }
   return tokens;

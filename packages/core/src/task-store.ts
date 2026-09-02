@@ -170,16 +170,6 @@ export interface TaskStore {
    */
   setDeadline(id: string, deadline: string | null): Promise<void>;
   /**
-   * Sets `duration` (minutes) and clears `seq`. Refuses (throws) a
-   * duration on a Task whose *current* `date` doesn't carry a time, and
-   * refuses one over 1440 (24 hours) — ./task-fields.ts's
-   * assertValidDuration. Checked against the Task's current `date`, not a
-   * `date` this same call might also be setting: change both by calling
-   * setDate() then setDuration(), in that order. `null` clears the
-   * duration. No-op against a tombstone.
-   */
-  setDuration(id: string, duration: number | null): Promise<void>;
-  /**
    * Sets `priority` and clears `seq`. Refuses (throws) anything outside
    * 1-4 — ./task-fields.ts's assertValidPriority. Unlike the other three
    * setters above, there is no `null` case: `priority` isn't nullable (see
@@ -218,7 +208,7 @@ export interface TaskStore {
    * the Task filed into a Section of the *new* Project calls setSection()
    * as a deliberate second step, exactly as setTaskDate's own doc comment
    * (apps/web's use-tasks.ts) already documents a similar two-step
-   * pattern for `date`/`duration`. No validation of `projectId` itself
+   * pattern for `date`/`deadline`. No validation of `projectId` itself
    * against ProjectStore — this is the identical accepted, transient
    * dangling-reference state `labelIds`' own doc comment names, applied
    * here for the same reason: cross-store validation would need the
@@ -284,7 +274,7 @@ export interface TaskStore {
    * outcome — data that reached this Device already corrupted, rather
    * than something this method can silently paper over). No-op against a
    * tombstone or an unknown id — checked before either throw becomes
-   * reachable, the same ordering setDuration's own doc comment explains
+   * reachable, the same ordering setDeadline's own doc comment explains
    * for the identical reason. Clears `seq`.
    */
   advanceRecurring(id: string, completedAt: string): Promise<void>;

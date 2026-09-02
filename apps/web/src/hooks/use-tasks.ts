@@ -1,5 +1,5 @@
 import type { EntryStore, Task, TaskStore } from "@meologue/core";
-import { hasTime, mintId, orderKeyBetween } from "@meologue/core";
+import { mintId, orderKeyBetween } from "@meologue/core";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { queryClient } from "@/lib/query-client";
 import { COMPLETED_TASKS_QUERY_KEY, ENTRIES_QUERY_KEY, TASKS_QUERY_KEY } from "@/lib/query-keys";
@@ -24,7 +24,6 @@ export interface AddTaskOverrides {
   /** The Task's `date` — the view's own inherited date if the reader typed no date/time token of their own, or `taskFieldsFromQuickAdd`'s resolved `date` (an explicit token, or a recognised recurrence's first occurrence) if they did. Undated (`null`) by default, matching a Task created directly in Todo (issue #169's own acceptance criterion). */
   date?: string | null;
   deadline?: string | null;
-  duration?: number | null;
   priority?: number;
   labelIds?: string[];
   /** `Task.dateString` — the canonical recurrence phrase quick-add-task.ts resolved, or `null` for a Task that doesn't repeat. */
@@ -78,23 +77,10 @@ export interface UseTasksResult {
   /**
    * Sets a Task's `date` (issue #169) — the one door every picker in Todo
    * goes through, rather than each calling `TaskStore.setDate` directly.
-   * Dropping to an undated or all-day value while `duration` still holds a
-   * value from an earlier timed `date` is this function's own job to fix,
-   * not the store's: TaskStore.setDuration's own doc comment is explicit
-   * that "requires a date that carries a time" is checked against the
-   * Task's *current* `date` at the moment `setDuration` runs, and
-   * `setDate` "does not need a mirror-image check … changing `date` never
-   * touches `duration`'s stored value" — meaning the store leaves an
-   * inconsistent row (a `duration` sitting on an all-day Task) exactly as
-   * valid as any other write, and expects the caller who just removed the
-   * time to also clear it. This hook is that caller for every picker in
-   * the app, so it happens here once rather than once per picker.
    */
   setTaskDate: (id: string, date: string | null) => void;
   /** Sets a Task's `deadline` (issue #169) — TaskStore.setDeadline throws on a timed value; DatePickerSheet only ever hands this a bare day, so that refusal is never reachable from a picker. */
   setTaskDeadline: (id: string, deadline: string | null) => void;
-  /** Sets a Task's `duration` in minutes (issue #169) — TaskStore.setDuration throws without a timed `date` or above 1440; the picker that calls this disables itself rather than relying on the throw (task-schedule-sheet.tsx). */
-  setTaskDuration: (id: string, duration: number | null) => void;
   /** Sets a Task's stored `priority` (1-4) — callers pass `storedPriorityOf(uiPriority)`, never the UI number directly (task-types.ts's own warning against open-coding the inversion). */
   setTaskPriority: (id: string, priority: number) => void;
   /**
@@ -274,11 +260,10 @@ export function useTasks(
       // call site rather than left to an omitted key's default — `?? `'s
       // right-hand side is that explicit "nothing" state for a caller
       // (every pre-#170 one, and this file's own tests) with no overrides
-      // of its own to give: undated, no deadline, no duration, priority 1
+      // of its own to give: undated, no deadline, priority 1
       // ("no priority"), no Labels, no recurrence.
       date: overrides.date ?? null,
       deadline: overrides.deadline ?? null,
-      duration: overrides.duration ?? null,
       priority: overrides.priority ?? 1,
       labelIds: overrides.labelIds ?? [],
       dateString: overrides.dateString ?? null,
@@ -398,27 +383,8 @@ export function useTasks(
     onSuccess: afterLocalWrite,
   });
 
-  const setDurationMutation = useMutation({
-    mutationFn: ({ id, duration }: { id: string; duration: number | null }) =>
-      taskStore.setDuration(id, duration),
-    onSuccess: afterLocalWrite,
-  });
-
   function setTaskDate(id: string, date: string | null) {
     setDateMutation.mutate({ id, date });
-    // See UseTasksResult.setTaskDate's own doc comment for why this
-    // follow-up write exists. `tasks` (this closure's own active list) is
-    // read synchronously here rather than after `setDateMutation` settles:
-    // the two writes race against the same row regardless of ordering —
-    // TaskStore's per-field setters clear `seq` independently, and no
-    // Sync exists yet to interleave with (issue #172) — so there is no
-    // correctness reason to wait, only latency to lose by doing so.
-    if (!hasTime(date)) {
-      const current = tasks.find((t) => t.id === id);
-      if (current !== undefined && current.duration !== null) {
-        setDurationMutation.mutate({ id, duration: null });
-      }
-    }
   }
 
   const setDeadlineMutation = useMutation({
@@ -429,10 +395,6 @@ export function useTasks(
 
   function setTaskDeadline(id: string, deadline: string | null) {
     setDeadlineMutation.mutate({ id, deadline });
-  }
-
-  function setTaskDuration(id: string, duration: number | null) {
-    setDurationMutation.mutate({ id, duration });
   }
 
   const setPriorityMutation = useMutation({
@@ -565,7 +527,6 @@ export function useTasks(
     removeTask,
     setTaskDate,
     setTaskDeadline,
-    setTaskDuration,
     setTaskPriority,
     setTaskLabels,
     listTasksInProject,

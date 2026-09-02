@@ -16,7 +16,6 @@ function task(overrides: Partial<Task> = {}): Task {
     deletedAt: null,
     date: null,
     deadline: null,
-    duration: null,
     priority: 1,
     // No Labels, doesn't repeat — the same "concrete value, not a gap"
     // default packages/core/src/test-support/task-fixture.ts's own

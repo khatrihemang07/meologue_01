@@ -69,7 +69,7 @@ export interface TaskRowProps {
   onRequestDelete: () => void;
   /**
    * Opens the schedule picker (issue #169's `TaskScheduleSheet`) for this
-   * Task — every one of Date/Deadline/Duration/Priority is reachable from
+   * Task — every one of Date/Deadline/Priority is reachable from
    * here, in both Inbox and Today, since both render this same row. See
    * this ticket's own brief: "pickers, not text parsing," and this is the
    * one door onto them a reader always has, regardless of which view

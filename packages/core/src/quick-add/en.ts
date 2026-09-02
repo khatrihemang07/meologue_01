@@ -4,7 +4,7 @@ import type { QuickAddLanguage } from "./language";
  * The English word tables — see ./language.ts's own header comment for
  * what a second language would need to supply alongside a file shaped
  * like this one. Every value below was chosen for issue #170's own
- * worked examples (`27 Jan`, `tod`, `this fri`, `morning`, `for 45min`)
+ * worked examples (`27 Jan`, `tod`, `this fri`, `morning`)
  * rather than an attempt at exhaustive English coverage — a form not in
  * ../quick-add.test.ts's table is a form this pack doesn't claim to
  * recognise.
@@ -100,18 +100,6 @@ export const englishQuickAddLanguage: QuickAddLanguage = {
     months: "months",
     year: "years",
     years: "years",
-  },
-
-  durationWord: "for",
-  durationUnits: {
-    min: "minutes",
-    mins: "minutes",
-    minute: "minutes",
-    minutes: "minutes",
-    hr: "hours",
-    hrs: "hours",
-    hour: "hours",
-    hours: "hours",
   },
 
   // Deliberately small — see ./language.ts's own doc comment on this

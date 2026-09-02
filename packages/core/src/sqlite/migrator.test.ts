@@ -47,8 +47,9 @@ describe("migrate", () => {
     // (../migrations/index.ts's own comment on MIGRATIONS has the full
     // story of why it's sequenced before the labels migration's own
     // version 8 despite landing after it in this tree). version 9 is
-    // issue #171's projects/sections migration.
-    expect(result.rows).toEqual([[1], [2], [3], [4], [5], [6], [7], [8], [9]]);
+    // issue #171's projects/sections migration. version 10 is issue #179's
+    // drop of `tasks.duration`.
+    expect(result.rows).toEqual([[1], [2], [3], [4], [5], [6], [7], [8], [9], [10]]);
   });
 
   it("backfills Entries that existed before the search index migration shipped", async () => {
@@ -140,7 +141,7 @@ describe("migrate", () => {
     await expect(migrate(driver)).resolves.toBeUndefined();
 
     const ledger = await driver.execute("SELECT version FROM meologue_migrations", [], "all");
-    expect(ledger.rows).toEqual([[1], [2], [3], [4], [5], [6], [7], [8], [9]]);
+    expect(ledger.rows).toEqual([[1], [2], [3], [4], [5], [6], [7], [8], [9], [10]]);
 
     // The store isn't just "didn't throw" — it's actually usable: a write
     // that touches the new column succeeds.
@@ -151,5 +152,34 @@ describe("migrate", () => {
     );
     const row = await driver.execute("SELECT deleted_at FROM entries WHERE id = 'a'", [], "all");
     expect(row.rows).toEqual([[null]]);
+  });
+
+  // The mirror-image scenario for ../migrator.ts's NO_SUCH_COLUMN guard
+  // (issue #179): a process that dies after migration 10's `ALTER TABLE
+  // tasks DROP COLUMN duration` lands but before its ledger row is
+  // written. Simulate that exactly the way the ADD COLUMN test above
+  // does: run migrate() for real (which drops the column for real), then
+  // delete only migration 10's own ledger row, then run migrate() again
+  // and assert it completes rather than throwing `no such column`.
+  it("re-running migrate() after an interrupted DROP COLUMN does not throw and leaves the store usable", async () => {
+    const driver = new NodeSqliteDriver();
+    await migrate(driver);
+    await driver.execute("DELETE FROM meologue_migrations WHERE version = 10", [], "run");
+
+    await expect(migrate(driver)).resolves.toBeUndefined();
+
+    const ledger = await driver.execute("SELECT version FROM meologue_migrations", [], "all");
+    expect(ledger.rows).toEqual([[1], [2], [3], [4], [5], [6], [7], [8], [9], [10]]);
+
+    // The store isn't just "didn't throw" — `duration` is actually gone,
+    // and the rest of the row still reads and writes normally.
+    await driver.execute(
+      "INSERT INTO tasks (id, device_id, content, order_key, created_at) VALUES ('t', 'device-1', 'buy milk', 'V', '2026-01-01T00:00:00.000Z')",
+      [],
+      "run",
+    );
+    const columns = await driver.execute("PRAGMA table_info(tasks)", [], "all");
+    const columnNames = columns.rows.map((row) => (row as unknown[])[1]);
+    expect(columnNames).not.toContain("duration");
   });
 });

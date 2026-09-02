@@ -148,7 +148,6 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     message,
     setTaskDate,
     setTaskDeadline,
-    setTaskDuration,
     setTaskPriority,
     setTaskLabels,
     listTasksInProject,
@@ -454,7 +453,6 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     addTask(fields.content, {
       date: fields.date ?? captureDate,
       deadline: fields.deadline,
-      duration: fields.duration,
       priority: fields.priority,
       dateString: fields.dateString,
       labelIds,
@@ -599,7 +597,6 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
           }}
           onSetDate={setTaskDate}
           onSetDeadline={setTaskDeadline}
-          onSetDuration={setTaskDuration}
           onSetPriority={setTaskPriority}
         />
       )}

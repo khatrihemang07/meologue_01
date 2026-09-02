@@ -10,6 +10,16 @@ const STATEMENT_BREAKPOINT = "--> statement-breakpoint";
 // amendment, ADR 0028). See its use in migrate() below.
 const DUPLICATE_COLUMN_NAME = /duplicate column name/i;
 
+// The mirror-image error for `ALTER TABLE ... DROP COLUMN` against a
+// column that's already gone — SQLite's own message when re-running a
+// migration whose column drop already landed on a previous, interrupted
+// run (migration 10, ../migrations/0007_drop_task_duration.sql, issue
+// #179). Verified against node:sqlite the same way DUPLICATE_COLUMN_NAME
+// above was; a drop has no `IF EXISTS` form in SQLite either, so this is
+// the identical statement-level swallow, for the opposite direction of
+// the identical trap.
+const NO_SUCH_COLUMN = /no such column/i;
+
 /**
  * Hand-written because drizzle's own migrator for this driver hard-imports
  * node:fs to read migration files off disk, which can't run in a WebView
@@ -37,13 +47,14 @@ const DUPLICATE_COLUMN_NAME = /duplicate column name/i;
  * anywhere.
  *
  * The fix instead lives at the statement level: when a statement throws,
- * re-throw unless the message matches DUPLICATE_COLUMN_NAME, in which case
- * swallow it — that error means the column this statement was trying to
- * add is already present, which is exactly the outcome the statement
- * wanted. This is what obtains "re-running an interrupted migration is
- * harmless" without a transaction, and it's deliberately narrow: only this
- * error, only for this reason. A future migration whose statements aren't
- * each individually re-runnable this way — an unguarded backfill, a
+ * re-throw unless the message matches DUPLICATE_COLUMN_NAME or
+ * NO_SUCH_COLUMN, in which case swallow it — either error means the column
+ * this statement was trying to add or drop is already in the state the
+ * statement wanted, which is exactly the outcome it was after. This is
+ * what obtains "re-running an interrupted migration is harmless" without a
+ * transaction, and it's deliberately narrow: only these two errors, only
+ * for this reason. A future migration whose statements aren't each
+ * individually re-runnable this way — an unguarded backfill, a
  * multi-statement table rewrite — cannot fall back on a transaction on any
  * platform either, and has to solve it at the statement level the way this
  * one does.
@@ -67,12 +78,13 @@ export async function migrate(driver: SqliteDriver): Promise<void> {
         await driver.execute(statement, [], "run");
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        if (!DUPLICATE_COLUMN_NAME.test(message)) {
+        if (!DUPLICATE_COLUMN_NAME.test(message) && !NO_SUCH_COLUMN.test(message)) {
           throw error;
         }
-        // The column this statement adds is already there — a previous,
-        // interrupted run of this same migration got this far already.
-        // Treat it as done and move on to the next statement.
+        // Either the column this statement adds is already there, or the
+        // column it drops is already gone — a previous, interrupted run of
+        // this same migration got this far already. Treat it as done and
+        // move on to the next statement.
       }
     }
     await driver.execute(

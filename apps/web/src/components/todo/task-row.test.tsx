@@ -14,13 +14,12 @@ function task(overrides: Partial<Task> = {}): Task {
     seq: 1,
     syncedAt: "2026-01-01T00:00:00.000Z",
     deletedAt: null,
-    // Undated, no deadline, no duration, priority 1 ("no priority") — the
+    // Undated, no deadline, priority 1 ("no priority") — the
     // same default packages/core/src/test-support/task-fixture.ts uses,
     // so a test that wants a scheduled Task says so explicitly via
     // `overrides` rather than this fixture guessing at one.
     date: null,
     deadline: null,
-    duration: null,
     priority: 1,
     // No Labels, doesn't repeat — the same "concrete value, not a gap"
     // default packages/core/src/test-support/task-fixture.ts's own
@@ -285,7 +284,7 @@ describe("TaskRow", () => {
   });
 
   // Issue #169: the schedule button is the one door onto Date/Deadline/
-  // Duration/Priority pickers from any row, in either Inbox or Today
+  // Priority pickers from any row, in either Inbox or Today
   // (TaskRow's own doc comment on `onOpenSchedule`).
   // "Schedule" was renamed "Date" (issue #178's own reference behaviour —
   // the row's four hover actions read Edit, Date, Comment, More).

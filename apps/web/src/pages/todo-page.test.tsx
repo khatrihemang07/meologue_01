@@ -31,11 +31,10 @@ function task(overrides: Partial<Task> = {}): Task {
     seq: 1,
     syncedAt: "2026-01-01T00:00:00.000Z",
     deletedAt: null,
-    // Undated, no deadline, no duration, priority 1 ("no priority") — the
+    // Undated, no deadline, priority 1 ("no priority") — the
     // same default packages/core/src/test-support/task-fixture.ts uses.
     date: null,
     deadline: null,
-    duration: null,
     priority: 1,
     // No Labels, doesn't repeat — the same "concrete value, not a gap"
     // default packages/core/src/test-support/task-fixture.ts's own
@@ -109,7 +108,6 @@ function readyContext(overrides: Partial<EntryStoreOutletContext> = {}): EntrySt
     removeTask: vi.fn(),
     setTaskDate: vi.fn(),
     setTaskDeadline: vi.fn(),
-    setTaskDuration: vi.fn(),
     setTaskPriority: vi.fn(),
     setTaskLabels: vi.fn(),
     listTasksInProject: vi.fn(async () => []),
