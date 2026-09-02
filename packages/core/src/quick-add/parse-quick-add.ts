@@ -10,11 +10,9 @@ import {
   matchWeekdayArithmeticCombo,
 } from "./date-rules";
 import { englishQuickAddLanguage } from "./en";
-import type { QuickAddLanguage } from "./language";
 import {
   matchDeadline,
   matchDescription,
-  matchDuration,
   matchLabel,
   matchPriority,
   matchProject,
@@ -53,7 +51,7 @@ export function parseQuickAdd(input: string, options: QuickAddOptions): QuickAdd
   const { now } = options;
   const dateCtx: DateRuleContext = { language, now };
 
-  const candidates = collectCandidates(input, language, dateCtx, smartDates);
+  const candidates = collectCandidates(input, dateCtx, smartDates);
   const tokens = resolveOverlaps(candidates, demoted);
 
   return buildResult(input, tokens, now);
@@ -85,7 +83,6 @@ export function demoteQuickAddToken(
 // function's own call from parseQuickAdd.
 function collectCandidates(
   input: string,
-  language: QuickAddLanguage,
   dateCtx: DateRuleContext,
   smartDates: boolean,
 ): QuickAddToken[] {
@@ -97,7 +94,6 @@ function collectCandidates(
     ...matchLabel(input),
     ...matchPriority(input),
     ...matchDeadline(input, dateCtx),
-    ...matchDuration(input, language),
     ...matchReminder(input, dateCtx),
   ];
   if (smartDates) {
@@ -153,7 +149,6 @@ function buildResult(input: string, tokens: QuickAddToken[], now: string): Quick
   let date: string | null = null;
   let time: string | null = null;
   let deadline: string | null = null;
-  let duration: number | null = null;
   let priority = 1;
   let projectName: string | null = null;
   let sectionName: string | null = null;
@@ -176,9 +171,6 @@ function buildResult(input: string, tokens: QuickAddToken[], now: string): Quick
         break;
       case "deadline":
         deadline = token.deadline;
-        break;
-      case "duration":
-        duration = token.minutes;
         break;
       case "priority":
         priority = token.priority;
@@ -214,7 +206,6 @@ function buildResult(input: string, tokens: QuickAddToken[], now: string): Quick
     content: buildContent(input, tokens),
     date: mergeDateAndTime(date, time, now),
     deadline,
-    duration,
     priority,
     projectName,
     sectionName,

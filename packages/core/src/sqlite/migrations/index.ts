@@ -5,6 +5,7 @@ import taskSchedulingFields from "./0003_task_scheduling_fields.sql?raw";
 import labelsTable from "./0004_labels_table.sql?raw";
 import taskRecurrenceString from "./0005_task_recurrence_string.sql?raw";
 import projectsSections from "./0006_projects_sections.sql?raw";
+import dropTaskDuration from "./0007_drop_task_duration.sql?raw";
 import entriesSearchIndex from "./entries_search_index.sql?raw";
 import tasksSearchIndex from "./tasks_search_index.sql?raw";
 
@@ -131,6 +132,21 @@ export interface Migration {
  * `duplicate column name` swallow, migration 6's template. All of this
  * migration's `CREATE INDEX` statements are `IF NOT EXISTS` for the same
  * reason every other index-creating statement in this file is.
+ *
+ * `0007_drop_task_duration` (version 10, issue #179) drops `tasks.duration`
+ * — the field existed to serve calendar and time-blocking views this app
+ * never built, so it had nowhere to be. A single `ALTER TABLE tasks DROP
+ * COLUMN duration`, hand-written rather than `drizzle-kit generate` output
+ * for the same stale-`meta/`-snapshot reason every migration since
+ * `0004_labels_table` has been. SQLite has no `IF EXISTS` form for `DROP
+ * COLUMN` either, so idempotence leans on the identical statement-level
+ * technique migration 3 established for `ADD COLUMN`, mirrored in the
+ * opposite direction: ../migrator.ts's own `NO_SUCH_COLUMN` swallows the
+ * error a second run throws once the column is already gone, the same way
+ * `DUPLICATE_COLUMN_NAME` already covers the add-side error. Not to be
+ * confused with ../../recurrence/rule.ts's `durationBound` — a
+ * recurrence's own end bound (`every day for 3 weeks`) — which was never a
+ * column on this table and is untouched by this migration.
  */
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, sql: initial },
@@ -142,4 +158,5 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 7, sql: taskRecurrenceString },
   { version: 8, sql: labelsTable },
   { version: 9, sql: projectsSections },
+  { version: 10, sql: dropTaskDuration },
 ];

@@ -225,7 +225,6 @@ pub struct TaskInput {
     /// `dateString`/`deadline` below are.
     pub date: Option<String>,
     pub deadline: Option<String>,
-    pub duration: Option<i32>,
     pub priority: i32,
     pub label_ids: Vec<Uuid>,
     pub date_string: Option<String>,
@@ -249,7 +248,6 @@ pub struct TaskOutput {
     pub deleted_at: Option<DateTime<Utc>>,
     pub date: Option<String>,
     pub deadline: Option<String>,
-    pub duration: Option<i32>,
     pub priority: i32,
     pub label_ids: Vec<Uuid>,
     pub date_string: Option<String>,
@@ -624,10 +622,10 @@ async fn insert_tasks(pool: &PgPool, tasks: &[TaskInput]) -> anyhow::Result<()> 
         sqlx::query(
             "insert into tasks (
                  id, device_id, content, completed_at, order_key, created_at,
-                 deleted_at, date, deadline, duration, priority, label_ids,
+                 deleted_at, date, deadline, priority, label_ids,
                  date_string, project_id, section_id, parent_id
              )
-             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
              on conflict (id) do update
                set content       = excluded.content,
                    completed_at  = excluded.completed_at,
@@ -635,7 +633,6 @@ async fn insert_tasks(pool: &PgPool, tasks: &[TaskInput]) -> anyhow::Result<()> 
                    deleted_at    = excluded.deleted_at,
                    date          = excluded.date,
                    deadline      = excluded.deadline,
-                   duration      = excluded.duration,
                    priority      = excluded.priority,
                    label_ids     = excluded.label_ids,
                    date_string   = excluded.date_string,
@@ -650,7 +647,6 @@ async fn insert_tasks(pool: &PgPool, tasks: &[TaskInput]) -> anyhow::Result<()> 
                    or tasks.deleted_at   is distinct from excluded.deleted_at
                    or tasks.date         is distinct from excluded.date
                    or tasks.deadline     is distinct from excluded.deadline
-                   or tasks.duration     is distinct from excluded.duration
                    or tasks.priority     is distinct from excluded.priority
                    or tasks.label_ids    is distinct from excluded.label_ids
                    or tasks.date_string  is distinct from excluded.date_string
@@ -667,7 +663,6 @@ async fn insert_tasks(pool: &PgPool, tasks: &[TaskInput]) -> anyhow::Result<()> 
         .bind(task.deleted_at)
         .bind(&task.date)
         .bind(&task.deadline)
-        .bind(task.duration)
         .bind(task.priority)
         .bind(&task.label_ids)
         .bind(&task.date_string)
@@ -694,7 +689,7 @@ async fn insert_tasks(pool: &PgPool, tasks: &[TaskInput]) -> anyhow::Result<()> 
 async fn fetch_tasks_since(pool: &PgPool, since_seq: i64) -> anyhow::Result<Vec<TaskOutput>> {
     let tasks = sqlx::query_as::<_, TaskOutput>(
         "select id, device_id, content, completed_at, order_key, created_at, seq,
-                deleted_at, date, deadline, duration, priority, label_ids,
+                deleted_at, date, deadline, priority, label_ids,
                 date_string, project_id, section_id, parent_id
          from tasks
          where seq > $1

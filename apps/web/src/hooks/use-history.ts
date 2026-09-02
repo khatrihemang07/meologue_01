@@ -51,7 +51,7 @@ function defaultPromotionContext(): ComposerPromotionContext {
  * Composer highlights recognised tokens... so it files itself" (issue
  * #173's own acceptance criterion) actually means, and it wins instead
  * — this is `??`, not an unconditional overwrite, on purpose.
- * `deadline`/`duration`/`priority`/`dateString`/`labelIds` all carry the
+ * `deadline`/`priority`/`dateString`/`labelIds` all carry the
  * parse's own resolved values unconditionally, the identical fields
  * `todo-page.tsx`'s own `handleAdd` already writes from
  * `taskFieldsFromQuickAdd` for the add field — Promotion is that same
@@ -84,7 +84,6 @@ export function promotedTaskToTask(
     deletedAt: null,
     date: promoted.date ?? entryDayKey(capturedAt, deviceUtcOffsetMinutes()),
     deadline: promoted.deadline,
-    duration: promoted.duration,
     priority: promoted.priority,
     labelIds,
     dateString: promoted.dateString,

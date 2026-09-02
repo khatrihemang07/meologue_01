@@ -13,7 +13,7 @@
  * (../sqlite/schema.ts's own comment on `entries` names the same trap
  * under ADR 0007, before ADR 0028 gave it a real use).
  *
- * Date, deadline, duration and priority (issue #169) are on the type
+ * Date, deadline and priority (issue #169) are on the type
  * below, and so, since issue #171, are `projectId`, `sectionId` and
  * `parentId` — sequenced behind their own migration (version 9,
  * ../sqlite/migrations/index.ts) rather than folded into an earlier one,
@@ -68,13 +68,6 @@ export type Task = {
    * rather than re-checking the shape itself.
    */
   deadline: string | null;
-  /**
-   * Minutes, capped at 1440 (24 hours). Requires `date` to carry a time —
-   * there's nothing to measure a length from otherwise — enforced by
-   * task-fields.ts's assertValidDuration rather than by this field's type,
-   * because the rule spans two fields and a type can't express that.
-   */
-  duration: number | null;
   /**
    * 1-4, where 4 is the most urgent — inverted against the UI's p1-p4
    * naming, exactly as Todoist's own API is (CONTEXT.md's Priority entry).
@@ -192,7 +185,7 @@ export type Task = {
    * when the two halves land together, while the weakened type would have
    * outlived it. The rule ../types.ts states for `Entry.deletedAt` holds
    * here unchanged — every caller says explicitly rather than letting an
-   * omission default silently — and `date`/`deadline`/`duration`/
+   * omission default silently — and `date`/`deadline`/
    * `priority`/`labelIds` above all obey it.
    *
    * ../task-fields.ts's withDefaultDateString still normalises a missing

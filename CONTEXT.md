@@ -269,11 +269,6 @@ The hard cutoff by which a Task must be done. Date-only — no time, no recurren
 of Date: a Task may carry a Date, a Deadline, both, or neither, and a Deadline does not imply the
 user plans to work on the Task before it, only that it must be finished by then.
 
-### Duration
-
-How long a Task is expected to take. A Duration requires a Date that carries a time, because there
-is nothing to measure a length from otherwise.
-
 ### Recurrence
 
 A Task that comes back. What the user typed to describe the pattern is what is stored, unchanged;

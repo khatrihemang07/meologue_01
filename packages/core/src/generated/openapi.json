@@ -945,13 +945,6 @@
             "type": "string",
             "format": "uuid"
           },
-          "duration": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int32"
-          },
           "id": {
             "type": "string",
             "format": "uuid"
@@ -1049,13 +1042,6 @@
           "device_id": {
             "type": "string",
             "format": "uuid"
-          },
-          "duration": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int32"
           },
           "id": {
             "type": "string",

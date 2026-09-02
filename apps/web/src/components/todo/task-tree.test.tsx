@@ -25,7 +25,6 @@ function task(overrides: Partial<Task> = {}): Task {
     deletedAt: null,
     date: null,
     deadline: null,
-    duration: null,
     priority: 1,
     labelIds: [],
     dateString: null,

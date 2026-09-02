@@ -122,7 +122,6 @@ export interface QuickAddTaskFields {
   content: string;
   date: string | null;
   deadline: string | null;
-  duration: number | null;
   priority: number;
   /** `../../packages/core/src/task-types.ts`'s `Task.dateString` — the canonical recurrence phrase (see `RECURRENCE_WORD_TO_PHRASE` above), or `null` for a Task that doesn't repeat. */
   dateString: string | null;
@@ -223,7 +222,6 @@ export function taskFieldsFromQuickAdd(
     // consequence of it").
     date: recurrence.dateString !== null ? recurrence.date : result.date,
     deadline: result.deadline,
-    duration: result.duration,
     priority: result.priority,
     dateString: recurrence.dateString,
     labelNames: result.labelNames,

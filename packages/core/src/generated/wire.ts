@@ -752,8 +752,6 @@ export interface components {
             deleted_at?: string | null;
             /** Format: uuid */
             device_id: string;
-            /** Format: int32 */
-            duration?: number | null;
             /** Format: uuid */
             id: string;
             label_ids: string[];
@@ -785,8 +783,6 @@ export interface components {
             deleted_at?: string | null;
             /** Format: uuid */
             device_id: string;
-            /** Format: int32 */
-            duration?: number | null;
             /** Format: uuid */
             id: string;
             label_ids: string[];

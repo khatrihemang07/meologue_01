@@ -3,13 +3,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useSettingsStore } from "@/lib/settings";
 import { AddTaskForm } from "./add-task-form";
 
-// Every highlighted span carries this class (quick-add-highlight.ts's
-// `QUICK_ADD_HIGHLIGHT_CLASS`) — matched directly here rather than
-// imported, so a rename of the constant's own value still leaves this
-// suite testing "is *a* highlight class present," the same thing a reader
-// looking at the screen would actually judge by, not "does this string
-// equal that string."
-const HIGHLIGHT_CLASS = "bg-primary/15";
+// Every one of the three live states (quick-add-highlight.ts's own
+// `QuickAddHighlightState`) is painted through a class containing this
+// substring — `bg-quick-add-pending`/`bg-quick-add-resolved`/
+// `bg-quick-add-resolved-accent` all share it — so this is "is *a*
+// highlight present at all," the coarse question most of this suite
+// actually asks; `spanClasses` below is what the handful of tests that
+// care WHICH of the three states a span is in reach for instead.
+const ANY_HIGHLIGHT_CLASS = "bg-quick-add-";
 
 function highlightedSpans(): HTMLElement[] {
   // The backdrop is `aria-hidden` and `pointer-events-none` (add-task-
@@ -18,12 +19,24 @@ function highlightedSpans(): HTMLElement[] {
   // directly, the same way task-row.test.tsx's own drag tests reach past
   // Testing Library's accessible queries for a detail those queries have
   // no vocabulary for. Filtered by `className.includes` rather than a CSS
-  // class selector: Tailwind's own `/` (an opacity modifier, `bg-primary/15`)
-  // needs escaping to appear literally in a `querySelector` string, and a
-  // substring check on the rendered className needs none of that.
+  // class selector: Tailwind's own `[...]` arbitrary-value syntax
+  // (`rounded-[3px]`) needs escaping to appear literally in a
+  // `querySelector` string, and a substring check on the rendered
+  // className needs none of that.
   return Array.from(document.querySelectorAll("span")).filter((span) =>
-    span.className.includes(HIGHLIGHT_CLASS),
+    span.className.includes(ANY_HIGHLIGHT_CLASS),
   );
+}
+
+// The exact class list on the one span whose text is `text` — for the
+// tests that care which of the three states a token is in, not merely
+// whether it's highlighted at all. Splitting on whitespace (rather than
+// another `.includes` check) is what tells `bg-quick-add-resolved` and
+// `bg-quick-add-resolved-accent` apart: the former is a literal substring
+// of the latter, so a substring check alone can't distinguish them.
+function spanClasses(text: string): string[] {
+  const span = Array.from(document.querySelectorAll("span")).find((s) => s.textContent === text);
+  return span === undefined ? [] : span.className.split(/\s+/);
 }
 
 function getInput(): HTMLInputElement {
@@ -134,6 +147,80 @@ describe("AddTaskForm", () => {
       fireEvent.change(getInput(), { target: { value: "buy milk tomorrow p1" } });
 
       expect(highlightedSpans().map((s) => s.textContent)).toEqual(["p1"]);
+    });
+  });
+
+  // Issue #179's Part A: a resolved token, a still-being-typed (pending)
+  // token, and a token that never resolves to anything real now each read
+  // differently — see quick-add-highlight.ts's own `QuickAddHighlightState`
+  // doc comment for exactly what each means and why.
+  describe("the three live states", () => {
+    it("reads as pending while the caret still sits right after the word it just finished typing", () => {
+      render(<AddTaskForm onAdd={vi.fn()} disabled={false} />);
+
+      // A native `<input>`'s own value-setting behaviour moves the caret
+      // to the end of the new value — exactly "immediately after" the
+      // token that ends the line, which is what makes this the live,
+      // in-progress state a reader sees while still typing, before they
+      // click away or type further.
+      fireEvent.change(getInput(), { target: { value: "buy milk tomorrow" } });
+
+      expect(spanClasses("tomorrow")).toContain("bg-quick-add-pending");
+    });
+
+    it("upgrades to resolved, with this app's one reserved accent, once the caret moves off a Date token", () => {
+      render(<AddTaskForm onAdd={vi.fn()} disabled={false} />);
+      const input = getInput();
+
+      fireEvent.change(input, { target: { value: "buy milk tomorrow" } });
+      clickAt(input, 0); // caret moves to the very start — well clear of "tomorrow"
+
+      const classes = spanClasses("tomorrow");
+      expect(classes).toContain("bg-quick-add-resolved-accent");
+      expect(classes).not.toContain("bg-quick-add-pending");
+    });
+
+    it("resolves a Label to the grayscale chip, not the colour-worthy one — colour is reserved for Priority and Dates", () => {
+      render(<AddTaskForm onAdd={vi.fn()} disabled={false} />);
+      const input = getInput();
+
+      fireEvent.change(input, { target: { value: "buy milk %errands" } });
+      clickAt(input, 0); // caret away from the label token
+
+      const classes = spanClasses("%errands");
+      expect(classes).toContain("bg-quick-add-resolved");
+      expect(classes).not.toContain("bg-quick-add-resolved-accent");
+    });
+
+    it("an unresolved token (#project — nowhere to land yet) stays plain: neither highlighted nor stripped from what was typed", () => {
+      const onAdd = vi.fn();
+      render(<AddTaskForm onAdd={onAdd} disabled={false} />);
+      const input = getInput();
+
+      fireEvent.change(input, { target: { value: "buy milk #Work" } });
+
+      // Neither highlighted — no `bg-quick-add-*` class at all, in any of
+      // the three states, just the base `text-transparent` every backdrop
+      // span carries — nor removed from the field itself.
+      expect(spanClasses("#Work")).toEqual(["text-transparent"]);
+      expect(input).toHaveValue("buy milk #Work");
+
+      // Nor stripped from what actually gets stored on submit — the
+      // acceptance criterion's own second half: "not removed from what
+      // the reader typed."
+      fireEvent.click(screen.getByRole("button", { name: "Add" }));
+      expect(onAdd).toHaveBeenCalledWith(expect.objectContaining({ content: "buy milk #Work" }));
+    });
+
+    it("clicking into an unresolved token leaves the field showing no highlight at all — there was never anything visibly lit up to demote", () => {
+      render(<AddTaskForm onAdd={vi.fn()} disabled={false} />);
+      const input = getInput();
+
+      fireEvent.change(input, { target: { value: "buy milk #Work" } });
+      clickAt(input, 11); // inside "#Work"
+
+      expect(highlightedSpans()).toHaveLength(0);
+      expect(input).toHaveValue("buy milk #Work");
     });
   });
 

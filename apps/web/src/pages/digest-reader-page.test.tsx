@@ -25,7 +25,6 @@ const defaultEntryStoreContext: EntryStoreOutletContext = {
   removeTask: vi.fn(),
   setTaskDate: vi.fn(),
   setTaskDeadline: vi.fn(),
-  setTaskDuration: vi.fn(),
   setTaskPriority: vi.fn(),
   listTasksInProject: vi.fn(async () => []),
   listTaskChildren: vi.fn(async () => []),

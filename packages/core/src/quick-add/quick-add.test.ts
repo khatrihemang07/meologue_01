@@ -188,14 +188,16 @@ describe("tokens", () => {
     });
   });
 
-  describe("for 45min — duration", () => {
-    it.each<[string, number]>([
-      ["meeting for 45min", 45],
-      ["meeting for 45 min", 45],
-      ["meeting for 2 hours", 120],
-      ["meeting for 1 hr", 60],
-    ])("%s -> %i minutes", (input, expected) => {
-      expect(parse(input).duration).toBe(expected);
+  describe("'for 45min' — no longer a token (issue #179 removed Duration)", () => {
+    it.each<string>([
+      "meeting for 45min",
+      "meeting for 45 min",
+      "meeting for 2 hours",
+      "meeting for 1 hr",
+    ])("%s produces no token, and stays exactly as typed", (input) => {
+      const result = parse(input);
+      expect(result.tokens).toEqual([]);
+      expect(result.content).toBe(input);
     });
   });
 
@@ -314,7 +316,7 @@ describe("smart date recognition can be turned off entirely", () => {
 
 describe("offsets", () => {
   it("every token's raw text is exactly input.slice(start, end)", () => {
-    const input = "* Buy milk #Home /Chores %urgent p1 !5pm for 45min tomorrow //don't forget bags";
+    const input = "* Buy milk #Home /Chores %urgent p1 !5pm tomorrow //don't forget bags";
     const result = parse(input);
     expect(result.tokens.length).toBeGreaterThan(0);
     for (const token of result.tokens) {
@@ -350,7 +352,7 @@ describe("offsets", () => {
 
 describe("a fully-loaded input — every non-colliding token family at once", () => {
   it("recognises every piece and strips it all from content", () => {
-    const input = "* Buy milk #Home /Chores %urgent p1 for 45min //don't forget bags";
+    const input = "* Buy milk #Home /Chores %urgent p1 //don't forget bags";
     const result = parse(input);
 
     expect(result.uncompletable).toBe(true);
@@ -358,7 +360,6 @@ describe("a fully-loaded input — every non-colliding token family at once", ()
     expect(result.sectionName).toBe("Chores");
     expect(result.labelNames).toEqual(["urgent"]);
     expect(result.priority).toBe(4);
-    expect(result.duration).toBe(45);
     expect(result.description).toBe("don't forget bags");
     expect(result.content).toBe("Buy milk");
   });

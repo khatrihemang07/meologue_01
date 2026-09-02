@@ -152,17 +152,16 @@ export interface EntryStoreOutletContext {
   reorderTask: (id: string, orderKey: string) => void;
   removeTask: (id: string) => void;
   /**
-   * The four scheduling setters issue #169 adds (use-tasks.ts's own doc
-   * comments carry the reasoning each individually needs — the duration/
-   * date coupling in particular). Grouped under `tasks`/`addTask`/etc.
-   * above rather than a nested object: every other Task mutation on this
-   * context is a flat, top-level field, and a `scheduling: {...}` bag here
-   * would be the one field on this interface that reads differently from
-   * its neighbours for no reason a caller benefits from.
+   * The three scheduling setters issue #169 adds (use-tasks.ts's own doc
+   * comments carry the reasoning each individually needs). Grouped under
+   * `tasks`/`addTask`/etc. above rather than a nested object: every other
+   * Task mutation on this context is a flat, top-level field, and a
+   * `scheduling: {...}` bag here would be the one field on this interface
+   * that reads differently from its neighbours for no reason a caller
+   * benefits from.
    */
   setTaskDate: (id: string, date: string | null) => void;
   setTaskDeadline: (id: string, deadline: string | null) => void;
-  setTaskDuration: (id: string, duration: number | null) => void;
   setTaskPriority: (id: string, priority: number) => void;
   /** A Project's own top-level Tasks (`null` for Inbox) — use-tasks.ts's own `listTasksInProject` doc comment. */
   listTasksInProject: (projectId: string | null) => Promise<Task[]>;
@@ -358,14 +357,12 @@ function noopReorderTask(_id: string, _orderKey: string) {}
 
 function noopRemoveTask(_id: string) {}
 
-// Issue #169's four setters — the not-ready stand-ins for a Today view or a
+// Issue #169's three setters — the not-ready stand-ins for a Today view or a
 // picker mounted before the store opens, same reasoning as
 // noopAddTask/noopReorderTask above.
 function noopSetTaskDate(_id: string, _date: string | null) {}
 
 function noopSetTaskDeadline(_id: string, _deadline: string | null) {}
-
-function noopSetTaskDuration(_id: string, _duration: number | null) {}
 
 function noopSetTaskPriority(_id: string, _priority: number) {}
 
@@ -523,7 +520,7 @@ const TASK_STORE_METHODS: StoreMethodNames<TaskStore> = {
   getCursor: true,
   setCursor: true,
   search: true,
-  // Issue #169's four setters, added to TaskStore alongside the scheduling
+  // Issue #169's three setters, added to TaskStore alongside the scheduling
   // fields themselves — this is the compile-time checkpoint this registry
   // exists for (StoreMethodNames's own doc comment): a method added to
   // TaskStore and not listed here fails `tsc -b` right at this line,
@@ -531,7 +528,6 @@ const TASK_STORE_METHODS: StoreMethodNames<TaskStore> = {
   // one time a picker calls it before the store finishes opening.
   setDate: true,
   setDeadline: true,
-  setDuration: true,
   setPriority: true,
   // Issue #170 adds setLabelIds alongside the Labels feature itself, and
   // its recurrence engine adds three more (../../packages/core/
@@ -803,7 +799,6 @@ export function EntryStoreLayout() {
     removeTask,
     setTaskDate,
     setTaskDeadline,
-    setTaskDuration,
     setTaskPriority,
     listTasksInProject,
     listTaskChildren,
@@ -865,7 +860,6 @@ export function EntryStoreLayout() {
               removeTask,
               setTaskDate,
               setTaskDeadline,
-              setTaskDuration,
               setTaskPriority,
               listTasksInProject,
               listTaskChildren,
@@ -921,7 +915,6 @@ export function EntryStoreLayout() {
               removeTask: noopRemoveTask,
               setTaskDate: noopSetTaskDate,
               setTaskDeadline: noopSetTaskDeadline,
-              setTaskDuration: noopSetTaskDuration,
               setTaskPriority: noopSetTaskPriority,
               listTasksInProject: noopListTasksInProject,
               listTaskChildren: noopListTaskChildren,

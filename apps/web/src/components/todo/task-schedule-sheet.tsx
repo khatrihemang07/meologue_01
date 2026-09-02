@@ -1,9 +1,12 @@
 /**
- * The one place Date, Deadline, Duration and Priority are all settable
+ * The one place Date, Deadline and Priority are all settable
  * (issue #169's own acceptance criterion: "settable from pickers, without
  * needing any text parsing" — #170's quick-add grammar is a second door
- * onto these same four fields, not a prerequisite for this one, and this
- * file has to stand on its own without it).
+ * onto these same fields, not a prerequisite for this one, and this
+ * file has to stand on its own without it). Duration was a fourth such
+ * field until issue #179 removed it from the product entirely — it
+ * existed to serve calendar and time-blocking views this app never built,
+ * so it had nowhere to be; this sheet no longer has a section for it.
  *
  * Reuses `DatePickerSheet` (and, through it, `components/ui/calendar.tsx`)
  * for both the Date and the Deadline pick, rather than a second calendar
@@ -23,8 +26,8 @@
  * confirmation layers a dialog over its sheet the identical way).
  *
  * Every picker here commits immediately, with no separate "Save" — Date's
- * "Today"/"Tomorrow" shortcuts, the nested date picks, the duration
- * `<select>`, and the four priority buttons all call their setter the
+ * "Today"/"Tomorrow" shortcuts, the nested date picks, and the four
+ * priority buttons all call their setter the
  * moment they're used. `DatePickerSheet`'s own tap-then-confirm two-step
  * exists to protect a scroll position in History a mis-tap would cost
  * dearly to undo (its own header comment); nothing here has an equivalent
@@ -40,7 +43,6 @@ import { DatePickerSheet, localDayKey } from "@/components/date-picker-sheet";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { formatDay } from "@/lib/format-task-date";
-import { cn } from "@/lib/utils";
 
 export interface TaskScheduleSheetProps {
   /** The Task being scheduled, looked up fresh by id on every render of the caller — never a snapshot taken when the sheet opened, so a picker's own effect is visible the moment the next render lands. */
@@ -49,7 +51,6 @@ export interface TaskScheduleSheetProps {
   onOpenChange: (open: boolean) => void;
   onSetDate: (id: string, date: string | null) => void;
   onSetDeadline: (id: string, deadline: string | null) => void;
-  onSetDuration: (id: string, duration: number | null) => void;
   onSetPriority: (id: string, priority: number) => void;
 }
 
@@ -60,31 +61,12 @@ export interface TaskScheduleSheetProps {
 // that precision comes from instead.
 const DEFAULT_TIME = "09:00";
 
-// Common lengths a Task actually takes, not a free-typed number of
-// minutes — this is a picker, the same "no text entry" rule the rest of
-// this file follows. 4 hours is the longest single preset; anything
-// longer than that is unusual enough that 1440 (the store's own 24-hour
-// ceiling, task-fields.ts's assertValidDuration) doesn't need a preset of
-// its own to be reachable — it's exactly what "select a value near what
-// you meant, then nudge it" pickers everywhere else stop short of.
-const DURATION_PRESETS_MINUTES = [15, 30, 45, 60, 90, 120, 240];
-
-function formatMinutes(minutes: number): string {
-  if (minutes < 60) {
-    return `${minutes}m`;
-  }
-  const hours = Math.floor(minutes / 60);
-  const rest = minutes % 60;
-  return rest === 0 ? `${hours}h` : `${hours}h ${rest}m`;
-}
-
 export function TaskScheduleSheet({
   task,
   open,
   onOpenChange,
   onSetDate,
   onSetDeadline,
-  onSetDuration,
   onSetPriority,
 }: TaskScheduleSheetProps) {
   const [pickingDate, setPickingDate] = useState(false);
@@ -167,10 +149,7 @@ export function TaskScheduleSheet({
                     if (event.target.checked) {
                       onSetDate(task.id, `${dateDay}T${DEFAULT_TIME}`);
                     } else {
-                      // Dropping the time makes this Task all-day again;
-                      // use-tasks.ts's setTaskDate is what clears a
-                      // surviving `duration` for us — see its own doc
-                      // comment for why that isn't this component's job.
+                      // Dropping the time makes this Task all-day again.
                       onSetDate(task.id, dateDay);
                     }
                   }}
@@ -234,40 +213,6 @@ export function TaskScheduleSheet({
                 </Button>
               )}
             </div>
-          </section>
-
-          <section className="flex flex-col gap-2 px-1">
-            <h3 className="text-muted-foreground text-xs">Duration</h3>
-            {/* Disabled rather than hidden while there's no timed Date: the
-              rule ("requires a Date that carries a time" — CONTEXT.md's
-              Duration entry) is more legible as a control a reader can see
-              and be told why it's off than as a section that silently
-              isn't there yet. */}
-            <select
-              aria-label="Duration"
-              disabled={dateTime === null}
-              value={task.duration ?? ""}
-              onChange={(event) =>
-                onSetDuration(
-                  task.id,
-                  event.target.value === "" ? null : Number(event.target.value),
-                )
-              }
-              className={cn(
-                "w-fit rounded-md border border-border bg-background px-2 py-1.5 text-sm",
-                dateTime === null && "opacity-50",
-              )}
-            >
-              <option value="">No duration</option>
-              {DURATION_PRESETS_MINUTES.map((minutes) => (
-                <option key={minutes} value={minutes}>
-                  {formatMinutes(minutes)}
-                </option>
-              ))}
-            </select>
-            {dateTime === null && (
-              <p className="text-muted-foreground text-xs">Add a time above to set a duration.</p>
-            )}
           </section>
 
           <section className="flex flex-col gap-2 px-1 pb-1">
