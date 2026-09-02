@@ -106,3 +106,7 @@ produce a release build — debug builds need nothing and remain the documented 
 A machine that runs the script twice gets a brand-new macOS identity both times (expected) and
 the same Android keystore both times (required) — the asymmetry between the two halves of the one
 script is the load-bearing property this ADR records, not an inconsistency to clean up later.
+
+See [0054](0054-release-builds-are-published-as-github-releases.md): once release builds reach a
+public GitHub Release, "the only people who will ever run these builds already have the repo open"
+stops being true, though the Decision above does not change.

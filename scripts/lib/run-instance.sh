@@ -36,7 +36,8 @@
 #     below is not belt-and-braces; it is the only thing that stops them.
 #
 # scripts/run-sandbox.sh sets: INSTANCE, COMPOSE_SERVICE, CONTAINER, DB_PORT,
-# SERVER_PORT, VITE_PORT, DATABASE_URL, STATIC_DIR, WEB_BUILD_SCRIPT, WEB_DIST.
+# SERVER_PORT, VITE_PORT, BIND, DATABASE_URL, STATIC_DIR, WEB_BUILD_SCRIPT,
+# WEB_DIST.
 
 # Palette from preflight.sh, which every caller sources first. Named here so a
 # future reordering fails with this sentence instead of `_C_CYA: unbound
@@ -179,7 +180,7 @@ run_instance() {
   trap _ri_cleanup EXIT
   set -m
 
-  # DATABASE_URL, STATIC_DIR and PORT are exported inside the subshell rather
+  # DATABASE_URL, STATIC_DIR, PORT and BIND are exported inside the subshell rather
   # than assigned with ${VAR:-...} defaults, for the reason scripts/
   # sandbox-server.sh spells out at length: the point of a per-instance script
   # is that it cannot be aimed at the other instance, and a `${DATABASE_URL:-}`
@@ -192,6 +193,7 @@ run_instance() {
     export DATABASE_URL="$DATABASE_URL"
     export STATIC_DIR="$STATIC_DIR"
     export PORT="$SERVER_PORT"
+    export BIND="$BIND"
     exec cargo run
   ) > >(_ri_prefix 'srv' "$_C_CYA") 2>&1 </dev/null &
   SRV_PID=$!

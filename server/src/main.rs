@@ -214,10 +214,36 @@ async fn main() -> anyhow::Result<()> {
         .ok()
         .and_then(|p| p.parse().ok())
         .unwrap_or(41207);
-    let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await?;
+    // 0.0.0.0 stays the default: Tailscale (tailscale_identity/tailscale_serve_url
+    // below) reaches this server over the tailnet's 100.x interface, and a
+    // loopback-only default would silently break that path for anyone who hasn't
+    // set BIND. BIND exists for the person who wants to narrow it deliberately.
+    // `.filter(|b| !b.is_empty())` and not a bare `unwrap_or_else`: server/.env.example
+    // ships `BIND=` with no value, and dotenvy sets that as an EMPTY string rather than
+    // leaving the variable unset — so `env::var` returns `Ok("")` and the fallback never
+    // fires, leaving `bind("", port)` to fail at startup for anyone who copied the example
+    // file verbatim. The PORT parse directly above is already tolerant of this by accident
+    // (an empty string fails `parse()` and falls through to 41207); this makes BIND
+    // tolerant of it on purpose.
+    let bind = env::var("BIND")
+        .ok()
+        .filter(|b| !b.is_empty())
+        .unwrap_or_else(|| "0.0.0.0".to_string());
+    let listener = tokio::net::TcpListener::bind((bind.as_str(), port)).await?;
     println!("meologue-server listening on :{port}");
     println!("Server URL for Settings: http://localhost:{port}");
-    if let Some(identity) =
+    // A loopback bind makes every address below unreachable, so they must not be
+    // advertised. Printing "Tailscale IP URL for Settings: http://100.x.y.z:PORT"
+    // under BIND=127.0.0.1 hands the reader an address that will refuse the
+    // connection, and they have no way to tell from the banner that the bind is
+    // why — which is a worse failure than saying nothing, because it looks like
+    // Tailscale itself is broken.
+    let loopback = matches!(bind.as_str(), "127.0.0.1" | "::1" | "localhost");
+    if loopback {
+        println!("BIND={bind} — reachable from this machine only; tailnet URLs omitted.");
+    }
+    if !loopback
+        && let Some(identity) =
         tailscale_json(&["status", "--json"]).and_then(|status| tailscale_identity(&status))
     {
         println!(
@@ -234,6 +260,24 @@ async fn main() -> anyhow::Result<()> {
         {
             println!("Tailscale Serve URL for Settings: {url}");
         }
+    }
+    // Unconditional, not gated on `bind`: 0.0.0.0 is the default and has to stay
+    // the default (see the comment above), so a warning that only fired for
+    // 0.0.0.0 would print on virtually every run anyway and buys nothing — worse,
+    // its absence on the rare BIND=127.0.0.1 run would read as "this run is safe
+    // now," which docs/adr/0003 explicitly says is never true. There is no
+    // authentication at all: anything that can open a TCP connection to this
+    // address can read and write every Entry.
+    println!("WARNING: no authentication (docs/adr/0003). Anything that can reach");
+    println!("  {bind}:{port} can read and write every Entry. Keep this on localhost or a");
+    println!("  tailnet — never a public host.");
+    // The lever, only when it has not already been pulled. Telling someone who
+    // set BIND=127.0.0.1 to "narrow the bind with BIND=127.0.0.1" reads as though
+    // the setting did not take, and trains the reader to skip the whole warning.
+    // The no-auth sentence above stays unconditional either way: loopback is not
+    // safe, it is merely narrower.
+    if !loopback {
+        println!("  Narrow it to this machine with BIND=127.0.0.1.");
     }
     axum::serve(listener, app).await?;
 

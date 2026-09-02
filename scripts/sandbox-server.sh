@@ -16,7 +16,7 @@
 # inherited: `server/src/main.rs` loads `server/.env`, and dotenvy does not
 # override variables already in the environment, so MEOLOGUE_CHAT_* /
 # MEOLOGUE_EMBED_* / MEOLOGUE_TZ come from the developer's own .env while
-# DATABASE_URL, STATIC_DIR and PORT below still win.
+# DATABASE_URL, STATIC_DIR, PORT and BIND below still win.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -28,4 +28,5 @@ cd server
 export DATABASE_URL="postgres://meologue:meologue@localhost:5442/meologue"
 export STATIC_DIR="../apps/web/dist/sandbox"
 export PORT=41307
+export BIND="0.0.0.0"
 exec cargo run

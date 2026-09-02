@@ -24,6 +24,7 @@ CONTAINER="meologue-postgres-sandbox"
 DB_PORT=5442
 SERVER_PORT=41307
 VITE_PORT=5174
+BIND="0.0.0.0"
 DATABASE_URL="postgres://meologue:meologue@localhost:5442/meologue"
 STATIC_DIR="../apps/web/dist/sandbox"
 WEB_BUILD_SCRIPT="build:sandbox"

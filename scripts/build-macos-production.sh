@@ -141,8 +141,12 @@ fi
 cat <<NEXT
 
 Signed but NOT notarized — there is no Apple Developer account
-(docs/adr/0015). Opening $APP on another Mac needs one explicit
-right-click → Open; a double-click alone is refused by Gatekeeper.
+(docs/adr/0015). This $APP was built locally, so it was never downloaded and
+never picked up the com.apple.quarantine attribute Gatekeeper checks — it
+opens with a plain double-click here. A copy of it fetched from anywhere
+else (e.g. a GitHub Release) will carry that attribute and needs:
+  xattr -dr com.apple.quarantine /Applications/meologue.app
+or System Settings → Privacy & Security → "Open Anyway".
 
 The Sandbox build (com.meologue.app.sandbox) has a separate identifier and
 application data directory. Both can run and sync at once, each reaching

@@ -24,6 +24,7 @@ COMPOSE_SERVICE="postgres"
 CONTAINER="meologue-postgres"
 DB_PORT=5432
 SERVER_PORT=41207
+BIND="0.0.0.0"
 DATABASE_URL="postgres://meologue:meologue@localhost:5432/meologue"
 STATIC_DIR="../apps/web/dist/web"
 WEB_BUILD_SCRIPT="build:web"
@@ -134,7 +135,7 @@ printf '  Ctrl-C stops it.\n\n'
 # MEOLOGUE_* chat and embedding configuration and taking Reflection and Digest
 # with it.
 #
-# The three variables are exported rather than defaulted through
+# The four variables are exported rather than defaulted through
 # `${VAR:-...}`, for the reason scripts/sandbox-server.sh spells out at length:
 # the point of a per-instance script is that it cannot be aimed at the other
 # instance, and a `${DATABASE_URL:-}` fallback would let an exported variable
@@ -146,6 +147,7 @@ cd server
 export DATABASE_URL="$DATABASE_URL"
 export STATIC_DIR="$STATIC_DIR"
 export PORT="$SERVER_PORT"
+export BIND="$BIND"
 # SERVER_BIN is written relative to the repo root, because that is where the
 # --no-build check and the banner above both read it from; `../` re-anchors it
 # now that we are inside server/. One definition, so the two cannot drift.

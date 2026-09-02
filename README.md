@@ -58,6 +58,14 @@ Configuring an endpoint only points at it — for a local model (e.g. Ollama) it
 running, or Reflection fails with a connection-refused error. Start it with
 `brew services start ollama` (or `ollama serve`) before using Reflection.
 
+### Install a build
+
+The shortest path to a running app is a Production build from
+[the latest Release](https://github.com/khatrihemang07/meologue_01/releases/latest) rather than one
+you build yourself. Apple Silicon only. Both are self-signed, so each needs one install step —
+`xattr -dr com.apple.quarantine` on macOS, allowing the source on Android — which every Release's
+notes spell out. The Server still has to be running and set as the Server URL in Settings.
+
 ### Web
 
 `./scripts/run-production.sh` is a frozen, production-style process: it builds the bundle and the
