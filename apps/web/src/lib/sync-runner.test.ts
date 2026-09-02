@@ -1,6 +1,6 @@
 import type { Entry, EntryStore, TaskStore } from "@meologue/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ENTRIES_QUERY_KEY } from "@/lib/query-keys";
+import { ENTRIES_QUERY_KEY, TASKS_QUERY_KEY } from "@/lib/query-keys";
 import { useSettingsStore } from "@/lib/settings";
 
 const { syncMock } = vi.hoisted(() => ({ syncMock: vi.fn(async () => {}) }));
@@ -306,6 +306,38 @@ describe("requestSync", () => {
       // sync() itself throws first — the refresh only runs after a
       // successful sync().
       expect(store.list).not.toHaveBeenCalled();
+    });
+  });
+
+  // Issue #177: before this fix, `runSyncOnce` refreshed Entries
+  // (`refreshNewestEntriesPage`, just above) but never invalidated
+  // `TASKS_QUERY_KEY` — a Task pulled from another Device during a sync
+  // sat in the store correctly but stayed invisible in Todo (a stale
+  // TanStack Query cache) until something else happened to invalidate it,
+  // most reliably a reload.
+  describe("tasks cache refresh (issue #177)", () => {
+    it("on success, invalidates the Tasks query so a Task pulled from another Device shows without a reload", async () => {
+      const { requestSync, queryClient } = await importFresh();
+      const store = createFakeStore();
+      const taskStore = createFakeTaskStore();
+      const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+
+      await requestSync(store, taskStore, "device-a");
+
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: TASKS_QUERY_KEY });
+    });
+
+    it("leaves the tasks cache untouched when sync fails", async () => {
+      const { requestSync, queryClient } = await importFresh();
+      const store = createFakeStore();
+      const taskStore = createFakeTaskStore();
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      syncMock.mockRejectedValueOnce(new Error("boom"));
+      const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+
+      await requestSync(store, taskStore, "device-a");
+
+      expect(invalidateSpy).not.toHaveBeenCalled();
     });
   });
 });

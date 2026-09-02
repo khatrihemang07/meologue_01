@@ -3,6 +3,7 @@ import { hasTime, mintId, orderKeyBetween } from "@meologue/core";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { queryClient } from "@/lib/query-client";
 import { COMPLETED_TASKS_QUERY_KEY, ENTRIES_QUERY_KEY, TASKS_QUERY_KEY } from "@/lib/query-keys";
+import { requestSync } from "@/lib/sync-runner";
 import { syncTaskReferenceChecked, syncTaskReferenceLabel } from "@/lib/task-reference-sync";
 import { refreshTasks } from "@/lib/tasks-refresh";
 
@@ -200,19 +201,15 @@ export function useTasks(
   // forgetting the Sync nudge is invisible on screen, so every mutation
   // below routes through the one place that remembers it.
   //
-  // The nudge itself is the seam, not yet the call. Task Sync doesn't exist
-  // until issue #172 (ADR 0047's Consequence 3 — a second entity stream is
-  // its own protocol-version change, not something this ticket's TaskStore
-  // reaches for on its own), and sync-runner.ts's `requestSync` is typed to
-  // `EntryStore` specifically — there is no Task-shaped version of it to
-  // call yet. #172 lands its own `requestSync`-equivalent on the line
-  // directly below the comment, in this exact function, rather than this
-  // hook growing a parallel `afterLocalWrite` later that has to be kept in
-  // step with this one by hand.
+  // `requestSync` (issue #177's fix — #172 landed Task Sync itself but left
+  // this hook's own nudge as a seam, per this comment's earlier revision)
+  // coalesces against any sync already in flight, same as use-history.ts's
+  // and backfill-tasks.ts's own calls — a Task mutation now reaches other
+  // Devices as soon as this write commits, rather than waiting for the next
+  // scheduled poll.
   const afterLocalWrite = async () => {
     await refreshTasks();
-    // Seam for issue #172's Task Sync nudge — see this function's own
-    // comment above.
+    void requestSync(store, taskStore, deviceId);
   };
 
   const addTaskMutation = useMutation({

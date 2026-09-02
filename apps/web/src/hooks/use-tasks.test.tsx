@@ -6,6 +6,17 @@ import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { useTasks as UseTasks } from "./use-tasks";
 
+// Issue #177: `afterLocalWrite`'s own nudge, mocked the identical way
+// use-history.test.tsx's own `requestSyncMock` is (that file's own comment
+// explains why `vi.mock` rather than spying on the real thing — sync-runner
+// keeps module-scope in-flight state that a real call would need a live
+// Server to resolve).
+const { requestSyncMock } = vi.hoisted(() => ({
+  requestSyncMock: vi.fn(async () => {}),
+}));
+
+vi.mock("@/lib/sync-runner", () => ({ requestSync: requestSyncMock }));
+
 // use-tasks.ts reaches for the `queryClient` singleton exported by
 // lib/query-client.ts directly (not React context), the same shape
 // use-history.test.tsx's own comment explains — each test needs a fresh
@@ -221,6 +232,7 @@ function createFakeEntryStore(initial: readonly Entry[] = []): EntryStore {
 describe("useTasks", () => {
   beforeEach(() => {
     localStorage.clear();
+    requestSyncMock.mockClear();
   });
 
   async function renderUseTasks(
@@ -286,6 +298,39 @@ describe("useTasks", () => {
     const added = result.current.tasks.find((t) => t.content === "call mum");
     expect(added).toBeDefined();
     expect((added as Task).orderKey > "M").toBe(true);
+  });
+
+  // Issue #177: `afterLocalWrite`'s own nudge — before this fix, a Task
+  // mutation refreshed the local TanStack Query cache but never called
+  // `requestSync`, so a Task created, completed or edited here reached
+  // another Device only at the next scheduled poll rather than
+  // immediately, unlike every Entry mutation (use-history.ts's own
+  // `afterLocalWrite`) and the Tasks backfill (backfill-tasks.ts), both of
+  // which already nudge.
+  it("nudges Sync right away after adding a Task, rather than waiting for the next poll", async () => {
+    const store = createFakeStore();
+    const { result } = await renderUseTasks(store);
+    await waitFor(() => expect(result.current.tasks).toEqual([]));
+
+    act(() => result.current.addTask("call mum"));
+
+    await waitFor(() =>
+      expect(requestSyncMock).toHaveBeenCalledWith(expect.anything(), store, "device-a"),
+    );
+  });
+
+  it("nudges Sync right away after completing a Task", async () => {
+    const store = createFakeStore();
+    await store.upsert([task({ id: "a" })]);
+    const { result } = await renderUseTasks(store);
+    await waitFor(() => expect(result.current.tasks).toHaveLength(1));
+    requestSyncMock.mockClear();
+
+    act(() => result.current.completeTask("a"));
+
+    await waitFor(() =>
+      expect(requestSyncMock).toHaveBeenCalledWith(expect.anything(), store, "device-a"),
+    );
   });
 
   it("completes a Task, moving it out of the active list and into completedTasks", async () => {

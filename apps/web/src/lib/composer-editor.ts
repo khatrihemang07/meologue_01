@@ -1260,6 +1260,27 @@ const TASK_CHECKBOX_CLASS = "mt-[0.2em] shrink-0 accent-current";
  * this function's own DOM writes reacting to `checked` changing) for a
  * paragraph edit.
  */
+/**
+ * Whether `item` (a `list_item`) is a REFERENCED checklist line — its own
+ * leading paragraph holds nothing but Promotion's `task_reference` atom
+ * (`isTaskReferenceParagraph`'s own comment, just above) — rather than a
+ * bare checkbox's ordinary typed text. `listItemNodeView`'s own `render`
+ * (below) reads this to decide who draws the ONE checkbox a task line
+ * shows: a bare item draws its own, a referenced one defers entirely to
+ * `taskReferenceNodeView`'s (issue #177) — the identical split
+ * `entry-prose.tsx`'s `renderListItem` already makes for read mode
+ * (`TaskReferenceItem` renders the whole `<li>` itself, never falling
+ * through to the bare-checkbox `<li>` beneath it). Without this, every
+ * task line under `checked !== null` drew this file's own checkbox
+ * regardless of whether it was bare or referenced, and once
+ * `taskReferenceNodeView` started drawing its own inside a referenced
+ * line's paragraph too, the reader saw two: `☐ ☐ buy milk`.
+ */
+function isReferencedTaskItem(item: PMNode): boolean {
+  const first = item.firstChild;
+  return first !== null && isTaskReferenceParagraph(first);
+}
+
 export function listItemNodeView(
   node: PMNode,
   view: EditorView,
@@ -1270,9 +1291,16 @@ export function listItemNodeView(
   let checkbox: HTMLInputElement | null = null;
 
   function render(current: PMNode) {
-    if (current.attrs.checked === null) {
-      dom.className = "";
-      contentDOM.className = "";
+    // A referenced task line (`isReferencedTaskItem`, just above) still
+    // wants `TASK_LI_CLASS`/`TASK_CONTENT_CLASS` — `list-none` so no
+    // bullet marker fights the checkbox `taskReferenceNodeView` draws
+    // inside the paragraph, `items-baseline` for the same alignment a
+    // bare task line gets — it just must not draw a SECOND checkbox of
+    // its own alongside that one.
+    const referenced = current.attrs.checked !== null && isReferencedTaskItem(current);
+    if (current.attrs.checked === null || referenced) {
+      dom.className = referenced ? TASK_LI_CLASS : "";
+      contentDOM.className = referenced ? TASK_CONTENT_CLASS : "";
       checkbox?.remove();
       checkbox = null;
       if (contentDOM.parentElement !== dom) {
@@ -1362,6 +1390,180 @@ export function referenceNodeView(node: PMNode): NodeView {
 }
 
 // ---------------------------------------------------------------------------
+// A Task reference's NodeView
+// ---------------------------------------------------------------------------
+
+/**
+ * `entrySchema`'s own `task_reference` node spec (entry-schema.ts, ADR
+ * 0048) has a `toDOM` now (issue #177), but only for
+ * `DOMSerializer.fromSchema`'s clipboard path — see that spec's own
+ * comment for why copy specifically needs one even though rendering does
+ * not. Live rendering still goes through a NodeView here, for the same
+ * reason `referenceNodeView` just above does: `entrySchema` stays usable
+ * headless (entry-document.ts's own round-trip tests hold no `EditorView`
+ * at all), and a NodeView is where the interactive/DOM-specific half of a
+ * leaf's rendering belongs.
+ *
+ * This is the piece issue #173 built `TaskReferenceAttrs` for and never
+ * finished wiring up: without a NodeView registered for `task_reference`
+ * (composer.tsx's own `nodeViews` map), ProseMirror falls back to calling
+ * `node.type.spec.toDOM` unconditionally the moment a document holding one
+ * of these nodes needs to render — before this ticket, that spec had no
+ * `toDOM` at all, so opening any Entry whose body a checkbox had already
+ * been promoted into (ADR 0048, and issue #174's backfill of nearly every
+ * historical checkbox) crashed `TypeError: node.type.spec.toDOM is not a
+ * function` inside the mount effect's `useEffect`, and — with no error
+ * boundary anywhere in the app before this ticket's own `AppErrorBoundary`
+ * — took the entire screen down with it.
+ *
+ * Renders the Task's own cached `label`/`checked` (ADR 0048: caches,
+ * refreshed from the Task on every write, never a fact this node edits on
+ * its own) as one atomic, uneditable unit, matching
+ * `listItemNodeView`'s own checkbox (`TASK_CHECKBOX_CLASS`) and
+ * `entry-row.tsx`'s `TaskReferenceItem` — the read-mode renderer for the
+ * identical data — so a task reference looks the same whether it's being
+ * composed or being read. The checkbox stays `disabled`: unlike
+ * `listItemNodeView`'s own checkbox (which commits straight to THIS
+ * document via `setNodeMarkup`, matching `entry-document.ts`'s own
+ * `writeListItem` reading the enclosing `list_item`'s `checked` as the
+ * one attr that actually reaches the saved body), ticking a Task
+ * reference has to write the Task itself (ADR 0048's "ticking writes the
+ * Task; the body's marker follows as a consequence, not a second write")
+ * — something only a component with a Task store in reach can do
+ * (`entry-row.tsx`'s `TaskReferenceItem`, via `useEntryStore()`), which
+ * this plain constructor function, called from composer.tsx's mount
+ * effect with no store of its own, is not. Wiring a live toggle here is
+ * issue #181's own scope, not this ticket's — "render, don't crash" is
+ * the whole of what issue #177 asks for.
+ *
+ * `contentEditable = "false"` on the wrapper, plus `stopEvent`/
+ * `ignoreMutation` both unconditionally `true`, are what keep this atom
+ * uneditable in the way ADR 0048's "a task reference is either a complete
+ * node or it is plain text, with nothing in between" requires: nothing a
+ * reader does inside this NodeView's own DOM (a click that lands on the
+ * disabled checkbox, a mutation the browser itself makes while it's
+ * updating) is ever read by ProseMirror's own DOMObserver as a document
+ * edit the way typing into an ordinary contenteditable region would be.
+ */
+export function taskReferenceNodeView(node: PMNode): NodeView {
+  const span = document.createElement("span");
+  span.className = "inline-flex items-baseline gap-1.5 align-baseline";
+  span.dataset.taskReference = "true";
+  span.contentEditable = "false";
+
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
+  checkbox.disabled = true;
+  checkbox.className = TASK_CHECKBOX_CLASS;
+
+  const label = document.createElement("span");
+  label.className = "whitespace-pre-wrap";
+
+  span.append(checkbox, label);
+
+  function render(current: PMNode) {
+    checkbox.checked = current.attrs.checked === true;
+    const text = typeof current.attrs.label === "string" ? current.attrs.label : "";
+    checkbox.setAttribute(
+      "aria-label",
+      text.length > 0 ? text : checkbox.checked ? "Checked" : "Unchecked",
+    );
+    label.textContent = text;
+  }
+
+  render(node);
+  return {
+    dom: span,
+    selectNode() {
+      span.classList.add("bg-accent");
+    },
+    deselectNode() {
+      span.classList.remove("bg-accent");
+    },
+    update(updatedNode) {
+      if (updatedNode.type.name !== "task_reference") {
+        return false;
+      }
+      render(updatedNode);
+      return true;
+    },
+    stopEvent() {
+      return true;
+    },
+    ignoreMutation() {
+      return true;
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// A referenced checklist item's own separator space
+// ---------------------------------------------------------------------------
+
+/**
+ * Visually hides — via a `Decoration`, never a document edit — the single
+ * leading whitespace text node a referenced checklist item's leading
+ * paragraph always starts with: the mandatory separator between `- [ ]`/
+ * `- [x]` and whatever follows it, which `entry-document.ts`'s own
+ * round trip deliberately keeps as real document content rather than
+ * stripping it (`entry-document.test.ts`'s own comment: "the reference
+ * itself is the child after it" — this file's `isTaskReferenceParagraph`,
+ * just above, already skips over exactly this same text node when
+ * deciding whether a paragraph IS a referenced task line, for the
+ * identical reason). Read mode (`entry-prose.tsx`'s `renderListItem`)
+ * never renders that space at all — a referenced item swaps its entire
+ * first block for `TaskReferenceItem`'s own rendering rather than walking
+ * its children one leaf at a time — but the Composer's `paragraphNodeView`
+ * renders every leaf of a paragraph in the ordinary way, including this
+ * one, and the editable root's own `white-space: pre-wrap` (load-bearing
+ * elsewhere for a typed NBSP or a run of spaces to stay visible) means
+ * this leading space shows up as a real, visible gap in front of
+ * `taskReferenceNodeView`'s own chip — `☐ [ ]buy milk` reading as
+ * `☐  buy milk` — rather than collapsing the way it would under
+ * `white-space: normal`.
+ *
+ * A decoration rather than teaching `entryMarkdownToDocument` to drop the
+ * text node (or `entryDocumentToMarkdown` to special-case its absence):
+ * the document a copy/paste, an undo/redo, or `entry-document.test.ts`'s
+ * own 691-case corpus sees stays byte-for-byte the model
+ * `entry-document.ts` already produces and already has coverage for; only
+ * this ONE NodeView's on-screen rendering changes.
+ */
+function taskReferenceSeparatorDecorations(doc: PMNode): DecorationSet {
+  const decorations: Decoration[] = [];
+  doc.descendants((node, pos) => {
+    if (node.type.name !== "paragraph") {
+      return true;
+    }
+    if (isTaskReferenceParagraph(node)) {
+      const first = node.firstChild;
+      if (first?.isText) {
+        decorations.push(
+          Decoration.inline(pos + 1, pos + 1 + first.nodeSize, {
+            class: "hidden",
+          }),
+        );
+      }
+    }
+    // Paragraphs never nest a second paragraph (entry-schema.ts's own
+    // content expressions), so there is nothing further to find by
+    // descending into this one's own children either way.
+    return false;
+  });
+  return DecorationSet.create(doc, decorations);
+}
+
+export function taskReferenceSeparatorPlugin(): Plugin {
+  return new Plugin({
+    props: {
+      decorations(state) {
+        return taskReferenceSeparatorDecorations(state.doc);
+      },
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Assembly
 // ---------------------------------------------------------------------------
 
@@ -1389,6 +1591,9 @@ export function buildComposerPlugins(placeholder: string): Plugin[] {
     // Issue #173: independent of picker/slash ordering — reads only its
     // own plugin state and the doc/selection, never either of theirs.
     checklistHighlightPlugin(),
+    // Issue #177: independent of every other plugin here too — reads only
+    // the current doc, not the selection or any plugin's own state.
+    taskReferenceSeparatorPlugin(),
     placeholderPlugin(placeholder),
     history(),
   ];

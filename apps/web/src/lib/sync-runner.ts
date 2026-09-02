@@ -4,6 +4,7 @@ import { refreshNewestEntriesPage } from "@/lib/entries-pagination";
 import { useSettingsStore } from "@/lib/settings";
 import { useSyncStatusStore } from "@/lib/sync-status";
 import { syncTransport } from "@/lib/sync-transport";
+import { refreshTasks } from "@/lib/tasks-refresh";
 
 let syncInFlight: Promise<void> | null = null;
 let rerunRequested = false;
@@ -34,6 +35,15 @@ async function runSyncOnce(
     // scrolled, and why "newest page only" is still correct for what a
     // sync pull can actually change.
     await refreshNewestEntriesPage(store);
+    // Issue #177: a Task pulled from another Device during this sync (ADR
+    // 0047's Consequence 3, issue #172's Task Sync) otherwise leaves
+    // `TASKS_QUERY_KEY`/`COMPLETED_TASKS_QUERY_KEY` (tasks-refresh.ts) stale
+    // — Todo keeps showing whatever it already had cached until something
+    // else happens to invalidate them, which could be a reload away. Task
+    // Sync has no paged "newest page" the way Entries do
+    // (`refreshTasks`'s own doc comment), so this is a plain invalidate,
+    // same as every other caller of it.
+    await refreshTasks();
     useSyncStatusStore.getState().recordSuccess(serverUrl);
   } catch (error) {
     console.error("meologue: sync failed", error);

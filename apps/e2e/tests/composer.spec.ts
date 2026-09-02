@@ -784,6 +784,56 @@ test("opening an Entry and closing it unchanged writes nothing — ADR 0044's di
     .not.toBe(seqAfterUnchangedEdit);
 });
 
+// Issue #177: a Sent checkbox line is promoted into a Task reference (ADR
+// 0048) the moment it Sends, and `task_reference` (entry-schema.ts) had no
+// renderer anywhere the Composer's EditorView could reach — opening it for
+// editing crashed inside a `useEffect`, and with no error boundary
+// anywhere in the app, React 19 unmounted the ENTIRE tree, not just the
+// Composer. Issue #174's backfill means nearly every historical checkbox
+// carried this same, previously un-editable shape.
+test("editing a Sent checkbox line opens it in the Composer instead of blanking the screen", async ({
+  page,
+}) => {
+  const body = uniqueEntryBody("composer-task-reference-edit");
+  await page.goto("/composer");
+  await sendEntry(page, `- [ ] ${body}`);
+
+  // Promotion writes the Task's own cached label back into the row, which
+  // reads identically to what was typed either way — this is the row
+  // ADR 0048 says is now a live Task reference, not a plain checkbox line.
+  //
+  // `entryRow`, never a bare `getByText(body)`: promoting this line minted a
+  // Task dated today (issue #173's capture-date rule), so the identical words
+  // now ALSO render in today's Day block (issue #174, history.tsx's
+  // `DayTasksRow`) — a bare text match resolves to two elements and fails
+  // Playwright's strict mode. Every assertion in a task-bearing spec has to
+  // say WHICH of the two surfaces it means.
+  await expect(entryRow(page, body)).toBeVisible();
+
+  const row = entryRow(page, body);
+  await row.hover();
+  await row.getByRole("button", { name: "Edit" }).click();
+
+  // The crash this ticket fixes took the WHOLE screen down, not merely the
+  // Composer — asserting the app's own persistent chrome ("Editing Entry",
+  // the Cancel affordance) survived is as important as asserting the
+  // checkbox itself rendered.
+  await expect(page.getByText("Editing Entry")).toBeVisible();
+  const editor = composerField(page);
+  const checkbox = editor.locator('input[type="checkbox"]');
+  await expect(checkbox).toHaveCount(1);
+  await expect(checkbox).toBeDisabled();
+  await expect(checkbox).not.toBeChecked();
+  await expect(editor).toContainText(body);
+
+  // Reading further proves the app never unmounted: Cancel still works,
+  // leaving edit mode the ordinary way rather than the page having become
+  // inert underneath a crashed render.
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await expect(page.getByText("Editing Entry")).toHaveCount(0);
+  await expect(entryRow(page, body)).toBeVisible();
+});
+
 // ---------------------------------------------------------------------------
 // Issue #164: the format toolbar and its keyboard shortcuts.
 //
