@@ -11,12 +11,13 @@ import type {
 } from "@meologue/core";
 import { open } from "@meologue/core";
 import { queryOptions, useQuery } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Outlet, useOutletContext } from "react-router";
 import { type UseHistoryPagination, useHistory } from "@/hooks/use-history";
 import { useLabels } from "@/hooks/use-labels";
 import { type AddProjectOverrides, useProjects } from "@/hooks/use-projects";
 import { type AddTaskOverrides, useTasks } from "@/hooks/use-tasks";
+import { runTasksBackfillOnce } from "@/lib/backfill-tasks";
 import { dayHasEntries } from "@/lib/day-has-entries";
 import { dayReferrers } from "@/lib/day-referrers";
 import { deferStore, type StoreMethodNames } from "@/lib/defer-store";
@@ -759,6 +760,32 @@ export function EntryStoreLayout() {
   // below, the identical LabelStore round trip `handleAdd` (further down
   // this file) already awaits for the add field's own `%label` tokens.
   const { labels, resolveLabelIds } = useLabels(labelStore, deviceId);
+
+  // Issue #174, ADR 0053: the one-time History backfill, kicked off the
+  // moment the real store is open — `backfillTasksFromHistory` itself is
+  // what makes running it more than once harmless (its own header
+  // comment), but `backfillStarted` still guards against firing it
+  // *concurrently* with itself: two overlapping runs would both read the
+  // same not-yet-rewritten Entry bodies before either had a chance to
+  // write one back, and both would mint a Task for the same checkbox line
+  // — the loop guard only protects a line already rewritten by an
+  // EARLIER, finished run, not two runs racing each other. A plain ref
+  // (not `runTasksBackfillOnce`'s own localStorage flag, which only
+  // updates once the whole scan finishes) is what closes that window: it
+  // flips the instant this effect decides to start, before the first
+  // `await` inside `runTasksBackfillOnce` ever runs, so React's dev-mode
+  // double-invoke of a fresh mount's effects can never launch two scans
+  // side by side.
+  const backfillStarted = useRef(false);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `resolveLabelIds` is read for its current value only, deliberately not a reactive trigger — `backfillStarted` already limits this to one call for the lifetime of this component, so re-running it because a *different* function identity was handed over on a later render would be wrong, not merely redundant.
+  useEffect(() => {
+    if (data === undefined || backfillStarted.current) {
+      return;
+    }
+    backfillStarted.current = true;
+    void runTasksBackfillOnce(data.store, data.taskStore, data.deviceId, resolveLabelIds);
+  }, [data]);
+
   const { entries, pagination, sendEntry, editEntry, commitEntryEdit, removeEntry } = useHistory(
     store,
     taskStore,

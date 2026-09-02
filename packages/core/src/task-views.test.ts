@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { groupEntriesIntoDayFiles } from "./export/day-file";
 import type { Task } from "./task-types";
 import { storedPriorityOf } from "./task-types";
-import { compareForToday, today } from "./task-views";
+import { compareForToday, tasksForDay, today } from "./task-views";
+import { entry } from "./test-support/entry-fixture";
 import { task } from "./test-support/task-fixture";
 
 // A fixed "now" for every test below — a floating timestamp, matching
@@ -243,5 +245,98 @@ describe("grouping does not collapse the order to priority", () => {
     }
 
     expect(groupedByPriority.get(3)?.map((t) => t.id)).toEqual(["early", "late"]);
+  });
+});
+
+describe("tasksForDay — the day block's own filter (issue #174)", () => {
+  it("includes a Task dated that day, a Task deadlined that day, and excludes one dated another day and one with neither field", () => {
+    const dated = task({ id: "dated", date: "2026-09-01" });
+    const deadlined = task({ id: "deadlined", date: null, deadline: "2026-09-01" });
+    const otherDay = task({ id: "other-day", date: "2026-09-02" });
+    const neither = task({ id: "neither", date: null, deadline: null });
+
+    const block = tasksForDay([dated, deadlined, otherDay, neither], "2026-09-01");
+
+    expect(new Set(block.map((t) => t.id))).toEqual(new Set(["dated", "deadlined"]));
+  });
+
+  it("matches a timed Task's calendar day, not its exact date-and-time string", () => {
+    const timed = task({ id: "timed", date: "2026-09-01T17:00" });
+
+    expect(tasksForDay([timed], "2026-09-01").map((t) => t.id)).toEqual(["timed"]);
+    expect(tasksForDay([timed], "2026-09-02")).toEqual([]);
+  });
+
+  it("does not require the date and deadline to agree — a Task dated elsewhere but deadlined this day still opens this day's block (and its own dated day, independently)", () => {
+    const t = task({ id: "future-date-this-deadline", date: "2026-09-20", deadline: "2026-09-01" });
+
+    expect(tasksForDay([t], "2026-09-01").map((x) => x.id)).toEqual(["future-date-this-deadline"]);
+    expect(tasksForDay([t], "2026-09-20").map((x) => x.id)).toEqual(["future-date-this-deadline"]);
+    expect(tasksForDay([t], "2026-09-15")).toEqual([]);
+  });
+
+  it("orders a day's block with the identical compareForToday chain Today and Inbox already use", () => {
+    const late = task({ id: "late", date: "2026-09-01T18:00", priority: storedPriorityOf(1) });
+    const early = task({ id: "early", date: "2026-09-01T09:00", priority: storedPriorityOf(4) });
+
+    expect(tasksForDay([late, early], "2026-09-01").map((t) => t.id)).toEqual(["early", "late"]);
+  });
+
+  it("is a rendering, not a record — a plain filter that neither mutates its input nor produces the same array instance twice", () => {
+    const tasks = [task({ id: "a", date: "2026-09-01" }), task({ id: "b", date: "2026-09-02" })];
+    const original = [...tasks];
+
+    const first = tasksForDay(tasks, "2026-09-01");
+    const second = tasksForDay(tasks, "2026-09-01");
+
+    expect(tasks).toEqual(original);
+    expect(first).not.toBe(second);
+    expect(first).toEqual(second);
+  });
+
+  it("re-dating a Task moves it between days with no membership to update — calling tasksForDay again against the changed array is the whole mechanism", () => {
+    // Issue #174's own worked example: a Task re-dated from the 31st to
+    // the 1st keeps its own row, and simply stops matching one day's
+    // filter and starts matching the other's the next time each is
+    // called — there is nothing else to write.
+    const redated = task({ id: "redated", date: "2026-08-31" });
+    expect(tasksForDay([redated], "2026-08-31").map((t) => t.id)).toEqual(["redated"]);
+    expect(tasksForDay([redated], "2026-09-01")).toEqual([]);
+
+    const afterRedate = { ...redated, date: "2026-09-01" };
+    expect(tasksForDay([afterRedate], "2026-08-31")).toEqual([]);
+    expect(tasksForDay([afterRedate], "2026-09-01").map((t) => t.id)).toEqual(["redated"]);
+  });
+
+  // Issue #174's own acceptance criterion: "the block is rendered only:
+  // absent from the Export ... nothing should be stored twice." This is
+  // provable directly rather than merely argued, because
+  // groupEntriesIntoDayFiles (../export/day-file.ts) takes only Entry[] —
+  // it has no Task[] parameter to have rendered day-block content from in
+  // the first place. The Task below is dated 1 Sept and would open
+  // tasksForDay's own 1-Sept block (asserted above); the Entry that
+  // References it was captured on 31 Aug and never touches 1 Sept at all.
+  // If the day block were anything but a rendering, exporting would have
+  // to reach into `tasks` to reconstruct it — it doesn't, and this proves
+  // there is genuinely nothing there to reach for: no entries/2026-09-01.txt
+  // exists at all, because no Entry was ever captured that day.
+  it("never reaches Export — Export groups by Entry.createdAt alone, with no Task in scope to have rendered a day block from", () => {
+    const redated = task({ id: "redated-task", date: "2026-09-01", content: "buy milk" });
+    expect(tasksForDay([redated], "2026-09-01").map((t) => t.id)).toEqual(["redated-task"]);
+
+    const capturedOn31st = entry({
+      id: "entry-31st",
+      createdAt: "2026-08-31T10:00:00.000Z",
+      // The exact `[[task:...]]` syntax doesn't matter here — day-file.ts
+      // never parses a body, only writes it verbatim (its own doc
+      // comment) — so plain text referencing the Task's cached label
+      // stands in for the real mark this Entry would actually carry.
+      body: "- [ ] buy milk",
+    });
+
+    const { files } = groupEntriesIntoDayFiles([capturedOn31st], 0);
+
+    expect(files.map((f) => f.path)).toEqual(["entries/2026-08-31.txt"]);
+    expect(files.some((f) => f.path === "entries/2026-09-01.txt")).toBe(false);
   });
 });

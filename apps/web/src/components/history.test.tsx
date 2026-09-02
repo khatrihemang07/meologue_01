@@ -1,4 +1,4 @@
-import type { Entry } from "@meologue/core";
+import type { Entry, Task } from "@meologue/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
@@ -65,6 +65,34 @@ function entry(overrides: Partial<Entry>): Entry {
     seq: 1,
     syncedAt: "now",
     deletedAt: null,
+    ...overrides,
+  };
+}
+
+// Issue #174's own day-block suite fixture — undated, no deadline by
+// default (the state a Task never appears in any day block from), mirroring
+// ../../packages/core/src/test-support/task-fixture.ts's own defaults so a
+// test only ever states the one or two fields it actually cares about.
+function task(overrides: Partial<Task>): Task {
+  return {
+    id: "task-1",
+    deviceId: "device-a",
+    content: "buy milk",
+    completedAt: null,
+    orderKey: "V",
+    createdAt: "now",
+    seq: null,
+    syncedAt: null,
+    deletedAt: null,
+    date: null,
+    deadline: null,
+    duration: null,
+    priority: 1,
+    labelIds: [],
+    dateString: null,
+    projectId: null,
+    sectionId: null,
+    parentId: null,
     ...overrides,
   };
 }
@@ -1245,6 +1273,123 @@ describe("History", () => {
 
       expect(screen.getByTestId("location")).toHaveTextContent("/composer?d=2020-01-01");
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+  });
+
+  // Issue #174: "each day opens with the Tasks dated or deadlined that
+  // day" — `DayTasksRow`'s own suite. Unlike day Referrers just below,
+  // `tasks` needs no probe/QueryClient plumbing at all: `tasksForDay` is a
+  // synchronous filter over whatever this test hands `<History>` directly,
+  // so every assertion here can run without an `await`.
+  describe("day Tasks (issue #174)", () => {
+    it("opens a day with the Task dated that day", () => {
+      render(
+        <History
+          entries={[entry({ id: "1", createdAt: "2026-08-28T10:00:00.000Z" })]}
+          syncEnabled={false}
+          tasks={[task({ id: "t1", content: "buy milk", date: "2026-08-28" })]}
+        />,
+      );
+
+      expect(screen.getByText("buy milk")).toBeInTheDocument();
+    });
+
+    it("opens a day with a Task deadlined that day too, independent of its date", () => {
+      render(
+        <History
+          entries={[entry({ id: "1", createdAt: "2026-08-28T10:00:00.000Z" })]}
+          syncEnabled={false}
+          tasks={[
+            task({ id: "t1", content: "renew passport", date: null, deadline: "2026-08-28" }),
+          ]}
+        />,
+      );
+
+      expect(screen.getByText("renew passport")).toBeInTheDocument();
+    });
+
+    it("shows nothing for a day no Task is dated or deadlined to", () => {
+      render(
+        <History
+          entries={[entry({ id: "1", createdAt: "2026-08-28T10:00:00.000Z" })]}
+          syncEnabled={false}
+          tasks={[task({ id: "t1", content: "someday maybe", date: "2026-09-15" })]}
+        />,
+      );
+
+      expect(screen.queryByText("someday maybe")).not.toBeInTheDocument();
+    });
+
+    // Issue #174's own acceptance criterion: a Task with neither field
+    // appears in no block at all — the same "in Inbox until given one"
+    // state task-views.ts's own tasksForDay doc comment names.
+    it("shows nothing for a Task with neither a date nor a deadline", () => {
+      render(
+        <History
+          entries={[entry({ id: "1", createdAt: "2026-08-28T10:00:00.000Z" })]}
+          syncEnabled={false}
+          tasks={[task({ id: "t1", content: "someday maybe", date: null, deadline: null })]}
+        />,
+      );
+
+      expect(screen.queryByText("someday maybe")).not.toBeInTheDocument();
+    });
+
+    it("shows nothing when no tasks prop is supplied at all — every pre-#174 caller keeps rendering unchanged", () => {
+      render(
+        <History
+          entries={[entry({ id: "1", createdAt: "2026-08-28T10:00:00.000Z" })]}
+          syncEnabled={false}
+        />,
+      );
+
+      expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    });
+
+    // ADR 0053's whole argument, exercised directly: nothing is stored, so
+    // re-dating a Task and re-rendering is the entire mechanism — there is
+    // no membership to migrate from one day's block to the other's.
+    it("moves a Task between day blocks on re-date, with no record left behind on the day it moved from", () => {
+      const redated = task({ id: "t1", content: "buy milk", date: "2026-08-31" });
+      const { rerender } = render(
+        <History
+          entries={[
+            entry({ id: "31", createdAt: "2026-08-31T10:00:00.000Z" }),
+            entry({ id: "1", createdAt: "2026-09-01T10:00:00.000Z" }),
+          ]}
+          syncEnabled={false}
+          tasks={[redated]}
+        />,
+      );
+      expect(screen.getByText("buy milk")).toBeInTheDocument();
+
+      rerender(
+        <History
+          entries={[
+            entry({ id: "31", createdAt: "2026-08-31T10:00:00.000Z" }),
+            entry({ id: "1", createdAt: "2026-09-01T10:00:00.000Z" }),
+          ]}
+          syncEnabled={false}
+          tasks={[{ ...redated, date: "2026-09-01" }]}
+        />,
+      );
+
+      // Still shown exactly once — moved, not duplicated into both blocks.
+      expect(screen.getAllByText("buy milk")).toHaveLength(1);
+    });
+
+    // Read-only: ADR 0053's own argument that this is a rendering, never a
+    // second editing surface for a Task's completion bit (Todo's own job).
+    it("renders a Task's checkbox disabled — this row never toggles a Task's completion itself", () => {
+      render(
+        <History
+          entries={[entry({ id: "1", createdAt: "2026-08-28T10:00:00.000Z" })]}
+          syncEnabled={false}
+          tasks={[task({ id: "t1", content: "buy milk", date: "2026-08-28" })]}
+        />,
+      );
+
+      expect(screen.getByRole("checkbox", { name: /buy milk/ })).toBeDisabled();
     });
   });
 

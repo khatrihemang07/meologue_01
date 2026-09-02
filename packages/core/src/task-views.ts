@@ -213,3 +213,49 @@ function compareNullableAscending(a: string | null, b: string | null): number {
   }
   return a < b ? -1 : 1;
 }
+
+/**
+ * The day block's own filter (issue #174): every Task whose `date` or
+ * `deadline` falls on exactly `dayKey`'s calendar day — the same union
+ * today() applies to "today," narrowed from "today, or before it" down to
+ * "this one day, and only this one day," which is what lets History open
+ * each day with the Tasks that belong to it. `dayKey` is a bare
+ * `YYYY-MM-DD`, matching entry-day.ts's own day keys (the caller —
+ * history.tsx — computes one per day separator the identical way it
+ * already does for Entries), and only `t.date`'s own first ten characters
+ * are compared, for the identical "day-granular, not time-of-day-granular"
+ * reason today() reads `now.slice(0, 10)` rather than a full timestamp.
+ *
+ * **A rendering, not a record — the property ADR 0053 exists to protect.**
+ * This is a plain filter over whatever `tasks` a caller already has in
+ * memory (history.tsx reads `EntryStoreOutletContext.tasks`, the exact
+ * array Today and Inbox already render from): nothing here reads a store,
+ * writes one, or remembers which day a Task last matched. A Task re-dated
+ * from 31 Aug to 1 Sept simply stops satisfying `tasksForDay(tasks,
+ * "2026-08-31")` and starts satisfying `tasksForDay(tasks, "2026-09-01")`
+ * the next time either is called — there is no membership row to update,
+ * because none was ever written. ADR 0053 names the rejected alternative
+ * this avoids: storing the day block as rows would be a second copy of
+ * exactly what a Task's own `date`/`deadline` already says, and
+ * immediately stale the moment either changes.
+ *
+ * **Completed Tasks are the caller's concern, not this function's.**
+ * `tasks` is expected to already be an *active* list (TaskStore.list()'s
+ * own guarantee, the same expectation today() carries) — a completed Task
+ * filed alongside its still-open siblings would otherwise keep surfacing
+ * in a day's block forever, the identical reasoning that keeps a
+ * completed Task out of Inbox in the first place.
+ *
+ * Sorted with the same compareForToday chain today() uses for its own
+ * sections, so a reader who already learned "date-and-time, then
+ * priority" from Today or Inbox sees the identical order here rather than
+ * a second one this module would have to justify on its own.
+ */
+export function tasksForDay(tasks: Task[], dayKey: string): Task[] {
+  const matches = tasks.filter((t) => {
+    const dateDay = t.date === null ? null : t.date.slice(0, 10);
+    return dateDay === dayKey || t.deadline === dayKey;
+  });
+  matches.sort(compareForToday);
+  return matches;
+}

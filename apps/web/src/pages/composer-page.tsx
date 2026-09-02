@@ -50,6 +50,10 @@ export function ComposerPage() {
     disabled,
     message,
     dayReferrers,
+    // Issue #174: the day block's own source — the exact active-Task
+    // array Today and Inbox already render from, handed to History so it
+    // can filter it per day with `tasksForDay` (task-views.ts).
+    tasks,
   } = useEntryStore();
   // Subscribed, not a one-off read: a change saved on Settings now updates
   // this without a reload or a remount (ticket 36), on top of the render
@@ -272,6 +276,7 @@ export function ComposerPage() {
           onRefer={handleRefer}
           onToggleTask={handleToggleTask}
           dayReferrers={dayReferrers}
+          tasks={tasks}
           seek={seek}
           onSeekNeedsOlder={handleSeekNeedsOlder}
           onSeekSettled={settleSeek}

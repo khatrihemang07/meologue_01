@@ -31,6 +31,70 @@ function defaultPromotionContext(): ComposerPromotionContext {
 }
 
 /**
+ * Turns one `PromotedTask` (promote-tasks.ts) into a real `Task` row —
+ * `use-tasks.ts`'s own `addTask` builds an identically-shaped literal
+ * for the same reason (`Task`'s required fields, task-types.ts's own
+ * comment on why): a Task minted here starts with the same "nothing"
+ * every field defaults to for a caller with no opinion of its own,
+ * except `date`, which carries the Entry's own capture date rather than
+ * staying undated (ADR 0048: "A Task promoted from an Entry takes the
+ * Entry's capture date; one created in Todo stays undated" — #169's
+ * view-context inheritance, with the Entry as the origin).
+ *
+ * **The capture-date rule, precisely.** `promoted.date` is `null` only
+ * when nothing in the checkbox line parsed to a date — in that case,
+ * and ONLY that case, the Entry's own capture date wins, day-only
+ * (mirroring `todo-page.tsx`'s own `captureDate`: a Date "may carry a
+ * time," but nothing about *when in the day* an Entry happened to be
+ * captured is a plan the reader made for the Task). When a date DID
+ * parse (`- [ ] buy milk tomorrow`), that parsed date is what "the
+ * Composer highlights recognised tokens... so it files itself" (issue
+ * #173's own acceptance criterion) actually means, and it wins instead
+ * — this is `??`, not an unconditional overwrite, on purpose.
+ * `deadline`/`duration`/`priority`/`dateString`/`labelIds` all carry the
+ * parse's own resolved values unconditionally, the identical fields
+ * `todo-page.tsx`'s own `handleAdd` already writes from
+ * `taskFieldsFromQuickAdd` for the add field — Promotion is that same
+ * parse, not a second, poorer one.
+ *
+ * Module-scope and exported, not a closure inside `useHistory` (issue
+ * #174) — `backfill-tasks.ts` needs the identical capture-date rule for
+ * every checkbox it promotes out of existing History, and duplicating
+ * this function there would be a second place that rule could drift from
+ * this one. `deviceId` is threaded in as a plain parameter for exactly
+ * that reuse: the backfill has its own `deviceId`, read once from
+ * `EntryStore.ensureDeviceId()`, not this hook's own closed-over value.
+ */
+export function promotedTaskToTask(
+  promoted: PromotedTask,
+  deviceId: string,
+  capturedAt: string,
+  orderKey: string,
+  labelIds: string[],
+): Task {
+  return {
+    id: promoted.id,
+    deviceId,
+    content: promoted.content,
+    completedAt: promoted.checked ? capturedAt : null,
+    orderKey,
+    createdAt: capturedAt,
+    seq: null,
+    syncedAt: null,
+    deletedAt: null,
+    date: promoted.date ?? entryDayKey(capturedAt, deviceUtcOffsetMinutes()),
+    deadline: promoted.deadline,
+    duration: promoted.duration,
+    priority: promoted.priority,
+    labelIds,
+    dateString: promoted.dateString,
+    projectId: null,
+    sectionId: null,
+    parentId: null,
+  };
+}
+
+/**
  * Issue #79's scroll-triggered "load older" glue, handed to Shell (via
  * whichever page renders History) so it can call `fetchMore` once the
  * reader reaches the oldest loaded edge — see use-pinned-scroll.ts's
@@ -205,61 +269,6 @@ export function useHistory(
   };
 
   /**
-   * Turns one `PromotedTask` (promote-tasks.ts) into a real `Task` row —
-   * `use-tasks.ts`'s own `addTask` builds an identically-shaped literal
-   * for the same reason (`Task`'s required fields, task-types.ts's own
-   * comment on why): a Task minted here starts with the same "nothing"
-   * every field defaults to for a caller with no opinion of its own,
-   * except `date`, which carries the Entry's own capture date rather than
-   * staying undated (ADR 0048: "A Task promoted from an Entry takes the
-   * Entry's capture date; one created in Todo stays undated" — #169's
-   * view-context inheritance, with the Entry as the origin).
-   *
-   * **The capture-date rule, precisely.** `promoted.date` is `null` only
-   * when nothing in the checkbox line parsed to a date — in that case,
-   * and ONLY that case, the Entry's own capture date wins, day-only
-   * (mirroring `todo-page.tsx`'s own `captureDate`: a Date "may carry a
-   * time," but nothing about *when in the day* an Entry happened to be
-   * captured is a plan the reader made for the Task). When a date DID
-   * parse (`- [ ] buy milk tomorrow`), that parsed date is what "the
-   * Composer highlights recognised tokens... so it files itself" (issue
-   * #173's own acceptance criterion) actually means, and it wins instead
-   * — this is `??`, not an unconditional overwrite, on purpose.
-   * `deadline`/`duration`/`priority`/`dateString`/`labelIds` all carry the
-   * parse's own resolved values unconditionally, the identical fields
-   * `todo-page.tsx`'s own `handleAdd` already writes from
-   * `taskFieldsFromQuickAdd` for the add field — Promotion is that same
-   * parse, not a second, poorer one.
-   */
-  function promotedTaskToTask(
-    promoted: PromotedTask,
-    capturedAt: string,
-    orderKey: string,
-    labelIds: string[],
-  ): Task {
-    return {
-      id: promoted.id,
-      deviceId,
-      content: promoted.content,
-      completedAt: promoted.checked ? capturedAt : null,
-      orderKey,
-      createdAt: capturedAt,
-      seq: null,
-      syncedAt: null,
-      deletedAt: null,
-      date: promoted.date ?? entryDayKey(capturedAt, deviceUtcOffsetMinutes()),
-      deadline: promoted.deadline,
-      duration: promoted.duration,
-      priority: promoted.priority,
-      labelIds,
-      dateString: promoted.dateString,
-      projectId: null,
-      sectionId: null,
-      parentId: null,
-    };
-  }
-
-  /**
    * Mints a real `Task` row per `PromotedTask` and writes them, chained
    * end-to-end off one read of the active list — shared by `sendEntry` and
    * `commitEntryEdit` below, the two doors through which a bare checkbox
@@ -289,7 +298,7 @@ export function useHistory(
     for (const task of promoted) {
       lastKey = orderKeyBetween(lastKey, null);
       const labelIds = await resolveLabelIds(task.labelNames);
-      tasks.push(promotedTaskToTask(task, capturedAt, lastKey, labelIds));
+      tasks.push(promotedTaskToTask(task, deviceId, capturedAt, lastKey, labelIds));
     }
     await taskStore.upsert(tasks);
   }

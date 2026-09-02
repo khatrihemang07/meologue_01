@@ -90,12 +90,17 @@
  * comment already gives for the ProseMirror round trip: testable top to
  * bottom, nothing implicit.
  */
-import type { QuickAddOptions } from "@meologue/core";
+import type { QuickAddOptions, QuickAddResult, QuickAddToken } from "@meologue/core";
+import { parseQuickAdd } from "@meologue/core";
 import type { Node as PMNode } from "prosemirror-model";
 import { Fragment } from "prosemirror-model";
 import { entryDocumentToMarkdown, entryMarkdownToDocument } from "@/lib/entry-document";
 import { entrySchema } from "@/lib/entry-schema";
-import { type DemotedSignature, parseWithDemotions } from "@/lib/quick-add-highlight";
+import {
+  type DemotedSignature,
+  parseWithDemotions,
+  tokenSignature,
+} from "@/lib/quick-add-highlight";
 import { taskFieldsFromQuickAdd } from "@/lib/quick-add-task";
 
 /**
@@ -228,6 +233,51 @@ function isAlreadyReferenced(paragraph: PMNode): boolean {
   return own.length === 1 && own[0]?.type.name === "task_reference";
 }
 
+/**
+ * A per-token refusal, layered on top of `parseWithDemotions`'s own
+ * per-item demotion set (issue #174) — the backfill's own answer to "the
+ * thing that makes the parser safe in the add field... does not exist in
+ * a migration" (this module's own header comment already names the risk;
+ * `backfill-tasks.ts` is where the actual gate lives, built from
+ * `@meologue/core`'s own English word tables rather than anything this
+ * module needs to know about). Returning `true` for a token means
+ * "refuse this regardless of what any live Composer might otherwise have
+ * let through" — every caller reachable from a live Composer passes no
+ * gate at all, so nothing about live Promotion (issue #173) changes by
+ * this parameter merely existing.
+ */
+export type ChecklistConfidenceGate = (token: QuickAddToken) => boolean;
+
+/**
+ * `parseWithDemotions`, widened with an optional `confidenceGate`. Left
+ * `undefined` (every live-Composer call site), this is byte-identical to
+ * calling `parseWithDemotions` directly — no second parse, no extra work
+ * on the hot path a reader's every Send already runs. Supplied (the
+ * backfill alone), the natural parse is computed once here to find which
+ * tokens the gate refuses, and those are folded into `demoted` alongside
+ * whatever a live Composer's own per-item demotion already contributed —
+ * two different questions ("what did THIS reader click back to plain
+ * text" vs "what does this app never trust without one to click"), never
+ * one excluding the other.
+ */
+function parseChecklistLine(
+  text: string,
+  quickAddOptions: QuickAddOptions,
+  demoted: ReadonlySet<DemotedSignature>,
+  confidenceGate: ChecklistConfidenceGate | undefined,
+): QuickAddResult {
+  if (confidenceGate === undefined) {
+    return parseWithDemotions(text, quickAddOptions, demoted);
+  }
+  const natural = parseQuickAdd(text, quickAddOptions);
+  const refused = natural.tokens.filter(confidenceGate).map(tokenSignature);
+  if (refused.length === 0) {
+    return parseWithDemotions(text, quickAddOptions, demoted);
+  }
+  const merged = demoted.size === 0 ? new Set(refused) : new Set([...demoted, ...refused]);
+  return parseWithDemotions(text, quickAddOptions, merged);
+}
+
 function transformNode(
   node: PMNode,
   mintId: () => string,
@@ -235,6 +285,7 @@ function transformNode(
   quickAddOptions: QuickAddOptions,
   activePromotion: ActiveChecklistPromotion | null,
   ordinal: { current: number },
+  confidenceGate: ChecklistConfidenceGate | undefined,
 ): PMNode {
   if (node.type.name === "list_item" && node.attrs.checked !== null) {
     const first = node.firstChild;
@@ -251,7 +302,7 @@ function transformNode(
         activePromotion !== null && activePromotion.ordinal === itemOrdinal
           ? activePromotion.demoted
           : NO_DEMOTIONS;
-      const parsed = parseWithDemotions(text, quickAddOptions, demoted);
+      const parsed = parseChecklistLine(text, quickAddOptions, demoted, confidenceGate);
       const fields = taskFieldsFromQuickAdd(text, parsed, quickAddOptions);
       // A line entirely consumed by recognised tokens ("tomorrow p1" with
       // nothing else) parses to empty `content` — falling back to the
@@ -284,7 +335,17 @@ function transformNode(
       const rest: PMNode[] = [];
       node.forEach((child, _offset, index) => {
         if (index > 0) {
-          rest.push(transformNode(child, mintId, tasks, quickAddOptions, activePromotion, ordinal));
+          rest.push(
+            transformNode(
+              child,
+              mintId,
+              tasks,
+              quickAddOptions,
+              activePromotion,
+              ordinal,
+              confidenceGate,
+            ),
+          );
         }
       });
       return entrySchema.node("list_item", node.attrs, [promotedFirst, ...rest]);
@@ -295,7 +356,17 @@ function transformNode(
   }
   const children: PMNode[] = [];
   node.forEach((child) => {
-    children.push(transformNode(child, mintId, tasks, quickAddOptions, activePromotion, ordinal));
+    children.push(
+      transformNode(
+        child,
+        mintId,
+        tasks,
+        quickAddOptions,
+        activePromotion,
+        ordinal,
+        confidenceGate,
+      ),
+    );
   });
   return node.copy(Fragment.fromArray(children));
 }
@@ -312,18 +383,32 @@ function transformNode(
  * highlight." `activePromotion` defaults to `null`: every caller except
  * the live Composer (`use-history.ts`'s own fallback for a test or a
  * future non-Composer door) has no demotion to report and no ordinal
- * naming which item it would even apply to.
+ * naming which item it would even apply to. `confidenceGate` (issue #174)
+ * defaults to `undefined` — see `ChecklistConfidenceGate`'s own doc
+ * comment; every caller reachable from a live Composer leaves it unset
+ * and gets exactly today's behaviour, unchanged. `backfill-tasks.ts` is
+ * the one caller that supplies it, for the one caller with no reader
+ * watching to click a wrong guess back to plain text.
  */
 export function promoteBareCheckboxes(
   body: string,
   mintId: () => string,
   quickAddOptions: QuickAddOptions,
   activePromotion: ActiveChecklistPromotion | null = null,
+  confidenceGate?: ChecklistConfidenceGate,
 ): PromotionResult {
   const doc = entryMarkdownToDocument(body);
   const tasks: PromotedTask[] = [];
   const ordinal = { current: 0 };
-  const promoted = transformNode(doc, mintId, tasks, quickAddOptions, activePromotion, ordinal);
+  const promoted = transformNode(
+    doc,
+    mintId,
+    tasks,
+    quickAddOptions,
+    activePromotion,
+    ordinal,
+    confidenceGate,
+  );
   if (tasks.length === 0) {
     return { body, tasks: [] };
   }

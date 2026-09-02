@@ -18,6 +18,16 @@ vi.mock("@meologue/core", async (importOriginal) => {
   return { ...actual, open: openMock };
 });
 
+// Issue #174: EntryStoreLayout kicks off the one-time backfill itself, once
+// the real store opens — stubbed here so this file's tests, none of which
+// care about backfill-tasks.ts's own scanning logic (backfill-tasks.test.ts
+// owns that), don't each need a real EntryStore full of checkbox lines just
+// to satisfy an effect this file isn't testing.
+const { runTasksBackfillOnceMock } = vi.hoisted(() => ({
+  runTasksBackfillOnceMock: vi.fn(async () => {}),
+}));
+vi.mock("@/lib/backfill-tasks", () => ({ runTasksBackfillOnce: runTasksBackfillOnceMock }));
+
 function createFakeStore(): EntryStore {
   return {
     list: vi.fn(async () => []),
@@ -154,6 +164,7 @@ describe("EntryStoreLayout", () => {
   beforeEach(() => {
     createDriver.mockReset();
     openMock.mockReset();
+    runTasksBackfillOnceMock.mockClear();
     mountEvents = [];
   });
 
@@ -238,6 +249,28 @@ describe("EntryStoreLayout", () => {
 
     await waitFor(() =>
       expect(screen.getByText("disabled:false message:none")).toBeInTheDocument(),
+    );
+  });
+
+  // Issue #174, ADR 0053: the store-open trigger for the History backfill —
+  // this pins down that EntryStoreLayout actually calls it, with the real
+  // opened store/taskStore/deviceId, once and not on every re-render.
+  // backfill-tasks.test.ts owns whether the backfill itself does the right
+  // thing once called.
+  it("kicks off the Tasks backfill exactly once, with the real opened store", async () => {
+    createDriver.mockResolvedValue({});
+    const store = createFakeStore();
+    const taskStore = createFakeTaskStore();
+    openMock.mockResolvedValue({ store, taskStore, deviceId: "device-a" });
+
+    await renderLayout();
+
+    await waitFor(() => expect(runTasksBackfillOnceMock).toHaveBeenCalledTimes(1));
+    expect(runTasksBackfillOnceMock).toHaveBeenCalledWith(
+      store,
+      taskStore,
+      "device-a",
+      expect.any(Function),
     );
   });
 

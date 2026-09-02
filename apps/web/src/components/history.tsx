@@ -1,4 +1,5 @@
-import type { Entry } from "@meologue/core";
+import type { Entry, Task } from "@meologue/core";
+import { tasksForDay } from "@meologue/core";
 import {
   measureElement as measureElementDefault,
   useVirtualizer,
@@ -104,6 +105,19 @@ interface HistoryProps {
    * nothing, same as a day confirmed to have no referrers.
    */
   dayReferrers?: (dayKey: string) => Promise<Entry[]>;
+  /**
+   * Issue #174: the day block — every active Task, for `flattenGroups`
+   * (below) to filter per day with `tasksForDay` (`@meologue/core`).
+   * Unlike `dayReferrers` just above, this is not a probe: `tasksForDay`
+   * is a synchronous, in-memory filter, so there is nothing to await —
+   * the caller (composer-page.tsx) hands over the exact array Today and
+   * Inbox already render from (`EntryStoreOutletContext.tasks`), already
+   * loaded before History ever mounts. Defaults to an empty array, the
+   * same "row renders nothing" fallback `dayReferrers` gives an absent
+   * probe, so every pre-#174 test in this file that renders `<History>`
+   * with no `tasks` prop at all keeps passing unchanged.
+   */
+  tasks?: Task[];
   /**
    * Issue #142/#143: the day or Entry a Reference seek (composer-page.tsx)
    * is looking for, or `null`/omitted while no seek is active. History is
@@ -251,6 +265,29 @@ interface FlatDayReferrersItem {
   key: string;
   dayKey: string;
 }
+/**
+ * Issue #174: the day block — the Tasks dated or deadlined this day
+ * (`tasksForDay`, `@meologue/core`), right after the separator it opens
+ * and ahead of `FlatDayReferrersItem` — "this day; here is what it
+ * opens with; here is what refers back to it," in that reading order.
+ * Unlike `FlatDayReferrersItem`, `flattenGroups` only ever emits this item
+ * when `tasksForDay` actually found something: the filter is synchronous
+ * and already known at flatten time, so there is no "still resolving"
+ * state to reserve a zero-height row for the way the async referrers
+ * probe needs one — an empty day simply gets no row at all. `tasks` is
+ * carried on the item itself, already filtered and sorted, rather than
+ * recomputed inside `DayTasksRow`: `flattenGroups` is where every other
+ * per-day derivation already happens (the separator's own `dayKey`, the
+ * referrers row's own probe target), and doing it a second time inside
+ * the row component would just be the identical call repeated for no
+ * reason.
+ */
+interface FlatDayTasksItem {
+  kind: "dayTasks";
+  key: string;
+  dayKey: string;
+  tasks: Task[];
+}
 interface FlatEntryItem {
   kind: "entry";
   key: string;
@@ -260,13 +297,27 @@ interface FlatEntryItem {
   /** True for the first Entry in its group — the one row in each run that gets no divider above it (see the render below, replacing the old `divide-y` wrapper a virtualized list can't use: rows are no longer necessarily adjacent DOM siblings). */
   isFirstInGroup: boolean;
 }
-type FlatItem = FlatSeparatorItem | FlatDayReferrersItem | FlatEntryItem;
+type FlatItem = FlatSeparatorItem | FlatDayTasksItem | FlatDayReferrersItem | FlatEntryItem;
 
-function flattenGroups(groups: DayGroup[]): FlatItem[] {
+function flattenGroups(groups: DayGroup[], tasks: Task[]): FlatItem[] {
   const items: FlatItem[] = [];
   for (const group of groups) {
     if (group.dayKey !== null) {
       items.push({ kind: "separator", key: `sep:${group.dayKey}`, dayKey: group.dayKey });
+      // Issue #174: right after the separator it belongs to — the day
+      // "opens with" these, ahead of #147's dayReferrers row just below.
+      // `tasks` is passed in as a plain array rather than read from
+      // context, matching every other per-day derivation this function
+      // already computes from its own arguments alone.
+      const dayTasks = tasksForDay(tasks, group.dayKey);
+      if (dayTasks.length > 0) {
+        items.push({
+          kind: "dayTasks",
+          key: `tasks:${group.dayKey}`,
+          dayKey: group.dayKey,
+          tasks: dayTasks,
+        });
+      }
       // Issue #147: right after the separator it belongs to, not before —
       // reads as "this day; here is what refers back to it" in that order.
       items.push({ kind: "dayReferrers", key: `ref:${group.dayKey}`, dayKey: group.dayKey });
@@ -320,6 +371,59 @@ const OVERSCAN = 25;
 // first paint (before its first ResizeObserver callback lands) — exactly
 // the per-row DOM cost issue #83 exists to remove.
 const MAX_FALLBACK_ROWS = OVERSCAN;
+
+// A stable empty array for `tasks`'s own default (issue #174) — every
+// pre-#174 caller of `<History>` (this file's own tests among them) omits
+// the prop entirely, and a fresh `[]` literal on every render would give
+// `flattenGroups`'s own `useMemo` below a new dependency identity every
+// time, defeating memoisation for a prop that, absent, never actually
+// changes.
+const EMPTY_TASKS: Task[] = [];
+
+/**
+ * Issue #174: the day block — the Tasks dated or deadlined this exact day
+ * (task-views.ts's own `tasksForDay`, already filtered and sorted onto
+ * `item.tasks` by `flattenGroups`), rendered right after the separator so
+ * a day in History opens with them, ahead of `DayReferrersRow` next door
+ * (later Entries pointing back at this day is a different, secondary fact
+ * about it, not what the day itself has to show first).
+ *
+ * **Read-only, and deliberately so.** ADR 0053's whole argument is that
+ * this block is a rendering, never a record — nothing here writes a Task,
+ * and nothing here needs a TaskStore handle to do it with. Ticking a Task
+ * complete, or opening it to reschedule, stays Todo's own job
+ * (task-row.tsx); duplicating that editing surface a second time inside
+ * History would give a Task two places its own completion could be
+ * toggled from, the identical two-copies risk ADR 0048 already refused
+ * for a Task's name and completion bit. The checkbox below is `disabled`
+ * for exactly this reason — a visual echo of what Todo would show, not a
+ * second control for it.
+ *
+ * A day with nothing dated or deadlined to it renders no row at all:
+ * `flattenGroups` only ever emits `FlatDayTasksItem` when `tasksForDay`
+ * found something, so there is no empty state to design for here either.
+ */
+function DayTasksRow({ tasks }: { tasks: readonly Task[] }) {
+  return (
+    <div className="flex flex-col gap-1 px-4 pb-2">
+      <ul className="mx-auto flex w-full max-w-prose flex-col gap-1">
+        {tasks.map((t) => (
+          <li key={t.id} className="flex items-baseline gap-1.5 text-sm">
+            <input
+              type="checkbox"
+              checked={false}
+              disabled
+              readOnly
+              aria-label={`${t.content} — open in Todo to complete`}
+              className="mt-[0.2em] shrink-0 accent-current"
+            />
+            <span className="min-w-0 flex-1 truncate text-muted-foreground">{t.content}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
 
 /**
  * Issue #147: "a day shows what Refers to it" (ADR 0042's own Context) —
@@ -401,6 +505,7 @@ export function History({
   onRefer,
   onToggleTask,
   dayReferrers,
+  tasks = EMPTY_TASKS,
   seek,
   onSeekNeedsOlder,
   onSeekSettled,
@@ -524,7 +629,7 @@ export function History({
   // memoised on `groups` alone, the same reasoning as `groups`' own memo
   // just above: a render triggered by something grouping doesn't depend on
   // (`query` changing, say) must not re-walk the Entries a second time.
-  const flatItems = useMemo(() => flattenGroups(groups), [groups]);
+  const flatItems = useMemo(() => flattenGroups(groups, tasks), [groups, tasks]);
 
   // Issue #83: the scroll element and the upward jump-to-newest hookup —
   // see HistoryScrollContext's own comment (shell.tsx) for why both cross
@@ -992,6 +1097,11 @@ export function History({
                     {formatDaySeparator(item.dayKey, todayKey)}
                   </button>
                 </div>
+              ) : item.kind === "dayTasks" ? (
+                // Issue #174: see `DayTasksRow`'s own comment for why the
+                // day block is its own row, right after the separator and
+                // ahead of `dayReferrers` below.
+                <DayTasksRow tasks={item.tasks} />
               ) : item.kind === "dayReferrers" ? (
                 // Issue #147: see `DayReferrersRow`'s own comment for why
                 // this is a row of its own rather than something folded
