@@ -1,7 +1,8 @@
-import type { Task } from "@meologue/core";
+import type { Project, Section, Task } from "@meologue/core";
+import { today } from "@meologue/core";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import { useParams } from "react-router";
+import { useLocation, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import { BackToChats } from "@/components/back-to-chats";
 import { localDayKey } from "@/components/date-picker-sheet";
@@ -10,14 +11,44 @@ import { AddTaskForm } from "@/components/todo/add-task-form";
 import { CompletedTasks } from "@/components/todo/completed-tasks";
 import { ProjectView } from "@/components/todo/project-view";
 import { ProjectsView } from "@/components/todo/projects-view";
+import { TaskDetailView } from "@/components/todo/task-detail-view";
 import { TaskList } from "@/components/todo/task-list";
+import type { TaskDetailActions } from "@/components/todo/task-row";
 import { TaskScheduleSheet } from "@/components/todo/task-schedule-sheet";
 import { TodayView } from "@/components/todo/today-view";
 import { TodoNav } from "@/components/todo/todo-nav";
 import { ConfirmDialog } from "@/components/ui/alert-dialog";
 import { sectionsQueryKey, tasksInProjectQueryKey } from "@/lib/query-keys";
 import type { QuickAddTaskFields } from "@/lib/quick-add-task";
+import { taskDetailPath, taskIdFromParam } from "@/lib/task-detail-route";
 import { useEntryStore } from "@/pages/entry-store-layout";
+
+/**
+ * Which of Todo's non-Task views is rendered *behind* the Task detail
+ * modal/sheet (issue #178) — computed once (`backgroundView` below) and
+ * used for two things: which of Inbox/Today/Projects/a Project's own
+ * screen this page actually renders while `/todo/task/:taskSlugId` is
+ * open, and which list `prevTask`/`nextTask` step through. Every
+ * `openTaskDetail` call (`TaskDetailActions.onOpenDetail`, passed to
+ * every row on this page) carries the *current* one of these as
+ * `location.state.from`, so opening a Task's own view remembers where it
+ * was opened from without this page needing a second route per
+ * background view the way `App.tsx`'s four `view`-driven routes already
+ * are one per view.
+ */
+interface TodoBackgroundView {
+  view: "inbox" | "today" | "projects" | "project";
+  projectId: string | null;
+}
+
+function backgroundPath(background: TodoBackgroundView): string {
+  if (background.view === "project") {
+    return background.projectId === null
+      ? "/todo/projects"
+      : `/todo/projects/${background.projectId}`;
+  }
+  return `/todo/${background.view}`;
+}
 
 export interface TodoPageProps {
   /**
@@ -79,8 +110,30 @@ export interface TodoPageProps {
  * `captureDate`/`captureProjectId` below.
  */
 export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
-  const { projectId: routeProjectId } = useParams<{ projectId: string }>();
-  const currentProjectId = view === "project" ? (routeProjectId ?? null) : null;
+  const { projectId: routeProjectId, taskSlugId } = useParams<{
+    projectId: string;
+    taskSlugId: string;
+  }>();
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  // Which background view renders *behind* the Task detail modal/sheet —
+  // this file's own header comment on `TodoBackgroundView`/`backgroundPath`
+  // explains why `/todo/task/:taskSlugId` (App.tsx) passes no `view` prop
+  // of its own and reads this from `location.state` instead. A direct
+  // link or a reload of a Task's own address carries no such state (there
+  // was no "opened from" navigation to remember), so it falls back to
+  // Inbox — the identical fallback `/todo` itself redirects to
+  // (App.tsx's own `<Navigate to="/todo/inbox" />`), rather than this
+  // page inventing a second "nothing chosen" default.
+  const backgroundView: TodoBackgroundView =
+    taskSlugId !== undefined
+      ? ((location.state as { from?: TodoBackgroundView } | null)?.from ?? {
+          view: "inbox",
+          projectId: null,
+        })
+      : { view, projectId: view === "project" ? (routeProjectId ?? null) : null };
+  const currentProjectId = backgroundView.projectId;
 
   const {
     tasks,
@@ -88,6 +141,7 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     addTask,
     completeTask,
     uncompleteTask,
+    renameTask,
     reorderTask,
     removeTask,
     disabled,
@@ -96,6 +150,7 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     setTaskDeadline,
     setTaskDuration,
     setTaskPriority,
+    setTaskLabels,
     listTasksInProject,
     listTaskChildren,
     listTasksInSection,
@@ -103,8 +158,10 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     advanceRecurringTask,
     completeForeverTask,
     postponeTask,
+    setTaskProject,
     setTaskParent,
     setTaskSection,
+    labels,
     resolveLabelIds,
     projects,
     addProject,
@@ -137,19 +194,21 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   // treatment on the same reasoning: a Task added from a Project's own
   // "Add a Task" field that silently landed in Inbox instead would be the
   // structural equivalent of that same bug.
-  const captureDate = view === "today" ? localDayKey(new Date()) : null;
-  const captureProjectId = view === "project" ? currentProjectId : null;
+  const captureDate = backgroundView.view === "today" ? localDayKey(new Date()) : null;
+  const captureProjectId = backgroundView.view === "project" ? currentProjectId : null;
 
   // Inbox's and a Project's own top-level Tasks (TaskStore.listByProject,
   // `null` meaning Inbox) — this component's own header comment on why
   // this replaced the flat `tasks` array for these two views specifically.
   // `enabled` skips the fetch entirely for Today/Projects, which have no
   // use for it.
-  const scopeProjectId = view === "inbox" ? null : currentProjectId;
+  const scopeProjectId = backgroundView.view === "inbox" ? null : currentProjectId;
   const scopedTasksQuery = useQuery({
     queryKey: tasksInProjectQueryKey(scopeProjectId),
     queryFn: () => listTasksInProject(scopeProjectId),
-    enabled: view === "inbox" || (view === "project" && currentProjectId !== null),
+    enabled:
+      backgroundView.view === "inbox" ||
+      (backgroundView.view === "project" && currentProjectId !== null),
   });
   const scopedTasks = scopedTasksQuery.data ?? [];
 
@@ -158,7 +217,7 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   const sectionsQuery = useQuery({
     queryKey: sectionsQueryKey(currentProjectId ?? ""),
     queryFn: () => listSections(currentProjectId as string),
-    enabled: view === "project" && currentProjectId !== null,
+    enabled: backgroundView.view === "project" && currentProjectId !== null,
   });
   const sections = sectionsQuery.data ?? [];
 
@@ -262,6 +321,122 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     handleOpenSchedule(task.id);
   }
 
+  // Issue #178's Task detail view. `openTask` is looked up against the
+  // flat `tasks` array — the same "still holds every Task anywhere"
+  // property this component's own header comment already leans on for
+  // `confirmingTask`/`schedulingTask` above, so a Task opened from any
+  // view (Inbox, Today, a Project) resolves here regardless of which
+  // view's own scoped query happens to be loaded.
+  const openTaskId = taskSlugId !== undefined ? taskIdFromParam(taskSlugId) : null;
+  const openTask = openTaskId !== null ? (tasks.find((t) => t.id === openTaskId) ?? null) : null;
+  const openTaskProject: Project | null =
+    openTask === null ? null : (projects.find((p) => p.id === openTask.projectId) ?? null);
+
+  // The open Task's own Section, for the breadcrumb — a *second*,
+  // independent `listSections` query rather than reusing `sections`
+  // above: `sections` is scoped to `currentProjectId` (the background
+  // view's own Project), which disagrees with `openTask.projectId`
+  // whenever a reader opens a Task from Today or from a different
+  // Project's own list — a cross-view open is exactly the case
+  // `backgroundView`'s own `location.state.from` fallback already has to
+  // handle, and the breadcrumb needs the identical tolerance.
+  const openTaskSectionsQuery = useQuery({
+    queryKey: sectionsQueryKey(openTask?.projectId ?? ""),
+    queryFn: () => listSections(openTask?.projectId as string),
+    enabled: openTask !== null && openTask.projectId !== null,
+  });
+  const openTaskSection: Section | null =
+    openTask === null || openTask.sectionId === null
+      ? null
+      : ((openTaskSectionsQuery.data ?? []).find((s) => s.id === openTask.sectionId) ?? null);
+
+  // The list `prevTask`/`nextTask` step through — whichever list the
+  // background view itself renders, in the identical order that view's
+  // own rendering already puts its rows in, so stepping through the
+  // detail view never disagrees with what a reader would see by closing
+  // it and looking at the row order directly. Today's own order
+  // (`today()`, @meologue/core) is recomputed here rather than reused
+  // from a ref, on the same reasoning `TodayView` itself recomputes it on
+  // every render: it's a pure function over `tasks` plus "now," cheap
+  // enough that memoising it would cost more to reason about than it
+  // saves. The Projects list has no Tasks of its own to page through.
+  const backgroundTaskList: Task[] =
+    backgroundView.view === "today"
+      ? (() => {
+          const { overdue, dueToday } = today(tasks, localDayKey(new Date()));
+          return [...overdue, ...dueToday];
+        })()
+      : backgroundView.view === "projects"
+        ? []
+        : scopedTasks;
+  const openTaskIndex =
+    openTask === null ? -1 : backgroundTaskList.findIndex((t) => t.id === openTask.id);
+  const prevTask = openTaskIndex > 0 ? (backgroundTaskList[openTaskIndex - 1] ?? null) : null;
+  const nextTask =
+    openTaskIndex >= 0 && openTaskIndex < backgroundTaskList.length - 1
+      ? (backgroundTaskList[openTaskIndex + 1] ?? null)
+      : null;
+
+  // Opens a Task's own address (issue #178's own acceptance criterion:
+  // "Clicking a Task should open it in a view of its own"). Carries the
+  // *current* `backgroundView` as `location.state.from` — not
+  // `useNavigate`'s `replace` — so the browser's own Back returns to
+  // wherever this was opened from (this ticket's own acceptance
+  // criterion), and TaskDetailView renders that same background dimmed
+  // behind the modal/sheet while it's open.
+  function openTaskDetail(task: Task) {
+    navigate(taskDetailPath(task), { state: { from: backgroundView } });
+  }
+
+  // Steps to `prevTask`/`nextTask` without closing (TaskDetailView's own
+  // `onNavigate`) — `replace: true`, unlike `openTaskDetail` above: this
+  // is "look at a different Task while still standing in the same place,"
+  // not a new navigation a reader would expect Back to unwind one step at
+  // a time, so it doesn't grow the history stack per step the way opening
+  // a fresh Task from a row does.
+  function stepTaskDetail(task: Task) {
+    navigate(taskDetailPath(task), { replace: true, state: { from: backgroundView } });
+  }
+
+  // Closes the detail view back onto whichever background it opened over
+  // — a real navigation to `backgroundPath(backgroundView)`, not
+  // `navigate(-1)`: `back-to-chats.tsx`'s own header comment gives the
+  // identical reasoning for why a real link beats history navigation
+  // here — a reader who opened this Task's address directly (a bookmark,
+  // a shared link, a reload) has no in-app history entry to go back to,
+  // and closing has to land somewhere sensible regardless.
+  function closeTaskDetail() {
+    navigate(backgroundPath(backgroundView));
+  }
+
+  // "Copy link to task" (the command menu's own item) — the same address
+  // `openTaskDetail` navigates to, made absolute so it's meaningful
+  // pasted anywhere outside this app. Wrapped rather than left to throw:
+  // `navigator.clipboard` is unavailable over plain http and in some
+  // embedded WebViews, and a silent failure here is better than an
+  // unhandled rejection over a nice-to-have.
+  function copyTaskLink(task: Task) {
+    const url = `${window.location.origin}${taskDetailPath(task)}`;
+    navigator.clipboard?.writeText(url).then(
+      () => toast("Link copied"),
+      () => toast.error("Couldn't copy the link"),
+    );
+  }
+
+  // Every row on this page renders through `TaskRow`, and every one of
+  // them needs this identical bundle — see `TaskDetailActions`'s own doc
+  // comment (task-row.tsx) for why it's threaded as one object rather
+  // than five more props widening TaskList/TaskTree/TodayView/ProjectView.
+  const detailActions: TaskDetailActions = {
+    projects,
+    labels,
+    onOpenDetail: openTaskDetail,
+    onSetPriority: setTaskPriority,
+    onSetProject: setTaskProject,
+    onSetLabels: setTaskLabels,
+    onCopyLink: copyTaskLink,
+  };
+
   // The add field's own parse (add-task-form.tsx, quick-add-task.ts)
   // resolves everything except `labelIds` — a `%label` name needs a
   // LabelStore round trip (use-labels.ts's `resolveLabelIds`) this
@@ -314,11 +489,12 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
           Projects list (`view === "projects"`) has nothing to add a Task
           to, and gets its own "New Project" form instead
           (`ProjectsView`). */}
-      {view !== "projects" && <AddTaskForm onAdd={handleAdd} disabled={disabled} />}
+      {backgroundView.view !== "projects" && <AddTaskForm onAdd={handleAdd} disabled={disabled} />}
 
-      {view === "today" && (
+      {backgroundView.view === "today" && (
         <TodayView
           tasks={tasks}
+          detailActions={detailActions}
           onComplete={handleComplete}
           onCompleteForever={handleCompleteForever}
           onRequestDelete={handleRequestDelete}
@@ -328,12 +504,13 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
         />
       )}
 
-      {view === "inbox" && (
+      {backgroundView.view === "inbox" && (
         <TaskList
           tasks={scopedTasks}
           sections={[]}
           projectId={null}
           emptyMessage="Nothing in your Inbox. Add a Task above to get started."
+          detailActions={detailActions}
           onComplete={handleCompleteTask}
           onCompleteForever={handleCompleteForeverTask}
           onRequestDelete={handleRequestDeleteTask}
@@ -345,7 +522,7 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
         />
       )}
 
-      {view === "project" &&
+      {backgroundView.view === "project" &&
         (currentProject === null ? (
           // Loading (`projects` hasn't resolved yet) or a bad/removed id —
           // this component has no way to tell those apart, and neither is
@@ -359,6 +536,7 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
             project={currentProject}
             sections={sections}
             tasks={scopedTasks}
+            detailActions={detailActions}
             onRename={(name) => renameProject(currentProject.id, name)}
             onSetDescription={(description) =>
               setProjectDescription(currentProject.id, description)
@@ -386,7 +564,7 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
           />
         ))}
 
-      {view === "projects" && (
+      {backgroundView.view === "projects" && (
         <ProjectsView
           projects={projects}
           onAdd={(name, colour) => addProject(name, { colour })}
@@ -406,7 +584,9 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
           than per-view. A Project's own view has no Completed disclosure
           of its own — out of this ticket's scope, named in its report
           rather than built ahead of being asked for. */}
-      {view === "inbox" && <CompletedTasks tasks={completedTasks} onUncomplete={uncompleteTask} />}
+      {backgroundView.view === "inbox" && (
+        <CompletedTasks tasks={completedTasks} onUncomplete={uncompleteTask} />
+      )}
 
       {schedulingTask !== null && (
         <TaskScheduleSheet
@@ -447,6 +627,31 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
           }
         }}
       />
+
+      {/* Issue #178's Task detail view — a route AND a modal/sheet at
+          once (task-detail-view.tsx's own header comment). Rendered
+          alongside whichever background view above is currently on
+          screen, not instead of it: `openTask` is only non-null while
+          `/todo/task/:taskSlugId` is the active route, and the
+          background view underneath is exactly what `backgroundView`
+          already computed for every other branch above. */}
+      {openTask !== null && (
+        <TaskDetailView
+          task={openTask}
+          project={openTaskProject}
+          section={openTaskSection}
+          projects={projects}
+          labels={labels}
+          prevTask={prevTask}
+          nextTask={nextTask}
+          onClose={closeTaskDetail}
+          onNavigate={stepTaskDetail}
+          onRename={(content) => renameTask(openTask.id, content)}
+          onOpenSchedule={() => handleOpenSchedule(openTask.id)}
+          onSetProject={(projectId) => setTaskProject(openTask.id, projectId)}
+          onSetLabels={(labelIds) => setTaskLabels(openTask.id, labelIds)}
+        />
+      )}
     </Shell>
   );
 }

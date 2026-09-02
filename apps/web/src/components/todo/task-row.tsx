@@ -1,12 +1,47 @@
-import type { Task } from "@meologue/core";
+import type { Label, Project, Task } from "@meologue/core";
 import { uiPriorityOf } from "@meologue/core";
-import { CalendarClock, CheckCheck, GripVertical, Trash2 } from "lucide-react";
-import type { MouseEvent, PointerEvent } from "react";
+import {
+  CalendarClock,
+  CheckCheck,
+  GripVertical,
+  MessageSquare,
+  MoreHorizontal,
+  Pencil,
+} from "lucide-react";
+import type { KeyboardEvent, MouseEvent, PointerEvent } from "react";
+import { useState } from "react";
+import { TaskCommandMenu } from "@/components/todo/task-command-menu";
 import { formatDay, formatTaskDate } from "@/lib/format-task-date";
+import { priorityColour } from "@/lib/task-priority-colors";
 import { cn } from "@/lib/utils";
+
+/**
+ * Every door onto the Task detail view and its own command set (issue
+ * #178) that a row needs but doesn't own a setter for directly — bundled
+ * into one object, threaded unbound through TaskList/TaskTree/TodayView/
+ * ProjectView exactly as `reorderTask`/`setTaskParent` already are
+ * (task-tree.tsx's own header comment), rather than five more individual
+ * props widening every intermediate component's own signature. `task` is
+ * already in scope wherever a `TaskRow` renders, so this row binds each
+ * function to its own Task itself instead of asking a caller several
+ * layers up to do it per-row the way TaskTreeRow binds `onComplete`/etc.
+ * — there is no equivalent binding step needed here.
+ */
+export interface TaskDetailActions {
+  projects: Project[];
+  labels: Label[];
+  /** Opens the Task's own route/modal/sheet (issue #178) — the destination Edit, clicking the row's own words, and the Comment hover action (no comment thread exists yet — this file's own doc comment on why) all share. */
+  onOpenDetail: (task: Task) => void;
+  onSetPriority: (id: string, priority: number) => void;
+  onSetProject: (id: string, projectId: string | null) => void;
+  onSetLabels: (id: string, labelIds: string[]) => void;
+  onCopyLink: (task: Task) => void;
+}
 
 export interface TaskRowProps {
   task: Task;
+  /** See `TaskDetailActions`'s own doc comment. */
+  detailActions: TaskDetailActions;
   /**
    * Completes this Task — for a recurring one (`task.dateString !== null`),
    * the caller's own job is to call `advanceRecurringTask` here instead of
@@ -169,6 +204,7 @@ export interface TaskRowProps {
  */
 export function TaskRow({
   task,
+  detailActions,
   onComplete,
   onCompleteForever,
   onRequestDelete,
@@ -187,6 +223,12 @@ export function TaskRow({
   sectionOptions,
   onMoveToSection,
 }: TaskRowProps) {
+  // The full command set's own open state (issue #178) — right-click
+  // anywhere on the row, the `.` key while any of the row's own controls
+  // has focus, or clicking the "More actions" button below all just flip
+  // this one flag, and TaskCommandMenu (its own header comment) renders
+  // the identical menu regardless of which of the three opened it.
+  const [commandMenuOpen, setCommandMenuOpen] = useState(false);
   const isRecurring = task.dateString !== null;
   // A recurring Task always shows a schedule summary line, even one with
   // no `date` of its own yet (../recurrence/'s engine failing to resolve
@@ -235,6 +277,33 @@ export function TaskRow({
       // per level beyond the first, so a depth-1 (top-level) Task keeps
       // exactly the padding every pre-#171 row already had.
       style={{ paddingLeft: `${12 + (depth - 1) * 20}px` }}
+      // The full command set, reached from anywhere on the row — issue
+      // #178's own reference behaviour ("the full command set lives
+      // behind right-click and the `.` key, not on the row"). `.` is read
+      // here, on the row itself, rather than on any one control inside
+      // it: a keydown on the checkbox, the content, or an action button
+      // all bubble up to this handler, so the reader doesn't have to
+      // land focus on one specific element first. Ignored while a
+      // modifier is held, or while the event's own target is the Section
+      // `<select>` below — a reader typing to jump that combobox to an
+      // option starting with "." (vanishingly unlikely, but this guard
+      // costs nothing) must not also pop this menu open underneath it.
+      onContextMenu={(event) => {
+        event.preventDefault();
+        setCommandMenuOpen(true);
+      }}
+      onKeyDown={(event: KeyboardEvent<HTMLLIElement>) => {
+        if (
+          event.key === "." &&
+          !event.metaKey &&
+          !event.ctrlKey &&
+          !event.altKey &&
+          (event.target as HTMLElement).tagName !== "SELECT"
+        ) {
+          event.preventDefault();
+          setCommandMenuOpen(true);
+        }
+      }}
     >
       {draggable && (
         <button
@@ -296,29 +365,71 @@ export function TaskRow({
         real `onChange` is the honest description of what this control is:
         a button shaped like a checkbox, not a real toggle.
       */}
-      <input
-        type="checkbox"
-        checked={false}
-        readOnly
-        onClick={(event: MouseEvent<HTMLInputElement>) => {
-          // Shift+Click on a recurring Task's checkbox is Todoist's own
-          // documented "Complete and archive recurring task" — ends the
-          // series, not "complete this occurrence" (this file's own
-          // `onCompleteForever` doc comment). Meaningless on a
-          // non-recurring Task, so the modifier is simply ignored there
-          // and an ordinary complete happens instead — no extra gesture
-          // a reader could stumble into by accident.
-          if (isRecurring && event.shiftKey) {
-            onCompleteForever();
-          } else {
-            onComplete();
-          }
-        }}
-        aria-label={task.content}
-        className="shrink-0 accent-current"
-      />
+      {/*
+        A checkbox that carries its own Priority (issue #178's own
+        acceptance criterion) — a ring, not a fill: `accent-current` below
+        already claims the checkbox's own tick/fill colour for the reader's
+        theme accent, so Priority gets the one visual slot that doesn't
+        collide with it. `padding`+`border-radius` on this wrapping `<span>`
+        rather than a `box-shadow`/`outline` on the `<input>` directly: a
+        native checkbox's own rendering (`accent-current`) ignores most box-
+        model properties applied straight to it across browsers, where a
+        wrapper's border is unconditionally respected everywhere. Priority
+        1 ("no priority," task-types.ts's own doc comment: a real level,
+        not an absence) still gets a ring — `priorityColour`'s own neutral
+        grey for it — rather than no ring at all, so every row's checkbox
+        reads consistently rather than only a prioritised one carrying a
+        border a reader has to learn means something.
+      */}
+      <span
+        className="shrink-0 rounded-full p-0.5"
+        // A plain inline `boxShadow` ring rather than Tailwind's own
+        // `ring-*` utilities: those resolve through a `--tw-ring-color`
+        // custom property this app's design tokens don't otherwise touch,
+        // and reaching for it here would make this one ring's colour
+        // depend on Tailwind's internal implementation rather than on
+        // `priorityColour` alone.
+        style={{ boxShadow: `0 0 0 1px ${priorityColour(uiPriorityOf(task.priority))}` }}
+      >
+        <input
+          type="checkbox"
+          checked={false}
+          readOnly
+          onClick={(event: MouseEvent<HTMLInputElement>) => {
+            // Shift+Click on a recurring Task's checkbox is Todoist's own
+            // documented "Complete and archive recurring task" — ends the
+            // series, not "complete this occurrence" (this file's own
+            // `onCompleteForever` doc comment). Meaningless on a
+            // non-recurring Task, so the modifier is simply ignored there
+            // and an ordinary complete happens instead — no extra gesture
+            // a reader could stumble into by accident.
+            if (isRecurring && event.shiftKey) {
+              onCompleteForever();
+            } else {
+              onComplete();
+            }
+          }}
+          aria-label={task.content}
+          className="block shrink-0 accent-current"
+        />
+      </span>
       <span className="flex min-w-0 flex-1 flex-col">
-        <span className="truncate text-sm">{task.content}</span>
+        {/*
+          The row's own words, clickable (issue #178: "Clicking a Task
+          should open it in a view of its own") — a real `<button>`, not a
+          `<span onClick>`, so this is reachable by keyboard and announced
+          as interactive rather than as plain text. `text-left` overrides
+          `<button>`'s own default centering; the rest of the classes
+          reproduce the plain `<span>` this replaces exactly, so nothing
+          about the row's layout shifts.
+        */}
+        <button
+          type="button"
+          onClick={() => detailActions.onOpenDetail(task)}
+          className="truncate text-left text-sm hover:underline"
+        >
+          {task.content}
+        </button>
         {/* A compact schedule summary, present only once there's something
             to summarise (issue #169, extended by #170's recurrence line) —
             Date, then Deadline, then Priority (never "no priority", the
@@ -410,9 +521,35 @@ export function TaskRow({
           ))}
         </select>
       )}
+      {/*
+        The four hover actions, in the fixed order issue #178's own
+        reference behaviour observed live: Edit, Date, Comment, More —
+        replacing the old Schedule/Delete pair. Edit opens the identical
+        detail view the row's own words already open (this file's own
+        `detailActions.onOpenDetail` doc comment); Comment does too, for
+        now — there is no comment thread to scroll to yet (issue #180's
+        own scope), so "open the Task's own view" is the honest, non-dead
+        destination for that icon until #180 gives it something more
+        specific to land in. Delete moved off the row entirely, into the
+        command menu below (⌘⌫) — this ticket's own acceptance criterion
+        is "reachable from a menu, not only from the hover actions," which
+        for Delete specifically now means *only* from the menu, matching
+        the reference layout exactly.
+      */}
       <button
         type="button"
-        aria-label={`Schedule "${task.content}"`}
+        aria-label={`Edit "${task.content}"`}
+        onClick={() => detailActions.onOpenDetail(task)}
+        className={cn(
+          "flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
+          "[@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:focus-visible:opacity-100",
+        )}
+      >
+        <Pencil aria-hidden="true" className="size-4" />
+      </button>
+      <button
+        type="button"
+        aria-label={`Date "${task.content}"`}
         onClick={onOpenSchedule}
         className={cn(
           "flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
@@ -423,15 +560,41 @@ export function TaskRow({
       </button>
       <button
         type="button"
-        aria-label={`Delete "${task.content}"`}
-        onClick={onRequestDelete}
+        aria-label={`Comment on "${task.content}"`}
+        onClick={() => detailActions.onOpenDetail(task)}
         className={cn(
-          "flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-destructive/10 hover:text-destructive",
+          "flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
           "[@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:focus-visible:opacity-100",
         )}
       >
-        <Trash2 aria-hidden="true" className="size-4" />
+        <MessageSquare aria-hidden="true" className="size-4" />
       </button>
+      <TaskCommandMenu
+        task={task}
+        projects={detailActions.projects}
+        labels={detailActions.labels}
+        open={commandMenuOpen}
+        onOpenChange={setCommandMenuOpen}
+        trigger={
+          <button
+            type="button"
+            aria-label={`More actions for "${task.content}"`}
+            className={cn(
+              "flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
+              "[@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:focus-visible:opacity-100 aria-expanded:opacity-100",
+            )}
+          >
+            <MoreHorizontal aria-hidden="true" className="size-4" />
+          </button>
+        }
+        onOpenDetail={() => detailActions.onOpenDetail(task)}
+        onOpenSchedule={onOpenSchedule}
+        onSetPriority={(priority) => detailActions.onSetPriority(task.id, priority)}
+        onSetProject={(projectId) => detailActions.onSetProject(task.id, projectId)}
+        onSetLabels={(labelIds) => detailActions.onSetLabels(task.id, labelIds)}
+        onCopyLink={() => detailActions.onCopyLink(task)}
+        onRequestDelete={onRequestDelete}
+      />
     </li>
   );
 }

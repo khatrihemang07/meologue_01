@@ -1,6 +1,6 @@
 import type { Task } from "@meologue/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { Link, MemoryRouter, Outlet, Route, Routes } from "react-router";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -77,6 +77,10 @@ function renderTodoPage(context: EntryStoreOutletContext, initialPath = "/todo/i
             <Route path="/todo/today" element={<TodoPage view="today" />} />
             <Route path="/todo/projects" element={<TodoPage view="projects" />} />
             <Route path="/todo/projects/:projectId" element={<TodoPage view="project" />} />
+            {/* Issue #178's Task detail route — no `view` prop, mirroring
+                App.tsx's own identical route exactly (that file's own
+                comment explains why). */}
+            <Route path="/todo/task/:taskSlugId" element={<TodoPage />} />
             <Route path="/composer" element={<p>Composer</p>} />
           </Route>
         </Routes>
@@ -107,6 +111,7 @@ function readyContext(overrides: Partial<EntryStoreOutletContext> = {}): EntrySt
     setTaskDeadline: vi.fn(),
     setTaskDuration: vi.fn(),
     setTaskPriority: vi.fn(),
+    setTaskLabels: vi.fn(),
     listTasksInProject: vi.fn(async () => []),
     listTaskChildren: vi.fn(async () => []),
     listTasksInSection: vi.fn(async () => []),
@@ -245,6 +250,60 @@ describe("TodoPage", () => {
     expect(screen.queryByRole("navigation", { name: "Todo" })).not.toBeInTheDocument();
   });
 
+  // Issue #178's own Task route is still `/todo/*` — ADR 0049's own
+  // constraint on where Todo's internal navigation may live has to hold
+  // for it too, not only for Inbox/Today/Projects.
+  it("still shows Todo's own navigation while a Task's own address is open, and still unmounts it on leaving Todo from there", () => {
+    renderTodoPage(inboxContext([task({ id: "a", content: "call mum" })]), "/todo/task/call-mum-a");
+
+    expect(screen.getByRole("navigation", { name: "Todo" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("link", { name: "Leave Todo" }));
+
+    expect(screen.getByText("Composer")).toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Todo" })).not.toBeInTheDocument();
+  });
+
+  // A real uuid — `taskIdFromParam`'s own regex (lib/task-detail-route.ts)
+  // only ever reads the trailing uuid, so this suite's usual plain `"a"`
+  // ids don't resolve to anything and are deliberately reused just above
+  // for the "bad/typo'd address must not break nav scoping" case.
+  const DETAIL_TASK_ID = "11111111-1111-7111-8111-111111111111";
+
+  it("opens a Task's own view over its background, with a breadcrumb and an editable title", async () => {
+    renderTodoPage(
+      inboxContext([task({ id: DETAIL_TASK_ID, content: "call mum" })]),
+      `/todo/task/call-mum-${DETAIL_TASK_ID}`,
+    );
+
+    // The background — Inbox, the fallback for a direct link with no
+    // `location.state.from` (todo-page.tsx's own `backgroundView` doc
+    // comment) — is still rendered, dimmed behind the modal/sheet.
+    await waitFor(() => expect(screen.getAllByText("call mum")).not.toHaveLength(0));
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toBeInTheDocument();
+    // "Inbox" appears twice inside the dialog — the breadcrumb and the
+    // Project attribute row both say it, for different reasons (this
+    // file's own comment on the breadcrumb vs. `AttributeRow`'s "Project
+    // is never truly unset" doc comment, task-detail-view.tsx) — so this
+    // scopes to the breadcrumb's own `<header>` specifically rather than
+    // an unscoped match that would resolve to both.
+    expect(dialog.querySelector("header")).toHaveTextContent("Inbox");
+    expect(within(dialog).getByLabelText("Task title")).toHaveValue("call mum");
+  });
+
+  it("Esc closes the Task's own view", async () => {
+    renderTodoPage(
+      inboxContext([task({ id: DETAIL_TASK_ID, content: "call mum" })]),
+      `/todo/task/call-mum-${DETAIL_TASK_ID}`,
+    );
+
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
   it("reads an empty Inbox as a real state, not a blank panel", () => {
     renderTodoPage(inboxContext([]));
 
@@ -370,12 +429,16 @@ describe("TodoPage", () => {
     expect(uncompleteTask).toHaveBeenCalledWith("a");
   });
 
+  // Issue #178 moved Delete off the row's own hover actions into the
+  // "More actions" (⋯) menu — task-row.test.tsx's own equivalent test has
+  // the fuller reasoning.
   it("deletes a Task only after confirming, mirroring sessions-page.tsx's ConfirmDialog", async () => {
     const removeTask = vi.fn();
     renderTodoPage(inboxContext([task({ id: "a", content: "call mum" })], { removeTask }));
 
     await waitFor(() => expect(screen.getByText("call mum")).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: 'Delete "call mum"' }));
+    fireEvent.pointerDown(screen.getByRole("button", { name: 'More actions for "call mum"' }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /Delete/ }));
     expect(removeTask).not.toHaveBeenCalled();
     expect(screen.getByRole("alertdialog")).toBeInTheDocument();
 
@@ -389,7 +452,8 @@ describe("TodoPage", () => {
     renderTodoPage(inboxContext([task({ id: "a", content: "call mum" })], { removeTask }));
 
     await waitFor(() => expect(screen.getByText("call mum")).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: 'Delete "call mum"' }));
+    fireEvent.pointerDown(screen.getByRole("button", { name: 'More actions for "call mum"' }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /Delete/ }));
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
     expect(removeTask).not.toHaveBeenCalled();
@@ -629,12 +693,14 @@ describe("TodoPage — Today", () => {
 // from Inbox here, since task-schedule-sheet.test.tsx already covers the
 // sheet's own picker behaviour in isolation.
 describe("TodoPage — scheduling", () => {
+  // "Schedule" was renamed "Date" on the row (issue #178's own reference
+  // behaviour) — the sheet it opens, and its own title, are unchanged.
   it("opens the schedule sheet for the tapped Task, and a picker action calls the context's setter", async () => {
     const setTaskPriority = vi.fn();
     renderTodoPage(inboxContext([task({ id: "a", content: "call mum" })], { setTaskPriority }));
 
     await waitFor(() => expect(screen.getByText("call mum")).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: 'Schedule "call mum"' }));
+    fireEvent.click(screen.getByRole("button", { name: 'Date "call mum"' }));
     expect(screen.getByText('Schedule "call mum"')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "P1" }));
@@ -647,7 +713,7 @@ describe("TodoPage — scheduling", () => {
     renderTodoPage(inboxContext([task({ id: "a", content: "call mum" })]));
 
     await waitFor(() => expect(screen.getByText("call mum")).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: 'Schedule "call mum"' }));
+    fireEvent.click(screen.getByRole("button", { name: 'Date "call mum"' }));
     fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
 
     expect(screen.queryByText('Schedule "call mum"')).not.toBeInTheDocument();

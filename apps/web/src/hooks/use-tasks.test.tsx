@@ -370,6 +370,20 @@ describe("useTasks", () => {
     await waitFor(() => expect(store.rename).toHaveBeenCalledWith("a", "new"));
   });
 
+  // Issue #178: setTaskLabels is this hook's own door onto
+  // TaskStore.setLabelIds — the first UI caller of a mutation this hook
+  // already exposed (this ticket's own report names the gap).
+  it("setTaskLabels writes the whole replacement array through setLabelIds", async () => {
+    const store = createFakeStore();
+    await store.upsert([task({ id: "a", labelIds: ["l1"] })]);
+    const { result } = await renderUseTasks(store);
+    await waitFor(() => expect(result.current.tasks).toHaveLength(1));
+
+    act(() => result.current.setTaskLabels("a", ["l1", "l2"]));
+
+    await waitFor(() => expect(store.setLabelIds).toHaveBeenCalledWith("a", ["l1", "l2"]));
+  });
+
   // ADR 0048's fan-out: an act on the Task side refreshes every Entry
   // referencing it. `entry()` mirrors entry-row.test.tsx's own fixture
   // shape.

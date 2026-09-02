@@ -44,7 +44,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { PointerEvent } from "react";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
-import { TaskRow } from "@/components/todo/task-row";
+import { type TaskDetailActions, TaskRow } from "@/components/todo/task-row";
 import { taskChildrenQueryKey } from "@/lib/query-keys";
 import { refocusTaskHandle } from "@/lib/refocus-task-handle";
 import { dropIndexForPointer } from "@/lib/task-drag-recognizer";
@@ -66,6 +66,8 @@ export interface TaskTreeProps {
   projectId: string | null;
   /** Passed straight through to every row's own `TaskRow` — see that component's own doc comment on `sectionOptions`. */
   sectionOptions?: { id: string; name: string }[];
+  /** Passed straight through, unbound, to every row's own `TaskRow` — see `TaskDetailActions`'s own doc comment (task-row.tsx) for why this needs no per-row binding here the way `onComplete`/etc. below do. */
+  detailActions: TaskDetailActions;
   onComplete: (task: Task) => void;
   onCompleteForever: (task: Task) => void;
   onRequestDelete: (task: Task) => void;
@@ -95,6 +97,7 @@ export function TaskTree({
   depth,
   projectId,
   sectionOptions,
+  detailActions,
   onComplete,
   onCompleteForever,
   onRequestDelete,
@@ -351,6 +354,7 @@ export function TaskTree({
           depth={depth}
           projectId={projectId}
           sectionOptions={sectionOptions}
+          detailActions={detailActions}
           isDropTarget={drag !== null && overTarget?.kind === "before" && overTarget.id === task.id}
           isNestTarget={drag !== null && overTarget?.kind === "nest" && overTarget.id === task.id}
           // The raw, task-taking callbacks — not bound to this row here —
@@ -397,6 +401,7 @@ interface TaskTreeRowProps {
   depth: number;
   projectId: string | null;
   sectionOptions?: { id: string; name: string }[];
+  detailActions: TaskDetailActions;
   isDropTarget: boolean;
   isNestTarget: boolean;
   // The raw, task-taking callbacks — see this component's own call site in
@@ -435,6 +440,7 @@ function TaskTreeRow({
   depth,
   projectId,
   sectionOptions,
+  detailActions,
   isDropTarget,
   isNestTarget,
   onComplete,
@@ -470,6 +476,7 @@ function TaskTreeRow({
     <>
       <TaskRow
         task={task}
+        detailActions={detailActions}
         depth={depth}
         isDropTarget={isDropTarget}
         isNestTarget={isNestTarget}
@@ -494,6 +501,7 @@ function TaskTreeRow({
           parentTask={task}
           depth={depth + 1}
           projectId={projectId}
+          detailActions={detailActions}
           onComplete={onComplete}
           onCompleteForever={onCompleteForever}
           onRequestDelete={onRequestDelete}

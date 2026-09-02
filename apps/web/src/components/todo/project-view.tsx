@@ -18,6 +18,7 @@ import { orderKeyBetween } from "@meologue/core";
 import { ChevronDown, ChevronUp, Trash2 } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { TaskList } from "@/components/todo/task-list";
+import type { TaskDetailActions } from "@/components/todo/task-row";
 import { ConfirmDialog } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,6 +27,8 @@ export interface ProjectViewProps {
   project: Project;
   sections: Section[];
   tasks: Task[];
+  /** Forwarded straight through to `TaskList` — see `TaskDetailActions`'s own doc comment (task-row.tsx). */
+  detailActions: TaskDetailActions;
   onRename: (name: string) => void;
   onSetDescription: (description: string | null) => void;
   onToggleFavourite: (favourite: boolean) => void;
@@ -67,6 +70,7 @@ export function ProjectView({
   project,
   sections,
   tasks,
+  detailActions,
   onRename,
   onSetDescription,
   onToggleFavourite,
@@ -315,6 +319,7 @@ export function ProjectView({
           sections={sections.filter((section) => !section.archived)}
           projectId={project.id}
           emptyMessage="Nothing in this Project yet. Add a Task above to get started."
+          detailActions={detailActions}
           onComplete={onComplete}
           onCompleteForever={onCompleteForever}
           onRequestDelete={onRequestDelete}

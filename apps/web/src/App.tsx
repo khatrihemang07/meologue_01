@@ -156,6 +156,21 @@ function App() {
               <Route path="/todo/today" element={<TodoPage view="today" />} />
               <Route path="/todo/projects" element={<TodoPage view="projects" />} />
               <Route path="/todo/projects/:projectId" element={<TodoPage view="project" />} />
+              {/* A Task's own address (issue #178), still under `/todo/*` per
+              ADR 0049's own constraint on where Todo's internal navigation
+              may live — no `view` prop: `todo-page.tsx`'s own header
+              comment on `taskSlugId` explains how it recovers *which*
+              background view (Inbox/Today/a Project) to render dimmed
+              behind the Task's own modal/sheet from `location.state`
+              rather than from a prop this route would otherwise have to
+              guess at. `taskSlugId` is `<slug>-<id>`
+              (lib/task-detail-route.ts) — the trailing id is a `mintId()`
+              uuid, so, like every dynamic segment above, it never
+              contains a "." and stays safe under this file's own
+              no-dot-in-a-`/todo/*`-segment rule; the slug half is
+              stripped of everything but `[a-z0-9-]` by the same module,
+              for the identical reason. */}
+              <Route path="/todo/task/:taskSlugId" element={<TodoPage />} />
             </Route>
             {/* A sibling of EntryStoreLayout's children above, not nested under
               it — see this file's own top comment for why that has to hold

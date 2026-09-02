@@ -98,6 +98,17 @@ export interface UseTasksResult {
   /** Sets a Task's stored `priority` (1-4) — callers pass `storedPriorityOf(uiPriority)`, never the UI number directly (task-types.ts's own warning against open-coding the inversion). */
   setTaskPriority: (id: string, priority: number) => void;
   /**
+   * Replaces a Task's `labelIds` wholesale — TaskStore.setLabelIds's own
+   * doc comment on why "read, splice, write back the whole array" is the
+   * contract rather than an add/remove pair. Issue #178's Task detail
+   * view is this function's first caller with a UI of its own (add-
+   * task-form.tsx's `resolveLabelIds` only ever sets Labels once, at
+   * creation) — every setter above it in this file exists for the
+   * identical reason: one door onto a TaskStore write, shared by every
+   * picker rather than each opening its own.
+   */
+  setTaskLabels: (id: string, labelIds: string[]) => void;
+  /**
    * A Project's own top-level Tasks (TaskStore.listByProject), `null` for
    * Inbox — issue #171's own replacement for reading the flat `tasks`
    * array above once Tasks can live in more than one place. An async
@@ -434,6 +445,16 @@ export function useTasks(
     setPriorityMutation.mutate({ id, priority });
   }
 
+  const setLabelIdsMutation = useMutation({
+    mutationFn: ({ id, labelIds }: { id: string; labelIds: string[] }) =>
+      taskStore.setLabelIds(id, labelIds),
+    onSuccess: afterLocalWrite,
+  });
+
+  function setTaskLabels(id: string, labelIds: string[]) {
+    setLabelIdsMutation.mutate({ id, labelIds });
+  }
+
   function listTasksInProject(projectId: string | null): Promise<Task[]> {
     return taskStore.listByProject(projectId);
   }
@@ -546,6 +567,7 @@ export function useTasks(
     setTaskDeadline,
     setTaskDuration,
     setTaskPriority,
+    setTaskLabels,
     listTasksInProject,
     listTaskChildren,
     listTasksInSection,

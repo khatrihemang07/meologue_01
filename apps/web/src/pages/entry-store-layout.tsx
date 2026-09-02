@@ -164,6 +164,8 @@ export interface EntryStoreOutletContext {
   setTaskDeadline: (id: string, deadline: string | null) => void;
   setTaskDuration: (id: string, duration: number | null) => void;
   setTaskPriority: (id: string, priority: number) => void;
+  /** Replaces a Task's Labels wholesale — use-tasks.ts's own `setTaskLabels` doc comment. */
+  setTaskLabels: (id: string, labelIds: string[]) => void;
   /** A Project's own top-level Tasks (`null` for Inbox) — use-tasks.ts's own `listTasksInProject` doc comment. */
   listTasksInProject: (projectId: string | null) => Promise<Task[]>;
   /** A Task's own direct sub-tasks — use-tasks.ts's own `listTaskChildren` doc comment. */
@@ -368,6 +370,10 @@ function noopSetTaskDeadline(_id: string, _deadline: string | null) {}
 function noopSetTaskDuration(_id: string, _duration: number | null) {}
 
 function noopSetTaskPriority(_id: string, _priority: number) {}
+
+// Issue #178's Task detail view — the not-ready stand-in for `setTaskLabels`,
+// same reasoning as the four setters just above.
+function noopSetTaskLabels(_id: string, _labelIds: string[]) {}
 
 // `listTasksInProject`/`listTaskChildren`'s own not-ready stand-ins,
 // mirroring `noopGetEntries`: nothing can be resolved before the store
@@ -805,6 +811,7 @@ export function EntryStoreLayout() {
     setTaskDeadline,
     setTaskDuration,
     setTaskPriority,
+    setTaskLabels,
     listTasksInProject,
     listTaskChildren,
     listTasksInSection,
@@ -867,6 +874,7 @@ export function EntryStoreLayout() {
               setTaskDeadline,
               setTaskDuration,
               setTaskPriority,
+              setTaskLabels,
               listTasksInProject,
               listTaskChildren,
               listTasksInSection,
@@ -923,6 +931,7 @@ export function EntryStoreLayout() {
               setTaskDeadline: noopSetTaskDeadline,
               setTaskDuration: noopSetTaskDuration,
               setTaskPriority: noopSetTaskPriority,
+              setTaskLabels: noopSetTaskLabels,
               listTasksInProject: noopListTasksInProject,
               listTaskChildren: noopListTaskChildren,
               listTasksInSection: noopListTasksInSection,

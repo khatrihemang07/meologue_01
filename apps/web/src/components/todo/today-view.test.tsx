@@ -36,6 +36,15 @@ function task(overrides: Partial<Task> = {}): Task {
 function renderTodayView(overrides: Partial<Parameters<typeof TodayView>[0]> = {}) {
   const props = {
     tasks: [] as Task[],
+    detailActions: {
+      projects: [],
+      labels: [],
+      onOpenDetail: vi.fn(),
+      onSetPriority: vi.fn(),
+      onSetProject: vi.fn(),
+      onSetLabels: vi.fn(),
+      onCopyLink: vi.fn(),
+    },
     onComplete: vi.fn(),
     onCompleteForever: vi.fn(),
     onRequestDelete: vi.fn(),

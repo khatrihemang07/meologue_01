@@ -216,7 +216,22 @@ const CHUNK_BUDGETS = {
   // `date-picker-sheet` (~20.8 KB, react-day-picker) — issue #169's
   // schedule sheet reusing the app's existing date UI rather than
   // building a second one, unchanged by this ticket.
-  "src/pages/todo-page.tsx": { ceilingBytes: 67_000, baselineBytes: 51_254 },
+  //
+  // Re-measured 2026-09-03 against a clean `vite build --mode android`,
+  // immediately after issue #178's Task detail view landed
+  // (task-detail-view.tsx, task-command-menu.tsx, task-detail-route.ts,
+  // task-priority-colors.ts — all new, first-party weight, plus this
+  // route's first use of Radix's `DropdownMenu` primitive, which nothing
+  // in Todo needed before the full command set): 51,254 grew to 67,406
+  // bytes gzip (own chunk + 7 shared). `ceilingBytes` raised to keep the
+  // same ~30% headroom over that fresh baseline every other budget in
+  // this table carries — the old 67,000 ceiling would have failed this
+  // build by 406 bytes, and the point of a ceiling is to reflect what a
+  // route honestly costs now, not to be quietly eaten down to nothing by
+  // an increase this ticket's own report already names as expected
+  // ("Todo's route budget will grow," the identical prediction #171's own
+  // comment above already made good on once).
+  "src/pages/todo-page.tsx": { ceilingBytes: 87_600, baselineBytes: 67_406 },
 };
 
 /**

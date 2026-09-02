@@ -75,6 +75,7 @@ function renderEntryRow(
     setTaskDeadline: vi.fn(),
     setTaskDuration: vi.fn(),
     setTaskPriority: vi.fn(),
+    setTaskLabels: vi.fn(),
     listTasksInProject: vi.fn(async () => []),
     listTaskChildren: vi.fn(async () => []),
     listTasksInSection: vi.fn(async () => []),

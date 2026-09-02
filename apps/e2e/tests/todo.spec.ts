@@ -136,7 +136,11 @@ test("deleting a Task requires confirmation, and the deletion survives a reload"
   await addTask(page, content);
   await expect(page.getByText(content)).toBeVisible();
 
-  await page.getByRole("button", { name: `Delete "${content}"` }).click();
+  // Issue #178 moved Delete off the row's own hover actions into the
+  // "More actions" (⋯) menu, alongside the rest of the full command set —
+  // task-row.test.tsx's own equivalent unit test has the fuller reasoning.
+  await page.getByRole("button", { name: `More actions for "${content}"` }).click();
+  await page.getByRole("menuitem", { name: /^Delete/ }).click();
   const confirm = page.getByRole("alertdialog");
   await expect(confirm).toBeVisible();
   // Scoped to the dialog, not `page.getByText(content)`: the Task's row is

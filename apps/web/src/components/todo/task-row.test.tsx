@@ -40,6 +40,15 @@ function task(overrides: Partial<Task> = {}): Task {
 function renderRow(overrides: Partial<Parameters<typeof TaskRow>[0]> = {}) {
   const props = {
     task: task(),
+    detailActions: {
+      projects: [],
+      labels: [],
+      onOpenDetail: vi.fn(),
+      onSetPriority: vi.fn(),
+      onSetProject: vi.fn(),
+      onSetLabels: vi.fn(),
+      onCopyLink: vi.fn(),
+    },
     onComplete: vi.fn(),
     onCompleteForever: vi.fn(),
     onRequestDelete: vi.fn(),
@@ -152,11 +161,15 @@ describe("TaskRow", () => {
     expect(screen.getByText("every other monday")).toBeInTheDocument();
   });
 
-  it("the delete button calls onRequestDelete, not the store directly", () => {
+  // Issue #178 moved Delete off the row's own hover actions entirely — it
+  // lives behind the "More actions" (⋯) menu now, alongside the rest of
+  // the full command set, per this ticket's own reference behaviour.
+  it("Delete, in the More actions menu, calls onRequestDelete, not the store directly", () => {
     const onRequestDelete = vi.fn();
     renderRow({ task: task({ content: "call mum" }), onRequestDelete });
 
-    fireEvent.click(screen.getByRole("button", { name: 'Delete "call mum"' }));
+    fireEvent.pointerDown(screen.getByRole("button", { name: 'More actions for "call mum"' }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /Delete/ }));
 
     expect(onRequestDelete).toHaveBeenCalledTimes(1);
   });
@@ -274,13 +287,57 @@ describe("TaskRow", () => {
   // Issue #169: the schedule button is the one door onto Date/Deadline/
   // Duration/Priority pickers from any row, in either Inbox or Today
   // (TaskRow's own doc comment on `onOpenSchedule`).
-  it("the schedule button calls onOpenSchedule", () => {
+  // "Schedule" was renamed "Date" (issue #178's own reference behaviour —
+  // the row's four hover actions read Edit, Date, Comment, More).
+  it("the Date button calls onOpenSchedule", () => {
     const onOpenSchedule = vi.fn();
     renderRow({ task: task({ content: "call mum" }), onOpenSchedule });
 
-    fireEvent.click(screen.getByRole("button", { name: 'Schedule "call mum"' }));
+    fireEvent.click(screen.getByRole("button", { name: 'Date "call mum"' }));
 
     expect(onOpenSchedule).toHaveBeenCalledTimes(1);
+  });
+
+  it("hovering a row reveals its actions in the fixed order Edit, Date, Comment, More", () => {
+    renderRow({ task: task({ content: "call mum" }) });
+
+    const buttons = screen
+      .getAllByRole("button")
+      .map((button) => button.getAttribute("aria-label"))
+      .filter((label): label is string => label !== null);
+
+    // Only the four hover actions, checked by their relative order — the
+    // drag handle and the checkbox carry their own, differently-shaped
+    // labels and aren't part of this claim.
+    const hoverActionLabels = buttons.filter((label) =>
+      /^(Edit|Date|Comment on|More actions for)/.test(label),
+    );
+    expect(hoverActionLabels).toEqual([
+      'Edit "call mum"',
+      'Date "call mum"',
+      'Comment on "call mum"',
+      'More actions for "call mum"',
+    ]);
+  });
+
+  it('opens the full command menu on right-click, and on the "." key', () => {
+    renderRow({ task: task({ content: "call mum" }) });
+
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+
+    fireEvent.contextMenu(screen.getByRole("listitem"));
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /^Edit/ })).toBeInTheDocument();
+
+    // Escaped on the menu itself, not the row — Radix hides the rest of
+    // the page from the accessibility tree while an open menu's focus
+    // scope is active, so the `<li>` isn't a `listitem` to query against
+    // until the menu closes again.
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+
+    fireEvent.keyDown(screen.getByRole("listitem"), { key: "." });
+    expect(screen.getByRole("menu")).toBeInTheDocument();
   });
 
   it("shows no schedule summary for a Task with no date, deadline or priority set", () => {
