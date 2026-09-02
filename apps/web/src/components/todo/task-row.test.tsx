@@ -298,7 +298,7 @@ describe("TaskRow", () => {
     expect(onOpenSchedule).toHaveBeenCalledTimes(1);
   });
 
-  it("hovering a row reveals its actions in the fixed order Edit, Date, Comment, More", () => {
+  it("on a hover-capable pointer, a row's actions render in the fixed order Edit, Date, Comment, More", () => {
     renderRow({ task: task({ content: "call mum" }) });
 
     const buttons = screen
@@ -318,6 +318,40 @@ describe("TaskRow", () => {
       'Comment on "call mum"',
       'More actions for "call mum"',
     ]);
+  });
+
+  // A real device (1080x2400) found this the hard way: with all four
+  // hover actions following the pre-existing `(hover: hover)` convention
+  // — visible unless a hover-capable pointer says otherwise — a touch
+  // reader with no hover at all got all four, permanently, on a 349px
+  // row. Four 44px buttons plus the grip handle and checkbox left "call
+  // the dentist" as little as 37px to render in, and it came out "call …".
+  //
+  // jsdom (this project's test environment, `vite.config.ts`'s own `test.
+  // environment: "jsdom"`, with no `css: true`) never loads Tailwind's
+  // actual generated stylesheet, so nothing here can assert real
+  // `display`/visibility the way a browser would — `toBeVisible()` would
+  // pass or fail independent of any class on the element. What's actually
+  // load-bearing, and what this asserts instead, is the exact utility
+  // classes Tailwind mechanically turns into that CSS: `hidden` (the base,
+  // no-hover state) overridden only by `[@media(hover:hover)]:flex`, on
+  // Edit/Date/Comment specifically — the same pattern entry-actions.tsx's
+  // own `EntryHoverActions` already uses for its own two buttons. More
+  // carries no `hidden` at all: it has to stay the one thing a touch
+  // reader can always tap, since it's now the only door onto the other
+  // three's own actions at rest.
+  it("only More actions renders unconditionally — Edit, Date and Comment are hidden outside a hover-capable pointer", () => {
+    renderRow({ task: task({ content: "call mum" }) });
+
+    for (const label of ['Edit "call mum"', 'Date "call mum"', 'Comment on "call mum"']) {
+      const button = screen.getByRole("button", { name: label });
+      expect(button).toHaveClass("hidden");
+      expect(button).toHaveClass("[@media(hover:hover)]:flex");
+    }
+
+    const more = screen.getByRole("button", { name: 'More actions for "call mum"' });
+    expect(more).not.toHaveClass("hidden");
+    expect(more).toHaveClass("flex");
   });
 
   it('opens the full command menu on right-click, and on the "." key', () => {

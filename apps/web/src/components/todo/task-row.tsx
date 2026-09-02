@@ -535,13 +535,36 @@ export function TaskRow({
         is "reachable from a menu, not only from the hover actions," which
         for Delete specifically now means *only* from the menu, matching
         the reference layout exactly.
+
+        **Edit/Date/Comment are hidden outside `(hover: hover)`; More is
+        not** — a follow-up fix, measured on a real device (1080x2400):
+        with all four always visible on touch (this row's own pre-fix
+        state, following the `(hover: hover)` convention's original
+        comment — "that's what *takes each away* at rest," which has
+        nothing left to take away when there's no hover to begin with),
+        four 44px buttons plus the grip handle and checkbox left a Task's
+        own words as little as 37-57px of a 349px row — "call the
+        dentist" rendered as "call …". Every one of Edit/Date/Comment's
+        own actions already lives in the command menu the More button
+        opens (Edit and Comment both just call `onOpenDetail` already;
+        Date is `onOpenSchedule`, also in the menu), so hiding the three
+        loses no reachability, only the four-icons-eating-the-row problem.
+        This is `entry-actions.tsx`'s own `EntryHoverActions` pattern,
+        applied here now that this row finally has an equivalent to its
+        `EntryActionsSheet` (the command menu) to hide behind — `hidden`
+        (not merely `opacity-0`) is what removes each from the touch
+        layout and tab order entirely, not just from view, mirroring that
+        file's own reasoning for why `hidden` beats a fade there too. More
+        keeps its `flex` base unconditionally: unlike the other three, a
+        touch reader needs it visible and tappable at rest, since it is
+        now the only door onto the other three's own actions.
       */}
       <button
         type="button"
         aria-label={`Edit "${task.content}"`}
         onClick={() => detailActions.onOpenDetail(task)}
         className={cn(
-          "flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
+          "hidden [@media(hover:hover)]:flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
           "[@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:focus-visible:opacity-100",
         )}
       >
@@ -552,7 +575,7 @@ export function TaskRow({
         aria-label={`Date "${task.content}"`}
         onClick={onOpenSchedule}
         className={cn(
-          "flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
+          "hidden [@media(hover:hover)]:flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
           "[@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:focus-visible:opacity-100",
         )}
       >
@@ -563,7 +586,7 @@ export function TaskRow({
         aria-label={`Comment on "${task.content}"`}
         onClick={() => detailActions.onOpenDetail(task)}
         className={cn(
-          "flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
+          "hidden [@media(hover:hover)]:flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
           "[@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:focus-visible:opacity-100",
         )}
       >
