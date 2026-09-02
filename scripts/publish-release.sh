@@ -368,36 +368,29 @@ printf '  %s\n' "$DMG_ASSET"
 NOTES="$STAGE_DIR/release-notes.md"
 cp "$PREAMBLE" "$NOTES"
 
-# --prerelease only while the major version is 0 — semver's own convention
-# for "the public interface (here: the Release artifacts and what they
-# promise) may still change incompatibly between minor bumps." This project
-# has never cut a 1.0, so this is presently always true, but reading it off
-# $VERSION rather than hardcoding `true` means it stops being prerelease the
-# day this genuinely does become a 1.x release, with no line here to remember
-# to delete.
-MAJOR=${VERSION%%.*}
-PRERELEASE_FLAG=()
-if [ "$MAJOR" = "0" ]; then
-  PRERELEASE_FLAG[0]=--prerelease
-fi
-
-# --target is NOT optional here, and leaving it off is a silent, serious bug.
-# `gh release create` documents that when the tag does not already exist, "one
-# will automatically get created from the latest state of the default branch"
-# — origin/main's tip, NOT local HEAD. Every guard above vets HEAD: the tree is
-# clean at HEAD, the version sites agree at HEAD, the artifacts are no older
-# than HEAD's commit. If origin/main has moved on (someone else pushed, or this
-# is being published from a branch), gh would tag a commit that none of those
-# guards ever looked at, and the Release would carry artifacts built from a
-# different tree than the tag claims. Pinning the resolved SHA makes the commit
-# the guards checked and the commit the tag names the same commit by
-# construction. Guard 2 above is what makes this SHA fetchable by origin.
-HEAD_SHA=$(git rev-parse HEAD)
+# NOT marked --prerelease, and that is a deliberate reversal of the original
+# design decision — recorded here because the reasoning for the flag still
+# sounds right in the abstract and someone will be tempted to add it back.
+#
+# `--prerelease` is semver-honest about a 0.x version carrying no compatibility
+# promise. What it also does, which is not obvious until you watch it happen, is
+# make the Release INVISIBLE where people actually look for it. GitHub's repo
+# sidebar only ever shows the latest NON-prerelease release, so the homepage
+# said "1 tag / Create a new release" with a published Release sitting right
+# there. Worse, /releases/latest does not resolve to a prerelease at all: the
+# REST endpoint answers 404 and the browser URL redirects to the bare /releases
+# list. That is the exact URL README.md hands people as the download link, so
+# the flag silently broke the one path this whole script exists to create.
+#
+# The honesty the flag bought was worth less than the discoverability it cost,
+# for a project whose Releases are how anyone installs without a toolchain. If
+# a future version genuinely needs to ship un-advertised — a real release
+# candidate — pass --prerelease by hand for that one, and expect it to be
+# absent from both the sidebar and /releases/latest.
 
 GH_ARGS=(release create "v$VERSION" --title "v$VERSION" \
   --target "$HEAD_SHA" \
   --notes-file "$NOTES" --generate-notes \
-  ${PRERELEASE_FLAG[@]+"${PRERELEASE_FLAG[@]}"} \
   "$APK_ASSET" "$DMG_ASSET")
 
 if [ "$DRY_RUN" = 1 ]; then

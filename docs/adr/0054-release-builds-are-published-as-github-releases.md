@@ -98,9 +98,17 @@ one documented command and one settings toggle, rather than in a subscription. S
   double-click. Understanding precisely what that purchase removes is why it was reconsidered here
   rather than dismissed on the strength of 0015's own reasoning alone.
 
-**Releases stay `--prerelease` while the version is `0.x`,** matching semver's own convention that a
-zero major version carries no compatibility promise, and telling a Release page's reader the same
-thing before they download anything.
+**Releases are NOT marked `--prerelease`, even at `0.x`.** They were, briefly, on the semver-honest
+reasoning that a zero major version carries no compatibility promise and a Release page's reader
+deserves to know that before downloading. Publishing v0.2.0 that way showed what the flag actually
+costs: GitHub's repo sidebar only ever surfaces the latest NON-prerelease release, so the homepage
+read "1 tag / Create a new release" with a published Release sitting right there, and
+`/releases/latest` did not resolve to it either — the REST endpoint answered `404` and the browser
+URL redirected to the bare `/releases` list. That is the precise URL README's "Install a build"
+hands people, so the flag silently broke the one path this ADR exists to create. Discoverability
+is the whole point of publishing a Release; semver honesty about a version number is already
+carried by the version number. A genuine release candidate can pass `--prerelease` by hand, and
+should expect to be absent from both places.
 
 ## Alternatives considered
 
