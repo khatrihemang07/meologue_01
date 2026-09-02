@@ -26,6 +26,7 @@ import {
   SecondTabError,
   StorageUnavailableError,
 } from "@/lib/entry-store-errors";
+import type { ComposerPromotionContext } from "@/lib/promote-tasks";
 import { ENTRY_STORE_QUERY_KEY } from "@/lib/query-keys";
 import { createDriver } from "@/platform/sqlite-driver";
 
@@ -33,7 +34,7 @@ export interface EntryStoreOutletContext {
   entries: Entry[];
   /** Issue #79 — see UseHistoryPagination's own doc comment (use-history.ts). */
   pagination: UseHistoryPagination;
-  sendEntry: (raw: string) => void;
+  sendEntry: (raw: string, promotion?: ComposerPromotionContext) => void;
   /** Search (ticket 39) — narrows History to Entries whose body matches `query`, per EntryStore.search. */
   search: (query: string) => Promise<Entry[]>;
   /**
@@ -114,6 +115,8 @@ export interface EntryStoreOutletContext {
   getEntry?: (entryId: string) => Promise<Entry | undefined>;
   /** ADR 0028 — see use-history.ts's own doc comment for what these do and why removeEntry takes the whole Entry. */
   editEntry: (id: string, body: string) => void;
+  /** The Composer's own edit-commit door (issue #173) — use-history.ts's own `commitEntryEdit` doc comment for why this is `editEntry`'s promoting sibling rather than the same function. */
+  commitEntryEdit: (id: string, body: string, promotion?: ComposerPromotionContext) => void;
   removeEntry: (entry: Entry) => void;
   /**
    * Todo's Tasks (issue #168, ADR 0047) — the Task-shaped sibling of
@@ -332,6 +335,8 @@ async function noopDayReferrers(): Promise<Entry[]> {
 // page never has to null-check which branch of EntryStoreLayout it's
 // under.
 function noopEdit(_id: string, _body: string) {}
+
+function noopCommitEntryEdit(_id: string, _body: string) {}
 
 function noopRemove(_entry: Entry) {}
 
@@ -748,10 +753,17 @@ export function EntryStoreLayout() {
   const projectStore = data?.projectStore ?? pendingProjectStore;
   const deviceId = data?.deviceId ?? "";
 
-  const { entries, pagination, sendEntry, editEntry, removeEntry } = useHistory(
+  // `useLabels` is called before `useHistory` on purpose: Promotion's own
+  // `#Shopping` resolution (`upsertPromotedTasks`, use-history.ts) needs
+  // `resolveLabelIds` handed in as `useHistory`'s own fourth argument
+  // below, the identical LabelStore round trip `handleAdd` (further down
+  // this file) already awaits for the add field's own `%label` tokens.
+  const { labels, resolveLabelIds } = useLabels(labelStore, deviceId);
+  const { entries, pagination, sendEntry, editEntry, commitEntryEdit, removeEntry } = useHistory(
     store,
     taskStore,
     deviceId,
+    resolveLabelIds,
   );
   const {
     tasks,
@@ -776,8 +788,7 @@ export function EntryStoreLayout() {
     setTaskProject,
     setTaskSection,
     setTaskParent,
-  } = useTasks(taskStore, deviceId);
-  const { labels, resolveLabelIds } = useLabels(labelStore, deviceId);
+  } = useTasks(store, taskStore, deviceId);
   const {
     projects,
     addProject,
@@ -815,6 +826,7 @@ export function EntryStoreLayout() {
                 dayReferrers(store, dayKey, deviceUtcOffsetMinutes()),
               getEntry: (entryId: string) => store.getMany([entryId]).then((found) => found.at(0)),
               editEntry,
+              commitEntryEdit,
               removeEntry,
               tasks,
               completedTasks,
@@ -870,6 +882,7 @@ export function EntryStoreLayout() {
               dayReferrers: noopDayReferrers,
               getEntry: noopGetEntry,
               editEntry: noopEdit,
+              commitEntryEdit: noopCommitEntryEdit,
               removeEntry: noopRemove,
               tasks: [],
               completedTasks: [],

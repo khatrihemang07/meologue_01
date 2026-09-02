@@ -1,8 +1,11 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { entryProse } from "./entry-prose";
+import { formatTaskReference } from "@/lib/inline-markdown";
+import { entryProse, type TaskReferenceRenderer } from "./entry-prose";
 import type { ReferenceRenderers } from "./inline-prose";
+
+const TASK_ID = "0192abcd-1234-7890-abcd-0123456789ac";
 
 /**
  * `entryProse` has no wrapper of its own — same contract as `inlineProse`
@@ -14,13 +17,19 @@ function Harness({
   query,
   refs,
   onToggleTask,
+  renderTaskReference,
 }: {
   body: string;
   query?: string;
   refs?: ReferenceRenderers;
   onToggleTask?: (markerFrom: number, markerTo: number) => void;
+  renderTaskReference?: TaskReferenceRenderer;
 }): ReactNode {
-  return <div data-testid="prose">{entryProse(body, query, refs, onToggleTask)}</div>;
+  return (
+    <div data-testid="prose">
+      {entryProse(body, query, refs, onToggleTask, renderTaskReference)}
+    </div>
+  );
 }
 
 describe("entryProse", () => {
@@ -262,6 +271,113 @@ describe("entryProse", () => {
         expect(li).not.toBeNull();
         expect(li?.classList.contains("list-none")).toBe(true);
         expect(checkbox.nextElementSibling?.tagName).toBe("DIV");
+      });
+    });
+
+    // Issue #173, ADR 0048: a checkbox line whose whole content is
+    // `[[task:id|label]]` — Promotion's own output shape — is a
+    // *referenced* task item, a different render branch entirely from the
+    // bare-checkbox one above. `entryProse`'s default renderer
+    // (`defaultTaskReferenceItem`) has no store to resolve a live Task
+    // against, so every one of these renders the body's own cache and
+    // stays unconditionally disabled — the same "no renderer supplied, no
+    // interactivity" rule a date/Entry Reference already follows.
+    describe("referenced task-list checkboxes", () => {
+      it("renders the cached label, not the raw [[task:…]] mark", () => {
+        render(<Harness body={`- [ ] ${formatTaskReference(TASK_ID, "buy milk")}`} />);
+
+        expect(screen.getByText("buy milk")).toBeInTheDocument();
+        expect(screen.queryByText(/\[\[task:/)).not.toBeInTheDocument();
+      });
+
+      it("reads its checked state from the marker's own cache — unchecked", () => {
+        render(<Harness body={`- [ ] ${formatTaskReference(TASK_ID, "buy milk")}`} />);
+
+        expect(screen.getByRole("checkbox")).not.toBeChecked();
+      });
+
+      it("reads its checked state from the marker's own cache — checked", () => {
+        render(<Harness body={`- [x] ${formatTaskReference(TASK_ID, "buy milk")}`} />);
+
+        expect(screen.getByRole("checkbox")).toBeChecked();
+      });
+
+      // The "leads nowhere" half of ADR 0048's unresolved-reference rule —
+      // this file has no store to resolve against at all, which is the
+      // same state a Device that hasn't Synced the Task yet would see, so
+      // `entryProse`'s own default renderer is a faithful stand-in for it.
+      it("stays disabled — toggleTaskAt's own handler is never invoked for a referenced line", () => {
+        const onToggleTask = vi.fn();
+        render(
+          <Harness
+            body={`- [ ] ${formatTaskReference(TASK_ID, "buy milk")}`}
+            onToggleTask={onToggleTask}
+          />,
+        );
+
+        const checkbox = screen.getByRole("checkbox");
+        expect(checkbox).toBeDisabled();
+        fireEvent.click(checkbox);
+        expect(onToggleTask).not.toHaveBeenCalled();
+      });
+
+      it("keeps working as a bare checkbox once a reference sits alongside other text on the same line", () => {
+        // Not Promotion's own shape — a reference plus trailing text on one
+        // line. `referencedTaskOf` (entry-prose.tsx) only recognises the
+        // reference when it is the item's *entire* content, so this falls
+        // back to the ordinary bare-checkbox branch instead of guessing.
+        const onToggleTask = vi.fn();
+        const body = `- [ ] ${formatTaskReference(TASK_ID, "buy milk")} plus more`;
+        render(<Harness body={body} onToggleTask={onToggleTask} />);
+
+        const checkbox = screen.getByRole("checkbox");
+        expect(checkbox).not.toBeDisabled();
+        fireEvent.click(checkbox);
+        expect(onToggleTask).toHaveBeenCalledTimes(1);
+      });
+
+      it("still renders a nested list beneath a referenced line", () => {
+        render(
+          <Harness
+            body={`- [ ] ${formatTaskReference(TASK_ID, "buy milk")}\n  - a note about it`}
+          />,
+        );
+
+        expect(screen.getByText("buy milk")).toBeInTheDocument();
+        expect(screen.getByText("a note about it")).toBeInTheDocument();
+      });
+
+      it("keeps the DOM shape index.css's completed-style rule depends on", () => {
+        render(<Harness body={`- [x] ${formatTaskReference(TASK_ID, "buy milk")}`} />);
+
+        const checkbox = screen.getByRole("checkbox");
+        const li = checkbox.closest("li");
+        expect(li).not.toBeNull();
+        expect(li?.classList.contains("list-none")).toBe(true);
+        expect(checkbox.nextElementSibling?.tagName).toBe("DIV");
+      });
+
+      it("hands a supplied renderer the reference's own taskId/label/checked and any nested content", () => {
+        const renderTaskReference = vi.fn(({ taskId, label, checked, content }, key: string) => (
+          <li key={key} data-testid="custom-task-ref">
+            {taskId}:{label}:{String(checked)}
+            {content}
+          </li>
+        ));
+
+        render(
+          <Harness
+            body={`- [x] ${formatTaskReference(TASK_ID, "buy milk")}\n  - nested`}
+            renderTaskReference={renderTaskReference}
+          />,
+        );
+
+        expect(renderTaskReference).toHaveBeenCalledTimes(1);
+        const [props] = renderTaskReference.mock.calls[0] ?? [];
+        expect(props).toMatchObject({ taskId: TASK_ID, label: "buy milk", checked: true });
+        expect(screen.getByTestId("custom-task-ref")).toHaveTextContent(
+          `${TASK_ID}:buy milk:truenested`,
+        );
       });
     });
 

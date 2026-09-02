@@ -25,8 +25,10 @@ import type { Node as PMNode } from "prosemirror-model";
 import { describe, expect, it } from "vitest";
 import { entryDocumentToMarkdown, entryMarkdownToDocument } from "./entry-document";
 import { entrySchema } from "./entry-schema";
+import { formatTaskReference } from "./inline-markdown";
 
 const ENTRY_ID = "0192abcd-1234-7890-abcd-0123456789ab";
+const TASK_ID = "0192abcd-1234-7890-abcd-0123456789ac";
 
 function roundTrip(body: string): string {
   return entryDocumentToMarkdown(entryMarkdownToDocument(body));
@@ -47,6 +49,29 @@ const NAMED_CASES: ReadonlyArray<readonly [string, string]> = [
   ["a Reference inside a nested list item", `- outer\n  - see [[e:${ENTRY_ID}]]`],
   ["a Reference immediately followed by more text", "[[2026-08-28]] happened"],
   ["a malformed Reference stays literal", "[[not-a-real-reference]]"],
+
+  [
+    "an unchecked task reference — Promotion's own output shape",
+    `- [ ] ${formatTaskReference(TASK_ID, "buy milk")}`,
+  ],
+  ["a checked task reference", `- [x] ${formatTaskReference(TASK_ID, "buy milk")}`],
+  [
+    "a task reference nested under another item",
+    `- outer\n  - [ ] ${formatTaskReference(TASK_ID, "buy milk")}`,
+  ],
+  [
+    "a task reference with a nested list under it",
+    `- [ ] ${formatTaskReference(TASK_ID, "buy milk")}\n  - a note about it`,
+  ],
+  [
+    "a task reference sitting outside any checkbox — not Promotion's shape, but not an error",
+    `see ${formatTaskReference(TASK_ID, "buy milk")} for details`,
+  ],
+  ["a bare `[[task:…]]` with no label is not a Reference at all", `[[task:${TASK_ID}]]`],
+  [
+    "a task reference whose cached label needs escaping — brackets and a backslash",
+    `- [ ] ${formatTaskReference(TASK_ID, "close]] and \\ backslash, then a | pipe")}`,
+  ],
 
   ["nested emphasis inside strong", "**bold *and* italic**"],
   ["nested strong inside emphasis", "*italic **and** bold*"],
@@ -131,6 +156,7 @@ const INLINE_FRAGMENTS: readonly string[] = [
   "`code`",
   "[[2026-08-28]]",
   `[[e:${ENTRY_ID}]]`,
+  formatTaskReference(TASK_ID, "buy milk"),
   "\\*escaped\\*",
   "**bold *and em* together**",
   "a *sentence* with **several** `marks` and [[2026-08-28]] in it",
@@ -236,6 +262,7 @@ describe("entryMarkdownToDocument", () => {
           "paragraph",
           "text",
           "reference",
+          "task_reference",
           "bullet_list",
           "ordered_list",
           "list_item",
@@ -277,6 +304,33 @@ describe("entryMarkdownToDocument", () => {
     expect(list?.child(2).attrs.checked).toBe(null);
   });
 
+  // `.lastChild`, not `.firstChild`: the leading paragraph's first child is
+  // the mandatory separator space between `[ ]` and its content (this
+  // file's own `needsTaskSeparator` comment, entry-document.ts) surviving
+  // as a text(" ") node — the reference itself is the child after it.
+  it("resolves a taskReference to a task_reference node carrying the id and decoded cached label", () => {
+    const doc = entryMarkdownToDocument(`- [ ] ${formatTaskReference(TASK_ID, "buy milk")}`);
+    const item = doc.firstChild?.firstChild;
+    const leaf = item?.firstChild?.lastChild;
+    expect(leaf?.type.name).toBe("task_reference");
+    expect(leaf?.attrs).toMatchObject({ taskId: TASK_ID, label: "buy milk", checked: false });
+  });
+
+  it("carries the enclosing item's own checked state onto a task_reference's checked attribute — the cache, not the write path", () => {
+    const doc = entryMarkdownToDocument(`- [x] ${formatTaskReference(TASK_ID, "buy milk")}`);
+    const item = doc.firstChild?.firstChild;
+    const leaf = item?.firstChild?.lastChild;
+    expect(leaf?.attrs.checked).toBe(true);
+  });
+
+  it("decodes a task_reference's label even when it needed escaping", () => {
+    const label = "close]] and \\ backslash";
+    const doc = entryMarkdownToDocument(`- [ ] ${formatTaskReference(TASK_ID, label)}`);
+    const item = doc.firstChild?.firstChild;
+    const leaf = item?.firstChild?.lastChild;
+    expect(leaf?.attrs.label).toBe(label);
+  });
+
   it("carries an ordered list's start number onto order", () => {
     const doc = entryMarkdownToDocument("5. five\n6. six");
     expect(doc.firstChild?.attrs.order).toBe(5);
@@ -297,6 +351,7 @@ describe("entryDocumentToMarkdown", () => {
       "1. a\n2. b",
       "- [ ] todo\n- [x] done",
       "- outer\n  - inner",
+      `- [ ] ${formatTaskReference(TASK_ID, "buy milk")}`,
     ];
     for (const body of exact) {
       expect(roundTrip(body)).toBe(body);

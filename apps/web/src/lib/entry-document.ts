@@ -29,7 +29,7 @@
 import type { Mark, Node as PMNode } from "prosemirror-model";
 import { entrySchema } from "./entry-schema";
 import type { EntryBlockNode, EntryListItem, InlineNode } from "./inline-markdown";
-import { parseEntryMarkdown } from "./inline-markdown";
+import { formatTaskReference, parseEntryMarkdown } from "./inline-markdown";
 
 // ---------------------------------------------------------------------------
 // markdown -> document
@@ -42,8 +42,23 @@ import { parseEntryMarkdown } from "./inline-markdown";
  * `parseEntryMarkdown`'s tree carries mark nesting as node *nesting*
  * (`strong` containing `emphasis` containing `text`), and a `Node`'s marks
  * are a *set* on a leaf instead, so this is where that shape is flattened.
+ *
+ * `taskChecked` (issue #173) is not derived from anything in `nodes` — a
+ * `taskReference` InlineNode carries no checked state of its own, only
+ * `taskId`/`label` (inline-markdown.ts's own comment on why the mark's
+ * *text* never encodes it: the checkbox marker already does, and this is
+ * the one caller that reads that marker). `blocksToPM` threads the
+ * enclosing item's own `EntryTaskMarker.checked` down to here so a
+ * `task_reference` node's `checked` attr — a cache, never consulted by
+ * `entryDocumentToMarkdown`'s own write side — starts out agreeing with
+ * the marker it sits beside, for a reader that wants the state without
+ * walking back up to the parent `list_item`.
  */
-function inlineNodesToPM(nodes: readonly InlineNode[], marks: readonly Mark[]): PMNode[] {
+function inlineNodesToPM(
+  nodes: readonly InlineNode[],
+  marks: readonly Mark[],
+  taskChecked: boolean,
+): PMNode[] {
   const out: PMNode[] = [];
   for (const node of nodes) {
     switch (node.kind) {
@@ -63,10 +78,14 @@ function inlineNodesToPM(nodes: readonly InlineNode[], marks: readonly Mark[]): 
         }
         break;
       case "emphasis":
-        out.push(...inlineNodesToPM(node.children, [...marks, entrySchema.mark("em")]));
+        out.push(
+          ...inlineNodesToPM(node.children, [...marks, entrySchema.mark("em")], taskChecked),
+        );
         break;
       case "strong":
-        out.push(...inlineNodesToPM(node.children, [...marks, entrySchema.mark("strong")]));
+        out.push(
+          ...inlineNodesToPM(node.children, [...marks, entrySchema.mark("strong")], taskChecked),
+        );
         break;
       case "dateReference":
         out.push(
@@ -88,6 +107,16 @@ function inlineNodesToPM(nodes: readonly InlineNode[], marks: readonly Mark[]): 
           ),
         );
         break;
+      case "taskReference":
+        out.push(
+          entrySchema.node(
+            "task_reference",
+            { taskId: node.taskId, label: node.label, checked: taskChecked },
+            undefined,
+            marks,
+          ),
+        );
+        break;
     }
   }
   return out;
@@ -100,13 +129,24 @@ function inlineNodesToPM(nodes: readonly InlineNode[], marks: readonly Mark[]): 
  * already merges consecutive lines of plain text into a single run (see
  * `inline-markdown.ts`'s `collectBlocks`), so there is exactly one
  * `paragraph` per run here too, never one per source line.
+ *
+ * `taskChecked` defaults `false` for `entryMarkdownToDocument`'s own
+ * top-level call, where there is no enclosing item at all — a
+ * `taskReference` mark sitting in plain prose (the dialect permits it;
+ * ADR 0048 assumes it never happens in practice, since Promotion only ever
+ * writes one inside a checkbox item) needs *some* value for `checked`, and
+ * `false` is no less arbitrary than any other choice for a case the app
+ * never actually produces. `itemToPM` (below) overrides it with the
+ * enclosing item's own marker for every other call.
  */
-function blocksToPM(blocks: readonly EntryBlockNode[]): PMNode[] {
+function blocksToPM(blocks: readonly EntryBlockNode[], taskChecked = false): PMNode[] {
   const out: PMNode[] = [];
   for (const block of blocks) {
     switch (block.kind) {
       case "prose":
-        out.push(entrySchema.node("paragraph", null, inlineNodesToPM(block.children, [])));
+        out.push(
+          entrySchema.node("paragraph", null, inlineNodesToPM(block.children, [], taskChecked)),
+        );
         break;
       case "bulletList":
         out.push(entrySchema.node("bullet_list", null, block.items.map(itemToPM)));
@@ -137,7 +177,13 @@ function blocksToPM(blocks: readonly EntryBlockNode[]): PMNode[] {
  * paragraph, so nothing about it is visible in the text that comes back out.
  */
 function itemToPM(item: EntryListItem): PMNode {
-  const content = blocksToPM(item.content);
+  // The item's own checkbox marker, if it has one — passed down so any
+  // `taskReference` mark inside this item's own leading content (not a
+  // nested item's; `blocksToPM`'s "bulletList"/"orderedList" branch calls
+  // `itemToPM` fresh for each of those, which recomputes this from ITS OWN
+  // `item.task`) starts its `checked` cache agreeing with the marker
+  // beside it.
+  const content = blocksToPM(item.content, item.task?.checked ?? false);
   const needsLeadingParagraph = content.length === 0 || content[0]?.type.name !== "paragraph";
   const withLeadingParagraph = needsLeadingParagraph
     ? [entrySchema.node("paragraph"), ...content]
@@ -438,6 +484,25 @@ function writeReference(node: PMNode, w: Writer): void {
 }
 
 /**
+ * Unlike `writeReference` just above, this does not replay a stored `raw`
+ * — `task_reference` has none (`entry-schema.ts`'s own comment on why).
+ * The mark's characters are rebuilt fresh from `taskId`/`label` through
+ * `formatTaskReference` (inline-markdown.ts, the one function that knows
+ * how to escape a label's own `\`/`]` characters) every time this runs, so
+ * a `label` a caller has since refreshed from the Task — a rename, ADR
+ * 0048's own "a Task's name is no longer something only Todo can change" —
+ * serializes correctly with no separate step to keep a cached `raw` in
+ * step with it. `checked` plays no part here: the checkbox's own `[ ]`/
+ * `[x]` comes from the enclosing `list_item`'s `checked` attr
+ * (`writeListItem`), exactly as it does for a bare task — this node's own
+ * `checked` is a read-only convenience for a live component, never a
+ * second place the marker's own state is written.
+ */
+function writeTaskReference(node: PMNode, w: Writer): void {
+  w.write(formatTaskReference(String(node.attrs.taskId), String(node.attrs.label)));
+}
+
+/**
  * Walks one `paragraph`'s (or a Reference's ancestor's) inline content,
  * diffing each leaf's marks against whatever is already open and only
  * closing/opening the difference — not closing everything after every leaf
@@ -477,6 +542,8 @@ function writeInline(content: PMNode, w: Writer): void {
 
     if (leaf.type.name === "reference") {
       writeReference(leaf, w);
+    } else if (leaf.type.name === "task_reference") {
+      writeTaskReference(leaf, w);
     } else if (leaf.marks.some((mark) => mark.type.name === "code")) {
       writeCodeSpan(leaf.text ?? "", w);
     } else {

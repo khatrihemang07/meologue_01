@@ -299,6 +299,7 @@ export const EntryBubble = memo(function EntryBubble({
           onToggleTask === undefined
             ? undefined
             : (markerFrom, markerTo) => onToggleTask(entry, markerFrom, markerTo),
+          entry.id,
         )}
       </div>
       <BubbleMeta

@@ -27,16 +27,20 @@
  */
 import type { Node as PMNode } from "prosemirror-model";
 import { EditorState, TextSelection, type Transaction } from "prosemirror-state";
+import type { DecorationSet } from "prosemirror-view";
 import { describe, expect, it } from "vitest";
 import {
+  activeChecklistPromotion,
   buildInputRules,
   checkboxInputRulePattern,
+  checklistHighlightPlugin,
+  checklistHighlightPluginKey,
   checklistShortcutInputRulePattern,
   liftAtStartOfListItem,
 } from "./composer-editor";
 import { entryMarkdownToDocument } from "./entry-document";
 import { entrySchema } from "./entry-schema";
-import { parseEntryMarkdown } from "./inline-markdown";
+import { formatTaskReference, parseEntryMarkdown } from "./inline-markdown";
 
 const NBSP = String.fromCharCode(0xa0);
 
@@ -442,5 +446,298 @@ describe("liftAtStartOfListItem", () => {
     // exactly one bullet_list left, not zero.
     expect(countNodesOfType(next.doc, "bullet_list")).toBe(1);
     expect(countNodesOfType(next.doc, "list_item")).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// checklistHighlightPlugin (issue #173) — the live highlight/click-to-demote
+// #170 built for Todo's add field, ported onto a checklist line. Its own
+// `state.apply`/`props.decorations` are plain functions of an `EditorState`
+// (ProseMirror's `Node`/`ResolvedPos`/`Transaction` all work without a DOM),
+// so the DERIVATION — which line is "active," where a decoration lands, how
+// a demotion threads through a later transaction — is genuinely testable
+// here. What is NOT: `props.handleClick` needs a live `EditorView` to
+// dispatch through, and real caret/typing behaviour needs a real browser
+// (ADR 0044) — both stay e2e-only (apps/e2e/tests/composer.spec.ts), and
+// specifically the one thing add-task-form.tsx's own defect (issue #170's
+// backdrop losing sync with a scrolled field) cannot recur here in exactly
+// the same shape: `Decoration.inline` paints INSIDE the real text node
+// ProseMirror already renders, not a second, separately-scrolled layer —
+// verified by reading composer-editor.ts's `decorations` prop, not by a
+// jsdom test, since jsdom lays out and scrolls nothing.
+describe("checklistHighlightPlugin", () => {
+  /**
+   * A fresh `EditorState` uses `Plugin.spec.state.init` for a plugin's own
+   * value, never `apply` — `checklistHighlightPlugin`'s own `init` returns
+   * `null` unconditionally (`pickerPlugin`/`slashPlugin`'s own identical
+   * shape, both real-world plugins this file already mirrors), because a
+   * live Composer always dispatches at least one transaction before a
+   * reader can see anything (loading the document, the very first
+   * keystroke). A test that only ever CONSTRUCTS a state, never applies
+   * one, would see the plugin at that same "never derived yet" `null` —
+   * not a bug in the plugin, a gap between how a fixture is built and how
+   * the real editor actually runs. Applying one empty, no-op transaction
+   * (identical selection, no doc change) closes that gap the same way a
+   * live `EditorView`'s own mount effect implicitly does.
+   */
+  function stateWithHighlight(doc: PMNode, selection: { from: number; to?: number }): EditorState {
+    const initial = EditorState.create({
+      schema: entrySchema,
+      doc,
+      selection: TextSelection.create(doc, selection.from, selection.to ?? selection.from),
+      plugins: [checklistHighlightPlugin()],
+    });
+    return initial.apply(initial.tr);
+  }
+
+  /** Every `Decoration.inline`'s own `[from, to)` span, sorted — `DecorationSet.find()` with no arguments returns every decoration in the set, in no particular order. */
+  function decorationSpans(state: EditorState): Array<{ from: number; to: number }> {
+    const plugin = checklistHighlightPlugin();
+    // A fresh plugin INSTANCE, not the one already registered on `state` —
+    // `props.decorations` is a pure function of `state` alone (it never
+    // reads anything the plugin's own construction captured), so calling it
+    // off a second instance is equivalent to calling it off the first; this
+    // sidesteps needing `state.plugins` type gymnastics to reach the exact
+    // instance `stateWithHighlight` built. Cast to `DecorationSet` rather
+    // than the wider `DecorationSource` `props.decorations` is typed to
+    // return: this file's own implementation only ever returns
+    // `DecorationSet.empty`/`DecorationSet.create(...)`, never the other
+    // shapes that union admits.
+    const decorations = plugin.props.decorations?.call(plugin, state) as DecorationSet | undefined;
+    const found = decorations?.find() ?? [];
+    return found
+      .map((d) => ({ from: d.from, to: d.to }))
+      .sort((a, b) => a.from - b.from || a.to - b.to);
+  }
+
+  /**
+   * A checklist item's own leading paragraph carries the mandatory
+   * separator after `[ ]`/`[x]` as literal leading text
+   * (`inline-markdown.ts`'s own comment on `referencedTaskOf` — "the
+   * mandatory single space... survives parsing as this run's own leading
+   * text node"), so a fixture built from `"- [ ] buy milk p1"` does NOT
+   * put "buy milk p1" at the paragraph's own content start; it puts
+   * `" buy milk p1"` there, one character further in. Deriving every
+   * expected offset from the paragraph's own `textContent` (rather than a
+   * hand-counted string length) is what keeps these tests correct
+   * regardless of that leading separator, instead of silently encoding
+   * the same off-by-one this file's own tests exist to catch elsewhere.
+   */
+  function paragraphAt(doc: PMNode, blockStart: number): PMNode {
+    return doc.resolve(blockStart).parent;
+  }
+
+  it("highlights a recognised token on the checklist line the caret is inside", () => {
+    const doc = entryMarkdownToDocument("- [ ] buy milk p1");
+    const blockStart = startOfFirstParagraph(doc);
+    const text = paragraphAt(doc, blockStart).textContent;
+    const state = stateWithHighlight(doc, { from: blockStart + text.length });
+
+    const p1Offset = text.indexOf("p1");
+    const p1Start = blockStart + p1Offset;
+    expect(decorationSpans(state)).toEqual([{ from: p1Start, to: p1Start + "p1".length }]);
+  });
+
+  it("highlights nothing on an ordinary paragraph outside any checklist item", () => {
+    const doc = entryMarkdownToDocument("buy milk p1");
+    const state = stateWithHighlight(doc, { from: startOfFirstParagraph(doc) });
+
+    expect(decorationSpans(state)).toEqual([]);
+  });
+
+  it("highlights nothing on a nested block below a checklist item's own first line", () => {
+    const doc = entryMarkdownToDocument("- [ ] buy milk\n  - p1 is a note here, not a command");
+    let nestedStart: number | null = null;
+    doc.descendants((node, pos) => {
+      if (
+        nestedStart === null &&
+        node.type.name === "paragraph" &&
+        node.textContent.includes("p1")
+      ) {
+        nestedStart = pos + 1;
+      }
+    });
+    if (nestedStart === null) {
+      throw new Error("fixture has no nested paragraph");
+    }
+    const state = stateWithHighlight(doc, { from: nestedStart });
+
+    expect(decorationSpans(state)).toEqual([]);
+  });
+
+  it("highlights nothing on an already-referenced checklist line — Promotion's own cached label is not prose to re-tokenize", () => {
+    const doc = entryMarkdownToDocument(
+      `- [ ] ${formatTaskReference("0192abcd-1234-7890-abcd-0123456789ac", "buy milk p1")}`,
+    );
+    const state = stateWithHighlight(doc, { from: startOfFirstParagraph(doc) });
+
+    expect(decorationSpans(state)).toEqual([]);
+  });
+
+  it("carries a demotion forward across a later keystroke on the SAME line", () => {
+    const doc = entryMarkdownToDocument("- [ ] buy milk p1");
+    const blockStart = startOfFirstParagraph(doc);
+    const text = paragraphAt(doc, blockStart).textContent;
+    const opened = stateWithHighlight(doc, { from: blockStart + text.length });
+    const p1Start = blockStart + text.indexOf("p1");
+    expect(decorationSpans(opened)).toEqual([{ from: p1Start, to: p1Start + "p1".length }]);
+
+    // The transaction `handleClick` itself dispatches: no doc change, just
+    // the demoted token's own signature on the plugin's meta.
+    const demoteTr = opened.tr.setMeta(checklistHighlightPluginKey, "priority:p1");
+    const demoted = opened.apply(demoteTr);
+    expect(decorationSpans(demoted)).toEqual([]);
+
+    // Typing on the SAME line, past the demoted word — `demoted` must
+    // survive this, the exact rule quick-add-highlight.ts's own
+    // `parseWithDemotions` doc comment gives ("typing anywhere else in the
+    // line never invalidates it"). " ok" rather than a bare character: `!`
+    // alone is ALSO a real, recognised token (matchReminder,
+    // ../../packages/core/src/quick-add/rules.ts — "the marker alone is
+    // still a reminder token"), so it would highlight on its own merits
+    // and this test would not be able to tell that apart from a demotion
+    // actually failing to survive.
+    const typeTr = demoted.tr.insertText(" ok", demoted.selection.from);
+    const afterTyping = demoted.apply(typeTr);
+    expect(decorationSpans(afterTyping)).toEqual([]);
+  });
+
+  it("does not carry a demotion onto a DIFFERENT checklist line", () => {
+    const doc = entryMarkdownToDocument("- [ ] buy milk p1\n- [ ] call mum p1");
+    const firstBlockStart = startOfFirstParagraph(doc);
+    const firstText = paragraphAt(doc, firstBlockStart).textContent;
+    const opened = stateWithHighlight(doc, { from: firstBlockStart + firstText.length });
+    const demoteTr = opened.tr.setMeta(checklistHighlightPluginKey, "priority:p1");
+    const demoted = opened.apply(demoteTr);
+    expect(decorationSpans(demoted)).toEqual([]);
+
+    let secondItemParagraphStart: number | null = null;
+    doc.descendants((node, pos) => {
+      if (
+        secondItemParagraphStart === null &&
+        node.type.name === "paragraph" &&
+        node.textContent.includes("call mum")
+      ) {
+        secondItemParagraphStart = pos + 1;
+      }
+    });
+    if (secondItemParagraphStart === null) {
+      throw new Error("fixture has no second item");
+    }
+    const secondText = paragraphAt(doc, secondItemParagraphStart).textContent;
+    const moveTr = demoted.tr.setSelection(
+      TextSelection.create(demoted.doc, secondItemParagraphStart + secondText.length),
+    );
+    const movedAway = demoted.apply(moveTr);
+    const secondP1Start = secondItemParagraphStart + secondText.indexOf("p1");
+    expect(decorationSpans(movedAway)).toEqual([
+      { from: secondP1Start, to: secondP1Start + "p1".length },
+    ]);
+  });
+
+  // `activeChecklistPromotion` (issue #173 follow-up) — the ordinal +
+  // demoted-signature pair `composer.tsx`'s own `send()` hands to
+  // `promoteBareCheckboxes` (promote-tasks.ts) so a demotion the reader
+  // clicked survives into promotion. Genuinely testable here for the
+  // identical reason the rest of this describe block already is: a plain
+  // function of an `EditorState`, no mounted `EditorView` needed.
+  describe("activeChecklistPromotion", () => {
+    it("returns null when the caret isn't on a checklist line at all", () => {
+      const doc = entryMarkdownToDocument("just a thought, no checkbox");
+      const state = stateWithHighlight(doc, { from: startOfFirstParagraph(doc) });
+
+      expect(activeChecklistPromotion(state)).toBeNull();
+    });
+
+    it("returns ordinal 0 and an empty demoted set for the one checklist item in the Entry", () => {
+      const doc = entryMarkdownToDocument("- [ ] buy milk p1");
+      const blockStart = startOfFirstParagraph(doc);
+      const text = paragraphAt(doc, blockStart).textContent;
+      const state = stateWithHighlight(doc, { from: blockStart + text.length });
+
+      expect(activeChecklistPromotion(state)).toEqual({ ordinal: 0, demoted: new Set() });
+    });
+
+    it("counts by ORDINAL among qualifying items, not by list position — an already-referenced item ahead of it does not bump the count", () => {
+      const doc = entryMarkdownToDocument(
+        `- [ ] ${formatTaskReference("0192abcd-1234-7890-abcd-0123456789ac", "already promoted")}\n- [ ] call mum p1`,
+      );
+      let secondItemStart: number | null = null;
+      doc.descendants((node, pos) => {
+        if (
+          secondItemStart === null &&
+          node.type.name === "paragraph" &&
+          node.textContent.includes("call mum")
+        ) {
+          secondItemStart = pos + 1;
+        }
+      });
+      if (secondItemStart === null) {
+        throw new Error("fixture has no second item");
+      }
+      const secondText = paragraphAt(doc, secondItemStart).textContent;
+      const state = stateWithHighlight(doc, { from: secondItemStart + secondText.length });
+
+      // The already-referenced FIRST item is not a promotable checklist
+      // item at all (`promoteBareCheckboxes`'s own loop guard) — this
+      // item, the only qualifying one, is ordinal 0, not 1.
+      expect(activeChecklistPromotion(state)).toEqual({ ordinal: 0, demoted: new Set() });
+    });
+
+    it("counts a SECOND bare checkbox as ordinal 1, matching the order promoteBareCheckboxes visits them in", () => {
+      const doc = entryMarkdownToDocument("- [ ] buy milk p1\n- [ ] call mum p1");
+      let secondItemStart: number | null = null;
+      doc.descendants((node, pos) => {
+        if (
+          secondItemStart === null &&
+          node.type.name === "paragraph" &&
+          node.textContent.includes("call mum")
+        ) {
+          secondItemStart = pos + 1;
+        }
+      });
+      if (secondItemStart === null) {
+        throw new Error("fixture has no second item");
+      }
+      const secondText = paragraphAt(doc, secondItemStart).textContent;
+      const state = stateWithHighlight(doc, { from: secondItemStart + secondText.length });
+
+      expect(activeChecklistPromotion(state)).toEqual({ ordinal: 1, demoted: new Set() });
+    });
+
+    it("counts a checkbox nested inside another item's own trailing content, matching promote-tasks.ts's own traversal", () => {
+      const doc = entryMarkdownToDocument("- outer\n  - [ ] nested task p1");
+      let nestedStart: number | null = null;
+      doc.descendants((node, pos) => {
+        if (
+          nestedStart === null &&
+          node.type.name === "paragraph" &&
+          node.textContent.includes("nested task")
+        ) {
+          nestedStart = pos + 1;
+        }
+      });
+      if (nestedStart === null) {
+        throw new Error("fixture has no nested item");
+      }
+      const nestedText = paragraphAt(doc, nestedStart).textContent;
+      const state = stateWithHighlight(doc, { from: nestedStart + nestedText.length });
+
+      expect(activeChecklistPromotion(state)).toEqual({ ordinal: 0, demoted: new Set() });
+    });
+
+    it("carries the plugin's own demoted signatures through, for the ordinal it names", () => {
+      const doc = entryMarkdownToDocument("- [ ] buy milk p1");
+      const blockStart = startOfFirstParagraph(doc);
+      const text = paragraphAt(doc, blockStart).textContent;
+      const opened = stateWithHighlight(doc, { from: blockStart + text.length });
+      const demoteTr = opened.tr.setMeta(checklistHighlightPluginKey, "priority:p1");
+      const demoted = opened.apply(demoteTr);
+
+      expect(activeChecklistPromotion(demoted)).toEqual({
+        ordinal: 0,
+        demoted: new Set(["priority:p1"]),
+      });
+    });
   });
 });

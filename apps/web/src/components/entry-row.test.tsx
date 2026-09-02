@@ -1,10 +1,11 @@
-import type { Entry } from "@meologue/core";
+import type { Entry, Task } from "@meologue/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { MemoryRouter, Outlet, Route, Routes } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as entryDayModule from "@/lib/entry-day";
+import { formatTaskReference } from "@/lib/inline-markdown";
 import { entryReferenceQueryKey } from "@/lib/query-keys";
 import type { EntryStoreOutletContext } from "@/pages/entry-store-layout";
 import { EntryRow } from "./entry-row";
@@ -60,6 +61,7 @@ function renderEntryRow(
     search: vi.fn(async () => []),
     getEntries: vi.fn(async () => []),
     editEntry: vi.fn(),
+    commitEntryEdit: vi.fn(),
     removeEntry: vi.fn(),
     tasks: [],
     completedTasks: [],
@@ -683,6 +685,78 @@ describe("EntryRow", () => {
       const marks = screen.getAllByText("matching", { selector: "mark" });
       expect(marks).toHaveLength(1);
       expect(marks[0]?.closest("a")).toBeNull();
+    });
+  });
+
+  // `TaskReferenceItem` (entry-row.tsx) — the checklist's own analogue of
+  // "an Entry Reference" just above, resolving off `useEntryStore()`'s own
+  // `tasks`/`completedTasks` (already loaded, ADR 0047) rather than a
+  // probe: no `waitFor`/`findBy*` needed anywhere in this block, since
+  // there is nothing asynchronous to wait on.
+  describe("a task reference", () => {
+    const taskId = "0192abcd-1234-7890-abcd-0123456789ac";
+
+    function taskFixture(overrides: Partial<Task> = {}): Task {
+      return {
+        id: taskId,
+        deviceId: "device-a",
+        content: "buy milk",
+        completedAt: null,
+        orderKey: "V",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        seq: null,
+        syncedAt: null,
+        deletedAt: null,
+        date: null,
+        deadline: null,
+        duration: null,
+        priority: 1,
+        labelIds: [],
+        dateString: null,
+        projectId: null,
+        sectionId: null,
+        parentId: null,
+        ...overrides,
+      };
+    }
+
+    it("renders the live Task's own content and checked state once resolved from `tasks`", () => {
+      renderEntryRow(
+        entry({ body: `- [ ] ${formatTaskReference(taskId, "stale cached label")}` }),
+        {
+          tasks: [taskFixture({ content: "live label", completedAt: null })],
+        },
+      );
+
+      expect(screen.getByText("live label")).toBeInTheDocument();
+      expect(screen.queryByText("stale cached label")).not.toBeInTheDocument();
+      expect(screen.getByRole("checkbox")).not.toBeChecked();
+    });
+
+    it("finds a completed Task in `completedTasks`, not just `tasks`", () => {
+      renderEntryRow(entry({ body: `- [ ] ${formatTaskReference(taskId, "buy milk")}` }), {
+        completedTasks: [taskFixture({ completedAt: "2026-08-28T00:00:00.000Z" })],
+      });
+
+      expect(screen.getByRole("checkbox")).toBeChecked();
+    });
+
+    it("falls back to the body's own cached label/checked when the Task isn't in either list — not yet Synced", () => {
+      renderEntryRow(entry({ body: `- [x] ${formatTaskReference(taskId, "cached label")}` }), {
+        tasks: [],
+        completedTasks: [],
+      });
+
+      expect(screen.getByText("cached label")).toBeInTheDocument();
+      expect(screen.getByRole("checkbox")).toBeChecked();
+    });
+
+    it("stays disabled even once resolved — the write half of this feature lands separately", () => {
+      renderEntryRow(entry({ body: `- [ ] ${formatTaskReference(taskId, "buy milk")}` }), {
+        tasks: [taskFixture()],
+      });
+
+      expect(screen.getByRole("checkbox")).toBeDisabled();
     });
   });
 });

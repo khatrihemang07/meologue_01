@@ -7,7 +7,16 @@ describe("entrySchema", () => {
     // purpose (ADR 0043) — this is the test that would fail if one of them
     // ever got added back.
     expect(Object.keys(entrySchema.nodes).sort()).toEqual(
-      ["doc", "paragraph", "text", "reference", "bullet_list", "ordered_list", "list_item"].sort(),
+      [
+        "doc",
+        "paragraph",
+        "text",
+        "reference",
+        "task_reference",
+        "bullet_list",
+        "ordered_list",
+        "list_item",
+      ].sort(),
     );
   });
 
@@ -38,6 +47,15 @@ describe("entrySchema", () => {
     const reference = entrySchema.nodes.reference;
     expect(reference?.isInline).toBe(true);
     expect(reference?.isAtom).toBe(true);
+  });
+
+  it("makes task_reference an inline atom too, carrying taskId/label/checked", () => {
+    const taskReference = entrySchema.nodes.task_reference;
+    expect(taskReference?.isInline).toBe(true);
+    expect(taskReference?.isAtom).toBe(true);
+
+    const node = taskReference?.create({ taskId: "abc123", label: "buy milk", checked: true });
+    expect(node?.attrs).toMatchObject({ taskId: "abc123", label: "buy milk", checked: true });
   });
 
   it("rejects a doc with no blocks at all — block+ requires at least one", () => {

@@ -1,8 +1,12 @@
-import type { Entry, EntryPage, EntryStore, TaskStore } from "@meologue/core";
+import type { Entry, EntryPage, EntryStore, Task, TaskStore } from "@meologue/core";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { deviceUtcOffsetMinutes, entryDayKey } from "@/lib/entry-day";
+import { formatTaskReference } from "@/lib/inline-markdown";
+import type { ComposerPromotionContext } from "@/lib/promote-tasks";
+import { tokenSignature } from "@/lib/quick-add-highlight";
 import type { useHistory as UseHistory } from "./use-history";
 
 const { requestSyncMock } = vi.hoisted(() => ({
@@ -47,24 +51,33 @@ function createFakeStore(): EntryStore {
     search: vi.fn(async () => []),
     edit: vi.fn(async () => {}),
     remove: vi.fn(async () => {}),
-    getMany: vi.fn(async () => []),
+    // `commitEntryEdit`'s own test below needs this to answer for real —
+    // it reads the edited Entry's own `createdAt` off exactly this call
+    // (use-history.ts's own comment on why "now" is only ever a fallback).
+    getMany: vi.fn(async (ids: string[]) => entries.filter((e) => ids.includes(e.id))),
   };
 }
 
-// Issue #172 / ADR 0051: useHistory takes a TaskStore purely to hand it
-// through to requestSync (mocked above via `requestSyncMock`) — nothing
-// in useHistory.ts itself ever calls a method on it, so a bare stub is
-// enough for every test in this file.
+// Issue #172 / ADR 0051 had useHistory take a TaskStore purely to hand it
+// through to requestSync (mocked above via `requestSyncMock`). Issue #173
+// changed that: Promotion now calls `list()`/`upsert()` on this directly
+// (use-history.ts's `upsertPromotedTasks`), so this fake tracks its own
+// `active` list the same way use-tasks.test.tsx's own `createFakeStore`
+// does, rather than staying a bare stub — every test that doesn't send a
+// checkbox line still never exercises either method beyond that.
 function createFakeTaskStore(): TaskStore {
+  let active: Task[] = [];
   return {
-    list: vi.fn(async () => []),
+    list: vi.fn(async () => active),
     listByProject: vi.fn(async () => []),
     listChildren: vi.fn(async () => []),
     listInSection: vi.fn(async () => []),
     listDescendants: vi.fn(async () => []),
     listCompleted: vi.fn(async () => []),
     get: vi.fn(async () => undefined),
-    upsert: vi.fn(async () => {}),
+    upsert: vi.fn(async (incoming: Task[]) => {
+      active = [...active, ...incoming];
+    }),
     complete: vi.fn(async () => {}),
     uncomplete: vi.fn(async () => {}),
     rename: vi.fn(async () => {}),
@@ -94,17 +107,24 @@ describe("useHistory", () => {
     requestSyncMock.mockClear();
   });
 
-  async function renderUseHistory(store: EntryStore, deviceId = "device-a") {
+  async function renderUseHistory(
+    store: EntryStore,
+    taskStore: TaskStore = createFakeTaskStore(),
+    deviceId = "device-a",
+    // Every test but Promotion's own label-resolution one has no
+    // `%label` token to resolve — this default mirrors `useHistory`'s own
+    // "no labels resolve to anything" fallback rather than duplicating it.
+    resolveLabelIds: (names: string[]) => Promise<string[]> = async () => [],
+  ) {
     const fresh = await importFresh();
-    const taskStore = createFakeTaskStore();
     const wrapper = ({ children }: { children: ReactNode }) => (
       <QueryClientProvider client={fresh.queryClient}>{children}</QueryClientProvider>
     );
     const rendered = renderHook<ReturnType<typeof UseHistory>, void>(
-      () => (fresh.useHistory as typeof UseHistory)(store, taskStore, deviceId),
+      () => (fresh.useHistory as typeof UseHistory)(store, taskStore, deviceId, resolveLabelIds),
       { wrapper },
     );
-    return { fresh, ...rendered };
+    return { fresh, taskStore, ...rendered };
   }
 
   it("reads entries from the store", async () => {
@@ -231,6 +251,281 @@ describe("useHistory", () => {
       // No restore call of any kind — store.upsert() is only ever used by
       // sendEntry, never by removeEntry.
       expect(store.upsert).not.toHaveBeenCalled();
+    });
+
+    // ADR 0048's asymmetric deletion, proven at the write path rather than
+    // merely inferred from the diff — the mirror of use-tasks.test.tsx's
+    // own "never touches the Entry store when removing a Task": deleting
+    // an Entry must never reach across into the Task store at all, so
+    // every Task it referenced is left completely untouched.
+    it("never touches the Task store — deletion is asymmetric (ADR 0048)", async () => {
+      const store = createFakeStore();
+      const { result, taskStore } = await renderUseHistory(store);
+      await waitFor(() => expect(result.current.entries).toEqual([]));
+
+      act(() => result.current.removeEntry(entry({ id: "7" })));
+
+      await waitFor(() => expect(store.remove).toHaveBeenCalledWith("7"));
+      for (const [name, method] of Object.entries(taskStore)) {
+        expect(vi.mocked(method), `taskStore.${name} was called`).not.toHaveBeenCalled();
+      }
+    });
+  });
+
+  // Promotion (issue #173, ADR 0048): sending or committing an Entry
+  // containing a bare `- [ ]` mints a Task for it and rewrites that line
+  // as a Reference.
+  //
+  // `mustFirstCall`/`mustAt` exist for the same reason entry-document.test.ts's
+  // own `nodeType` helper does — noUncheckedIndexedAccess makes a mock's
+  // `.calls[0]` and an array's own `[0]` both possibly `undefined`, and
+  // these throw rather than sprinkling non-null assertions (which Biome's
+  // `recommended` refuses) through every test below.
+  function mustFirstCall<T extends unknown[]>(mock: { mock: { calls: T[] } }): T {
+    const call = mock.mock.calls[0];
+    if (call === undefined) {
+      throw new Error("expected the mock to have been called");
+    }
+    return call;
+  }
+
+  function mustAt<T>(items: readonly T[], index: number): T {
+    const value = items[index];
+    if (value === undefined) {
+      throw new Error(`expected an element at index ${index}`);
+    }
+    return value;
+  }
+
+  describe("Promotion", () => {
+    it("mints a Task for a bare checkbox and rewrites the line as a Reference", async () => {
+      const store = createFakeStore();
+      const { result, taskStore } = await renderUseHistory(store);
+      await waitFor(() => expect(result.current.entries).toEqual([]));
+
+      act(() => result.current.sendEntry("- [ ] buy milk"));
+
+      await waitFor(() => expect(taskStore.upsert).toHaveBeenCalledTimes(1));
+      const [mintedTasks] = mustFirstCall(vi.mocked(taskStore.upsert));
+      expect(mintedTasks).toHaveLength(1);
+      const task = mustAt(mintedTasks, 0);
+      expect(task.content).toBe("buy milk");
+      expect(task.completedAt).toBeNull();
+
+      await waitFor(() => expect(store.upsert).toHaveBeenCalledTimes(1));
+      const [sentEntries] = mustFirstCall(vi.mocked(store.upsert));
+      expect(mustAt(sentEntries, 0).body).toBe(`- [ ] ${formatTaskReference(task.id, "buy milk")}`);
+    });
+
+    it("a promoted Task takes the Entry's own capture date, day-only", async () => {
+      const store = createFakeStore();
+      const { result, taskStore } = await renderUseHistory(store);
+      await waitFor(() => expect(result.current.entries).toEqual([]));
+
+      act(() => result.current.sendEntry("- [ ] buy milk"));
+
+      await waitFor(() => expect(taskStore.upsert).toHaveBeenCalledTimes(1));
+      const [mintedTasks] = mustFirstCall(vi.mocked(taskStore.upsert));
+      const [sentEntries] = mustFirstCall(vi.mocked(store.upsert));
+      const sentEntry = mustAt(sentEntries, 0);
+      const task = mustAt(mintedTasks, 0);
+      expect(task.date).toBe(entryDayKey(sentEntry.createdAt, deviceUtcOffsetMinutes()));
+    });
+
+    it("checks the ticked marker too — `- [x]` mints an already-completed Task", async () => {
+      const store = createFakeStore();
+      const { result, taskStore } = await renderUseHistory(store);
+      await waitFor(() => expect(result.current.entries).toEqual([]));
+
+      act(() => result.current.sendEntry("- [x] done already"));
+
+      await waitFor(() => expect(taskStore.upsert).toHaveBeenCalledTimes(1));
+      const [mintedTasks] = mustFirstCall(vi.mocked(taskStore.upsert));
+      expect(mustAt(mintedTasks, 0).completedAt).not.toBeNull();
+    });
+
+    it("does not mint a second Task for a line that is already a Reference — the loop guard", async () => {
+      const store = createFakeStore();
+      const { result, taskStore } = await renderUseHistory(store);
+      await waitFor(() => expect(result.current.entries).toEqual([]));
+      const taskId = "0192abcd-1234-7890-abcd-0123456789ac";
+
+      act(() =>
+        result.current.sendEntry(`- [ ] ${formatTaskReference(taskId, "already promoted")}`),
+      );
+
+      await waitFor(() => expect(store.upsert).toHaveBeenCalledTimes(1));
+      expect(taskStore.upsert).not.toHaveBeenCalled();
+      const [sentEntries] = mustFirstCall(vi.mocked(store.upsert));
+      expect(mustAt(sentEntries, 0).body).toBe(
+        `- [ ] ${formatTaskReference(taskId, "already promoted")}`,
+      );
+    });
+
+    it("does nothing to the Task store for an ordinary Entry with no checkbox", async () => {
+      const store = createFakeStore();
+      const { result, taskStore } = await renderUseHistory(store);
+      await waitFor(() => expect(result.current.entries).toEqual([]));
+
+      act(() => result.current.sendEntry("just a thought, no checkbox"));
+
+      await waitFor(() => expect(store.upsert).toHaveBeenCalledTimes(1));
+      expect(taskStore.upsert).not.toHaveBeenCalled();
+    });
+
+    // Issue #173's own follow-up: the checkbox line must genuinely "file
+    // itself" — a recognised date/priority token resolves into the
+    // minted Task's own fields, not just into words stripped from its
+    // name. `promote-tasks.test.ts` already covers the parse itself in
+    // isolation; these prove the WIRING through `sendEntry` end to end,
+    // the seam a unit test on `promoteBareCheckboxes` alone cannot catch
+    // (a wrong argument order, a dropped `quickAddOptions`, and so on).
+    describe("the checkbox line files itself (issue #173 follow-up)", () => {
+      const PROMOTION: ComposerPromotionContext = {
+        quickAddOptions: { now: "2026-09-02", smartDates: true },
+        active: null,
+      };
+
+      it("resolves a date token and a priority token into the minted Task's own fields", async () => {
+        const store = createFakeStore();
+        const { result, taskStore } = await renderUseHistory(store);
+        await waitFor(() => expect(result.current.entries).toEqual([]));
+
+        act(() => result.current.sendEntry("- [ ] buy milk tomorrow p1", PROMOTION));
+
+        await waitFor(() => expect(taskStore.upsert).toHaveBeenCalledTimes(1));
+        const [mintedTasks] = mustFirstCall(vi.mocked(taskStore.upsert));
+        const task = mustAt(mintedTasks, 0);
+        expect(task.content).toBe("buy milk");
+        expect(task.date).toBe("2026-09-03");
+        expect(task.priority).toBe(4);
+
+        const [sentEntries] = mustFirstCall(vi.mocked(store.upsert));
+        expect(mustAt(sentEntries, 0).body).toBe(
+          `- [ ] ${formatTaskReference(task.id, "buy milk")}`,
+        );
+      });
+
+      it("resolves a %label token through the injected resolveLabelIds, the same round trip Todo's own add field uses", async () => {
+        const store = createFakeStore();
+        const resolveLabelIds = vi.fn(async (names: string[]) => names.map((n) => `label-${n}`));
+        const { result, taskStore } = await renderUseHistory(
+          store,
+          createFakeTaskStore(),
+          "device-a",
+          resolveLabelIds,
+        );
+        await waitFor(() => expect(result.current.entries).toEqual([]));
+
+        act(() => result.current.sendEntry("- [ ] buy milk %Shopping", PROMOTION));
+
+        await waitFor(() => expect(taskStore.upsert).toHaveBeenCalledTimes(1));
+        expect(resolveLabelIds).toHaveBeenCalledWith(["Shopping"]);
+        const [mintedTasks] = mustFirstCall(vi.mocked(taskStore.upsert));
+        expect(mustAt(mintedTasks, 0).labelIds).toEqual(["label-Shopping"]);
+      });
+
+      it("does not consume a token the reader demoted in the Composer before Send", async () => {
+        const store = createFakeStore();
+        const { result, taskStore } = await renderUseHistory(store);
+        await waitFor(() => expect(result.current.entries).toEqual([]));
+        const demotedTomorrow: ComposerPromotionContext = {
+          quickAddOptions: PROMOTION.quickAddOptions,
+          active: {
+            ordinal: 0,
+            demoted: new Set([tokenSignature({ kind: "date", raw: "tomorrow" })]),
+          },
+        };
+
+        act(() => result.current.sendEntry("- [ ] buy milk tomorrow p1", demotedTomorrow));
+
+        await waitFor(() => expect(taskStore.upsert).toHaveBeenCalledTimes(1));
+        const [mintedTasks] = mustFirstCall(vi.mocked(taskStore.upsert));
+        const task = mustAt(mintedTasks, 0);
+        // "tomorrow" survives as plain content, exactly as the reader saw
+        // it once they clicked to demote it; "p1" was never demoted, so
+        // it's still recognised.
+        expect(task.content).toBe("buy milk tomorrow");
+        expect(task.priority).toBe(4);
+        const [sentEntries] = mustFirstCall(vi.mocked(store.upsert));
+        expect(mustAt(sentEntries, 0).body).toBe(
+          `- [ ] ${formatTaskReference(task.id, "buy milk tomorrow")}`,
+        );
+      });
+
+      it("falls back to the Entry's own capture date when nothing parses, still the unchanged capture-date rule", async () => {
+        const store = createFakeStore();
+        const { result, taskStore } = await renderUseHistory(store);
+        await waitFor(() => expect(result.current.entries).toEqual([]));
+
+        act(() => result.current.sendEntry("- [ ] buy milk", PROMOTION));
+
+        await waitFor(() => expect(taskStore.upsert).toHaveBeenCalledTimes(1));
+        const [mintedTasks] = mustFirstCall(vi.mocked(taskStore.upsert));
+        const [sentEntries] = mustFirstCall(vi.mocked(store.upsert));
+        const sentEntry = mustAt(sentEntries, 0);
+        expect(mustAt(mintedTasks, 0).date).toBe(
+          entryDayKey(sentEntry.createdAt, deviceUtcOffsetMinutes()),
+        );
+      });
+    });
+
+    describe("commitEntryEdit — the Composer's own promoting edit-commit door", () => {
+      it("promotes a bare checkbox added on edit, exactly as a fresh Send does", async () => {
+        const store = createFakeStore();
+        await store.upsert([entry({ id: "existing", body: "old body" })]);
+        const { result, taskStore } = await renderUseHistory(store);
+        await waitFor(() => expect(result.current.entries).toHaveLength(1));
+
+        act(() => result.current.commitEntryEdit("existing", "- [ ] buy milk"));
+
+        await waitFor(() => expect(taskStore.upsert).toHaveBeenCalledTimes(1));
+        const [mintedTasks] = mustFirstCall(vi.mocked(taskStore.upsert));
+        const task = mustAt(mintedTasks, 0);
+        expect(task.content).toBe("buy milk");
+        await waitFor(() => expect(store.edit).toHaveBeenCalledTimes(1));
+        expect(store.edit).toHaveBeenCalledWith(
+          "existing",
+          `- [ ] ${formatTaskReference(task.id, "buy milk")}`,
+        );
+      });
+
+      it("takes the EDITED Entry's own capture date, never 'now'", async () => {
+        const store = createFakeStore();
+        const capturedAt = "2020-03-01T00:00:00.000Z";
+        await store.upsert([entry({ id: "existing", body: "old body", createdAt: capturedAt })]);
+        const { result, taskStore } = await renderUseHistory(store);
+        await waitFor(() => expect(result.current.entries).toHaveLength(1));
+
+        act(() => result.current.commitEntryEdit("existing", "- [ ] buy milk"));
+
+        await waitFor(() => expect(taskStore.upsert).toHaveBeenCalledTimes(1));
+        const [mintedTasks] = mustFirstCall(vi.mocked(taskStore.upsert));
+        expect(mustAt(mintedTasks, 0).date).toBe(entryDayKey(capturedAt, deviceUtcOffsetMinutes()));
+      });
+
+      it("does not promote a bare checkbox already there before the edit twice over — the loop guard holds across edits too", async () => {
+        const store = createFakeStore();
+        const taskId = "0192abcd-1234-7890-abcd-0123456789ac";
+        await store.upsert([
+          entry({
+            id: "existing",
+            body: `- [ ] ${formatTaskReference(taskId, "already promoted")}`,
+          }),
+        ]);
+        const { result, taskStore } = await renderUseHistory(store);
+        await waitFor(() => expect(result.current.entries).toHaveLength(1));
+
+        act(() =>
+          result.current.commitEntryEdit(
+            "existing",
+            `- [ ] ${formatTaskReference(taskId, "already promoted")}\n\nedited to add a line`,
+          ),
+        );
+
+        await waitFor(() => expect(store.edit).toHaveBeenCalledTimes(1));
+        expect(taskStore.upsert).not.toHaveBeenCalled();
+      });
     });
   });
 

@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   entryBlocksToText,
+  formatTaskReference,
   type InlineNode,
   inlineNodesToText,
   parseEntryMarkdown,
   parseInlineMarkdown,
   parseReferenceDate,
+  parseReferenceTask,
 } from "./inline-markdown";
 
 const ENTRY_ID = "0192abcd-1234-7890-abcd-0123456789ab";
@@ -153,12 +155,33 @@ describe("parseInlineMarkdown", () => {
       ]);
     });
 
+    it("parses [[task:<uuid>|label]] as a taskReference carrying the id and cached label", () => {
+      const raw = `[[task:${ENTRY_ID}|buy milk]]`;
+      expect(parseInlineMarkdown(raw)).toEqual([
+        { kind: "taskReference", taskId: ENTRY_ID, label: "buy milk", raw },
+      ]);
+    });
+
+    it("decodes a task reference's escaped label — a run of two ] never terminates it early", () => {
+      const raw = formatTaskReference(ENTRY_ID, "close]] and \\ backslash, a | pipe too");
+      expect(parseInlineMarkdown(raw)).toEqual([
+        {
+          kind: "taskReference",
+          taskId: ENTRY_ID,
+          label: "close]] and \\ backslash, a | pipe too",
+          raw,
+        },
+      ]);
+    });
+
     it("does not treat a malformed mark as a Reference — it renders literally", () => {
       const malformed = [
         "[[nope]]",
         "[[2026-13-45]]", // month 13 does not exist
         "[[2026-02-30]]", // Feb 30 does not exist
         `[[e:not-a-uuid]]`,
+        `[[task:not-a-uuid|label]]`,
+        `[[task:${ENTRY_ID}]]`, // no `|label` at all
         "[[2026-08-28", // unclosed
       ];
       for (const body of malformed) {
@@ -278,6 +301,56 @@ describe("parseReferenceDate", () => {
   });
 });
 
+describe("parseReferenceTask / formatTaskReference", () => {
+  it("round-trips a plain label through format then parse", () => {
+    const raw = formatTaskReference(ENTRY_ID, "buy milk");
+    expect(raw).toBe(`[[task:${ENTRY_ID}|buy milk]]`);
+    expect(parseReferenceTask(raw.slice(2, -2))).toEqual({ taskId: ENTRY_ID, label: "buy milk" });
+  });
+
+  it("escapes and recovers a label containing ]] — the mark's own closing delimiter", () => {
+    const raw = formatTaskReference(ENTRY_ID, "wrap this up]]");
+    // The escaped form never contains two consecutive, unescaped `]`
+    // characters ahead of the mark's real close — verified directly
+    // rather than trusted, since that is the one property this scheme
+    // depends on.
+    expect(raw.slice(0, -2)).not.toMatch(/(?<!\\)\]\]/);
+    expect(parseReferenceTask(raw.slice(2, -2))).toEqual({
+      taskId: ENTRY_ID,
+      label: "wrap this up]]",
+    });
+  });
+
+  it("escapes and recovers a label containing a literal backslash", () => {
+    const raw = formatTaskReference(ENTRY_ID, "C:\\path\\to\\file");
+    expect(parseReferenceTask(raw.slice(2, -2))).toEqual({
+      taskId: ENTRY_ID,
+      label: "C:\\path\\to\\file",
+    });
+  });
+
+  it("does not need to escape a pipe — only the first | ever delimits", () => {
+    const raw = formatTaskReference(ENTRY_ID, "milk | eggs | bread");
+    expect(parseReferenceTask(raw.slice(2, -2))).toEqual({
+      taskId: ENTRY_ID,
+      label: "milk | eggs | bread",
+    });
+  });
+
+  it("rejects a head that is not task:<uuid>, however label-shaped the rest is", () => {
+    expect(parseReferenceTask("task:not-a-uuid|label")).toBeNull();
+    expect(parseReferenceTask("e:not-even-task-prefixed|label")).toBeNull();
+  });
+
+  it("rejects a task: head with no | at all — a task reference always has a cached label", () => {
+    expect(parseReferenceTask(`task:${ENTRY_ID}`)).toBeNull();
+  });
+
+  it("accepts an empty label", () => {
+    expect(parseReferenceTask(`task:${ENTRY_ID}|`)).toEqual({ taskId: ENTRY_ID, label: "" });
+  });
+});
+
 describe("inlineNodesToText", () => {
   it("joins text across nested emphasis and strong, ignoring formatting", () => {
     const nodes: InlineNode[] = [
@@ -294,6 +367,23 @@ describe("inlineNodesToText", () => {
       { kind: "dateReference", date: "2026-08-28", raw: "[[2026-08-28]]" },
     ];
     expect(inlineNodesToText(nodes)).toBe("[[2026-08-28]]");
+  });
+
+  // The opposite rule from a date/Entry Reference just above — deliberately
+  // so, per ADR 0048: a task reference's whole point is to show real words
+  // even before the Task itself has Synced, so `entrySnippet`/the `[[`
+  // picker (this function's own callers) get the cached label, never the
+  // `[[task:…]]` mark itself.
+  it("renders a task reference's cached label, not its mark", () => {
+    const nodes: InlineNode[] = [
+      {
+        kind: "taskReference",
+        taskId: ENTRY_ID,
+        label: "buy milk",
+        raw: `[[task:${ENTRY_ID}|buy milk]]`,
+      },
+    ];
+    expect(inlineNodesToText(nodes)).toBe("buy milk");
   });
 });
 
@@ -416,6 +506,29 @@ describe("parseEntryMarkdown", () => {
               { kind: "text", text: " " },
               { kind: "strong", children: [{ kind: "text", text: "call" }] },
               { kind: "text", text: " mum" },
+            ],
+          },
+        ]);
+      });
+
+      // Promotion's own output shape (issue #173, ADR 0048): a checkbox
+      // whose entire line is one task reference. The checkbox marker
+      // itself (`item.task`) is unaffected by the mark it happens to
+      // contain — `- [ ] [[task:…]]` parses its `[ ]` exactly the way a
+      // bare `- [ ] call mum` does; the reference sits inside `content`
+      // like any other inline node the mark set recognises.
+      it("parses a task reference inside a checkbox item, beside its own [ ]/[x] marker", () => {
+        const raw = formatTaskReference(ENTRY_ID, "buy milk");
+        const [block] = parseEntryMarkdown(`- [ ] ${raw}`);
+        if (block?.kind !== "bulletList") throw new Error("expected bulletList");
+        const [item] = block.items;
+        expect(item?.task?.checked).toBe(false);
+        expect(item?.content).toEqual([
+          {
+            kind: "prose",
+            children: [
+              { kind: "text", text: " " },
+              { kind: "taskReference", taskId: ENTRY_ID, label: "buy milk", raw },
             ],
           },
         ]);

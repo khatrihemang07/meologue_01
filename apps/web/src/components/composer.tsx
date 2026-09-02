@@ -39,11 +39,13 @@ import { entrySnippet } from "@/components/entry-row";
 import { Button } from "@/components/ui/button";
 import { type ComposerCommand, composerCommands } from "@/lib/composer-commands";
 import {
+  activeChecklistPromotion,
   buildComposerPlugins,
   listItemNodeView,
   PICKER_DISMISS_META,
   paragraphNodeView,
   pickerPluginKey,
+  quickAddOptionsNow,
   referenceNodeType,
   referenceNodeView,
   SLASH_DISMISS_META,
@@ -65,6 +67,7 @@ import { entryDocumentToMarkdown, entryMarkdownToDocument } from "@/lib/entry-do
 import { entrySchema, type ReferenceAttrs } from "@/lib/entry-schema";
 import { normalizeEntryBody } from "@/lib/entry-text";
 import { parseReferenceDate } from "@/lib/inline-markdown";
+import type { ComposerPromotionContext } from "@/lib/promote-tasks";
 import { useSettingsStore } from "@/lib/settings";
 import { isSubmitChord } from "@/lib/submit-chord";
 import { cn } from "@/lib/utils";
@@ -209,7 +212,15 @@ export interface ComposerHandle {
 }
 
 interface ComposerProps {
-  onSend: (body: string) => void;
+  /**
+   * `promotion` is built fresh off the live `EditorView` the instant Send
+   * fires (`quickAddOptionsNow()` plus `activeChecklistPromotion`, both
+   * composer-editor.ts) — see `ComposerPromotionContext`'s own doc comment
+   * (promote-tasks.ts) for why `onSend`'s caller has to receive this
+   * rather than let `use-history.ts` recompute its own, possibly
+   * disagreeing, "now".
+   */
+  onSend: (body: string, promotion: ComposerPromotionContext) => void;
   /**
    * Sending before the store finishes its async open would look identical
    * to a normal Send but silently never persist (ticket 21) — the disabled
@@ -225,8 +236,8 @@ interface ComposerProps {
    * Owned by the page (composer-page.tsx), not the Composer itself.
    */
   editingEntry?: Entry | null;
-  /** Commits the edit — Send, while `editingEntry` is set AND the document actually changed (ADR 0044's dirty-only commit rule). Required together with `editingEntry`. */
-  onCommitEdit?: (id: string, body: string) => void;
+  /** Commits the edit — Send, while `editingEntry` is set AND the document actually changed (ADR 0044's dirty-only commit rule). Required together with `editingEntry`. `promotion` — see `onSend`'s own doc comment just above. */
+  onCommitEdit?: (id: string, body: string, promotion: ComposerPromotionContext) => void;
   /** Escape, the visible Cancel control, or Send on an Entry nobody actually edited (ADR 0044) — leaves edit mode without committing anything. */
   onCancelEdit?: () => void;
   /**
@@ -521,6 +532,19 @@ export function Composer({
       return;
     }
     const rawBody = entryDocumentToMarkdown(view.state.doc);
+    // Read off `view.state` at this exact instant, alongside `rawBody`
+    // above — issue #173's own "the decoration and the promotion must
+    // agree" requirement (promote-tasks.ts's own header comment) is what
+    // this buys: `quickAddOptionsNow()` is the identical "now" the
+    // checklist line's own decorations were just drawn with (nothing
+    // dispatches between that render and this line), and
+    // `activeChecklistPromotion` reads the SAME plugin state those
+    // decorations came from, not a value recomputed later after
+    // `loadDocument` below has already reset it.
+    const promotion: ComposerPromotionContext = {
+      quickAddOptions: quickAddOptionsNow(),
+      active: activeChecklistPromotion(view.state),
+    };
     const decision = decideSend({
       editingEntryId: editingEntry?.id ?? null,
       rawBody,
@@ -537,10 +561,10 @@ export function Composer({
       return;
     }
     if (decision.kind === "commit") {
-      onCommitEdit?.(decision.id, decision.body);
+      onCommitEdit?.(decision.id, decision.body, promotion);
       return;
     }
-    onSend(decision.body);
+    onSend(decision.body, promotion);
     loadDocument(view, "");
     dirtyRef.current = false;
   }, [disabled, editingEntry, onCancelEdit, onCommitEdit, onSend, loadDocument]);

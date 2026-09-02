@@ -35,9 +35,9 @@ import { baseKeymap, chainCommands, splitBlock } from "prosemirror-commands";
 import { history } from "prosemirror-history";
 import { InputRule, inputRules, wrappingInputRule } from "prosemirror-inputrules";
 import { keymap } from "prosemirror-keymap";
-import type { MarkType, NodeType, Node as PMNode } from "prosemirror-model";
+import type { MarkType, NodeType, Node as PMNode, ResolvedPos } from "prosemirror-model";
 import { splitListItem } from "prosemirror-schema-list";
-import { type Command, Plugin, PluginKey } from "prosemirror-state";
+import { type Command, type EditorState, Plugin, PluginKey } from "prosemirror-state";
 import { findWrapping } from "prosemirror-transform";
 import { Decoration, DecorationSet, type EditorView, type NodeView } from "prosemirror-view";
 import {
@@ -52,8 +52,17 @@ import {
 } from "@/lib/composer-commands";
 import { derivePicker, type ReferencePickerState } from "@/lib/composer-picker";
 import { deriveSlashMenu, type SlashMenuState } from "@/lib/composer-slash";
+import { deviceUtcOffsetMinutes, entryDayKey } from "@/lib/entry-day";
 import { entrySchema, type ReferenceAttrs } from "@/lib/entry-schema";
 import { parseReferenceDate, parseReferenceEntryId } from "@/lib/inline-markdown";
+import {
+  type DemotedSignature,
+  parseWithDemotions,
+  QUICK_ADD_HIGHLIGHT_CLASS,
+  tokenAtOffset,
+  tokenSignature,
+} from "@/lib/quick-add-highlight";
+import { useSettingsStore } from "@/lib/settings";
 
 // ---------------------------------------------------------------------------
 // Typed schema access
@@ -870,6 +879,268 @@ export function slashPlugin(): Plugin<SlashMenuState | null> {
 }
 
 // ---------------------------------------------------------------------------
+// Checklist line highlighting and click-to-demote (issue #173)
+// ---------------------------------------------------------------------------
+
+/**
+ * Every option `parseQuickAdd` needs (`@meologue/core`), read fresh on
+ * every call rather than threaded in as a plugin parameter — cheap, and
+ * the same "recomputed on every render" posture add-task-form.tsx's own
+ * identical `options` literal already takes for the add field
+ * (`localDayKey(new Date())`/`smartDatesEnabled`), for the same reason: a
+ * ProseMirror plugin is built exactly once per Composer instance
+ * (`buildComposerPlugins`, composer.tsx's own `useState` initializer), so
+ * caching this at construction time would leave it stale the moment the
+ * Device crosses midnight or the reader flips Smart dates in Settings
+ * while the Composer stays mounted. `entryDayKey`/`deviceUtcOffsetMinutes`
+ * rather than `date-picker-sheet.tsx`'s own `localDayKey` — the two
+ * compute the identical device-local `YYYY-MM-DD`, but this file already
+ * sits under `lib/`, and reaching into a `components/` file for a date
+ * utility would be the one import in it running the wrong direction.
+ *
+ * Exported so `use-history.ts`'s `sendEntry`/`commitEntryEdit` can fall
+ * back to this SAME computation when no live Composer handed over its own
+ * `QuickAddOptions` (promote-tasks.ts's own header comment, "keeping the
+ * parse in step with the highlight") — one function computing "now" for
+ * quick-add purposes, not two that could drift apart.
+ */
+export function quickAddOptionsNow(): { now: string; smartDates: boolean } {
+  return {
+    now: entryDayKey(new Date().toISOString(), deviceUtcOffsetMinutes()) ?? "",
+    smartDates: useSettingsStore.getState().smartDatesEnabled,
+  };
+}
+
+/**
+ * The one checklist line currently being typed into, if any — `blockStart`
+ * is the paragraph's own content start (the same absolute doc position
+ * `pickerPlugin`'s `$from.start()` already uses, so `textBlockPlainText`'s
+ * 1:1 text/position correspondence applies here unchanged), and `itemPos`
+ * is the enclosing `list_item`'s own position, tracked ACROSS transactions
+ * via `tr.mapping` (see `checklistHighlightPlugin`'s own `apply`) so an
+ * edit anywhere else in the document — a different Entry line, a Reference
+ * resolving — never mistakes this line for a different one and clears
+ * `demoted` it shouldn't have.
+ */
+interface ChecklistHighlightState {
+  readonly itemPos: number;
+  readonly blockStart: number;
+  readonly demoted: ReadonlySet<DemotedSignature>;
+}
+
+export const checklistHighlightPluginKey = new PluginKey<ChecklistHighlightState | null>(
+  "composer-checklist-highlight",
+);
+
+/**
+ * Whether `paragraph` already holds nothing but Promotion's own reference
+ * mark — `entry-schema.ts`'s `task_reference` atom, alone or preceded only
+ * by the mandatory separator whitespace the mark's own leading space
+ * survives parsing as (the identical shape `promote-tasks.ts`'s own
+ * `isAlreadyReferenced` checks, kept as a small local copy here rather
+ * than an import: that module belongs to Promotion's own write path, this
+ * one only ever READS a document that might already hold its output).
+ * Opening an Entry that was already promoted for editing must never
+ * re-tokenize the Task's own cached label as if it were prose the reader
+ * just typed — those words belong to the Task, not to this line.
+ */
+function isTaskReferenceParagraph(paragraph: PMNode): boolean {
+  const children: PMNode[] = [];
+  paragraph.forEach((child) => {
+    children.push(child);
+  });
+  const first = children[0];
+  const own = first?.isText && (first.text ?? "").trim() === "" ? children.slice(1) : children;
+  return own.length === 1 && own[0]?.type.name === "task_reference";
+}
+
+/**
+ * Whether `$from` sits inside a checkbox item's own LEADING paragraph —
+ * not a nested block (a note under the checkbox, `- [ ] milk\n  - 2%`),
+ * which is ordinary prose with no tokens of its own to recognise, and not
+ * a `task_reference` line (Promotion's own output, entry-schema.ts's
+ * `task_reference` atom) — a referenced line is words the Task already
+ * owns, not raw text `parseQuickAdd` has any business re-parsing. Mirrors
+ * `checkboxInputRule`'s own "must be the item's own first child" check
+ * (`$start.index(-1) !== 0`, above in this file) for the identical reason:
+ * `list_item`'s content is `"paragraph block*"` (entry-schema.ts), so index
+ * 0 is always that leading paragraph and nothing else ever is.
+ */
+function activeChecklistItem($from: ResolvedPos): { itemPos: number; blockStart: number } | null {
+  if (!$from.parent.isTextblock || $from.parent.type.name !== "paragraph") {
+    return null;
+  }
+  if ($from.depth < 1 || $from.index(-1) !== 0) {
+    return null;
+  }
+  const grandParent = $from.node(-1);
+  if (grandParent.type !== listItemNodeType || grandParent.attrs.checked === null) {
+    return null;
+  }
+  if (isTaskReferenceParagraph($from.parent)) {
+    return null;
+  }
+  return { itemPos: $from.before(-1), blockStart: $from.start() };
+}
+
+/**
+ * Live highlighting on a checkbox line as you type — `- [ ] buy milk
+ * tomorrow p1 #Shopping` — reusing #170's own parser and demotion rules
+ * (`quick-add-highlight.ts`) unchanged, per the ticket's own "reuse that
+ * logic; do not write a second parser integration." What differs from
+ * `add-task-form.tsx` is only the rendering surface: that file paints a
+ * `pointer-events-none` backdrop `<div>` behind a real `<input>`, because a
+ * native text field has nowhere to attach "this run is highlighted" other
+ * than a second, hand-synchronized layer; a ProseMirror document has
+ * exactly that attachment point built in — `Decoration.inline`, the same
+ * mechanism `placeholderPlugin` (below) already uses for its own widget.
+ *
+ * State tracks the ONE checklist line the caret is currently inside, the
+ * same "one open thing at a time" shape `pickerPlugin`/`slashPlugin`
+ * already use — an Entry can hold several checklist items, but only the
+ * one being actively typed into needs live decoration; a line the reader
+ * has moved away from keeps whatever plain markdown it already has, read
+ * back correctly the next time `entryMarkdownToDocument` parses it (issue
+ * #174's backfill migration is what turns an EXISTING plain checkbox into
+ * a real Task; this plugin's own job ends at Send, same as `promoteTasks`,
+ * promote-tasks.ts). Demotions are threaded through `tr.mapping` (not
+ * recomputed from `previous.itemPos === itemPos` by raw equality) so an
+ * edit anywhere ELSE in the document — a different paragraph, a Reference
+ * resolving — never looks like "moved to a different item" and clears a
+ * demotion the reader hasn't actually revisited.
+ *
+ * `handleClick` mirrors `add-task-form.tsx`'s own `handleInputClick`
+ * exactly — the identical `tokenAtOffset`/`tokenSignature` pair, over the
+ * identical flat text a `Decoration` is drawn against — but returns
+ * `false` unconditionally rather than swallowing the click: ProseMirror's
+ * own click handling still runs afterwards and places the caret exactly
+ * where the reader tapped, the same behaviour a native `<input>` gives for
+ * free and a `contenteditable` does not unless nothing upstream calls
+ * `preventDefault`.
+ */
+export function checklistHighlightPlugin(): Plugin<ChecklistHighlightState | null> {
+  return new Plugin<ChecklistHighlightState | null>({
+    key: checklistHighlightPluginKey,
+    state: {
+      init: (): ChecklistHighlightState | null => null,
+      apply(tr, previous, _oldState, newState): ChecklistHighlightState | null {
+        const active = activeChecklistItem(newState.selection.$from);
+        if (active === null) {
+          return null;
+        }
+        const mappedPreviousItemPos = previous === null ? null : tr.mapping.map(previous.itemPos);
+        const demotedSignature = tr.getMeta(checklistHighlightPluginKey) as
+          | DemotedSignature
+          | undefined;
+        const carriedOver =
+          previous !== null && mappedPreviousItemPos === active.itemPos
+            ? previous.demoted
+            : new Set<DemotedSignature>();
+        const demoted =
+          demotedSignature === undefined
+            ? carriedOver
+            : new Set([...carriedOver, demotedSignature]);
+        return { itemPos: active.itemPos, blockStart: active.blockStart, demoted };
+      },
+    },
+    props: {
+      decorations(state) {
+        const active = checklistHighlightPluginKey.getState(state);
+        if (active === null || active === undefined) {
+          return DecorationSet.empty;
+        }
+        const $blockStart = state.doc.resolve(active.blockStart);
+        const text = textBlockPlainText($blockStart.parent);
+        const result = parseWithDemotions(text, quickAddOptionsNow(), active.demoted);
+        const decorations = result.tokens.map((token) =>
+          Decoration.inline(active.blockStart + token.start, active.blockStart + token.end, {
+            class: QUICK_ADD_HIGHLIGHT_CLASS,
+          }),
+        );
+        return DecorationSet.create(state.doc, decorations);
+      },
+      handleClick(view, pos) {
+        const active = checklistHighlightPluginKey.getState(view.state);
+        if (active === null || active === undefined) {
+          return false;
+        }
+        const offset = pos - active.blockStart;
+        if (offset < 0) {
+          return false;
+        }
+        const $blockStart = view.state.doc.resolve(active.blockStart);
+        const text = textBlockPlainText($blockStart.parent);
+        const result = parseWithDemotions(text, quickAddOptionsNow(), active.demoted);
+        const token = tokenAtOffset(result.tokens, offset);
+        if (token === undefined) {
+          return false;
+        }
+        view.dispatch(view.state.tr.setMeta(checklistHighlightPluginKey, tokenSignature(token)));
+        return false;
+      },
+    },
+  });
+}
+
+/**
+ * The ordinal position (0-based, document order) of the ONE checklist
+ * item `checklistHighlightPluginKey` is actively tracking, plus that
+ * item's own demoted-token signatures — or `null` when the caret isn't on
+ * such a line — so `composer.tsx`'s own `send()` can hand both straight
+ * to `promoteBareCheckboxes` (promote-tasks.ts) and have promotion agree
+ * with whatever was highlighted a moment ago instead of silently
+ * disagreeing with it.
+ *
+ * **Ordinal position, not the line's own text and not its live document
+ * position.** `promoteBareCheckboxes` re-parses `body`
+ * (`entryMarkdownToDocument`) from scratch, so the paragraph node
+ * `active.itemPos` resolves to HERE and the paragraph that function later
+ * visits at the "same" item are two different `Node` instances out of two
+ * different parses of what is, after `entryDocumentToMarkdown`'s own
+ * round trip, the identical document (promote-tasks.ts's own header
+ * comment already leans on that round trip's stability) — `itemPos`
+ * itself is meaningless outside this live `EditorState`, so it cannot be
+ * the thing that survives. Nor can the line's own flattened text:
+ * `textBlockPlainText` below renders a `[[` reference atom as a single
+ * placeholder character rather than its raw markdown, where
+ * promote-tasks.ts's own `flattenLabel` (its own comment explains why)
+ * expands it to the full `[[…]]` — the two would not always agree on
+ * what "this line's text" even is. Counting instead — "the Nth bare,
+ * unreferenced checkbox item in document order" — sidesteps both: both
+ * functions walk the identical document in the identical order and apply
+ * the identical qualifying rule (`checked !== null` and not already a
+ * `task_reference`, `activeChecklistItem`/`isTaskReferenceParagraph` here
+ * mirroring `promoteBareCheckboxes`'s own `isAlreadyReferenced`), so the
+ * Nth item found here is the Nth item `transformNode` there mints a Task
+ * for, with nothing coordinate- or text-dependent in between.
+ */
+export function activeChecklistPromotion(
+  state: EditorState,
+): { readonly ordinal: number; readonly demoted: ReadonlySet<DemotedSignature> } | null {
+  const active = checklistHighlightPluginKey.getState(state);
+  if (active === null || active === undefined) {
+    return null;
+  }
+  let ordinal = 0;
+  let found: number | null = null;
+  state.doc.descendants((node, pos) => {
+    if (node.type !== listItemNodeType || node.attrs.checked === null) {
+      return true;
+    }
+    const first = node.firstChild;
+    if (first === null || isTaskReferenceParagraph(first)) {
+      return true;
+    }
+    if (pos === active.itemPos) {
+      found = ordinal;
+    }
+    ordinal += 1;
+    return true;
+  });
+  return found === null ? null : { ordinal: found, demoted: active.demoted };
+}
+
+// ---------------------------------------------------------------------------
 // The empty-document placeholder
 // ---------------------------------------------------------------------------
 
@@ -1115,6 +1386,9 @@ export function buildComposerPlugins(placeholder: string): Plugin[] {
     // Registered after pickerPlugin() — slashPlugin()'s own comment
     // explains why the order is load-bearing, not incidental.
     slashPlugin(),
+    // Issue #173: independent of picker/slash ordering — reads only its
+    // own plugin state and the doc/selection, never either of theirs.
+    checklistHighlightPlugin(),
     placeholderPlugin(placeholder),
     history(),
   ];

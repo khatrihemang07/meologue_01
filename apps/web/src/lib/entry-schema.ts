@@ -55,6 +55,29 @@ const referenceAttrs: { [name: string]: { default?: unknown; validate?: string }
   entryId: { default: null, validate: "string|null" },
 };
 
+/**
+ * `task_reference`'s own attrs (issue #173, ADR 0048) — deliberately not
+ * `raw`: unlike `reference` above, whose mark is a link that never itself
+ * changes, a task reference's `label` and `checked` are *caches*, rewritten
+ * from the Task on every render and Sync. Keeping a frozen `raw` alongside
+ * them would be a second copy to keep in step with `label` the moment
+ * either changes — exactly the divergence ADR 0048 built this node to rule
+ * out — so `entry-document.ts`'s serializer rebuilds the mark's characters
+ * from `taskId`/`label` (`formatTaskReference`, inline-markdown.ts) on
+ * every write instead of replaying a stored string.
+ *
+ * `checked` has no `default`, unlike `reference`'s own `date`/`entryId`:
+ * every `task_reference` a real parse produces sits inside a checkbox list
+ * item and always has an answer for it (`entry-document.ts`'s
+ * `inlineNodesToPM` reads it straight off the enclosing item's own task
+ * marker), so there is no state this attr needs to fall back to.
+ */
+const taskReferenceAttrs: { [name: string]: { default?: unknown; validate?: string } } = {
+  taskId: { validate: "string" },
+  label: { validate: "string" },
+  checked: { validate: "boolean" },
+};
+
 const nodes: { [name: string]: NodeSpec } = {
   doc: { content: "block+" },
 
@@ -71,6 +94,23 @@ const nodes: { [name: string]: NodeSpec } = {
     group: "inline",
     atom: true,
     attrs: referenceAttrs,
+  },
+
+  /**
+   * `[[task:id|label]]` (issue #173, ADR 0048) — a second inline atom
+   * alongside `reference` rather than a fourth `ReferenceKind`, because a
+   * task reference isn't merely a different target for the same kind of
+   * link: it carries its own cached `label`/`checked`, and its rendering
+   * (a real checkbox, entry-prose.tsx) has nothing in common with a `Link`
+   * to a day or an Entry. Atom, like `reference`, for the identical
+   * reason: the Composer can select or delete the whole thing, never edit
+   * inside it, so it can never end up half-typed.
+   */
+  task_reference: {
+    inline: true,
+    group: "inline",
+    atom: true,
+    attrs: taskReferenceAttrs,
   },
 
   // `itemContent` below is `"paragraph block*"`, the shape
@@ -155,4 +195,11 @@ export type ReferenceAttrs = Attrs & {
   raw: string;
   date: string | null;
   entryId: string | null;
+};
+
+/** `task_reference`'s own attrs — see `taskReferenceAttrs`'s own comment for why there is no `raw`. */
+export type TaskReferenceAttrs = Attrs & {
+  taskId: string;
+  label: string;
+  checked: boolean;
 };

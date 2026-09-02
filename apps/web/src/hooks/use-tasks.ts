@@ -1,7 +1,9 @@
-import type { Task, TaskStore } from "@meologue/core";
+import type { EntryStore, Task, TaskStore } from "@meologue/core";
 import { hasTime, mintId, orderKeyBetween } from "@meologue/core";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { COMPLETED_TASKS_QUERY_KEY, TASKS_QUERY_KEY } from "@/lib/query-keys";
+import { queryClient } from "@/lib/query-client";
+import { COMPLETED_TASKS_QUERY_KEY, ENTRIES_QUERY_KEY, TASKS_QUERY_KEY } from "@/lib/query-keys";
+import { syncTaskReferenceChecked, syncTaskReferenceLabel } from "@/lib/task-reference-sync";
 import { refreshTasks } from "@/lib/tasks-refresh";
 
 /**
@@ -176,7 +178,11 @@ export interface UseTasksResult {
  * tasks-refresh.ts's own header comment for why Todo's Inbox has nothing
  * for a page boundary to bound.
  */
-export function useTasks(taskStore: TaskStore, deviceId: string): UseTasksResult {
+export function useTasks(
+  store: EntryStore,
+  taskStore: TaskStore,
+  deviceId: string,
+): UseTasksResult {
   const tasksQuery = useQuery({
     queryKey: TASKS_QUERY_KEY,
     queryFn: () => taskStore.list(),
@@ -291,9 +297,32 @@ export function useTasks(taskStore: TaskStore, deviceId: string): UseTasksResult
     });
   }
 
+  // ADR 0048's "ticking writes the Task; the body's marker follows as a
+  // consequence" reads the same from either side of the act — an Entry's
+  // own checkbox ticked writes the Task (entry-row.tsx's
+  // `TaskReferenceItem`), and completing/uncompleting a Task from Todo
+  // writes back every referencing Entry's own cache to match
+  // (task-reference-sync.ts's `syncTaskReferenceChecked`, this function's
+  // one non-Entry-initiated caller). `queryClient.invalidateQueries`
+  // rather than `refreshNewestEntriesPage`: a referencing Entry can be
+  // anywhere in History, not only on the newest loaded page, and this is
+  // rare enough (a Task with an Entry Reference, completed from Todo, not
+  // the ordinary "tap a Task row" path) that a full re-read is the right
+  // trade rather than teaching this hook the newest-page-only shortcut
+  // use-history.ts's own comment explains is a deliberate narrowing.
+  const afterTaskReferenceWrite = async () => {
+    await queryClient.invalidateQueries({ queryKey: ENTRIES_QUERY_KEY });
+  };
+
   const completeTaskMutation = useMutation({
-    mutationFn: (id: string) => taskStore.complete(id, new Date().toISOString()),
-    onSuccess: afterLocalWrite,
+    mutationFn: async (id: string) => {
+      await taskStore.complete(id, new Date().toISOString());
+      await syncTaskReferenceChecked(store, id, true);
+    },
+    onSuccess: async () => {
+      await afterLocalWrite();
+      await afterTaskReferenceWrite();
+    },
   });
 
   function completeTask(id: string) {
@@ -301,8 +330,14 @@ export function useTasks(taskStore: TaskStore, deviceId: string): UseTasksResult
   }
 
   const uncompleteTaskMutation = useMutation({
-    mutationFn: (id: string) => taskStore.uncomplete(id),
-    onSuccess: afterLocalWrite,
+    mutationFn: async (id: string) => {
+      await taskStore.uncomplete(id);
+      await syncTaskReferenceChecked(store, id, false);
+    },
+    onSuccess: async () => {
+      await afterLocalWrite();
+      await afterTaskReferenceWrite();
+    },
   });
 
   function uncompleteTask(id: string) {
@@ -310,8 +345,17 @@ export function useTasks(taskStore: TaskStore, deviceId: string): UseTasksResult
   }
 
   const renameTaskMutation = useMutation({
-    mutationFn: ({ id, content }: { id: string; content: string }) => taskStore.rename(id, content),
-    onSuccess: afterLocalWrite,
+    mutationFn: async ({ id, content }: { id: string; content: string }) => {
+      await taskStore.rename(id, content);
+      // ADR 0048: "renaming a Task refreshes the cached label in every
+      // Entry referencing it" — the one place in meologue an edit made in
+      // Todo visibly changes text rendered in History.
+      await syncTaskReferenceLabel(store, id, content);
+    },
+    onSuccess: async () => {
+      await afterLocalWrite();
+      await afterTaskReferenceWrite();
+    },
   });
 
   function renameTask(id: string, content: string) {

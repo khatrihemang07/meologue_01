@@ -1,4 +1,4 @@
-import type { Task, TaskStore } from "@meologue/core";
+import type { Entry, EntryStore, Task, TaskStore } from "@meologue/core";
 import { nextOccurrence, tomorrowOf } from "@meologue/core";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
@@ -179,21 +179,64 @@ function createFakeStore(): TaskStore {
   };
 }
 
+/**
+ * A minimal, in-memory `EntryStore` stand-in — `useTasks`' own fan-out
+ * (issue #173, ADR 0048) reads and writes Entries through this rather than
+ * through TaskStore, so every test in this suite that doesn't care about
+ * Entries at all gets one with nothing in it (`renderUseTasks`'s own
+ * default), and the fan-out tests further down construct one seeded with
+ * an Entry carrying a `[[task:id|label]]` Reference.
+ *
+ * `search` is a plain substring match against the raw body rather than the
+ * real FTS5 tokenizer `sqlite-entry-store.ts` runs — good enough here
+ * because the only query this module ever issues is the bare Task uuid
+ * itself (`task-reference-sync.ts`'s own module comment explains why that
+ * always finds a real mark against the real index); the real tokenizer
+ * behaviour is exercised by `task-reference-sync.test.ts` instead, against
+ * a real search.
+ */
+function createFakeEntryStore(initial: readonly Entry[] = []): EntryStore {
+  let entries = [...initial];
+  return {
+    list: vi.fn(async () => entries),
+    upsert: vi.fn(async (incoming: Entry[]) => {
+      entries = [...entries, ...incoming];
+    }),
+    pending: vi.fn(async () => []),
+    getCursor: vi.fn(async () => 0),
+    setCursor: vi.fn(async () => {}),
+    search: vi.fn(async (query: string) => entries.filter((e) => e.body.includes(query))),
+    edit: vi.fn(async (id: string, body: string) => {
+      entries = entries.map((e) => (e.id === id ? { ...e, body, seq: null } : e));
+    }),
+    remove: vi.fn(async (id: string) => {
+      entries = entries.map((e) =>
+        e.id === id ? { ...e, body: "", deletedAt: new Date().toISOString() } : e,
+      );
+    }),
+    getMany: vi.fn(async (ids: string[]) => entries.filter((e) => ids.includes(e.id))),
+  };
+}
+
 describe("useTasks", () => {
   beforeEach(() => {
     localStorage.clear();
   });
 
-  async function renderUseTasks(store: TaskStore, deviceId = "device-a") {
+  async function renderUseTasks(
+    store: TaskStore,
+    entryStore: EntryStore = createFakeEntryStore(),
+    deviceId = "device-a",
+  ) {
     const fresh = await importFresh();
     const wrapper = ({ children }: { children: ReactNode }) => (
       <QueryClientProvider client={fresh.queryClient}>{children}</QueryClientProvider>
     );
     const rendered = renderHook<ReturnType<typeof UseTasks>, void>(
-      () => (fresh.useTasks as typeof UseTasks)(store, deviceId),
+      () => (fresh.useTasks as typeof UseTasks)(entryStore, store, deviceId),
       { wrapper },
     );
-    return { fresh, ...rendered };
+    return { fresh, entryStore, ...rendered };
   }
 
   it("reads active Tasks from the store", async () => {
@@ -282,6 +325,110 @@ describe("useTasks", () => {
     await waitFor(() => expect(store.rename).toHaveBeenCalledWith("a", "new"));
   });
 
+  // ADR 0048's fan-out: an act on the Task side refreshes every Entry
+  // referencing it. `entry()` mirrors entry-row.test.tsx's own fixture
+  // shape.
+  function entry(overrides: Partial<Entry>): Entry {
+    return {
+      id: "e1",
+      deviceId: "device-a",
+      body: "hello",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      seq: 1,
+      syncedAt: "2026-01-01T00:00:00.000Z",
+      deletedAt: null,
+      ...overrides,
+    };
+  }
+
+  describe("the Task-side half of ADR 0048's cache refresh", () => {
+    // A real uuid — `parseReferenceTask`'s own `TASK_SHAPE` (inline-
+    // markdown.ts) refuses anything shorter, so this suite's usual
+    // single-letter Task ids ("a", "b") would never parse back into a real
+    // `taskReference` node at all.
+    const TASK_ID = "0192abcd-1234-7890-abcd-0123456789ac";
+
+    it("renaming a Task refreshes the cached label in every Entry referencing it", async () => {
+      const store = createFakeStore();
+      await store.upsert([task({ id: TASK_ID, content: "old label" })]);
+      const { formatTaskReference } = await import("@/lib/inline-markdown");
+      const referencing = entry({
+        id: "e1",
+        body: `- [ ] ${formatTaskReference(TASK_ID, "old label")}`,
+      });
+      const entryStore = createFakeEntryStore([referencing]);
+      const { result } = await renderUseTasks(store, entryStore);
+      await waitFor(() => expect(result.current.tasks).toHaveLength(1));
+
+      act(() => result.current.renameTask(TASK_ID, "new label"));
+
+      await waitFor(() =>
+        expect(entryStore.edit).toHaveBeenCalledWith(
+          "e1",
+          `- [ ] ${formatTaskReference(TASK_ID, "new label")}`,
+        ),
+      );
+    });
+
+    it("completing a Task from Todo ticks the cached marker in every Entry referencing it", async () => {
+      const store = createFakeStore();
+      await store.upsert([task({ id: TASK_ID, content: "buy milk" })]);
+      const { formatTaskReference } = await import("@/lib/inline-markdown");
+      const referencing = entry({
+        id: "e1",
+        body: `- [ ] ${formatTaskReference(TASK_ID, "buy milk")}`,
+      });
+      const entryStore = createFakeEntryStore([referencing]);
+      const { result } = await renderUseTasks(store, entryStore);
+      await waitFor(() => expect(result.current.tasks).toHaveLength(1));
+
+      act(() => result.current.completeTask(TASK_ID));
+
+      await waitFor(() =>
+        expect(entryStore.edit).toHaveBeenCalledWith(
+          "e1",
+          `- [x] ${formatTaskReference(TASK_ID, "buy milk")}`,
+        ),
+      );
+    });
+
+    it("uncompleting a Task from Todo unticks the cached marker in every Entry referencing it", async () => {
+      const store = createFakeStore();
+      await store.upsert([task({ id: TASK_ID, content: "buy milk" })]);
+      await store.complete(TASK_ID, "2026-01-02T00:00:00.000Z");
+      const { formatTaskReference } = await import("@/lib/inline-markdown");
+      const referencing = entry({
+        id: "e1",
+        body: `- [x] ${formatTaskReference(TASK_ID, "buy milk")}`,
+      });
+      const entryStore = createFakeEntryStore([referencing]);
+      const { result } = await renderUseTasks(store, entryStore);
+      await waitFor(() => expect(result.current.completedTasks).toHaveLength(1));
+
+      act(() => result.current.uncompleteTask(TASK_ID));
+
+      await waitFor(() =>
+        expect(entryStore.edit).toHaveBeenCalledWith(
+          "e1",
+          `- [ ] ${formatTaskReference(TASK_ID, "buy milk")}`,
+        ),
+      );
+    });
+
+    it("does not write to any Entry when the Task has no Reference to refresh", async () => {
+      const store = createFakeStore();
+      await store.upsert([task({ id: TASK_ID, content: "buy milk" })]);
+      const entryStore = createFakeEntryStore([]);
+      const { result } = await renderUseTasks(store, entryStore);
+      await waitFor(() => expect(result.current.tasks).toHaveLength(1));
+
+      act(() => result.current.completeTask(TASK_ID));
+
+      await waitFor(() => expect(result.current.completedTasks).toHaveLength(1));
+      expect(entryStore.edit).not.toHaveBeenCalled();
+    });
+  });
+
   it("reorders a Task by writing the exact key it's handed, and nothing else", async () => {
     const store = createFakeStore();
     await store.upsert([task({ id: "a", orderKey: "A" }), task({ id: "b", orderKey: "B" })]);
@@ -308,6 +455,29 @@ describe("useTasks", () => {
 
     await waitFor(() => expect(store.remove).toHaveBeenCalledWith("a"));
     await waitFor(() => expect(result.current.tasks).toEqual([]));
+  });
+
+  // ADR 0048's asymmetric deletion, proven at the write path rather than
+  // merely inferred from the diff: deleting a Task must never reach across
+  // into the Entry store at all — not a search to find a referencing
+  // Entry, not an edit to its body. The Entry's own line is left exactly
+  // as it was, as the plain text of its last cached label (entry-row.tsx's
+  // own render-level test, entry-bubble.test.tsx, proves that half; this
+  // proves the Task-side write never even attempts the other half).
+  it("never touches the Entry store when removing a Task — deletion is asymmetric (ADR 0048)", async () => {
+    const store = createFakeStore();
+    await store.upsert([task({ id: "a" })]);
+    const entryStore = createFakeEntryStore();
+    const { result } = await renderUseTasks(store, entryStore);
+    await waitFor(() => expect(result.current.tasks).toHaveLength(1));
+
+    act(() => result.current.removeTask("a"));
+
+    await waitFor(() => expect(store.remove).toHaveBeenCalledWith("a"));
+    expect(entryStore.search).not.toHaveBeenCalled();
+    expect(entryStore.edit).not.toHaveBeenCalled();
+    expect(entryStore.upsert).not.toHaveBeenCalled();
+    expect(entryStore.remove).not.toHaveBeenCalled();
   });
 
   it("adds a Task carrying overrides — labelIds and dateString among them", async () => {

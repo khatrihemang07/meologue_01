@@ -40,6 +40,7 @@ const readyContext: EntryStoreOutletContext = {
   entries: [],
   sendEntry: vi.fn(),
   editEntry: vi.fn(),
+  commitEntryEdit: vi.fn(),
   removeEntry: vi.fn(),
   search: vi.fn(async () => []),
   getEntries: vi.fn(async () => []),
@@ -120,6 +121,7 @@ describe("ComposerPage", () => {
       entries: [],
       sendEntry: vi.fn(),
       editEntry: vi.fn(),
+      commitEntryEdit: vi.fn(),
       removeEntry: vi.fn(),
       search: vi.fn(async () => []),
       getEntries: vi.fn(async () => []),
@@ -190,6 +192,7 @@ describe("ComposerPage", () => {
       entries: [],
       sendEntry: vi.fn(),
       editEntry: vi.fn(),
+      commitEntryEdit: vi.fn(),
       removeEntry: vi.fn(),
       search: vi.fn(async () => []),
       getEntries: vi.fn(async () => []),
@@ -265,6 +268,7 @@ describe("ComposerPage", () => {
       ],
       sendEntry: vi.fn(),
       editEntry: vi.fn(),
+      commitEntryEdit: vi.fn(),
       removeEntry: vi.fn(),
       search: vi.fn(async () => []),
       getEntries: vi.fn(async () => []),
@@ -359,6 +363,7 @@ describe("ComposerPage", () => {
       ],
       sendEntry: vi.fn(),
       editEntry: vi.fn(),
+      commitEntryEdit: vi.fn(),
       removeEntry: vi.fn(),
       search: vi.fn(async () => []),
       getEntries: vi.fn(async () => []),
@@ -498,6 +503,7 @@ describe("ComposerPage", () => {
         ],
         sendEntry: vi.fn(),
         editEntry: vi.fn(),
+        commitEntryEdit: vi.fn(),
         removeEntry: vi.fn(),
         search,
         getEntries: vi.fn(async () => []),
@@ -593,6 +599,7 @@ describe("ComposerPage", () => {
         entries: [],
         sendEntry: vi.fn(),
         editEntry: vi.fn(),
+        commitEntryEdit: vi.fn(),
         removeEntry: vi.fn(),
         search,
         getEntries: vi.fn(async () => []),
@@ -692,6 +699,7 @@ describe("ComposerPage", () => {
         ],
         sendEntry: vi.fn(),
         editEntry: vi.fn(),
+        commitEntryEdit: vi.fn(),
         removeEntry: vi.fn(),
         search: vi.fn(async () => []),
         getEntries: vi.fn(async () => []),
@@ -787,6 +795,7 @@ describe("ComposerPage", () => {
           ],
           sendEntry: vi.fn(),
           editEntry: vi.fn(),
+          commitEntryEdit: vi.fn(),
           removeEntry: vi.fn(),
           search,
           getEntries: vi.fn(async () => []),
@@ -999,6 +1008,77 @@ describe("ComposerPage", () => {
       expect(screen.getByText("Editing Entry")).toBeInTheDocument();
       expect(screen.getByPlaceholderText("What's on your mind?").textContent).toBe(
         "editing this one[[e:referred-entry-id-2]]",
+      );
+      expect(editEntry).not.toHaveBeenCalled();
+    });
+  });
+
+  // Issue #173: `handleCommitEdit` routes a genuine edit-commit through
+  // `commitEntryEdit` (use-history.ts), not plain `editEntry` — the door
+  // that also runs Promotion (ADR 0048: a bare checkbox the reader just
+  // added while editing becomes a Task too, not only one Sent fresh).
+  // Driven through the same "Refer" insertion the describe block above
+  // already proves dirties the document via a real dispatched transaction
+  // (`insertAtCursor`), rather than simulated typing composer.tsx's own
+  // module comment says jsdom cannot drive (ADR 0044) — Send is then an
+  // ordinary button click on already-dirtied content.
+  describe("committing an edit", () => {
+    it("calls commitEntryEdit, not editEntry, once the edited document actually changed", async () => {
+      const editEntry = vi.fn();
+      const commitEntryEdit = vi.fn();
+      const base: EntryStoreOutletContext["entries"][number] = {
+        id: "referred-entry-id-2",
+        deviceId: "device-a",
+        body: "hello",
+        createdAt: "now",
+        seq: 1,
+        syncedAt: "now",
+        deletedAt: null,
+      };
+      const entries: EntryStoreOutletContext["entries"] = [
+        { ...base, id: "being-edited", body: "editing this one" },
+        base,
+      ];
+      renderComposerPage({ ...readyContext, entries, editEntry, commitEntryEdit });
+
+      swipeLeft(screen.getByText("editing this one"));
+      fireEvent.click(await screen.findByText("Edit"));
+      expect(screen.getByPlaceholderText("What's on your mind?").textContent).toBe(
+        "editing this one",
+      );
+
+      // Dirties the document via a real transaction, the same mechanism
+      // Refer's own test above already exercises.
+      swipeLeft(screen.getByText("hello"));
+      fireEvent.click(await screen.findByText("Refer to this Entry"));
+      expect(screen.getByPlaceholderText("What's on your mind?").textContent).toBe(
+        "editing this one[[e:referred-entry-id-2]]",
+      );
+
+      fireEvent.click(screen.getByLabelText("Send"));
+
+      // `insertAtCursor` writes literal characters, not a live `reference`
+      // node (only a hand-typed `[[…]]` or a picker choice ever creates
+      // one — composer-editor.ts's own `referenceInputRule`) — so
+      // `entryDocumentToMarkdown`'s own `escapeUserText` protects the
+      // leading `[` of the pasted-looking `[[e:…]]` the same way it would
+      // for any other reader-typed text that happens to start a mark. This
+      // assertion is about which DOOR the commit went through, not about
+      // Refer's own escaping, which the describe block above already
+      // covers on its own terms.
+      // The third argument (issue #173's own follow-up) is `composer.tsx`'s
+      // own `ComposerPromotionContext` — built fresh off the live editor at
+      // Send, so it's asserted on shape (`quickAddOptions` present, no
+      // active checklist item here — this Entry has no checkbox line at
+      // all) rather than pinned to a literal, since `now` is read from the
+      // real clock this test doesn't control.
+      expect(commitEntryEdit).toHaveBeenCalledWith(
+        "being-edited",
+        "editing this one\\[[e:referred-entry-id-2]]",
+        {
+          quickAddOptions: expect.objectContaining({ smartDates: expect.any(Boolean) }),
+          active: null,
+        },
       );
       expect(editEntry).not.toHaveBeenCalled();
     });

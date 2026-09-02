@@ -1,14 +1,34 @@
-import type { Entry, EntryStore, TaskStore } from "@meologue/core";
-import { mintId } from "@meologue/core";
+import type { Entry, EntryStore, Task, TaskStore } from "@meologue/core";
+import { mintId, orderKeyBetween } from "@meologue/core";
 import { useInfiniteQuery, useMutation } from "@tanstack/react-query";
+import { quickAddOptionsNow } from "@/lib/composer-editor";
 import {
   INITIAL_ENTRIES_PAGE_PARAM,
   nextEntriesPageParam,
   refreshNewestEntriesPage,
 } from "@/lib/entries-pagination";
+import { deviceUtcOffsetMinutes, entryDayKey } from "@/lib/entry-day";
 import { normalizeEntryBody } from "@/lib/entry-text";
+import {
+  type ComposerPromotionContext,
+  type PromotedTask,
+  promoteBareCheckboxes,
+} from "@/lib/promote-tasks";
 import { ENTRIES_QUERY_KEY } from "@/lib/query-keys";
 import { requestSync } from "@/lib/sync-runner";
+import { refreshTasks } from "@/lib/tasks-refresh";
+
+/**
+ * A caller with no live Composer to ask (this hook's own tests among
+ * them) gets `promoteBareCheckboxes` the identical fresh "now" and
+ * "nothing demoted" the plugin itself would compute if it had been asked
+ * right now — see `ComposerPromotionContext`'s own doc comment
+ * (promote-tasks.ts) for why the Composer's own value, when there is one,
+ * always wins over this fallback instead of the two racing.
+ */
+function defaultPromotionContext(): ComposerPromotionContext {
+  return { quickAddOptions: quickAddOptionsNow(), active: null };
+}
 
 /**
  * Issue #79's scroll-triggered "load older" glue, handed to Shell (via
@@ -30,9 +50,35 @@ export interface UseHistoryResult {
   entries: Entry[];
   /** Issue #79 — see UseHistoryPagination's own doc comment. */
   pagination: UseHistoryPagination;
-  sendEntry: (raw: string) => void;
-  /** Changes an Entry's body locally, then pushes it (ADR 0028) — the Composer's edit-commit path. Refuses an edit to empty/whitespace, same as sendEntry. */
+  /**
+   * `promotion`, when given, is exactly what `composer.tsx`'s own `send()`
+   * built from the live editor — see `ComposerPromotionContext`'s own doc
+   * comment (promote-tasks.ts) for why that has to be threaded through
+   * rather than recomputed here, and why every caller without one (a
+   * test, Reflection's own Grounding writer, anything else that isn't the
+   * live Composer) is still correct without it.
+   */
+  sendEntry: (raw: string, promotion?: ComposerPromotionContext) => void;
+  /**
+   * Changes an Entry's body locally, then pushes it (ADR 0028). Refuses an
+   * edit to empty/whitespace, same as sendEntry. Non-promoting (issue
+   * #173) — this is also the tick path's own door (composer-page.tsx's
+   * `handleToggleTask`), and a checkbox tap must keep working exactly as
+   * it does today, not silently mint a Task mid-tick. `commitEntryEdit`
+   * below is the Composer's own edit-commit path instead.
+   */
   editEntry: (id: string, body: string) => void;
+  /**
+   * The Composer's own edit-commit path (issue #173, ADR 0048) —
+   * `editEntry`'s promoting sibling, for a genuine edit rather than a
+   * checkbox tap: a bare `- [ ]` added to an Entry on a later edit mints a
+   * Task exactly as one already present at Send does (CONTEXT.md's Task
+   * entry draws no line between the two). The promoted Task's own capture
+   * date is the edited Entry's own, unchanged `createdAt` — editing an
+   * Entry never moves it in History, and Promotion doesn't either.
+   * `promotion` — see `sendEntry`'s own doc comment just above.
+   */
+  commitEntryEdit: (id: string, body: string, promotion?: ComposerPromotionContext) => void;
   /**
    * Removes an Entry locally and pushes the tombstone (ADR 0028). Called
    * once the confirm dialog in front of Delete has already been accepted
@@ -83,6 +129,19 @@ export function useHistory(
   store: EntryStore,
   taskStore: TaskStore,
   deviceId: string,
+  /**
+   * `use-labels.ts`'s own `resolveLabelIds` (issue #170) — Promotion's
+   * `#Shopping` needs the identical `%label`-name-to-id round trip
+   * `todo-page.tsx`'s own `handleAdd` already awaits for the add field,
+   * and this hook has no LabelStore of its own to do that resolution with
+   * directly. Defaulted to "no labels resolve to anything" rather than
+   * made mandatory, so every existing call site (this file's own tests
+   * among them) that never sends a checkbox line with a `#label` on it
+   * keeps compiling unchanged — `entry-store-layout.tsx` is the one
+   * production caller, and it always passes the real thing (`useLabels`'s
+   * own `resolveLabelIds`).
+   */
+  resolveLabelIds: (names: string[]) => Promise<string[]> = async () => [],
 ): UseHistoryResult {
   const entriesQuery = useInfiniteQuery({
     queryKey: ENTRIES_QUERY_KEY,
@@ -145,27 +204,168 @@ export function useHistory(
     void requestSync(store, taskStore, deviceId);
   };
 
-  const sendEntryMutation = useMutation({
-    mutationFn: (entry: Entry) => store.upsert([entry]),
-    onSuccess: afterLocalWrite,
-  });
-
-  function sendEntry(raw: string) {
-    const body = normalizeEntryBody(raw);
-    if (body === null) {
-      return;
-    }
-    sendEntryMutation.mutate({
-      id: mintId(),
+  /**
+   * Turns one `PromotedTask` (promote-tasks.ts) into a real `Task` row —
+   * `use-tasks.ts`'s own `addTask` builds an identically-shaped literal
+   * for the same reason (`Task`'s required fields, task-types.ts's own
+   * comment on why): a Task minted here starts with the same "nothing"
+   * every field defaults to for a caller with no opinion of its own,
+   * except `date`, which carries the Entry's own capture date rather than
+   * staying undated (ADR 0048: "A Task promoted from an Entry takes the
+   * Entry's capture date; one created in Todo stays undated" — #169's
+   * view-context inheritance, with the Entry as the origin).
+   *
+   * **The capture-date rule, precisely.** `promoted.date` is `null` only
+   * when nothing in the checkbox line parsed to a date — in that case,
+   * and ONLY that case, the Entry's own capture date wins, day-only
+   * (mirroring `todo-page.tsx`'s own `captureDate`: a Date "may carry a
+   * time," but nothing about *when in the day* an Entry happened to be
+   * captured is a plan the reader made for the Task). When a date DID
+   * parse (`- [ ] buy milk tomorrow`), that parsed date is what "the
+   * Composer highlights recognised tokens... so it files itself" (issue
+   * #173's own acceptance criterion) actually means, and it wins instead
+   * — this is `??`, not an unconditional overwrite, on purpose.
+   * `deadline`/`duration`/`priority`/`dateString`/`labelIds` all carry the
+   * parse's own resolved values unconditionally, the identical fields
+   * `todo-page.tsx`'s own `handleAdd` already writes from
+   * `taskFieldsFromQuickAdd` for the add field — Promotion is that same
+   * parse, not a second, poorer one.
+   */
+  function promotedTaskToTask(
+    promoted: PromotedTask,
+    capturedAt: string,
+    orderKey: string,
+    labelIds: string[],
+  ): Task {
+    return {
+      id: promoted.id,
       deviceId,
-      body,
-      createdAt: new Date().toISOString(),
+      content: promoted.content,
+      completedAt: promoted.checked ? capturedAt : null,
+      orderKey,
+      createdAt: capturedAt,
       seq: null,
       syncedAt: null,
       deletedAt: null,
+      date: promoted.date ?? entryDayKey(capturedAt, deviceUtcOffsetMinutes()),
+      deadline: promoted.deadline,
+      duration: promoted.duration,
+      priority: promoted.priority,
+      labelIds,
+      dateString: promoted.dateString,
+      projectId: null,
+      sectionId: null,
+      parentId: null,
+    };
+  }
+
+  /**
+   * Mints a real `Task` row per `PromotedTask` and writes them, chained
+   * end-to-end off one read of the active list — shared by `sendEntry` and
+   * `commitEntryEdit` below, the two doors through which a bare checkbox
+   * can turn into a Task (ADR 0048: "sending an Entry containing a bare
+   * `- [ ]`" reaches both a brand-new Entry and a genuine edit-commit that
+   * added one; CONTEXT.md's Task entry states this unconditionally —
+   * "every checkbox written in an Entry is a Task" — not scoped to a new
+   * Send alone). `orderKeyBetween` is walked forward once per promoted
+   * Task rather than recomputed against `active` each time, so two
+   * checkboxes written in one Entry land in the order they were written,
+   * not both racing for the same "after the last existing Task" slot.
+   * `resolveLabelIds` is awaited once per Task, in order, matching
+   * `use-labels.ts`'s own `resolveLabelIds` doc comment on why a second
+   * `#Shopping` in the same Entry must see the Label the first one just
+   * minted rather than racing it.
+   */
+  async function upsertPromotedTasks(
+    promoted: readonly PromotedTask[],
+    capturedAt: string,
+  ): Promise<void> {
+    if (promoted.length === 0) {
+      return;
+    }
+    const active = await taskStore.list();
+    let lastKey = active.at(-1)?.orderKey ?? null;
+    const tasks: Task[] = [];
+    for (const task of promoted) {
+      lastKey = orderKeyBetween(lastKey, null);
+      const labelIds = await resolveLabelIds(task.labelNames);
+      tasks.push(promotedTaskToTask(task, capturedAt, lastKey, labelIds));
+    }
+    await taskStore.upsert(tasks);
+  }
+
+  // Promotion's own Tasks (issue #173) land in the same local write each
+  // mutation below already made visible — `refreshTasks` (tasks-refresh.ts)
+  // is what makes a freshly-promoted Task appear in Todo/Inbox without a
+  // reader having to navigate there and back. Shared between `sendEntry`
+  // and `commitEntryEdit`'s own `onSuccess` for the identical reason
+  // `afterLocalWrite` itself is shared, and skipped when nothing was
+  // promoted: an ordinary Send or edit (no checkbox at all) has no Task
+  // list to invalidate.
+  async function afterPromotion(promotedCount: number): Promise<void> {
+    if (promotedCount > 0) {
+      await refreshTasks();
+    }
+  }
+
+  const sendEntryMutation = useMutation({
+    mutationFn: async ({
+      entry,
+      promoted,
+    }: {
+      entry: Entry;
+      promoted: readonly PromotedTask[];
+    }) => {
+      await upsertPromotedTasks(promoted, entry.createdAt);
+      await store.upsert([entry]);
+    },
+    onSuccess: async (_data, { promoted }) => {
+      await afterLocalWrite();
+      await afterPromotion(promoted.length);
+    },
+  });
+
+  function sendEntry(raw: string, promotion?: ComposerPromotionContext) {
+    const normalized = normalizeEntryBody(raw);
+    if (normalized === null) {
+      return;
+    }
+    // Promotion (issue #173, ADR 0048) fires only on a bare checkbox with
+    // no Reference — `promoteBareCheckboxes`'s own loop guard, so a Task
+    // created in Todo (which writes no Entry at all) can never feed back
+    // into this path, and a line this function has already promoted on an
+    // earlier Send is never re-promoted on a later one. `promotion ??
+    // defaultPromotionContext()` — see that function's own doc comment.
+    const { quickAddOptions, active } = promotion ?? defaultPromotionContext();
+    const { body, tasks: promoted } = promoteBareCheckboxes(
+      normalized,
+      mintId,
+      quickAddOptions,
+      active,
+    );
+    sendEntryMutation.mutate({
+      entry: {
+        id: mintId(),
+        deviceId,
+        body,
+        createdAt: new Date().toISOString(),
+        seq: null,
+        syncedAt: null,
+        deletedAt: null,
+      },
+      promoted,
     });
   }
 
+  // `editEntry` stays non-promoting, on purpose: it is also the tick
+  // path's own door (composer-page.tsx's `handleToggleTask` splices a
+  // marker with `toggleTaskAt` and commits through this exact function),
+  // and `entry-prose.tsx`'s own comment on `ToggleTaskHandler` is explicit
+  // that a bare checkbox "keeps working exactly as it does today" —
+  // running Promotion here would mean a tap on a checkbox silently mints a
+  // Task mid-tick, an edit nobody asked for. `commitEntryEdit` just below
+  // is the promoting door instead, reserved for a genuine Composer
+  // edit-commit (composer-page.tsx's `handleCommitEdit`).
   const editEntryMutation = useMutation({
     mutationFn: ({ id, body }: { id: string; body: string }) => store.edit(id, body),
     onSuccess: afterLocalWrite,
@@ -177,6 +377,67 @@ export function useHistory(
       return;
     }
     editEntryMutation.mutate({ id, body });
+  }
+
+  /**
+   * The promoting sibling of `editEntry` (issue #173, ADR 0048) — a
+   * genuine Composer edit-commit runs Promotion exactly as `sendEntry`
+   * does, because CONTEXT.md's Task entry draws no line between an Entry
+   * that arrives with a bare checkbox already in it and one that gains
+   * one on a later edit: "every checkbox written in an Entry is a Task."
+   *
+   * The promoted Task's own capture date is the EDITED Entry's own
+   * `createdAt`, never "now" — ADR 0048's "a Task promoted from an Entry
+   * takes the Entry's capture date" names the Entry, not the moment
+   * Promotion happens to run, and an edit is explicitly not what moves an
+   * Entry in History (CONTEXT.md's Entry entry: "editing an Entry does not
+   * move it"). `store.getMany([id])` reads the authoritative row rather
+   * than trusting whatever this Device's own `entries` cache happens to
+   * still hold — correct even for an Entry old enough to have scrolled out
+   * of History's loaded pages (issue #79).
+   */
+  const commitEntryEditMutation = useMutation({
+    mutationFn: async ({
+      id,
+      body,
+      promotion,
+    }: {
+      id: string;
+      body: string;
+      promotion?: ComposerPromotionContext;
+    }) => {
+      const [current] = await store.getMany([id]);
+      // No `current` only if the Entry was removed or has not Synced to
+      // this Device between the reader opening it for edit and committing
+      // — `store.edit` below already no-ops against exactly that case
+      // (ADR 0028's own tombstone guard), so this falls back to "now"
+      // purely to give `upsertPromotedTasks` SOME valid timestamp for a
+      // write that is about to no-op anyway, not because "now" is ever the
+      // intended capture date for a real edit.
+      const capturedAt = current?.createdAt ?? new Date().toISOString();
+      const { quickAddOptions, active } = promotion ?? defaultPromotionContext();
+      const { body: promotedBody, tasks: promoted } = promoteBareCheckboxes(
+        body,
+        mintId,
+        quickAddOptions,
+        active,
+      );
+      await upsertPromotedTasks(promoted, capturedAt);
+      await store.edit(id, promotedBody);
+      return promoted.length;
+    },
+    onSuccess: async (promotedCount) => {
+      await afterLocalWrite();
+      await afterPromotion(promotedCount);
+    },
+  });
+
+  function commitEntryEdit(id: string, raw: string, promotion?: ComposerPromotionContext) {
+    const body = normalizeEntryBody(raw);
+    if (body === null) {
+      return;
+    }
+    commitEntryEditMutation.mutate({ id, body, promotion });
   }
 
   const removeEntryMutation = useMutation({
@@ -214,6 +475,7 @@ export function useHistory(
     },
     sendEntry,
     editEntry,
+    commitEntryEdit,
     removeEntry,
   };
 }

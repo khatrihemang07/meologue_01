@@ -6,6 +6,7 @@ import { Composer, type ComposerHandle } from "@/components/composer";
 import { History, type HistorySeekTarget } from "@/components/history";
 import { Shell } from "@/components/shell";
 import { useHistorySearch } from "@/hooks/use-history-search";
+import type { ComposerPromotionContext } from "@/lib/promote-tasks";
 import { useSyncEnabled } from "@/lib/settings";
 import { toggleTaskAt } from "@/lib/toggle-task";
 import { useEntryStore } from "@/pages/entry-store-layout";
@@ -44,6 +45,7 @@ export function ComposerPage() {
     sendEntry,
     search,
     editEntry,
+    commitEntryEdit,
     removeEntry,
     disabled,
     message,
@@ -84,8 +86,8 @@ export function ComposerPage() {
   // `usePinnedScroll` only compares identity, never reads the value.
   const [sendSignal, setSendSignal] = useState<number | undefined>(undefined);
 
-  function handleSend(body: string) {
-    sendEntry(body);
+  function handleSend(body: string, promotion: ComposerPromotionContext) {
+    sendEntry(body, promotion);
     // `?? 0` covers the first Send specifically: `undefined + 1` is `NaN`,
     // and — because `Object.is(NaN, NaN)` is `true` — a *second* Send would
     // then leave `forceToNewest` looking unchanged to the effect's
@@ -169,8 +171,14 @@ export function ComposerPage() {
   // composer.tsx's own `editingEntry` doc comment for why.
   const [editingEntry, setEditingEntry] = useState<Entry | null>(null);
 
-  function handleCommitEdit(id: string, body: string) {
-    editEntry(id, body);
+  // `commitEntryEdit`, not `editEntry` (issue #173) — a genuine Composer
+  // edit-commit is where Promotion also has to fire (ADR 0048: a bare
+  // checkbox the reader just added while editing becomes a Task too, not
+  // only one Sent fresh), unlike `handleToggleTask` below, which stays on
+  // plain `editEntry` on purpose — see that function's own comment for why
+  // a tick must never risk minting a Task mid-click.
+  function handleCommitEdit(id: string, body: string, promotion: ComposerPromotionContext) {
+    commitEntryEdit(id, body, promotion);
     setEditingEntry(null);
   }
 
@@ -179,12 +187,16 @@ export function ComposerPage() {
   }
 
   // Issue #153: a tapped checkbox. Splices only the marker characters
-  // (`toggleTaskAt`, toggle-task.ts) and commits through the exact same
-  // `editEntry` `handleCommitEdit` above already uses for an ordinary
-  // Composer edit — ADR 0043's "a tick is an ordinary Entry edit," not a
-  // second write path. Reads `entry.body` fresh off the tap's own `entry`
-  // argument rather than looking it up in `entries`, so this is correct
-  // even if `entries` has moved on since the checkbox was rendered.
+  // (`toggleTaskAt`, toggle-task.ts) and commits through plain `editEntry`
+  // — ADR 0043's "a tick is an ordinary Entry edit," not a second write
+  // path — deliberately NOT `commitEntryEdit` (issue #173): that door also
+  // runs Promotion, and a tap on an EXISTING checkbox must never risk
+  // minting a Task mid-click the reader never asked to create (a bare
+  // checkbox with no Task behind it "keeps working exactly as it does
+  // today," this ticket's own brief). Reads `entry.body` fresh off the
+  // tap's own `entry` argument rather than looking it up in `entries`, so
+  // this is correct even if `entries` has moved on since the checkbox was
+  // rendered.
   function handleToggleTask(entry: Entry, markerFrom: number, markerTo: number) {
     editEntry(entry.id, toggleTaskAt(entry.body, markerFrom, markerTo));
   }

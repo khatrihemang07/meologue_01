@@ -51,7 +51,20 @@ export type InlineNode =
   /** `[[YYYY-MM-DD]]` — `date` is the day it names, `raw` the text as typed. */
   | { kind: "dateReference"; date: string; raw: string }
   /** `[[e:<id>]]` — `entryId` is the Entry it points at, `raw` the text as typed. */
-  | { kind: "entryReference"; entryId: string; raw: string };
+  | { kind: "entryReference"; entryId: string; raw: string }
+  /**
+   * `[[task:<id>|<label>]]` (ADR 0048) — `taskId` the Task it points at,
+   * `label` the cached text carried alongside it, decoded (see
+   * `parseReferenceTask`'s own comment on why the mark's raw characters
+   * and this field can differ), `raw` the mark exactly as it sits in the
+   * body. Unlike a date or Entry Reference, `raw` is never what
+   * `entry-document.ts`'s serializer re-emits: `label` is a cache that
+   * gets rewritten from the Task, so the write side rebuilds the mark's
+   * text from `taskId`/`label` (`formatTaskReference`) rather than
+   * replaying `raw` verbatim — `raw` exists on this node only for a reader
+   * (`entryBlocksToText`'s callers, a test) that wants the mark as typed.
+   */
+  | { kind: "taskReference"; taskId: string; label: string; raw: string };
 
 const OPEN_BRACKET = 91; // [
 const CLOSE_BRACKET = 93; // ]
@@ -59,6 +72,9 @@ const CLOSE_BRACKET = 93; // ]
 const DATE_SHAPE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const ENTRY_SHAPE =
   /^e:([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$/;
+/** Matches only the `task:<uuid>` head of a task reference — the part before its `|label`. */
+const TASK_SHAPE =
+  /^task:([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$/;
 
 /**
  * A calendar date, not merely something date-shaped. `[[2026-13-45]]` matches
@@ -94,6 +110,86 @@ export function parseReferenceDate(text: string): string | null {
 export function parseReferenceEntryId(text: string): string | null {
   const match = ENTRY_SHAPE.exec(text);
   return match?.[1] ?? null;
+}
+
+/** What `parseReferenceTask` recovers from a `task:<uuid>|<label>` inner text. */
+export interface TaskReferenceParts {
+  readonly taskId: string;
+  readonly label: string;
+}
+
+/**
+ * Reverses `formatTaskReference`'s escaping of a cached label — every `\`
+ * this file ever writes into one is a literal backslash it put there to
+ * protect the character right after it, so "consume the next character
+ * whole" is the entire rule, with no lookahead needed for which character
+ * that is.
+ */
+function unescapeTaskReferenceLabel(text: string): string {
+  let out = "";
+  for (let i = 0; i < text.length; i += 1) {
+    if (text[i] === "\\" && i + 1 < text.length) {
+      i += 1;
+    }
+    out += text[i];
+  }
+  return out;
+}
+
+/**
+ * A well-formed `task:<uuid>|<label>` (ADR 0048), the only shape
+ * `[[task:…]]` can hold — a bare `[[task:<uuid>]]` with no `|` fails this
+ * the same way `[[e:notauuid]]` fails `parseReferenceEntryId`, because a
+ * task reference with no cached label defeats the entire point of caching
+ * one (rendering something before the Task itself has Synced). `referenceParser`
+ * below is this function's one caller inside this file, checking the shape
+ * through it rather than keeping a second copy of `TASK_SHAPE` — the same
+ * "one dialect" discipline `parseReferenceEntryId`'s own comment names.
+ *
+ * Splits on the *first* `|` only: `head` (the id) can never itself contain
+ * one — `TASK_SHAPE` is a fixed-length hex uuid — so every `|` after the
+ * first is just a character the label happens to contain, not a second
+ * field.
+ *
+ * `label` comes back unescaped, not the raw slice: `formatTaskReference`
+ * (this function's write-side counterpart, entry-document.ts's own caller)
+ * protects a literal `\` or `]` in the label so a run of two — the
+ * mark's own closing delimiter — can never appear by accident inside one.
+ * Decoding here is what makes the label a caller gets back identical to
+ * the one that was cached, `]]` and all.
+ */
+export function parseReferenceTask(text: string): TaskReferenceParts | null {
+  const bar = text.indexOf("|");
+  if (bar === -1) {
+    return null;
+  }
+  const match = TASK_SHAPE.exec(text.slice(0, bar));
+  if (match === null) {
+    return null;
+  }
+  return { taskId: match[1] as string, label: unescapeTaskReferenceLabel(text.slice(bar + 1)) };
+}
+
+/**
+ * Builds `[[task:<id>|<label>]]`, the one function that knows how to write
+ * this mark — `entry-document.ts`'s serializer calls this rather than
+ * hand-formatting the string itself, so the write side and
+ * `parseReferenceTask` above (the read side) can never drift on how a
+ * label's own `\`/`]` characters are protected from being misread as the
+ * mark's own delimiters.
+ *
+ * Escapes `\` (so a literal backslash never reads back as the start of an
+ * escape) and `]` (so two of them — the only way this mark's own closing
+ * `]]` can appear — can never occur unescaped inside the label, regardless
+ * of what the cached Task content actually contains). Nothing else needs
+ * escaping: `|` is only ever a delimiter for the *first* occurrence
+ * (`parseReferenceTask`'s own comment), so a `|` anywhere in the label is
+ * already unambiguous, and everything else is ordinary text between two
+ * `]]`-safe delimiters this function guarantees can't appear early.
+ */
+export function formatTaskReference(taskId: string, label: string): string {
+  const escaped = label.replace(/[\\\]]/g, (char) => `\\${char}`);
+  return `[[task:${taskId}|${escaped}]]`;
 }
 
 /**
@@ -132,7 +228,9 @@ const referenceParser: InlineParser = {
         ? "DateReference"
         : ENTRY_SHAPE.test(inner)
           ? "EntryReference"
-          : null;
+          : parseReferenceTask(inner) !== null
+            ? "TaskReference"
+            : null;
     if (name === null) {
       return -1;
     }
@@ -155,7 +253,7 @@ const referenceParser: InlineParser = {
  * removal needed — also deliberate (ADR 0041).
  */
 const inlineParser = commonmark.configure({
-  defineNodes: ["DateReference", "EntryReference"],
+  defineNodes: ["DateReference", "EntryReference", "TaskReference"],
   parseInline: [referenceParser],
   remove: ["Link", "Image", "HTMLTag", "Entity", "HardBreak"],
 });
@@ -252,6 +350,23 @@ function walk(
         nodes.push({ kind: "entryReference", entryId: raw.slice(4, -2), raw });
         break;
       }
+      case "TaskReference": {
+        // `referenceParser` only ever emits this element name once
+        // `parseReferenceTask` has already confirmed the inner text's
+        // shape (this file's own `parse` above), so re-running it here is
+        // extraction, not a second validation — `parts` is never actually
+        // `null`, but the fallback keeps this total rather than trusting
+        // an invariant a future edit to the parser could quietly break.
+        const raw = body.slice(element.from, element.to);
+        const parts = parseReferenceTask(raw.slice(2, -2));
+        nodes.push({
+          kind: "taskReference",
+          taskId: parts?.taskId ?? "",
+          label: parts?.label ?? "",
+          raw,
+        });
+        break;
+      }
       default:
         // Anything we do not model reaches the reader as what was typed.
         pushText(nodes, body.slice(element.from, element.to));
@@ -294,6 +409,14 @@ export function inlineNodesToText(nodes: readonly InlineNode[]): string {
       case "dateReference":
       case "entryReference":
         text += node.raw;
+        break;
+      case "taskReference":
+        // Unlike a date/Entry Reference, whose mark IS the words a reader
+        // sees (`raw`), a task reference's whole point is that the words
+        // live in `label` instead (ADR 0048's "Export writes the cached
+        // label, not the mark") — `entrySnippet`/the `[[` picker, this
+        // function's own callers, want real words here, not `[[task:…]]`.
+        text += node.label;
         break;
     }
   }
@@ -372,7 +495,7 @@ export interface EntryListItem {
  */
 const entryParser = commonmark.configure([
   {
-    defineNodes: ["DateReference", "EntryReference"],
+    defineNodes: ["DateReference", "EntryReference", "TaskReference"],
     parseInline: [referenceParser],
     remove: [
       "Link",
@@ -465,6 +588,19 @@ function walkEntryInline(
       case "EntryReference": {
         const raw = body.slice(node.from, node.to);
         result.push({ kind: "entryReference", entryId: raw.slice(4, -2), raw });
+        break;
+      }
+      case "TaskReference": {
+        // See `walk`'s own identical case above for why re-running
+        // `parseReferenceTask` here is extraction, not re-validation.
+        const raw = body.slice(node.from, node.to);
+        const parts = parseReferenceTask(raw.slice(2, -2));
+        result.push({
+          kind: "taskReference",
+          taskId: parts?.taskId ?? "",
+          label: parts?.label ?? "",
+          raw,
+        });
         break;
       }
       default:
@@ -649,4 +785,134 @@ export function entryBlocksToText(blocks: readonly EntryBlockNode[]): string {
     }
   }
   return parts.join(" ");
+}
+
+/**
+ * A task item's own `[[task:id|label]]` mark, when Promotion's own output
+ * shape holds — the item's first block is a `"prose"` run whose only real
+ * content is one `taskReference` node, `- [ ] [[task:id|label]]` and
+ * nothing else on that line. `undefined` for a bare checkbox, or for a
+ * task item whose first line carries a reference alongside other text:
+ * that shape is technically legal in the dialect but not one Promotion (or
+ * anything else in this app) produces, so callers fall back to treating it
+ * as an ordinary bare checkbox instead of guessing which of several inline
+ * nodes the "real" reference is.
+ *
+ * Lives here, not in entry-prose.tsx (issue #153, where this originated)
+ * — issue #173's Promotion (promote-tasks.ts) and its cache-refresh fan-out
+ * (task-reference-sync.ts) both need the identical detection Promotion's
+ * own loop guard depends on ("fires only on a bare checkbox with no
+ * reference"), and a parsing concern belongs beside the parser that
+ * produces the tree it walks, not inside a React renderer that merely
+ * consumes it. `entry-prose.tsx`'s `renderListItem` imports this rather
+ * than keeping its own copy — one detection, read by every caller that
+ * needs to tell a referenced checkbox line from a bare one, is what the
+ * ticket's own brief warns is load-bearing: "If you make Promotion emit a
+ * different shape, that detection breaks."
+ *
+ * The mandatory single space between a checkbox's `[ ]`/`[x]` and whatever
+ * follows it (`entry-document.ts`'s own `needsTaskSeparator` comment) is
+ * not itself typed content — it survives parsing as this run's own
+ * leading `{kind: "text"}` node, whitespace and nothing else, so it is
+ * stripped before checking whether what remains is the reference alone.
+ */
+export function referencedTaskOf(
+  item: EntryListItem,
+): { taskId: string; label: string } | undefined {
+  const first = item.content[0];
+  if (first === undefined || first.kind !== "prose") {
+    return undefined;
+  }
+  const children = first.children;
+  const leadsWithSeparator = children[0]?.kind === "text" && children[0].text.trim() === "";
+  const own = leadsWithSeparator ? children.slice(1) : children;
+  if (own.length !== 1) {
+    return undefined;
+  }
+  const onlyChild = own[0];
+  if (onlyChild === undefined || onlyChild.kind !== "taskReference") {
+    return undefined;
+  }
+  return { taskId: onlyChild.taskId, label: onlyChild.label };
+}
+
+/**
+ * Rewrites every `[[task:<taskId>|...]]` mark in `body` to carry `label`
+ * instead of whatever cached text it held before (ADR 0048's "renaming a
+ * Task refreshes the cached label in every Entry referencing it") —
+ * `task-reference-sync.ts`'s own fan-out is this function's one caller.
+ *
+ * Deliberately not a re-parse-and-reserialize round trip through
+ * `entryMarkdownToDocument`/`entryDocumentToMarkdown` — that would
+ * renormalize the WHOLE body (mark nesting order, escaped markers,
+ * everything else in it) for a caller that only ever wants one `|label`
+ * half of one mark changed, exactly the "reading/renaming must never
+ * reformat an Entry the reader never asked to edit" discipline
+ * `toggleTaskAt` (toggle-task.ts) already applies to a checkbox's own
+ * `[ ]`/`[x]`.
+ *
+ * Every occurrence is found by parsing `body` with `parseEntryMarkdown` —
+ * the same trusted walk `referenceParser`/`parseReferenceTask` already
+ * validated each mark through — and collecting each matching
+ * `taskReference` node's own `raw` text, in document order. `raw` is an
+ * exact slice of `body` (`walkEntryInline`'s own `body.slice(node.from,
+ * node.to)`), so replaying those strings against `body` with a
+ * left-to-right, cursor-advancing `indexOf` reproduces each mark's real
+ * position with no offset bookkeeping of its own to get wrong — including
+ * correctly skipping past an escaped look-alike, since an escaped `\[[`
+ * never parses into a `taskReference` node in the first place and so never
+ * contributes a `raw` value to search for.
+ */
+export function refreshTaskReferenceLabel(body: string, taskId: string, label: string): string {
+  const occurrences: string[] = [];
+  collectTaskReferenceRaws(parseEntryMarkdown(body), taskId, occurrences);
+  if (occurrences.length === 0) {
+    return body;
+  }
+  let out = "";
+  let cursor = 0;
+  for (const raw of occurrences) {
+    const at = body.indexOf(raw, cursor);
+    // `raw` came from parsing this exact `body`, so it is always found —
+    // defensive rather than reachable, kept total rather than trusting an
+    // invariant a future edit to the parser could quietly break.
+    if (at === -1) {
+      continue;
+    }
+    out += body.slice(cursor, at);
+    out += formatTaskReference(taskId, label);
+    cursor = at + raw.length;
+  }
+  out += body.slice(cursor);
+  return out;
+}
+
+function collectTaskReferenceRawsInline(
+  nodes: readonly InlineNode[],
+  taskId: string,
+  out: string[],
+): void {
+  for (const node of nodes) {
+    if (node.kind === "taskReference" && node.taskId === taskId) {
+      out.push(node.raw);
+    } else if (node.kind === "emphasis" || node.kind === "strong") {
+      collectTaskReferenceRawsInline(node.children, taskId, out);
+    }
+  }
+}
+
+function collectTaskReferenceRaws(
+  blocks: readonly EntryBlockNode[],
+  taskId: string,
+  out: string[],
+): void {
+  for (const block of blocks) {
+    if (block.kind === "prose") {
+      collectTaskReferenceRawsInline(block.children, taskId, out);
+    } else {
+      for (const item of block.items) {
+        collectTaskReferenceRaws(item.content, taskId, out);
+      }
+    }
+  }
 }

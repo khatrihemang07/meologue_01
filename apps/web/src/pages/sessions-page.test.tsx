@@ -18,6 +18,7 @@ const defaultEntryStoreContext: EntryStoreOutletContext = {
   entries: [],
   sendEntry: vi.fn(),
   editEntry: vi.fn(),
+  commitEntryEdit: vi.fn(),
   removeEntry: vi.fn(),
   search: vi.fn(async () => []),
   getEntries: vi.fn(async () => []),

@@ -28,7 +28,7 @@
 import type { ReactNode } from "react";
 import { type ReferenceRenderers, renderNodes } from "@/components/inline-prose";
 import type { EntryBlockNode, EntryListItem } from "@/lib/inline-markdown";
-import { entryBlocksToText, parseEntryMarkdown } from "@/lib/inline-markdown";
+import { entryBlocksToText, parseEntryMarkdown, referencedTaskOf } from "@/lib/inline-markdown";
 import { cn } from "@/lib/utils";
 
 /**
@@ -39,8 +39,64 @@ import { cn } from "@/lib/utils";
  * Optional everywhere it's threaded below: `undefined` is what keeps a
  * checkbox disabled rather than merely unwired — see `renderListItem`'s
  * own comment for which callers pass one and which deliberately don't.
+ *
+ * `toggleTaskAt` retires for a *referenced* checkbox line (issue #173,
+ * ADR 0048's "ticking writes the Task") — this handler is never invoked
+ * for one; see `renderListItem`'s own comment for where that branch
+ * happens. A bare checkbox with no reference behind it keeps working
+ * through this handler exactly as it did before this ticket, on purpose:
+ * issue #174's backfill turns an existing bare checkbox into a reference
+ * eventually, not on this ticket's own timeline, so this code must not
+ * assume every checkbox it ever sees already has a Task behind it.
  */
 type ToggleTaskHandler = (markerFrom: number, markerTo: number) => void;
+
+/**
+ * What `renderListItem` hands a referenced checkbox line's own renderer
+ * (issue #173, ADR 0048) — everything about the line except how to draw
+ * it. `label`/`checked` are the body's own *cache*: whatever a live Task
+ * lookup would improve on is the renderer's own business, not this file's
+ * — `entry-prose.tsx` has no store access of any kind (the module comment
+ * above already says as much for the rest of this file), so the default
+ * renderer below can only ever show the cache. `content` is any block
+ * that follows the reference's own line inside the same item (a nested
+ * list — `- [ ] [[task:id|label]]\n  - a note`) already rendered through
+ * the ordinary path, so a custom renderer never has to know
+ * `EntryBlockNode` exists to render it.
+ */
+export interface TaskReferenceProps {
+  readonly taskId: string;
+  readonly label: string;
+  readonly checked: boolean;
+  readonly content: ReactNode;
+  /**
+   * The enclosing item's own `EntryTaskMarker` offsets (issue #173),
+   * handed through unchanged — a writeable renderer (`entry-row.tsx`'s
+   * `TaskReferenceItem`) needs them to splice this one Entry's own
+   * `[ ]`/`[x]` cache the same way `toggleTaskAt` (toggle-task.ts) already
+   * does for a bare checkbox, without re-parsing the body to find them
+   * again.
+   */
+  readonly markerFrom: number;
+  readonly markerTo: number;
+}
+
+/**
+ * Draws one referenced checkbox line, or the whole rest of the list item —
+ * `entryProse`'s own analogue of `ReferenceRenderers.date`/`.entry`, one
+ * level up: those render one inline node, this renders the `<li>` itself,
+ * because a referenced task's checkbox chrome (its checked state, its
+ * click handling) has to change as a unit with the label beside it rather
+ * than independently, the way `renderListItem`'s existing bare-checkbox
+ * branch already keeps its own `<input>` and label together.
+ *
+ * `undefined` — the default `entryProse` runs with — is what keeps a
+ * referenced checkbox rendering the body's own cache with `defaultTaskReferenceItem`
+ * below, exactly the "no renderer, no interactivity" rule
+ * `ReferenceRenderers`'s own fields already follow for a date/Entry
+ * Reference.
+ */
+export type TaskReferenceRenderer = (props: TaskReferenceProps, key: string) => ReactNode;
 
 /**
  * Vertical rhythm shared by every top-level block this file renders —
@@ -122,6 +178,7 @@ function renderBlocks(
   refs: ReferenceRenderers,
   keyPrefix: string,
   onToggleTask: ToggleTaskHandler | undefined,
+  renderTaskReference: TaskReferenceRenderer,
   depth: number,
 ): ReactNode[] {
   return blocks.map((block, index) => {
@@ -141,7 +198,15 @@ function renderBlocks(
             className={cn(bulletListStyleClass(listDepth), "space-y-0.5 pl-5", BLOCK_SPACING)}
           >
             {block.items.map((item, itemIndex) =>
-              renderListItem(item, query, refs, `${key}-${itemIndex}`, onToggleTask, listDepth),
+              renderListItem(
+                item,
+                query,
+                refs,
+                `${key}-${itemIndex}`,
+                onToggleTask,
+                renderTaskReference,
+                listDepth,
+              ),
             )}
           </ul>
         );
@@ -155,7 +220,15 @@ function renderBlocks(
             className={cn("list-decimal space-y-0.5 pl-5", BLOCK_SPACING)}
           >
             {block.items.map((item, itemIndex) =>
-              renderListItem(item, query, refs, `${key}-${itemIndex}`, onToggleTask, listDepth),
+              renderListItem(
+                item,
+                query,
+                refs,
+                `${key}-${itemIndex}`,
+                onToggleTask,
+                renderTaskReference,
+                listDepth,
+              ),
             )}
           </ol>
         );
@@ -170,6 +243,32 @@ function renderBlocks(
     }
   });
 }
+
+/**
+ * `entryProse`'s own default `TaskReferenceRenderer` — cached data,
+ * unconditionally disabled, the same "no live lookup available" stance
+ * `ReferenceRenderers`'s own missing `date`/`entry` fields take (this
+ * file's own module comment: no store access lives here). A caller that
+ * wants a referenced checkbox to show the Task's *live* label/checked
+ * state, or to actually tick it, supplies its own renderer instead —
+ * `entry-row.tsx`'s `TaskReferenceItem` is that renderer, reading
+ * `useEntryStore()`'s own `tasks`/`completedTasks`.
+ */
+const defaultTaskReferenceItem: TaskReferenceRenderer = ({ label, checked, content }, key) => (
+  <li key={key} className="-ml-5 flex list-none items-baseline gap-1.5">
+    <input
+      type="checkbox"
+      checked={checked}
+      disabled
+      aria-label={label || (checked ? "Checked" : "Unchecked")}
+      className="mt-[0.2em] shrink-0 accent-current"
+    />
+    <div className="min-w-0 flex-1">
+      <p className={cn("whitespace-pre-wrap", BLOCK_SPACING)}>{label}</p>
+      {content}
+    </div>
+  </li>
+);
 
 /**
  * One `<li>`. A task item drops the marker entirely — no bullet, no literal
@@ -209,6 +308,20 @@ function renderBlocks(
  * alone included — either grows real text or stops being a `Task` at all,
  * per `taskMarkerOf`'s own contract), kept because a checkbox with a blank
  * accessible name is a worse failure than this fallback ever costs.
+ *
+ * A *referenced* task item (issue #173, ADR 0048) never reaches any of the
+ * above — `referencedTaskOf` (inline-markdown.ts) is checked first, and
+ * when it finds one this function hands off to `renderTaskReference`
+ * entirely instead, with the item's own checkbox marker as the cached
+ * fallback `checked` and everything AFTER the reference's own line (a
+ * nested list, most likely)
+ * still rendered through the ordinary path below and passed through as
+ * `content`. `toggleTaskAt`'s own splice retires for exactly this
+ * branch — `onToggleTask` is never invoked for it, on purpose: ticking a
+ * reference has to write the Task (ADR 0048), not re-splice the Entry's
+ * own marker, and this file has no Task store to write to (this file's
+ * own module comment). A caller that can write one supplies its own
+ * `renderTaskReference` and wires ticking there instead.
  */
 function renderListItem(
   item: EntryListItem,
@@ -216,9 +329,43 @@ function renderListItem(
   refs: ReferenceRenderers,
   key: string,
   onToggleTask: ToggleTaskHandler | undefined,
+  renderTaskReference: TaskReferenceRenderer,
   depth: number,
 ): ReactNode {
-  const content = renderBlocks(item.content, query, refs, `${key}-`, onToggleTask, depth);
+  if (item.task !== undefined) {
+    const reference = referencedTaskOf(item);
+    if (reference !== undefined) {
+      const rest = renderBlocks(
+        item.content.slice(1),
+        query,
+        refs,
+        `${key}-`,
+        onToggleTask,
+        renderTaskReference,
+        depth,
+      );
+      return renderTaskReference(
+        {
+          taskId: reference.taskId,
+          label: reference.label,
+          checked: item.task.checked,
+          content: rest.length > 0 ? rest : null,
+          markerFrom: item.task.markerFrom,
+          markerTo: item.task.markerTo,
+        },
+        key,
+      );
+    }
+  }
+  const content = renderBlocks(
+    item.content,
+    query,
+    refs,
+    `${key}-`,
+    onToggleTask,
+    renderTaskReference,
+    depth,
+  );
   if (item.task === undefined) {
     return <li key={key}>{content}</li>;
   }
@@ -239,11 +386,32 @@ function renderListItem(
   );
 }
 
+/**
+ * `renderTaskReference` defaults to `defaultTaskReferenceItem` (cached
+ * data, disabled) for every caller that doesn't supply its own — Grounding
+ * (`entry-row.tsx`'s `EntryBody`), every test in this file's own suite,
+ * and anywhere else that renders an Entry's body with no Task store in
+ * reach. `entry-row.tsx`'s `entryBodyContent` is the one caller that
+ * supplies a live one.
+ */
 export function entryProse(
   body: string,
   query = "",
   refs: ReferenceRenderers = {},
   onToggleTask?: ToggleTaskHandler,
+  renderTaskReference: TaskReferenceRenderer = defaultTaskReferenceItem,
 ): ReactNode {
-  return <>{renderBlocks(parseEntryMarkdown(body), query, refs, "", onToggleTask, 0)}</>;
+  return (
+    <>
+      {renderBlocks(
+        parseEntryMarkdown(body),
+        query,
+        refs,
+        "",
+        onToggleTask,
+        renderTaskReference,
+        0,
+      )}
+    </>
+  );
 }

@@ -21,6 +21,7 @@ import {
 } from "@/lib/entry-day";
 import { formatAbsoluteTime } from "@/lib/entry-time";
 import { entryBlocksToText, parseEntryMarkdown } from "@/lib/inline-markdown";
+import { setTaskMarkerChecked } from "@/lib/toggle-task";
 import { cn } from "@/lib/utils";
 import { useEntryStore } from "@/pages/entry-store-layout";
 
@@ -187,6 +188,136 @@ function EntryReferenceLink({ entryId, raw }: { entryId: string; raw: string }) 
 }
 
 /**
+ * One referenced checkbox line (issue #173, ADR 0048) — `entryBodyContent`
+ * below wherever `entryProse` (entry-prose.tsx) finds a checkbox item whose
+ * entire content is one `[[task:id|label]]` mark, Promotion's own output
+ * shape. The checklist's own analogue of `DateReferenceLink`/
+ * `EntryReferenceLink` just above, for the same reason those are
+ * components of their own rather than plain render callbacks: reading a
+ * live Task means reading `useEntryStore()`, and a Hook needs a component
+ * to run inside.
+ *
+ * Unlike an Entry Reference, resolving a Task needs no probe, no query key,
+ * and no "still in flight" state at all — `useEntryStore()`'s own `tasks`/
+ * `completedTasks` (ADR 0047's `useTasks`, already loaded above every route
+ * this component renders under) are the live set of every Task this Device
+ * has Synced, so finding one by id is a lookup, not a fetch. `live ===
+ * undefined` is this component's one "unresolvable" case, folding together
+ * ADR 0048's two real causes — a Task not yet Synced to this Device, and
+ * one that was deleted (#174's backfill; `list()`/`listCompleted()` both
+ * already exclude a tombstone), into the same rule ADR 0042 already gives a
+ * date/Entry Reference: render the cached words, and stay inert. That
+ * inertness IS the asymmetric-deletion rule ADR 0048 asks for — deleting a
+ * Task leaves this line exactly where it was, as the plain words the
+ * reader typed, never silently rewritten or removed on their behalf.
+ *
+ * **Interactive only where `interactive` says so** — `entryBodyContent`
+ * below passes `onToggleTask !== undefined` through, the same gate a bare
+ * checkbox already uses two functions below: Grounding (`EntryBody`, which
+ * never supplies `onToggleTask` at all) must stay read-only, and this is
+ * the one place that rule has to be enforced for a *referenced* line too,
+ * since `renderTaskReference` — unlike `onToggleTask` itself — is always
+ * supplied regardless (this component's own read side has nothing to do
+ * with editing a past Answer, only the write side does).
+ *
+ * **Recurring is a different act from ticking.** A recurring Task's own
+ * `completedAt` never becomes non-null (CONTEXT.md's Recurrence entry: the
+ * checkbox never "un-ticks itself," and the Task never enters
+ * `completedTasks`) — so for a recurring Task, `live.completedAt` can
+ * never be the right source for THIS line's own checked state, because
+ * every Entry that references the same recurring Task would then read
+ * identically regardless of which occurrence was actually ticked. The
+ * Entry's own cached marker is what's authoritative there instead, exactly
+ * because it is pinned to the one moment this Entry was written (ADR
+ * 0048's own words: "An Entry line is pinned to a moment, which is exactly
+ * what an occurrence record is") — `canToggle` refuses a second click once
+ * it reads `true`, which is the whole of "cannot be reopened, rescheduled
+ * or reordered" (CONTEXT.md's Occurrence entry): there is no reschedule or
+ * reorder affordance on this checkbox to refuse in the first place, so
+ * refusing the untick is the one refusal this component actually has to
+ * make.
+ */
+function TaskReferenceItem({
+  taskId,
+  label,
+  checked,
+  content,
+  markerFrom,
+  markerTo,
+  body,
+  entryId,
+  interactive,
+}: {
+  taskId: string;
+  label: string;
+  checked: boolean;
+  content: ReactNode;
+  markerFrom: number;
+  markerTo: number;
+  /** The Entry's own current, stored body — the same one `markerFrom`/`markerTo` are offsets into. */
+  body: string;
+  /** `undefined` when the caller (`EntryBody`, Grounding) has no Entry to write back to at all. */
+  entryId: string | undefined;
+  interactive: boolean;
+}) {
+  const { tasks, completedTasks, completeTask, uncompleteTask, advanceRecurringTask, editEntry } =
+    useEntryStore();
+  const live =
+    tasks.find((task) => task.id === taskId) ?? completedTasks.find((task) => task.id === taskId);
+  const recurring = live !== undefined && live.dateString !== null;
+  const resolvedChecked = live === undefined || recurring ? checked : live.completedAt !== null;
+  const resolvedLabel = live !== undefined ? live.content : label;
+  // Once a recurring occurrence reads checked, no further click does
+  // anything — see this function's own doc comment for why that IS the
+  // "cannot be reopened" rule, not a separate guard bolted onto it.
+  const canToggle =
+    interactive && live !== undefined && entryId !== undefined && !(recurring && resolvedChecked);
+
+  function handleChange() {
+    if (!canToggle || entryId === undefined) {
+      return;
+    }
+    if (recurring) {
+      // `canToggle` above only ever lets this branch run false -> true —
+      // advances the live Task in Todo, and pins JUST this Entry's own
+      // marker, never task-reference-sync.ts's fan-out: every OTHER Entry
+      // referencing the same recurring Task is a DIFFERENT occurrence, not
+      // this one, and must not also read checked because this one was.
+      advanceRecurringTask(taskId);
+      editEntry(entryId, setTaskMarkerChecked(body, markerFrom, markerTo, true));
+      return;
+    }
+    // Ticking writes the Task (ADR 0048) — `completeTask`/`uncompleteTask`
+    // (use-tasks.ts) already fan out to every Entry referencing this Task,
+    // this line included, so there is no separate `editEntry` call to make
+    // here: the body's own marker follows as a consequence of that write,
+    // not as a second one this component performs itself.
+    if (resolvedChecked) {
+      uncompleteTask(taskId);
+    } else {
+      completeTask(taskId);
+    }
+  }
+
+  return (
+    <li className="-ml-5 flex list-none items-baseline gap-1.5">
+      <input
+        type="checkbox"
+        checked={resolvedChecked}
+        disabled={!canToggle}
+        onChange={canToggle ? handleChange : undefined}
+        aria-label={resolvedLabel || (resolvedChecked ? "Checked" : "Unchecked")}
+        className="mt-[0.2em] shrink-0 accent-current"
+      />
+      <div className="min-w-0 flex-1">
+        <p className="whitespace-pre-wrap first:mt-0 mt-1">{resolvedLabel}</p>
+        {content}
+      </div>
+    </li>
+  );
+}
+
+/**
  * An Entry's words with the Search query highlighted, and — since issue
  * #152 — its own block structure (a list) when it has one. No wrapper of
  * its own here either way; the caller still supplies the box.
@@ -215,11 +346,36 @@ function EntryReferenceLink({ entryId, raw }: { entryId: string; raw: string }) 
  * only `EntryBubble`'s own caller (history.tsx, through composer-page.tsx)
  * ever supplies one. `EntryBody` below, this function's other caller, never
  * does — see its own comment for why.
+ *
+ * The fifth argument (issue #173) is always `TaskReferenceItem` above,
+ * regardless of `onToggleTask` — unlike a bare checkbox, a referenced
+ * line's own read side (the live label/checked state `TaskReferenceItem`
+ * resolves) is not the write-gated half of this feature, so both of
+ * `entryBodyContent`'s callers get it: Grounding sees a referenced
+ * checkbox's true, current state exactly as it already sees a renamed
+ * Entry Reference's target update live. Whether it can also be TICKED is
+ * gated separately, by `entryId`/`interactive` below — `TaskReferenceItem`
+ * itself reads `onToggleTask !== undefined` as "the same permission a bare
+ * checkbox already has," so Grounding (which never supplies one) stays
+ * exactly as read-only for a referenced line as it already is for a bare
+ * one, with no second flag for a caller to remember to withhold.
+ *
+ * `entryId` (issue #173) is the Entry `body` belongs to — threaded through
+ * only so `TaskReferenceItem` can splice `body` back via `editEntry` when
+ * ticking a *recurring* Task's own occurrence (see that component's own
+ * doc comment for why that one case writes the Entry directly rather than
+ * going through `completeTask`/`uncompleteTask`'s fan-out). `undefined`
+ * for `EntryBody`'s own call below, which has no `onToggleTask` either —
+ * neither flows independently of the other in practice, but they are two
+ * separate parameters rather than one, since `interactive` (whether
+ * ticking is permitted at all) and `entryId` (what to splice if it is) are
+ * two different questions a caller could in principle answer separately.
  */
 export function entryBodyContent(
   body: string,
   query: string,
   onToggleTask?: (markerFrom: number, markerTo: number) => void,
+  entryId?: string,
 ): ReactNode {
   return entryProse(
     body,
@@ -229,6 +385,15 @@ export function entryBodyContent(
       entry: (node, key) => <EntryReferenceLink key={key} entryId={node.entryId} raw={node.raw} />,
     },
     onToggleTask,
+    (node, key) => (
+      <TaskReferenceItem
+        key={key}
+        {...node}
+        body={body}
+        entryId={entryId}
+        interactive={onToggleTask !== undefined}
+      />
+    ),
   );
 }
 
