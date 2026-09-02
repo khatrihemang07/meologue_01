@@ -84,12 +84,19 @@ test("adding, completing (with Undo), reordering and reloading all leave Todo ex
 
   const startX = secondHandleBox.x + secondHandleBox.width / 2;
   const startY = secondHandleBox.y + secondHandleBox.height / 2;
-  // The pointer has to land in "first"'s TOP half: `dropIndexForPointer`'s
-  // own midpoint rule reads the bottom half as "after this row," which is
-  // exactly where "second" already sits — landing there would be a
-  // correct no-op, not the swap this test is asserting.
+  // The pointer has to land well inside "first"'s TOP EDGE BAND.
+  // `dropIndexForPointer` reads a row in three bands since issue #171: the
+  // top and bottom quarters reorder, and the middle half *nests* the
+  // dragged Task under this one. So there are two ways to get this wrong,
+  // and both look like a passing drag until you read the result — the
+  // bottom band means "after this row," which is where "second" already
+  // sits (a correct no-op, not the swap being asserted), and the middle
+  // band changes the Task's parent rather than its order.
+  //
+  // `height / 8`, not `height / 4`: a quarter is exactly the band boundary,
+  // and landing on a boundary is how this test failed once already.
   const endX = firstBox.x + firstBox.width / 2;
-  const endY = firstBox.y + firstBox.height / 4;
+  const endY = firstBox.y + firstBox.height / 8;
 
   await page.mouse.move(startX, startY);
   await page.mouse.down();
