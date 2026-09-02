@@ -1,4 +1,4 @@
-import type { Entry, EntryStore } from "@meologue/core";
+import type { Entry, EntryStore, Project, ProjectStore, Task, TaskStore } from "@meologue/core";
 import { PROTOCOL_VERSION } from "@meologue/core";
 import { QueryClient, QueryClientProvider, queryOptions } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -50,6 +50,79 @@ function createFakeStore(entries: Entry[] = []): EntryStore {
     edit: vi.fn(async () => {}),
     remove: vi.fn(async () => {}),
     getMany: vi.fn(async () => []),
+  };
+}
+
+// A minimal TaskStore double — issue #175's Export now reads Tasks
+// alongside Entries. Every method beyond list()/listCompleted() is a
+// trivial stub: no test in this file exercises Todo's own mutation paths
+// (those live in use-tasks.test.tsx and todo-page.test.tsx), so each just
+// has to satisfy the interface, the same reasoning use-tasks.test.tsx's
+// own createFakeStore gives for its untouched methods.
+function createFakeTaskStore(active: Task[] = [], completed: Task[] = []): TaskStore {
+  return {
+    list: vi.fn(async () => active),
+    listByProject: vi.fn(async () => []),
+    listChildren: vi.fn(async () => []),
+    listInSection: vi.fn(async () => []),
+    listDescendants: vi.fn(async () => []),
+    listCompleted: vi.fn(async () => completed),
+    get: vi.fn(async () => undefined),
+    upsert: vi.fn(async () => {}),
+    complete: vi.fn(async () => {}),
+    uncomplete: vi.fn(async () => {}),
+    rename: vi.fn(async () => {}),
+    reorder: vi.fn(async () => {}),
+    setDate: vi.fn(async () => {}),
+    setDeadline: vi.fn(async () => {}),
+    setDuration: vi.fn(async () => {}),
+    setPriority: vi.fn(async () => {}),
+    setLabelIds: vi.fn(async () => {}),
+    setProject: vi.fn(async () => {}),
+    setSection: vi.fn(async () => {}),
+    setParent: vi.fn(async () => {}),
+    advanceRecurring: vi.fn(async () => {}),
+    completeForever: vi.fn(async () => {}),
+    postpone: vi.fn(async () => {}),
+    remove: vi.fn(async () => {}),
+    pending: vi.fn(async () => []),
+    getCursor: vi.fn(async () => 0),
+    setCursor: vi.fn(async () => {}),
+    search: vi.fn(async () => []),
+  };
+}
+
+// A minimal ProjectStore double, mirroring createFakeTaskStore's own
+// reasoning above — only listProjects() is ever read by handleExport.
+function createFakeProjectStore(projects: Project[] = []): ProjectStore {
+  return {
+    listProjects: vi.fn(async () => projects),
+    getProject: vi.fn(async () => undefined),
+    upsertProjects: vi.fn(async () => {}),
+    renameProject: vi.fn(async () => {}),
+    setProjectColour: vi.fn(async () => {}),
+    setProjectDescription: vi.fn(async () => {}),
+    setProjectFavourite: vi.fn(async () => {}),
+    archiveProject: vi.fn(async () => {}),
+    unarchiveProject: vi.fn(async () => {}),
+    setProjectParent: vi.fn(async () => {}),
+    reorderProject: vi.fn(async () => {}),
+    removeProject: vi.fn(async () => {}),
+    pendingProjects: vi.fn(async () => []),
+    getProjectCursor: vi.fn(async () => 0),
+    setProjectCursor: vi.fn(async () => {}),
+    listSections: vi.fn(async () => []),
+    getSection: vi.fn(async () => undefined),
+    addSection: vi.fn(async () => {}),
+    renameSection: vi.fn(async () => {}),
+    setSectionDescription: vi.fn(async () => {}),
+    reorderSection: vi.fn(async () => {}),
+    deleteSection: vi.fn(async () => {}),
+    archiveSection: vi.fn(async () => {}),
+    unarchiveSection: vi.fn(async () => {}),
+    pendingSections: vi.fn(async () => []),
+    getSectionCursor: vi.fn(async () => 0),
+    setSectionCursor: vi.fn(async () => {}),
   };
 }
 
@@ -665,7 +738,12 @@ describe("SettingsPage", () => {
     });
 
     it("is enabled once the store resolves", async () => {
-      openEntryStoreMock.mockResolvedValue({ store: createFakeStore(), deviceId: "device-a" });
+      openEntryStoreMock.mockResolvedValue({
+        store: createFakeStore(),
+        taskStore: createFakeTaskStore(),
+        projectStore: createFakeProjectStore(),
+        deviceId: "device-a",
+      });
 
       renderPage();
 
@@ -674,7 +752,7 @@ describe("SettingsPage", () => {
       );
     });
 
-    it("reads every Entry, saves a zip, and shows a success toast", async () => {
+    it("reads every Entry, Task and Project, saves a zip, and shows a success toast", async () => {
       const entries: Entry[] = [
         {
           id: "e1",
@@ -687,7 +765,14 @@ describe("SettingsPage", () => {
         },
       ];
       const store = createFakeStore(entries);
-      openEntryStoreMock.mockResolvedValue({ store, deviceId: "device-a" });
+      const taskStore = createFakeTaskStore();
+      const projectStore = createFakeProjectStore();
+      openEntryStoreMock.mockResolvedValue({
+        store,
+        taskStore,
+        projectStore,
+        deviceId: "device-a",
+      });
       const successToast = vi.spyOn(toast, "success");
 
       renderPage();
@@ -698,6 +783,12 @@ describe("SettingsPage", () => {
 
       await waitFor(() => expect(saveFileMock).toHaveBeenCalledTimes(1));
       expect(store.list).toHaveBeenCalledTimes(1);
+      // Issue #175: Export now reads every Task and Project alongside
+      // every Entry — a backup that silently omitted Tasks would fail ADR
+      // 0016's own "quietly omits things is worse than none" rule.
+      expect(taskStore.list).toHaveBeenCalledTimes(1);
+      expect(taskStore.listCompleted).toHaveBeenCalledTimes(1);
+      expect(projectStore.listProjects).toHaveBeenCalledTimes(1);
       const call = saveFileMock.mock.calls[0];
       expect(call).toBeDefined();
       const [fileName, bytes] = call ?? ["", new Uint8Array()];
@@ -714,7 +805,12 @@ describe("SettingsPage", () => {
     // backup existed when nothing had been written anywhere.
     it("raises no toast at all — neither success nor error — when the user cancels the save", async () => {
       const store = createFakeStore([]);
-      openEntryStoreMock.mockResolvedValue({ store, deviceId: "device-a" });
+      openEntryStoreMock.mockResolvedValue({
+        store,
+        taskStore: createFakeTaskStore(),
+        projectStore: createFakeProjectStore(),
+        deviceId: "device-a",
+      });
       saveFileMock.mockResolvedValue("cancelled");
       const successToast = vi.spyOn(toast, "success");
       const errorToast = vi.spyOn(toast, "error");
@@ -732,7 +828,12 @@ describe("SettingsPage", () => {
 
     it("shows an error toast carrying the real error when saving fails", async () => {
       const store = createFakeStore([]);
-      openEntryStoreMock.mockResolvedValue({ store, deviceId: "device-a" });
+      openEntryStoreMock.mockResolvedValue({
+        store,
+        taskStore: createFakeTaskStore(),
+        projectStore: createFakeProjectStore(),
+        deviceId: "device-a",
+      });
       saveFileMock.mockRejectedValue(new Error("Export isn't supported on Android yet."));
       const errorToast = vi.spyOn(toast, "error");
 

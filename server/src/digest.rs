@@ -474,6 +474,7 @@ async fn generate_digest_body(
     period: Period,
     start: NaiveDate,
     entries: &[DigestEntry],
+    tasks: &DigestTasks,
     tz: Tz,
     context_window: u32,
 ) -> anyhow::Result<GeneratedDigest> {
@@ -483,7 +484,7 @@ async fn generate_digest_body(
     let mut bodies = Vec::with_capacity(chunks.len());
     let mut entry_ids: Vec<Uuid> = Vec::with_capacity(entries.len());
     let mut any_chunk_skipped = false;
-    for chunk in &chunks {
+    for (i, chunk) in chunks.iter().enumerate() {
         // The single-chunk case renders the Period's own range, unchanged
         // from before chunking existed; only a genuine split names a
         // chunk's own narrower span. See this function's own doc comment
@@ -493,7 +494,25 @@ async fn generate_digest_body(
         } else {
             chunk_range_label(chunk, tz)
         };
-        let messages = build_messages(&range, chunk, tz);
+        // Issue #175: Task facts ride only the *last* chunk's own call,
+        // never every chunk's — the overwhelmingly common case is exactly
+        // one chunk (`chunks.len() == 1`, so "last" and "only" are the
+        // same call), and the rare multi-chunk case would otherwise repeat
+        // "you completed X" once per chunk in the final concatenated body
+        // (`bodies.join("\n\n")` below), which is exactly the scoreboard
+        // this ticket's own "reads as prose" framing argues against. The
+        // accepted cost: if the last chunk is the one issue #137 skips
+        // (a transport error or a rejected reply), this Period's Digest
+        // loses Task coverage along with that chunk's own Entries — no
+        // worse than losing any other chunk's material, and no separate
+        // mechanism exists (or is worth building) to retry Task facts on
+        // their own.
+        let tasks_block = if i == chunks.len() - 1 {
+            render_tasks_block(tasks)
+        } else {
+            None
+        };
+        let messages = build_messages(&range, chunk, tasks_block.as_deref(), tz);
 
         // Issue #137: a chunk's own failure — transport error or a
         // rejected reply — is caught here, not propagated with `?`, so one
@@ -791,6 +810,22 @@ async fn write_digest_for(
         return false;
     }
 
+    // Issue #175: Task facts alongside the Entries. A failure here must
+    // not cost the Period its Digest — Entries remain this worker's
+    // primary subject (ADR 0027), and unlike `select_entries` above, whose
+    // failure genuinely means "nothing to write about," a failed Task
+    // query only means "this Digest won't mention Tasks this time," which
+    // degrades cleanly to `DigestTasks::default()` (see that type's own
+    // doc comment) rather than consuming an attempt or losing a
+    // perfectly-writable Digest over an unrelated table.
+    let tasks = match select_digest_tasks(pool, period, start, from_utc, to_utc).await {
+        Ok(tasks) => tasks,
+        Err(err) => {
+            tracing::warn!(error = ?err, period = period.as_str(), %start, "failed to load Task facts for a digest; continuing without them");
+            DigestTasks::default()
+        }
+    };
+
     // `generate_digest_body` (issue #135, chunked per issue #136, made
     // partiality-tolerant per issue #137) is the only path from these
     // Entries to a body: it splits them into one or more chunks against
@@ -805,16 +840,25 @@ async fn write_digest_for(
     // full reasoning. Total failure is treated exactly as a failed chat
     // call already was before issue #135: attempt consumed, nothing
     // written, retried on a later tick within `MAX_ATTEMPTS`.
-    let generated =
-        match generate_digest_body(client, period, start, &entries, tz, context_window).await {
-            Ok(result) => result,
-            Err(err) => {
-                let count = attempts.entry(key).or_insert(0);
-                *count += 1;
-                tracing::warn!(error = ?err, period = period.as_str(), %start, attempt = *count, "digest body generation failed");
-                return false;
-            }
-        };
+    let generated = match generate_digest_body(
+        client,
+        period,
+        start,
+        &entries,
+        &tasks,
+        tz,
+        context_window,
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(err) => {
+            let count = attempts.entry(key).or_insert(0);
+            *count += 1;
+            tracing::warn!(error = ?err, period = period.as_str(), %start, attempt = *count, "digest body generation failed");
+            return false;
+        }
+    };
 
     match insert_digest(
         pool,
@@ -899,6 +943,176 @@ async fn select_entries(
     .await
 }
 
+/// One Task fact fed into a Digest's chat call (issue #175) — the Task's
+/// own text, and, for an overdue Task, the date or deadline that made it
+/// so (`None` for a completed one; `render_tasks_block` below reads that
+/// distinction directly rather than needing a second type). Deliberately
+/// carries only what the prompt needs to say something true and specific
+/// ("renew the passport, which was due 2026-08-20") — not the whole `Task`
+/// row Export's own `ExportManifestTask` copies losslessly: a Digest is
+/// prose written *about* a Task, never a record of it, so it has no reason
+/// to carry a priority, a Label list, or an id the model would have
+/// nothing to do with.
+#[derive(Debug, Clone, PartialEq, Default, sqlx::FromRow)]
+struct DigestTaskFact {
+    content: String,
+    due: Option<NaiveDate>,
+}
+
+/// What a Digest's chat call is told about Tasks, alongside the Entries it
+/// already reads — `completed` (issue #175's first half: what got done) and
+/// `overdue` (the second half: what didn't, and whose date or deadline had
+/// already passed by the Period's own end). `Default` is what lets
+/// `write_digest_for`/`run_regenerate` degrade to "no Task facts this
+/// time" without failing the whole Digest when the Task queries below
+/// error (see their own call sites' comments) — an empty `DigestTasks` is
+/// indistinguishable, downstream, from "this Period genuinely had no Task
+/// activity," which is the correct degrade: Entries remain this worker's
+/// primary subject (ADR 0027), and Task coverage is additive.
+#[derive(Debug, Clone, Default)]
+struct DigestTasks {
+    completed: Vec<DigestTaskFact>,
+    overdue: Vec<DigestTaskFact>,
+}
+
+impl DigestTasks {
+    fn is_empty(&self) -> bool {
+        self.completed.is_empty() && self.overdue.is_empty()
+    }
+}
+
+/// Both Task queries a Digest needs, run together — `select_entries`'s own
+/// sibling, one level up (it composes the two queries below rather than
+/// being a third query itself). `from_utc`/`to_utc` are the same UTC
+/// instants `select_entries` was already called with for this Period,
+/// passed in rather than re-derived, so a completed Task's own window
+/// agrees with an Entry's by construction; `start` is used to compute the
+/// Period's own end date (`period::period_end`) for the overdue query,
+/// which reasons in local calendar dates rather than UTC instants (see
+/// `select_overdue_tasks`'s own doc comment for why).
+async fn select_digest_tasks(
+    pool: &PgPool,
+    period: Period,
+    start: NaiveDate,
+    from_utc: DateTime<Utc>,
+    to_utc: DateTime<Utc>,
+) -> sqlx::Result<DigestTasks> {
+    let end = period::period_end(period, start);
+    let completed = select_completed_tasks(pool, from_utc, to_utc).await?;
+    let overdue = select_overdue_tasks(pool, start, end).await?;
+    Ok(DigestTasks { completed, overdue })
+}
+
+/// Tasks completed inside `[from_utc, to_utc)` — the identical half-open
+/// window `select_entries` reads, since `completed_at` (like `created_at`)
+/// is a real UTC instant, not a floating date. `deleted_at is null`
+/// mirrors `select_entries`'s own guard: a Task deleted after being
+/// completed has nothing left worth telling the reader they finished.
+async fn select_completed_tasks(
+    pool: &PgPool,
+    from_utc: DateTime<Utc>,
+    to_utc: DateTime<Utc>,
+) -> sqlx::Result<Vec<DigestTaskFact>> {
+    sqlx::query_scalar::<_, String>(
+        "select content from tasks \
+         where deleted_at is null and completed_at is not null \
+           and completed_at >= $1 and completed_at < $2 \
+         order by completed_at asc",
+    )
+    .bind(from_utc)
+    .bind(to_utc)
+    .fetch_all(pool)
+    .await
+    .map(|rows| {
+        rows.into_iter()
+            .map(|content| DigestTaskFact { content, due: None })
+            .collect()
+    })
+}
+
+/// Active Tasks (not completed, not deleted) whose `date` or `deadline`
+/// falls inside `[period_start, period_end]`, the Period's own inclusive
+/// local calendar range — deliberately **not** "every Task overdue as of
+/// today," which would repeat the same still-open Task in every Digest
+/// written from the Period it first slipped in onwards, forever, the exact
+/// scoreboard-that-never-clears this ticket's own "reads as prose about
+/// the stretch of time" framing argues against. Scoping to the Period's
+/// own window instead makes "overdue in its Period" mean "the reader's
+/// plan for this stretch of time didn't hold," which is a fact about that
+/// stretch specifically, told once.
+///
+/// `date`/`deadline` are floating text (`YYYY-MM-DD` or
+/// `YYYY-MM-DDTHH:MM` for `date`, always `YYYY-MM-DD` for `deadline` —
+/// `../../packages/core/src/task-types.ts`'s own doc comments), compared
+/// here as local calendar dates against `period_start`/`period_end`
+/// (themselves already local dates, `period::period_bounds`'s own
+/// currency) — never converted through a UTC offset, the same "a floating
+/// date is read exactly as stored" rule `tasks-file.ts` follows on the
+/// Export side of this ticket for the identical reason: there is no
+/// instant to convert, only a plan.
+async fn select_overdue_tasks(
+    pool: &PgPool,
+    period_start: NaiveDate,
+    period_end: NaiveDate,
+) -> sqlx::Result<Vec<DigestTaskFact>> {
+    sqlx::query_as::<_, DigestTaskFact>(
+        "select content, coalesce(substring(date, 1, 10)::date, deadline::date) as due \
+         from tasks \
+         where deleted_at is null and completed_at is null \
+           and ( \
+             (date is not null and substring(date, 1, 10)::date between $1 and $2) \
+             or (deadline is not null and deadline::date between $1 and $2) \
+           ) \
+         order by due asc, id asc",
+    )
+    .bind(period_start)
+    .bind(period_end)
+    .fetch_all(pool)
+    .await
+}
+
+/// Renders `tasks` into the short block of facts appended to a Digest
+/// chat call's own user message — `None` when there is nothing to say
+/// (`generate_digest_body` then appends nothing at all, exactly the
+/// "silence when there's nothing to add" convention the harness tools use
+/// for a complete page). Deliberately terse and fact-only: this is input
+/// the model reads and reworks into its own prose
+/// (`digest_system_prompt`'s own instruction, extended by this ticket, to
+/// weave these facts in rather than list them) — it is not itself the
+/// Digest's prose, so it reads like a note, not a draft.
+///
+/// Both lines are written even when one half is empty — "Completed: none"
+/// rather than omitting the line — so the model is told plainly that
+/// nothing was finished, instead of being left to either invent a
+/// completion or stay silent about a stretch that genuinely had none;
+/// CONTEXT.md's "an Answer with no Grounding behind it says so plainly"
+/// rule, applied here to Task coverage instead of Reflection's Grounding.
+fn render_tasks_block(tasks: &DigestTasks) -> Option<String> {
+    if tasks.is_empty() {
+        return None;
+    }
+    let describe = |facts: &[DigestTaskFact]| -> String {
+        if facts.is_empty() {
+            return "none".to_string();
+        }
+        facts
+            .iter()
+            .map(|fact| match fact.due {
+                Some(due) => format!("{} (was due {})", fact.content, due.format("%Y-%m-%d")),
+                None => fact.content.clone(),
+            })
+            .collect::<Vec<_>>()
+            .join("; ")
+    };
+    Some(format!(
+        "Tasks from the user's to-do list, for the same stretch of time:\n\
+         - Completed: {}.\n\
+         - Still open, past their date or deadline: {}.",
+        describe(&tasks.completed),
+        describe(&tasks.overdue),
+    ))
+}
+
 /// Inserts the background worker's own Digest for one Period, returning
 /// whether a row was actually written. Always `revision = 1` — the worker
 /// generates, it never regenerates (issue #132 / ADR 0039: only
@@ -977,7 +1191,13 @@ fn digest_system_prompt() -> &'static str {
      title, a preamble, headings or bullet points — just the prose itself. Write plain prose \
      with no Markdown: no asterisks, no underscores, no backticks. A Digest is meant to read as \
      one continuous piece of writing about a stretch of time, and formatting marks would make \
-     it read as a document instead."
+     it read as a document instead. You may also be given a short list of Tasks the user \
+     completed or left overdue during the same stretch of time. Weave whatever is worth \
+     mentioning into the same continuous prose — never as a separate list, a heading, or a \
+     count of items done and not done: a Digest that reports task activity as a scoreboard has \
+     stopped being a Digest. Use only the Tasks you are actually given — invent nothing there \
+     either — and if none are given, or none of them are worth mentioning, say nothing about \
+     tasks at all rather than inventing something to say."
 }
 
 /// The Period's own inclusive local date range, exactly as this module
@@ -1057,12 +1277,33 @@ fn chunk_range_label(chunk: &[DigestEntry], tz: Tz) -> String {
 /// "what date it's labelled with when shown to the model" answers to the
 /// same timezone, by construction, rather than by two call sites happening
 /// to agree.
-fn build_messages(range: &str, entries: &[DigestEntry], tz: Tz) -> Vec<ChatMessage> {
+///
+/// `tasks_block` (issue #175) is `render_tasks_block`'s own output,
+/// `None` when this call carries no Task facts at all — appended after
+/// the Entries block, with a blank line between the two, rather than
+/// interleaved with it: the Entries block's own shape (`[YYYY-MM-DD]
+/// body`, blank-line separated) is unrelated to a Task fact's, and
+/// keeping them as two distinct paragraphs is what lets the system
+/// prompt tell the model "this second part is a different kind of
+/// material" without either block needing to say so itself.
+fn build_messages(
+    range: &str,
+    entries: &[DigestEntry],
+    tasks_block: Option<&str>,
+    tz: Tz,
+) -> Vec<ChatMessage> {
     let entries_block = entries
         .iter()
         .map(|entry| render_entry(entry, tz))
         .collect::<Vec<_>>()
         .join("\n\n");
+
+    let mut user_content =
+        format!("Here is everything the user wrote from {range}:\n\n{entries_block}");
+    if let Some(block) = tasks_block {
+        user_content.push_str("\n\n");
+        user_content.push_str(block);
+    }
 
     vec![
         ChatMessage {
@@ -1071,7 +1312,7 @@ fn build_messages(range: &str, entries: &[DigestEntry], tz: Tz) -> Vec<ChatMessa
         },
         ChatMessage {
             role: "user".to_string(),
-            content: format!("Here is everything the user wrote from {range}:\n\n{entries_block}"),
+            content: user_content,
         },
     ]
 }
@@ -1623,6 +1864,23 @@ async fn run_regenerate(
     let entries = select_entries(pool, from_utc, to_utc).await?;
 
     if !entries.is_empty() {
+        // Issue #175: same degrade-on-failure as `write_digest_for` — see
+        // that call site's own comment. Deliberately still gated on
+        // `!entries.is_empty()`, unchanged from before this ticket: a
+        // Period with Task activity but no Entries at all still produces
+        // no Digest, on the same "Entries remain this worker's primary
+        // subject" reasoning `select_digest_tasks`'s own doc comment
+        // gives — widening *when* a Digest gets written at all to include
+        // Task-only Periods is a bigger, separate decision this ticket
+        // does not make.
+        let tasks = match select_digest_tasks(pool, period, date, from_utc, to_utc).await {
+            Ok(tasks) => tasks,
+            Err(err) => {
+                tracing::warn!(error = ?err, period = period.as_str(), %date, "failed to load Task facts for a digest regenerate; continuing without them");
+                DigestTasks::default()
+            }
+        };
+
         // `generate_digest_body` (issue #135, chunked per issue #136) is
         // the same single path `write_digest_for` goes through — a
         // rejected reply (empty, whitespace-only, or fence-only), or any
@@ -1632,7 +1890,8 @@ async fn run_regenerate(
         // minted, so an existing good revision is never shadowed by a
         // blank one (the exact failure this ticket was filed against).
         let generated =
-            generate_digest_body(client, period, date, &entries, tz, context_window).await?;
+            generate_digest_body(client, period, date, &entries, &tasks, tz, context_window)
+                .await?;
         regenerate_insert(
             pool,
             period,
@@ -1694,9 +1953,14 @@ async fn regenerate_insert(
 
 #[cfg(test)]
 mod tests {
-    use super::{DigestEntry, digest_system_prompt, render_entry};
-    use chrono::TimeZone;
+    use super::{
+        DigestEntry, DigestTaskFact, DigestTasks, digest_system_prompt, render_entry,
+        render_tasks_block, select_completed_tasks, select_digest_tasks, select_overdue_tasks,
+    };
+    use crate::period::Period;
+    use chrono::{DateTime, NaiveDate, TimeZone};
     use chrono_tz::Tz;
+    use sqlx::PgPool;
     use uuid::Uuid;
 
     fn entry(body: &str) -> DigestEntry {
@@ -1807,5 +2071,283 @@ mod tests {
         );
         assert!(prompt.contains("no Markdown"));
         assert!(prompt.contains("no asterisks"));
+    }
+
+    // -------------------------------------------------------------------
+    // Issue #175: a Digest covers the Tasks completed and overdue in its
+    // Period, and is told plainly not to turn that coverage into a
+    // scoreboard.
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn the_system_prompt_forbids_a_task_scoreboard_and_invented_tasks() {
+        let prompt = digest_system_prompt();
+        assert!(prompt.contains("scoreboard"));
+        assert!(
+            prompt.contains("Use only the Tasks you are actually given — invent nothing there"),
+            "the prompt must extend the same invent-nothing discipline it already gives \
+             Entries to Task coverage, not add a second, weaker rule: {prompt}"
+        );
+    }
+
+    fn fact(content: &str) -> DigestTaskFact {
+        DigestTaskFact {
+            content: content.to_string(),
+            due: None,
+        }
+    }
+
+    fn overdue_fact(content: &str, due: (i32, u32, u32)) -> DigestTaskFact {
+        DigestTaskFact {
+            content: content.to_string(),
+            due: Some(NaiveDate::from_ymd_opt(due.0, due.1, due.2).unwrap()),
+        }
+    }
+
+    #[test]
+    fn no_task_activity_at_all_renders_nothing_to_append() {
+        assert_eq!(render_tasks_block(&DigestTasks::default()), None);
+    }
+
+    #[test]
+    fn a_completed_task_with_nothing_overdue_says_so_honestly_rather_than_omitting_the_line() {
+        let tasks = DigestTasks {
+            completed: vec![fact("buy milk")],
+            overdue: vec![],
+        };
+        let block = render_tasks_block(&tasks).expect("some Task activity");
+        assert!(block.contains("Completed: buy milk."));
+        assert!(
+            block.contains("Still open, past their date or deadline: none."),
+            "an empty half must say so explicitly, the same 'no Grounding says so plainly' \
+             rule CONTEXT.md gives Reflection: {block}"
+        );
+    }
+
+    #[test]
+    fn an_overdue_task_names_the_date_or_deadline_that_passed() {
+        let tasks = DigestTasks {
+            completed: vec![],
+            overdue: vec![overdue_fact("renew passport", (2026, 8, 20))],
+        };
+        let block = render_tasks_block(&tasks).expect("some Task activity");
+        assert!(block.contains("Completed: none."));
+        assert!(block.contains("renew passport (was due 2026-08-20)"));
+    }
+
+    #[test]
+    fn several_tasks_on_one_side_are_joined_rather_than_only_the_first_kept() {
+        let tasks = DigestTasks {
+            completed: vec![fact("buy milk"), fact("call plumber")],
+            overdue: vec![],
+        };
+        let block = render_tasks_block(&tasks).expect("some Task activity");
+        assert!(block.contains("Completed: buy milk; call plumber."));
+    }
+
+    async fn insert_task(
+        pool: &PgPool,
+        id: Uuid,
+        content: &str,
+        completed_at: Option<DateTime<chrono::Utc>>,
+        date: Option<&str>,
+        deadline: Option<&str>,
+    ) {
+        sqlx::query(
+            "insert into tasks (id, device_id, content, completed_at, order_key, created_at, date, deadline) \
+             values ($1, $2, $3, $4, 'a', now(), $5, $6)",
+        )
+        .bind(id)
+        .bind(Uuid::new_v4())
+        .bind(content)
+        .bind(completed_at)
+        .bind(date)
+        .bind(deadline)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    fn at(y: i32, m: u32, d: u32) -> DateTime<chrono::Utc> {
+        Tz::UTC
+            .with_ymd_and_hms(y, m, d, 12, 0, 0)
+            .unwrap()
+            .with_timezone(&chrono::Utc)
+    }
+
+    #[sqlx::test]
+    async fn select_completed_tasks_reads_only_what_was_completed_inside_the_window(pool: PgPool) {
+        insert_task(&pool, Uuid::new_v4(), "inside", Some(at(2026, 3, 10)), None, None).await;
+        insert_task(&pool, Uuid::new_v4(), "before", Some(at(2026, 2, 28)), None, None).await;
+        insert_task(&pool, Uuid::new_v4(), "still open", None, None, None).await;
+
+        let facts = select_completed_tasks(&pool, at(2026, 3, 1), at(2026, 4, 1))
+            .await
+            .unwrap();
+
+        assert_eq!(facts, vec![fact("inside")]);
+    }
+
+    #[sqlx::test]
+    async fn select_completed_tasks_excludes_a_deleted_task(pool: PgPool) {
+        let id = Uuid::new_v4();
+        insert_task(&pool, id, "deleted", Some(at(2026, 3, 10)), None, None).await;
+        sqlx::query("update tasks set deleted_at = now() where id = $1")
+            .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let facts = select_completed_tasks(&pool, at(2026, 3, 1), at(2026, 4, 1))
+            .await
+            .unwrap();
+
+        assert!(facts.is_empty());
+    }
+
+    #[sqlx::test]
+    async fn select_overdue_tasks_matches_on_date_or_deadline_falling_in_the_period(pool: PgPool) {
+        insert_task(
+            &pool,
+            Uuid::new_v4(),
+            "by date",
+            None,
+            Some("2026-03-15"),
+            None,
+        )
+        .await;
+        insert_task(
+            &pool,
+            Uuid::new_v4(),
+            "by deadline",
+            None,
+            None,
+            Some("2026-03-20"),
+        )
+        .await;
+        insert_task(
+            &pool,
+            Uuid::new_v4(),
+            "outside the period",
+            None,
+            Some("2026-04-01"),
+            None,
+        )
+        .await;
+
+        let start = NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
+        let end = NaiveDate::from_ymd_opt(2026, 3, 31).unwrap();
+        let facts = select_overdue_tasks(&pool, start, end).await.unwrap();
+
+        assert_eq!(
+            facts,
+            vec![
+                overdue_fact("by date", (2026, 3, 15)),
+                overdue_fact("by deadline", (2026, 3, 20)),
+            ]
+        );
+    }
+
+    /// A `date` carrying a time (`YYYY-MM-DDTHH:MM`, task-types.ts's own
+    /// floating-time shape) must still compare correctly — this is
+    /// `substring(date, 1, 10)::date` doing its job, not a coincidence of
+    /// the fixture only ever using date-only strings elsewhere in this
+    /// suite.
+    #[sqlx::test]
+    async fn select_overdue_tasks_reads_the_date_part_of_a_timed_date(pool: PgPool) {
+        insert_task(
+            &pool,
+            Uuid::new_v4(),
+            "timed",
+            None,
+            Some("2026-03-15T09:30"),
+            None,
+        )
+        .await;
+
+        let start = NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
+        let end = NaiveDate::from_ymd_opt(2026, 3, 31).unwrap();
+        let facts = select_overdue_tasks(&pool, start, end).await.unwrap();
+
+        assert_eq!(facts, vec![overdue_fact("timed", (2026, 3, 15))]);
+    }
+
+    #[sqlx::test]
+    async fn select_overdue_tasks_excludes_a_completed_task_even_if_its_date_falls_in_the_period(
+        pool: PgPool,
+    ) {
+        insert_task(
+            &pool,
+            Uuid::new_v4(),
+            "done anyway",
+            Some(at(2026, 3, 12)),
+            Some("2026-03-15"),
+            None,
+        )
+        .await;
+
+        let start = NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
+        let end = NaiveDate::from_ymd_opt(2026, 3, 31).unwrap();
+        let facts = select_overdue_tasks(&pool, start, end).await.unwrap();
+
+        assert!(facts.is_empty());
+    }
+
+    /// Issue #175's own scoping decision, stated in `select_overdue_tasks`'s
+    /// doc comment: a Task that was already overdue in an earlier Period
+    /// and still hasn't been done does not appear again here — only a date
+    /// or deadline actually falling inside *this* window counts, so the
+    /// same Task is never repeated across every later Digest until it's
+    /// finally completed.
+    #[sqlx::test]
+    async fn select_overdue_tasks_does_not_repeat_a_task_overdue_since_an_earlier_period(
+        pool: PgPool,
+    ) {
+        insert_task(
+            &pool,
+            Uuid::new_v4(),
+            "overdue since January",
+            None,
+            Some("2026-01-05"),
+            None,
+        )
+        .await;
+
+        let march_start = NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
+        let march_end = NaiveDate::from_ymd_opt(2026, 3, 31).unwrap();
+        let facts = select_overdue_tasks(&pool, march_start, march_end)
+            .await
+            .unwrap();
+
+        assert!(facts.is_empty());
+    }
+
+    #[sqlx::test]
+    async fn select_digest_tasks_composes_both_queries_over_the_periods_own_bounds(pool: PgPool) {
+        insert_task(&pool, Uuid::new_v4(), "finished it", Some(at(2026, 3, 10)), None, None).await;
+        insert_task(
+            &pool,
+            Uuid::new_v4(),
+            "still owed",
+            None,
+            Some("2026-03-20"),
+            None,
+        )
+        .await;
+
+        let from_utc = at(2026, 3, 1);
+        let to_utc = at(2026, 4, 1);
+        let tasks = select_digest_tasks(
+            &pool,
+            Period::Month,
+            NaiveDate::from_ymd_opt(2026, 3, 1).unwrap(),
+            from_utc,
+            to_utc,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(tasks.completed, vec![fact("finished it")]);
+        assert_eq!(tasks.overdue, vec![overdue_fact("still owed", (2026, 3, 20))]);
     }
 }

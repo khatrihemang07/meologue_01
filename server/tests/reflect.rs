@@ -268,6 +268,23 @@ async fn insert_entry_at(pool: &PgPool, id: Uuid, body: &str, created_at: DateTi
         .unwrap();
 }
 
+// Issue #175: a distinctive live Task, for the "a non-task Question pulls
+// no task context" tests below — `order_key` is a plain `text` column
+// with no fractional-index contract this file needs to honour, so any
+// non-empty string satisfies it.
+async fn insert_task(pool: &PgPool, id: Uuid, content: &str) {
+    sqlx::query(
+        "insert into tasks (id, device_id, content, order_key, created_at) \
+         values ($1, $2, $3, 'a', now())",
+    )
+    .bind(id)
+    .bind(Uuid::new_v4())
+    .bind(content)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
 /// One parsed SSE frame — `event: <name>`, `data: <json>` — from
 /// `/v1/reflect`'s streamed response body.
 #[derive(Debug, Clone)]
@@ -2470,14 +2487,122 @@ async fn the_active_tool_set_is_named_in_the_system_prompt(pool: PgPool) {
     assert_eq!(system_message.role, "system");
     // Issue #94's own acceptance criterion: "each tool contributes its own
     // description to the model's instructions" — all three of the loop's
-    // tools must appear, not just the one issue #93 shipped first.
-    for tool_name in ["entries_in_range", "search_entries", "similar_entries"] {
+    // tools must appear, not just the one issue #93 shipped first. Issue
+    // #175 adds `list_tasks` as a fourth name this same claim now covers.
+    for tool_name in ["entries_in_range", "search_entries", "similar_entries", "list_tasks"] {
         assert!(
             system_message.content.contains(tool_name),
             "the active tool set should be described in the system prompt: {}",
             system_message.content
         );
     }
+}
+
+/// Issue #175's own central acceptance criterion, stated directly: "a
+/// Question that is not about tasks does not pull task context." ADR
+/// 0023's fixed three-source fan-out — retrieval run for *every*
+/// Question — is long since superseded by ADR 0031's tool loop, where a
+/// tool only ever runs because the model's own reply asked for it
+/// (`<tool_call>`). This test proves that structurally rather than by
+/// inspection: a live Task with unmistakable content sits in the
+/// database throughout, the scripted model never once emits a
+/// `<tool_call>` naming `list_tasks`, and the Task's own content string
+/// is asserted absent from *every* message sent to the model across the
+/// whole run — the only way that content could ever reach a chat call is
+/// via a `list_tasks` tool result appended to the Conversation, so its
+/// absence from every call is proof the tool was never invoked, not
+/// merely that its result wasn't quoted back in the final Answer.
+#[sqlx::test]
+async fn a_non_task_question_pulls_no_task_context(pool: PgPool) {
+    insert_task(&pool, Uuid::new_v4(), "zzyzx-unmistakable-task-marker").await;
+
+    // Two identical plain-prose replies: issue #103's structural
+    // corrective turn fires on any zero-tool-call Answer (this reply
+    // calls no tool at all), so the loop asks a second time to confirm it
+    // before treating it as the real Answer — the same shape
+    // `a_chat_only_server_answers_without_offering_similar_entries` above
+    // already relies on for an identical reason.
+    let chat = Arc::new(FakeChatClient::new([
+        "That sounds like a difficult feeling to sit with.",
+        "That sounds like a difficult feeling to sit with.",
+    ]));
+    let reflect = reflect_state(chat.clone());
+
+    let (status, body) = post_reflect(
+        &pool,
+        Some(reflect),
+        json!({ "protocol_version": 5, "question": "I've been feeling anxious lately." }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["answer"],
+        "That sounds like a difficult feeling to sit with."
+    );
+
+    for call_index in 0..chat.call_count() {
+        for message in chat.nth_call(call_index) {
+            assert!(
+                !message.content.contains("zzyzx-unmistakable-task-marker"),
+                "a non-task Question must never surface Task content in any chat call, but call \
+                 {call_index}'s {:?} message did: {}",
+                message.role,
+                message.content
+            );
+        }
+    }
+
+    // The wire response's own `grounding_entry_ids` is specifically an
+    // Entry-ids collection (`ToolOutcome::entry_ids`'s own doc comment,
+    // `harness/tools/mod.rs`) — a Task could never appear there even if
+    // `list_tasks` had been called, so this only confirms no Entry-facing
+    // tool ran either, which the zero-tool-call script above already
+    // guarantees; kept as a belt-and-braces check on the same claim.
+    assert_eq!(grounding_ids(&body), Vec::<Uuid>::new());
+}
+
+/// The positive half of the same claim: when a Question *is* about
+/// something the user said they'd do, the model can choose `list_tasks`
+/// and read a real Task back — proving the tool actually works end to
+/// end through the loop, not merely that it's declared in the prompt.
+#[sqlx::test]
+async fn a_task_question_can_call_list_tasks_and_read_a_real_task(pool: PgPool) {
+    insert_task(&pool, Uuid::new_v4(), "renew the passport").await;
+
+    let chat = Arc::new(FakeChatClient::new([
+        tool_call_tag("list_tasks", json!({"status": "active"})).as_str(),
+        "You still need to renew the passport.",
+    ]));
+    let reflect = reflect_state(chat.clone());
+
+    let (status, body) = post_reflect(
+        &pool,
+        Some(reflect),
+        json!({ "protocol_version": 5, "question": "What did I say I'd still do?" }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["answer"], "You still need to renew the passport.");
+
+    // The tool result that fed the second chat call must actually carry
+    // the Task's own text — proving `list_tasks` really queried the
+    // database rather than the loop merely accepting an unquestioned
+    // tool-call tag. Tool results are carried as a `user` message under
+    // this harness's own prompted protocol (ADR 0032: "tool calls are
+    // carried in the prompt, not the wire" — `prompted.rs` wraps a
+    // `Message::ToolResult` as `role: "user"`), so this looks for the
+    // content directly rather than filtering on a `"tool"` role that
+    // never appears on this wire.
+    let second_call = chat.nth_call(1);
+    assert!(
+        second_call
+            .iter()
+            .any(|message| message.content.contains("renew the passport")),
+        "the second chat call should have read list_tasks's own result naming the Task: {:?}",
+        second_call
+    );
 }
 
 /// Issue #130's central acceptance criterion: a Server configured with a

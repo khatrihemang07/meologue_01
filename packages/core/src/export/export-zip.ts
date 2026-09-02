@@ -1,8 +1,11 @@
 import { strToU8, zipSync } from "fflate";
+import type { Project } from "../project-types";
+import type { Task } from "../task-types";
 import type { Entry } from "../types";
 import { groupEntriesIntoDayFiles } from "./day-file";
 import { buildManifest } from "./manifest";
 import { toLocalParts } from "./offset";
+import { renderTasksFile } from "./tasks-file";
 
 export interface ExportOptions {
   deviceId: string;
@@ -38,28 +41,40 @@ export function exportFileName(now: Date, offsetMinutes: number): string {
 }
 
 /**
- * Turns every Entry passed in into zip bytes: one `entries/<YYYY-MM-DD>.txt`
- * per local day plus a lossless `manifest.json` (day-file.ts, manifest.ts).
- * Pure and platform-free — no DOM, no Node built-ins — so it's exercised
- * directly by unit tests; only delivering the resulting bytes to disk is
- * platform-specific (`@/platform/save-file` in apps/web).
+ * Turns every Entry and Task passed in into zip bytes: one
+ * `entries/<YYYY-MM-DD>.txt` per local day, one `tasks.txt` grouped by
+ * Project (day-file.ts, tasks-file.ts), plus a lossless `manifest.json`
+ * covering both (manifest.ts). Pure and platform-free — no DOM, no Node
+ * built-ins — so it's exercised directly by unit tests; only delivering
+ * the resulting bytes to disk is platform-specific
+ * (`@/platform/save-file` in apps/web).
  *
- * `entries` is expected to be every Entry the store holds
- * (`EntryStore.list()`), never a search-narrowed subset — a backup that
- * silently omits things is worse than none, so this function has no
- * filtering parameter for a caller to accidentally pass one through.
+ * `entries`/`tasks`/`projects` are expected to be every row the respective
+ * store holds (`EntryStore.list()`, `TaskStore.list()` +
+ * `TaskStore.listCompleted()`, `ProjectStore.listProjects()`), never a
+ * search-narrowed subset — a backup that silently omits things is worse
+ * than none (ADR 0016, extended to Tasks by issue #175), so this function
+ * has no filtering parameter for a caller to accidentally pass one
+ * through.
  */
-export function exportEntriesToZip(entries: Entry[], options: ExportOptions): ExportResult {
+export function exportEntriesToZip(
+  entries: Entry[],
+  tasks: Task[],
+  projects: Project[],
+  options: ExportOptions,
+): ExportResult {
   const { deviceId, now, utcOffsetMinutes } = options;
   const { files, fileForEntry } = groupEntriesIntoDayFiles(entries, utcOffsetMinutes);
-  const manifest = buildManifest(entries, fileForEntry, {
+  const manifest = buildManifest(entries, fileForEntry, tasks, {
     deviceId,
     exportedAt: now.toISOString(),
     offsetMinutes: utcOffsetMinutes,
   });
+  const tasksFile = renderTasksFile(tasks, projects, utcOffsetMinutes);
 
   const zipInput: Record<string, Uint8Array> = {
     "manifest.json": strToU8(JSON.stringify(manifest, null, 2)),
+    [tasksFile.path]: strToU8(tasksFile.contents),
   };
   for (const file of files) {
     zipInput[file.path] = strToU8(file.contents);

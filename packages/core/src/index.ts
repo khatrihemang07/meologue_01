@@ -1,6 +1,6 @@
 export type { ExportOptions, ExportResult } from "./export/export-zip";
 export { exportEntriesToZip, exportFileName } from "./export/export-zip";
-export type { ExportManifest, ExportManifestEntry } from "./export/manifest";
+export type { ExportManifest, ExportManifestEntry, ExportManifestTask } from "./export/manifest";
 export type { LocalParts } from "./export/offset";
 export { toLocalParts } from "./export/offset";
 export { mintId } from "./id";

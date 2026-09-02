@@ -443,17 +443,28 @@ export function SettingsPage() {
     }
   }
 
-  // Always every Entry (store.list()), never the current search — a backup
-  // that silently omits things is worse than none (ticket 46). No progress
-  // UI: at personal-log scale this is fast enough that success/failure
-  // toasts are the whole story.
+  // Always every Entry (store.list()), every Task (taskStore.list() +
+  // listCompleted()) and every Project (projectStore.listProjects()),
+  // never the current search — a backup that silently omits things is
+  // worse than none (ticket 46, extended to Tasks by issue #175: ADR 0016
+  // was written about Entries when Entries were the only thing there was
+  // to omit). No progress UI: at personal-log scale this is fast enough
+  // that success/failure toasts are the whole story.
   async function handleExport() {
     if (!opened) {
       return;
     }
     try {
-      const entries = await opened.store.list();
-      const { fileName, bytes } = exportEntriesToZip(entries, {
+      const [entries, activeTasks, completedTasks, projects] = await Promise.all([
+        opened.store.list(),
+        opened.taskStore.list(),
+        opened.taskStore.listCompleted(),
+        opened.projectStore.listProjects(),
+      ]);
+      // Both active and completed — see tasks-file.ts's own doc comment
+      // for why a backup includes what's done, not just what's open.
+      const tasks = [...activeTasks, ...completedTasks];
+      const { fileName, bytes } = exportEntriesToZip(entries, tasks, projects, {
         deviceId: opened.deviceId,
         now: new Date(),
         utcOffsetMinutes: -new Date().getTimezoneOffset(),
@@ -469,8 +480,9 @@ export function SettingsPage() {
         // docs/adr/0016).
         return;
       }
-      const count = entries.length === 1 ? "1 Entry" : `${entries.length} Entries`;
-      toast.success(`Exported ${count} to ${fileName}.`);
+      const entryLabel = entries.length === 1 ? "1 Entry" : `${entries.length} Entries`;
+      const taskLabel = tasks.length === 1 ? "1 Task" : `${tasks.length} Tasks`;
+      toast.success(`Exported ${entryLabel} and ${taskLabel} to ${fileName}.`);
     } catch (error) {
       console.error("meologue: export failed", error);
       toast.error(error instanceof Error ? error.message : "Export failed.");

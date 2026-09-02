@@ -1,6 +1,8 @@
 import { strFromU8, unzipSync } from "fflate";
 import { describe, expect, it } from "vitest";
 import { entry } from "../test-support/entry-fixture";
+import { project } from "../test-support/project-fixture";
+import { task } from "../test-support/task-fixture";
 import { exportEntriesToZip, exportFileName } from "./export-zip";
 import type { ExportManifest } from "./manifest";
 
@@ -33,7 +35,7 @@ describe("exportEntriesToZip", () => {
       }),
     ];
 
-    const { fileName, bytes } = exportEntriesToZip(entries, {
+    const { fileName, bytes } = exportEntriesToZip(entries, [], [], {
       deviceId: "device-a",
       now: new Date("2026-08-16T06:15:00.000Z"),
       utcOffsetMinutes: OFFSET_IST,
@@ -42,7 +44,11 @@ describe("exportEntriesToZip", () => {
     expect(fileName).toBe("meologue-export-20260816-114500.zip");
 
     const unzipped = unzipSync(bytes);
-    expect(Object.keys(unzipped).sort()).toEqual(["entries/2026-08-16.txt", "manifest.json"]);
+    expect(Object.keys(unzipped).sort()).toEqual([
+      "entries/2026-08-16.txt",
+      "manifest.json",
+      "tasks.txt",
+    ]);
 
     const dayFile = strFromU8(unzipped["entries/2026-08-16.txt"] as Uint8Array);
     expect(dayFile).toBe(
@@ -75,19 +81,57 @@ describe("exportEntriesToZip", () => {
     ]);
   });
 
-  it("produces a zip with only a manifest for an empty Entry list", () => {
-    const { bytes } = exportEntriesToZip([], {
+  it("produces a zip with just a manifest and an empty tasks file for an empty Entry and Task list", () => {
+    const { bytes } = exportEntriesToZip([], [], [], {
       deviceId: "device-a",
       now: new Date("2026-08-16T06:15:00.000Z"),
       utcOffsetMinutes: OFFSET_IST,
     });
 
     const unzipped = unzipSync(bytes);
-    expect(Object.keys(unzipped)).toEqual(["manifest.json"]);
+    expect(Object.keys(unzipped).sort()).toEqual(["manifest.json", "tasks.txt"]);
     const manifest = JSON.parse(
       strFromU8(unzipped["manifest.json"] as Uint8Array),
     ) as ExportManifest;
     expect(manifest.entry_count).toBe(0);
     expect(manifest.entries).toEqual([]);
+    expect(manifest.task_count).toBe(0);
+    expect(manifest.tasks).toEqual([]);
+    expect(strFromU8(unzipped["tasks.txt"] as Uint8Array)).toBe("No Tasks.\n");
+  });
+
+  it("covers Tasks losslessly in the manifest and readably, grouped by Project, in tasks.txt", () => {
+    const projects = [project({ id: "project-1", name: "Groceries" })];
+    const tasks = [
+      task({ id: "t1", content: "buy milk", projectId: "project-1", priority: 4 }),
+      task({ id: "t2", content: "unfiled errand", projectId: null }),
+    ];
+
+    const { bytes } = exportEntriesToZip([], tasks, projects, {
+      deviceId: "device-a",
+      now: new Date("2026-08-16T06:15:00.000Z"),
+      utcOffsetMinutes: OFFSET_IST,
+    });
+
+    const unzipped = unzipSync(bytes);
+    const manifest = JSON.parse(
+      strFromU8(unzipped["manifest.json"] as Uint8Array),
+    ) as ExportManifest;
+    expect(manifest.task_count).toBe(2);
+    expect(manifest.tasks.map((t) => t.id)).toEqual(["t1", "t2"]);
+
+    const tasksFile = strFromU8(unzipped["tasks.txt"] as Uint8Array);
+    expect(tasksFile).toBe(
+      [
+        "# Inbox",
+        "",
+        "- [ ] unfiled errand",
+        "",
+        "# Groceries",
+        "",
+        "- [ ] buy milk (p1)",
+        "",
+      ].join("\n"),
+    );
   });
 });

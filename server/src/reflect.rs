@@ -1,8 +1,9 @@
 //! `POST /v1/reflect` — a Question is answered by `harness::agent_loop`, a
 //! tool-calling loop that decides for itself how many times to look before
-//! it answers, and how, from four tools (`harness::tools`:
+//! it answers, and how, from five tools (`harness::tools`:
 //! `EntriesInRangeTool`, `SearchEntriesTool`, `SimilarEntriesTool`,
-//! `ReadDigestTool`). `reflect_handler` resolves the Session synchronously
+//! `ReadDigestTool`, `TasksTool` — issue #175's own reach into Tasks,
+//! recorded in ADR 0052). `reflect_handler` resolves the Session synchronously
 //! (`resolve_session`) and then spawns `run_reflect_stream`, which runs
 //! `run_reflect_stream_inner` — the loop itself — reporting every step onto
 //! a `text/event-stream` as it happens, live, rather than only once the
@@ -87,6 +88,7 @@ use crate::harness::prompted::PromptedToolClient;
 use crate::harness::run_log::RunLog;
 use crate::harness::tools::{
     self, AgentTool, EntriesInRangeTool, ReadDigestTool, SearchEntriesTool, SimilarEntriesTool,
+    TasksTool,
 };
 use crate::harness::types::{AssistantMessage, ContentBlock, Message, StopReason};
 use crate::llm::{ChatMessage, LlmClient};
@@ -1273,24 +1275,32 @@ async fn run_reflect_stream_inner(
     )
     .await?;
 
-    // Up to four tools: `entries_in_range` (issue #93, by date),
+    // Up to five tools: `entries_in_range` (issue #93, by date),
     // `search_entries` (issue #94, by word), `similar_entries` (issue #94,
-    // by meaning) and `read_digest` (issue #95, a written summary rather
-    // than raw Entries at all) — each independently constructible, so a
-    // future caller (issue #100's evaluation) can build its own subset of
-    // this same `Vec` to compare arms without touching `run_reflect_stream_inner`
-    // itself. `search_entries` and `similar_entries` stay two tools rather
-    // than one merged one deliberately — see `harness::tools`'s own doc
-    // comment for why.
+    // by meaning), `read_digest` (issue #95, a written summary rather
+    // than raw Entries at all) and `list_tasks` (issue #175, ADR 0052 —
+    // Todo's Tasks, not journal Entries at all) — each independently
+    // constructible, so a future caller (issue #100's evaluation) can
+    // build its own subset of this same `Vec` to compare arms without
+    // touching `run_reflect_stream_inner` itself. `search_entries` and
+    // `similar_entries` stay two tools rather than one merged one
+    // deliberately — see `harness::tools`'s own doc comment for why.
     //
-    // Issue #130: `similar_entries` is the one tool of the four backed by
+    // Issue #130: `similar_entries` is the one tool of the five backed by
     // embeddings (`SimilarEntriesTool::execute` calls `embed_client.
     // embed_query`), so it's the one tool left out entirely — not merely
     // disabled — when `reflect.embed_client` is `None`. Leaving it out of
     // the `Vec` rather than offering it and letting every call fail is what
     // keeps `render_tool_guidance` honest: a chat-only Server's system
     // prompt never advertises a capability that would only turn out, turn
-    // by turn, not to work.
+    // by turn, not to work. `list_tasks` needs no embedding client at all
+    // (it is a plain SQL read, like `entries_in_range`/`search_entries`/
+    // `read_digest`) and no capability check either — ADR 0051's own
+    // `HealthCapabilities::todo` is unconditionally `true` for exactly
+    // this reason (that field's own doc comment: "any Server that answers
+    // `/v1/health` at all... always accepts Tasks"), so there is no
+    // configuration state for this tool's registration to condition on in
+    // the first place.
     //
     // Built as an initial three-tool `Vec` with `similar_entries` inserted
     // at index 2 (rather than appended) so that when it *is* present, this
@@ -1298,7 +1308,9 @@ async fn run_reflect_stream_inner(
     // read_digest` order the system prompt has always rendered in —
     // `render_tool_guidance` walks the `Vec` in order, so appending instead
     // would silently reorder the prompt for every already-configured Server
-    // this ticket has no reason to touch.
+    // this ticket has no reason to touch. `list_tasks` is pushed last,
+    // after that conditional insert, so it lands at the same trailing
+    // position regardless of whether `similar_entries` is present.
     let mut tools: Vec<Arc<dyn AgentTool>> = vec![
         Arc::new(EntriesInRangeTool::new(pool.clone(), offset_minutes)),
         Arc::new(SearchEntriesTool::new(pool.clone(), offset_minutes)),
@@ -1310,6 +1322,7 @@ async fn run_reflect_stream_inner(
             Arc::new(SimilarEntriesTool::new(pool.clone(), embed_client, offset_minutes)),
         );
     }
+    tools.push(Arc::new(TasksTool::new(pool.clone(), offset_minutes)));
     let system_prompt = tools::render_tool_guidance(LOOP_SYSTEM_INSTRUCTION, &tools);
 
     // `prior_summary` is `Some` only when `maybe_compact_prior_turns` just

@@ -196,6 +196,11 @@ before now: if there is a daily Digest for Monday and none for Tuesday, then on 
 daily Digest is still Monday's. A Digest is Grounded in exactly the Entries it was written from —
 normally every Entry in the Period, and observably fewer when part of a Period had to be left out.
 
+A Digest also covers the Tasks completed and the Tasks that slipped in its Period. This is the one
+place a Digest stops being purely about what the user wrote, and it reads as prose about the
+stretch of time rather than as a scoreboard. Grounding still names Entries alone: a Task is not
+something the user wrote, so it is not something a Digest can cite as the words it drew on.
+
 ### Period
 
 The stretch of time a Digest covers: a day, a week, or a month. Period is what makes the Digest

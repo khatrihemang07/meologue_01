@@ -36,11 +36,17 @@
 //! what that ticket was actually testing (whether a new *kind* of data
 //! costs only a new `AgentTool` impl, or forces a change here or in
 //! `agent_loop`) and what it found.
+//!
+//! `list_tasks` (`tasks.rs`, issue #175) is the fifth tool, and the first
+//! over a Task (ADR 0047's second root noun) rather than an Entry or a
+//! Digest — see ADR 0052 and that file's own doc comment for why this is
+//! a tool, not a widening of ADR 0023's now-superseded fan-out.
 
 pub mod entries_in_range;
 pub mod read_digest;
 pub mod search_entries;
 pub mod similar_entries;
+pub mod tasks;
 
 use std::sync::Arc;
 
@@ -53,6 +59,7 @@ pub use entries_in_range::EntriesInRangeTool;
 pub use read_digest::ReadDigestTool;
 pub use search_entries::SearchEntriesTool;
 pub use similar_entries::SimilarEntriesTool;
+pub use tasks::TasksTool;
 
 use super::types::Tool;
 
