@@ -30,18 +30,39 @@ import { cn } from "@/lib/utils";
 export interface TaskDetailActions {
   projects: Project[];
   labels: Label[];
-  /** Opens the Task's own route/modal/sheet (issue #178) — the destination Edit, clicking the row's own words, and the Comment hover action (no comment thread exists yet — this file's own doc comment on why) all share. */
+  /** Opens the Task's own route/modal/sheet (issue #178) — the destination Edit, clicking the row's own words, and the Comment hover action all share; the Comment thread itself lives inside that view (issue #180), not behind a second destination of its own. */
   onOpenDetail: (task: Task) => void;
   onSetPriority: (id: string, priority: number) => void;
   onSetProject: (id: string, projectId: string | null) => void;
   onSetLabels: (id: string, labelIds: string[]) => void;
   onCopyLink: (task: Task) => void;
+  /**
+   * A Task's own comment count (issue #180) — `TaskRow`'s own
+   * `commentCount` doc comment. Bundled here rather than a sixth prop on
+   * every intermediate component for the identical reason every field
+   * above it already is: `comment-counts.ts`'s `commentCountForTask`
+   * closed over `useEntryStore()`'s `comments`, computed once by
+   * whichever page builds this object rather than every row reaching
+   * into that list itself.
+   */
+  commentCountFor: (taskId: string) => number;
 }
 
 export interface TaskRowProps {
   task: Task;
   /** See `TaskDetailActions`'s own doc comment. */
   detailActions: TaskDetailActions;
+  /**
+   * How many live Comments this Task carries (issue #180) — Todoist's
+   * own `note_count`, a speech-bubble glyph plus a number next to the
+   * date chip, shown only when this is non-zero. Callers read this off
+   * `comments` (`useEntryStore()`) through comment-counts.ts's
+   * `commentCountForTask` rather than this row reaching into a store of
+   * its own — this file has no store access, the same "core/the caller
+   * computes, the row only renders" split every other Task attribute
+   * here already follows.
+   */
+  commentCount?: number;
   /**
    * Completes this Task — for a recurring one (`task.dateString !== null`),
    * the caller's own job is to call `advanceRecurringTask` here instead of
@@ -205,6 +226,7 @@ export interface TaskRowProps {
 export function TaskRow({
   task,
   detailActions,
+  commentCount = 0,
   onComplete,
   onCompleteForever,
   onRequestDelete,
@@ -239,6 +261,11 @@ export function TaskRow({
   // was understood" when something was.
   const hasSchedule =
     task.date !== null || task.deadline !== null || task.priority !== 1 || isRecurring;
+  // Issue #180's own reference behaviour: a comment count sits next to
+  // the date chip, not gated behind whether a Task also has one — a Task
+  // with Comments but no Date/Deadline/Priority/recurrence still shows
+  // this line, just with the badge as its only content.
+  const hasScheduleOrComments = hasSchedule || commentCount > 0;
   const draggable =
     onHandlePointerDown !== undefined &&
     onHandlePointerMove !== undefined &&
@@ -444,12 +471,22 @@ export function TaskRow({
             "the string is the truth" (task-types.ts's own doc comment on
             `Task.dateString`) means the reader sees exactly what they
             typed here too, not this row's own paraphrase of it. */}
-        {hasSchedule && (
-          <span className="flex flex-wrap gap-x-2 text-muted-foreground text-xs">
+        {hasScheduleOrComments && (
+          <span className="flex flex-wrap items-center gap-x-2 text-muted-foreground text-xs">
             {task.date !== null && <span>{formatTaskDate(task.date)}</span>}
             {task.deadline !== null && <span>Due {formatDay(task.deadline)}</span>}
             {task.priority !== 1 && <span>P{uiPriorityOf(task.priority)}</span>}
             {task.dateString !== null && <span>{task.dateString}</span>}
+            {/* The comment count (issue #180) — Todoist's own
+                `note_count`, a speech-bubble glyph plus a number, shown
+                only when non-zero (this component's own `commentCount`
+                doc comment). */}
+            {commentCount > 0 && (
+              <span className="flex items-center gap-0.5">
+                <MessageSquare aria-hidden="true" className="size-3" />
+                {commentCount}
+              </span>
+            )}
           </span>
         )}
       </span>
@@ -526,11 +563,9 @@ export function TaskRow({
         reference behaviour observed live: Edit, Date, Comment, More —
         replacing the old Schedule/Delete pair. Edit opens the identical
         detail view the row's own words already open (this file's own
-        `detailActions.onOpenDetail` doc comment); Comment does too, for
-        now — there is no comment thread to scroll to yet (issue #180's
-        own scope), so "open the Task's own view" is the honest, non-dead
-        destination for that icon until #180 gives it something more
-        specific to land in. Delete moved off the row entirely, into the
+        `detailActions.onOpenDetail` doc comment); Comment does too — the
+        Task's own view is where its Comment thread lives (issue #180),
+        not a second destination reached from this row. Delete moved off the row entirely, into the
         command menu below (⌘⌫) — this ticket's own acceptance criterion
         is "reachable from a menu, not only from the hover actions," which
         for Delete specifically now means *only* from the menu, matching

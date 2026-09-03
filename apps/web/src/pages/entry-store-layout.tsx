@@ -1,4 +1,6 @@
 import type {
+  Comment,
+  CommentStore,
   Entry,
   EntryStore,
   Label,
@@ -13,6 +15,7 @@ import { open } from "@meologue/core";
 import { queryOptions, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Outlet, useOutletContext } from "react-router";
+import { useComments } from "@/hooks/use-comments";
 import { type UseHistoryPagination, useHistory } from "@/hooks/use-history";
 import { useLabels } from "@/hooks/use-labels";
 import { type AddProjectOverrides, useProjects } from "@/hooks/use-projects";
@@ -165,6 +168,8 @@ export interface EntryStoreOutletContext {
   setTaskPriority: (id: string, priority: number) => void;
   /** Replaces a Task's Labels wholesale — use-tasks.ts's own `setTaskLabels` doc comment. */
   setTaskLabels: (id: string, labelIds: string[]) => void;
+  /** Sets a Task's Description (issue #180) — use-tasks.ts's own `setTaskDescription` doc comment. */
+  setTaskDescription: (id: string, description: string | null) => void;
   /** A Project's own top-level Tasks (`null` for Inbox) — use-tasks.ts's own `listTasksInProject` doc comment. */
   listTasksInProject: (projectId: string | null) => Promise<Task[]>;
   /** A Task's own direct sub-tasks — use-tasks.ts's own `listTaskChildren` doc comment. */
@@ -187,6 +192,19 @@ export interface EntryStoreOutletContext {
    */
   labels: Label[];
   resolveLabelIds: (names: string[]) => Promise<string[]>;
+  /**
+   * Todo's Comments (issue #180) — the Comment-shaped sibling of `labels`
+   * above, built the same way for the same reason: `useComments`
+   * (use-comments.ts) runs once, here, above every route this layout
+   * wraps. `comments` is the whole, flat, cross-Task list — task-row.tsx's
+   * own comment-count badge and the Task detail view's own thread both
+   * narrow it client-side (comment-counts.ts) rather than this context
+   * growing a second, per-Task field.
+   */
+  comments: Comment[];
+  addComment: (taskId: string, text: string) => void;
+  editComment: (id: string, text: string) => void;
+  removeComment: (id: string) => void;
   /**
    * Todo's Projects and Sections (issue #171) — the Project-shaped sibling
    * of `labels`/`tasks` above, built the same way for the same reason:
@@ -372,6 +390,10 @@ function noopSetTaskPriority(_id: string, _priority: number) {}
 // same reasoning as the four setters just above.
 function noopSetTaskLabels(_id: string, _labelIds: string[]) {}
 
+// Issue #180's Task detail view — the not-ready stand-in for
+// `setTaskDescription`, same reasoning as the setters just above.
+function noopSetTaskDescription(_id: string, _description: string | null) {}
+
 // `listTasksInProject`/`listTaskChildren`'s own not-ready stand-ins,
 // mirroring `noopGetEntries`: nothing can be resolved before the store
 // opens, and an empty array is already each field's own "nothing found"
@@ -412,6 +434,16 @@ async function noopSetTaskParent(_id: string, _parentId: string | null): Promise
 async function noopResolveLabelIds(_names: string[]): Promise<string[]> {
   return [];
 }
+
+// `comments`'s own not-ready stand-ins (issue #180), mirroring
+// `noopAddTask`/`noopRemoveTask`: `comments: []` below has nothing to
+// act on regardless, but every field `EntryStoreOutletContext` declares
+// still has to exist.
+function noopAddComment(_taskId: string, _text: string) {}
+
+function noopEditComment(_id: string, _text: string) {}
+
+function noopRemoveComment(_id: string) {}
 
 // Todo's Projects and Sections (issue #171) — same not-ready reasoning as
 // `noopAddTask`/`noopRemoveTask` above: `projects: []` below has nothing
@@ -548,6 +580,9 @@ const TASK_STORE_METHODS: StoreMethodNames<TaskStore> = {
   setProject: true,
   setSection: true,
   setParent: true,
+  // Issue #180's Description setter — the identical compile-time
+  // checkpoint as every setter above.
+  setDescription: true,
 };
 
 function deferTaskStoreUntilOpen(
@@ -616,6 +651,28 @@ function deferProjectStoreUntilOpen(
   promise: Promise<{ projectStore: ProjectStore; deviceId: string }>,
 ): ProjectStore {
   return deferStore(promise, ({ projectStore }) => projectStore, PROJECT_STORE_METHODS);
+}
+
+// Comments (issue #180) — a fifth deferred facade over the same open
+// promise, same reasoning as TASK_STORE_METHODS's own comment: this is
+// the compile-time checkpoint that fails `tsc -b` the moment CommentStore
+// grows a method this registry doesn't also list.
+const COMMENT_STORE_METHODS: StoreMethodNames<CommentStore> = {
+  list: true,
+  listByTask: true,
+  get: true,
+  upsert: true,
+  edit: true,
+  remove: true,
+  pending: true,
+  getCursor: true,
+  setCursor: true,
+};
+
+function deferCommentStoreUntilOpen(
+  promise: Promise<{ commentStore: CommentStore; deviceId: string }>,
+): CommentStore {
+  return deferStore(promise, ({ commentStore }) => commentStore, COMMENT_STORE_METHODS);
 }
 
 /**
@@ -696,6 +753,7 @@ export function EntryStoreLayout() {
       taskStore: TaskStore;
       labelStore: LabelStore;
       projectStore: ProjectStore;
+      commentStore: CommentStore;
       deviceId: string;
     }) => void;
     let reject!: (reason: unknown) => void;
@@ -704,6 +762,7 @@ export function EntryStoreLayout() {
       taskStore: TaskStore;
       labelStore: LabelStore;
       projectStore: ProjectStore;
+      commentStore: CommentStore;
       deviceId: string;
     }>((res, rej) => {
       resolve = res;
@@ -749,11 +808,18 @@ export function EntryStoreLayout() {
     () => deferProjectStoreUntilOpen(deferred.promise),
     [deferred],
   );
+  // `useComments`'s own equivalent (issue #180) — a fifth facade over the
+  // same one open.
+  const pendingCommentStore = useMemo(
+    () => deferCommentStoreUntilOpen(deferred.promise),
+    [deferred],
+  );
 
   const store = data?.store ?? pendingStore;
   const taskStore = data?.taskStore ?? pendingTaskStore;
   const labelStore = data?.labelStore ?? pendingLabelStore;
   const projectStore = data?.projectStore ?? pendingProjectStore;
+  const commentStore = data?.commentStore ?? pendingCommentStore;
   const deviceId = data?.deviceId ?? "";
 
   // `useLabels` is called before `useHistory` on purpose: Promotion's own
@@ -807,6 +873,7 @@ export function EntryStoreLayout() {
     setTaskDeadline,
     setTaskPriority,
     setTaskLabels,
+    setTaskDescription,
     listTasksInProject,
     listTaskChildren,
     listTasksInSection,
@@ -818,6 +885,7 @@ export function EntryStoreLayout() {
     setTaskSection,
     setTaskParent,
   } = useTasks(store, taskStore, deviceId);
+  const { comments, addComment, editComment, removeComment } = useComments(commentStore, deviceId);
   const {
     projects,
     addProject,
@@ -869,6 +937,7 @@ export function EntryStoreLayout() {
               setTaskDeadline,
               setTaskPriority,
               setTaskLabels,
+              setTaskDescription,
               listTasksInProject,
               listTaskChildren,
               listTasksInSection,
@@ -881,6 +950,10 @@ export function EntryStoreLayout() {
               setTaskParent,
               labels,
               resolveLabelIds,
+              comments,
+              addComment,
+              editComment,
+              removeComment,
               projects,
               addProject,
               renameProject,
@@ -925,6 +998,7 @@ export function EntryStoreLayout() {
               setTaskDeadline: noopSetTaskDeadline,
               setTaskPriority: noopSetTaskPriority,
               setTaskLabels: noopSetTaskLabels,
+              setTaskDescription: noopSetTaskDescription,
               listTasksInProject: noopListTasksInProject,
               listTaskChildren: noopListTaskChildren,
               listTasksInSection: noopListTasksInSection,
@@ -937,6 +1011,10 @@ export function EntryStoreLayout() {
               setTaskParent: noopSetTaskParent,
               labels: [],
               resolveLabelIds: noopResolveLabelIds,
+              comments: [],
+              addComment: noopAddComment,
+              editComment: noopEditComment,
+              removeComment: noopRemoveComment,
               projects: [],
               addProject: noopAddProject,
               renameProject: noopRenameProject,

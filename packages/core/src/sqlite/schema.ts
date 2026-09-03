@@ -131,6 +131,13 @@ export const tasks = sqliteTable(
     // walking this column, not by a CHECK constraint SQLite has no way to
     // express across rows.
     parentId: text("parent_id"),
+    // The Task's own words about itself, beyond `content` (issue #180) —
+    // Markdown, rendered by the identical renderer an Entry's body
+    // already uses. Nullable with no DEFAULT, the same shape
+    // `date`/`deadline`/`projectId` above take: a pre-#180 row backfilled
+    // by migration 11 below gets `null` from `ALTER TABLE ADD COLUMN`'s
+    // own implicit default, which is exactly "no Description yet."
+    description: text("description"),
   },
   (table) => [
     // Supports list()'s actual query: `WHERE completed_at IS NULL AND
@@ -284,6 +291,46 @@ export const labels = sqliteTable(
     // relying on a `COLLATE NOCASE` index, so this index still serves the
     // query even though it isn't the exact sort the caller sees.
     index("labels_name_id_idx").on(table.name, table.id),
+  ],
+);
+
+/**
+ * Mirrors the `Comment` type (../comment-types.ts) exactly (issue #180) —
+ * a fourth root noun (ADR 0047's move, made a second time), for the
+ * identical reason `tasks`/`projects`/`labels` above each got their own
+ * table: a Comment has its own identity and its own lifecycle, and it is
+ * unbounded and individually addressable in a way `tasks.labelIds`'
+ * own doc comment explains a JSON array cannot be. No collaboration
+ * column, mirroring every table above it for the identical reason.
+ */
+export const comments = sqliteTable(
+  "comments",
+  {
+    id: text("id").primaryKey(),
+    deviceId: text("device_id").notNull(),
+    // The Task this Comment belongs to — no foreign key constraint,
+    // mirroring `tasks.projectId`'s own comment: this store does not
+    // reach across tables to enforce or clean up a cross-store reference
+    // (../comment-store.ts's own header comment on why deleting a Task
+    // leaves its Comments behind rather than cascading).
+    taskId: text("task_id").notNull(),
+    // The Comment's own words — Markdown, rendered by the identical
+    // renderer an Entry's body and a Task's description both use.
+    text: text("text").notNull(),
+    createdAt: text("created_at").notNull(),
+    seq: integer("seq"),
+    syncedAt: text("synced_at"),
+    // Tombstone (ADR 0028's rule, applied to Comments) — identical
+    // representation to every other table's `deleted_at` above.
+    deletedAt: text("deleted_at"),
+  },
+  (table) => [
+    // Supports listByTask()'s actual query — `WHERE task_id = ? AND
+    // deleted_at IS NULL ORDER BY created_at ASC, id ASC` — mirroring
+    // `sections_project_id_order_key_id_idx`'s identical shape for the
+    // identical reason: a plain composite index on the WHERE column plus
+    // the ORDER BY columns lets SQLite walk it directly.
+    index("comments_task_id_created_at_id_idx").on(table.taskId, table.createdAt, table.id),
   ],
 );
 

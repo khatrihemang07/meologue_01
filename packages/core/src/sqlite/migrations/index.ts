@@ -6,6 +6,8 @@ import labelsTable from "./0004_labels_table.sql?raw";
 import taskRecurrenceString from "./0005_task_recurrence_string.sql?raw";
 import projectsSections from "./0006_projects_sections.sql?raw";
 import dropTaskDuration from "./0007_drop_task_duration.sql?raw";
+import taskDescription from "./0008_task_description.sql?raw";
+import commentsTable from "./0009_comments_table.sql?raw";
 import entriesSearchIndex from "./entries_search_index.sql?raw";
 import tasksSearchIndex from "./tasks_search_index.sql?raw";
 
@@ -147,6 +149,23 @@ export interface Migration {
  * confused with ../../recurrence/rule.ts's `durationBound` — a
  * recurrence's own end bound (`every day for 3 weeks`) — which was never a
  * column on this table and is untouched by this migration.
+ *
+ * `0008_task_description` (version 11, issue #180) is a single
+ * `ALTER TABLE tasks ADD description text`, hand-written for the same
+ * stale-`meta/`-snapshot reason every migration since `0004_labels_table`
+ * has been, leaning on ../migrator.ts's `duplicate column name` swallow,
+ * migration 6's template.
+ *
+ * `0009_comments_table` (version 12, issue #180) adds a fourth root
+ * noun's own table, `comments` — representable in ../schema.ts, so
+ * `CREATE TABLE IF NOT EXISTS` covers it the ordinary way, migration 4's
+ * own template, plus one `CREATE INDEX IF NOT EXISTS` for the same
+ * reason every other index-creating statement in this file is. Sequenced
+ * after `0008_task_description` even though both ship in the same
+ * ticket, for the identical "each migration's blast radius stays the one
+ * thing it's actually adding" reasoning every migration above already
+ * follows: a Task gaining a column and a new table existing are two
+ * different things, not one.
  */
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, sql: initial },
@@ -159,4 +178,6 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 8, sql: labelsTable },
   { version: 9, sql: projectsSections },
   { version: 10, sql: dropTaskDuration },
+  { version: 11, sql: taskDescription },
+  { version: 12, sql: commentsTable },
 ];

@@ -226,6 +226,7 @@ describe("EntryBubble", () => {
         projectId: null,
         sectionId: null,
         parentId: null,
+        description: null,
         ...overrides,
       };
     }
@@ -256,6 +257,7 @@ describe("EntryBubble", () => {
         setTaskDeadline: vi.fn(),
         setTaskPriority: vi.fn(),
         setTaskLabels: vi.fn(),
+        setTaskDescription: vi.fn(),
         listTasksInProject: vi.fn(async () => []),
         listTaskChildren: vi.fn(async () => []),
         listTasksInSection: vi.fn(async () => []),
@@ -268,6 +270,10 @@ describe("EntryBubble", () => {
         setTaskParent: vi.fn(async () => {}),
         labels: [],
         resolveLabelIds: vi.fn(async () => []),
+        comments: [],
+        addComment: vi.fn(),
+        editComment: vi.fn(),
+        removeComment: vi.fn(),
         projects: [],
         addProject: vi.fn(),
         renameProject: vi.fn(),

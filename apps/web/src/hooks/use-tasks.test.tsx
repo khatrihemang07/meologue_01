@@ -54,6 +54,7 @@ function task(overrides: Partial<Task> = {}): Task {
     projectId: null,
     sectionId: null,
     parentId: null,
+    description: null,
     ...overrides,
   };
 }
@@ -182,6 +183,9 @@ function createFakeStore(): TaskStore {
     }),
     setParent: vi.fn(async (id: string, parentId: string | null) => {
       active = active.map((t) => (t.id === id ? { ...t, parentId, seq: null } : t));
+    }),
+    setDescription: vi.fn(async (id: string, description: string | null) => {
+      active = active.map((t) => (t.id === id ? { ...t, description, seq: null } : t));
     }),
   };
 }

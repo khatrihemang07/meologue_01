@@ -247,6 +247,28 @@ export type Task = {
    * cascades back up.
    */
   parentId: string | null;
+  /**
+   * The Task's own words about itself, beyond its `content` — Markdown,
+   * rendered by the identical renderer an Entry's body already uses
+   * (issue #180, apps/web's `entryProse`/inline-markdown.ts — this
+   * package holds no rendering code of its own for either an Entry or a
+   * Task, so there is nothing here to duplicate). `null` until the user
+   * gives it one, the same "nothing chosen yet" state every attribute
+   * above defaults to (Task.dateString's own doc comment states the
+   * identical rule): a Task created in Todo, or promoted from a
+   * checkbox, starts with no Description.
+   *
+   * Required and nullable, like every field above it, for the identical
+   * reason (Task.priority's own doc comment): a caller states explicitly
+   * that a Task has no Description rather than an omitted key silently
+   * defaulting one way or the other.
+   *
+   * Deliberately **not** an Entry, never enters History, Export's day
+   * files, or Digest grounding — CONTEXT.md's History entry is emphatic
+   * that History is what the user actually wrote, and a Task's own words
+   * about itself are Todo's, not History's (issue #180).
+   */
+  description: string | null;
 };
 
 /**

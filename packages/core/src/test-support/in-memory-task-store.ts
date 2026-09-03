@@ -8,6 +8,7 @@ import {
   assertValidPriority,
   hasTime,
   withDefaultDateString,
+  withDefaultDescription,
   withDefaultSchedulingFields,
   withDefaultStructureFields,
 } from "../task-fields";
@@ -115,8 +116,10 @@ export class InMemoryTaskStore implements TaskStore {
     for (const t of tasks) {
       this.tasks.set(
         t.id,
-        withDefaultStructureFields(
-          withDefaultDateString(withDefaultLabelIds(withDefaultSchedulingFields(t))),
+        withDefaultDescription(
+          withDefaultStructureFields(
+            withDefaultDateString(withDefaultLabelIds(withDefaultSchedulingFields(t))),
+          ),
         ),
       );
     }
@@ -182,6 +185,11 @@ export class InMemoryTaskStore implements TaskStore {
   // doc comment for why this replaces the array wholesale.
   async setLabelIds(id: string, labelIds: string[]): Promise<void> {
     this.applyIfLive(id, { labelIds, seq: null, syncedAt: null });
+  }
+
+  // Mirrors SqliteTaskStore.setDescription — see TaskStore.setDescription's own doc comment.
+  async setDescription(id: string, description: string | null): Promise<void> {
+    this.applyIfLive(id, { description, seq: null, syncedAt: null });
   }
 
   // Mirrors SqliteTaskStore.setProject — see TaskStore.setProject's own

@@ -14,6 +14,7 @@ describe("migrate", () => {
       "all",
     );
     expect(result.rows).toEqual([
+      ["comments"],
       ["entries"],
       ["entries_fts"],
       ["entries_fts_config"],
@@ -48,8 +49,10 @@ describe("migrate", () => {
     // story of why it's sequenced before the labels migration's own
     // version 8 despite landing after it in this tree). version 9 is
     // issue #171's projects/sections migration. version 10 is issue #179's
-    // drop of `tasks.duration`.
-    expect(result.rows).toEqual([[1], [2], [3], [4], [5], [6], [7], [8], [9], [10]]);
+    // drop of `tasks.duration`. version 11 is issue #180's
+    // `tasks.description` column; version 12 is that same issue's
+    // `comments` table.
+    expect(result.rows).toEqual([[1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12]]);
   });
 
   it("backfills Entries that existed before the search index migration shipped", async () => {
@@ -141,7 +144,7 @@ describe("migrate", () => {
     await expect(migrate(driver)).resolves.toBeUndefined();
 
     const ledger = await driver.execute("SELECT version FROM meologue_migrations", [], "all");
-    expect(ledger.rows).toEqual([[1], [2], [3], [4], [5], [6], [7], [8], [9], [10]]);
+    expect(ledger.rows).toEqual([[1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12]]);
 
     // The store isn't just "didn't throw" — it's actually usable: a write
     // that touches the new column succeeds.
@@ -169,7 +172,7 @@ describe("migrate", () => {
     await expect(migrate(driver)).resolves.toBeUndefined();
 
     const ledger = await driver.execute("SELECT version FROM meologue_migrations", [], "all");
-    expect(ledger.rows).toEqual([[1], [2], [3], [4], [5], [6], [7], [8], [9], [10]]);
+    expect(ledger.rows).toEqual([[1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12]]);
 
     // The store isn't just "didn't throw" — `duration` is actually gone,
     // and the rest of the row still reads and writes normally.

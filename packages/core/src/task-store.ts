@@ -245,6 +245,19 @@ export interface TaskStore {
    */
   setParent(id: string, parentId: string | null): Promise<void>;
   /**
+   * Sets `description` and clears `seq` (issue #180) — mirrors
+   * setLabelIds' own doc comment for why this is its own method rather
+   * than upsert() with a mutated Task: a caller building its own patch
+   * object has no way to know it must no-op against a tombstone, the
+   * trap every setter here guards against. `null` clears the
+   * Description back to "nothing chosen yet," the same state a Task
+   * created directly in Todo starts in. No validation beyond the string
+   * shape itself — a Description is Markdown text, and this store has no
+   * more business refusing one shape of it than TaskStore.rename refuses
+   * a `content` it doesn't like. No-op against a tombstone.
+   */
+  setDescription(id: string, description: string | null): Promise<void>;
+  /**
    * Advances a recurring Task to its next occurrence (issue #170's
    * recurrence engine, ../recurrence/) instead of completing it — a
    * recurring Task's checkbox never "un-ticks itself," and the Task never

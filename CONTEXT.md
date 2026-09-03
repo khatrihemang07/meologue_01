@@ -219,6 +219,10 @@ actually wrote, not everything the user is tracking. The Task owns its text: whi
 Task started life on, there is exactly one copy of what it says and one copy of whether it is
 done.
 
+A Task also owns a Description and the Comments made against it — see their own entries below.
+Both belong to Todo alone: neither enters History, and History's own rule above ("what the user
+actually wrote") is why not.
+
 ### Todo
 
 The fifth Destination (ADR 0036, ADR 0049): the view where the user manages Tasks — creating
@@ -241,6 +245,18 @@ A Task whose parent is another Task. A sub-task is a full Task in every other re
 carry its own Date, Priority and Labels, and can have sub-tasks of its own. Completing a parent
 completes its sub-tasks along with it; completing every sub-task does not complete the parent,
 because the parent may still name work its sub-tasks don't cover.
+
+### Description
+
+A Task's own words about itself, beyond its name — Markdown, read the same way an Entry's body
+is. A Task need not carry one; unlike an Entry's body, which exists the moment the Entry does, a
+Description starts absent and is added, or not, afterward.
+
+### Comment
+
+A note added against a Task after the fact, with its own identity and its own time — a Task can
+hold many. A Comment is not an Entry: it is never added to History, never covered by Export or
+Digest grounding, and belongs to Todo alone, the same way a Task's Description does.
 
 ### Label
 

@@ -60,12 +60,14 @@ export function toWireTaskInput(task: Task): WireTaskInput {
 
 /**
  * See toWireTaskInput's own doc comment for the reshaping rule this
- * mirrors (none). `?? null` on every nullable field follows
- * fromWireEntryOutput's own convention above — a field absent on the wire
- * and a field explicitly `null` both mean the identical thing to this
- * Task's own fields, which are required-and-nullable, never `?`-optional
- * (../task-types.ts's own doc comment on why: an omitted key must never
- * silently default one way or the other without a caller saying so).
+ * mirrors (none) — with one deliberate exception, `description`
+ * (issue #180), covered in its own paragraph below. `?? null` on every
+ * other nullable field follows fromWireEntryOutput's own convention
+ * above — a field absent on the wire and a field explicitly `null` both
+ * mean the identical thing to this Task's own fields, which are
+ * required-and-nullable, never `?`-optional (../task-types.ts's own doc
+ * comment on why: an omitted key must never silently default one way or
+ * the other without a caller saying so).
  * `withDefaultSchedulingFields`/`withDefaultLabelIds`/`withDefaultDateString`/
  * `withDefaultStructureFields` (../task-fields.ts, ../label-fields.ts) are
  * the *second* safety net a Task arriving over Sync passes through, inside
@@ -74,8 +76,40 @@ export function toWireTaskInput(task: Task): WireTaskInput {
  * a real value," and the store-level defaulters turn "an even older
  * client never sent this key at all" into whichever default that ticket's
  * own Task doc comment names. Neither makes the other redundant.
+ *
+ * **`description` cannot be read off `output` at all — the wire carries
+ * no field for it yet (issue #182 is the protocol bump that adds one,
+ * alongside Projects, Sections, Labels, Comments and Activity together).
+ * `existing` is this Device's own current copy of the Task, if any, and
+ * this function carries its `description` straight through rather than
+ * manufacturing a `null`.** That distinction matters because
+ * `TaskStore.upsert()` (ADR 0047's own "there is deliberately no `add()`"
+ * — Sync's pull applies an incoming Task by overwriting the whole row,
+ * exactly like a fresh local insert) cannot tell "the wire confirms this
+ * Task has no description" apart from "the wire has nothing to say about
+ * description at all" — both would arrive here as `null` if this function
+ * invented one, and the *first* upsert() of any ordinary field change
+ * (a rename, a reschedule — anything that reaches the wire and gets
+ * echoed back) would silently overwrite a Device's own locally-set
+ * `description` with that invented `null`, discarding words the wire
+ * never even claimed to know about. Reading it off `existing` instead
+ * means a Task this Device has never seen before (`existing` is
+ * `undefined`) still gets `null` — there is nothing to carry through, and
+ * that is the same "nothing chosen yet" state a brand-new Task starts in
+ * either way — while a Task already on this Device keeps whatever it had.
+ * This is the one field on `Task` today the wire cannot speak for; the
+ * identical treatment — read it off `existing`, not off `output` — is
+ * what any future locally-held-only field must get here too, which is
+ * why the fix lives in this one function rather than in sync-engine.ts's
+ * own call site: that call site has no way to know which of a Task's
+ * many fields are wire-covered and which aren't, and it must not have to
+ * remember.
  */
-export function fromWireTaskOutput(output: WireTaskOutput, syncedAt: string): Task {
+export function fromWireTaskOutput(
+  output: WireTaskOutput,
+  syncedAt: string,
+  existing: Task | undefined,
+): Task {
   return {
     id: output.id,
     deviceId: output.device_id,
@@ -94,5 +128,8 @@ export function fromWireTaskOutput(output: WireTaskOutput, syncedAt: string): Ta
     projectId: output.project_id ?? null,
     sectionId: output.section_id ?? null,
     parentId: output.parent_id ?? null,
+    // See this function's own doc comment above for why this reads off
+    // `existing`, not off `output` — the wire has no field for it yet.
+    description: existing?.description ?? null,
   };
 }

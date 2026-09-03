@@ -18,6 +18,7 @@ import { TaskScheduleSheet } from "@/components/todo/task-schedule-sheet";
 import { TodayView } from "@/components/todo/today-view";
 import { TodoNav } from "@/components/todo/todo-nav";
 import { ConfirmDialog } from "@/components/ui/alert-dialog";
+import { commentCountForTask, commentsForTask } from "@/lib/comment-counts";
 import { sectionsQueryKey, tasksInProjectQueryKey } from "@/lib/query-keys";
 import type { QuickAddTaskFields } from "@/lib/quick-add-task";
 import { taskDetailPath, taskIdFromParam } from "@/lib/task-detail-route";
@@ -160,8 +161,13 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     setTaskProject,
     setTaskParent,
     setTaskSection,
+    setTaskDescription,
     labels,
     resolveLabelIds,
+    comments,
+    addComment,
+    editComment,
+    removeComment,
     projects,
     addProject,
     renameProject,
@@ -434,6 +440,7 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     onSetProject: setTaskProject,
     onSetLabels: setTaskLabels,
     onCopyLink: copyTaskLink,
+    commentCountFor: (taskId) => commentCountForTask(comments, taskId),
   };
 
   // The add field's own parse (add-task-form.tsx, quick-add-task.ts)
@@ -647,6 +654,11 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
           onOpenSchedule={() => handleOpenSchedule(openTask.id)}
           onSetProject={(projectId) => setTaskProject(openTask.id, projectId)}
           onSetLabels={(labelIds) => setTaskLabels(openTask.id, labelIds)}
+          onSetDescription={(description) => setTaskDescription(openTask.id, description)}
+          comments={commentsForTask(comments, openTask.id)}
+          onAddComment={(text) => addComment(openTask.id, text)}
+          onEditComment={editComment}
+          onRemoveComment={removeComment}
         />
       )}
     </Shell>

@@ -95,6 +95,12 @@ export interface UseTasksResult {
    */
   setTaskLabels: (id: string, labelIds: string[]) => void;
   /**
+   * Sets a Task's `description` (issue #180) — the one door the Task
+   * detail view's own description field goes through, mirroring every
+   * setter above's shape. `null` clears it back to "nothing chosen yet."
+   */
+  setTaskDescription: (id: string, description: string | null) => void;
+  /**
    * A Project's own top-level Tasks (TaskStore.listByProject), `null` for
    * Inbox — issue #171's own replacement for reading the flat `tasks`
    * array above once Tasks can live in more than one place. An async
@@ -287,6 +293,13 @@ export function useTasks(
       projectId: overrides.projectId ?? null,
       sectionId: overrides.sectionId ?? null,
       parentId: null,
+      // No Description yet (issue #180) — the same "nothing chosen yet"
+      // state every other never-overridden field above starts in; there
+      // is no AddTaskOverrides field for it, mirroring `parentId` above:
+      // a Description is something the reader adds once the Task already
+      // exists, in the Task's own detail view, not something the add
+      // field predicts on their behalf.
+      description: null,
     });
   }
 
@@ -417,6 +430,16 @@ export function useTasks(
     setLabelIdsMutation.mutate({ id, labelIds });
   }
 
+  const setDescriptionMutation = useMutation({
+    mutationFn: ({ id, description }: { id: string; description: string | null }) =>
+      taskStore.setDescription(id, description),
+    onSuccess: afterLocalWrite,
+  });
+
+  function setTaskDescription(id: string, description: string | null) {
+    setDescriptionMutation.mutate({ id, description });
+  }
+
   function listTasksInProject(projectId: string | null): Promise<Task[]> {
     return taskStore.listByProject(projectId);
   }
@@ -529,6 +552,7 @@ export function useTasks(
     setTaskDeadline,
     setTaskPriority,
     setTaskLabels,
+    setTaskDescription,
     listTasksInProject,
     listTaskChildren,
     listTasksInSection,

@@ -76,7 +76,23 @@ export async function sync(options: SyncEngineOptions): Promise<void> {
 
     if (response.tasks.length > 0) {
       const syncedAt = now();
-      await taskStore.upsert(response.tasks.map((task) => fromWireTaskOutput(task, syncedAt)));
+      // Looked up per incoming Task, not read off `pendingTasks`/some
+      // other snapshot already in scope: an echoed Task's own row may
+      // have been pending or may not (the Server can echo a Task this
+      // Device never pushed, ADR 0051's whole "converge" point), and
+      // this Device's current copy is the only thing that can answer
+      // "what does this Device already hold for a field the wire doesn't
+      // carry" (mapping.ts's fromWireTaskOutput own doc comment on why
+      // `description` needs this at all). `get()` returns `undefined`
+      // for a Task this Device has never seen, or has since tombstoned —
+      // both cases correctly have nothing local to carry through.
+      const incomingTasks = await Promise.all(
+        response.tasks.map(async (wireTask) => {
+          const existing = await taskStore.get(wireTask.id);
+          return fromWireTaskOutput(wireTask, syncedAt, existing);
+        }),
+      );
+      await taskStore.upsert(incomingTasks);
     }
     if (response.task_cursor > taskCursor) {
       await taskStore.setCursor(response.task_cursor);

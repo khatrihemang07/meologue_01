@@ -32,6 +32,7 @@ function task(overrides: Partial<Task> = {}): Task {
     projectId: null,
     sectionId: null,
     parentId: null,
+    description: null,
     ...overrides,
   };
 }
@@ -47,6 +48,7 @@ function renderRow(overrides: Partial<Parameters<typeof TaskRow>[0]> = {}) {
       onSetProject: vi.fn(),
       onSetLabels: vi.fn(),
       onCopyLink: vi.fn(),
+      commentCountFor: vi.fn(() => 0),
     },
     onComplete: vi.fn(),
     onCompleteForever: vi.fn(),
@@ -399,6 +401,30 @@ describe("TaskRow", () => {
     renderRow({ task: task({ content: "call mum", date: "2026-09-03T09:30" }) });
 
     expect(screen.getByText("Sep 3, 9:30 AM")).toBeInTheDocument();
+  });
+
+  describe("comment count — issue #180", () => {
+    it("shows no comment count when there are none", () => {
+      renderRow({ task: task({ content: "call mum" }), commentCount: 0 });
+
+      expect(screen.queryByText("0")).not.toBeInTheDocument();
+    });
+
+    it("shows the count next to the date chip when non-zero", () => {
+      renderRow({
+        task: task({ content: "call mum", date: "2026-09-03" }),
+        commentCount: 3,
+      });
+
+      expect(screen.getByText("Sep 3")).toBeInTheDocument();
+      expect(screen.getByText("3")).toBeInTheDocument();
+    });
+
+    it("shows the count even on a Task with no date, deadline or priority", () => {
+      renderRow({ task: task({ content: "call mum" }), commentCount: 1 });
+
+      expect(screen.getByText("1")).toBeInTheDocument();
+    });
   });
 
   // Issue #169's Today view is the first caller with no drag handlers at

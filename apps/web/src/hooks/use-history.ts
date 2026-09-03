@@ -90,6 +90,10 @@ export function promotedTaskToTask(
     projectId: null,
     sectionId: null,
     parentId: null,
+    // No Description — a Task promoted out of a checkbox line starts
+    // with the same "nothing chosen yet" state one created directly in
+    // Todo does (issue #180, @meologue/core's task-types.ts).
+    description: null,
   };
 }
 

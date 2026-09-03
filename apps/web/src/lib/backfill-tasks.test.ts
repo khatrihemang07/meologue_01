@@ -393,6 +393,7 @@ describe("backfillTasksFromHistory", () => {
       projectId: null,
       sectionId: null,
       parentId: null,
+      description: null,
     });
 
     await backfillTasksFromHistory({

@@ -475,6 +475,26 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
     });
   });
 
+  describe("setDescription() — issue #180", () => {
+    it("changes description and clears seq", async () => {
+      await store.upsert([task({ id: "a", seq: 5 })]);
+
+      await store.setDescription("a", "some *markdown* text");
+
+      const [found] = await store.list();
+      expect(found).toMatchObject({ id: "a", description: "some *markdown* text", seq: null });
+    });
+
+    it("clears description back to null", async () => {
+      await store.upsert([task({ id: "a", description: "already has one", seq: 5 })]);
+
+      await store.setDescription("a", null);
+
+      const [found] = await store.list();
+      expect(found).toMatchObject({ description: null });
+    });
+  });
+
   describe("setProject() — issue #171", () => {
     it("changes projectId and clears seq", async () => {
       await store.upsert([task({ id: "a", seq: 5 })]);
@@ -761,7 +781,7 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
 
     // Every local mutation against a tombstone is a no-op — no
     // resurrection, no matter which door a caller tries.
-    it("complete(), uncomplete(), rename(), reorder(), the three #169 setters, setLabelIds(), the three #171 setters, advanceRecurring(), completeForever() and postpone() are all no-ops against a tombstone", async () => {
+    it("complete(), uncomplete(), rename(), reorder(), the three #169 setters, setLabelIds(), the three #171 setters, setDescription(), advanceRecurring(), completeForever() and postpone() are all no-ops against a tombstone", async () => {
       await store.upsert([task({ id: "a", content: "something", seq: 1, orderKey: "m" })]);
       await store.remove("a");
 
@@ -775,6 +795,7 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
       await store.setLabelIds("a", ["work"]);
       await store.setProject("a", "some-project");
       await store.setSection("a", "some-section");
+      await store.setDescription("a", "trying to bring it back");
       // setParent's own no-op check runs before its parent-existence
       // check, so this doesn't throw even though "not-a-real-parent" was
       // never created.

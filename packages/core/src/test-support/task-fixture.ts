@@ -30,6 +30,10 @@ export function task(overrides: Partial<Task> = {}): Task {
     projectId: null,
     sectionId: null,
     parentId: null,
+    // No description — the same "nothing chosen yet" state a Task
+    // created directly in Todo starts with (issue #180,
+    // ../task-types.ts's own `description` doc comment).
+    description: null,
     ...overrides,
   };
 }

@@ -1,5 +1,6 @@
 import type { SqliteDriver } from "./driver";
 import { migrate } from "./migrator";
+import { SqliteCommentStore } from "./sqlite-comment-store";
 import { SqliteEntryStore } from "./sqlite-entry-store";
 import { SqliteLabelStore } from "./sqlite-label-store";
 import { SqliteProjectStore } from "./sqlite-project-store";
@@ -32,6 +33,8 @@ export interface OpenedSqliteStore {
   taskStore: SqliteTaskStore;
   labelStore: SqliteLabelStore;
   projectStore: SqliteProjectStore;
+  /** Comments (issue #180) — a fifth field, following the identical additive rule this interface's own header comment states. */
+  commentStore: SqliteCommentStore;
   deviceId: string;
 }
 
@@ -64,6 +67,7 @@ export async function open(driver: SqliteDriver): Promise<OpenedSqliteStore> {
   // takes a TaskStore collaborator for deleteSection/archiveSection's
   // cascade (../project-store.ts's own header comment, point 3).
   const projectStore = new SqliteProjectStore(driver, taskStore);
+  const commentStore = new SqliteCommentStore(driver);
   const deviceId = await store.ensureDeviceId();
-  return { store, taskStore, labelStore, projectStore, deviceId };
+  return { store, taskStore, labelStore, projectStore, commentStore, deviceId };
 }

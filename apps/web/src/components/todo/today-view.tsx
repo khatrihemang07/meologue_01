@@ -147,6 +147,7 @@ export function TodayView({
                 key={task.id}
                 task={task}
                 detailActions={detailActions}
+                commentCount={detailActions.commentCountFor(task.id)}
                 onComplete={() => onComplete(task.id, task.content, task.dateString)}
                 onCompleteForever={() => onCompleteForever(task.id, task.content)}
                 onRequestDelete={() => onRequestDelete(task.id)}
@@ -192,6 +193,7 @@ export function TodayView({
                     key={task.id}
                     task={task}
                     detailActions={detailActions}
+                    commentCount={detailActions.commentCountFor(task.id)}
                     onComplete={() => onComplete(task.id, task.content, task.dateString)}
                     onCompleteForever={() => onCompleteForever(task.id, task.content)}
                     onRequestDelete={() => onRequestDelete(task.id)}

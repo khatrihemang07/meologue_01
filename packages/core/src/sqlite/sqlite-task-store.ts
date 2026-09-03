@@ -9,6 +9,7 @@ import {
   assertValidPriority,
   hasTime,
   withDefaultDateString,
+  withDefaultDescription,
   withDefaultSchedulingFields,
   withDefaultStructureFields,
 } from "../task-fields";
@@ -153,7 +154,8 @@ export class SqliteTaskStore implements TaskStore {
       .map(withDefaultSchedulingFields)
       .map(withDefaultLabelIds)
       .map(withDefaultDateString)
-      .map(withDefaultStructureFields);
+      .map(withDefaultStructureFields)
+      .map(withDefaultDescription);
     // A single statement (mirrors SqliteEntryStore.upsert — see ADR
     // 0007): SQLite's native upsert applies each conflicting row's own
     // `excluded` values, so this stays correct for a batch of unrelated
@@ -180,6 +182,7 @@ export class SqliteTaskStore implements TaskStore {
           projectId: sql`excluded.project_id`,
           sectionId: sql`excluded.section_id`,
           parentId: sql`excluded.parent_id`,
+          description: sql`excluded.description`,
         },
       });
     for (const t of normalized) {
@@ -267,6 +270,12 @@ export class SqliteTaskStore implements TaskStore {
   // file's own header comment, and ../label-store.ts's remove()).
   async setLabelIds(id: string, labelIds: string[]): Promise<void> {
     await this.updateIfLive(id, { labelIds, seq: null, syncedAt: null });
+  }
+
+  // See TaskStore.setDescription's own doc comment. No validation beyond
+  // the string shape itself — a Description is free-form Markdown.
+  async setDescription(id: string, description: string | null): Promise<void> {
+    await this.updateIfLive(id, { description, seq: null, syncedAt: null });
   }
 
   // See TaskStore.setProject's own doc comment for why `sectionId` is
@@ -444,7 +453,7 @@ export class SqliteTaskStore implements TaskStore {
     // match list()'s own order (order_key asc, id asc), mirroring
     // SqliteEntryStore.search's "same order as list()" guarantee.
     const result = await this.driver.execute(
-      `SELECT tasks.id, tasks.device_id, tasks.content, tasks.completed_at, tasks.order_key, tasks.created_at, tasks.seq, tasks.synced_at, tasks.deleted_at, tasks.date, tasks.deadline, tasks.priority, tasks.label_ids, tasks.date_string, tasks.project_id, tasks.section_id, tasks.parent_id
+      `SELECT tasks.id, tasks.device_id, tasks.content, tasks.completed_at, tasks.order_key, tasks.created_at, tasks.seq, tasks.synced_at, tasks.deleted_at, tasks.date, tasks.deadline, tasks.priority, tasks.label_ids, tasks.date_string, tasks.project_id, tasks.section_id, tasks.parent_id, tasks.description
        FROM tasks_fts
        JOIN tasks ON tasks.id = tasks_fts.id
        WHERE tasks_fts MATCH ? AND tasks.deleted_at IS NULL AND tasks.completed_at IS NULL
@@ -537,8 +546,8 @@ function toPrefixMatchQuery(text: string): string {
 // rowToEntry — a row that doesn't match the shape this query asked for
 // throws instead of silently mis-mapping a value into the wrong field.
 function rowToTask(row: unknown): Task {
-  if (!Array.isArray(row) || row.length !== 17) {
-    throw new Error(`sqlite search expected a 17-column tasks row, got ${JSON.stringify(row)}`);
+  if (!Array.isArray(row) || row.length !== 18) {
+    throw new Error(`sqlite search expected an 18-column tasks row, got ${JSON.stringify(row)}`);
   }
   const [
     id,
@@ -558,6 +567,7 @@ function rowToTask(row: unknown): Task {
     projectId,
     sectionId,
     parentId,
+    description,
   ] = row as [
     string,
     string,
@@ -572,6 +582,7 @@ function rowToTask(row: unknown): Task {
     string | null,
     number,
     string,
+    string | null,
     string | null,
     string | null,
     string | null,
@@ -599,5 +610,6 @@ function rowToTask(row: unknown): Task {
     projectId,
     sectionId,
     parentId,
+    description,
   };
 }

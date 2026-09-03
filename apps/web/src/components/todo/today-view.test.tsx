@@ -28,6 +28,7 @@ function task(overrides: Partial<Task> = {}): Task {
     projectId: null,
     sectionId: null,
     parentId: null,
+    description: null,
     ...overrides,
   };
 }
@@ -43,6 +44,7 @@ function renderTodayView(overrides: Partial<Parameters<typeof TodayView>[0]> = {
       onSetProject: vi.fn(),
       onSetLabels: vi.fn(),
       onCopyLink: vi.fn(),
+      commentCountFor: vi.fn(() => 0),
     },
     onComplete: vi.fn(),
     onCompleteForever: vi.fn(),

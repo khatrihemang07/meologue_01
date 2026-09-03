@@ -1,4 +1,4 @@
-import type { Label, Project, Section, Task } from "@meologue/core";
+import type { Comment, Label, Project, Section, Task } from "@meologue/core";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TaskDetailView } from "./task-detail-view";
@@ -22,6 +22,7 @@ function task(overrides: Partial<Task> = {}): Task {
     projectId: null,
     sectionId: null,
     parentId: null,
+    description: null,
     ...overrides,
   };
 }
@@ -76,6 +77,20 @@ function label(overrides: Partial<Label> = {}): Label {
   };
 }
 
+function comment(overrides: Partial<Comment> = {}): Comment {
+  return {
+    id: "c1",
+    deviceId: "device-a",
+    taskId: "1",
+    text: "sounds good",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    seq: 1,
+    syncedAt: "2026-01-01T00:00:00.000Z",
+    deletedAt: null,
+    ...overrides,
+  };
+}
+
 function renderView(overrides: Partial<Parameters<typeof TaskDetailView>[0]> = {}) {
   const props = {
     task: task(),
@@ -91,6 +106,11 @@ function renderView(overrides: Partial<Parameters<typeof TaskDetailView>[0]> = {
     onOpenSchedule: vi.fn(),
     onSetProject: vi.fn(),
     onSetLabels: vi.fn(),
+    onSetDescription: vi.fn(),
+    comments: [],
+    onAddComment: vi.fn(),
+    onEditComment: vi.fn(),
+    onRemoveComment: vi.fn(),
     ...overrides,
   };
   render(<TaskDetailView {...props} />);
@@ -253,10 +273,154 @@ describe("TaskDetailView", () => {
     expect(screen.getByRole("button", { name: /Labels.*Home, Errands/s })).toBeInTheDocument();
   });
 
-  it("names description and comments as not built yet, rather than showing nothing", () => {
-    renderView();
+  describe("Description — issue #180", () => {
+    it("an unset Description renders a pill", () => {
+      renderView({ task: task({ description: null }) });
 
-    expect(screen.getByText(/Description and comments aren't built yet/)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Description" })).toBeInTheDocument();
+    });
+
+    it("a set Description is promoted into a rendered, click-to-edit block", () => {
+      renderView({ task: task({ description: "buy the *good* milk" }) });
+
+      expect(screen.queryByRole("button", { name: "Description" })).not.toBeInTheDocument();
+      // Rendered as Markdown by the same renderer an Entry's body uses —
+      // "*good*" reads as emphasis, not literal asterisks.
+      expect(screen.getByText("good").tagName).toBe("EM");
+    });
+
+    it("tapping the pill opens an editable textarea seeded with the current text", () => {
+      renderView({ task: task({ description: "existing text" }) });
+
+      fireEvent.click(screen.getByText("existing text"));
+
+      expect(screen.getByLabelText("Task description")).toHaveValue("existing text");
+    });
+
+    it("commits a new Description on blur, trimmed", () => {
+      const onSetDescription = vi.fn();
+      renderView({ task: task({ description: null }), onSetDescription });
+
+      fireEvent.click(screen.getByRole("button", { name: "Description" }));
+      const field = screen.getByLabelText("Task description");
+      fireEvent.change(field, { target: { value: "  a plan\n\n- step one\n- step two  " } });
+      fireEvent.blur(field);
+
+      expect(onSetDescription).toHaveBeenCalledWith("a plan\n\n- step one\n- step two");
+    });
+
+    it("clearing a Description back to blank sets it to null", () => {
+      const onSetDescription = vi.fn();
+      renderView({ task: task({ description: "something" }), onSetDescription });
+
+      fireEvent.click(screen.getByText("something"));
+      const field = screen.getByLabelText("Task description");
+      fireEvent.change(field, { target: { value: "   " } });
+      fireEvent.blur(field);
+
+      expect(onSetDescription).toHaveBeenCalledWith(null);
+    });
+
+    it("does not commit when the text is unchanged", () => {
+      const onSetDescription = vi.fn();
+      renderView({ task: task({ description: "unchanged" }), onSetDescription });
+
+      fireEvent.click(screen.getByText("unchanged"));
+      fireEvent.blur(screen.getByLabelText("Task description"));
+
+      expect(onSetDescription).not.toHaveBeenCalled();
+    });
+
+    it("Escape reverts an in-progress edit without committing", () => {
+      const onSetDescription = vi.fn();
+      renderView({ task: task({ description: "original" }), onSetDescription });
+
+      fireEvent.click(screen.getByText("original"));
+      const field = screen.getByLabelText("Task description");
+      fireEvent.change(field, { target: { value: "discard me" } });
+      fireEvent.keyDown(field, { key: "Escape" });
+      fireEvent.blur(field);
+
+      expect(onSetDescription).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("Comments — issue #180", () => {
+    it("renders no thread heading when there are no Comments yet", () => {
+      renderView({ comments: [] });
+
+      expect(screen.getByText("Comments")).toBeInTheDocument();
+      expect(screen.queryByText(/^Comments \(/)).not.toBeInTheDocument();
+    });
+
+    it("lists every Comment, oldest first as handed in, each rendered as Markdown", () => {
+      renderView({
+        comments: [
+          comment({ id: "c1", text: "first *reply*" }),
+          comment({ id: "c2", text: "second reply" }),
+        ],
+      });
+
+      expect(screen.getByText("Comments (2)")).toBeInTheDocument();
+      expect(screen.getByText("reply", { selector: "em" })).toBeInTheDocument();
+      expect(screen.getByText("second reply")).toBeInTheDocument();
+    });
+
+    it("the composer is always visible, and submitting adds a Comment and clears the field", () => {
+      const onAddComment = vi.fn();
+      renderView({ comments: [], onAddComment });
+
+      const field = screen.getByLabelText("Add a comment");
+      fireEvent.change(field, { target: { value: "  a new comment  " } });
+      fireEvent.click(screen.getByRole("button", { name: "Comment" }));
+
+      expect(onAddComment).toHaveBeenCalledWith("a new comment");
+      expect(field).toHaveValue("");
+    });
+
+    it("Enter submits the composer; Shift+Enter does not", () => {
+      const onAddComment = vi.fn();
+      renderView({ comments: [], onAddComment });
+
+      const field = screen.getByLabelText("Add a comment");
+      fireEvent.change(field, { target: { value: "typed" } });
+      fireEvent.keyDown(field, { key: "Enter", shiftKey: true });
+      expect(onAddComment).not.toHaveBeenCalled();
+
+      fireEvent.keyDown(field, { key: "Enter" });
+      expect(onAddComment).toHaveBeenCalledWith("typed");
+    });
+
+    it("ignores a blank comment", () => {
+      const onAddComment = vi.fn();
+      renderView({ comments: [], onAddComment });
+
+      fireEvent.click(screen.getByRole("button", { name: "Comment" }));
+
+      expect(onAddComment).not.toHaveBeenCalled();
+    });
+
+    it("editing a Comment opens a textarea seeded with its text, and commits on blur", () => {
+      const onEditComment = vi.fn();
+      renderView({ comments: [comment({ id: "c1", text: "original" })], onEditComment });
+
+      fireEvent.click(screen.getByRole("button", { name: "Edit comment" }));
+      const field = screen.getByLabelText("Edit comment");
+      expect(field).toHaveValue("original");
+      fireEvent.change(field, { target: { value: "changed" } });
+      fireEvent.blur(field);
+
+      expect(onEditComment).toHaveBeenCalledWith("c1", "changed");
+    });
+
+    it("deleting a Comment calls onRemoveComment with its id", () => {
+      const onRemoveComment = vi.fn();
+      renderView({ comments: [comment({ id: "c1" })], onRemoveComment });
+
+      fireEvent.click(screen.getByRole("button", { name: "Delete comment" }));
+
+      expect(onRemoveComment).toHaveBeenCalledWith("c1");
+    });
   });
 
   it("shows no duration control anywhere — Task.duration was removed in #179", () => {

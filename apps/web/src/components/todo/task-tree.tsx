@@ -477,6 +477,7 @@ function TaskTreeRow({
       <TaskRow
         task={task}
         detailActions={detailActions}
+        commentCount={detailActions.commentCountFor(task.id)}
         depth={depth}
         isDropTarget={isDropTarget}
         isNestTarget={isNestTarget}

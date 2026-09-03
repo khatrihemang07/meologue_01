@@ -143,6 +143,21 @@ export function withDefaultStructureFields(t: Task): Task {
 }
 
 /**
+ * Fills in `description` where an incoming Task omits it (issue #180) —
+ * the fourth such `?`-optional-in-practice defaulter, mirroring
+ * withDefaultDateString/withDefaultStructureFields above and
+ * ../label-fields.ts's withDefaultLabelIds for the identical reason:
+ * `description` is **required** on `Task` (../task-types.ts's own doc
+ * comment), so this is purely the safety net for a Task literal or a
+ * Sync payload written before this field existed, never a licence for a
+ * local caller to stay vague. `null` means "no Description yet," the
+ * same state a Task created directly in Todo starts in.
+ */
+export function withDefaultDescription(t: Task): Task {
+  return { ...t, description: t.description ?? null };
+}
+
+/**
  * A sub-task nests at most this many levels deep, CONTEXT.md's Sub-task
  * entry and issue #171's acceptance criteria (top-level Task = depth 1,
  * its sub-task = depth 2, and so on). Exported so both TaskStore

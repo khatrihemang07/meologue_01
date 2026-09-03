@@ -71,6 +71,7 @@ function createFakeTaskStore(): TaskStore {
     setProject: vi.fn(async () => {}),
     setSection: vi.fn(async () => {}),
     setParent: vi.fn(async () => {}),
+    setDescription: vi.fn(async () => {}),
     advanceRecurring: vi.fn(async () => {}),
     completeForever: vi.fn(async () => {}),
     postpone: vi.fn(async () => {}),

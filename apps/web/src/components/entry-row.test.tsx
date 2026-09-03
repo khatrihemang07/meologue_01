@@ -75,6 +75,7 @@ function renderEntryRow(
     setTaskDeadline: vi.fn(),
     setTaskPriority: vi.fn(),
     setTaskLabels: vi.fn(),
+    setTaskDescription: vi.fn(),
     listTasksInProject: vi.fn(async () => []),
     listTaskChildren: vi.fn(async () => []),
     listTasksInSection: vi.fn(async () => []),
@@ -90,6 +91,10 @@ function renderEntryRow(
     setTaskParent: vi.fn(async () => {}),
     labels: [],
     resolveLabelIds: vi.fn(async () => []),
+    comments: [],
+    addComment: vi.fn(),
+    editComment: vi.fn(),
+    removeComment: vi.fn(),
     // Issue #171's Projects and Sections — these tests never exercise
     // them either, same reasoning as the setTaskProject/etc. stubs above.
     projects: [],
@@ -715,6 +720,7 @@ describe("EntryRow", () => {
         projectId: null,
         sectionId: null,
         parentId: null,
+        description: null,
         ...overrides,
       };
     }

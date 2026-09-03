@@ -31,6 +31,7 @@ function task(overrides: Partial<Task> = {}): Task {
     projectId: null,
     sectionId: null,
     parentId: null,
+    description: null,
     ...overrides,
   };
 }
@@ -48,6 +49,7 @@ function renderTree(overrides: Partial<Parameters<typeof TaskTree>[0]> = {}) {
       onSetProject: vi.fn(),
       onSetLabels: vi.fn(),
       onCopyLink: vi.fn(),
+      commentCountFor: vi.fn(() => 0),
     },
     onComplete: vi.fn(),
     onCompleteForever: vi.fn(),

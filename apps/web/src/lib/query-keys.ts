@@ -195,3 +195,20 @@ export const PROJECTS_QUERY_KEY = ["projects"] as const;
 export function sectionsQueryKey(projectId: string) {
   return ["sections", projectId] as const;
 }
+
+/**
+ * Issue #180: every live Comment across every Task (CommentStore.list()),
+ * read by use-comments.ts. Flat and unpaginated, mirroring
+ * LABELS_QUERY_KEY — a personal task list's own Comments sit at the same
+ * scale Labels and Tasks themselves already do, not History's (ADR
+ * 0016's own reasoning for why *that* list() gained paging). One key for
+ * the whole app rather than one per Task: task-row.tsx's own
+ * comment-count badge needs every Task's count at once, and the Task
+ * detail view's own thread narrows this same list to one Task's Comments
+ * client-side (comment-counts.ts's `commentsForTask`) rather than this
+ * file growing a second, per-Task key the way `taskChildrenQueryKey`
+ * exists for Tasks — a personal Comment list is small enough that a
+ * second round trip buys nothing list() itself doesn't already have in
+ * memory.
+ */
+export const COMMENTS_QUERY_KEY = ["comments"] as const;

@@ -306,4 +306,62 @@ describe("sync engine", () => {
     // ordinary active-Task feed, exactly like any other Task.
     expect((await taskStore.list()).map((t) => t.id)).toContain("orphaned-task");
   });
+
+  // Issue #180's own data-loss bug, reproduced end to end and pinned down
+  // at the layer it actually lives at: `description` has no wire field
+  // yet (mapping.ts's fromWireTaskOutput own doc comment), so an
+  // *ordinary* round trip that changes nothing but a wire-covered field
+  // — a rename, here — must not let that absence get treated as "the
+  // wire confirms this Task has no description" and silently overwrite
+  // whatever this Device already held locally. Reproduced live before
+  // this fix: renaming a Task with a description, syncing, and pulling
+  // the Server's echo back cleared the description in the store, not
+  // only on screen.
+  it("preserves a Task's locally-held description across a sync round trip that changes an unrelated, wire-covered field", async () => {
+    const store = new InMemoryEntryStore();
+    const taskStore = new InMemoryTaskStore();
+    await taskStore.upsert([
+      task({
+        id: "local-task-1",
+        content: "buy milk",
+        description: "oat milk, not soy",
+        seq: 1,
+      }),
+    ]);
+
+    // The Server echoes back a rename — `content` changed and gets a
+    // fresh `seq` (ADR 0051's `is distinct from` guard), but the wire
+    // itself carries nothing about `description` either way; nothing in
+    // `wireTaskOutput`'s own fixture has a field to even omit.
+    const transport = vi.fn(async () => ({
+      ...emptyResponse,
+      tasks: [wireTaskOutput({ id: "local-task-1", content: "buy milk Q", seq: 2 })],
+      task_cursor: 2,
+    }));
+
+    await sync({ store, taskStore, transport, deviceId: DEVICE_ID });
+
+    const updated = await taskStore.get("local-task-1");
+    expect(updated?.content).toBe("buy milk Q");
+    expect(updated?.description).toBe("oat milk, not soy");
+  });
+
+  // The mirror case: a Task this Device has never held any copy of has
+  // nothing to carry through, and correctly lands the same "nothing
+  // chosen yet" `null` a brand-new Task starts with either way — proving
+  // the fix reads `existing`, not merely refusing to ever apply `null`.
+  it("a Task synced for the first time starts with no description to carry through", async () => {
+    const store = new InMemoryEntryStore();
+    const taskStore = new InMemoryTaskStore();
+
+    const transport = vi.fn(async () => ({
+      ...emptyResponse,
+      tasks: [wireTaskOutput({ id: "brand-new-task", seq: 1 })],
+      task_cursor: 1,
+    }));
+
+    await sync({ store, taskStore, transport, deviceId: DEVICE_ID });
+
+    expect((await taskStore.get("brand-new-task"))?.description).toBeNull();
+  });
 });

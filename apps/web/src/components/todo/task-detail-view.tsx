@@ -10,13 +10,26 @@
  * *both* shapes depending on screen width, where every existing caller of
  * `Sheet` only ever wants one.
  *
+ * **Description and Comments** (issue #180) sit directly under the
+ * title, not in the attribute sidebar — that's the one reference-
+ * behaviour departure from Project/Date/Deadline/Priority/Labels below,
+ * which stay a sidebar of pills-or-rows. Description follows the
+ * identical pill-then-row promotion those five already use
+ * (`AttributePill`/`AttributeRow`'s own doc comments): unset, it's a
+ * pill; once it has words, it's promoted into a rendered block, edited
+ * in place by tapping it. Both a description and a Comment's own `text`
+ * are Markdown, rendered by the identical renderer an Entry's body
+ * already uses (`entryProse`, ../entry-prose.tsx) — this file writes no
+ * second renderer for either.
+ *
  * **Out of scope, deliberately** (issue #178's own report names these
- * rather than leaving them to look like oversights): description and
- * comments (issue #180 — the placeholder row below says so in the running
- * app, not only in this comment), the composer chip that would open this
- * route directly from a Sent checkbox (issue #181), the activity log
- * (issue #184), and duration — `Task.duration` is being removed in a
- * concurrent ticket (issue #179) and nothing here reads or renders it.
+ * rather than leaving them to look like oversights): the composer chip
+ * that would open this route directly from a Sent checkbox (issue #181),
+ * the activity log (issue #184 — this view's own Comment edit/delete
+ * doors are left wired straight to the store, with no event recorded,
+ * exactly the "seams clean, log not built" scope issue #180 draws), and
+ * duration — `Task.duration` is being removed in a concurrent ticket
+ * (issue #179) and nothing here reads or renders it.
  *
  * **Date, Deadline and Priority all open the identical `TaskScheduleSheet`
  * every row's own "Date" hover action already opens** (`onOpenSchedule`
@@ -27,12 +40,13 @@
  * app edits either), so this file builds the one inline control each
  * needs.
  */
-import type { Label, Project, Section, Task } from "@meologue/core";
+import type { Comment, Label, Project, Section, Task } from "@meologue/core";
 import { uiPriorityOf } from "@meologue/core";
-import { ChevronLeft, ChevronRight, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Pencil, Trash2, X } from "lucide-react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import type * as React from "react";
 import { useState } from "react";
+import { entryProse } from "@/components/entry-prose";
 import { useWideLayout } from "@/hooks/use-wide-layout";
 import { formatDay, formatTaskDate } from "@/lib/format-task-date";
 import { priorityColour } from "@/lib/task-priority-colors";
@@ -59,6 +73,14 @@ export interface TaskDetailViewProps {
   onOpenSchedule: () => void;
   onSetProject: (projectId: string | null) => void;
   onSetLabels: (labelIds: string[]) => void;
+  /** Sets the Task's `description` (issue #180) — `null` clears it back to "nothing chosen yet." */
+  onSetDescription: (description: string | null) => void;
+  /** This Task's own Comment thread, oldest first — already scoped to this Task by the caller (comment-counts.ts's `commentsForTask`), not the whole app's Comments. */
+  comments: Comment[];
+  /** Adds a new Comment to this Task. */
+  onAddComment: (text: string) => void;
+  onEditComment: (id: string, text: string) => void;
+  onRemoveComment: (id: string) => void;
 }
 
 /** A Task's attribute, before it has one — a small, tappable pill rather than an empty row (this file's own header comment: "the view grows with the Task instead of showing empty fields"). */
@@ -111,6 +133,136 @@ function AttributeRow({
   );
 }
 
+/**
+ * One Comment in the thread (issue #180) — rendered inline, click to
+ * edit in place, mirroring the Description block's own toggle between a
+ * rendered view and a raw-Markdown textarea. A hover-revealed pencil/
+ * trash pair rather than a swipe or a context menu: this file has no
+ * other row chrome to match, and a Comment thread is short enough that
+ * two small buttons cost nothing to keep visible on hover.
+ */
+function CommentRow({
+  comment,
+  onEdit,
+  onRemove,
+}: {
+  comment: Comment;
+  onEdit: (text: string) => void;
+  onRemove: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(comment.text);
+
+  function startEditing() {
+    setDraft(comment.text);
+    setEditing(true);
+  }
+
+  function commit() {
+    setEditing(false);
+    const trimmed = draft.trim();
+    if (trimmed === "" || trimmed === comment.text) {
+      setDraft(comment.text);
+      return;
+    }
+    onEdit(trimmed);
+  }
+
+  if (editing) {
+    return (
+      <li>
+        <textarea
+          aria-label="Edit comment"
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={commit}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              setDraft(comment.text);
+              event.currentTarget.blur();
+            }
+          }}
+          rows={2}
+          className="w-full resize-none rounded-md border border-border bg-transparent p-2 text-sm outline-none"
+        />
+      </li>
+    );
+  }
+
+  return (
+    <li className="group flex items-start gap-1 rounded-md p-1.5 text-sm transition hover:bg-muted">
+      <div className="min-w-0 flex-1 [&_p]:my-0 [&_ul]:my-0">{entryProse(comment.text)}</div>
+      <button
+        type="button"
+        aria-label="Edit comment"
+        onClick={startEditing}
+        className="flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100"
+      >
+        <Pencil aria-hidden="true" className="size-3.5" />
+      </button>
+      <button
+        type="button"
+        aria-label="Delete comment"
+        onClick={onRemove}
+        className="flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100"
+      >
+        <Trash2 aria-hidden="true" className="size-3.5" />
+      </button>
+    </li>
+  );
+}
+
+/**
+ * The always-visible "Add a comment" composer (issue #180's own
+ * reference-behaviour note — never hidden behind an icon). Enter submits,
+ * Shift+Enter inserts a newline, mirroring the title field's identical
+ * Enter-commits convention above; submitting clears the field for the
+ * next Comment rather than leaving what was just sent sitting in the box.
+ */
+function CommentComposer({ onSubmit }: { onSubmit: (text: string) => void }) {
+  const [text, setText] = useState("");
+
+  function submit() {
+    const trimmed = text.trim();
+    if (trimmed === "") {
+      return;
+    }
+    onSubmit(trimmed);
+    setText("");
+  }
+
+  return (
+    <form
+      onSubmit={(event) => {
+        event.preventDefault();
+        submit();
+      }}
+      className="flex items-end gap-2"
+    >
+      <textarea
+        aria-label="Add a comment"
+        placeholder="Add a comment"
+        value={text}
+        onChange={(event) => setText(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && !event.shiftKey) {
+            event.preventDefault();
+            submit();
+          }
+        }}
+        rows={1}
+        className="min-w-0 flex-1 resize-none rounded-md border border-border bg-transparent p-2 text-sm outline-none"
+      />
+      <button
+        type="submit"
+        className="shrink-0 rounded-md border border-border px-2.5 py-1.5 text-sm transition hover:bg-muted"
+      >
+        Comment
+      </button>
+    </form>
+  );
+}
+
 function TaskDetailBody({
   task,
   project,
@@ -124,11 +276,18 @@ function TaskDetailBody({
   onOpenSchedule,
   onSetProject,
   onSetLabels,
+  onSetDescription,
+  comments,
+  onAddComment,
+  onEditComment,
+  onRemoveComment,
   wide,
 }: Omit<TaskDetailViewProps, "onClose"> & { wide: boolean }) {
   const [title, setTitle] = useState(task.content);
   const [pickingProject, setPickingProject] = useState(false);
   const [pickingLabels, setPickingLabels] = useState(false);
+  const [editingDescription, setEditingDescription] = useState(false);
+  const [descriptionDraft, setDescriptionDraft] = useState(task.description ?? "");
   const uiPriority = uiPriorityOf(task.priority);
 
   function commitTitle() {
@@ -138,6 +297,25 @@ function TaskDetailBody({
       return;
     }
     onRename(trimmed);
+  }
+
+  function openDescriptionEditor() {
+    setDescriptionDraft(task.description ?? "");
+    setEditingDescription(true);
+  }
+
+  // Trims only — the identical "never reflows a body, only trims it"
+  // convention normalizeEntryBody (entry-text.ts) already follows for an
+  // Entry's own body, applied here for the identical reason: a
+  // Description is Markdown text, and internal newlines are part of what
+  // was typed, not incidental whitespace this view gets to discard.
+  function commitDescription() {
+    setEditingDescription(false);
+    const trimmed = descriptionDraft.trim();
+    const next = trimmed === "" ? null : trimmed;
+    if (next !== task.description) {
+      onSetDescription(next);
+    }
   }
 
   return (
@@ -208,13 +386,67 @@ function TaskDetailBody({
             />
           </DialogPrimitive.Title>
 
-          {/* Description and comments are issue #180's own scope — see
-              this file's own header comment. A plain, muted line rather
-              than silence: a reader who scrolls this far should see that
-              nothing is missing by accident. */}
-          <p className="text-muted-foreground text-xs italic">
-            Description and comments aren't built yet.
-          </p>
+          {/* Description (issue #180) — directly under the title, not in
+              the sidebar (this file's own header comment). Pill until it
+              has words, then a rendered, click-to-edit block — the
+              identical promotion Project/Date/Deadline/Priority/Labels
+              use below, extended to cover this attribute too. */}
+          {task.description === null && !editingDescription ? (
+            <AttributePill label="Description" onClick={openDescriptionEditor} />
+          ) : editingDescription ? (
+            <textarea
+              aria-label="Task description"
+              value={descriptionDraft}
+              onChange={(event) => setDescriptionDraft(event.target.value)}
+              onBlur={commitDescription}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  setDescriptionDraft(task.description ?? "");
+                  event.currentTarget.blur();
+                }
+              }}
+              placeholder="Add a description…"
+              rows={4}
+              className="w-full resize-none rounded-md border border-border bg-transparent p-2 text-sm outline-none"
+            />
+          ) : (
+            <button
+              type="button"
+              onClick={openDescriptionEditor}
+              className="w-full rounded-md p-2 text-left text-sm transition hover:bg-muted"
+            >
+              {/* `[&_p]:my-0` — entryProse's own `<p>` carries margin
+                  meant for History's multi-Entry rhythm; a single Task's
+                  Description reads as one block, not a stack of Entries,
+                  so that margin is undone here the same way it would be
+                  wherever else this renderer is dropped into a context
+                  that isn't History. */}
+              <div className="[&_p]:my-0 [&_ul]:my-0">{entryProse(task.description ?? "")}</div>
+            </button>
+          )}
+
+          {/* Comments (issue #180) — a thread below the description, an
+              always-visible composer, the most recent Comment simply the
+              last item in the list rather than hidden behind an icon
+              (this ticket's own reference-behaviour note). */}
+          <div className="flex flex-col gap-2">
+            <h2 className="text-muted-foreground text-xs">
+              Comments{comments.length > 0 ? ` (${comments.length})` : ""}
+            </h2>
+            {comments.length > 0 && (
+              <ul className="flex flex-col gap-1">
+                {comments.map((comment) => (
+                  <CommentRow
+                    key={comment.id}
+                    comment={comment}
+                    onEdit={(text) => onEditComment(comment.id, text)}
+                    onRemove={() => onRemoveComment(comment.id)}
+                  />
+                ))}
+              </ul>
+            )}
+            <CommentComposer onSubmit={onAddComment} />
+          </div>
         </div>
 
         {/* The attribute sidebar — Project, Date, Deadline, Priority,
