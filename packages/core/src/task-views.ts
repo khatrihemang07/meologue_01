@@ -32,8 +32,15 @@ import type { Task } from "./task-types";
  * independent of what was separately planned.
  *
  * **The sort chain.** `date-and-time (or deadline, where there is no
- * date) -> priority -> deadline -> manual (orderKey) -> created`, applied
+ * date) -> priority -> deadline -> manual (dayOrder) -> created`, applied
  * by compareForToday below to every Task this module places in a section.
+ * The manual step reads `dayOrder`, Today's own fractional index (issue
+ * #182), not `orderKey` — `orderKey` is a Task's position inside its
+ * Project or Section, and letting Today's tie-break read it would mean a
+ * drag in Today silently reordering a Task inside its Project too, the
+ * exact bug ADR 0050's second index exists to rule out. See task-store.ts's
+ * `reorderToday` and mapping.ts's `fromWireTaskOutput` for the rest of
+ * that split.
  * Priority is a *tie-break inside a shared date-and-time*, not a global
  * rank — swapping the first two steps is the specific regression
  * Todoist itself shipped and then fixed twice in 2026, which is why
@@ -57,10 +64,10 @@ import type { Task } from "./task-types";
  * `dueToday` are returned separately, both sorted by the same
  * compareForToday chain — there's no second, "manual" comparator anywhere
  * in this module, so there's nothing that could reorder `overdue` by
- * `orderKey` first even under a future "manual sort" display mode: the
+ * `dayOrder` first even under a future "manual sort" display mode: the
  * chain's first step is always the date-and-time key, for every Task in
  * every section. task-views.test.ts proves this isn't merely true by
- * construction: it gives a set of overdue Tasks `orderKey`s that would
+ * construction: it gives a set of overdue Tasks `dayOrder`s that would
  * reorder them if sorted by manual order alone, and asserts `overdue`
  * still comes back in due-date order regardless.
  */
@@ -164,11 +171,13 @@ export function compareForToday(a: Task, b: Task): number {
     return deadlineOrder;
   }
 
-  // Manual: orderKey alone, not order-key.ts's compareByOrder — that
-  // helper folds in an id tie-break, which would make the "created" step
-  // below unreachable and collapse two steps of this chain into one.
-  if (a.orderKey !== b.orderKey) {
-    return a.orderKey < b.orderKey ? -1 : 1;
+  // Manual: dayOrder alone (Today's own fractional index, issue #182 —
+  // this module's own doc comment explains why not orderKey), not
+  // order-key.ts's compareByOrder — that helper folds in an id tie-break,
+  // which would make the "created" step below unreachable and collapse
+  // two steps of this chain into one.
+  if (a.dayOrder !== b.dayOrder) {
+    return a.dayOrder < b.dayOrder ? -1 : 1;
   }
 
   if (a.createdAt !== b.createdAt) {
@@ -176,7 +185,7 @@ export function compareForToday(a: Task, b: Task): number {
   }
 
   // Every step above tied — vanishingly unlikely (it needs an exact
-  // orderKey collision on top of everything else matching), but Array.sort
+  // dayOrder collision on top of everything else matching), but Array.sort
   // isn't guaranteed stable on every engine this runs on, so this is the
   // one tie-break that has to exist to keep the result deterministic
   // rather than merely usually-deterministic.

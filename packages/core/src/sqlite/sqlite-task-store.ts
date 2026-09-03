@@ -9,6 +9,7 @@ import {
   assertValidPriority,
   hasTime,
   withDefaultDateString,
+  withDefaultDayOrder,
   withDefaultDescription,
   withDefaultSchedulingFields,
   withDefaultStructureFields,
@@ -155,7 +156,8 @@ export class SqliteTaskStore implements TaskStore {
       .map(withDefaultLabelIds)
       .map(withDefaultDateString)
       .map(withDefaultStructureFields)
-      .map(withDefaultDescription);
+      .map(withDefaultDescription)
+      .map(withDefaultDayOrder);
     // A single statement (mirrors SqliteEntryStore.upsert — see ADR
     // 0007): SQLite's native upsert applies each conflicting row's own
     // `excluded` values, so this stays correct for a batch of unrelated
@@ -170,6 +172,7 @@ export class SqliteTaskStore implements TaskStore {
           content: sql`excluded.content`,
           completedAt: sql`excluded.completed_at`,
           orderKey: sql`excluded.order_key`,
+          dayOrder: sql`excluded.day_order`,
           createdAt: sql`excluded.created_at`,
           seq: sql`excluded.seq`,
           syncedAt: sql`excluded.synced_at`,
@@ -246,6 +249,17 @@ export class SqliteTaskStore implements TaskStore {
    */
   async reorder(id: string, orderKey: string): Promise<void> {
     await this.updateIfLive(id, { orderKey, seq: null, syncedAt: null });
+  }
+
+  /**
+   * Changes a Task's dayOrder locally — the Today-shaped sibling of
+   * reorder() above (issue #182). Writes exactly one row via the
+   * identical `WHERE id = ?` UPDATE, and leaves `orderKey` untouched:
+   * dragging in Today never reaches into a Task's Project position.
+   * No-op against a tombstone.
+   */
+  async reorderToday(id: string, dayOrder: string): Promise<void> {
+    await this.updateIfLive(id, { dayOrder, seq: null, syncedAt: null });
   }
 
   async setDate(id: string, date: string | null): Promise<void> {
@@ -453,7 +467,7 @@ export class SqliteTaskStore implements TaskStore {
     // match list()'s own order (order_key asc, id asc), mirroring
     // SqliteEntryStore.search's "same order as list()" guarantee.
     const result = await this.driver.execute(
-      `SELECT tasks.id, tasks.device_id, tasks.content, tasks.completed_at, tasks.order_key, tasks.created_at, tasks.seq, tasks.synced_at, tasks.deleted_at, tasks.date, tasks.deadline, tasks.priority, tasks.label_ids, tasks.date_string, tasks.project_id, tasks.section_id, tasks.parent_id, tasks.description
+      `SELECT tasks.id, tasks.device_id, tasks.content, tasks.completed_at, tasks.order_key, tasks.day_order, tasks.created_at, tasks.seq, tasks.synced_at, tasks.deleted_at, tasks.date, tasks.deadline, tasks.priority, tasks.label_ids, tasks.date_string, tasks.project_id, tasks.section_id, tasks.parent_id, tasks.description
        FROM tasks_fts
        JOIN tasks ON tasks.id = tasks_fts.id
        WHERE tasks_fts MATCH ? AND tasks.deleted_at IS NULL AND tasks.completed_at IS NULL
@@ -546,8 +560,8 @@ function toPrefixMatchQuery(text: string): string {
 // rowToEntry — a row that doesn't match the shape this query asked for
 // throws instead of silently mis-mapping a value into the wrong field.
 function rowToTask(row: unknown): Task {
-  if (!Array.isArray(row) || row.length !== 18) {
-    throw new Error(`sqlite search expected an 18-column tasks row, got ${JSON.stringify(row)}`);
+  if (!Array.isArray(row) || row.length !== 19) {
+    throw new Error(`sqlite search expected a 19-column tasks row, got ${JSON.stringify(row)}`);
   }
   const [
     id,
@@ -555,6 +569,7 @@ function rowToTask(row: unknown): Task {
     content,
     completedAt,
     orderKey,
+    dayOrder,
     createdAt,
     seq,
     syncedAt,
@@ -573,6 +588,7 @@ function rowToTask(row: unknown): Task {
     string,
     string,
     string | null,
+    string,
     string,
     string,
     number | null,
@@ -594,6 +610,7 @@ function rowToTask(row: unknown): Task {
     content,
     completedAt,
     orderKey,
+    dayOrder,
     createdAt,
     seq,
     syncedAt,

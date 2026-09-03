@@ -172,6 +172,14 @@ export class InMemoryProjectStore implements ProjectStore {
     this.sections.set(section.id, withDefaultSectionFields(section));
   }
 
+  // Sync's write path for Sections (issue #182) — mirrors upsertProjects
+  // above, no validation (addSection's own doc comment explains why).
+  async upsertSections(newSections: Section[]): Promise<void> {
+    for (const s of newSections) {
+      this.sections.set(s.id, withDefaultSectionFields(s));
+    }
+  }
+
   async renameSection(id: string, name: string): Promise<void> {
     assertValidSectionName(name);
     this.applySectionIfLive(id, { name, seq: null, syncedAt: null });

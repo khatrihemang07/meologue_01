@@ -80,6 +80,7 @@ function task(overrides: Partial<Task>): Task {
     content: "buy milk",
     completedAt: null,
     orderKey: "V",
+    dayOrder: "V",
     createdAt: "now",
     seq: null,
     syncedAt: null,

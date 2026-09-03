@@ -1,4 +1,12 @@
-import type { Entry, EntryStore, Task, TaskStore } from "@meologue/core";
+import type {
+  CommentStore,
+  Entry,
+  EntryStore,
+  LabelStore,
+  ProjectStore,
+  Task,
+  TaskStore,
+} from "@meologue/core";
 import { nextOccurrence, tomorrowOf } from "@meologue/core";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
@@ -34,6 +42,7 @@ function task(overrides: Partial<Task> = {}): Task {
     content: "buy milk",
     completedAt: null,
     orderKey: "V",
+    dayOrder: "V",
     createdAt: "2026-01-01T00:00:00.000Z",
     seq: 1,
     syncedAt: "2026-01-01T00:00:00.000Z",
@@ -110,6 +119,9 @@ function createFakeStore(): TaskStore {
     }),
     reorder: vi.fn(async (id: string, orderKey: string) => {
       active = active.map((t) => (t.id === id ? { ...t, orderKey, seq: null } : t));
+    }),
+    reorderToday: vi.fn(async (id: string, dayOrder: string) => {
+      active = active.map((t) => (t.id === id ? { ...t, dayOrder, seq: null } : t));
     }),
     remove: vi.fn(async (id: string) => {
       active = active.filter((t) => t.id !== id);
@@ -244,8 +256,24 @@ describe("useTasks", () => {
     const wrapper = ({ children }: { children: ReactNode }) => (
       <QueryClientProvider client={fresh.queryClient}>{children}</QueryClientProvider>
     );
+    // Issue #182: `useTasks` now takes three more stores solely to pass
+    // through to `requestSync` (use-tasks.ts's own doc comment) — this
+    // suite mocks `requestSync` wholesale (`requestSyncMock` above), so
+    // none of the three is ever actually called; a bare cast is enough to
+    // satisfy the parameter's type without a full fake implementation.
+    const projectStore = {} as ProjectStore;
+    const labelStore = {} as LabelStore;
+    const commentStore = {} as CommentStore;
     const rendered = renderHook<ReturnType<typeof UseTasks>, void>(
-      () => (fresh.useTasks as typeof UseTasks)(entryStore, store, deviceId),
+      () =>
+        (fresh.useTasks as typeof UseTasks)(
+          entryStore,
+          store,
+          projectStore,
+          labelStore,
+          commentStore,
+          deviceId,
+        ),
       { wrapper },
     );
     return { fresh, entryStore, ...rendered };
@@ -314,7 +342,10 @@ describe("useTasks", () => {
     act(() => result.current.addTask("call mum"));
 
     await waitFor(() =>
-      expect(requestSyncMock).toHaveBeenCalledWith(expect.anything(), store, "device-a"),
+      expect(requestSyncMock).toHaveBeenCalledWith(
+        expect.objectContaining({ taskStore: store }),
+        "device-a",
+      ),
     );
   });
 
@@ -328,7 +359,10 @@ describe("useTasks", () => {
     act(() => result.current.completeTask("a"));
 
     await waitFor(() =>
-      expect(requestSyncMock).toHaveBeenCalledWith(expect.anything(), store, "device-a"),
+      expect(requestSyncMock).toHaveBeenCalledWith(
+        expect.objectContaining({ taskStore: store }),
+        "device-a",
+      ),
     );
   });
 

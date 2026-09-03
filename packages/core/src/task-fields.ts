@@ -158,6 +158,21 @@ export function withDefaultDescription(t: Task): Task {
 }
 
 /**
+ * Fills in `dayOrder` where an incoming Task omits it (issue #182) — the
+ * fifth such `?`-optional-in-practice defaulter, mirroring
+ * withDefaultDescription above for the identical reason: `dayOrder` is
+ * **required** on `Task` (../task-types.ts's own doc comment), so this is
+ * purely the safety net for a Task literal or a Sync payload written
+ * before this field existed. Falls back to the Task's own `orderKey`,
+ * not `null` — `dayOrder` isn't nullable, and "wherever its Project order
+ * already put it" is the identical bootstrap mapping.ts's
+ * fromWireTaskOutput uses for a Task arriving fresh over Sync.
+ */
+export function withDefaultDayOrder(t: Task): Task {
+  return { ...t, dayOrder: t.dayOrder ?? t.orderKey };
+}
+
+/**
  * A sub-task nests at most this many levels deep, CONTEXT.md's Sub-task
  * entry and issue #171's acceptance criteria (top-level Task = depth 1,
  * its sub-task = depth 2, and so on). Exported so both TaskStore

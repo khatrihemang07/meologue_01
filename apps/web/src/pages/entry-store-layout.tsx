@@ -153,6 +153,8 @@ export interface EntryStoreOutletContext {
   uncompleteTask: (id: string) => void;
   renameTask: (id: string, content: string) => void;
   reorderTask: (id: string, orderKey: string) => void;
+  /** Writes the one `dayOrder` a Today drag computed (issue #182) — use-tasks.ts's own `reorderTaskToday` doc comment. */
+  reorderTaskToday: (id: string, dayOrder: string) => void;
   removeTask: (id: string) => void;
   /**
    * The three scheduling setters issue #169 adds (use-tasks.ts's own doc
@@ -375,6 +377,8 @@ function noopRenameTask(_id: string, _content: string) {}
 
 function noopReorderTask(_id: string, _orderKey: string) {}
 
+function noopReorderTaskToday(_id: string, _dayOrder: string) {}
+
 function noopRemoveTask(_id: string) {}
 
 // Issue #169's three setters — the not-ready stand-ins for a Today view or a
@@ -553,6 +557,9 @@ const TASK_STORE_METHODS: StoreMethodNames<TaskStore> = {
   uncomplete: true,
   rename: true,
   reorder: true,
+  // Issue #182's Today-shaped sibling of reorder — the identical
+  // compile-time checkpoint as every setter here.
+  reorderToday: true,
   remove: true,
   pending: true,
   getCursor: true,
@@ -636,6 +643,9 @@ const PROJECT_STORE_METHODS: StoreMethodNames<ProjectStore> = {
   listSections: true,
   getSection: true,
   addSection: true,
+  // Issue #182's Sync write path for Sections — the identical
+  // compile-time checkpoint as every method here.
+  upsertSections: true,
   renameSection: true,
   setSectionDescription: true,
   reorderSection: true,
@@ -851,12 +861,23 @@ export function EntryStoreLayout() {
       return;
     }
     backfillStarted.current = true;
-    void runTasksBackfillOnce(data.store, data.taskStore, data.deviceId, resolveLabelIds);
+    void runTasksBackfillOnce(
+      data.store,
+      data.taskStore,
+      data.projectStore,
+      data.labelStore,
+      data.commentStore,
+      data.deviceId,
+      resolveLabelIds,
+    );
   }, [data]);
 
   const { entries, pagination, sendEntry, editEntry, commitEntryEdit, removeEntry } = useHistory(
     store,
     taskStore,
+    projectStore,
+    labelStore,
+    commentStore,
     deviceId,
     resolveLabelIds,
   );
@@ -868,6 +889,7 @@ export function EntryStoreLayout() {
     uncompleteTask,
     renameTask,
     reorderTask,
+    reorderTaskToday,
     removeTask,
     setTaskDate,
     setTaskDeadline,
@@ -884,7 +906,7 @@ export function EntryStoreLayout() {
     setTaskProject,
     setTaskSection,
     setTaskParent,
-  } = useTasks(store, taskStore, deviceId);
+  } = useTasks(store, taskStore, projectStore, labelStore, commentStore, deviceId);
   const { comments, addComment, editComment, removeComment } = useComments(commentStore, deviceId);
   const {
     projects,
@@ -932,6 +954,7 @@ export function EntryStoreLayout() {
               uncompleteTask,
               renameTask,
               reorderTask,
+              reorderTaskToday,
               removeTask,
               setTaskDate,
               setTaskDeadline,
@@ -993,6 +1016,7 @@ export function EntryStoreLayout() {
               uncompleteTask: noopUncompleteTask,
               renameTask: noopRenameTask,
               reorderTask: noopReorderTask,
+              reorderTaskToday: noopReorderTaskToday,
               removeTask: noopRemoveTask,
               setTaskDate: noopSetTaskDate,
               setTaskDeadline: noopSetTaskDeadline,

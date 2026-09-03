@@ -207,6 +207,35 @@ export class SqliteProjectStore implements ProjectStore {
     await this.db.insert(sections).values(withDefaultSectionFields(section));
   }
 
+  // Sync's write path for Sections (issue #182) — mirrors upsertProjects
+  // above exactly: no validation, unlike addSection (that method's own doc
+  // comment explains why the twenty-cap check cannot live in a
+  // trusted-bulk-merge path).
+  async upsertSections(newSections: Section[]): Promise<void> {
+    if (newSections.length === 0) {
+      return;
+    }
+    const normalized = newSections.map(withDefaultSectionFields);
+    await this.db
+      .insert(sections)
+      .values(normalized)
+      .onConflictDoUpdate({
+        target: sections.id,
+        set: {
+          deviceId: sql`excluded.device_id`,
+          projectId: sql`excluded.project_id`,
+          name: sql`excluded.name`,
+          description: sql`excluded.description`,
+          orderKey: sql`excluded.order_key`,
+          archived: sql`excluded.archived`,
+          createdAt: sql`excluded.created_at`,
+          seq: sql`excluded.seq`,
+          syncedAt: sql`excluded.synced_at`,
+          deletedAt: sql`excluded.deleted_at`,
+        },
+      });
+  }
+
   async renameSection(id: string, name: string): Promise<void> {
     assertValidSectionName(name);
     await this.updateSectionIfLive(id, { name, seq: null, syncedAt: null });

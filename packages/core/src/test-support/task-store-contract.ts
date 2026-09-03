@@ -354,6 +354,59 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
     });
   });
 
+  describe("reorderToday()", () => {
+    it("changes dayOrder and clears seq, leaving orderKey untouched", async () => {
+      const synced = task({ id: "a", orderKey: "project-position", dayOrder: "m", seq: 5 });
+      await store.upsert([synced]);
+
+      const newDayOrder = orderKeyBetween(null, "m");
+      await store.reorderToday("a", newDayOrder);
+
+      const [found] = await store.list();
+      expect(found).toMatchObject({
+        id: "a",
+        dayOrder: newDayOrder,
+        orderKey: "project-position",
+        seq: null,
+      });
+    });
+
+    // The reverse of the guarantee above, and the one this issue's own
+    // acceptance criterion names explicitly: dragging a Task in its
+    // Project must never move it inside Today, and dragging it in Today
+    // must never move it inside its Project.
+    it("reorder() (a Project drag) leaves dayOrder untouched, the reverse of reorderToday()", async () => {
+      const synced = task({ id: "a", orderKey: "m", dayOrder: "today-position", seq: 5 });
+      await store.upsert([synced]);
+
+      const newOrderKey = orderKeyBetween(null, "m");
+      await store.reorder("a", newOrderKey);
+
+      const [found] = await store.list();
+      expect(found).toMatchObject({
+        id: "a",
+        orderKey: newOrderKey,
+        dayOrder: "today-position",
+        seq: null,
+      });
+    });
+
+    it("touches only the reordered Task — every sibling's dayOrder and seq are untouched", async () => {
+      const a = task({ id: "a", dayOrder: "a", seq: 1 });
+      const b = task({ id: "b", dayOrder: "b", seq: 2 });
+      const c = task({ id: "c", dayOrder: "c", seq: 3 });
+      await store.upsert([a, b, c]);
+
+      await store.reorderToday("c", orderKeyBetween(null, "a"));
+
+      const found = await store.list();
+      const byId = new Map(found.map((t) => [t.id, t]));
+      expect(byId.get("a")).toEqual(a);
+      expect(byId.get("b")).toEqual(b);
+      expect(byId.get("c")).toMatchObject({ id: "c" });
+    });
+  });
+
   describe("setDate()", () => {
     it("changes date and clears seq", async () => {
       await store.upsert([task({ id: "a", seq: 5 })]);

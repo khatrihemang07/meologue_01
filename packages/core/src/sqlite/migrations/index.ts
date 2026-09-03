@@ -8,6 +8,7 @@ import projectsSections from "./0006_projects_sections.sql?raw";
 import dropTaskDuration from "./0007_drop_task_duration.sql?raw";
 import taskDescription from "./0008_task_description.sql?raw";
 import commentsTable from "./0009_comments_table.sql?raw";
+import taskDayOrder from "./0010_task_day_order.sql?raw";
 import entriesSearchIndex from "./entries_search_index.sql?raw";
 import tasksSearchIndex from "./tasks_search_index.sql?raw";
 
@@ -166,6 +167,21 @@ export interface Migration {
  * thing it's actually adding" reasoning every migration above already
  * follows: a Task gaining a column and a new table existing are two
  * different things, not one.
+ *
+ * `0010_task_day_order` (version 13, issue #182) adds `tasks.day_order` — a
+ * second, independent fractional index for Today's own manual order
+ * (../../task-types.ts's own `dayOrder` doc comment). Two statements: an
+ * `ALTER TABLE ADD COLUMN` leaning on the identical `duplicate column name`
+ * swallow every other `ADD COLUMN` migration here already relies on, then
+ * an `UPDATE ... WHERE day_order IS NULL` backfill — the same guarded-
+ * backfill-needs-no-transaction shape `entries_search_index`'s own header
+ * comment describes, applied to an ordinary table instead of an FTS5 one.
+ * The column carries no SQL-level `NOT NULL` (unlike `priority`'s own
+ * `ADD COLUMN ... DEFAULT 1 NOT NULL`, migration 6): its backfill value is
+ * computed from another column (`order_key`), which `DEFAULT` can't
+ * express, so the guarantee that every row ends up with a real value comes
+ * from the backfill statement running unconditionally on every open,
+ * rather than from a constraint SQLite would enforce on write.
  */
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, sql: initial },
@@ -180,4 +196,5 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 10, sql: dropTaskDuration },
   { version: 11, sql: taskDescription },
   { version: 12, sql: commentsTable },
+  { version: 13, sql: taskDayOrder },
 ];

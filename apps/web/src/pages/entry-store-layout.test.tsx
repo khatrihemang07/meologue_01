@@ -1,4 +1,4 @@
-import type { EntryStore, TaskStore } from "@meologue/core";
+import type { CommentStore, EntryStore, LabelStore, ProjectStore, TaskStore } from "@meologue/core";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import { useEffect } from "react";
@@ -66,6 +66,7 @@ function createFakeTaskStore(): TaskStore {
     uncomplete: vi.fn(async () => {}),
     rename: vi.fn(async () => {}),
     reorder: vi.fn(async () => {}),
+    reorderToday: vi.fn(async () => {}),
     remove: vi.fn(async () => {}),
     pending: vi.fn(async () => []),
     getCursor: vi.fn(async () => 0),
@@ -261,7 +262,22 @@ describe("EntryStoreLayout", () => {
     createDriver.mockResolvedValue({});
     const store = createFakeStore();
     const taskStore = createFakeTaskStore();
-    openMock.mockResolvedValue({ store, taskStore, deviceId: "device-a" });
+    // Issue #182: `runTasksBackfillOnce` now also takes the three stores
+    // added alongside it (Project, Label, Comment) — bare casts suffice
+    // here, mirroring use-history.test.tsx/use-tasks.test.tsx's own
+    // reasoning: this test only checks they were threaded through by
+    // reference, never that anything on them was actually called.
+    const projectStore = {} as ProjectStore;
+    const labelStore = {} as LabelStore;
+    const commentStore = {} as CommentStore;
+    openMock.mockResolvedValue({
+      store,
+      taskStore,
+      projectStore,
+      labelStore,
+      commentStore,
+      deviceId: "device-a",
+    });
 
     await renderLayout();
 
@@ -269,6 +285,9 @@ describe("EntryStoreLayout", () => {
     expect(runTasksBackfillOnceMock).toHaveBeenCalledWith(
       store,
       taskStore,
+      projectStore,
+      labelStore,
+      commentStore,
       "device-a",
       expect.any(Function),
     );

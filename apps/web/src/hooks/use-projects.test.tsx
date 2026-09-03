@@ -89,6 +89,9 @@ function createFakeStore(): ProjectStore {
       }
       sections = [...sections, incoming];
     }),
+    upsertSections: vi.fn(async (incoming: Section[]) => {
+      sections = [...sections, ...incoming];
+    }),
     renameSection: vi.fn(async () => {}),
     setSectionDescription: vi.fn(async () => {}),
     reorderSection: vi.fn(async () => {}),

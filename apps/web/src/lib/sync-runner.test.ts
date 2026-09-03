@@ -1,4 +1,11 @@
-import type { Entry, EntryStore, TaskStore } from "@meologue/core";
+import type {
+  CommentStore,
+  Entry,
+  EntryStore,
+  LabelStore,
+  ProjectStore,
+  TaskStore,
+} from "@meologue/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ENTRIES_QUERY_KEY, TASKS_QUERY_KEY } from "@/lib/query-keys";
 import { useSettingsStore } from "@/lib/settings";
@@ -64,6 +71,7 @@ function createFakeTaskStore(): TaskStore {
     uncomplete: vi.fn(async () => {}),
     rename: vi.fn(async () => {}),
     reorder: vi.fn(async () => {}),
+    reorderToday: vi.fn(async () => {}),
     setDate: vi.fn(async () => {}),
     setDeadline: vi.fn(async () => {}),
     setPriority: vi.fn(async () => {}),
@@ -83,6 +91,20 @@ function createFakeTaskStore(): TaskStore {
   };
 }
 
+// Issue #182: three more stores requestSync's own SyncStores bag needs —
+// bare casts suffice here, the same reasoning createFakeTaskStore's own
+// comment gives: sync() itself is mocked, so nothing ever calls into
+// these beyond handing them back to the mock.
+function fakeProjectStore(): ProjectStore {
+  return {} as ProjectStore;
+}
+function fakeLabelStore(): LabelStore {
+  return {} as LabelStore;
+}
+function fakeCommentStore(): CommentStore {
+  return {} as CommentStore;
+}
+
 describe("requestSync", () => {
   beforeEach(() => {
     localStorage.clear();
@@ -94,8 +116,11 @@ describe("requestSync", () => {
     const { requestSync } = await importFresh();
     const store = createFakeStore();
     const taskStore = createFakeTaskStore();
+    const projectStore = fakeProjectStore();
+    const labelStore = fakeLabelStore();
+    const commentStore = fakeCommentStore();
 
-    await requestSync(store, taskStore, "device-a");
+    await requestSync({ store, taskStore, projectStore, labelStore, commentStore }, "device-a");
 
     expect(syncMock).toHaveBeenCalledTimes(1);
     expect(syncMock).toHaveBeenCalledWith(
@@ -108,8 +133,11 @@ describe("requestSync", () => {
     const { requestSync } = await importFresh();
     const store = createFakeStore();
     const taskStore = createFakeTaskStore();
+    const projectStore = fakeProjectStore();
+    const labelStore = fakeLabelStore();
+    const commentStore = fakeCommentStore();
 
-    await requestSync(store, taskStore, "device-a");
+    await requestSync({ store, taskStore, projectStore, labelStore, commentStore }, "device-a");
 
     expect(syncMock).not.toHaveBeenCalled();
   });
@@ -118,6 +146,9 @@ describe("requestSync", () => {
     const { requestSync } = await importFresh();
     const store = createFakeStore();
     const taskStore = createFakeTaskStore();
+    const projectStore = fakeProjectStore();
+    const labelStore = fakeLabelStore();
+    const commentStore = fakeCommentStore();
     let resolveSync: () => void = () => {};
     syncMock.mockImplementationOnce(
       () =>
@@ -126,8 +157,14 @@ describe("requestSync", () => {
         }),
     );
 
-    const first = requestSync(store, taskStore, "device-a");
-    const second = requestSync(store, taskStore, "device-a");
+    const first = requestSync(
+      { store, taskStore, projectStore, labelStore, commentStore },
+      "device-a",
+    );
+    const second = requestSync(
+      { store, taskStore, projectStore, labelStore, commentStore },
+      "device-a",
+    );
     expect(syncMock).toHaveBeenCalledTimes(1);
 
     resolveSync();
@@ -143,6 +180,9 @@ describe("requestSync", () => {
     const { requestSync } = await importFresh();
     const store = createFakeStore();
     const taskStore = createFakeTaskStore();
+    const projectStore = fakeProjectStore();
+    const labelStore = fakeLabelStore();
+    const commentStore = fakeCommentStore();
     let resolveFirst: () => void = () => {};
     syncMock.mockImplementationOnce(
       () =>
@@ -151,11 +191,17 @@ describe("requestSync", () => {
         }),
     );
 
-    const first = requestSync(store, taskStore, "device-a");
+    const first = requestSync(
+      { store, taskStore, projectStore, labelStore, commentStore },
+      "device-a",
+    );
     expect(syncMock).toHaveBeenCalledTimes(1);
 
     // Arrives while the first run is still in flight.
-    const second = requestSync(store, taskStore, "device-a");
+    const second = requestSync(
+      { store, taskStore, projectStore, labelStore, commentStore },
+      "device-a",
+    );
     resolveFirst();
     await Promise.all([first, second]);
 
@@ -166,6 +212,9 @@ describe("requestSync", () => {
     const { requestSync } = await importFresh();
     const store = createFakeStore();
     const taskStore = createFakeTaskStore();
+    const projectStore = fakeProjectStore();
+    const labelStore = fakeLabelStore();
+    const commentStore = fakeCommentStore();
     let concurrent = 0;
     let maxConcurrent = 0;
     syncMock.mockImplementation(async () => {
@@ -175,8 +224,14 @@ describe("requestSync", () => {
       concurrent--;
     });
 
-    const first = requestSync(store, taskStore, "device-a");
-    const second = requestSync(store, taskStore, "device-a");
+    const first = requestSync(
+      { store, taskStore, projectStore, labelStore, commentStore },
+      "device-a",
+    );
+    const second = requestSync(
+      { store, taskStore, projectStore, labelStore, commentStore },
+      "device-a",
+    );
     await Promise.all([first, second]);
 
     expect(maxConcurrent).toBe(1);
@@ -192,8 +247,11 @@ describe("requestSync", () => {
       const { requestSync, useSyncStatusStore } = await importFresh();
       const store = createFakeStore();
       const taskStore = createFakeTaskStore();
+      const projectStore = fakeProjectStore();
+      const labelStore = fakeLabelStore();
+      const commentStore = fakeCommentStore();
 
-      await requestSync(store, taskStore, "device-a");
+      await requestSync({ store, taskStore, projectStore, labelStore, commentStore }, "device-a");
 
       expect(useSyncStatusStore.getState().lastAttempt).toEqual({
         url: "https://server.example",
@@ -205,10 +263,15 @@ describe("requestSync", () => {
       const { requestSync, useSyncStatusStore } = await importFresh();
       const store = createFakeStore();
       const taskStore = createFakeTaskStore();
+      const projectStore = fakeProjectStore();
+      const labelStore = fakeLabelStore();
+      const commentStore = fakeCommentStore();
       const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
       syncMock.mockRejectedValueOnce(new Error("sync request failed with status 500"));
 
-      await expect(requestSync(store, taskStore, "device-a")).resolves.toBeUndefined();
+      await expect(
+        requestSync({ store, taskStore, projectStore, labelStore, commentStore }, "device-a"),
+      ).resolves.toBeUndefined();
 
       expect(useSyncStatusStore.getState().lastAttempt).toEqual({
         url: "https://server.example",
@@ -222,13 +285,16 @@ describe("requestSync", () => {
       const { requestSync, useSyncStatusStore } = await importFresh();
       const store = createFakeStore();
       const taskStore = createFakeTaskStore();
+      const projectStore = fakeProjectStore();
+      const labelStore = fakeLabelStore();
+      const commentStore = fakeCommentStore();
       vi.spyOn(console, "error").mockImplementation(() => {});
       syncMock.mockRejectedValueOnce(new Error("boom"));
 
-      await requestSync(store, taskStore, "device-a");
+      await requestSync({ store, taskStore, projectStore, labelStore, commentStore }, "device-a");
       expect(useSyncStatusStore.getState().lastAttempt?.outcome).toBe("failing");
 
-      await requestSync(store, taskStore, "device-a");
+      await requestSync({ store, taskStore, projectStore, labelStore, commentStore }, "device-a");
 
       expect(useSyncStatusStore.getState().lastAttempt).toEqual({
         url: "https://server.example",
@@ -241,8 +307,11 @@ describe("requestSync", () => {
       const { requestSync, useSyncStatusStore } = await importFresh();
       const store = createFakeStore();
       const taskStore = createFakeTaskStore();
+      const projectStore = fakeProjectStore();
+      const labelStore = fakeLabelStore();
+      const commentStore = fakeCommentStore();
 
-      await requestSync(store, taskStore, "device-a");
+      await requestSync({ store, taskStore, projectStore, labelStore, commentStore }, "device-a");
 
       expect(useSyncStatusStore.getState().lastAttempt).toBeNull();
     });
@@ -272,6 +341,9 @@ describe("requestSync", () => {
       const { requestSync, queryClient } = await importFresh();
       const store = createFakeStore();
       const taskStore = createFakeTaskStore();
+      const projectStore = fakeProjectStore();
+      const labelStore = fakeLabelStore();
+      const commentStore = fakeCommentStore();
       const boundary = { createdAt: "2026-01-05T00:00:00.000Z", id: "boundary" };
       const pageOne = [entry({ id: "old-1" })];
       const pageTwo = [entry({ id: "old-2" })];
@@ -282,7 +354,7 @@ describe("requestSync", () => {
       const refreshedPageOne = [entry({ id: "old-1" }), entry({ id: "new-from-sync" })];
       (store.list as ReturnType<typeof vi.fn>).mockResolvedValueOnce(refreshedPageOne);
 
-      await requestSync(store, taskStore, "device-a");
+      await requestSync({ store, taskStore, projectStore, labelStore, commentStore }, "device-a");
 
       // Bounded by the second page's own cursor, not a fixed page size —
       // see refreshNewestEntriesPage's own doc comment for why.
@@ -297,10 +369,13 @@ describe("requestSync", () => {
       const { requestSync } = await importFresh();
       const store = createFakeStore();
       const taskStore = createFakeTaskStore();
+      const projectStore = fakeProjectStore();
+      const labelStore = fakeLabelStore();
+      const commentStore = fakeCommentStore();
       vi.spyOn(console, "error").mockImplementation(() => {});
       syncMock.mockRejectedValueOnce(new Error("boom"));
 
-      await requestSync(store, taskStore, "device-a");
+      await requestSync({ store, taskStore, projectStore, labelStore, commentStore }, "device-a");
 
       // list() is never called by requestSync's own refresh path when
       // sync() itself throws first — the refresh only runs after a
@@ -320,9 +395,12 @@ describe("requestSync", () => {
       const { requestSync, queryClient } = await importFresh();
       const store = createFakeStore();
       const taskStore = createFakeTaskStore();
+      const projectStore = fakeProjectStore();
+      const labelStore = fakeLabelStore();
+      const commentStore = fakeCommentStore();
       const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
 
-      await requestSync(store, taskStore, "device-a");
+      await requestSync({ store, taskStore, projectStore, labelStore, commentStore }, "device-a");
 
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: TASKS_QUERY_KEY });
     });
@@ -331,11 +409,14 @@ describe("requestSync", () => {
       const { requestSync, queryClient } = await importFresh();
       const store = createFakeStore();
       const taskStore = createFakeTaskStore();
+      const projectStore = fakeProjectStore();
+      const labelStore = fakeLabelStore();
+      const commentStore = fakeCommentStore();
       vi.spyOn(console, "error").mockImplementation(() => {});
       syncMock.mockRejectedValueOnce(new Error("boom"));
       const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
 
-      await requestSync(store, taskStore, "device-a");
+      await requestSync({ store, taskStore, projectStore, labelStore, commentStore }, "device-a");
 
       expect(invalidateSpy).not.toHaveBeenCalled();
     });

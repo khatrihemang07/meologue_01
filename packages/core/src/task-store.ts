@@ -149,6 +149,16 @@ export interface TaskStore {
    */
   reorder(id: string, orderKey: string): Promise<void>;
   /**
+   * Changes `dayOrder` and clears `seq` — the Today-shaped sibling of
+   * reorder() above (issue #182, ADR 0050 reused a second time). Writes
+   * exactly one row, for the identical reason reorder() does: dragging a
+   * Task in Today never touches `orderKey`, and dragging it in a Project
+   * never touches `dayOrder` — the two fractional indices are independent
+   * columns on the same row, each written by its own setter. No-op
+   * against a tombstone.
+   */
+  reorderToday(id: string, dayOrder: string): Promise<void>;
+  /**
    * Sets `date` and clears `seq` (issue #169) — mirrors rename()'s doc
    * comment for why this is its own method rather than upsert() with a
    * mutated Task: ./task-fields.ts's assertValidDate is what refuses a

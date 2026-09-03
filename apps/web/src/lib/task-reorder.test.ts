@@ -1,6 +1,6 @@
 import type { Task } from "@meologue/core";
 import { describe, expect, it } from "vitest";
-import { reorderedTaskOrderKey, siblingMoveDropIndex } from "./task-reorder";
+import { reorderedTaskDayOrder, reorderedTaskOrderKey, siblingMoveDropIndex } from "./task-reorder";
 
 function task(overrides: Partial<Task> = {}): Task {
   return {
@@ -9,6 +9,7 @@ function task(overrides: Partial<Task> = {}): Task {
     content: "content",
     completedAt: null,
     orderKey: "V",
+    dayOrder: "V",
     createdAt: "2026-01-01T00:00:00.000Z",
     seq: null,
     syncedAt: null,
@@ -112,6 +113,37 @@ describe("reorderedTaskOrderKey", () => {
     const downKey = reorderedTaskOrderKey(tasks, "a", downIndex as number);
     expect(downKey > "B").toBe(true);
     expect(downKey < "C").toBe(true);
+  });
+});
+
+// The Today-shaped sibling of the suite above (issue #182) — the identical
+// arithmetic reused, not reinvented, over `dayOrder` instead of `orderKey`.
+// Not a full re-run of every case above (reorderedKeyFor's own comment in
+// task-reorder.ts is what guarantees the two share the identical
+// computation) — this proves the second entry point reaches it and reads
+// the right field, deliberately leaving `orderKey` at a value that would
+// fail every assertion below if this function read the wrong column.
+describe("reorderedTaskDayOrder", () => {
+  it("sorts strictly between the two neighbours' dayOrders, ignoring their orderKeys", () => {
+    const a = task({ id: "a", orderKey: "Z", dayOrder: "A" });
+    const b = task({ id: "b", orderKey: "Y", dayOrder: "B" });
+    const c = task({ id: "c", orderKey: "X", dayOrder: "C" });
+    const tasks = [a, b, c];
+
+    const key = reorderedTaskDayOrder(tasks, "c", 1);
+
+    expect(key > "A").toBe(true);
+    expect(key < "B").toBe(true);
+  });
+
+  it("ignores the dragged Task's own current position when finding its neighbours", () => {
+    const a = task({ id: "a", dayOrder: "A" });
+    const b = task({ id: "b", dayOrder: "B" });
+    const c = task({ id: "c", dayOrder: "C" });
+
+    const key = reorderedTaskDayOrder([a, b, c], "b", 0);
+
+    expect(key < "A").toBe(true);
   });
 });
 

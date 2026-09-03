@@ -139,3 +139,54 @@ one final order afterward. This is the specific claim integer positions and link
 both fail — two Devices touching different Tasks must never produce an order neither of them
 chose — and it is the test that would fail first if a future change reintroduced a multi-row write
 anywhere in the ordering path.
+
+## Amendment (issue #182): a second, independent fractional index for Today
+
+This ADR's own `order_key` names a Task's position among its siblings in a Project or a Section.
+Todo's Today view (issue #169, ADR 0049) is a second, cross-Project rendering of the same Tasks,
+and issue #182 asks it to carry a manual order of its own — dragging a Task to reorder it in
+Today, the same affordance ADR 0050's whole design already gives a Project.
+
+**One column cannot serve both.** `order_key` sorts a Task among the siblings that actually share
+its `projectId`/`sectionId` — that grouping is the whole reason `orderKeyBetween` is called with
+*those* neighbours' keys and no others. Today's own neighbours are a different, cross-Project set,
+assembled by `task-views.ts`'s `today()` from whichever Tasks are due or overdue on a given day.
+Writing a Today drag into `order_key` would compute a key relative to Today's neighbours and store
+it in the column the Task's Project also reads — the next time that Project is opened, the Task
+would have silently jumped to wherever the Today drag happened to leave it, which is precisely the
+defect this ticket's issue names: "dragging a Task in Today silently reorders it inside its
+Project too." A single fractional index can only ever answer "where does this Task sit among *one*
+sibling group"; Today and a Project are two different sibling groups over the same Task, not one
+sibling group read two ways.
+
+**The fix is not a new primitive — it is this ADR's own primitive, applied a second time.**
+`dayOrder` (`packages/core/src/task-types.ts`) is a second column, sorted, jittered, and grown
+exactly like `order_key`: the identical `orderKeyBetween`/`compareByOrder` (`order-key.ts`), the
+identical "a drag writes exactly one row" guarantee (`TaskStore.reorderToday`, mirroring
+`TaskStore.reorder`), and the identical acceptance of unbounded key growth as the honest cost of
+never touching a sibling's row. Nothing about *why* fractional indexing was the right answer for
+`order_key` — no transaction available, no Server consulted, two Devices touching different rows
+must never collide — is specific to Project membership; it holds for any sibling grouping a Task
+can be manually ordered within, and Today is simply the second one this app has. Real Todoist
+keeps the identical split on disk, `child_order` and `day_order` as two independent fields on one
+row, which is the concrete precedent this amendment follows rather than invents.
+
+**Unlike `order_key`, `dayOrder` was carried on the wire from the same bump that introduced it**
+(issue #182, ADR 0055) — there was no interim release where it existed only locally the way this
+ADR's own history has `order_key` predate Task Sync entirely (ADR 0051). The Server's role is
+unchanged regardless: `dayOrder` is opaque text it stores and forwards, never compares, generates,
+or repairs, the identical restraint this ADR's own Consequences already state for `order_key`.
+
+**The task-views.ts sort chain now reads `dayOrder`, not `order_key`, for its own manual tie-break
+step.** Today's chain (issue #169: date-and-time, then priority, then deadline, then manual, then
+created) always had a "manual" step; before this amendment it read `order_key` because that was
+the only order there was. That was never a considered choice about *which* order Today's manual
+step should mean — it was the only column available — and issue #182 is what makes the distinction
+actually matter: reading `order_key` there is exactly the coupling this whole amendment exists to
+break.
+
+A second contract test and a second convergence test extend this ADR's own Consequences the same
+way for `dayOrder` that they already hold for `order_key`: `reorderToday` writes exactly one row
+and leaves `order_key` untouched (and `reorder` leaves `dayOrder` untouched, the reverse), and two
+Devices dragging the same Task in Today while both offline converge to one `dayOrder` under the
+identical last-write-wins rule ADR 0028 already established.

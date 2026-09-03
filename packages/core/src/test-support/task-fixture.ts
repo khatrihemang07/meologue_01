@@ -7,6 +7,11 @@ export function task(overrides: Partial<Task> = {}): Task {
     content: "buy milk",
     completedAt: null,
     orderKey: "V",
+    // Same starting value as orderKey — the identical bootstrap
+    // mapping.ts's fromWireTaskOutput and task-fields.ts's
+    // withDefaultDayOrder both use for a Task with no Today position of
+    // its own yet (issue #182).
+    dayOrder: "V",
     createdAt: "2026-01-01T00:00:00.000Z",
     seq: null,
     syncedAt: null,

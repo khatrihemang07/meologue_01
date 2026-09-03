@@ -214,6 +214,40 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /**
+         * @description The Comment-shaped sibling of `TaskInput` — `task_id` is a plain
+         *     required `Uuid`, unvalidated against `tasks` for the identical reason
+         *     `SectionInput::project_id`'s own doc comment gives.
+         */
+        CommentInput: {
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            deleted_at?: string | null;
+            /** Format: uuid */
+            device_id: string;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            task_id: string;
+            text: string;
+        };
+        /** @description The Comment-shaped sibling of `TaskOutput` — adds only `seq`. */
+        CommentOutput: {
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            deleted_at?: string | null;
+            /** Format: uuid */
+            device_id: string;
+            /** Format: uuid */
+            id: string;
+            /** Format: int64 */
+            seq: number;
+            /** Format: uuid */
+            task_id: string;
+            text: string;
+        };
+        /**
          * @description The wire shape of one Digest — everything a client needs to render it
          *     (its Period, its inclusive local date range, its prose, the Entries it
          *     grounds in) plus the two neighbour dates described on `DigestResponse`.
@@ -415,6 +449,38 @@ export interface components {
             service: string;
         };
         /**
+         * @description The Label-shaped sibling of `TaskInput` — no `order_key`, mirroring
+         *     `../../packages/core/src/label-types.ts`'s own Label (no manual order —
+         *     see that type's own doc comment for why).
+         */
+        LabelInput: {
+            colour: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            deleted_at?: string | null;
+            /** Format: uuid */
+            device_id: string;
+            /** Format: uuid */
+            id: string;
+            name: string;
+        };
+        /** @description The Label-shaped sibling of `TaskOutput` — adds only `seq`. */
+        LabelOutput: {
+            colour: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            deleted_at?: string | null;
+            /** Format: uuid */
+            device_id: string;
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** Format: int64 */
+            seq: number;
+        };
+        /**
          * @description One Model the configured wrapper can serve — the subset of
          *     `localAIWrapper`'s own `OpenAIModel.local_ai_wrapper`
          *     (`discovery.ts::toOpenAIModel`) issue #96's `GET /v1/models` actually
@@ -443,6 +509,57 @@ export interface components {
              *     models offered" rather than a failed request.
              */
             models: components["schemas"]["ModelInfo"][];
+        };
+        /**
+         * @description The Project-shaped sibling of `TaskInput` (ADR 0047's second/third root
+         *     nouns, ADR 0051's third Sync stream, issue #182). `parent_id` is a
+         *     plain `Option<Uuid>`, unvalidated — a Project can nest under another
+         *     Project this Server has never heard of, the identical "dangling
+         *     cross-reference is not this server's problem" rule `TaskInput`'s own
+         *     doc comment states, applied here because there is nothing to validate
+         *     against: no foreign key, no self-join check.
+         */
+        ProjectInput: {
+            archived: boolean;
+            colour: string;
+            /** Format: date-time */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @description Tombstone — see `EntryInput::deleted_at`'s own doc comment.
+             */
+            deleted_at?: string | null;
+            description?: string | null;
+            /** Format: uuid */
+            device_id: string;
+            favourite: boolean;
+            /** Format: uuid */
+            id: string;
+            name: string;
+            order_key: string;
+            /** Format: uuid */
+            parent_id?: string | null;
+        };
+        /** @description The Project-shaped sibling of `TaskOutput` — adds only `seq`. */
+        ProjectOutput: {
+            archived: boolean;
+            colour: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            deleted_at?: string | null;
+            description?: string | null;
+            /** Format: uuid */
+            device_id: string;
+            favourite: boolean;
+            /** Format: uuid */
+            id: string;
+            name: string;
+            order_key: string;
+            /** Format: uuid */
+            parent_id?: string | null;
+            /** Format: int64 */
+            seq: number;
         };
         ReflectRequest: {
             /**
@@ -564,6 +681,50 @@ export interface components {
              */
             tool_called: boolean;
         };
+        /**
+         * @description The Section-shaped sibling of `TaskInput` — `project_id` is a plain
+         *     required `Uuid`, unvalidated against a `projects` table for the
+         *     identical reason `TaskInput::project_id`'s own doc comment gives: a
+         *     Section can arrive naming a Project this Server has never heard of
+         *     (or, within one push, a Project pushed in the very same request — this
+         *     Server does not require Sections to arrive after their own Project),
+         *     and that is an accepted, transient state carried straight through.
+         */
+        SectionInput: {
+            archived: boolean;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            deleted_at?: string | null;
+            description?: string | null;
+            /** Format: uuid */
+            device_id: string;
+            /** Format: uuid */
+            id: string;
+            name: string;
+            order_key: string;
+            /** Format: uuid */
+            project_id: string;
+        };
+        /** @description The Section-shaped sibling of `TaskOutput` — adds only `seq`. */
+        SectionOutput: {
+            archived: boolean;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            deleted_at?: string | null;
+            description?: string | null;
+            /** Format: uuid */
+            device_id: string;
+            /** Format: uuid */
+            id: string;
+            name: string;
+            order_key: string;
+            /** Format: uuid */
+            project_id: string;
+            /** Format: int64 */
+            seq: number;
+        };
         SessionResponse: {
             /** Format: date-time */
             created_at: string;
@@ -653,11 +814,31 @@ export interface components {
             tool_called: boolean;
         };
         SyncRequest: {
+            comments?: components["schemas"]["CommentInput"][];
             /** Format: uuid */
             device_id: string;
             entries: components["schemas"]["EntryInput"][];
+            labels?: components["schemas"]["LabelInput"][];
+            /** @description Mirrors `tasks`' own `#[serde(default)]` reasoning. */
+            projects?: components["schemas"]["ProjectInput"][];
             /** Format: int32 */
             protocol_version: number;
+            sections?: components["schemas"]["SectionInput"][];
+            /** Format: int64 */
+            since_comment_seq?: number;
+            /** Format: int64 */
+            since_label_seq?: number;
+            /**
+             * Format: int64
+             * @description Issue #182: four more streams, each mirroring `since_task_seq`'s own
+             *     `#[serde(default)]` reasoning exactly — a Device on 4 or 5 has none
+             *     of these keys in its request body at all, and defaulting to 0 is
+             *     exactly "this Device has never synced one of these," true of every
+             *     such Device by construction.
+             */
+            since_project_seq?: number;
+            /** Format: int64 */
+            since_section_seq?: number;
             /** Format: int64 */
             since_seq: number;
             /**
@@ -689,8 +870,27 @@ export interface components {
         };
         SyncResponse: {
             /** Format: int64 */
+            comment_cursor: number;
+            comments: components["schemas"]["CommentOutput"][];
+            /** Format: int64 */
             cursor: number;
             entries: components["schemas"]["EntryOutput"][];
+            /** Format: int64 */
+            label_cursor: number;
+            labels: components["schemas"]["LabelOutput"][];
+            /** Format: int64 */
+            project_cursor: number;
+            /**
+             * @description Issue #182: four more pulls, each mirroring `tasks`' own doc
+             *     comment exactly — always present on the wire, but `run_sync` sets
+             *     each to `[]` (and each cursor to its own `since_*_seq`, unchanged)
+             *     when `protocol_version < 6`, so a Device on 4 or 5 never receives
+             *     data it has no representation for and never asked to see.
+             */
+            projects: components["schemas"]["ProjectOutput"][];
+            /** Format: int64 */
+            section_cursor: number;
+            sections: components["schemas"]["SectionOutput"][];
             /** Format: int64 */
             task_cursor: number;
             /**
@@ -742,6 +942,25 @@ export interface components {
              */
             date?: string | null;
             date_string?: string | null;
+            /**
+             * @description Today's own manual order (issue #182,
+             *     `../../packages/core/src/task-types.ts`'s own `dayOrder` doc
+             *     comment) — a second, independent fractional index alongside
+             *     `order_key`, opaque text this Server never interprets, exactly as
+             *     `order_key` already is (ADR 0050/0051). `#[serde(default)]`, not
+             *     because a v6 Device ever omits it, but because this field did not
+             *     exist before issue #182: a Device still on protocol 5 has no such
+             *     key in its request body at all, the identical reasoning
+             *     `SyncRequest::since_task_seq`'s own doc comment gives for a whole
+             *     stream rather than one column of one. Defaulting to `""` (an empty
+             *     string) is not a synthesised position — this Server does not
+             *     compute one from `order_key` or anything else, the same "never
+             *     generates or repairs one" restraint ADR 0051 already states for
+             *     `order_key` — it is simply the type's own default, sorting first
+             *     under lexicographic comparison until the Task's own Device gives it
+             *     a real one.
+             */
+            day_order?: string;
             deadline?: string | null;
             /**
              * Format: date-time
@@ -750,6 +969,18 @@ export interface components {
              *     0028, applied to Tasks by ADR 0047).
              */
             deleted_at?: string | null;
+            /**
+             * @description The Task's own words about itself (#180,
+             *     `../../packages/core/src/task-types.ts`'s own `description` field) —
+             *     gains a wire representation here for the first time (issue #182).
+             *     Before this, `packages/core/src/mapping.ts`'s `fromWireTaskOutput`
+             *     carried a Device's existing local copy through unconditionally,
+             *     because the wire had nothing to say about it at all; now that it's
+             *     an ordinary `Option<String>` field like every other nullable column
+             *     here, that workaround is retired — see that function's own doc
+             *     comment for the mechanism it keeps for a future locally-held field.
+             */
+            description?: string | null;
             /** Format: uuid */
             device_id: string;
             /** Format: uuid */
@@ -778,9 +1009,12 @@ export interface components {
             created_at: string;
             date?: string | null;
             date_string?: string | null;
+            /** @description See `TaskInput::day_order`'s own doc comment. */
+            day_order: string;
             deadline?: string | null;
             /** Format: date-time */
             deleted_at?: string | null;
+            description?: string | null;
             /** Format: uuid */
             device_id: string;
             /** Format: uuid */
@@ -1086,7 +1320,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Entries (and, from protocol 5, Tasks) accepted; every change after since_seq/since_task_seq is returned */
+            /** @description Entries (from protocol 5, Tasks; from protocol 6, Projects/Sections/Labels/Comments too) accepted; every change since each stream's own cursor is returned */
             200: {
                 headers: {
                     [name: string]: unknown;

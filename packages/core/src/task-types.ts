@@ -34,6 +34,30 @@ export type Task = {
   completedAt: string | null;
   /** Fractional index — see order-key.ts. Sorts lexicographically; ties break on id. */
   orderKey: string;
+  /**
+   * A second, independent fractional index (issue #182, ADR 0050 reused
+   * rather than reinvented — see that ADR's own amendment) — the Today
+   * view's own manual order, kept apart from `orderKey` above so dragging
+   * a Task in Today does not silently reorder it inside its Project too.
+   * Real Todoist keeps the identical split on disk: `child_order`
+   * (position within a Project or Section) and `day_order` (position
+   * within Today) as two independent fields on the same row, and this
+   * follows that precedent deliberately rather than inventing a
+   * meologue-specific shape for it.
+   *
+   * Required, like every field on this type (Task.priority's own doc
+   * comment states the rule this follows): "nothing chosen in Today yet"
+   * is not an absence this type lets a caller omit, it is a concrete
+   * starting position — see task-fields.ts's withDefaultDayOrder for what
+   * that starting position is.
+   *
+   * Carried on the wire as `day_order`, alongside `order_key`, in the
+   * same protocol bump that added the four new entity streams (issue
+   * #182) — a Today drag reaches a Device's other Devices the same way
+   * dragging a Task in a Project already does. See mapping.ts's
+   * `toWireTaskInput`/`fromWireTaskOutput`.
+   */
+  dayOrder: string;
   createdAt: string;
   seq: number | null;
   syncedAt: string | null;

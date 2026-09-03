@@ -37,8 +37,11 @@
  * perfectly safe pass.
  */
 import type {
+  CommentStore,
   Entry,
   EntryStore,
+  LabelStore,
+  ProjectStore,
   QuickAddLanguage,
   QuickAddOptions,
   QuickAddToken,
@@ -314,6 +317,13 @@ function markBackfilled(): void {
 export async function runTasksBackfillOnce(
   store: EntryStore,
   taskStore: TaskStore,
+  // Issue #182: needed only to pass through to requestSync's own
+  // SyncStores bag below — see this function's own header comment on why
+  // it takes the full stores rather than backfillTasksFromHistory's own
+  // narrower `Pick<...>`.
+  projectStore: ProjectStore,
+  labelStore: LabelStore,
+  commentStore: CommentStore,
   deviceId: string,
   resolveLabelIds?: (names: string[]) => Promise<string[]>,
 ): Promise<void> {
@@ -334,6 +344,6 @@ export async function runTasksBackfillOnce(
       refreshTasks(),
       queryClient.invalidateQueries({ queryKey: ENTRIES_QUERY_KEY }),
     ]);
-    void requestSync(store, taskStore, deviceId);
+    void requestSync({ store, taskStore, projectStore, labelStore, commentStore }, deviceId);
   }
 }

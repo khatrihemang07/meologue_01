@@ -8,6 +8,7 @@ import {
   assertValidPriority,
   hasTime,
   withDefaultDateString,
+  withDefaultDayOrder,
   withDefaultDescription,
   withDefaultSchedulingFields,
   withDefaultStructureFields,
@@ -116,9 +117,11 @@ export class InMemoryTaskStore implements TaskStore {
     for (const t of tasks) {
       this.tasks.set(
         t.id,
-        withDefaultDescription(
-          withDefaultStructureFields(
-            withDefaultDateString(withDefaultLabelIds(withDefaultSchedulingFields(t))),
+        withDefaultDayOrder(
+          withDefaultDescription(
+            withDefaultStructureFields(
+              withDefaultDateString(withDefaultLabelIds(withDefaultSchedulingFields(t))),
+            ),
           ),
         ),
       );
@@ -164,6 +167,11 @@ export class InMemoryTaskStore implements TaskStore {
    */
   async reorder(id: string, orderKey: string): Promise<void> {
     this.applyIfLive(id, { orderKey, seq: null, syncedAt: null });
+  }
+
+  /** Mirrors SqliteTaskStore.reorderToday() — see TaskStore.reorderToday's own doc comment. */
+  async reorderToday(id: string, dayOrder: string): Promise<void> {
+    this.applyIfLive(id, { dayOrder, seq: null, syncedAt: null });
   }
 
   async setDate(id: string, date: string | null): Promise<void> {

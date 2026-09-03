@@ -1,10 +1,29 @@
-import type { EntryStore, TaskStore } from "@meologue/core";
+import type { CommentStore, EntryStore, LabelStore, ProjectStore, TaskStore } from "@meologue/core";
 import { sync } from "@meologue/core";
 import { refreshNewestEntriesPage } from "@/lib/entries-pagination";
 import { useSettingsStore } from "@/lib/settings";
 import { useSyncStatusStore } from "@/lib/sync-status";
 import { syncTransport } from "@/lib/sync-transport";
 import { refreshTasks } from "@/lib/tasks-refresh";
+
+/**
+ * Every store one `sync()` call needs (issue #182 widened this from two —
+ * `EntryStore`/`TaskStore` — to six: `sync()`'s own `SyncEngineOptions`
+ * doc comment explains why each is required, not optional, for the
+ * identical "no stream can silently go unsynced" reason `taskStore` was
+ * already required for. A named bag, not six positional parameters, is
+ * what keeps `requestSync`'s own signature — and every caller that has to
+ * thread these through (use-tasks.ts, use-history.ts, backfill-tasks.ts,
+ * use-sync-loop.ts) — legible as the six streams grow rather than as an
+ * ever-longer parameter list.
+ */
+export interface SyncStores {
+  store: EntryStore;
+  taskStore: TaskStore;
+  projectStore: ProjectStore;
+  labelStore: LabelStore;
+  commentStore: CommentStore;
+}
 
 let syncInFlight: Promise<void> | null = null;
 let rerunRequested = false;
@@ -16,17 +35,14 @@ let rerunRequested = false;
 // also recorded to `sync-status.ts` so the ambient indicator and Settings'
 // detail can both show it, and it keeps retrying on the next trigger either
 // way.
-async function runSyncOnce(
-  store: EntryStore,
-  taskStore: TaskStore,
-  deviceId: string,
-): Promise<void> {
+async function runSyncOnce(stores: SyncStores, deviceId: string): Promise<void> {
+  const { store } = stores;
   const serverUrl = useSettingsStore.getState().serverUrl;
   if (serverUrl === "") {
     return;
   }
   try {
-    await sync({ store, taskStore, transport: syncTransport, deviceId });
+    await sync({ ...stores, transport: syncTransport, deviceId });
     // Issue #79: refreshes the newest loaded page only, not every page the
     // reader has scrolled back through — see refreshNewestEntriesPage's own
     // doc comment (entries-pagination.ts) for why a whole-key invalidation
@@ -61,11 +77,7 @@ async function runSyncOnce(
  * tick. Instead, an overlapping caller schedules exactly one more run right
  * after the current one finishes.
  */
-export function requestSync(
-  store: EntryStore,
-  taskStore: TaskStore,
-  deviceId: string,
-): Promise<void> {
+export function requestSync(stores: SyncStores, deviceId: string): Promise<void> {
   if (syncInFlight) {
     rerunRequested = true;
     return syncInFlight;
@@ -73,7 +85,7 @@ export function requestSync(
   syncInFlight = (async () => {
     do {
       rerunRequested = false;
-      await runSyncOnce(store, taskStore, deviceId);
+      await runSyncOnce(stores, deviceId);
     } while (rerunRequested);
   })().finally(() => {
     syncInFlight = null;

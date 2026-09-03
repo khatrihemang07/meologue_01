@@ -1,4 +1,13 @@
-import type { Entry, EntryPage, EntryStore, Task, TaskStore } from "@meologue/core";
+import type {
+  CommentStore,
+  Entry,
+  EntryPage,
+  EntryStore,
+  LabelStore,
+  ProjectStore,
+  Task,
+  TaskStore,
+} from "@meologue/core";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
@@ -82,6 +91,7 @@ function createFakeTaskStore(): TaskStore {
     uncomplete: vi.fn(async () => {}),
     rename: vi.fn(async () => {}),
     reorder: vi.fn(async () => {}),
+    reorderToday: vi.fn(async () => {}),
     setDate: vi.fn(async () => {}),
     setDeadline: vi.fn(async () => {}),
     setPriority: vi.fn(async () => {}),
@@ -120,8 +130,25 @@ describe("useHistory", () => {
     const wrapper = ({ children }: { children: ReactNode }) => (
       <QueryClientProvider client={fresh.queryClient}>{children}</QueryClientProvider>
     );
+    // Issue #182: `useHistory` now takes three more stores solely to pass
+    // through to `requestSync` (use-history.ts's own doc comment) — this
+    // suite mocks `requestSync` wholesale (`requestSyncMock` above), so
+    // none of the three is ever actually called; a bare cast is enough to
+    // satisfy the parameter's type without a full fake implementation.
+    const projectStore = {} as ProjectStore;
+    const labelStore = {} as LabelStore;
+    const commentStore = {} as CommentStore;
     const rendered = renderHook<ReturnType<typeof UseHistory>, void>(
-      () => (fresh.useHistory as typeof UseHistory)(store, taskStore, deviceId, resolveLabelIds),
+      () =>
+        (fresh.useHistory as typeof UseHistory)(
+          store,
+          taskStore,
+          projectStore,
+          labelStore,
+          commentStore,
+          deviceId,
+          resolveLabelIds,
+        ),
       { wrapper },
     );
     return { fresh, taskStore, ...rendered };
@@ -178,7 +205,7 @@ describe("useHistory", () => {
     act(() => result.current.sendEntry("hello"));
 
     await waitFor(() =>
-      expect(requestSyncMock).toHaveBeenCalledWith(store, expect.anything(), "device-a"),
+      expect(requestSyncMock).toHaveBeenCalledWith(expect.objectContaining({ store }), "device-a"),
     );
   });
 
@@ -192,7 +219,10 @@ describe("useHistory", () => {
 
       await waitFor(() => expect(store.edit).toHaveBeenCalledWith("1", "an edited body"));
       await waitFor(() =>
-        expect(requestSyncMock).toHaveBeenCalledWith(store, expect.anything(), "device-a"),
+        expect(requestSyncMock).toHaveBeenCalledWith(
+          expect.objectContaining({ store }),
+          "device-a",
+        ),
       );
     });
 
@@ -228,7 +258,10 @@ describe("useHistory", () => {
 
       await waitFor(() => expect(store.remove).toHaveBeenCalledWith("7"));
       await waitFor(() =>
-        expect(requestSyncMock).toHaveBeenCalledWith(store, expect.anything(), "device-a"),
+        expect(requestSyncMock).toHaveBeenCalledWith(
+          expect.objectContaining({ store }),
+          "device-a",
+        ),
       );
     });
 

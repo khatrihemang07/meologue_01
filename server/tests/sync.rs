@@ -621,6 +621,50 @@ async fn replaying_an_unchanged_task_across_two_pushes_does_not_move_the_task_cu
     assert_eq!(seq, first_cursor, "an unchanged replay must not reassign seq");
 }
 
+/// Issue #182 put `day_order` on the wire in the same bump as `description`
+/// (`TaskInput::day_order`'s own doc comment) — this is the one guard this
+/// change is riskiest to get wrong silently: `insert_tasks`'s `where`
+/// clause has to name `day_order` in its `is distinct from` chain, or a
+/// push that changes *only* `day_order` (a Today drag, with no rename, no
+/// reschedule, nothing else different) satisfies none of the other
+/// columns' `is distinct from` checks, the `where` evaluates false, and
+/// the whole `on conflict do update` silently does not fire at all — not
+/// merely "seq doesn't move," but the new `day_order` value is never
+/// written and never reaches another Device. Pushing an *unchanged*
+/// `content` alongside a *changed* `day_order` is what isolates this: if
+/// `day_order` were missing from the guard, this second push would look
+/// exactly like the unchanged-replay case just above and be silently
+/// dropped.
+#[sqlx::test]
+async fn a_push_that_changes_only_day_order_still_reassigns_seq_and_is_not_dropped(pool: PgPool) {
+    let device = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+
+    let mut first_push = task(task_id, device, "unchanged content");
+    first_push["day_order"] = json!("A");
+    let (_, first) = post_sync(&pool, sync_request(6, device, vec![first_push])).await;
+    let first_cursor = first["task_cursor"].as_i64().unwrap();
+
+    let mut second_push = task(task_id, device, "unchanged content");
+    second_push["day_order"] = json!("B");
+    let (status, second) = post_sync(&pool, sync_request(6, device, vec![second_push])).await;
+    assert_eq!(status, StatusCode::OK);
+    let second_cursor = second["task_cursor"].as_i64().unwrap();
+    assert!(
+        second_cursor > first_cursor,
+        "a day_order-only change must reassign seq, exactly like a content-only change already does"
+    );
+
+    let (day_order, seq): (String, i64) =
+        sqlx::query_as("select day_order, seq from tasks where id = $1")
+            .bind(task_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(day_order, "B", "the changed day_order must actually be written, not dropped");
+    assert_eq!(seq, second_cursor);
+}
+
 #[sqlx::test]
 async fn a_tombstoned_task_is_returned_by_a_poll_with_deleted_at_set_and_a_blank_content(
     pool: PgPool,
@@ -766,8 +810,8 @@ async fn the_task_response_is_capped_at_the_bounded_batch_size(pool: PgPool) {
     let priorities: Vec<i32> = std::iter::repeat_n(1, total as usize).collect();
 
     sqlx::query(
-        "insert into tasks (id, device_id, content, order_key, created_at, priority)
-         select * from unnest($1::uuid[], $2::uuid[], $3::text[], $4::text[], $5::timestamptz[], $6::int[])",
+        "insert into tasks (id, device_id, content, order_key, day_order, created_at, priority)
+         select * from unnest($1::uuid[], $2::uuid[], $3::text[], $4::text[], $4::text[], $5::timestamptz[], $6::int[])",
     )
     .bind(&ids)
     .bind(&device_ids)
@@ -899,4 +943,405 @@ async fn a_task_naming_an_unresolved_project_round_trips_with_the_dangling_id_in
     let pulled = tasks.iter().find(|t| t["id"] == task_id.to_string()).unwrap();
     assert_eq!(pulled["project_id"], unresolved_project_id.to_string());
     assert_eq!(pulled["deleted_at"], Value::Null);
+}
+
+// Issue #182 / ADR 0051's own forward reference, delivered: four more
+// entity streams, protocol 6. `project`/`section`/`label`/`comment` mirror
+// `task` above field for field — see `server/src/sync.rs`'s own
+// `ProjectInput`/`SectionInput`/`LabelInput`/`CommentInput` doc comments —
+// and every test below mirrors the identically-shaped Task test above it,
+// proving the same guarantees (compacted change log, replay-is-a-no-op,
+// delete-is-terminal) hold for each of the four rather than assuming they
+// "just work" because the code looks similar.
+
+fn project(id: Uuid, device_id: Uuid, name: &str) -> Value {
+    json!({
+        "id": id,
+        "device_id": device_id,
+        "name": name,
+        "colour": "#b8256f",
+        "favourite": false,
+        "archived": false,
+        "parent_id": Value::Null,
+        "description": Value::Null,
+        "order_key": "V",
+        "created_at": "2026-01-01T00:00:00Z",
+        "deleted_at": Value::Null,
+    })
+}
+
+fn section(id: Uuid, device_id: Uuid, project_id: Uuid, name: &str) -> Value {
+    json!({
+        "id": id,
+        "device_id": device_id,
+        "project_id": project_id,
+        "name": name,
+        "description": Value::Null,
+        "order_key": "V",
+        "archived": false,
+        "created_at": "2026-01-01T00:00:00Z",
+        "deleted_at": Value::Null,
+    })
+}
+
+fn label(id: Uuid, device_id: Uuid, name: &str) -> Value {
+    json!({
+        "id": id,
+        "device_id": device_id,
+        "name": name,
+        "colour": "#b8256f",
+        "created_at": "2026-01-01T00:00:00Z",
+        "deleted_at": Value::Null,
+    })
+}
+
+fn comment(id: Uuid, device_id: Uuid, task_id: Uuid, text: &str) -> Value {
+    json!({
+        "id": id,
+        "device_id": device_id,
+        "task_id": task_id,
+        "text": text,
+        "created_at": "2026-01-01T00:00:00Z",
+        "deleted_at": Value::Null,
+    })
+}
+
+/// A protocol-6 `SyncRequest` carrying only one of the four new streams at
+/// a time — every other stream (Entries, Tasks, and the other three of
+/// these four) empty, mirroring `sync_request`'s own "everything else
+/// empty" shape.
+#[allow(clippy::too_many_arguments)]
+fn sync_request_v6(
+    device_id: Uuid,
+    projects: Vec<Value>,
+    sections: Vec<Value>,
+    labels: Vec<Value>,
+    comments: Vec<Value>,
+) -> Value {
+    json!({
+        "protocol_version": 6,
+        "device_id": device_id,
+        "since_seq": 0,
+        "entries": [],
+        "since_task_seq": 0,
+        "tasks": [],
+        "since_project_seq": 0,
+        "projects": projects,
+        "since_section_seq": 0,
+        "sections": sections,
+        "since_label_seq": 0,
+        "labels": labels,
+        "since_comment_seq": 0,
+        "comments": comments,
+    })
+}
+
+#[sqlx::test]
+async fn a_project_round_trips_to_a_later_poll_with_a_lower_project_cursor(pool: PgPool) {
+    let device_a = Uuid::new_v4();
+    let device_b = Uuid::new_v4();
+    let project_id = Uuid::new_v4();
+
+    let (status, posted) = post_sync(
+        &pool,
+        sync_request_v6(
+            device_a,
+            vec![project(project_id, device_a, "Errands")],
+            vec![],
+            vec![],
+            vec![],
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let project_cursor = posted["project_cursor"].as_i64().unwrap();
+    assert!(project_cursor > 0);
+
+    let (status, polled) =
+        post_sync(&pool, sync_request_v6(device_b, vec![], vec![], vec![], vec![])).await;
+    assert_eq!(status, StatusCode::OK);
+    let projects = polled["projects"].as_array().unwrap();
+    assert_eq!(projects.len(), 1);
+    assert_eq!(projects[0]["id"], project_id.to_string());
+    assert_eq!(projects[0]["name"], "Errands");
+    assert_eq!(projects[0]["seq"], project_cursor);
+    assert_eq!(polled["project_cursor"], project_cursor);
+}
+
+#[sqlx::test]
+async fn replaying_an_unchanged_project_across_two_pushes_does_not_move_the_project_cursor(
+    pool: PgPool,
+) {
+    let device = Uuid::new_v4();
+    let project_id = Uuid::new_v4();
+    let request = sync_request_v6(
+        device,
+        vec![project(project_id, device, "unchanged name")],
+        vec![],
+        vec![],
+        vec![],
+    );
+
+    let (_, first) = post_sync(&pool, request.clone()).await;
+    let first_cursor = first["project_cursor"].as_i64().unwrap();
+
+    let (status, second) = post_sync(&pool, request).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(second["project_cursor"], first_cursor);
+
+    let seq: i64 = sqlx::query_scalar("select seq from projects where id = $1")
+        .bind(project_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(seq, first_cursor, "an unchanged replay must not reassign seq");
+}
+
+#[sqlx::test]
+async fn a_section_round_trips_to_a_later_poll_with_a_lower_section_cursor(pool: PgPool) {
+    let device_a = Uuid::new_v4();
+    let device_b = Uuid::new_v4();
+    let project_id = Uuid::new_v4();
+    let section_id = Uuid::new_v4();
+
+    let (status, posted) = post_sync(
+        &pool,
+        sync_request_v6(
+            device_a,
+            vec![],
+            vec![section(section_id, device_a, project_id, "Groceries")],
+            vec![],
+            vec![],
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let section_cursor = posted["section_cursor"].as_i64().unwrap();
+    assert!(section_cursor > 0);
+
+    let (status, polled) =
+        post_sync(&pool, sync_request_v6(device_b, vec![], vec![], vec![], vec![])).await;
+    assert_eq!(status, StatusCode::OK);
+    let sections = polled["sections"].as_array().unwrap();
+    assert_eq!(sections.len(), 1);
+    assert_eq!(sections[0]["id"], section_id.to_string());
+    assert_eq!(sections[0]["project_id"], project_id.to_string());
+    assert_eq!(sections[0]["seq"], section_cursor);
+}
+
+/// A Section naming a Project this Server has no row for at all — the
+/// identical unvalidated-cross-reference guarantee
+/// `a_task_naming_an_unresolved_project_round_trips_with_the_dangling_id_intact`
+/// proves for Tasks, applied to Sections (`SectionInput::project_id`'s own
+/// doc comment).
+#[sqlx::test]
+async fn a_section_naming_an_unresolved_project_round_trips_with_the_dangling_id_intact(
+    pool: PgPool,
+) {
+    let device = Uuid::new_v4();
+    let section_id = Uuid::new_v4();
+    let unresolved_project_id = Uuid::new_v4();
+
+    let (status, _) = post_sync(
+        &pool,
+        sync_request_v6(
+            device,
+            vec![],
+            vec![section(section_id, device, unresolved_project_id, "Groceries")],
+            vec![],
+            vec![],
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, polled) = post_sync(
+        &pool,
+        sync_request_v6(Uuid::new_v4(), vec![], vec![], vec![], vec![]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let sections = polled["sections"].as_array().unwrap();
+    let pulled = sections.iter().find(|s| s["id"] == section_id.to_string()).unwrap();
+    assert_eq!(pulled["project_id"], unresolved_project_id.to_string());
+}
+
+#[sqlx::test]
+async fn a_label_round_trips_to_a_later_poll_with_a_lower_label_cursor(pool: PgPool) {
+    let device_a = Uuid::new_v4();
+    let device_b = Uuid::new_v4();
+    let label_id = Uuid::new_v4();
+
+    let (status, posted) = post_sync(
+        &pool,
+        sync_request_v6(device_a, vec![], vec![], vec![label(label_id, device_a, "errand")], vec![]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let label_cursor = posted["label_cursor"].as_i64().unwrap();
+    assert!(label_cursor > 0);
+
+    let (status, polled) =
+        post_sync(&pool, sync_request_v6(device_b, vec![], vec![], vec![], vec![])).await;
+    assert_eq!(status, StatusCode::OK);
+    let labels = polled["labels"].as_array().unwrap();
+    assert_eq!(labels.len(), 1);
+    assert_eq!(labels[0]["id"], label_id.to_string());
+    assert_eq!(labels[0]["name"], "errand");
+    assert_eq!(labels[0]["seq"], label_cursor);
+}
+
+/// Delete is terminal (ADR 0028, applied a fifth time) — a tombstoned
+/// Label can never be revived by a later push against the same id, the
+/// identical guarantee `insert_tasks`'s own `deleted_at is null` guard
+/// gives Tasks.
+#[sqlx::test]
+async fn a_deleted_label_cannot_be_revived_by_a_later_push(pool: PgPool) {
+    let device = Uuid::new_v4();
+    let label_id = Uuid::new_v4();
+
+    post_sync(
+        &pool,
+        sync_request_v6(device, vec![], vec![], vec![label(label_id, device, "errand")], vec![]),
+    )
+    .await;
+
+    let mut deleted = label(label_id, device, "");
+    deleted["deleted_at"] = json!("2026-01-02T00:00:00Z");
+    post_sync(&pool, sync_request_v6(device, vec![], vec![], vec![deleted], vec![])).await;
+
+    // A stale push from a Device that hasn't heard about the delete yet,
+    // trying to rename the (now-tombstoned) Label back to something live.
+    let (status, _) = post_sync(
+        &pool,
+        sync_request_v6(
+            device,
+            vec![],
+            vec![],
+            vec![label(label_id, device, "revived?")],
+            vec![],
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (name, deleted_at): (String, Option<chrono::DateTime<Utc>>) = sqlx::query_as(
+        "select name, deleted_at from labels where id = $1",
+    )
+    .bind(label_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(name, "", "the tombstone's blanked name must survive the stale push");
+    assert!(deleted_at.is_some(), "delete is terminal — a later push must not undo it");
+}
+
+#[sqlx::test]
+async fn a_comment_round_trips_to_a_later_poll_with_a_lower_comment_cursor(pool: PgPool) {
+    let device_a = Uuid::new_v4();
+    let device_b = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    let comment_id = Uuid::new_v4();
+
+    let (status, posted) = post_sync(
+        &pool,
+        sync_request_v6(
+            device_a,
+            vec![],
+            vec![],
+            vec![],
+            vec![comment(comment_id, device_a, task_id, "sounds good")],
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let comment_cursor = posted["comment_cursor"].as_i64().unwrap();
+    assert!(comment_cursor > 0);
+
+    let (status, polled) =
+        post_sync(&pool, sync_request_v6(device_b, vec![], vec![], vec![], vec![])).await;
+    assert_eq!(status, StatusCode::OK);
+    let comments = polled["comments"].as_array().unwrap();
+    assert_eq!(comments.len(), 1);
+    assert_eq!(comments[0]["id"], comment_id.to_string());
+    assert_eq!(comments[0]["task_id"], task_id.to_string());
+    assert_eq!(comments[0]["text"], "sounds good");
+    assert_eq!(comments[0]["seq"], comment_cursor);
+}
+
+/// The acceptance criterion issue #182 names explicitly, mirroring
+/// `a_v4_client_syncs_entries_and_receives_no_tasks` one bump later: a
+/// Device still on protocol 5 — built before Projects/Sections/Labels/
+/// Comments existed, so its own request body has none of those eight keys
+/// at all — keeps syncing Entries and Tasks exactly as before, and simply
+/// never sees any of the four new streams, even though another Device has
+/// pushed to every one of them. Built by hand, specifically without the
+/// eight new keys, to model what a real v5 build's JSON actually looks
+/// like rather than a v6 request that merely claims to be v5.
+#[sqlx::test]
+async fn a_v5_client_syncs_entries_and_tasks_and_receives_none_of_the_four_new_streams(
+    pool: PgPool,
+) {
+    let device_v6 = Uuid::new_v4();
+    let device_v5 = Uuid::new_v4();
+    let entry_id = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    let project_id = Uuid::new_v4();
+    let section_id = Uuid::new_v4();
+    let label_id = Uuid::new_v4();
+    let comment_id = Uuid::new_v4();
+
+    // A v6 Device pushes to every new stream first, so there is something
+    // a v5 Device could wrongly receive if the dual-version gate didn't
+    // hold.
+    post_sync(
+        &pool,
+        json!({
+            "protocol_version": 6,
+            "device_id": device_v6,
+            "since_seq": 0,
+            "entries": [],
+            "since_task_seq": 0,
+            "tasks": [task(task_id, device_v6, "buy milk")],
+            "since_project_seq": 0,
+            "projects": [project(project_id, device_v6, "Errands")],
+            "since_section_seq": 0,
+            "sections": [section(section_id, device_v6, project_id, "Groceries")],
+            "since_label_seq": 0,
+            "labels": [label(label_id, device_v6, "errand")],
+            "since_comment_seq": 0,
+            "comments": [comment(comment_id, device_v6, task_id, "sounds good")],
+        }),
+    )
+    .await;
+
+    let (status, response) = post_sync(
+        &pool,
+        json!({
+            "protocol_version": 5,
+            "device_id": device_v5,
+            "since_seq": 0,
+            "entries": [entry(entry_id, device_v5, "a v5 Device's own Entry")],
+            "since_task_seq": 0,
+            "tasks": [],
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let entries = response["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 1, "Entries must sync exactly as before protocol 6");
+    assert_eq!(entries[0]["id"], entry_id.to_string());
+    assert_eq!(
+        response["tasks"].as_array().unwrap().len(),
+        1,
+        "Tasks must keep syncing exactly as they did under protocol 5"
+    );
+    for stream in ["projects", "sections", "labels", "comments"] {
+        assert_eq!(
+            response[stream].as_array().unwrap().len(),
+            0,
+            "a v5 Device must receive no {stream}, even though another Device pushed to it"
+        );
+    }
 }

@@ -140,26 +140,36 @@ export interface ProjectStore {
   /** One Section by id, or undefined if unknown or tombstoned. */
   getSection(id: string): Promise<Section | undefined>;
   /**
-   * Creates a new Section — deliberately not `upsertSections`, unlike
-   * every other creation door in this codebase (this interface's own
-   * header comment explains the general rule). The twenty-section cap
-   * (issue #171's acceptance criteria) is checked here, against the
-   * *current* live-Section count for `section.projectId`, and refused
-   * (thrown) if it's already at twenty. That check can only live in a
-   * validated, local-only creation path: a trusted-bulk-merge `upsert`
-   * (the shape every other store's creation door takes) must never refuse
-   * a row arriving from Sync — refusing here would silently drop data
-   * another Device already committed, diverging the two Devices instead
-   * of converging them (../order-key.ts's own header comment makes the
-   * identical argument about why validation stays out of upsert paths
-   * generally). Since no Section sync stream exists yet (this store's own
-   * header comment), there is nothing today that calls a bulk merge path
-   * for Sections at all — `addSection` is simply the one door, and it is
-   * the one this ticket's twenty-cap invariant can safely live behind.
+   * Creates a new *local* Section — deliberately the only *validated*
+   * creation door for one (this interface's own header comment explains
+   * the general rule every other store's `upsert` follows instead). The
+   * twenty-section cap (issue #171's acceptance criteria) is checked here,
+   * against the *current* live-Section count for `section.projectId`, and
+   * refused (thrown) if it's already at twenty. That check can only live
+   * in a validated, local-only creation path: `upsertSections` below, the
+   * trusted-bulk-merge Sync's pull now uses (issue #182), must never
+   * refuse a row arriving from another Device — refusing there would
+   * silently drop data another Device already committed, diverging the
+   * two Devices instead of converging them (../order-key.ts's own header
+   * comment makes the identical argument about why validation stays out
+   * of upsert paths generally). A Device could in principle reach 21+
+   * Sections in one Project this way — Device A and Device B each add a
+   * twentieth Section while offline from each other — and that is accepted
+   * as the same kind of momentary over-cap issue #171's own cap already
+   * lives with locally (nothing here rolls one back once Sync reveals it).
    * Refuses (throws) an empty name (./project-fields.ts's
    * assertValidSectionName) and a `projectId` that isn't a live Project.
    */
   addSection(section: Section): Promise<void>;
+  /**
+   * Sync's write path for Sections (issue #182) — upsert wholesale,
+   * mirroring upsertProjects above exactly: no validation, no twenty-cap
+   * check (addSection's own doc comment explains why that check cannot
+   * live here). Not the door a local Section creation goes through —
+   * addSection is — the same asymmetry every other bulk `upsert` beside a
+   * validated creation door in this codebase already has.
+   */
+  upsertSections(sections: Section[]): Promise<void>;
   /** Changes `name` and clears `seq`. Refuses (throws) an empty name. No-op against a tombstone. */
   renameSection(id: string, name: string): Promise<void>;
   /** Changes `description` and clears `seq`. `null` clears it. No-op against a tombstone. */

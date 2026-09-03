@@ -68,6 +68,13 @@ export const tasks = sqliteTable(
     // Fractional index (../order-key.ts) — sorts lexicographically as
     // plain text, no numeric column involved.
     orderKey: text("order_key").notNull(),
+    // A second, independent fractional index — the Today view's own
+    // manual order (issue #182, ../task-types.ts's own `dayOrder` doc
+    // comment). Migration 13 backfills every pre-#182 row from its own
+    // `order_key` rather than leaving it null, since this column has no
+    // SQL-level `NOT NULL` of its own (see that migration's own comment
+    // for why — the same reasoning `description` below already needed).
+    dayOrder: text("day_order").notNull(),
     createdAt: text("created_at").notNull(),
     seq: integer("seq"),
     syncedAt: text("synced_at"),

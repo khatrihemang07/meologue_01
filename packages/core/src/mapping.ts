@@ -1,6 +1,22 @@
+import type { Comment } from "./comment-types";
+import type { Label } from "./label-types";
+import type { Project, Section } from "./project-types";
 import type { Task } from "./task-types";
 import type { Entry } from "./types";
-import type { WireEntryInput, WireEntryOutput, WireTaskInput, WireTaskOutput } from "./wire";
+import type {
+  WireCommentInput,
+  WireCommentOutput,
+  WireEntryInput,
+  WireEntryOutput,
+  WireLabelInput,
+  WireLabelOutput,
+  WireProjectInput,
+  WireProjectOutput,
+  WireSectionInput,
+  WireSectionOutput,
+  WireTaskInput,
+  WireTaskOutput,
+} from "./wire";
 
 export function toWireEntryInput(entry: Entry): WireEntryInput {
   return {
@@ -45,6 +61,11 @@ export function toWireTaskInput(task: Task): WireTaskInput {
     content: task.content,
     completed_at: task.completedAt,
     order_key: task.orderKey,
+    // Today's own manual order (issue #182, task-types.ts's own
+    // `dayOrder` doc comment) — a second, independent fractional index,
+    // carried onto the wire exactly like `order_key` above it: opaque
+    // text, no reshaping, no validation.
+    day_order: task.dayOrder,
     created_at: task.createdAt,
     deleted_at: task.deletedAt,
     date: task.date,
@@ -55,67 +76,73 @@ export function toWireTaskInput(task: Task): WireTaskInput {
     project_id: task.projectId,
     section_id: task.sectionId,
     parent_id: task.parentId,
+    description: task.description,
   };
 }
 
 /**
  * See toWireTaskInput's own doc comment for the reshaping rule this
- * mirrors (none) — with one deliberate exception, `description`
- * (issue #180), covered in its own paragraph below. `?? null` on every
- * other nullable field follows fromWireEntryOutput's own convention
- * above — a field absent on the wire and a field explicitly `null` both
- * mean the identical thing to this Task's own fields, which are
- * required-and-nullable, never `?`-optional (../task-types.ts's own doc
- * comment on why: an omitted key must never silently default one way or
- * the other without a caller saying so).
+ * mirrors (none). `?? null` on every nullable field follows
+ * fromWireEntryOutput's own convention above — a field absent on the wire
+ * and a field explicitly `null` both mean the identical thing to this
+ * Task's own fields, which are required-and-nullable, never `?`-optional
+ * (../task-types.ts's own doc comment on why: an omitted key must never
+ * silently default one way or the other without a caller saying so).
  * `withDefaultSchedulingFields`/`withDefaultLabelIds`/`withDefaultDateString`/
- * `withDefaultStructureFields` (../task-fields.ts, ../label-fields.ts) are
- * the *second* safety net a Task arriving over Sync passes through, inside
- * each TaskStore.upsert() — this function is the first, and the two exist
- * for different reasons: this one turns "absent on the wire" into "null,
- * a real value," and the store-level defaulters turn "an even older
- * client never sent this key at all" into whichever default that ticket's
- * own Task doc comment names. Neither makes the other redundant.
+ * `withDefaultStructureFields`/`withDefaultDescription`/`withDefaultDayOrder`
+ * (../task-fields.ts, ../label-fields.ts) are the *second* safety net a
+ * Task arriving over Sync passes through, inside each TaskStore.upsert()
+ * — this function is the first, and the two exist for different reasons:
+ * this one turns "absent on the wire" into "null, a real value," and the
+ * store-level defaulters turn "an even older client never sent this key
+ * at all" into whichever default that ticket's own Task doc comment
+ * names. Neither makes the other redundant.
  *
- * **`description` cannot be read off `output` at all — the wire carries
- * no field for it yet (issue #182 is the protocol bump that adds one,
- * alongside Projects, Sections, Labels, Comments and Activity together).
- * `existing` is this Device's own current copy of the Task, if any, and
- * this function carries its `description` straight through rather than
- * manufacturing a `null`.** That distinction matters because
- * `TaskStore.upsert()` (ADR 0047's own "there is deliberately no `add()`"
- * — Sync's pull applies an incoming Task by overwriting the whole row,
- * exactly like a fresh local insert) cannot tell "the wire confirms this
- * Task has no description" apart from "the wire has nothing to say about
- * description at all" — both would arrive here as `null` if this function
- * invented one, and the *first* upsert() of any ordinary field change
- * (a rename, a reschedule — anything that reaches the wire and gets
- * echoed back) would silently overwrite a Device's own locally-set
- * `description` with that invented `null`, discarding words the wire
- * never even claimed to know about. Reading it off `existing` instead
- * means a Task this Device has never seen before (`existing` is
- * `undefined`) still gets `null` — there is nothing to carry through, and
- * that is the same "nothing chosen yet" state a brand-new Task starts in
- * either way — while a Task already on this Device keeps whatever it had.
- * This is the one field on `Task` today the wire cannot speak for; the
- * identical treatment — read it off `existing`, not off `output` — is
- * what any future locally-held-only field must get here too, which is
- * why the fix lives in this one function rather than in sync-engine.ts's
- * own call site: that call site has no way to know which of a Task's
- * many fields are wire-covered and which aren't, and it must not have to
- * remember.
+ * **`existing` exists for one reason only: a field on `Task` that
+ * genuinely has no wire representation yet.** `description` (#180) and
+ * `dayOrder` (issue #182) both needed it for a while, in turn, and both
+ * are ordinary `output.field ?? null`/`output.field` lines above and
+ * below like any other by the time this comment is being read — see this
+ * file's own git history for the workaround each one was, and why it
+ * could finally retire: `TaskStore.upsert()` (ADR 0047's own "there is
+ * deliberately no `add()`" — Sync's pull applies an incoming Task by
+ * overwriting the whole row) cannot tell "the wire confirms this Task has
+ * no such value" apart from "the wire has nothing to say about this field
+ * at all," so a field with no wire counterpart has to be read off a
+ * Device's own existing copy instead of off `output`, or the *first*
+ * upsert() of any ordinary, unrelated field change would silently
+ * overwrite it with something invented.
+ *
+ * **No field uses `existing` right now, and that is the expected steady
+ * state, not a sign the parameter is dead.** The day `Task` next grows a
+ * field that ships ahead of its own wire support — #184's own activity
+ * stream is a new stream, not this shape, but whatever comes after it
+ * might not be — that field's line here reads `existing?.newField ?? <a
+ * sensible bootstrap>` instead of `output.new_field`, and every other line
+ * stays exactly as it is. **This is the one place that treatment belongs
+ * — not in sync-engine.ts's own call site**, which has no way to know
+ * which of a Task's many fields are wire-covered and which aren't, and
+ * must not have to remember.
  */
 export function fromWireTaskOutput(
   output: WireTaskOutput,
   syncedAt: string,
   existing: Task | undefined,
 ): Task {
+  // `existing` is read by nothing below right now — see this function's
+  // own doc comment for why the parameter stays anyway. The `void` is
+  // this file's own acknowledgement of that, not a change of behaviour:
+  // without it, apps/web's stricter `noUnusedParameters` build flags a
+  // parameter this function deliberately keeps dormant as if it were a
+  // mistake.
+  void existing;
   return {
     id: output.id,
     deviceId: output.device_id,
     content: output.content,
     completedAt: output.completed_at ?? null,
     orderKey: output.order_key,
+    dayOrder: output.day_order,
     createdAt: output.created_at,
     seq: output.seq,
     syncedAt,
@@ -128,8 +155,128 @@ export function fromWireTaskOutput(
     projectId: output.project_id ?? null,
     sectionId: output.section_id ?? null,
     parentId: output.parent_id ?? null,
-    // See this function's own doc comment above for why this reads off
-    // `existing`, not off `output` — the wire has no field for it yet.
-    description: existing?.description ?? null,
+    description: output.description ?? null,
+  };
+}
+
+/**
+ * The Project-shaped sibling of toWireTaskInput/fromWireTaskOutput above
+ * (issue #182 / ADR 0051 — Sync's third entity stream). No reshaping,
+ * mirroring toWireTaskInput's own doc comment: `parentId` names a Project
+ * this ticket does not validate, carried straight through honest and
+ * unresolved.
+ */
+export function toWireProjectInput(project: Project): WireProjectInput {
+  return {
+    id: project.id,
+    device_id: project.deviceId,
+    name: project.name,
+    colour: project.colour,
+    favourite: project.favourite,
+    archived: project.archived,
+    parent_id: project.parentId,
+    description: project.description,
+    order_key: project.orderKey,
+    created_at: project.createdAt,
+    deleted_at: project.deletedAt,
+  };
+}
+
+export function fromWireProjectOutput(output: WireProjectOutput, syncedAt: string): Project {
+  return {
+    id: output.id,
+    deviceId: output.device_id,
+    name: output.name,
+    colour: output.colour,
+    favourite: output.favourite,
+    archived: output.archived,
+    parentId: output.parent_id ?? null,
+    description: output.description ?? null,
+    orderKey: output.order_key,
+    createdAt: output.created_at,
+    seq: output.seq,
+    syncedAt,
+    deletedAt: output.deleted_at ?? null,
+  };
+}
+
+/** The Section-shaped sibling above — Sync's fourth entity stream. */
+export function toWireSectionInput(section: Section): WireSectionInput {
+  return {
+    id: section.id,
+    device_id: section.deviceId,
+    project_id: section.projectId,
+    name: section.name,
+    description: section.description,
+    order_key: section.orderKey,
+    archived: section.archived,
+    created_at: section.createdAt,
+    deleted_at: section.deletedAt,
+  };
+}
+
+export function fromWireSectionOutput(output: WireSectionOutput, syncedAt: string): Section {
+  return {
+    id: output.id,
+    deviceId: output.device_id,
+    projectId: output.project_id,
+    name: output.name,
+    description: output.description ?? null,
+    orderKey: output.order_key,
+    archived: output.archived,
+    createdAt: output.created_at,
+    seq: output.seq,
+    syncedAt,
+    deletedAt: output.deleted_at ?? null,
+  };
+}
+
+/** The Label-shaped sibling above — Sync's fifth entity stream. */
+export function toWireLabelInput(label: Label): WireLabelInput {
+  return {
+    id: label.id,
+    device_id: label.deviceId,
+    name: label.name,
+    colour: label.colour,
+    created_at: label.createdAt,
+    deleted_at: label.deletedAt,
+  };
+}
+
+export function fromWireLabelOutput(output: WireLabelOutput, syncedAt: string): Label {
+  return {
+    id: output.id,
+    deviceId: output.device_id,
+    name: output.name,
+    colour: output.colour,
+    createdAt: output.created_at,
+    seq: output.seq,
+    syncedAt,
+    deletedAt: output.deleted_at ?? null,
+  };
+}
+
+/** The Comment-shaped sibling above — Sync's sixth entity stream. */
+export function toWireCommentInput(comment: Comment): WireCommentInput {
+  return {
+    id: comment.id,
+    device_id: comment.deviceId,
+    task_id: comment.taskId,
+    text: comment.text,
+    created_at: comment.createdAt,
+    deleted_at: comment.deletedAt,
+  };
+}
+
+export function fromWireCommentOutput(output: WireCommentOutput, syncedAt: string): Comment {
+  return {
+    id: output.id,
+    deviceId: output.device_id,
+    taskId: output.task_id,
+    text: output.text,
+    createdAt: output.created_at,
+    seq: output.seq,
+    syncedAt,
+    deletedAt: output.deleted_at ?? null,
   };
 }

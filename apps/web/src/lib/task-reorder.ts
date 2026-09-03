@@ -24,6 +24,35 @@ import { orderKeyBetween } from "@meologue/core";
  * result — nothing here writes anything.
  */
 export function reorderedTaskOrderKey(tasks: Task[], draggedId: string, dropIndex: number): string {
+  return reorderedKeyFor(tasks, draggedId, dropIndex, (task) => task.orderKey);
+}
+
+/**
+ * The Today-shaped sibling of reorderedTaskOrderKey above (issue #182) —
+ * the identical computation, reusing this module's own logic rather than
+ * a parallel implementation (reorderedKeyFor below is exactly that reuse),
+ * over `dayOrder` instead of `orderKey`. Everything reorderedTaskOrderKey's
+ * own doc comment says about clamping, "ignores the dragged Task's own
+ * current position," and "writes exactly one row" (the caller's job, not
+ * this pure function's) applies unchanged: the only thing that differs is
+ * which of a Task's two independent fractional indices is being read and,
+ * via whichever setter the caller calls with the result
+ * (`TaskStore.reorderToday`, not `TaskStore.reorder`), written.
+ */
+export function reorderedTaskDayOrder(tasks: Task[], draggedId: string, dropIndex: number): string {
+  return reorderedKeyFor(tasks, draggedId, dropIndex, (task) => task.dayOrder);
+}
+
+// The one computation reorderedTaskOrderKey and reorderedTaskDayOrder both
+// are — extracted so the two stay the identical arithmetic by construction
+// rather than by two authors' care. `keyOf` is the one thing that differs
+// between a Task's two independent manual orders.
+function reorderedKeyFor(
+  tasks: Task[],
+  draggedId: string,
+  dropIndex: number,
+  keyOf: (task: Task) => string,
+): string {
   const withoutDragged = tasks.filter((task) => task.id !== draggedId);
   // Clamped rather than trusted: a drop index derived from pointer
   // coordinates can land at -1 (above the first row) or past the last row
@@ -32,9 +61,9 @@ export function reorderedTaskOrderKey(tasks: Task[], draggedId: string, dropInde
   // is what lets a caller pass a raw, unchecked index without every call
   // site re-deriving the same bounds check.
   const clampedIndex = Math.max(0, Math.min(dropIndex, withoutDragged.length));
-  const before = withoutDragged[clampedIndex - 1]?.orderKey ?? null;
-  const after = withoutDragged[clampedIndex]?.orderKey ?? null;
-  return orderKeyBetween(before, after);
+  const before = withoutDragged[clampedIndex - 1];
+  const after = withoutDragged[clampedIndex];
+  return orderKeyBetween(before ? keyOf(before) : null, after ? keyOf(after) : null);
 }
 
 /**

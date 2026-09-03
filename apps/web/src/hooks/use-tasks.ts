@@ -1,4 +1,11 @@
-import type { EntryStore, Task, TaskStore } from "@meologue/core";
+import type {
+  CommentStore,
+  EntryStore,
+  LabelStore,
+  ProjectStore,
+  Task,
+  TaskStore,
+} from "@meologue/core";
 import { mintId, orderKeyBetween } from "@meologue/core";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { queryClient } from "@/lib/query-client";
@@ -73,6 +80,13 @@ export interface UseTasksResult {
   renameTask: (id: string, content: string) => void;
   /** Writes the one `orderKey` a drag computed (task-reorder.ts's `reorderedTaskOrderKey`) — see TaskStore.reorder's own doc comment for why this never touches a sibling's row. */
   reorderTask: (id: string, orderKey: string) => void;
+  /**
+   * Writes the one `dayOrder` a Today drag computed (task-reorder.ts's
+   * `reorderedTaskDayOrder`, issue #182) — the Today-shaped sibling of
+   * `reorderTask` above, mirroring TaskStore.reorderToday's own doc
+   * comment: leaves `orderKey` (this Task's Project position) untouched.
+   */
+  reorderTaskToday: (id: string, dayOrder: string) => void;
   removeTask: (id: string) => void;
   /**
    * Sets a Task's `date` (issue #169) — the one door every picker in Todo
@@ -185,6 +199,13 @@ export interface UseTasksResult {
 export function useTasks(
   store: EntryStore,
   taskStore: TaskStore,
+  // Issue #182: needed only to pass through to requestSync's own
+  // SyncStores bag below (sync-runner.ts's own doc comment on why every
+  // stream is required there) — this hook does no read or write of its
+  // own against any of the three.
+  projectStore: ProjectStore,
+  labelStore: LabelStore,
+  commentStore: CommentStore,
   deviceId: string,
 ): UseTasksResult {
   const tasksQuery = useQuery({
@@ -212,7 +233,7 @@ export function useTasks(
   // scheduled poll.
   const afterLocalWrite = async () => {
     await refreshTasks();
-    void requestSync(store, taskStore, deviceId);
+    void requestSync({ store, taskStore, projectStore, labelStore, commentStore }, deviceId);
   };
 
   const addTaskMutation = useMutation({
@@ -228,12 +249,20 @@ export function useTasks(
     // Appended to the end of the active list — orderKeyBetween(lastKey,
     // null) sorts after every existing Task (order-key.ts's own doc
     // comment).
+    const orderKey = orderKeyBetween(tasks.at(-1)?.orderKey ?? null, null);
     addTaskMutation.mutate({
       id: mintId(),
       deviceId,
       content: trimmed,
       completedAt: null,
-      orderKey: orderKeyBetween(tasks.at(-1)?.orderKey ?? null, null),
+      orderKey,
+      // Starts at the same value as orderKey (issue #182) — the identical
+      // bootstrap task-fields.ts's withDefaultDayOrder and mapping.ts's
+      // fromWireTaskOutput both use for a Task with no Today position of
+      // its own yet: "wherever its Project order already put it" is a
+      // reasonable starting position for a Task that has never been
+      // dragged in Today specifically.
+      dayOrder: orderKey,
       createdAt: new Date().toISOString(),
       seq: null,
       syncedAt: null,
@@ -380,6 +409,16 @@ export function useTasks(
 
   function reorderTask(id: string, orderKey: string) {
     reorderTaskMutation.mutate({ id, orderKey });
+  }
+
+  const reorderTaskTodayMutation = useMutation({
+    mutationFn: ({ id, dayOrder }: { id: string; dayOrder: string }) =>
+      taskStore.reorderToday(id, dayOrder),
+    onSuccess: afterLocalWrite,
+  });
+
+  function reorderTaskToday(id: string, dayOrder: string) {
+    reorderTaskTodayMutation.mutate({ id, dayOrder });
   }
 
   const removeTaskMutation = useMutation({
@@ -547,6 +586,7 @@ export function useTasks(
     uncompleteTask,
     renameTask,
     reorderTask,
+    reorderTaskToday,
     removeTask,
     setTaskDate,
     setTaskDeadline,

@@ -140,20 +140,20 @@ describe("compareForToday's chain: date-and-time -> priority -> deadline -> manu
     expect(view.dueToday.map((t) => t.id)).toEqual(["with-deadline", "no-deadline"]);
   });
 
-  it("falls back to manual order (orderKey) once date-and-time, priority and deadline all tie", () => {
+  it("falls back to manual order (dayOrder) once date-and-time, priority and deadline all tie", () => {
     const b = task({
       id: "b",
       date: "2026-09-02T09:00",
       priority: 2,
       deadline: "2026-09-05",
-      orderKey: "b",
+      dayOrder: "b",
     });
     const a = task({
       id: "a",
       date: "2026-09-02T09:00",
       priority: 2,
       deadline: "2026-09-05",
-      orderKey: "a",
+      dayOrder: "a",
     });
 
     const view = today([b, a], NOW);
@@ -161,19 +161,19 @@ describe("compareForToday's chain: date-and-time -> priority -> deadline -> manu
     expect(view.dueToday.map((t) => t.id)).toEqual(["a", "b"]);
   });
 
-  it("falls back to createdAt once orderKey ties too — the last named step of the chain", () => {
+  it("falls back to createdAt once dayOrder ties too — the last named step of the chain", () => {
     const older = task({
       id: "older",
       date: "2026-09-02T09:00",
       priority: 2,
-      orderKey: "m",
+      dayOrder: "m",
       createdAt: "2026-01-01T00:00:00.000Z",
     });
     const newer = task({
       id: "newer",
       date: "2026-09-02T09:00",
       priority: 2,
-      orderKey: "m",
+      dayOrder: "m",
       createdAt: "2026-02-01T00:00:00.000Z",
     });
 
@@ -193,8 +193,8 @@ describe("compareForToday's chain: date-and-time -> priority -> deadline -> manu
 });
 
 describe("overdue is its own section, always ordered chronologically", () => {
-  it("orders overdue Tasks by date, even when orderKey would say the opposite", () => {
-    // orderKey alone ("z" then "a") would put `earlier` last and `later`
+  it("orders overdue Tasks by date, even when dayOrder would say the opposite", () => {
+    // dayOrder alone ("z" then "a") would put `earlier` last and `later`
     // first — the opposite of due-date order. Overdue never reaches the
     // manual step at all: its Tasks tie neither on date-and-time (their
     // dates differ) nor on any earlier step, so the chain's first
@@ -202,8 +202,8 @@ describe("overdue is its own section, always ordered chronologically", () => {
     // what a "manual sort" display mode might otherwise do to other
     // sections. See task-views.ts's own doc comment for why this holds by
     // construction rather than by a special case for `overdue`.
-    const earlier = task({ id: "earlier", date: "2026-08-01", orderKey: "z" });
-    const later = task({ id: "later", date: "2026-08-20", orderKey: "a" });
+    const earlier = task({ id: "earlier", date: "2026-08-01", dayOrder: "z" });
+    const later = task({ id: "later", date: "2026-08-20", dayOrder: "a" });
 
     const view = today([later, earlier], NOW);
 
@@ -216,13 +216,13 @@ describe("grouping does not collapse the order to priority", () => {
     // Two Tasks share a priority, so grouping by priority puts them in one
     // bucket together — the only thing left to decide their order inside
     // that bucket is the chain's first step, date-and-time, priority being
-    // constant within the group. orderKey ("a" then "z") is deliberately
+    // constant within the group. dayOrder ("a" then "z") is deliberately
     // set to the *opposite* of date order, so a grouping implementation
     // that quietly falls back to manual order inside a group — instead of
     // preserving the chain-sorted list it was handed — would produce
     // "late" before "early" here and fail this test.
-    const late = task({ id: "late", date: "2026-09-02T18:00", priority: 3, orderKey: "a" });
-    const early = task({ id: "early", date: "2026-09-02T06:00", priority: 3, orderKey: "z" });
+    const late = task({ id: "late", date: "2026-09-02T18:00", priority: 3, dayOrder: "a" });
+    const early = task({ id: "early", date: "2026-09-02T06:00", priority: 3, dayOrder: "z" });
 
     const view = today([late, early], NOW);
 

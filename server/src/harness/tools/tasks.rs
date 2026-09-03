@@ -445,15 +445,15 @@ mod tests {
         priority: i32,
     ) {
         sqlx::query(
-            "insert into tasks (id, device_id, content, completed_at, order_key, created_at, \
+            "insert into tasks (id, device_id, content, completed_at, order_key, day_order, created_at, \
              date, deadline, priority) \
-             values ($1, $2, $3, $4, $5, now(), $6, $7, $8)",
+             values ($1, $2, $3, $4, $5, $5, now(), $6, $7, $8)",
         )
         .bind(id)
         .bind(Uuid::new_v4())
         .bind(content)
         .bind(completed_at)
-        .bind(format!("k{id}")) // a unique order_key per row is enough to give (orderKey, id) a stable order without needing real fractional keys
+        .bind(format!("k{id}")) // a unique order_key per row is enough to give (orderKey, id) a stable order without needing real fractional keys — day_order reuses it, since nothing here exercises Today's own order
         .bind(date)
         .bind(deadline)
         .bind(priority)

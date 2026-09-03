@@ -312,6 +312,42 @@ export function projectStoreContract(
       });
     });
 
+    // Sync's write path (issue #182) — mirrors ProjectStore's own
+    // upsertProjects contract: wholesale insert-or-update, no validation,
+    // unlike addSection.
+    describe("upsertSections()", () => {
+      it("creates a Section reachable from listSections()/getSection(), bypassing the twenty-cap check", async () => {
+        for (let i = 0; i < MAX_SECTIONS_PER_PROJECT; i++) {
+          await projectStore.addSection(
+            section({ id: `section-${i}`, projectId: "project-1", orderKey: `k${i}` }),
+          );
+        }
+
+        // Sync must never refuse a row another Device already committed —
+        // addSection's own doc comment on why this check can't live here.
+        await projectStore.upsertSections([
+          section({ id: "one-more", projectId: "project-1", seq: 1 }),
+        ]);
+
+        expect(await projectStore.getSection("one-more")).toMatchObject({ id: "one-more" });
+      });
+
+      it("updates an existing Section's fields in place", async () => {
+        await projectStore.addSection(
+          section({ id: "a", projectId: "project-1", name: "original" }),
+        );
+
+        await projectStore.upsertSections([
+          section({ id: "a", projectId: "project-1", name: "renamed by sync", seq: 7 }),
+        ]);
+
+        expect(await projectStore.getSection("a")).toMatchObject({
+          name: "renamed by sync",
+          seq: 7,
+        });
+      });
+    });
+
     it("listSections() orders Sections by orderKey ascending, breaking ties by id, scoped to the Project", async () => {
       await projectStore.upsertProjects([project({ id: "project-2", seq: 1 })]);
       await projectStore.addSection(section({ id: "b", projectId: "project-1", orderKey: "b" }));
