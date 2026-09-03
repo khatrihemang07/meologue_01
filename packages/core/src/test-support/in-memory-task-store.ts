@@ -13,7 +13,8 @@ import {
   withDefaultSchedulingFields,
   withDefaultStructureFields,
 } from "../task-fields";
-import type { TaskStore } from "../task-store";
+import { matchesSubstring, matchesWholeWord } from "../task-search";
+import type { TaskSearchOptions, TaskStore } from "../task-store";
 import type { Task } from "../task-types";
 
 /**
@@ -357,20 +358,30 @@ export class InMemoryTaskStore implements TaskStore {
     this.cursor = seq;
   }
 
-  async search(query: string): Promise<Task[]> {
-    const queryTokens = tokenize(query);
-    if (queryTokens.length === 0) {
+  // Mirrors SqliteTaskStore.search — see TaskStore.search's own doc
+  // comment for the full matching rules (issue #183) and
+  // ../task-search.ts for the shared matchers this and the SQLite store
+  // both call, so the two can't drift on what "matches" means. Unlike
+  // SqliteTaskStore, there's no FTS5 here to fast-path: this store is a
+  // plain JS scan regardless of query length, which is exactly what
+  // SqliteTaskStore's own JS fallback path already is for a query FTS5's
+  // trigram tokenizer can't see.
+  async search(query: string, options?: TaskSearchOptions): Promise<Task[]> {
+    const trimmed = query.trim();
+    if (trimmed === "") {
       return [];
     }
-    // Completed and tombstoned Tasks are both excluded — see
-    // TaskStore.search's doc comment for why a completed Task doesn't
-    // belong in "find something I still need to act on."
+    const fields = options?.fields ?? (["title", "description"] as const);
+    const includeCompleted = options?.includeCompleted ?? false;
+    const matcher = includeCompleted ? matchesWholeWord : matchesSubstring;
     const candidates = [...this.tasks.values()].filter(
-      (t) => t.completedAt === null && t.deletedAt === null,
+      (t) => t.deletedAt === null && (includeCompleted || t.completedAt === null),
     );
     return candidates
-      .filter((t) => matchesPrefixPhrase(tokenize(t.content), queryTokens))
-      .sort(compareByOrder);
+      .filter((t) =>
+        fields.some((field) => matcher(field === "title" ? t.content : t.description, trimmed)),
+      )
+      .sort(byCreatedThenId);
   }
 
   // A local mutation against an unknown or already-tombstoned id is a
@@ -387,31 +398,15 @@ export class InMemoryTaskStore implements TaskStore {
   }
 }
 
-// Mirrors the SQLite store's FTS5 unicode61 tokenizer closely enough for
-// the shared contract to assert the same behaviour against both — see
-// ./in-memory-entry-store.ts's identical pair of helpers, duplicated
-// rather than shared, for the same reason that file's tokenizer isn't
-// exported: it's a small, store-local mirror of SQLite's own tokenizer,
-// not a shared implementation the two stores both depend on.
-function tokenize(text: string): string[] {
-  return text
-    .toLowerCase()
-    .split(/[^\p{L}\p{N}]+/u)
-    .filter((token) => token.length > 0);
-}
-
-function matchesPrefixPhrase(bodyTokens: string[], queryTokens: string[]): boolean {
-  const lastQueryToken = queryTokens.length - 1;
-  for (let start = 0; start <= bodyTokens.length - queryTokens.length; start++) {
-    const window = bodyTokens.slice(start, start + queryTokens.length);
-    const matchesHere = queryTokens.every((queryToken, offset) =>
-      offset === lastQueryToken
-        ? window[offset]?.startsWith(queryToken)
-        : window[offset] === queryToken,
-    );
-    if (matchesHere) {
-      return true;
-    }
+// Creation order — search()'s own ordering (TaskStore.search's doc
+// comment, issue #183), distinct from list()'s manual compareByOrder.
+// Task ids are time-ordered uuidv7 (../id.ts), so the id tie-break orders
+// a same-millisecond pair the same way createdAt itself would if it had
+// finer resolution — mirrors listCompleted()'s own tie-break above, just
+// ascending instead of descending.
+function byCreatedThenId(a: Task, b: Task): number {
+  if (a.createdAt !== b.createdAt) {
+    return a.createdAt < b.createdAt ? -1 : 1;
   }
-  return false;
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }

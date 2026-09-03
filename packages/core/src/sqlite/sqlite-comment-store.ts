@@ -3,6 +3,7 @@ import { drizzle } from "drizzle-orm/sqlite-proxy";
 import { assertValidCommentText } from "../comment-fields";
 import type { CommentStore } from "../comment-store";
 import type { Comment } from "../comment-types";
+import { matchesSubstring } from "../task-search";
 import type { SqliteDriver } from "./driver";
 import { comments, kv } from "./schema";
 
@@ -95,6 +96,16 @@ export class SqliteCommentStore implements CommentStore {
 
   async pending(): Promise<Comment[]> {
     return this.db.select().from(comments).where(isNull(comments.seq));
+  }
+
+  // See CommentStore.search's own doc comment for why this reuses list()'s
+  // own already-wholesale scan rather than a second FTS5 index.
+  async search(query: string): Promise<Comment[]> {
+    if (query.trim() === "") {
+      return [];
+    }
+    const all = await this.list();
+    return all.filter((c) => matchesSubstring(c.text, query));
   }
 
   async getCursor(): Promise<number> {

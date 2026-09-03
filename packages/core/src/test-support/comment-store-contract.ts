@@ -175,4 +175,64 @@ export function commentStoreContract(
 
     expect(await store.getCursor()).toBe(7);
   });
+
+  describe("search() (issue #183)", () => {
+    it("matches a fragment from the middle of a word, not just a prefix", async () => {
+      await store.upsert([comment({ id: "a", text: "let's schedule a follow-up" })]);
+
+      expect((await store.search("hedul")).map((c) => c.id)).toEqual(["a"]);
+    });
+
+    it("ignores case and folds accents", async () => {
+      await store.upsert([comment({ id: "a", text: "grab a café later" })]);
+
+      expect((await store.search("CAFE")).map((c) => c.id)).toEqual(["a"]);
+    });
+
+    it("requires every word, in any order, but never spans two Comments", async () => {
+      await store.upsert([
+        comment({ id: "a", text: "BetaqqZ AlphaqqZ" }),
+        comment({ id: "b", text: "AlphaqqZ only" }),
+      ]);
+
+      expect((await store.search("AlphaqqZ BetaqqZ")).map((c) => c.id)).toEqual(["a"]);
+    });
+
+    it("matches punctuation literally rather than stripping it", async () => {
+      await store.upsert([comment({ id: "a", text: "Test-Punct! done" })]);
+
+      expect(await store.search("TestPunct")).toEqual([]);
+      expect((await store.search("punct done")).map((c) => c.id)).toEqual(["a"]);
+    });
+
+    it("treats a quote as a literal character, never a phrase operator", async () => {
+      await store.upsert([comment({ id: "a", text: "a b" })]);
+
+      expect(await store.search('"a b"')).toEqual([]);
+    });
+
+    it("excludes a tombstoned Comment", async () => {
+      await store.upsert([comment({ id: "a", text: "sounds good", seq: 1 })]);
+
+      await store.remove("a");
+
+      expect(await store.search("sounds")).toEqual([]);
+    });
+
+    it("treats an empty or whitespace-only query as matching nothing", async () => {
+      await store.upsert([comment({ id: "a", text: "anything at all" })]);
+
+      expect(await store.search("")).toEqual([]);
+      expect(await store.search("   ")).toEqual([]);
+    });
+
+    it("orders results oldest-first, the same order list() returns", async () => {
+      await store.upsert([
+        comment({ id: "b", text: "match me", createdAt: "2026-01-02T00:00:00.000Z" }),
+        comment({ id: "a", text: "match me too", createdAt: "2026-01-01T00:00:00.000Z" }),
+      ]);
+
+      expect((await store.search("match")).map((c) => c.id)).toEqual(["a", "b"]);
+    });
+  });
 }

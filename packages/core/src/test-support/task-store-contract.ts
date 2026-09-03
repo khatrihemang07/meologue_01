@@ -913,27 +913,63 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
     expect(await store.getCursor()).toBe(7);
   });
 
-  describe("search()", () => {
-    it("matches by a word prefix", async () => {
+  describe("search() (issue #183)", () => {
+    it("matches a fragment from the middle of a word, not just a prefix", async () => {
       const shopping = task({ id: "a", content: "buy groceries", orderKey: "a" });
       const other = task({ id: "b", content: "call the dentist", orderKey: "b" });
       await store.upsert([shopping, other]);
 
       expect((await store.search("groc")).map((t) => t.id)).toEqual(["a"]);
+      // The headline change: a fragment from the *middle* of a word
+      // — not just a prefix — now finds the Task, unlike this method's
+      // pre-#183 prefix-only shape.
+      expect((await store.search("uildz")).map((t) => t.id)).toEqual([]);
+      await store.upsert([task({ id: "c", content: "Buildzzzing" })]);
+      expect((await store.search("uildz")).map((t) => t.id)).toEqual(["c"]);
     });
 
-    it("does not match a word that merely contains the query, not as a prefix", async () => {
-      await store.upsert([task({ id: "a", content: "a recurring task" })]);
+    it("ignores case and folds accents", async () => {
+      await store.upsert([task({ id: "a", content: "grab a café" })]);
 
-      expect(await store.search("urring")).toEqual([]);
+      expect((await store.search("CAFE")).map((t) => t.id)).toEqual(["a"]);
+
+      await store.upsert([task({ id: "b", content: "résumé writing" })]);
+      expect((await store.search("resume")).map((t) => t.id)).toEqual(["b"]);
     });
 
-    it("treats quotes, wildcards and boolean-looking words as literal text, never throwing", async () => {
-      await store.upsert([task({ id: "a", content: 'AND OR NOT "quoted" * text' })]);
+    it("requires every word, in any order, but never assembled from more than one word boundary", async () => {
+      const both = task({ id: "a", content: "BetaqqZ AlphaqqZ task" });
+      const onlyOne = task({ id: "b", content: "AlphaqqZ only" });
+      await store.upsert([both, onlyOne]);
 
-      expect((await store.search('AND OR NOT "quoted" *')).map((t) => t.id)).toEqual(["a"]);
-      await expect(store.search('he said "hello')).resolves.toEqual([]);
-      await expect(store.search("!!!")).resolves.toEqual([]);
+      expect((await store.search("AlphaqqZ BetaqqZ")).map((t) => t.id)).toEqual(["a"]);
+      expect((await store.search("BetaqqZ AlphaqqZ")).map((t) => t.id)).toEqual(["a"]);
+    });
+
+    it("treats a quote as a literal character, never a phrase operator", async () => {
+      await store.upsert([task({ id: "a", content: "a b" })]);
+
+      // The whole string, quote marks included, is matched literally —
+      // this content has no literal `"`, so it matches nothing, exactly
+      // as a real Todoist was observed doing (issue #183's own
+      // reference-behaviour research: quoting a query does not make it a
+      // phrase search).
+      expect(await store.search('"a b"')).toEqual([]);
+    });
+
+    it("matches punctuation literally rather than stripping it", async () => {
+      await store.upsert([task({ id: "a", content: "Test-Punct! 🎉 Task" })]);
+
+      expect(await store.search("TestPunct")).toEqual([]);
+      // Each whitespace-separated word is still matched independently.
+      expect((await store.search("punct task")).map((t) => t.id)).toEqual(["a"]);
+    });
+
+    it("has no minimum query length — a 1- or 2-character query still matches", async () => {
+      await store.upsert([task({ id: "a", content: "ok" })]);
+
+      expect((await store.search("o")).map((t) => t.id)).toEqual(["a"]);
+      expect((await store.search("ok")).map((t) => t.id)).toEqual(["a"]);
     });
 
     it("treats an empty or whitespace-only query as matching nothing", async () => {
@@ -943,7 +979,7 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
       expect(await store.search("   ")).toEqual([]);
     });
 
-    it("excludes a completed Task", async () => {
+    it("excludes a completed Task by default", async () => {
       await store.upsert([task({ id: "a", content: "a recurring task", seq: 1 })]);
 
       await store.complete("a", "2026-01-05T00:00:00.000Z");
@@ -951,12 +987,110 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
       expect(await store.search("recur")).toEqual([]);
     });
 
-    it("excludes a tombstoned Task", async () => {
+    it("excludes a tombstoned Task, even with includeCompleted", async () => {
       await store.upsert([task({ id: "a", content: "a recurring task", seq: 1 })]);
 
       await store.remove("a");
 
       expect(await store.search("recur")).toEqual([]);
+      expect(await store.search("recur", { includeCompleted: true })).toEqual([]);
+    });
+
+    it("rename() updates what a rename search matches, substring included", async () => {
+      await store.upsert([task({ id: "a", content: "old wording", seq: 1 })]);
+
+      await store.rename("a", "brand new phrasing");
+
+      expect((await store.search("phras")).map((t) => t.id)).toEqual(["a"]);
+      expect(await store.search("wording")).toEqual([]);
+    });
+
+    it("orders results by creation order, not manual orderKey order", async () => {
+      const first = task({
+        id: "a",
+        content: "match me",
+        orderKey: "z",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      });
+      const second = task({
+        id: "b",
+        content: "match me too",
+        orderKey: "a",
+        createdAt: "2026-01-02T00:00:00.000Z",
+      });
+      await store.upsert([first, second]);
+
+      expect((await store.search("match")).map((t) => t.id)).toEqual(["a", "b"]);
+    });
+
+    describe("a Task's Description", () => {
+      it("a word only in the Description finds the Task", async () => {
+        const withDescription = task({
+          id: "a",
+          content: "plan the trip",
+          description: "remember the passports",
+        });
+        await store.upsert([withDescription]);
+
+        expect((await store.search("passport")).map((t) => t.id)).toEqual(["a"]);
+      });
+
+      it("does not span the title and the Description in one query", async () => {
+        const task1 = task({
+          id: "a",
+          content: "desc-task",
+          description: "carries uniqbetaword here",
+        });
+        await store.upsert([task1]);
+
+        // "desc-task" is only in the title, "uniqbetaword" only in the
+        // Description — issue #183's own reference-behaviour research
+        // measured a real Todoist returning no match here, a kept quirk
+        // rather than something this store smooths over.
+        expect(await store.search("desc-task uniqbetaword")).toEqual([]);
+      });
+
+      it("fields option narrows search to just the title, excluding the Description", async () => {
+        const task1 = task({ id: "a", content: "plain title", description: "hidden phrase" });
+        await store.upsert([task1]);
+
+        expect(await store.search("hidden", { fields: ["title"] })).toEqual([]);
+        expect(
+          (await store.search("hidden", { fields: ["description"] })).map((t) => t.id),
+        ).toEqual(["a"]);
+      });
+    });
+
+    describe("includeCompleted — whole-word matching only", () => {
+      it("excludes a completed Task unless includeCompleted is set", async () => {
+        await store.upsert([task({ id: "a", content: "uniqzetaword", seq: 1 })]);
+        await store.complete("a", "2026-01-05T00:00:00.000Z");
+
+        expect(await store.search("uniqzetaword")).toEqual([]);
+        expect(
+          (await store.search("uniqzetaword", { includeCompleted: true })).map((t) => t.id),
+        ).toEqual(["a"]);
+      });
+
+      it("a substring fragment no longer matches a completed Task once includeCompleted is set", async () => {
+        await store.upsert([task({ id: "a", content: "uniqzetaword", seq: 1 })]);
+        await store.complete("a", "2026-01-05T00:00:00.000Z");
+
+        expect(await store.search("zetaword", { includeCompleted: true })).toEqual([]);
+        expect(
+          (await store.search("uniqzetaword", { includeCompleted: true })).map((t) => t.id),
+        ).toEqual(["a"]);
+      });
+
+      it("also switches an active Task's own match to whole-word only", async () => {
+        await store.upsert([task({ id: "a", content: "uniqzetaword" })]);
+
+        expect((await store.search("zetaword")).map((t) => t.id)).toEqual(["a"]);
+        expect(await store.search("zetaword", { includeCompleted: true })).toEqual([]);
+        expect(
+          (await store.search("uniqzetaword", { includeCompleted: true })).map((t) => t.id),
+        ).toEqual(["a"]);
+      });
     });
   });
 }

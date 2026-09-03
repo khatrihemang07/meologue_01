@@ -82,4 +82,24 @@ export interface CommentStore {
   pending(): Promise<Comment[]>;
   getCursor(): Promise<number>;
   setCursor(seq: number): Promise<void>;
+  /**
+   * Substring search over every live Comment's own `text` (issue #183) —
+   * the identical matching rules TaskStore.search's own doc comment gives
+   * for a Task's title/Description, shared via ../task-search.ts rather
+   * than reimplemented: case-insensitive, diacritic-folded, every
+   * whitespace-separated word of the query has to appear somewhere in the
+   * text, in any order, punctuation matched literally. Unlike TaskStore,
+   * there's no FTS5 index behind this and no whole-word/completed mode to
+   * opt into — a Comment carries no completion state of its own to
+   * exclude, and this store's own list()'s doc comment already
+   * establishes that a personal task list's Comments sit at a scale where
+   * scanning every one of them, the way this reuses list() to do, doesn't
+   * matter in practice; standing up a second hand-maintained FTS5 index
+   * for data already scanned wholesale elsewhere would be machinery this
+   * app's own scale doesn't ask for (CLAUDE.md's v0.1 scope discipline).
+   * Ordered oldest-first, list()'s own order — the same "creation order,
+   * no relevance re-ranking" finding TaskStore.search's own doc comment
+   * describes. An empty or whitespace-only query matches nothing.
+   */
+  search(query: string): Promise<Comment[]>;
 }

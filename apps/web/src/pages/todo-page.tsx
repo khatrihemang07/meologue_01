@@ -13,8 +13,10 @@ import { ProjectView } from "@/components/todo/project-view";
 import { ProjectsView } from "@/components/todo/projects-view";
 import { TaskDetailView } from "@/components/todo/task-detail-view";
 import { TaskList } from "@/components/todo/task-list";
+import { TaskQuickFind } from "@/components/todo/task-quick-find";
 import type { TaskDetailActions } from "@/components/todo/task-row";
 import { TaskScheduleSheet } from "@/components/todo/task-schedule-sheet";
+import { TaskSearchPage } from "@/components/todo/task-search-page";
 import { TodayView } from "@/components/todo/today-view";
 import { TodoNav } from "@/components/todo/todo-nav";
 import { ConfirmDialog } from "@/components/ui/alert-dialog";
@@ -38,8 +40,16 @@ import { useEntryStore } from "@/pages/entry-store-layout";
  * are one per view.
  */
 interface TodoBackgroundView {
-  view: "inbox" | "today" | "projects" | "project";
+  view: "inbox" | "today" | "projects" | "project" | "search";
   projectId: string | null;
+  /**
+   * The full search page's own `?q=…&tab=…` (issue #183) — `undefined`
+   * for every other view. Carried here, not recovered from `window.
+   * location` on close, so a Task opened from a search result and then
+   * closed lands back on the exact same query and tab rather than a bare
+   * `/todo/search`.
+   */
+  search?: string;
 }
 
 function backgroundPath(background: TodoBackgroundView): string {
@@ -47,6 +57,9 @@ function backgroundPath(background: TodoBackgroundView): string {
     return background.projectId === null
       ? "/todo/projects"
       : `/todo/projects/${background.projectId}`;
+  }
+  if (background.view === "search") {
+    return `/todo/search${background.search ?? ""}`;
   }
   return `/todo/${background.view}`;
 }
@@ -68,7 +81,7 @@ export interface TodoPageProps {
    * `/reflect/:sessionId` reads its own id — not a second prop, since the
    * id is already in the URL a bookmark or a reload has to survive.
    */
-  view?: "inbox" | "today" | "projects" | "project";
+  view?: "inbox" | "today" | "projects" | "project" | "search";
 }
 
 /**
@@ -133,7 +146,11 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
           view: "inbox",
           projectId: null,
         })
-      : { view, projectId: view === "project" ? (routeProjectId ?? null) : null };
+      : {
+          view,
+          projectId: view === "project" ? (routeProjectId ?? null) : null,
+          search: view === "search" ? location.search : undefined,
+        };
   const currentProjectId = backgroundView.projectId;
 
   const {
@@ -371,7 +388,7 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
           const { overdue, dueToday } = today(tasks, localDayKey(new Date()));
           return [...overdue, ...dueToday];
         })()
-      : backgroundView.view === "projects"
+      : backgroundView.view === "projects" || backgroundView.view === "search"
         ? []
         : scopedTasks;
   const openTaskIndex =
@@ -420,6 +437,15 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   // `navigator.clipboard` is unavailable over plain http and in some
   // embedded WebViews, and a silent failure here is better than an
   // unhandled rejection over a nice-to-have.
+  // Quick-find's own "Show more results" (task-quick-find.tsx's header
+  // comment) — hands the query to the full search page's own URL, a real
+  // navigation (not `replace`) so Back from the search page returns to
+  // wherever Quick-find was opened over, mirroring openTaskDetail's own
+  // reasoning just below.
+  function openFullSearch(query: string) {
+    navigate(`/todo/search?q=${encodeURIComponent(query)}`);
+  }
+
   function copyTaskLink(task: Task) {
     const url = `${window.location.origin}${taskDetailPath(task)}`;
     navigator.clipboard?.writeText(url).then(
@@ -490,11 +516,15 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
 
   return (
     <Shell title="Todo" back={<BackToChats />} message={message} composerSlot={<TodoNav />}>
-      {/* Shared by Inbox, Today and a Project's own view — only the
-          Projects list (`view === "projects"`) has nothing to add a Task
-          to, and gets its own "New Project" form instead
-          (`ProjectsView`). */}
-      {backgroundView.view !== "projects" && <AddTaskForm onAdd={handleAdd} disabled={disabled} />}
+      {/* Shared by Inbox, Today and a Project's own view — the Projects
+          list (`view === "projects"`) has nothing to add a Task to, and
+          gets its own "New Project" form instead (`ProjectsView`); the
+          full search page (`view === "search"`, issue #183) is a results
+          list with no "current view" for a captured Task to inherit
+          either, the identical reasoning. */}
+      {backgroundView.view !== "projects" && backgroundView.view !== "search" && (
+        <AddTaskForm onAdd={handleAdd} disabled={disabled} />
+      )}
 
       {backgroundView.view === "today" && (
         <TodayView
@@ -580,6 +610,17 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
         />
       )}
 
+      {backgroundView.view === "search" && (
+        <TaskSearchPage
+          tasks={tasks}
+          completedTasks={completedTasks}
+          comments={comments}
+          projects={projects}
+          onOpenTask={openTaskDetail}
+          onUncompleteTask={uncompleteTask}
+        />
+      )}
+
       {/* The Completed disclosure is Inbox-specific — Today's own Tasks
           are never completed *from* Today in a way that would need a
           second copy of this list; completing a Task from either view
@@ -661,6 +702,23 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
           onRemoveComment={removeComment}
         />
       )}
+
+      {/* Quick-find (issue #183) — mounted unconditionally, once, regardless
+          of which view above is on screen, so `/`/`f`/⌘K open it from
+          anywhere in Todo, the same "narrows Tasks, never reaches into
+          Entries or Sessions" scope every other Todo view already keeps
+          (task-quick-find.tsx's own header comment). `tasks` is the flat,
+          cross-Project array this component already leans on for
+          `confirmingTask`/`schedulingTask`/`openTask` above. */}
+      <TaskQuickFind
+        tasks={tasks}
+        projects={projects}
+        onOpenTask={openTaskDetail}
+        onOpenProject={(projectId) =>
+          navigate(projectId === null ? "/todo/inbox" : `/todo/projects/${projectId}`)
+        }
+        onShowMoreResults={openFullSearch}
+      />
     </Shell>
   );
 }

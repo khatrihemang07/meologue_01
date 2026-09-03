@@ -27,6 +27,12 @@ describe("migrate", () => {
       ["meologue_migrations"],
       ["projects"],
       ["sections"],
+      ["task_descriptions_fts"],
+      ["task_descriptions_fts_config"],
+      ["task_descriptions_fts_content"],
+      ["task_descriptions_fts_data"],
+      ["task_descriptions_fts_docsize"],
+      ["task_descriptions_fts_idx"],
       ["tasks"],
       ["tasks_fts"],
       ["tasks_fts_config"],
@@ -66,6 +72,7 @@ describe("migrate", () => {
       [11],
       [12],
       [13],
+      [14],
     ]);
   });
 
@@ -135,6 +142,75 @@ describe("migrate", () => {
     expect(count.rows).toEqual([[1]]);
   });
 
+  // Migration 14 (issue #183) rebuilds `tasks_fts` with a `trigram`
+  // tokenizer instead of `tasks_search_index.sql`'s original `unicode61` —
+  // this is the "changing a tokenizer means rebuilding the index" case
+  // ../migrations/index.ts's own comment on migration 14 describes, and
+  // this test is its mirror of "backfills Entries that existed before the
+  // search index migration shipped" above: a Task written directly against
+  // `tasks` (bypassing SqliteTaskStore, so bypassing its own indexForSearch
+  // too) still ends up findable by a substring match once migrate() runs.
+  it("rebuilds tasks_fts with substring matching, backfilling Tasks that predate the rebuild", async () => {
+    const driver = new NodeSqliteDriver();
+    await driver.execute(
+      `CREATE TABLE tasks (
+         id text primary key, device_id text not null, content text not null,
+         completed_at text, order_key text not null, day_order text not null,
+         created_at text not null, seq integer, synced_at text, deleted_at text,
+         date text, deadline text, priority integer not null default 1,
+         label_ids text not null default '[]', date_string text,
+         project_id text, section_id text, parent_id text, description text
+       )`,
+      [],
+      "run",
+    );
+    await driver.execute(
+      `INSERT INTO tasks (id, device_id, content, order_key, day_order, created_at)
+       VALUES ('a', 'device-1', 'a recurring task', 'V', 'V', '2026-01-01T00:00:00.000Z')`,
+      [],
+      "run",
+    );
+
+    await migrate(driver);
+
+    // "urring" is a fragment from the *middle* of "recurring" — the
+    // headline substring-matching change this migration exists for
+    // (`unicode61`, migration 5's own tokenizer, only ever matched a
+    // prefix).
+    const found = await driver.execute(
+      `SELECT id FROM tasks_fts WHERE tasks_fts MATCH '"urring"'`,
+      [],
+      "all",
+    );
+    expect(found.rows).toEqual([["a"]]);
+  });
+
+  // Mirrors "re-running the search index migration's own statements does
+  // not duplicate rows" above, for migration 14's drop-recreate-backfill
+  // shape specifically: a process that died after the DROP/CREATE but
+  // before the ledger row landed must not duplicate rows on retry.
+  it("re-running migration 14's rebuild does not duplicate rows", async () => {
+    const driver = new NodeSqliteDriver();
+    await migrate(driver);
+    await driver.execute(
+      `INSERT INTO tasks (id, device_id, content, order_key, day_order, created_at)
+       VALUES ('a', 'device-1', 'a recurring task', 'V', 'V', '2026-01-01T00:00:00.000Z')`,
+      [],
+      "run",
+    );
+    await driver.execute(
+      "INSERT INTO tasks_fts (id, content) VALUES ('a', 'a recurring task')",
+      [],
+      "run",
+    );
+    await driver.execute("DELETE FROM meologue_migrations WHERE version = 14", [], "run");
+
+    await migrate(driver);
+
+    const count = await driver.execute("SELECT count(*) FROM tasks_fts WHERE id = 'a'", [], "all");
+    expect(count.rows).toEqual([[1]]);
+  });
+
   // The scenario ../migrator.ts's DUPLICATE_COLUMN_NAME guard exists for
   // (ADR 0007's amendment, ADR 0028): a process that dies after migration
   // 3's `ALTER TABLE ADD COLUMN` lands but before its ledger row is
@@ -172,6 +248,7 @@ describe("migrate", () => {
       [11],
       [12],
       [13],
+      [14],
     ]);
 
     // The store isn't just "didn't throw" — it's actually usable: a write
@@ -214,6 +291,7 @@ describe("migrate", () => {
       [11],
       [12],
       [13],
+      [14],
     ]);
 
     // The store isn't just "didn't throw" — `duration` is actually gone,

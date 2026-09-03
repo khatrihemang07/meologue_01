@@ -1,6 +1,37 @@
 import type { Task } from "./task-types";
 
 /**
+ * search()'s own options (issue #183). Both are additive narrowings of the
+ * default — omitting either keeps `search`'s pre-#183 shape (title and
+ * Description, active Tasks only) exactly as its own doc comment below
+ * still describes as the default.
+ */
+export interface TaskSearchOptions {
+  /**
+   * Which of a Task's own fields to match against — defaults to both.
+   * `["title"]` is what apps/web's Quick-find dropdown passes (issue
+   * #183's own reference-behaviour finding: the dropdown matches Task
+   * titles only, never a Description, unlike the full search page). Every
+   * word of the query still has to be satisfied within *one* field for a
+   * Task to match — see `search`'s own doc comment on why a field named
+   * here never spans into another one also named here.
+   */
+  fields?: readonly ("title" | "description")[];
+  /**
+   * Opt in to completed Tasks, excluded by default (`search`'s own doc
+   * comment explains why). **Switches every result in this call to
+   * whole-word matching**, not merely the completed rows it adds — issue
+   * #183's own reference-behaviour research measured this against a real
+   * Todoist and found it applies uniformly, not just to the newly-included
+   * completed rows: "Searching for partial keywords won't match completed
+   * tasks" is Todoist's own documented wording for it. Replicated
+   * faithfully here rather than smoothed into "just search substrings a
+   * little wider," which is not what was observed.
+   */
+  includeCompleted?: boolean;
+}
+
+/**
  * The Task-shaped sibling of EntryStore (./store.ts) — a second store
  * interface beside it, not a widening of it (ADR 0047: `EntryStore` is
  * Entry-specific down to its method names, `list`/`upsert`/`pending`/
@@ -351,17 +382,30 @@ export interface TaskStore {
   getCursor(): Promise<number>;
   setCursor(seq: number): Promise<void>;
   /**
-   * Prefix search over `content`, literal text never query syntax
-   * (EntryStore.search's own guarantees — quotes, `*`, and AND/OR/NOT in
-   * the query are matched as literal characters, not parsed). An empty or
-   * whitespace-only query matches nothing.
+   * Substring search over a Task's own title (`content`) and/or
+   * Description (issue #183, superseding this method's original prefix-
+   * only shape from issue #37/#168) — literal text never query syntax
+   * (quotes, punctuation and boolean-looking words are matched as literal
+   * characters, never parsed, the same guarantee EntryStore.search
+   * already gives), case-insensitive and diacritic-folded (`cafe` matches
+   * `café`). Every whitespace-separated word of the query has to appear
+   * *somewhere* in the same field, in any order — `uildz` matches
+   * `Buildzzzing`, and `beta alpha` matches a title containing both words
+   * in either order — but **a match can never be assembled by combining a
+   * word found in the title with a word found only in the Description**:
+   * each field is checked on its own, exactly as issue #183's own
+   * reference-behaviour research measured a real Todoist doing (a
+   * deliberately-kept quirk, not an oversight — see task-search.ts's own
+   * header comment). An empty or whitespace-only query matches nothing.
    *
-   * Excludes both tombstoned and *completed* Tasks. A completed Task is
-   * deliberately not searchable: Todo's search is "find something I still
-   * need to act on," not a general archive query, and a completed Task
-   * that resurfaced here would read as still-open to anyone who found it
-   * this way. (A completed Task remains reachable through
-   * listCompleted().)
+   * Excludes both tombstoned and *completed* Tasks by default. A completed
+   * Task is deliberately not searchable this way: Todo's search is "find
+   * something I still need to act on," not a general archive query, and a
+   * completed Task that resurfaced here would read as still-open to
+   * anyone who found it this way. (A completed Task remains reachable
+   * through listCompleted().) `options.includeCompleted` opts back in —
+   * see TaskSearchOptions's own doc comment for the whole-word-matching
+   * trade that opt-in carries.
    */
-  search(query: string): Promise<Task[]>;
+  search(query: string, options?: TaskSearchOptions): Promise<Task[]>;
 }

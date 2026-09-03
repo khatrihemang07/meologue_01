@@ -156,6 +156,15 @@ function App() {
               <Route path="/todo/today" element={<TodoPage view="today" />} />
               <Route path="/todo/projects" element={<TodoPage view="projects" />} />
               <Route path="/todo/projects/:projectId" element={<TodoPage view="project" />} />
+              {/* The full search page (issue #183) — Quick-find's
+              (task-quick-find.tsx) "Show more results" own destination, and
+              its own linkable, bookmarkable URL, `?q=` and the rest carried
+              as ordinary search params rather than a route segment (the
+              same shape use-history-search.ts's own `q` param already
+              takes) — no dynamic segment here, so this stays a plain
+              static literal, safe under this file's own no-dot rule
+              trivially. */}
+              <Route path="/todo/search" element={<TodoPage view="search" />} />
               {/* A Task's own address (issue #178), still under `/todo/*` per
               ADR 0049's own constraint on where Todo's internal navigation
               may live — no `view` prop: `todo-page.tsx`'s own header

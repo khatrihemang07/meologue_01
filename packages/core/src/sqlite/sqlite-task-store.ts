@@ -14,7 +14,13 @@ import {
   withDefaultSchedulingFields,
   withDefaultStructureFields,
 } from "../task-fields";
-import type { TaskStore } from "../task-store";
+import {
+  isTrigramSafe,
+  matchesSubstring,
+  matchesWholeWord,
+  toTrigramMatchQuery,
+} from "../task-search";
+import type { TaskSearchOptions, TaskStore } from "../task-store";
 import type { Task } from "../task-types";
 import type { SqliteDriver } from "./driver";
 import { kv, tasks } from "./schema";
@@ -24,9 +30,13 @@ import { kv, tasks } from "./schema";
  * SqliteEntryStore (./sqlite-entry-store.ts) closely enough that a reader
  * of one recognises the other, including its hand-maintained FTS index
  * and the same non-atomicity it carries. Use ./open.ts rather than this
- * constructor directly: `tasks_fts` (migration 5) has to exist before
- * this can index anything into it, the same way `entries_fts` (migration
- * 2) has to exist before SqliteEntryStore can.
+ * constructor directly: `tasks_fts` (migration 5, rebuilt with a
+ * `trigram` tokenizer by migration 14 — issue #183) and
+ * `task_descriptions_fts` (also migration 14) both have to exist before
+ * this can index anything into either, the same way `entries_fts`
+ * (migration 2) has to exist before SqliteEntryStore can. See
+ * ../task-search.ts's own header comment for why title and Description
+ * get two separate FTS5 tables rather than two columns on one.
  */
 export class SqliteTaskStore implements TaskStore {
   private readonly db: ReturnType<typeof drizzle>;
@@ -456,23 +466,130 @@ export class SqliteTaskStore implements TaskStore {
     await this.setKv(TASK_CURSOR_KEY, String(seq));
   }
 
-  async search(query: string): Promise<Task[]> {
+  /**
+   * See TaskStore.search's own doc comment for the full matching rules
+   * (issue #183) — this is their mechanics. `fields` picks which of
+   * `tasks_fts` (title) and `task_descriptions_fts` (Description) to
+   * consult, each queried and matched **on its own**, never combined into
+   * one query, which is what keeps a title-only word and a
+   * Description-only word from together satisfying a two-word query (see
+   * task-search.ts's own header comment). `options.includeCompleted`
+   * switches the whole call to whole-word matching via a plain JS scan
+   * (searchWholeWord below) instead of either FTS5 table — see
+   * TaskSearchOptions's own doc comment for why.
+   *
+   * Absent that opt-in, a query containing a word shorter than
+   * MIN_TRIGRAM_WORD_LENGTH (task-search.ts) can't be expressed as a
+   * trigram MATCH at all, so it's routed through searchSubstringScan
+   * below (a plain JS scan, same matcher InMemoryTaskStore.search uses)
+   * instead of silently returning nothing — see MIN_TRIGRAM_WORD_LENGTH's
+   * own comment for why FTS5 can't help there regardless of query length
+   * elsewhere in the same call.
+   *
+   * Ordered by `created_at` ascending, then `id` ascending — creation
+   * order, not `list()`'s manual `order_key` order. Issue #183's own
+   * reference-behaviour research measured a real Todoist search doing
+   * exactly this (an exact match ranked *last* when it was created last,
+   * no relevance re-ranking observed), which is a deliberate change from
+   * this method's pre-#183 "same order as list()" guarantee.
+   */
+  async search(query: string, options?: TaskSearchOptions): Promise<Task[]> {
     const trimmed = query.trim();
     if (trimmed === "") {
       return [];
     }
-    // Excludes both tombstoned and completed Tasks — see
-    // TaskStore.search's doc comment for why a completed Task doesn't
-    // belong in "find something I still need to act on." Ordered to
-    // match list()'s own order (order_key asc, id asc), mirroring
-    // SqliteEntryStore.search's "same order as list()" guarantee.
+    const fields = options?.fields ?? (["title", "description"] as const);
+    if (options?.includeCompleted === true) {
+      return this.searchWholeWordScan(trimmed, fields);
+    }
+    return isTrigramSafe(trimmed)
+      ? this.searchTrigram(trimmed, fields)
+      : this.searchSubstringScan(trimmed, fields);
+  }
+
+  // The fast path: one MATCH per requested field's own FTS5 table, ids
+  // unioned in JS (a personal task list's own match counts never justify
+  // a hand-rolled dynamic SQL UNION for this), then fetched back through
+  // fetchTasksByIds below.
+  private async searchTrigram(
+    query: string,
+    fields: readonly ("title" | "description")[],
+  ): Promise<Task[]> {
+    const matchExpr = toTrigramMatchQuery(query);
+    const ids = new Set<string>();
+    if (fields.includes("title")) {
+      for (const id of await this.matchingIds("tasks_fts", matchExpr)) {
+        ids.add(id);
+      }
+    }
+    if (fields.includes("description")) {
+      for (const id of await this.matchingIds("task_descriptions_fts", matchExpr)) {
+        ids.add(id);
+      }
+    }
+    return this.fetchTasksByIds([...ids], { includeCompleted: false });
+  }
+
+  private async matchingIds(
+    table: "tasks_fts" | "task_descriptions_fts",
+    matchExpr: string,
+  ): Promise<string[]> {
     const result = await this.driver.execute(
-      `SELECT tasks.id, tasks.device_id, tasks.content, tasks.completed_at, tasks.order_key, tasks.day_order, tasks.created_at, tasks.seq, tasks.synced_at, tasks.deleted_at, tasks.date, tasks.deadline, tasks.priority, tasks.label_ids, tasks.date_string, tasks.project_id, tasks.section_id, tasks.parent_id, tasks.description
-       FROM tasks_fts
-       JOIN tasks ON tasks.id = tasks_fts.id
-       WHERE tasks_fts MATCH ? AND tasks.deleted_at IS NULL AND tasks.completed_at IS NULL
-       ORDER BY tasks.order_key ASC, tasks.id ASC`,
-      [toPrefixMatchQuery(trimmed)],
+      `SELECT id FROM ${table} WHERE ${table} MATCH ?`,
+      [matchExpr],
+      "all",
+    );
+    return result.rows.map((row) => (row as [string])[0]);
+  }
+
+  // A plain scan over active, non-tombstoned Tasks, substring-matched in
+  // JS via task-search.ts's matchesSubstring — the fallback for a query
+  // MIN_TRIGRAM_WORD_LENGTH's own comment says a trigram MATCH can't see.
+  private async searchSubstringScan(
+    query: string,
+    fields: readonly ("title" | "description")[],
+  ): Promise<Task[]> {
+    const candidates = await this.liveTasks({ includeCompleted: false });
+    return candidates.filter((t) => matchesAnyField(t, query, fields, matchesSubstring));
+  }
+
+  // Whole-word mode (TaskSearchOptions.includeCompleted's own doc
+  // comment) — active and completed Tasks alike, tombstones excluded,
+  // matched via task-search.ts's matchesWholeWord rather than any FTS5
+  // table: this mode exists specifically to *not* be substring matching.
+  private async searchWholeWordScan(
+    query: string,
+    fields: readonly ("title" | "description")[],
+  ): Promise<Task[]> {
+    const candidates = await this.liveTasks({ includeCompleted: true });
+    return candidates.filter((t) => matchesAnyField(t, query, fields, matchesWholeWord));
+  }
+
+  private async liveTasks({ includeCompleted }: { includeCompleted: boolean }): Promise<Task[]> {
+    const completedClause = includeCompleted ? "" : "AND tasks.completed_at IS NULL";
+    const result = await this.driver.execute(
+      `SELECT ${TASK_SEARCH_COLUMNS} FROM tasks WHERE tasks.deleted_at IS NULL ${completedClause}
+       ORDER BY tasks.created_at ASC, tasks.id ASC`,
+      [],
+      "all",
+    );
+    return result.rows.map(rowToTask);
+  }
+
+  private async fetchTasksByIds(
+    ids: string[],
+    { includeCompleted }: { includeCompleted: boolean },
+  ): Promise<Task[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+    const completedClause = includeCompleted ? "" : "AND tasks.completed_at IS NULL";
+    const placeholders = ids.map(() => "?").join(", ");
+    const result = await this.driver.execute(
+      `SELECT ${TASK_SEARCH_COLUMNS} FROM tasks
+       WHERE tasks.deleted_at IS NULL ${completedClause} AND tasks.id IN (${placeholders})
+       ORDER BY tasks.created_at ASC, tasks.id ASC`,
+      ids,
       "all",
     );
     return result.rows.map(rowToTask);
@@ -496,25 +613,42 @@ export class SqliteTaskStore implements TaskStore {
   // blocked by the tombstone guard.
   private async reindexFromCurrentState(id: string): Promise<void> {
     const [current] = await this.db
-      .select({ content: tasks.content, deletedAt: tasks.deletedAt })
+      .select({
+        content: tasks.content,
+        description: tasks.description,
+        deletedAt: tasks.deletedAt,
+      })
       .from(tasks)
       .where(eq(tasks.id, id))
       .limit(1);
     if (current === undefined) {
       return;
     }
-    await this.indexForSearch({ id, content: current.content, deletedAt: current.deletedAt });
+    await this.indexForSearch({
+      id,
+      content: current.content,
+      description: current.description,
+      deletedAt: current.deletedAt,
+    });
   }
 
-  // DELETE-then-INSERT, not atomic across the two statements (no
-  // transaction — ADR 0007) — mirrors SqliteEntryStore.indexForSearch's
-  // identical technique and the identical trade-off: a process that dies
-  // between the two statements leaves this Task temporarily missing from
+  // DELETE-then-INSERT against both tasks_fts (title) and
+  // task_descriptions_fts (Description, issue #183), not atomic across the
+  // statements (no transaction — ADR 0007) — mirrors SqliteEntryStore.
+  // indexForSearch's identical technique and the identical trade-off: a
+  // process that dies mid-way leaves this Task temporarily missing from
   // Search, which is self-healing (the next write that touches this id
-  // redelivers the INSERT) rather than lossy, and is worth naming rather
-  // than leaving as a silent race.
-  private async indexForSearch(t: Pick<Task, "id" | "content" | "deletedAt">): Promise<void> {
+  // redelivers the INSERTs) rather than lossy, and is worth naming rather
+  // than leaving as a silent race. `task_descriptions_fts` gets no row at
+  // all for a null or empty Description — matchesSubstring/matchesWholeWord
+  // (../task-search.ts) already treat "no Description" as "never matches,"
+  // and an indexed empty string would only cost storage to say the same
+  // thing FTS5 already says by the row's absence.
+  private async indexForSearch(
+    t: Pick<Task, "id" | "content" | "description" | "deletedAt">,
+  ): Promise<void> {
     await this.driver.execute("DELETE FROM tasks_fts WHERE id = ?", [t.id], "run");
+    await this.driver.execute("DELETE FROM task_descriptions_fts WHERE id = ?", [t.id], "run");
     if (t.deletedAt !== null) {
       return;
     }
@@ -523,6 +657,13 @@ export class SqliteTaskStore implements TaskStore {
       [t.id, t.content],
       "run",
     );
+    if (t.description !== null && t.description !== undefined && t.description !== "") {
+      await this.driver.execute(
+        "INSERT INTO task_descriptions_fts (id, description) VALUES (?, ?)",
+        [t.id, t.description],
+        "run",
+      );
+    }
   }
 
   private async getKv(key: string): Promise<string | undefined> {
@@ -545,15 +686,26 @@ export class SqliteTaskStore implements TaskStore {
 // row.
 const TASK_CURSOR_KEY = "task_cursor";
 
-/**
- * Builds an FTS5 MATCH expression that searches for `text` literally —
- * mirrors SqliteEntryStore's toPrefixMatchQuery exactly (see its comment
- * for the escaping and prefix-match mechanics; identical here because
- * FTS5's phrase-quoting behaviour doesn't depend on which table it's
- * matching against).
- */
-function toPrefixMatchQuery(text: string): string {
-  return `"${text.replaceAll('"', '""')}"*`;
+// The columns search()'s three query shapes (searchTrigram via
+// fetchTasksByIds, searchSubstringScan/searchWholeWordScan via liveTasks)
+// all select, in the exact order rowToTask below expects — pulled out
+// once so the three call sites can't drift into selecting different
+// columns from one another.
+const TASK_SEARCH_COLUMNS =
+  "tasks.id, tasks.device_id, tasks.content, tasks.completed_at, tasks.order_key, tasks.day_order, tasks.created_at, tasks.seq, tasks.synced_at, tasks.deleted_at, tasks.date, tasks.deadline, tasks.priority, tasks.label_ids, tasks.date_string, tasks.project_id, tasks.section_id, tasks.parent_id, tasks.description";
+
+// Shared by searchSubstringScan and searchWholeWordScan above: true when
+// `matcher` (matchesSubstring or matchesWholeWord, ../task-search.ts)
+// is satisfied by at least one of `fields`'s own text — title (`content`)
+// or Description — checked independently per field, never combined, the
+// same "no cross-field AND" rule search()'s own doc comment describes.
+function matchesAnyField(
+  t: Task,
+  query: string,
+  fields: readonly ("title" | "description")[],
+  matcher: (field: string | null | undefined, query: string) => boolean,
+): boolean {
+  return fields.some((field) => matcher(field === "title" ? t.content : t.description, query));
 }
 
 // Asserted here rather than cast, mirroring SqliteEntryStore's

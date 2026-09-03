@@ -9,6 +9,7 @@ import dropTaskDuration from "./0007_drop_task_duration.sql?raw";
 import taskDescription from "./0008_task_description.sql?raw";
 import commentsTable from "./0009_comments_table.sql?raw";
 import taskDayOrder from "./0010_task_day_order.sql?raw";
+import tasksFtsTrigram from "./0011_tasks_fts_trigram.sql?raw";
 import entriesSearchIndex from "./entries_search_index.sql?raw";
 import tasksSearchIndex from "./tasks_search_index.sql?raw";
 
@@ -182,6 +183,30 @@ export interface Migration {
  * express, so the guarantee that every row ends up with a real value comes
  * from the backfill statement running unconditionally on every open,
  * rather than from a constraint SQLite would enforce on write.
+ *
+ * `0011_tasks_fts_trigram` (version 14, issue #183) rebuilds `tasks_fts`
+ * with `tokenize='trigram'` instead of the `unicode61` migration 5 gave it,
+ * and adds a second FTS5 table, `task_descriptions_fts`, indexing
+ * `tasks.description` the same way — both maintained through
+ * SqliteTaskStore's existing `indexForSearch`/`reindexFromCurrentState`
+ * seam (../sqlite-task-store.ts), not a second write path. A `CREATE
+ * VIRTUAL TABLE` can't be altered in place once shipped (ADR 0014's own
+ * Consequences said so explicitly), so changing `tasks_fts`'s tokenizer
+ * means `DROP TABLE IF EXISTS` then `CREATE VIRTUAL TABLE IF NOT EXISTS`
+ * with the new tokenizer, then re-backfilling from `tasks` — the same
+ * `WHERE id NOT IN (...)` guard `tasks_search_index.sql` already uses,
+ * now also excluding a tombstone's blanked `content`/`description`
+ * (ADR 0014's Amendment: nothing worth matching a Search against). This
+ * three-statement shape (drop, create, backfill) is still safe to re-run
+ * from the top on an interrupted process: `DROP TABLE IF EXISTS` no-ops
+ * once the table is already gone, `CREATE VIRTUAL TABLE IF NOT EXISTS`
+ * no-ops once it's already recreated, and the backfill's own guard is
+ * unaffected either way — there is nothing partial for a second run to
+ * collide with. `task_descriptions_fts` is a second, independent virtual
+ * table rather than a second column on `tasks_fts` itself, so that a
+ * query against one field can never accidentally see a match that only
+ * exists in the other — see task-search.ts's own header comment for why
+ * that separation is load-bearing, not incidental.
  */
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, sql: initial },
@@ -197,4 +222,5 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 11, sql: taskDescription },
   { version: 12, sql: commentsTable },
   { version: 13, sql: taskDayOrder },
+  { version: 14, sql: tasksFtsTrigram },
 ];

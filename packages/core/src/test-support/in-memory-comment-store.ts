@@ -1,6 +1,7 @@
 import { assertValidCommentText } from "../comment-fields";
 import type { CommentStore } from "../comment-store";
 import type { Comment } from "../comment-types";
+import { matchesSubstring } from "../task-search";
 
 /**
  * A fake CommentStore for exercising Todo's UI in tests — the
@@ -55,6 +56,15 @@ export class InMemoryCommentStore implements CommentStore {
 
   async pending(): Promise<Comment[]> {
     return [...this.comments.values()].filter((c) => c.seq === null);
+  }
+
+  // Mirrors SqliteCommentStore.search — see CommentStore.search's own doc comment.
+  async search(query: string): Promise<Comment[]> {
+    if (query.trim() === "") {
+      return [];
+    }
+    const all = await this.list();
+    return all.filter((c) => matchesSubstring(c.text, query));
   }
 
   async getCursor(): Promise<number> {

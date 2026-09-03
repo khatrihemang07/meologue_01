@@ -53,11 +53,14 @@ blocks without touching any Entry that mentions it.
 
 ### Search
 
-Narrowing a collection to the items whose text matches what you typed — Entries in History,
-Sessions whose Conversation matches, or Tasks in Todo. Search reads text, not time, and it
-narrows the collection in place rather than producing a separate one. Todo's Search is its own
-instance of this over Tasks, not an extension of the Search that already covers Entries and
-Sessions — narrowing one collection never reaches into another.
+Narrowing a collection to the items whose text matches what you typed. One concept, three
+instances — Entries in the Composer, Sessions whose Conversation matches in Reflection, and Tasks
+in Todo — each its own instance over its own collection, not one Search extended to reach a
+second. Search reads text, not time, and each instance narrows its own collection in place rather
+than producing a separate one. Narrowing one collection never reaches into another: Todo's Search
+finds a Task by its title, its Description, or a Comment made against it, and nothing it finds
+ever comes from an Entry or a Session, the same boundary that keeps the Composer's own Search from
+ever reaching into Todo.
 
 ### Reference
 

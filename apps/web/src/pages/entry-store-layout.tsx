@@ -677,6 +677,9 @@ const COMMENT_STORE_METHODS: StoreMethodNames<CommentStore> = {
   pending: true,
   getCursor: true,
   setCursor: true,
+  // Issue #183's Comment search — the identical compile-time checkpoint
+  // as every other method above.
+  search: true,
 };
 
 function deferCommentStoreUntilOpen(
