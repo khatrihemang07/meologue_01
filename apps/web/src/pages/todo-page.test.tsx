@@ -79,6 +79,9 @@ function renderTodoPage(context: EntryStoreOutletContext, initialPath = "/todo/i
             <Route path="/todo/projects" element={<TodoPage view="projects" />} />
             <Route path="/todo/projects/:projectId" element={<TodoPage view="project" />} />
             <Route path="/todo/activity" element={<TodoPage view="activity" />} />
+            <Route path="/todo/filters" element={<TodoPage view="filters" />} />
+            <Route path="/todo/filters/new" element={<TodoPage view="filter" />} />
+            <Route path="/todo/filters/:filterId" element={<TodoPage view="filter" />} />
             {/* Issue #178's Task detail route — no `view` prop, mirroring
                 App.tsx's own identical route exactly (that file's own
                 comment explains why). */}
@@ -152,6 +155,12 @@ function readyContext(overrides: Partial<EntryStoreOutletContext> = {}): EntrySt
     events: [],
     listEventsByTask: vi.fn(async () => []),
     listEventsByProject: vi.fn(async () => []),
+    filters: [],
+    addFilter: vi.fn(() => "filter-1"),
+    renameFilter: vi.fn(),
+    setFilterColour: vi.fn(),
+    setFilterQuery: vi.fn(async () => {}),
+    removeFilter: vi.fn(),
     disabled: false,
     ...overrides,
   };
@@ -919,5 +928,114 @@ describe("TodoPage — Projects", () => {
         expect.objectContaining({ projectId: "p1" }),
       ),
     );
+  });
+});
+
+// Issue #185, ADR 0058 — Filters wired into TodoPage exactly the way
+// Projects were: a list view (`/todo/filters`) and a single Filter's own
+// screen (`/todo/filters/new`, `/todo/filters/:filterId`), both rendered
+// through this same lazy chunk (this file's own header comment on the
+// `view` prop). FilterView's and FiltersView's own unit tests already
+// cover the grammar, the live preview, and the parse-error/Save-disabled
+// behaviour in full (filter-view.test.tsx) — these three exist only to
+// prove the page-level wiring: the right component mounts for the right
+// route, and `addFilter`/the outlet context's other Filter setters are
+// the ones actually reached.
+describe("TodoPage — Filters", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 8, 10, 12, 0)); // Sep 10, 2026, local noon
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("lists every Filter, linking to its own screen", () => {
+    renderTodoPage(
+      readyContext({
+        filters: [
+          {
+            id: "f1",
+            deviceId: "device-a",
+            name: "Due today",
+            colour: "#DC4C3E",
+            query: "today",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            seq: 1,
+            syncedAt: "2026-01-01T00:00:00.000Z",
+            deletedAt: null,
+          },
+        ],
+      }),
+      "/todo/filters",
+    );
+
+    expect(screen.getByRole("link", { name: "Due today" })).toHaveAttribute(
+      "href",
+      "/todo/filters/f1",
+    );
+  });
+
+  it("opening a saved Filter shows its name, its query, and what it matches (criterion 1)", () => {
+    renderTodoPage(
+      readyContext({
+        filters: [
+          {
+            id: "f1",
+            deviceId: "device-a",
+            name: "Due today",
+            colour: "#DC4C3E",
+            query: "today",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            seq: 1,
+            syncedAt: "2026-01-01T00:00:00.000Z",
+            deletedAt: null,
+          },
+        ],
+        tasks: [task({ id: "a", content: "call mum", date: "2026-09-10" })],
+      }),
+      "/todo/filters/f1",
+    );
+
+    expect(screen.getByRole("textbox", { name: "Filter name" })).toHaveValue("Due today");
+    expect(screen.getByRole("textbox", { name: "Filter query" })).toHaveValue("today");
+    expect(screen.getByText("call mum")).toBeInTheDocument();
+  });
+
+  it("creating a new Filter (criterion 7's live preview, then Save) calls addFilter with the typed name and query", () => {
+    const addFilter = vi.fn(() => "new-filter-id");
+    renderTodoPage(readyContext({ addFilter }), "/todo/filters/new");
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Filter name" }), {
+      target: { value: "My overdue" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "Filter query" }), {
+      target: { value: "overdue" },
+    });
+
+    const saveButton = screen.getByRole("button", { name: "Save" });
+    expect(saveButton).not.toBeDisabled();
+    fireEvent.click(saveButton);
+
+    expect(addFilter).toHaveBeenCalledWith(
+      "My overdue",
+      "overdue",
+      expect.objectContaining({ colour: expect.any(String) }),
+    );
+  });
+
+  it("a query this grammar cannot parse keeps Save disabled and shows the error plainly (criterion 6)", () => {
+    renderTodoPage(readyContext(), "/todo/filters/new");
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Filter name" }), {
+      target: { value: "Bad filter" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "Filter query" }), {
+      target: { value: "today & p1 | subtask" },
+    });
+
+    expect(screen.getByRole("alert")).toHaveTextContent(/parentheses/i);
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
   });
 });

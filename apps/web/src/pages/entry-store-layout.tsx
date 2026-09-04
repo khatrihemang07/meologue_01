@@ -5,6 +5,8 @@ import type {
   EntryStore,
   Event,
   EventStore,
+  Filter,
+  FilterStore,
   Label,
   LabelStore,
   Project,
@@ -19,6 +21,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Outlet, useOutletContext } from "react-router";
 import { useComments } from "@/hooks/use-comments";
 import { useEvents } from "@/hooks/use-events";
+import { type AddFilterOverrides, useFilters } from "@/hooks/use-filters";
 import { type UseHistoryPagination, useHistory } from "@/hooks/use-history";
 import { useLabels } from "@/hooks/use-labels";
 import { type AddProjectOverrides, useProjects } from "@/hooks/use-projects";
@@ -257,6 +260,22 @@ export interface EntryStoreOutletContext {
   events: Event[];
   listEventsByTask: (taskId: string) => Promise<Event[]>;
   listEventsByProject: (projectId: string | null) => Promise<Event[]>;
+  /**
+   * Todo's Filters (issue #185, CONTEXT.md's Filter entry) — the
+   * Filter-shaped sibling of `labels`/`projects` above, built the same
+   * way for the same reason: `useFilters` (use-filters.ts) runs once,
+   * here, above every route this layout wraps. `filters` is the whole,
+   * flat, alphabetical list (FilterStore.list()'s own guarantee) — a
+   * personal task list's own saved Filters sit at the same small scale
+   * Labels and Projects already do, so there's no per-Filter query the
+   * way `listTasksInProject` exists for a Project's own Tasks.
+   */
+  filters: Filter[];
+  addFilter: (name: string, query: string, overrides?: AddFilterOverrides) => string;
+  renameFilter: (id: string, name: string) => void;
+  setFilterColour: (id: string, colour: string) => void;
+  setFilterQuery: (id: string, query: string) => Promise<void>;
+  removeFilter: (id: string) => void;
   disabled: boolean;
   message?: string;
 }
@@ -522,6 +541,26 @@ async function noopListEventsByProject(_projectId: string | null): Promise<Event
   return [];
 }
 
+// `filters`'s own not-ready stand-ins (issue #185), mirroring
+// `noopAddProject`/`noopRenameProject` above: `filters: []` below has
+// nothing to act on regardless, but every field `EntryStoreOutletContext`
+// declares still has to exist. `noopAddFilter` returns a placeholder id
+// rather than throwing — nothing can call it before the store opens (the
+// "New Filter" screen is itself behind this same layout), but the type
+// this stand-in fills is a synchronous `string`, not a `Promise`, so
+// there is no rejection for a caller to await instead.
+function noopAddFilter(_name: string, _query: string, _overrides?: AddFilterOverrides): string {
+  return "";
+}
+
+function noopRenameFilter(_id: string, _name: string) {}
+
+function noopSetFilterColour(_id: string, _colour: string) {}
+
+async function noopSetFilterQuery(_id: string, _query: string): Promise<void> {}
+
+function noopRemoveFilter(_id: string) {}
+
 function noopFetchMore() {}
 
 // Mirrors `entries: []` just above: nothing to page through before the
@@ -772,6 +811,34 @@ export function deferEventStoreUntilOpen(
   return deferStore(promise, ({ eventStore }) => eventStore, EVENT_STORE_METHODS);
 }
 
+// Filters (issue #185) — a seventh deferred facade over the same open
+// promise, same reasoning as TASK_STORE_METHODS's own comment: this is
+// the compile-time checkpoint that fails `tsc -b` the moment FilterStore
+// grows a method this registry doesn't also list.
+const FILTER_STORE_METHODS: StoreMethodNames<FilterStore> = {
+  list: true,
+  get: true,
+  upsert: true,
+  rename: true,
+  setColour: true,
+  setQuery: true,
+  remove: true,
+  pending: true,
+  getCursor: true,
+  setCursor: true,
+  // Issue #186 / ADR 0057 — see ENTRY_STORE_METHODS's own comment. Never
+  // called yet (Filters carry no Sync stream — ../../packages/core/src/
+  // filter-store.ts's own header comment), but every store carries this
+  // method regardless, so the registry lists it regardless too.
+  catchUpRowShapeEpoch: true,
+};
+
+export function deferFilterStoreUntilOpen(
+  promise: Promise<{ filterStore: FilterStore; deviceId: string }>,
+): FilterStore {
+  return deferStore(promise, ({ filterStore }) => filterStore, FILTER_STORE_METHODS);
+}
+
 /**
  * The composition root for ADR 0001, ADR 0013 and ADR 0047: opens the Entry
  * store and the Task store together (one `open()` call, one shared
@@ -852,6 +919,7 @@ export function EntryStoreLayout() {
       projectStore: ProjectStore;
       commentStore: CommentStore;
       eventStore: EventStore;
+      filterStore: FilterStore;
       deviceId: string;
     }) => void;
     let reject!: (reason: unknown) => void;
@@ -862,6 +930,7 @@ export function EntryStoreLayout() {
       projectStore: ProjectStore;
       commentStore: CommentStore;
       eventStore: EventStore;
+      filterStore: FilterStore;
       deviceId: string;
     }>((res, rej) => {
       resolve = res;
@@ -916,6 +985,9 @@ export function EntryStoreLayout() {
   // `useEvents`'s own equivalent (issue #184) — a sixth facade over the
   // same one open.
   const pendingEventStore = useMemo(() => deferEventStoreUntilOpen(deferred.promise), [deferred]);
+  // `useFilters`'s own equivalent (issue #185) — a seventh facade over
+  // the same one open.
+  const pendingFilterStore = useMemo(() => deferFilterStoreUntilOpen(deferred.promise), [deferred]);
 
   const store = data?.store ?? pendingStore;
   const taskStore = data?.taskStore ?? pendingTaskStore;
@@ -923,6 +995,7 @@ export function EntryStoreLayout() {
   const projectStore = data?.projectStore ?? pendingProjectStore;
   const commentStore = data?.commentStore ?? pendingCommentStore;
   const eventStore = data?.eventStore ?? pendingEventStore;
+  const filterStore = data?.filterStore ?? pendingFilterStore;
   const deviceId = data?.deviceId ?? "";
 
   // `useLabels` is called before `useHistory` on purpose: Promotion's own
@@ -1029,6 +1102,8 @@ export function EntryStoreLayout() {
     archiveSection,
     unarchiveSection,
   } = useProjects(projectStore, eventStore, deviceId);
+  const { filters, addFilter, renameFilter, setFilterColour, setFilterQuery, removeFilter } =
+    useFilters(filterStore, deviceId);
 
   return (
     <Outlet
@@ -1099,6 +1174,12 @@ export function EntryStoreLayout() {
               events,
               listEventsByTask,
               listEventsByProject,
+              filters,
+              addFilter,
+              renameFilter,
+              setFilterColour,
+              setFilterQuery,
+              removeFilter,
               disabled: false,
             } satisfies EntryStoreOutletContext)
           : ({
@@ -1164,6 +1245,12 @@ export function EntryStoreLayout() {
               events: [],
               listEventsByTask: noopListEventsByTask,
               listEventsByProject: noopListEventsByProject,
+              filters: [],
+              addFilter: noopAddFilter,
+              renameFilter: noopRenameFilter,
+              setFilterColour: noopSetFilterColour,
+              setFilterQuery: noopSetFilterQuery,
+              removeFilter: noopRemoveFilter,
               disabled: true,
               message,
             } satisfies EntryStoreOutletContext)

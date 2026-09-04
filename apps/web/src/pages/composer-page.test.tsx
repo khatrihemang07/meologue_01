@@ -120,6 +120,12 @@ const readyContext: EntryStoreOutletContext = {
   events: [],
   listEventsByTask: vi.fn(async () => []),
   listEventsByProject: vi.fn(async () => []),
+  filters: [],
+  addFilter: vi.fn(() => "filter-1"),
+  renameFilter: vi.fn(),
+  setFilterColour: vi.fn(),
+  setFilterQuery: vi.fn(async () => {}),
+  removeFilter: vi.fn(),
   disabled: false,
 };
 
@@ -210,6 +216,12 @@ describe("ComposerPage", () => {
       events: [],
       listEventsByTask: vi.fn(async () => []),
       listEventsByProject: vi.fn(async () => []),
+      filters: [],
+      addFilter: vi.fn(() => "filter-1"),
+      renameFilter: vi.fn(),
+      setFilterColour: vi.fn(),
+      setFilterQuery: vi.fn(async () => {}),
+      removeFilter: vi.fn(),
       disabled: true,
     });
 
@@ -290,6 +302,12 @@ describe("ComposerPage", () => {
       events: [],
       listEventsByTask: vi.fn(async () => []),
       listEventsByProject: vi.fn(async () => []),
+      filters: [],
+      addFilter: vi.fn(() => "filter-1"),
+      renameFilter: vi.fn(),
+      setFilterColour: vi.fn(),
+      setFilterQuery: vi.fn(async () => {}),
+      removeFilter: vi.fn(),
       disabled: true,
       message: "meologue couldn't open its storage. Reloading may help.",
     });
@@ -375,6 +393,12 @@ describe("ComposerPage", () => {
       events: [],
       listEventsByTask: vi.fn(async () => []),
       listEventsByProject: vi.fn(async () => []),
+      filters: [],
+      addFilter: vi.fn(() => "filter-1"),
+      renameFilter: vi.fn(),
+      setFilterColour: vi.fn(),
+      setFilterQuery: vi.fn(async () => {}),
+      removeFilter: vi.fn(),
       disabled: false,
     });
 
@@ -479,6 +503,12 @@ describe("ComposerPage", () => {
       events: [],
       listEventsByTask: vi.fn(async () => []),
       listEventsByProject: vi.fn(async () => []),
+      filters: [],
+      addFilter: vi.fn(() => "filter-1"),
+      renameFilter: vi.fn(),
+      setFilterColour: vi.fn(),
+      setFilterQuery: vi.fn(async () => {}),
+      removeFilter: vi.fn(),
       disabled: false,
     });
 
@@ -628,6 +658,12 @@ describe("ComposerPage", () => {
         events: [],
         listEventsByTask: vi.fn(async () => []),
         listEventsByProject: vi.fn(async () => []),
+        filters: [],
+        addFilter: vi.fn(() => "filter-1"),
+        renameFilter: vi.fn(),
+        setFilterColour: vi.fn(),
+        setFilterQuery: vi.fn(async () => {}),
+        removeFilter: vi.fn(),
         disabled: false,
       });
 
@@ -733,6 +769,12 @@ describe("ComposerPage", () => {
         events: [],
         listEventsByTask: vi.fn(async () => []),
         listEventsByProject: vi.fn(async () => []),
+        filters: [],
+        addFilter: vi.fn(() => "filter-1"),
+        renameFilter: vi.fn(),
+        setFilterColour: vi.fn(),
+        setFilterQuery: vi.fn(async () => {}),
+        removeFilter: vi.fn(),
         disabled: false,
       });
 
@@ -842,6 +884,12 @@ describe("ComposerPage", () => {
         events: [],
         listEventsByTask: vi.fn(async () => []),
         listEventsByProject: vi.fn(async () => []),
+        filters: [],
+        addFilter: vi.fn(() => "filter-1"),
+        renameFilter: vi.fn(),
+        setFilterColour: vi.fn(),
+        setFilterQuery: vi.fn(async () => {}),
+        removeFilter: vi.fn(),
         disabled: false,
       });
 
@@ -947,6 +995,12 @@ describe("ComposerPage", () => {
           events: [],
           listEventsByTask: vi.fn(async () => []),
           listEventsByProject: vi.fn(async () => []),
+          filters: [],
+          addFilter: vi.fn(() => "filter-1"),
+          renameFilter: vi.fn(),
+          setFilterColour: vi.fn(),
+          setFilterQuery: vi.fn(async () => {}),
+          removeFilter: vi.fn(),
           disabled: false,
         },
         "/?q=wor",

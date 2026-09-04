@@ -156,3 +156,82 @@ test("deleting a Task requires confirmation, and the deletion survives a reload"
   await page.reload();
   await expect(page.getByText(content)).toHaveCount(0);
 });
+
+// Issue #185, ADR 0058: saving a Filter and opening it — criterion 1
+// ("opening one shows what it matches") and criterion 7 ("a live preview
+// shows what a query matches before it is saved") end to end, against a
+// real Task added moments earlier through the ordinary Add field. `today`
+// is typed as ordinary quick-add text (add-task-form.tsx's own smart-date
+// recognition), not a Filter-specific setup step — this is what actually
+// gives the new Task a real `date` of today for the Filter's own `today`
+// flag to match, the same "considers a Date... when asking what is due"
+// criterion 4 states.
+test("saving a Filter and opening it shows what it matches, and both survive a reload", async ({
+  page,
+}) => {
+  const taskLabel = uniqueTaskContent("todo-filter-task");
+  const filterName = uniqueTaskContent("todo-filter-name");
+
+  await openDestination(page, "Todo");
+  await addTask(page, `${taskLabel} today`);
+  // Quick-add strips the recognised "today" token out of content — the
+  // row shows the bare label, dated today (../quick-add/'s own
+  // `content` doc comment).
+  await expect(page.getByText(taskLabel)).toBeVisible();
+
+  await page.getByRole("link", { name: "Filters" }).click();
+  await expect(page).toHaveURL("/todo/filters");
+
+  await page.getByRole("link", { name: "New Filter" }).click();
+  await expect(page).toHaveURL("/todo/filters/new");
+
+  const saveButton = page.getByRole("button", { name: "Save" });
+  await expect(saveButton).toBeDisabled();
+
+  await page.getByRole("textbox", { name: "Filter name" }).fill(filterName);
+  await page.getByRole("textbox", { name: "Filter query" }).fill("today");
+
+  // Criterion 7: the live preview, before Save is ever clicked — the
+  // just-added Task already shows up beneath the still-unsaved query.
+  await expect(page.getByText(taskLabel)).toBeVisible();
+  await expect(saveButton).toBeEnabled();
+
+  await saveButton.click();
+
+  // Saving navigates straight to the new Filter's own address (a real
+  // uuid, not "new") — criterion 1's "opening one shows what it matches"
+  // is the exact screen Save just landed on.
+  await expect(page).toHaveURL(/\/todo\/filters\/(?!new$)[\w-]+$/);
+  await expect(page.getByRole("textbox", { name: "Filter name" })).toHaveValue(filterName);
+  await expect(page.getByRole("textbox", { name: "Filter query" })).toHaveValue("today");
+  await expect(page.getByText(taskLabel)).toBeVisible();
+
+  await page.reload();
+
+  // Both the saved Filter and the Date it matches against survive —
+  // neither lived only in this page's own component state.
+  await expect(page.getByRole("textbox", { name: "Filter name" })).toHaveValue(filterName);
+  await expect(page.getByRole("textbox", { name: "Filter query" })).toHaveValue("today");
+  await expect(page.getByText(taskLabel)).toBeVisible();
+
+  await page.getByRole("link", { name: "Filters" }).click();
+  await expect(page.getByRole("link", { name: filterName })).toBeVisible();
+});
+
+// Criterion 6: a query this grammar cannot parse says so plainly, and
+// Save is never offered for it — the reference implementation's own
+// defect (silently blank, Save still enabled) this ticket was asked not
+// to copy.
+test("an unparseable Filter query shows the error plainly and never offers Save", async ({
+  page,
+}) => {
+  await openDestination(page, "Todo");
+  await page.getByRole("link", { name: "Filters" }).click();
+  await page.getByRole("link", { name: "New Filter" }).click();
+
+  await page.getByRole("textbox", { name: "Filter name" }).fill(uniqueTaskContent("bad-filter"));
+  await page.getByRole("textbox", { name: "Filter query" }).fill("today & p1 | subtask");
+
+  await expect(page.getByRole("alert")).toContainText(/parentheses/i);
+  await expect(page.getByRole("button", { name: "Save" })).toBeDisabled();
+});

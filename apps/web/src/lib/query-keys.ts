@@ -222,3 +222,12 @@ export const COMMENTS_QUERY_KEY = ["comments"] as const;
  * criterion), not paged the way History's ENTRIES_QUERY_KEY is.
  */
 export const EVENTS_QUERY_KEY = ["events"] as const;
+
+/**
+ * Issue #185: every active Filter (FilterStore.list()), read by
+ * use-filters.ts. Flat and unpaginated, mirroring LABELS_QUERY_KEY — a
+ * personal task list's own saved Filters sit at the same small scale
+ * Labels and Projects already do, and there is no archived/active split
+ * the way COMPLETED_TASKS_QUERY_KEY exists for Tasks.
+ */
+export const FILTERS_QUERY_KEY = ["filters"] as const;

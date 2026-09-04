@@ -11,6 +11,7 @@ import commentsTable from "./0009_comments_table.sql?raw";
 import taskDayOrder from "./0010_task_day_order.sql?raw";
 import tasksFtsTrigram from "./0011_tasks_fts_trigram.sql?raw";
 import eventsTable from "./0012_events_table.sql?raw";
+import filtersTable from "./0013_filters_table.sql?raw";
 import entriesSearchIndex from "./entries_search_index.sql?raw";
 import tasksSearchIndex from "./tasks_search_index.sql?raw";
 
@@ -218,6 +219,16 @@ export interface Migration {
  * Event is never edited or removed once written
  * (../../event-types.ts's own header comment), so there is no "nothing"
  * state a tombstone would need to represent.
+ *
+ * `0013_filters_table` (version 16, issue #185) adds a seventh root
+ * noun's own table, `filters` — CONTEXT.md's Filter entry, "a saved
+ * query over Tasks," the last of the glossary's terms to get one.
+ * `CREATE TABLE IF NOT EXISTS` covers it the ordinary way,
+ * `0012_events_table`'s own template, plus one `CREATE INDEX IF NOT
+ * EXISTS` for the same reason every other index-creating statement in
+ * this file is. Unlike `events`, `filters` does carry `deleted_at` — a
+ * Filter can be removed the same tombstoned way a Label or Project can
+ * (../filter-store.ts's own `remove()`).
  */
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, sql: initial },
@@ -235,4 +246,5 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 13, sql: taskDayOrder },
   { version: 14, sql: tasksFtsTrigram },
   { version: 15, sql: eventsTable },
+  { version: 16, sql: filtersTable },
 ];

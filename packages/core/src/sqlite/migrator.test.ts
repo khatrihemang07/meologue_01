@@ -23,6 +23,7 @@ describe("migrate", () => {
       ["entries_fts_docsize"],
       ["entries_fts_idx"],
       ["events"],
+      ["filters"],
       ["kv"],
       ["labels"],
       ["meologue_migrations"],
@@ -75,6 +76,7 @@ describe("migrate", () => {
       [13],
       [14],
       [15],
+      [16],
     ]);
   });
 
@@ -252,6 +254,7 @@ describe("migrate", () => {
       [13],
       [14],
       [15],
+      [16],
     ]);
 
     // The store isn't just "didn't throw" — it's actually usable: a write
@@ -296,6 +299,7 @@ describe("migrate", () => {
       [13],
       [14],
       [15],
+      [16],
     ]);
 
     // The store isn't just "didn't throw" — `duration` is actually gone,

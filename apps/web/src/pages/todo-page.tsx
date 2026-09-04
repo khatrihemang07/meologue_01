@@ -10,6 +10,8 @@ import { Shell } from "@/components/shell";
 import { ActivityFeed } from "@/components/todo/activity-feed";
 import { AddTaskForm } from "@/components/todo/add-task-form";
 import { CompletedTasks } from "@/components/todo/completed-tasks";
+import { FilterView } from "@/components/todo/filter-view";
+import { FiltersView } from "@/components/todo/filters-view";
 import { ProjectView } from "@/components/todo/project-view";
 import { ProjectsView } from "@/components/todo/projects-view";
 import { TaskDetailView } from "@/components/todo/task-detail-view";
@@ -41,8 +43,15 @@ import { useEntryStore } from "@/pages/entry-store-layout";
  * are one per view.
  */
 interface TodoBackgroundView {
-  view: "inbox" | "today" | "projects" | "project" | "search" | "activity";
+  view: "inbox" | "today" | "projects" | "project" | "search" | "activity" | "filters" | "filter";
   projectId: string | null;
+  /**
+   * The Filter this Task was opened from a result of, for `view ===
+   * "filter"` — `null` means `/todo/filters/new` (a Task opened from a
+   * still-unsaved query's own live preview), mirroring `projectId`'s own
+   * "which one" role for `view === "project"`.
+   */
+  filterId?: string | null;
   /**
    * The full search page's own `?q=…&tab=…` (issue #183) — `undefined`
    * for every other view. Carried here, not recovered from `window.
@@ -58,6 +67,11 @@ function backgroundPath(background: TodoBackgroundView): string {
     return background.projectId === null
       ? "/todo/projects"
       : `/todo/projects/${background.projectId}`;
+  }
+  if (background.view === "filter") {
+    return background.filterId === null || background.filterId === undefined
+      ? "/todo/filters/new"
+      : `/todo/filters/${background.filterId}`;
   }
   if (background.view === "search") {
     return `/todo/search${background.search ?? ""}`;
@@ -85,7 +99,7 @@ export interface TodoPageProps {
    * `/reflect/:sessionId` reads its own id — not a second prop, since the
    * id is already in the URL a bookmark or a reload has to survive.
    */
-  view?: "inbox" | "today" | "projects" | "project" | "search" | "activity";
+  view?: "inbox" | "today" | "projects" | "project" | "search" | "activity" | "filters" | "filter";
 }
 
 /**
@@ -128,8 +142,13 @@ export interface TodoPageProps {
  * `captureDate`/`captureProjectId` below.
  */
 export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
-  const { projectId: routeProjectId, taskSlugId } = useParams<{
+  const {
+    projectId: routeProjectId,
+    filterId: routeFilterId,
+    taskSlugId,
+  } = useParams<{
     projectId: string;
+    filterId: string;
     taskSlugId: string;
   }>();
   const location = useLocation();
@@ -153,9 +172,11 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
       : {
           view,
           projectId: view === "project" ? (routeProjectId ?? null) : null,
+          filterId: view === "filter" ? (routeFilterId ?? null) : null,
           search: view === "search" || view === "activity" ? location.search : undefined,
         };
   const currentProjectId = backgroundView.projectId;
+  const currentFilterId = backgroundView.filterId ?? null;
 
   const {
     tasks,
@@ -204,6 +225,12 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     archiveSection,
     unarchiveSection,
     events,
+    filters,
+    addFilter,
+    renameFilter,
+    setFilterColour,
+    setFilterQuery,
+    removeFilter,
   } = useEntryStore();
 
   // The default date/Project a Task captured *from this view* inherits —
@@ -240,6 +267,7 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   const scopedTasks = scopedTasksQuery.data ?? [];
 
   const currentProject = projects.find((project) => project.id === currentProjectId) ?? null;
+  const currentFilter = filters.find((filter) => filter.id === currentFilterId) ?? null;
 
   const sectionsQuery = useQuery({
     queryKey: sectionsQueryKey(currentProjectId ?? ""),
@@ -409,7 +437,9 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
         })()
       : backgroundView.view === "projects" ||
           backgroundView.view === "search" ||
-          backgroundView.view === "activity"
+          backgroundView.view === "activity" ||
+          backgroundView.view === "filters" ||
+          backgroundView.view === "filter"
         ? []
         : scopedTasks;
   const openTaskIndex =
@@ -561,7 +591,9 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
           either, the identical reasoning. */}
       {backgroundView.view !== "projects" &&
         backgroundView.view !== "search" &&
-        backgroundView.view !== "activity" && <AddTaskForm onAdd={handleAdd} disabled={disabled} />}
+        backgroundView.view !== "activity" &&
+        backgroundView.view !== "filters" &&
+        backgroundView.view !== "filter" && <AddTaskForm onAdd={handleAdd} disabled={disabled} />}
 
       {backgroundView.view === "today" && (
         <TodayView
@@ -646,6 +678,32 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
           }
         />
       )}
+
+      {backgroundView.view === "filters" && <FiltersView filters={filters} />}
+
+      {backgroundView.view === "filter" &&
+        (!currentFilter && currentFilterId !== null ? (
+          // Loading (`filters` hasn't resolved yet) or a bad/removed id —
+          // mirrors ProjectView's own identical "can't tell those apart,
+          // neither is worth a special-cased message" posture just above.
+          <p className="px-3 py-6 text-center text-muted-foreground text-sm">Loading…</p>
+        ) : (
+          <FilterView
+            filter={currentFilter}
+            tasks={tasks}
+            projects={projects}
+            labels={labels}
+            listSections={listSections}
+            onCreate={(name, query, colour) => addFilter(name, query, { colour })}
+            onRename={(name) => currentFilter && renameFilter(currentFilter.id, name)}
+            onSetColour={(colour) => currentFilter && setFilterColour(currentFilter.id, colour)}
+            onSetQuery={(query) =>
+              currentFilter ? setFilterQuery(currentFilter.id, query) : Promise.resolve()
+            }
+            onRemove={() => currentFilter && removeFilter(currentFilter.id)}
+            onOpenTask={openTaskDetail}
+          />
+        ))}
 
       {backgroundView.view === "search" && (
         <TaskSearchPage

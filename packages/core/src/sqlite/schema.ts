@@ -302,6 +302,50 @@ export const labels = sqliteTable(
 );
 
 /**
+ * Mirrors the `Filter` type (../filter-types.ts) exactly (issue #185) —
+ * a saved query over Tasks (CONTEXT.md's Filter entry), the last of the
+ * glossary's nouns to get a table. Structurally identical to `labels`
+ * above for the identical reason: `deviceId`, `createdAt`, `seq`,
+ * `syncedAt`, `deletedAt` are ADR 0028's sync-and-tombstone scaffolding,
+ * shipped ahead of any actual Filter Sync stream — see
+ * ../filter-store.ts's own header comment for why, the same argument
+ * `labels`' own comment above already makes for Labels. `query` carries
+ * whatever the user typed, unparsed and unvalidated at rest by this
+ * table itself (validation is ../filter-fields.ts's
+ * `assertValidFilterQuery`, enforced by the store's `setQuery`, never by
+ * a `CHECK` constraint SQLite has no way to run a recursive-descent
+ * parser inside).
+ */
+export const filters = sqliteTable(
+  "filters",
+  {
+    id: text("id").primaryKey(),
+    deviceId: text("device_id").notNull(),
+    name: text("name").notNull(),
+    // Shares LABEL_COLOURS with `projects`/`labels` above — see
+    // ../filter-types.ts's `Filter.colour` doc comment.
+    colour: text("colour").notNull(),
+    // The literal query text (../filter-query/), never a pre-parsed tree
+    // — mirrors `tasks.date_string`'s identical "the string is the
+    // truth" reasoning for Recurrence, applied to a Filter's own query.
+    query: text("query").notNull(),
+    createdAt: text("created_at").notNull(),
+    seq: integer("seq"),
+    syncedAt: text("synced_at"),
+    // Tombstone (ADR 0028's rule, applied to Filters) — identical
+    // representation to every other table's `deleted_at` above.
+    deletedAt: text("deleted_at"),
+  },
+  (table) => [
+    // Supports list()'s actual query — identical shape to
+    // `labels_name_id_idx` above, for the identical reason: alphabetical
+    // by name is this table's only ordering (../filter-store.ts's own
+    // comment on why there's no `order_key`).
+    index("filters_name_id_idx").on(table.name, table.id),
+  ],
+);
+
+/**
  * Mirrors the `Comment` type (../comment-types.ts) exactly (issue #180) —
  * a fourth root noun (ADR 0047's move, made a second time), for the
  * identical reason `tasks`/`projects`/`labels` above each got their own

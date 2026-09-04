@@ -61,4 +61,18 @@ describe("TodoNav", () => {
 
     expect(screen.getByRole("link", { name: "Projects" })).toHaveAttribute("aria-current", "page");
   });
+
+  // Issue #185's own proof of ADR 0049's prediction a third time — see
+  // todo-nav.tsx's own comment on VIEWS.
+  it("offers Filters as a fifth real link", () => {
+    renderAt("/todo/inbox");
+
+    expect(screen.getByRole("link", { name: "Filters" })).toHaveAttribute("href", "/todo/filters");
+  });
+
+  it("marks Filters current while viewing a single Filter's own screen too", () => {
+    renderAt("/todo/filters/some-filter-id");
+
+    expect(screen.getByRole("link", { name: "Filters" })).toHaveAttribute("aria-current", "page");
+  });
 });

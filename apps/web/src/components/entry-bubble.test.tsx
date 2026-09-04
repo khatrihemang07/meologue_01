@@ -297,6 +297,12 @@ describe("EntryBubble", () => {
         events: [],
         listEventsByTask: vi.fn(async () => []),
         listEventsByProject: vi.fn(async () => []),
+        filters: [],
+        addFilter: vi.fn(() => "filter-1"),
+        renameFilter: vi.fn(),
+        setFilterColour: vi.fn(),
+        setFilterQuery: vi.fn(async () => {}),
+        removeFilter: vi.fn(),
         disabled: false,
         ...overrides,
       };

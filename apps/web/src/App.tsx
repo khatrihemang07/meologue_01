@@ -172,6 +172,21 @@ function App() {
               segment" shape `/todo/search`'s own comment above already
               takes for `?q=`. */}
               <Route path="/todo/activity" element={<TodoPage view="activity" />} />
+              {/* Filters (issue #185, ADR 0058): `/todo/filters` names the
+              list of every saved Filter (`filters-view.tsx`);
+              `/todo/filters/new` is the composer for one not yet saved
+              (`filter-view.tsx`'s create mode); `/todo/filters/:filterId`
+              opens a saved one. `new` is a static literal ranked above
+              the dynamic segment by react-router regardless of
+              declaration order, the identical `/reflect/list` vs
+              `/reflect/:sessionId` precedent this file's own comment on
+              that pair already states — and `filterId` is a `mintId()`
+              uuid, so, like every dynamic segment above, it never
+              contains a "." and stays safe under this file's own no-dot
+              rule. */}
+              <Route path="/todo/filters" element={<TodoPage view="filters" />} />
+              <Route path="/todo/filters/new" element={<TodoPage view="filter" />} />
+              <Route path="/todo/filters/:filterId" element={<TodoPage view="filter" />} />
               {/* A Task's own address (issue #178), still under `/todo/*` per
               ADR 0049's own constraint on where Todo's internal navigation
               may live — no `view` prop: `todo-page.tsx`'s own header

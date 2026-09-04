@@ -113,9 +113,31 @@ function buildOutletContext(
     events: [],
     listEventsByTask: vi.fn(async () => []),
     listEventsByProject: vi.fn(async () => []),
+    filters: [],
+    addFilter: vi.fn(() => "filter-1"),
+    renameFilter: vi.fn(),
+    setFilterColour: vi.fn(),
+    setFilterQuery: vi.fn(async () => {}),
+    removeFilter: vi.fn(),
     disabled: false,
     ...overrides,
   };
+}
+
+/**
+ * A date Reference's own renderer (entry-row.tsx's `DateReferenceLink`)
+ * reads `dayHasEntries` off `useEntryStore()` and resolves it through
+ * TanStack Query — this stands EntryRow up inside the same outlet-context
+ * plus router plus query-client wiring composer-page.test.tsx uses for the
+ * page above it, scoped down to a bare `<EntryRow>`.
+ */
+function renderEntryRow(
+  target: Entry,
+  overrides: Partial<EntryStoreOutletContext> = {},
+  query = "",
+  queryClient = new QueryClient(),
+) {
+  const context = buildOutletContext(overrides);
   return {
     queryClient,
     ...render(

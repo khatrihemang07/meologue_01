@@ -3,6 +3,7 @@ import { migrate } from "./migrator";
 import { SqliteCommentStore } from "./sqlite-comment-store";
 import { SqliteEntryStore } from "./sqlite-entry-store";
 import { SqliteEventStore } from "./sqlite-event-store";
+import { SqliteFilterStore } from "./sqlite-filter-store";
 import { SqliteLabelStore } from "./sqlite-label-store";
 import { SqliteProjectStore } from "./sqlite-project-store";
 import { SqliteTaskStore } from "./sqlite-task-store";
@@ -38,6 +39,8 @@ export interface OpenedSqliteStore {
   commentStore: SqliteCommentStore;
   /** Events (issue #184) — a sixth field, following the identical additive rule this interface's own header comment states. */
   eventStore: SqliteEventStore;
+  /** Filters (issue #185) — a seventh field, following the identical additive rule this interface's own header comment states. */
+  filterStore: SqliteFilterStore;
   deviceId: string;
 }
 
@@ -72,6 +75,16 @@ export async function open(driver: SqliteDriver): Promise<OpenedSqliteStore> {
   const projectStore = new SqliteProjectStore(driver, taskStore);
   const commentStore = new SqliteCommentStore(driver);
   const eventStore = new SqliteEventStore(driver);
+  const filterStore = new SqliteFilterStore(driver);
   const deviceId = await store.ensureDeviceId();
-  return { store, taskStore, labelStore, projectStore, commentStore, eventStore, deviceId };
+  return {
+    store,
+    taskStore,
+    labelStore,
+    projectStore,
+    commentStore,
+    eventStore,
+    filterStore,
+    deviceId,
+  };
 }

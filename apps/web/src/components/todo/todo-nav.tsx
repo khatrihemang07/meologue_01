@@ -1,4 +1,4 @@
-import { CalendarCheck, FolderKanban, History, ListTodo } from "lucide-react";
+import { CalendarCheck, FolderKanban, History, ListFilter, ListTodo } from "lucide-react";
 import { NavLink } from "react-router";
 import { cn } from "@/lib/utils";
 
@@ -35,6 +35,13 @@ const VIEWS = [
   // third row appended to VIEWS, nothing else in this component
   // touched"), now with a fourth.
   { to: "/todo/activity", label: "Activity", Icon: History },
+  // Issue #185, ADR 0058: every saved Filter, the fifth row — the
+  // identical extension, once more. `/todo/filters` names the list of
+  // every Filter (`filters-view.tsx`); a single Filter's own screen
+  // (`/todo/filters/:filterId`, `filter-view.tsx`) has no row of its own
+  // here, mirroring `/todo/projects/:projectId`'s own absence above for
+  // the identical reason.
+  { to: "/todo/filters", label: "Filters", Icon: ListFilter },
 ] as const;
 
 export function TodoNav() {
