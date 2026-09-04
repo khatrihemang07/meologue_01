@@ -140,7 +140,9 @@ The native shell uses Tauri v2. macOS Command Line Tools are sufficient; install
 A debug build stays a manual `cargo tauri build --debug` in `apps/macos`, with
 `--config tauri.sandbox.conf.json` for the Sandbox. Run `./scripts/setup-signing.sh` from the
 repository root before a release build. It creates a local, self-signed identity; builds are signed
-but not notarized, so another Mac requires one explicit right-click → Open. Production and Sandbox
+but not notarized. A build made here opens on a double-click — it was never downloaded, so it never
+picked up the `com.apple.quarantine` attribute Gatekeeper checks. The same bundle fetched from a
+Release does carry it; docs/adr/0054 has the two ways to clear it. Production and Sandbox
 bundles have separate identifiers and application data. Both can run and sync at once, each reaching
 only its own Server.
 
