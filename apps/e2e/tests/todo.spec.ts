@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { expect, test } from "@playwright/test";
-import { openDestination } from "./helpers";
+import { SERVER_A_DATABASE } from "../servers";
+import { expect, test } from "./fixtures";
+import { openDestination, waitForTaskOrder } from "./helpers";
 
 /**
  * Issue #168: Todo's Inbox, modelled on composer.spec.ts — add, complete
@@ -10,6 +11,16 @@ import { openDestination } from "./helpers";
  * runs its specs sequentially against one shared Server (playwright.config.ts's
  * `fullyParallel: false`), so a bare "buy milk" would collide with whatever
  * an earlier run of this same spec already left behind.
+ *
+ * Issue #190: that same shared-Server fact meant the first test below used
+ * to count EVERY `li[data-task-id]` on the page, trusting that nothing
+ * other than this test had ever put one there — a trust an earlier spec
+ * file (composer.spec.ts, promoting a checkbox line into a Task) broke.
+ * `fixtures.ts`'s `resetTasks` fixture now makes that trust actually true
+ * (no Task survives from a previous test, in this file or any other), but
+ * the count below is scoped to `first`/`second` by their own random content
+ * regardless — so this test reads as "the two Tasks I just added," which is
+ * what it always meant, not "however many Tasks happen to exist."
  */
 function uniqueTaskContent(label: string): string {
   return `${label} ${randomUUID()}`;
@@ -36,7 +47,14 @@ test("adding, completing (with Undo), reordering and reloading all leave Todo ex
 
   // Added in order, appended each time (use-tasks.ts's own addTask) — the
   // first Task added sorts before the second.
-  const rows = page.locator("li[data-task-id]");
+  //
+  // Scoped to `first`/`second` by their own random content, not a bare
+  // `li[data-task-id]` — issue #190. `resetTasks` (fixtures.ts) already
+  // guarantees these are the only two Tasks that exist when this runs, but
+  // the count itself should still read as "the Tasks THIS test added,"
+  // not "however many happen to be on the page" — that was the assertion's
+  // actual bug, independent of what fixed the leak that exposed it.
+  const rows = page.locator("li[data-task-id]", { hasText: new RegExp(`${first}|${second}`) });
   await expect(rows).toHaveCount(2);
   await expect(rows.nth(0)).toContainText(first);
   await expect(rows.nth(1)).toContainText(second);
@@ -109,6 +127,16 @@ test("adding, completing (with Undo), reordering and reloading all leave Todo ex
 
   await expect(rows.nth(0)).toContainText(second);
   await expect(rows.nth(1)).toContainText(first);
+
+  // A reload re-boots from scratch and pulls whatever Sync hands it back —
+  // waiting for the Server's own copy to agree with the swap first is the
+  // same "wait for the causally-later, externally-checkable condition"
+  // discipline `waitForTaskCompleted` already uses for a completion
+  // (`waitForTaskOrder`'s own doc comment, helpers.ts). Without it, this
+  // step is a real, if occasional, race: reproduced on a full-file run at
+  // load ~10-13 — the drop rendering correctly, then a reload reverting to
+  // the pre-drop order because an in-flight Sync pull still carried it.
+  await waitForTaskOrder(second, first, SERVER_A_DATABASE);
 
   await page.reload();
 

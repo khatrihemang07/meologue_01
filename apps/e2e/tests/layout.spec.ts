@@ -1,4 +1,5 @@
-import { expect, type Page, test } from "@playwright/test";
+import type { Page } from "@playwright/test";
+import { expect, test } from "./fixtures";
 
 // ADR 0019 dropped the reading column's fixed max-w-2xl cap in favour of a
 // proportion of whatever contains it: 97% below Tailwind's `md` breakpoint

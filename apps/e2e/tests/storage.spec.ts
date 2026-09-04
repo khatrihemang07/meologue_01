@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 import { sendEntry, uniqueEntryBody } from "./helpers";
 
 // The web app's SQLite/OPFS storage (ticket 21) — real persistence and the

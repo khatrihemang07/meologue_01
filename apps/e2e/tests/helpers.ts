@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import type { Browser, BrowserContext, Locator, Page } from "@playwright/test";
-import { POSTGRES_CONTAINER, SERVER_A_URL } from "../servers";
+import { POSTGRES_CONTAINER, SERVER_A_DATABASE, SERVER_A_URL, SERVER_B_DATABASE } from "../servers";
 
 /** A body unique to this test run, so leftover rows from a prior local run never collide. */
 export function uniqueEntryBody(label: string): string {
@@ -162,17 +162,24 @@ export function entrySeq(id: string, database: string): string | undefined {
  * `timeoutMs` defaults to double `waitForEntryId`/`waitForTombstone`'s own
  * 20s, not because completing a Task is inherently slower than Sending or
  * deleting an Entry, but because of *where in this file* the one caller
- * that matters sits: issue #190 (filed separately, not fixed here) means
- * every earlier test in `composer.spec.ts` leaks a Task into today's Day
- * block, so by the time this fires the Server is fielding Sync requests
- * for a real, accumulated backlog rather than the single-row case
+ * that matters sits: at the time this default was measured, issue #190
+ * meant every earlier test in `composer.spec.ts` leaked a Task into today's
+ * Day block, so by the time this fired the Server was fielding Sync
+ * requests for a real, accumulated backlog rather than the single-row case
  * `waitForEntryId`'s own 20s was measured against. `SYNC_INTERVAL_MS`
  * (`@meologue/core`) is 5s — a request that gets coalesced behind an
  * already-in-flight one, or simply takes longer under the load a busy
  * suite run puts on the Server, can need more than one or two ticks to
  * land. Confirmed by reproducing a real full-file run at load ~11.6/16.4:
  * a completion this function was asked to find took longer than 20s to
- * reach the Server, not never — the poll condition itself is unchanged.
+ * reach the Server, not never.
+ *
+ * Issue #190 is now fixed (`fixtures.ts`'s `resetTasks` fixture — this same
+ * file), so a fresh measurement would likely find `waitForEntryId`'s own
+ * 20s enough again; the wider budget is left in place rather than tightened
+ * back down; it costs nothing on a test that finishes well within it, and
+ * general machine-load variance (the actual subject of issue #112) is still
+ * a real reason a poll can run long even with nothing left accumulating.
  */
 export async function waitForTaskCompleted(
   content: string,
@@ -182,6 +189,43 @@ export async function waitForTaskCompleted(
   await pollSql(
     database,
     `select 1 from tasks where content = ${sqlLiteral(content)} and completed_at is not null;`,
+    timeoutMs,
+  );
+}
+
+/**
+ * Waits until the Server's own copy agrees that `beforeContent`'s Task
+ * sorts before `afterContent`'s Task — `order_key` compared the same way
+ * `order-key.ts`'s own `compareOrder` does (`a.orderKey < b.orderKey`),
+ * lexicographically, ascending.
+ *
+ * The same "wait for the Server to agree before reloading" discipline
+ * `waitForTaskCompleted`'s own doc comment already gives for a completion,
+ * applied to a reorder instead: a drag-and-drop's `commitDrop` writes the
+ * new `order_key` locally and fires `requestSync()` the identical
+ * fire-and-forget way `completeTask` does (`use-tasks.ts`), so a
+ * `page.reload()` right after a drop is racing that push against whatever
+ * a periodic pull already in flight hands the fresh boot back — a pull
+ * that still carries the Server's own pre-drop order can land after the
+ * reload and overwrite the very swap a test just watched render, purely
+ * because the corresponding push hadn't reached the Server yet. Confirmed
+ * flaky on a real full-file run, this test's own reorder-then-reload step
+ * specifically, only at real load (~10-13): reproduced twice in five tries
+ * at that load, and not at all at a quieter one — the signature of exactly
+ * this race, not a deterministic bug.
+ */
+export async function waitForTaskOrder(
+  beforeContent: string,
+  afterContent: string,
+  database: string,
+  timeoutMs = 20_000,
+): Promise<void> {
+  await pollSql(
+    database,
+    `select 1 from tasks a, tasks b
+     where a.content = ${sqlLiteral(beforeContent)}
+       and b.content = ${sqlLiteral(afterContent)}
+       and a.order_key < b.order_key;`,
     timeoutMs,
   );
 }
@@ -265,6 +309,43 @@ export function deleteDigest(
     `delete from digests where period = ${sqlLiteral(period)} and period_start = ${sqlLiteral(periodStart)};`,
     database,
   );
+}
+
+/**
+ * Deletes every row from `tasks`, on both e2e databases — issue #190's
+ * structural fix. `fixtures.ts`'s own autouse fixture calls this before
+ * every single test, not merely at a spec-file boundary, so the guarantee
+ * holds regardless of which earlier file — or even which earlier test in
+ * the SAME file — happened to create a Task.
+ *
+ * A Task has no per-Device or per-user scope to isolate along in the first
+ * place (server/migrations/0010_create_tasks.sql's own header comment:
+ * "meologue is one person's journal and one person's task list" — every
+ * Device pulls every row), so the only place isolation between one test and
+ * the next can live is the shared table itself. Truncating it is cheap
+ * (`docker exec`/`psql`, the same round trip `pollSql` already pays inside
+ * this same test run) next to the cost a real per-file Server or database
+ * would add on top of the two this suite already boots.
+ *
+ * Both databases, not only `SERVER_A_DATABASE`: multi-server.spec.ts is the
+ * one spec that ever talks to `SERVER_B_DATABASE`, and it does not exercise
+ * Todo, but resetting a database this suite never dirties is a no-op, not a
+ * risk — leaving it out on the assumption "nothing writes Tasks there today"
+ * is exactly the kind of convention this fix is trying not to depend on.
+ *
+ * Deliberately `tasks` only, not `entries`: every other spec that reads back
+ * a broad surface (History, Search) already matches its own row by
+ * `uniqueEntryBody`'s random content rather than by counting the whole page
+ * (todo.spec.ts's own former `toHaveCount` — see git history — was the one
+ * assertion counting a whole surface instead). Widening the reset to
+ * `entries` would be a second, unasked-for change with a real cost
+ * (reflection.spec.ts's embeddings, search.spec.ts's index) for no failure
+ * this ticket needs it to fix.
+ */
+export function resetTasks(): void {
+  for (const database of [SERVER_A_DATABASE, SERVER_B_DATABASE]) {
+    runSql("delete from tasks;", database);
+  }
 }
 
 function runSql(sql: string, database: string): void {

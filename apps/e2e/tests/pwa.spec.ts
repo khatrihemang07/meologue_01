@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 import { openDestination, sendEntry, uniqueEntryBody } from "./helpers";
 
 // The web app installs and keeps working with the network off (ticket 45).

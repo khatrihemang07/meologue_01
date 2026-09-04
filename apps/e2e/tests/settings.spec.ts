@@ -1,6 +1,6 @@
 import type { Locator, Page } from "@playwright/test";
-import { expect, test } from "@playwright/test";
 import { SERVER_A_DATABASE } from "../servers";
+import { expect, test } from "./fixtures";
 import { entrySeq, entrySwipeTarget, sendEntry, uniqueEntryBody, waitForEntryId } from "./helpers";
 
 /**
