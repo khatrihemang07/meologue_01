@@ -282,6 +282,51 @@ export async function waitForTaskOrder(
 }
 
 /**
+ * Waits until the Server's own copy agrees that `childContent`'s Task has
+ * `parentContent`'s Task as its own `parent_id` — the same "wait for the
+ * Server to agree before asserting anything" discipline `waitForTaskOrder`'s
+ * own doc comment already gives for a reorder, applied to a reparent
+ * instead: `setTaskParent` (task-tree.tsx's own `handleIndent`, reached from
+ * `Alt`+`ArrowRight`, and `handleNestDrop`, reached from a drag) writes the
+ * new `parent_id` locally and fires `requestSync()` the identical
+ * fire-and-forget way every other Task mutation does (`use-tasks.ts`'s own
+ * `afterLocalWrite`), so asserting anything that depends on the Server's own
+ * state right after the gesture races that push against whatever pull is
+ * already in flight — exactly `waitForTaskOrder`'s own race, for a different
+ * column.
+ *
+ * Naming both `content`s, joined through `parent_id`, rather than polling
+ * `parent_id is not null` alone, is deliberate, and the same care
+ * `waitForTaskCompleted` above takes in naming the Task it is waiting on:
+ * this can only pass once the row for *this* child actually names *this*
+ * parent, not merely once some Task somewhere has acquired some parent —
+ * which, on a shared Server every spec in this suite writes to, is a
+ * condition some other test's leftover could satisfy on its own.
+ *
+ * This is also what turns a keyboard gesture that never reached its target
+ * — the reparent action itself never firing, as opposed to firing and
+ * merely taking a while to reach the Server — into a clear, named timeout
+ * here ("no row agrees" for the full budget) rather than a confusing
+ * mismatch several assertions later against whatever the DOM happened to
+ * still show.
+ */
+export async function waitForTaskParent(
+  childContent: string,
+  parentContent: string,
+  database: string,
+  timeoutMs = 20_000,
+): Promise<void> {
+  await pollSql(
+    database,
+    `select 1 from tasks child, tasks parent
+     where child.content = ${sqlLiteral(childContent)}
+       and parent.content = ${sqlLiteral(parentContent)}
+       and child.parent_id = parent.id;`,
+    timeoutMs,
+  );
+}
+
+/**
  * Waits until the Entry with this id has a non-null `deleted_at` — the
  * condition a delete's tombstone has actually reached the Server, rather
  * than assuming a fixed sleep gave it enough time. `id` (not `body`) since

@@ -87,6 +87,20 @@ function dragHandle(label: string): HTMLElement {
   return handle;
 }
 
+/**
+ * The `[data-task-row-box]` `<div>` inside the row that renders `label` —
+ * task-row.tsx's own header comment on why that `<div>`, not the `<li>`
+ * around it, is "the row" for every visual/geometric purpose since issue
+ * #192 nested a row's own sub-tasks inside its own `<li>`.
+ */
+function rowBox(label: string): HTMLElement {
+  const row = screen.getByText(label).closest("li");
+  if (!row) throw new Error(`expected a row for "${label}"`);
+  const box = row.querySelector<HTMLElement>(":scope > [data-task-row-box]");
+  if (!box) throw new Error(`expected a row box on "${label}"'s row`);
+  return box;
+}
+
 describe("TaskTree", () => {
   // Pointer-drag tests below need real-looking row geometry and pointer
   // capture, neither of which jsdom implements — todo-page.test.tsx's own
@@ -95,8 +109,20 @@ describe("TaskTree", () => {
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
       this: HTMLElement,
     ) {
-      const siblings = this.parentElement ? Array.from(this.parentElement.children) : [];
-      const index = siblings.indexOf(this);
+      // Issue #192 nested a row's own sub-task `<ul>` *inside* that row's
+      // own `<li>`, and `measureRows` (task-tree.tsx) now reads each
+      // row's own `[data-task-row-box]` rather than the `<li>` itself
+      // (that file's own header comment explains why: the `<li>` now
+      // encloses any already-rendered subtree too). This stub still has
+      // to key its stacked, `ROW_HEIGHT`-tall positions off the *row*
+      // regardless of which of the two elements actually asked —
+      // `closest("li")` finds the same `<li>` whether `this` is the
+      // `<li>` itself or the row box inside it, and that `<li>`'s own
+      // position among its own siblings in the owning `<ul>` is what
+      // "stacked with no gaps" has always meant here.
+      const li = this.closest("li") ?? this;
+      const siblings = li.parentElement ? Array.from(li.parentElement.children) : [];
+      const index = siblings.indexOf(li);
       const top = index * ROW_HEIGHT;
       return {
         top,
@@ -132,14 +158,56 @@ describe("TaskTree", () => {
 
     await waitFor(() => expect(screen.getByText("book flights")).toBeInTheDocument());
 
-    const parentRow = screen.getByText("plan trip").closest("li");
-    const childRow = screen.getByText("book flights").closest("li");
-    expect(parentRow).not.toBeNull();
-    expect(childRow).not.toBeNull();
     // depth 1 → 12px, depth 2 → 32px (12 + 1*20) — task-row.tsx's own
-    // `paddingLeft` formula.
-    expect(parentRow).toHaveStyle({ paddingLeft: "12px" });
-    expect(childRow).toHaveStyle({ paddingLeft: "32px" });
+    // `paddingLeft` formula, read off each row's own `[data-task-row-box]`
+    // (`rowBox`, this file's own helper) rather than the `<li>` around it
+    // — issue #192 moved the padding there so a nested sub-task `<ul>`
+    // isn't indented a second time on top of it.
+    expect(rowBox("plan trip")).toHaveStyle({ paddingLeft: "12px" });
+    expect(rowBox("book flights")).toHaveStyle({ paddingLeft: "32px" });
+  });
+
+  // Issue #192's own acceptance criterion, pinned structurally so it can't
+  // silently regress back to the pre-#192 shape: a `<ul>` may hold only
+  // `<li>` (plus `script`/`template`), and before this ticket a Task's own
+  // sub-task list rendered as a *sibling* of that Task's own `<li>`,
+  // both direct children of the level above — tolerated by browsers, but
+  // invalid HTML that handed assistive technology no relationship between
+  // a Task and its sub-tasks at all (task-tree.tsx's own header comment
+  // carries the fuller account). This asserts the actual DOM shape, not
+  // just that the padding looks right on screen.
+  it("nests a sub-task's own <ul> inside its parent row's own <li>, not beside it", async () => {
+    const parent = task({ id: "parent", content: "plan trip" });
+    const child = task({ id: "child", content: "book flights", parentId: "parent" });
+    renderTree({
+      tasks: [parent],
+      listTaskChildren: vi.fn(async (parentId: string) => (parentId === "parent" ? [child] : [])),
+    });
+
+    await waitFor(() => expect(screen.getByText("book flights")).toBeInTheDocument());
+
+    const parentLi = screen.getByText("plan trip").closest("li");
+    const childLi = screen.getByText("book flights").closest("li");
+    expect(parentLi).not.toBeNull();
+    expect(childLi).not.toBeNull();
+    if (!parentLi || !childLi) throw new Error("expected both rows' own <li>");
+
+    // The child's own <ul> — its own immediate list ancestor — has to be
+    // the parent's own <li>, not the outer <ul> two levels up.
+    const childList = childLi.closest("ul");
+    expect(childList).not.toBeNull();
+    expect(childList?.parentElement).toBe(parentLi);
+
+    // The inverse claim, read directly off the parent's own <li>: every
+    // one of its direct children is either the row's own box or another
+    // `<ul>` — never a bare `<li>`, which is what a `ul > ul` sibling
+    // shape (the pre-#192 bug) would have put there instead.
+    const directChildren = Array.from(parentLi.children);
+    expect(directChildren.length).toBeGreaterThan(0);
+    for (const el of directChildren) {
+      expect(["DIV", "UL"]).toContain(el.tagName);
+    }
+    expect(directChildren.some((el) => el.tagName === "UL")).toBe(true);
   });
 
   it("nests three levels deep, each one indent further than its own parent", async () => {
@@ -157,9 +225,9 @@ describe("TaskTree", () => {
 
     await waitFor(() => expect(screen.getByText("level three")).toBeInTheDocument());
 
-    expect(screen.getByText("level one").closest("li")).toHaveStyle({ paddingLeft: "12px" });
-    expect(screen.getByText("level two").closest("li")).toHaveStyle({ paddingLeft: "32px" });
-    expect(screen.getByText("level three").closest("li")).toHaveStyle({ paddingLeft: "52px" });
+    expect(rowBox("level one")).toHaveStyle({ paddingLeft: "12px" });
+    expect(rowBox("level two")).toHaveStyle({ paddingLeft: "32px" });
+    expect(rowBox("level three")).toHaveStyle({ paddingLeft: "52px" });
   });
 
   // Indenting the first Task in a sibling group has no preceding sibling

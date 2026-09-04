@@ -8,7 +8,7 @@ import {
   MoreHorizontal,
   Pencil,
 } from "lucide-react";
-import type { KeyboardEvent, MouseEvent, PointerEvent } from "react";
+import type { KeyboardEvent, MouseEvent, PointerEvent, ReactNode } from "react";
 import { useState } from "react";
 import { TaskCommandMenu } from "@/components/todo/task-command-menu";
 import { formatDay, formatTaskDate } from "@/lib/format-task-date";
@@ -184,6 +184,19 @@ export interface TaskRowProps {
    */
   sectionOptions?: { id: string; name: string }[];
   onMoveToSection?: (sectionId: string | null) => void;
+  /**
+   * A row's own sub-tasks (issue #171), rendered as a nested `TaskTree` by
+   * `TaskTreeRow` (task-tree.tsx) — accepted here, not rendered by that
+   * caller as a sibling `<ul>` beside this row's own `<li>`, because issue
+   * #192 is exactly the difference between those two: a `ul` may contain
+   * only `li` (plus `script`/`template`), so a nested Task's own sub-task
+   * list has to land *inside* this row's own `<li>` to be valid HTML, and
+   * `<li>{children}</li>` below is what does that. `undefined` for a Task
+   * with none, the same "the affordance isn't there" default every other
+   * optional prop here already uses — `TaskTreeRow` only ever passes a
+   * `TaskTree` once `children.length > 0` is already true.
+   */
+  children?: ReactNode;
 }
 
 /**
@@ -222,6 +235,40 @@ export interface TaskRowProps {
  * into the focusable `<button>` below: arrow keys reorder, `Alt`+arrow
  * keys reparent — see `onMoveUp`/`onIndent`'s own doc comments
  * (TaskRowProps) for why those specific keys.
+ *
+ * **The `<li>` itself carries only identity and the full command set's own
+ * handlers; a `<div>` inside it carries every visual concern** — issue
+ * #192. Before that ticket, this `<li>` was both the list item *and* the
+ * row: every visual class and the depth padding lived on it directly,
+ * which worked only because a Task's own sub-tasks rendered as a second
+ * `<ul>` beside this `<li>`, never inside it — invalid HTML (a `ul` may
+ * hold only `li`), and a structure that handed assistive technology no
+ * relationship between a Task and its sub-tasks at all, only the illusion
+ * of one from `paddingLeft` (task-tree.tsx's own header comment carries
+ * the fuller account, and this file's own task-row.test.tsx now pins the
+ * a11y evidence for the fix). Nesting the sub-task `<ul>` inside this
+ * `<li>` fixes the markup, but everything this `<li>` used to render
+ * directly would otherwise now describe the *whole subtree* rather than
+ * just this row: `hover:bg-muted` would light up every descendant on
+ * hover, `isDropTarget`/`isNestTarget`'s indicators would stretch across
+ * the subtree's full height, and `paddingLeft` would indent the nested
+ * `<ul>` a second time on top of the depth padding its own rows already
+ * carry. The `<div data-task-row-box>` below is what keeps every one of
+ * those scoped to this row alone — `children` (sub-tasks, if any) lands
+ * as its sibling inside the `<li>`, not as its descendant.
+ *
+ * `onContextMenu`/`onKeyDown` stay on the `<li>`, not that `<div>` — the
+ * one thing about this row #192 did *not* have to move — but they gain a
+ * `stopPropagation()` neither needed before: with a sub-task's own `<ul>`
+ * now a DOM descendant of this `<li>`, a right-click or a `.` keypress on
+ * a *child* row would otherwise bubble up through this row's own `<li>`
+ * too and pop a second command menu open on the parent — something that
+ * was structurally impossible before #192, since the two `<ul>`s were
+ * siblings, not ancestor and descendant. `<li>` also carries its own
+ * accessible `listitem` role for free, which is what keeps these handlers
+ * off biome's `noStaticElementInteractions` lint without an explicit
+ * `role` — the same reason they never moved onto the `<div>` in the first
+ * place.
  */
 export function TaskRow({
   task,
@@ -244,6 +291,7 @@ export function TaskRow({
   onOutdent,
   sectionOptions,
   onMoveToSection,
+  children,
 }: TaskRowProps) {
   // The full command set's own open state (issue #178) — right-click
   // anywhere on the row, the `.` key while any of the row's own controls
@@ -278,45 +326,31 @@ export function TaskRow({
   return (
     <li
       data-task-id={task.id}
-      className={cn(
-        "group flex items-center gap-2 rounded-lg border-t-2 border-t-transparent py-2.5 pr-3 transition-colors hover:bg-muted",
-        // A top border rather than a background swap for the drop
-        // indicator: it reads as "the row lands between here and the row
-        // above" without implying the hovered row itself is what's moving.
-        isDropTarget && "border-t-primary",
-        // The nest indicator (issue #171's drag-to-reparent) is a filled
-        // ring around the *whole* row instead — never a top border, which
-        // `isDropTarget` above already claims for a different outcome
-        // ("lands between rows"). Filling the row itself, rather than a
-        // second line drawn somewhere else on it, is what reads as "the
-        // dragged row goes inside this one" instead of "next to it,"
-        // without inventing a third line position (below the row? around
-        // just the content?) a reader would have to learn separately from
-        // the first. `ring-inset` keeps the ring inside the row's own
-        // border-box rather than growing the row's footprint and shifting
-        // every row below it during a drag, which a `border`-width ring
-        // would do.
-        isNestTarget && "bg-primary/10 ring-2 ring-primary ring-inset",
-      )}
-      // A fixed amount of left padding per level, on the `<li>` itself
-      // rather than a wrapper `<div>` — depth's own doc comment above.
-      // `12px` base padding (matching the row's own `pr-3`) plus `20px`
-      // per level beyond the first, so a depth-1 (top-level) Task keeps
-      // exactly the padding every pre-#171 row already had.
-      style={{ paddingLeft: `${12 + (depth - 1) * 20}px` }}
       // The full command set, reached from anywhere on the row — issue
       // #178's own reference behaviour ("the full command set lives
       // behind right-click and the `.` key, not on the row"). `.` is read
-      // here, on the row itself, rather than on any one control inside
+      // here, on the `<li>` itself, rather than on any one control inside
       // it: a keydown on the checkbox, the content, or an action button
-      // all bubble up to this handler, so the reader doesn't have to
-      // land focus on one specific element first. Ignored while a
-      // modifier is held, or while the event's own target is the Section
-      // `<select>` below — a reader typing to jump that combobox to an
-      // option starting with "." (vanishingly unlikely, but this guard
-      // costs nothing) must not also pop this menu open underneath it.
+      // all bubble up to this handler, so the reader doesn't have to land
+      // focus on one specific element first. Ignored while a modifier is
+      // held, or while the event's own target is the Section `<select>`
+      // below — a reader typing to jump that combobox to an option
+      // starting with "." (vanishingly unlikely, but this guard costs
+      // nothing) must not also pop this menu open underneath it.
+      //
+      // `stopPropagation()` here is new with issue #192, not incidental:
+      // that ticket nested a row's own sub-task `<ul>` *inside* its own
+      // `<li>` (this file's own header comment), which means a click or
+      // keypress on a *child* row's `<li>` now bubbles up through every
+      // ancestor row's `<li>` too, not just through the outer `<ul>` the
+      // way it did when the two were siblings. Without stopping it here,
+      // right-clicking a sub-task would pop that sub-task's own menu
+      // *and* its parent's, both reading the identical event — silently
+      // impossible before #192, since nothing this handler could bubble
+      // through belonged to another row's own `<li>` at all.
       onContextMenu={(event) => {
         event.preventDefault();
+        event.stopPropagation();
         setCommandMenuOpen(true);
       }}
       onKeyDown={(event: KeyboardEvent<HTMLLIElement>) => {
@@ -328,331 +362,391 @@ export function TaskRow({
           (event.target as HTMLElement).tagName !== "SELECT"
         ) {
           event.preventDefault();
+          event.stopPropagation();
           setCommandMenuOpen(true);
         }
       }}
     >
-      {draggable && (
-        <button
-          type="button"
-          aria-label={`Reorder or reparent "${task.content}" — arrow keys to move, Alt+arrow keys to indent or outdent`}
-          data-testid="task-drag-handle"
-          onPointerDown={onHandlePointerDown}
-          onPointerMove={onHandlePointerMove}
-          onPointerUp={onHandlePointerUp}
-          onPointerCancel={onHandlePointerCancel}
-          onKeyDown={(event) => {
-            // A real, focusable `<button>` rather than the `aria-hidden`,
-            // unfocusable `<span>` this handle used to be (issue #168's
-            // own version) — issue #171's keyboard reorder/reparent
-            // acceptance criterion needs a keyboard target to land focus
-            // on, and this is the one control already scoped to exactly
-            // this Task's own drag gesture, so it does double duty rather
-            // than this row growing a second, keyboard-only control for
-            // the identical action. `onOutdent`'s own doc comment
-            // (TaskRowProps) explains why `Alt`+arrow rather than `Tab`.
-            if (event.key === "ArrowUp" && !event.altKey) {
-              event.preventDefault();
-              onMoveUp?.();
-            } else if (event.key === "ArrowDown" && !event.altKey) {
-              event.preventDefault();
-              onMoveDown?.();
-            } else if (event.key === "ArrowRight" && event.altKey) {
-              event.preventDefault();
-              onIndent?.();
-            } else if (event.key === "ArrowLeft" && event.altKey) {
-              event.preventDefault();
-              onOutdent?.();
-            }
-          }}
-          // `touch-action: none` is what makes a touch drag possible at all
-          // — without it Chromium's own scroll gesture recogniser claims
-          // the gesture before a second pointermove ever reaches this
-          // handler, exactly as `pane-divider.tsx`'s own comment on its
-          // handle explains. Scoped to the handle rather than the row (or
-          // the list) is what keeps the rest of Inbox scrollable with a
-          // finger — the opposite of `use-swipe-actions.ts`'s bubble,
-          // which stays `pan-y` everywhere so the thread itself keeps
-          // scrolling under a swipe.
-          className="flex size-6 shrink-0 touch-none cursor-grab items-center justify-center rounded text-muted-foreground active:cursor-grabbing"
-        >
-          <GripVertical aria-hidden="true" className="size-4" />
-        </button>
-      )}
       {/*
-        `onClick`, not `onChange` — pre-#170 this was `onChange={onComplete}`.
-        `MouseEvent`'s own `shiftKey` is what Shift+Click on a recurring
-        Task's checkbox (`onCompleteForever`'s own doc comment) needs to
-        read, and only a `click` handler carries it directly rather than
-        through a `change` event's own, less direct relationship to
-        whichever click caused it. `checked={false}` never actually changes
-        (a completed Task, recurring or not, leaves this list rather than
-        rendering ticked — TaskStore.advanceRecurring's own doc comment:
-        "the checkbox does not un-tick itself"), so `readOnly` rather than a
-        real `onChange` is the honest description of what this control is:
-        a button shaped like a checkbox, not a real toggle.
+        This `<div>`, not the `<li>` above, is "the row" for every visual
+        purpose that used to point at the `<li>` directly — see this
+        file's own header comment ("The `<li>` itself carries only
+        identity…") for why issue #192 split them. `data-task-row-box` is
+        a bare marker, read only by task-tree.tsx's own `measureRows` to
+        know which element's geometry actually describes this row (not
+        this row plus whatever sub-tasks happen to be rendered under it)
+        — that file's own header comment carries the fuller reasoning for
+        why the distinction matters to a drag in progress. It carries no
+        `onContextMenu`/`onKeyDown` of its own — those stay on the `<li>`
+        above (that element's own doc comment explains why one row's own
+        sub-tasks nesting inside its `<li>` made `stopPropagation()` there
+        necessary, not why the handlers themselves moved anywhere).
       */}
-      {/*
-        A checkbox that carries its own Priority (issue #178's own
-        acceptance criterion) — a ring, not a fill: `accent-current` below
-        already claims the checkbox's own tick/fill colour for the reader's
-        theme accent, so Priority gets the one visual slot that doesn't
-        collide with it. `padding`+`border-radius` on this wrapping `<span>`
-        rather than a `box-shadow`/`outline` on the `<input>` directly: a
-        native checkbox's own rendering (`accent-current`) ignores most box-
-        model properties applied straight to it across browsers, where a
-        wrapper's border is unconditionally respected everywhere. Priority
-        1 ("no priority," task-types.ts's own doc comment: a real level,
-        not an absence) still gets a ring — `priorityColour`'s own neutral
-        grey for it — rather than no ring at all, so every row's checkbox
-        reads consistently rather than only a prioritised one carrying a
-        border a reader has to learn means something.
-      */}
-      <span
-        className="shrink-0 rounded-full p-0.5"
-        // A plain inline `boxShadow` ring rather than Tailwind's own
-        // `ring-*` utilities: those resolve through a `--tw-ring-color`
-        // custom property this app's design tokens don't otherwise touch,
-        // and reaching for it here would make this one ring's colour
-        // depend on Tailwind's internal implementation rather than on
-        // `priorityColour` alone.
-        style={{ boxShadow: `0 0 0 1px ${priorityColour(uiPriorityOf(task.priority))}` }}
+      <div
+        data-task-row-box
+        className={cn(
+          "group flex items-center gap-2 rounded-lg border-t-2 border-t-transparent py-2.5 pr-3 transition-colors hover:bg-muted",
+          // A top border rather than a background swap for the drop
+          // indicator: it reads as "the row lands between here and the row
+          // above" without implying the hovered row itself is what's moving.
+          isDropTarget && "border-t-primary",
+          // The nest indicator (issue #171's drag-to-reparent) is a filled
+          // ring around the *whole* row instead — never a top border, which
+          // `isDropTarget` above already claims for a different outcome
+          // ("lands between rows"). Filling the row itself, rather than a
+          // second line drawn somewhere else on it, is what reads as "the
+          // dragged row goes inside this one" instead of "next to it,"
+          // without inventing a third line position (below the row? around
+          // just the content?) a reader would have to learn separately from
+          // the first. `ring-inset` keeps the ring inside the row's own
+          // border-box rather than growing the row's footprint and shifting
+          // every row below it during a drag, which a `border`-width ring
+          // would do.
+          isNestTarget && "bg-primary/10 ring-2 ring-primary ring-inset",
+        )}
+        // A fixed amount of left padding per level, on this row's own box
+        // rather than the `<li>` — depth's own doc comment above. `12px`
+        // base padding (matching the row's own `pr-3`) plus `20px` per
+        // level beyond the first, so a depth-1 (top-level) Task keeps
+        // exactly the padding every pre-#171 row already had. Living here
+        // instead of on the `<li>` is what keeps a nested sub-task `<ul>`
+        // (this row's own `children`, below) from being indented a second
+        // time on top of the depth padding its own rows already carry —
+        // the `<li>` wrapping both has no padding of its own at all.
+        style={{ paddingLeft: `${12 + (depth - 1) * 20}px` }}
       >
-        <input
-          type="checkbox"
-          checked={false}
-          readOnly
-          onClick={(event: MouseEvent<HTMLInputElement>) => {
-            // Shift+Click on a recurring Task's checkbox is Todoist's own
-            // documented "Complete and archive recurring task" — ends the
-            // series, not "complete this occurrence" (this file's own
-            // `onCompleteForever` doc comment). Meaningless on a
-            // non-recurring Task, so the modifier is simply ignored there
-            // and an ordinary complete happens instead — no extra gesture
-            // a reader could stumble into by accident.
-            if (isRecurring && event.shiftKey) {
-              onCompleteForever();
-            } else {
-              onComplete();
-            }
-          }}
-          aria-label={task.content}
-          className="block shrink-0 accent-current"
-        />
-      </span>
-      <span className="flex min-w-0 flex-1 flex-col">
+        {draggable && (
+          <button
+            type="button"
+            aria-label={`Reorder or reparent "${task.content}" — arrow keys to move, Alt+arrow keys to indent or outdent`}
+            data-testid="task-drag-handle"
+            onPointerDown={onHandlePointerDown}
+            onPointerMove={onHandlePointerMove}
+            onPointerUp={onHandlePointerUp}
+            onPointerCancel={onHandlePointerCancel}
+            onKeyDown={(event) => {
+              // A real, focusable `<button>` rather than the `aria-hidden`,
+              // unfocusable `<span>` this handle used to be (issue #168's
+              // own version) — issue #171's keyboard reorder/reparent
+              // acceptance criterion needs a keyboard target to land focus
+              // on, and this is the one control already scoped to exactly
+              // this Task's own drag gesture, so it does double duty rather
+              // than this row growing a second, keyboard-only control for
+              // the identical action. `onOutdent`'s own doc comment
+              // (TaskRowProps) explains why `Alt`+arrow rather than `Tab`.
+              if (event.key === "ArrowUp" && !event.altKey) {
+                event.preventDefault();
+                onMoveUp?.();
+              } else if (event.key === "ArrowDown" && !event.altKey) {
+                event.preventDefault();
+                onMoveDown?.();
+              } else if (event.key === "ArrowRight" && event.altKey) {
+                event.preventDefault();
+                onIndent?.();
+              } else if (event.key === "ArrowLeft" && event.altKey) {
+                event.preventDefault();
+                onOutdent?.();
+              }
+            }}
+            // `touch-action: none` is what makes a touch drag possible at all
+            // — without it Chromium's own scroll gesture recogniser claims
+            // the gesture before a second pointermove ever reaches this
+            // handler, exactly as `pane-divider.tsx`'s own comment on its
+            // handle explains. Scoped to the handle rather than the row (or
+            // the list) is what keeps the rest of Inbox scrollable with a
+            // finger — the opposite of `use-swipe-actions.ts`'s bubble,
+            // which stays `pan-y` everywhere so the thread itself keeps
+            // scrolling under a swipe.
+            className="flex size-6 shrink-0 touch-none cursor-grab items-center justify-center rounded text-muted-foreground active:cursor-grabbing"
+          >
+            <GripVertical aria-hidden="true" className="size-4" />
+          </button>
+        )}
         {/*
-          The row's own words, clickable (issue #178: "Clicking a Task
-          should open it in a view of its own") — a real `<button>`, not a
-          `<span onClick>`, so this is reachable by keyboard and announced
-          as interactive rather than as plain text. `text-left` overrides
-          `<button>`'s own default centering; the rest of the classes
-          reproduce the plain `<span>` this replaces exactly, so nothing
-          about the row's layout shifts.
+          `onClick`, not `onChange` — pre-#170 this was `onChange={onComplete}`.
+          `MouseEvent`'s own `shiftKey` is what Shift+Click on a recurring
+          Task's checkbox (`onCompleteForever`'s own doc comment) needs to
+          read, and only a `click` handler carries it directly rather than
+          through a `change` event's own, less direct relationship to
+          whichever click caused it. `checked={false}` never actually changes
+          (a completed Task, recurring or not, leaves this list rather than
+          rendering ticked — TaskStore.advanceRecurring's own doc comment:
+          "the checkbox does not un-tick itself"), so `readOnly` rather than a
+          real `onChange` is the honest description of what this control is:
+          a button shaped like a checkbox, not a real toggle.
+        */}
+        {/*
+          A checkbox that carries its own Priority (issue #178's own
+          acceptance criterion) — a ring, not a fill: `accent-current` below
+          already claims the checkbox's own tick/fill colour for the reader's
+          theme accent, so Priority gets the one visual slot that doesn't
+          collide with it. `padding`+`border-radius` on this wrapping `<span>`
+          rather than a `box-shadow`/`outline` on the `<input>` directly: a
+          native checkbox's own rendering (`accent-current`) ignores most box-
+          model properties applied straight to it across browsers, where a
+          wrapper's border is unconditionally respected everywhere. Priority
+          1 ("no priority," task-types.ts's own doc comment: a real level,
+          not an absence) still gets a ring — `priorityColour`'s own neutral
+          grey for it — rather than no ring at all, so every row's checkbox
+          reads consistently rather than only a prioritised one carrying a
+          border a reader has to learn means something.
+        */}
+        <span
+          className="shrink-0 rounded-full p-0.5"
+          // A plain inline `boxShadow` ring rather than Tailwind's own
+          // `ring-*` utilities: those resolve through a `--tw-ring-color`
+          // custom property this app's design tokens don't otherwise touch,
+          // and reaching for it here would make this one ring's colour
+          // depend on Tailwind's internal implementation rather than on
+          // `priorityColour` alone.
+          style={{ boxShadow: `0 0 0 1px ${priorityColour(uiPriorityOf(task.priority))}` }}
+        >
+          <input
+            type="checkbox"
+            checked={false}
+            readOnly
+            onClick={(event: MouseEvent<HTMLInputElement>) => {
+              // Shift+Click on a recurring Task's checkbox is Todoist's own
+              // documented "Complete and archive recurring task" — ends the
+              // series, not "complete this occurrence" (this file's own
+              // `onCompleteForever` doc comment). Meaningless on a
+              // non-recurring Task, so the modifier is simply ignored there
+              // and an ordinary complete happens instead — no extra gesture
+              // a reader could stumble into by accident.
+              if (isRecurring && event.shiftKey) {
+                onCompleteForever();
+              } else {
+                onComplete();
+              }
+            }}
+            aria-label={task.content}
+            className="block shrink-0 accent-current"
+          />
+        </span>
+        <span className="flex min-w-0 flex-1 flex-col">
+          {/*
+            The row's own words, clickable (issue #178: "Clicking a Task
+            should open it in a view of its own") — a real `<button>`, not a
+            `<span onClick>`, so this is reachable by keyboard and announced
+            as interactive rather than as plain text. `text-left` overrides
+            `<button>`'s own default centering; the rest of the classes
+            reproduce the plain `<span>` this replaces exactly, so nothing
+            about the row's layout shifts.
+          */}
+          <button
+            type="button"
+            onClick={() => detailActions.onOpenDetail(task)}
+            className="truncate text-left text-sm hover:underline"
+          >
+            {task.content}
+          </button>
+          {/* A compact schedule summary, present only once there's something
+              to summarise (issue #169, extended by #170's recurrence line) —
+              Date, then Deadline, then Priority (never "no priority", the
+              same restraint the sort chain itself applies: a level that
+              means "nothing chosen" doesn't deserve a badge), then the
+              recurrence rule exactly as typed. `formatTaskDate`/`formatDay`
+              (lib/format-task-date.ts) are the same functions
+              `TaskScheduleSheet` reads a Task's current value through, so
+              this row can never show a date in words that disagree with
+              what the picker itself would say. `dateString` is rendered
+              verbatim, never re-derived through ../recurrence/'s engine —
+              "the string is the truth" (task-types.ts's own doc comment on
+              `Task.dateString`) means the reader sees exactly what they
+              typed here too, not this row's own paraphrase of it. */}
+          {hasScheduleOrComments && (
+            <span className="flex flex-wrap items-center gap-x-2 text-muted-foreground text-xs">
+              {task.date !== null && <span>{formatTaskDate(task.date)}</span>}
+              {task.deadline !== null && <span>Due {formatDay(task.deadline)}</span>}
+              {task.priority !== 1 && <span>P{uiPriorityOf(task.priority)}</span>}
+              {task.dateString !== null && <span>{task.dateString}</span>}
+              {/* The comment count (issue #180) — Todoist's own
+                  `note_count`, a speech-bubble glyph plus a number, shown
+                  only when non-zero (this component's own `commentCount`
+                  doc comment). */}
+              {commentCount > 0 && (
+                <span className="flex items-center gap-0.5">
+                  <MessageSquare aria-hidden="true" className="size-3" />
+                  {commentCount}
+                </span>
+              )}
+            </span>
+          )}
+        </span>
+        {/*
+          Both this Schedule button and the Delete button below follow the
+          same visibility rule, revealed on hover or focus on a pointer
+          device, always present on a touch one — the same split
+          `entry-actions.tsx` already makes for an Entry row's Edit/Delete.
+          Todo has no `EntryActionsSheet`-equivalent sheet a touch reader
+          could reach either through instead, so base state is visible and
+          `(hover: hover)` is what *takes each away* at rest — the inverse of
+          the Entry row's rule, arriving at the same result on both device
+          classes.
+  
+          `opacity`, not `display`, on the hover-capable path, for
+          `entry-actions.tsx`'s own reason: each button stays in the layout
+          and in the tab order, so `focus-visible` can bring it back for a
+          keyboard user who never hovers anything.
+        */}
+        {/*
+          Touch-reachable "Complete and archive recurring task" (this file's
+          own `onCompleteForever` doc comment) — Shift+Click has no
+          equivalent on a touch device at all, so a Task with no pointer
+          (mouse/trackpad) attached would otherwise have no way to reach
+          this action short of completing every future occurrence one at a
+          time. Rendered only for a recurring Task (`isRecurring`); every
+          other row keeps exactly the two buttons it had before this ticket.
+        */}
+        {isRecurring && (
+          <button
+            type="button"
+            aria-label={`Complete and archive recurring task "${task.content}"`}
+            onClick={onCompleteForever}
+            className={cn(
+              "flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
+              "[@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:focus-visible:opacity-100",
+            )}
+          >
+            <CheckCheck aria-hidden="true" className="size-4" />
+          </button>
+        )}
+        {/*
+          Moves this Task between the Sections of its own Project — issue
+          #171. A plain `<select>`, not a drag target: the pointer recogniser
+          (task-tree.tsx) only ever computes an insert-before/insert-after
+          position within one sibling group, and reaching across a Section
+          boundary that way is a gap this ticket's own report names rather
+          than solves (task-drag-recognizer.ts has no "onto a different
+          group" verdict at all). A `<select>` is a real, keyboard- and
+          screen-reader-reachable way to move a Task into or out of a
+          Section regardless of that gap. `sectionOptions` undefined/empty
+          hides it entirely, the identical "the affordance isn't there
+          rather than present and inert" rule `draggable` above follows.
+        */}
+        {sectionOptions !== undefined && sectionOptions.length > 0 && (
+          <select
+            aria-label={`Move "${task.content}" to a Section`}
+            value={task.sectionId ?? ""}
+            onChange={(event) =>
+              onMoveToSection?.(event.target.value === "" ? null : event.target.value)
+            }
+            className="shrink-0 rounded-md border border-border bg-background px-1 py-1 text-muted-foreground text-xs"
+          >
+            <option value="">No Section</option>
+            {sectionOptions.map((section) => (
+              <option key={section.id} value={section.id}>
+                {section.name}
+              </option>
+            ))}
+          </select>
+        )}
+        {/*
+          The four hover actions, in the fixed order issue #178's own
+          reference behaviour observed live: Edit, Date, Comment, More —
+          replacing the old Schedule/Delete pair. Edit opens the identical
+          detail view the row's own words already open (this file's own
+          `detailActions.onOpenDetail` doc comment); Comment does too — the
+          Task's own view is where its Comment thread lives (issue #180),
+          not a second destination reached from this row. Delete moved off the row entirely, into the
+          command menu below (⌘⌫) — this ticket's own acceptance criterion
+          is "reachable from a menu, not only from the hover actions," which
+          for Delete specifically now means *only* from the menu, matching
+          the reference layout exactly.
+  
+          **Edit/Date/Comment are hidden outside `(hover: hover)`; More is
+          not** — a follow-up fix, measured on a real device (1080x2400):
+          with all four always visible on touch (this row's own pre-fix
+          state, following the `(hover: hover)` convention's original
+          comment — "that's what *takes each away* at rest," which has
+          nothing left to take away when there's no hover to begin with),
+          four 44px buttons plus the grip handle and checkbox left a Task's
+          own words as little as 37-57px of a 349px row — "call the
+          dentist" rendered as "call …". Every one of Edit/Date/Comment's
+          own actions already lives in the command menu the More button
+          opens (Edit and Comment both just call `onOpenDetail` already;
+          Date is `onOpenSchedule`, also in the menu), so hiding the three
+          loses no reachability, only the four-icons-eating-the-row problem.
+          This is `entry-actions.tsx`'s own `EntryHoverActions` pattern,
+          applied here now that this row finally has an equivalent to its
+          `EntryActionsSheet` (the command menu) to hide behind — `hidden`
+          (not merely `opacity-0`) is what removes each from the touch
+          layout and tab order entirely, not just from view, mirroring that
+          file's own reasoning for why `hidden` beats a fade there too. More
+          keeps its `flex` base unconditionally: unlike the other three, a
+          touch reader needs it visible and tappable at rest, since it is
+          now the only door onto the other three's own actions.
         */}
         <button
           type="button"
+          aria-label={`Edit "${task.content}"`}
           onClick={() => detailActions.onOpenDetail(task)}
-          className="truncate text-left text-sm hover:underline"
-        >
-          {task.content}
-        </button>
-        {/* A compact schedule summary, present only once there's something
-            to summarise (issue #169, extended by #170's recurrence line) —
-            Date, then Deadline, then Priority (never "no priority", the
-            same restraint the sort chain itself applies: a level that
-            means "nothing chosen" doesn't deserve a badge), then the
-            recurrence rule exactly as typed. `formatTaskDate`/`formatDay`
-            (lib/format-task-date.ts) are the same functions
-            `TaskScheduleSheet` reads a Task's current value through, so
-            this row can never show a date in words that disagree with
-            what the picker itself would say. `dateString` is rendered
-            verbatim, never re-derived through ../recurrence/'s engine —
-            "the string is the truth" (task-types.ts's own doc comment on
-            `Task.dateString`) means the reader sees exactly what they
-            typed here too, not this row's own paraphrase of it. */}
-        {hasScheduleOrComments && (
-          <span className="flex flex-wrap items-center gap-x-2 text-muted-foreground text-xs">
-            {task.date !== null && <span>{formatTaskDate(task.date)}</span>}
-            {task.deadline !== null && <span>Due {formatDay(task.deadline)}</span>}
-            {task.priority !== 1 && <span>P{uiPriorityOf(task.priority)}</span>}
-            {task.dateString !== null && <span>{task.dateString}</span>}
-            {/* The comment count (issue #180) — Todoist's own
-                `note_count`, a speech-bubble glyph plus a number, shown
-                only when non-zero (this component's own `commentCount`
-                doc comment). */}
-            {commentCount > 0 && (
-              <span className="flex items-center gap-0.5">
-                <MessageSquare aria-hidden="true" className="size-3" />
-                {commentCount}
-              </span>
-            )}
-          </span>
-        )}
-      </span>
-      {/*
-        Both this Schedule button and the Delete button below follow the
-        same visibility rule, revealed on hover or focus on a pointer
-        device, always present on a touch one — the same split
-        `entry-actions.tsx` already makes for an Entry row's Edit/Delete.
-        Todo has no `EntryActionsSheet`-equivalent sheet a touch reader
-        could reach either through instead, so base state is visible and
-        `(hover: hover)` is what *takes each away* at rest — the inverse of
-        the Entry row's rule, arriving at the same result on both device
-        classes.
-
-        `opacity`, not `display`, on the hover-capable path, for
-        `entry-actions.tsx`'s own reason: each button stays in the layout
-        and in the tab order, so `focus-visible` can bring it back for a
-        keyboard user who never hovers anything.
-      */}
-      {/*
-        Touch-reachable "Complete and archive recurring task" (this file's
-        own `onCompleteForever` doc comment) — Shift+Click has no
-        equivalent on a touch device at all, so a Task with no pointer
-        (mouse/trackpad) attached would otherwise have no way to reach
-        this action short of completing every future occurrence one at a
-        time. Rendered only for a recurring Task (`isRecurring`); every
-        other row keeps exactly the two buttons it had before this ticket.
-      */}
-      {isRecurring && (
-        <button
-          type="button"
-          aria-label={`Complete and archive recurring task "${task.content}"`}
-          onClick={onCompleteForever}
           className={cn(
-            "flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
+            "hidden [@media(hover:hover)]:flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
             "[@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:focus-visible:opacity-100",
           )}
         >
-          <CheckCheck aria-hidden="true" className="size-4" />
+          <Pencil aria-hidden="true" className="size-4" />
         </button>
-      )}
-      {/*
-        Moves this Task between the Sections of its own Project — issue
-        #171. A plain `<select>`, not a drag target: the pointer recogniser
-        (task-tree.tsx) only ever computes an insert-before/insert-after
-        position within one sibling group, and reaching across a Section
-        boundary that way is a gap this ticket's own report names rather
-        than solves (task-drag-recognizer.ts has no "onto a different
-        group" verdict at all). A `<select>` is a real, keyboard- and
-        screen-reader-reachable way to move a Task into or out of a
-        Section regardless of that gap. `sectionOptions` undefined/empty
-        hides it entirely, the identical "the affordance isn't there
-        rather than present and inert" rule `draggable` above follows.
-      */}
-      {sectionOptions !== undefined && sectionOptions.length > 0 && (
-        <select
-          aria-label={`Move "${task.content}" to a Section`}
-          value={task.sectionId ?? ""}
-          onChange={(event) =>
-            onMoveToSection?.(event.target.value === "" ? null : event.target.value)
-          }
-          className="shrink-0 rounded-md border border-border bg-background px-1 py-1 text-muted-foreground text-xs"
+        <button
+          type="button"
+          aria-label={`Date "${task.content}"`}
+          onClick={onOpenSchedule}
+          className={cn(
+            "hidden [@media(hover:hover)]:flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
+            "[@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:focus-visible:opacity-100",
+          )}
         >
-          <option value="">No Section</option>
-          {sectionOptions.map((section) => (
-            <option key={section.id} value={section.id}>
-              {section.name}
-            </option>
-          ))}
-        </select>
-      )}
+          <CalendarClock aria-hidden="true" className="size-4" />
+        </button>
+        <button
+          type="button"
+          aria-label={`Comment on "${task.content}"`}
+          onClick={() => detailActions.onOpenDetail(task)}
+          className={cn(
+            "hidden [@media(hover:hover)]:flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
+            "[@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:focus-visible:opacity-100",
+          )}
+        >
+          <MessageSquare aria-hidden="true" className="size-4" />
+        </button>
+        <TaskCommandMenu
+          task={task}
+          projects={detailActions.projects}
+          labels={detailActions.labels}
+          open={commandMenuOpen}
+          onOpenChange={setCommandMenuOpen}
+          trigger={
+            <button
+              type="button"
+              aria-label={`More actions for "${task.content}"`}
+              className={cn(
+                "flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
+                "[@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:focus-visible:opacity-100 aria-expanded:opacity-100",
+              )}
+            >
+              <MoreHorizontal aria-hidden="true" className="size-4" />
+            </button>
+          }
+          onOpenDetail={() => detailActions.onOpenDetail(task)}
+          onOpenSchedule={onOpenSchedule}
+          onSetPriority={(priority) => detailActions.onSetPriority(task.id, priority)}
+          onSetProject={(projectId) => detailActions.onSetProject(task.id, projectId)}
+          onSetLabels={(labelIds) => detailActions.onSetLabels(task.id, labelIds)}
+          onCopyLink={() => detailActions.onCopyLink(task)}
+          onRequestDelete={onRequestDelete}
+        />
+      </div>
       {/*
-        The four hover actions, in the fixed order issue #178's own
-        reference behaviour observed live: Edit, Date, Comment, More —
-        replacing the old Schedule/Delete pair. Edit opens the identical
-        detail view the row's own words already open (this file's own
-        `detailActions.onOpenDetail` doc comment); Comment does too — the
-        Task's own view is where its Comment thread lives (issue #180),
-        not a second destination reached from this row. Delete moved off the row entirely, into the
-        command menu below (⌘⌫) — this ticket's own acceptance criterion
-        is "reachable from a menu, not only from the hover actions," which
-        for Delete specifically now means *only* from the menu, matching
-        the reference layout exactly.
-
-        **Edit/Date/Comment are hidden outside `(hover: hover)`; More is
-        not** — a follow-up fix, measured on a real device (1080x2400):
-        with all four always visible on touch (this row's own pre-fix
-        state, following the `(hover: hover)` convention's original
-        comment — "that's what *takes each away* at rest," which has
-        nothing left to take away when there's no hover to begin with),
-        four 44px buttons plus the grip handle and checkbox left a Task's
-        own words as little as 37-57px of a 349px row — "call the
-        dentist" rendered as "call …". Every one of Edit/Date/Comment's
-        own actions already lives in the command menu the More button
-        opens (Edit and Comment both just call `onOpenDetail` already;
-        Date is `onOpenSchedule`, also in the menu), so hiding the three
-        loses no reachability, only the four-icons-eating-the-row problem.
-        This is `entry-actions.tsx`'s own `EntryHoverActions` pattern,
-        applied here now that this row finally has an equivalent to its
-        `EntryActionsSheet` (the command menu) to hide behind — `hidden`
-        (not merely `opacity-0`) is what removes each from the touch
-        layout and tab order entirely, not just from view, mirroring that
-        file's own reasoning for why `hidden` beats a fade there too. More
-        keeps its `flex` base unconditionally: unlike the other three, a
-        touch reader needs it visible and tappable at rest, since it is
-        now the only door onto the other three's own actions.
+        This row's own sub-tasks, if any — `TaskTreeRow` (task-tree.tsx)
+        passes a nested `TaskTree` here once `children.length > 0`, and it
+        lands as a sibling of the `<div data-task-row-box>` above, both
+        inside this same `<li>`, which is what makes the sub-task `<ul>` a
+        child of this row's own `<li>` rather than of the outer one two
+        levels up (issue #192; this file's own header comment above has
+        the fuller account of why that distinction is the whole ticket).
       */}
-      <button
-        type="button"
-        aria-label={`Edit "${task.content}"`}
-        onClick={() => detailActions.onOpenDetail(task)}
-        className={cn(
-          "hidden [@media(hover:hover)]:flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
-          "[@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:focus-visible:opacity-100",
-        )}
-      >
-        <Pencil aria-hidden="true" className="size-4" />
-      </button>
-      <button
-        type="button"
-        aria-label={`Date "${task.content}"`}
-        onClick={onOpenSchedule}
-        className={cn(
-          "hidden [@media(hover:hover)]:flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
-          "[@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:focus-visible:opacity-100",
-        )}
-      >
-        <CalendarClock aria-hidden="true" className="size-4" />
-      </button>
-      <button
-        type="button"
-        aria-label={`Comment on "${task.content}"`}
-        onClick={() => detailActions.onOpenDetail(task)}
-        className={cn(
-          "hidden [@media(hover:hover)]:flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
-          "[@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:focus-visible:opacity-100",
-        )}
-      >
-        <MessageSquare aria-hidden="true" className="size-4" />
-      </button>
-      <TaskCommandMenu
-        task={task}
-        projects={detailActions.projects}
-        labels={detailActions.labels}
-        open={commandMenuOpen}
-        onOpenChange={setCommandMenuOpen}
-        trigger={
-          <button
-            type="button"
-            aria-label={`More actions for "${task.content}"`}
-            className={cn(
-              "flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
-              "[@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:focus-visible:opacity-100 aria-expanded:opacity-100",
-            )}
-          >
-            <MoreHorizontal aria-hidden="true" className="size-4" />
-          </button>
-        }
-        onOpenDetail={() => detailActions.onOpenDetail(task)}
-        onOpenSchedule={onOpenSchedule}
-        onSetPriority={(priority) => detailActions.onSetPriority(task.id, priority)}
-        onSetProject={(projectId) => detailActions.onSetProject(task.id, projectId)}
-        onSetLabels={(labelIds) => detailActions.onSetLabels(task.id, labelIds)}
-        onCopyLink={() => detailActions.onCopyLink(task)}
-        onRequestDelete={onRequestDelete}
-      />
+      {children}
     </li>
   );
 }

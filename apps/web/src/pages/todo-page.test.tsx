@@ -202,11 +202,24 @@ describe("TodoPage", () => {
     // geometry `task-tree.tsx` reads off real row rects needs a stand-in
     // here. Each row's rect is derived purely from its position among its
     // DOM siblings, which is all `dropIndexForPointer` ever looks at.
+    //
+    // Issue #192 nested a row's own sub-task `<ul>` *inside* that row's
+    // own `<li>`, and `measureRows` (task-tree.tsx) now reads each row's
+    // own `[data-task-row-box]` rather than the `<li>` itself (that
+    // file's own header comment explains why: the `<li>` now encloses any
+    // already-rendered subtree too, which would otherwise report a
+    // height tall enough to swallow several rows). This stub keys its
+    // stacked, `ROW_HEIGHT`-tall positions off the *row* regardless of
+    // which of the two elements actually asked — `closest("li")` finds
+    // the same `<li>` whether `this` is the `<li>` itself or the row box
+    // inside it — so every Inbox row here (none of which have sub-tasks
+    // in these tests) still stacks with no gaps exactly as before.
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
       this: HTMLElement,
     ) {
-      const siblings = this.parentElement ? Array.from(this.parentElement.children) : [];
-      const index = siblings.indexOf(this);
+      const li = this.closest("li") ?? this;
+      const siblings = li.parentElement ? Array.from(li.parentElement.children) : [];
+      const index = siblings.indexOf(li);
       const top = index * ROW_HEIGHT;
       return {
         top,

@@ -74,6 +74,20 @@ function renderRow(overrides: Partial<Parameters<typeof TaskRow>[0]> = {}) {
   return props;
 }
 
+/**
+ * The `[data-task-row-box]` `<div>` inside the rendered row — issue #192
+ * moved every visual class, the depth padding, and (since exactly one
+ * `TaskRow` ever renders per `renderRow` call here) every one of those
+ * onto this element rather than the `<li>` around it, so a test asserting
+ * on any of them has to look here now — task-row.tsx's own header comment
+ * carries the fuller reasoning for the split.
+ */
+function rowBox(): HTMLElement {
+  const box = document.querySelector<HTMLElement>("[data-task-row-box]");
+  if (!box) throw new Error("expected a row box");
+  return box;
+}
+
 describe("TaskRow", () => {
   it("renders the Task's content, with the checkbox unticked", () => {
     renderRow({ task: task({ content: "call mum" }) });
@@ -261,7 +275,7 @@ describe("TaskRow", () => {
   it("draws the drop indicator only while it is the drop target", () => {
     renderRow({ isDropTarget: true });
 
-    expect(screen.getByRole("listitem")).toHaveClass("border-t-primary");
+    expect(rowBox()).toHaveClass("border-t-primary");
   });
 
   // Issue #171's drag-to-reparent: nesting draws a genuinely different
@@ -273,17 +287,17 @@ describe("TaskRow", () => {
   it("draws a distinct row-highlight indicator, not the reorder line, while it is the nest target", () => {
     renderRow({ isNestTarget: true });
 
-    const row = screen.getByRole("listitem");
-    expect(row).toHaveClass("ring-primary");
-    expect(row).not.toHaveClass("border-t-primary");
+    const box = rowBox();
+    expect(box).toHaveClass("ring-primary");
+    expect(box).not.toHaveClass("border-t-primary");
   });
 
   it("draws neither indicator when the row is neither the reorder nor the nest target", () => {
     renderRow({ isDropTarget: false, isNestTarget: false });
 
-    const row = screen.getByRole("listitem");
-    expect(row).not.toHaveClass("border-t-primary");
-    expect(row).not.toHaveClass("ring-primary");
+    const box = rowBox();
+    expect(box).not.toHaveClass("border-t-primary");
+    expect(box).not.toHaveClass("ring-primary");
   });
 
   // Issue #169: the schedule button is the one door onto Date/Deadline/
@@ -472,5 +486,34 @@ describe("TaskRow", () => {
     });
 
     expect(screen.queryByTestId("task-drag-handle")).not.toBeInTheDocument();
+  });
+
+  // Issue #192's own acceptance criterion, pinned at the level that
+  // actually owns the `<li>`: whatever `children` this row is given (a
+  // sub-task's own nested `TaskTree`, in practice — task-tree.tsx's own
+  // `TaskTreeRow`) has to land *inside* this row's own `<li>`, not beside
+  // it, or the markup is invalid HTML again (a `ul` may hold only `li`).
+  // A plain `<ul>` stands in for the real `TaskTree` here — this test
+  // only needs to know where `TaskRow` puts whatever it's handed, not
+  // whether a real sub-task list renders correctly, which task-tree.test.tsx's
+  // own structural test already covers end to end.
+  it("renders children inside its own <li>, not as a sibling of it", () => {
+    renderRow({
+      task: task({ content: "plan trip" }),
+      children: (
+        <ul data-testid="fake-subtasks">
+          <li>book flights</li>
+        </ul>
+      ),
+    });
+
+    // `rowBox()`'s own `<li>` — not `screen.getByRole("listitem")`, which
+    // would now also match the fake sub-task `<li>` this test hands in as
+    // `children`, and fail on being asked for exactly one of two.
+    const li = rowBox().closest("li");
+    const subtasks = screen.getByTestId("fake-subtasks");
+    expect(li).not.toBeNull();
+    expect(li?.contains(subtasks)).toBe(true);
+    expect(subtasks.parentElement).toBe(li);
   });
 });
