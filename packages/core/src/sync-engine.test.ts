@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { PROTOCOL_VERSION, SYNC_BATCH_SIZE } from "./protocol";
+import { PROTOCOL_VERSION, ROW_SHAPE_EPOCH, SYNC_BATCH_SIZE } from "./protocol";
 import { sync } from "./sync-engine";
 import { entry } from "./test-support/entry-fixture";
 import { event } from "./test-support/event-fixture";
@@ -253,6 +253,11 @@ describe("sync engine", () => {
   // completely independently of one another.
   it("advances the Task Cursor to the last sequence received and never regresses it", async () => {
     const stores = newStores();
+    // Issue #186 / ADR 0057: this Device is already caught up on the
+    // current row-shape epoch, so the assertions below exercise only the
+    // "never regresses" guarantee, not the separate one-time catch-up
+    // reset those tests cover on their own.
+    await stores.taskStore.catchUpRowShapeEpoch(ROW_SHAPE_EPOCH.tasks);
     await stores.taskStore.setCursor(10);
 
     const staleTransport = vi.fn(async () => ({ ...emptyResponse, task_cursor: 5 }));
@@ -427,6 +432,10 @@ describe("sync engine", () => {
     await stores.store.upsert([entry({ id: "local-1", seq: null })]);
     await stores.store.setCursor(3);
     await stores.taskStore.upsert([task({ id: "local-task-1", seq: null })]);
+    // Issue #186 / ADR 0057: already caught up, so the Task Cursor below
+    // is genuinely untouched by anything sync() does before the network
+    // call that then fails — not merely reset-and-then-never-reassigned.
+    await stores.taskStore.catchUpRowShapeEpoch(ROW_SHAPE_EPOCH.tasks);
     await stores.taskStore.setCursor(7);
 
     const transport = vi.fn(async () => {
@@ -597,5 +606,155 @@ describe("sync engine", () => {
     const pulled = await stores.taskStore.get("brand-new-task");
     expect(pulled?.orderKey).toBe("fresh-order-key");
     expect(pulled?.dayOrder).toBe("fresh-day-order");
+  });
+
+  // Issue #186 / ADR 0057.
+  describe("row-shape catch-up", () => {
+    // The exact bug observed while verifying #182, reproduced directly:
+    // a Task this Device already pulled and already advanced its Cursor
+    // past, whose Server-side row has since gained a `description` this
+    // Device has never asked for again, because its Cursor has no memory
+    // of what shape the row had when it last passed by. Before ADR 0057's
+    // fix, this Device would poll forever at `since_task_seq: 1` and
+    // never see it — exactly the second Device in the ticket's own
+    // account, before the unrelated rename that rescued it.
+    it("a field added to an existing row's wire shape reaches a Task this Device already holds, without editing it", async () => {
+      const stores = newStores();
+      await stores.taskStore.upsert([task({ id: "task-1", seq: 1 })]);
+      await stores.taskStore.setCursor(1);
+
+      const transport = vi.fn(async (request) => {
+        if (request.since_task_seq === 0) {
+          // The full re-walk this Device has never done: the Server's own
+          // copy of task-1 already carries a description written on
+          // another Device.
+          return {
+            ...emptyResponse,
+            tasks: [wireTaskOutput({ id: "task-1", description: "oat milk, not soy", seq: 1 })],
+            task_cursor: 1,
+          };
+        }
+        // An ordinary poll past seq 1 sees nothing new — task-1's own seq
+        // never moved, so it never resurfaces on its own (the bug, absent
+        // the fix below).
+        return { ...emptyResponse, task_cursor: request.since_task_seq };
+      });
+
+      await sync({ ...stores, transport, deviceId: DEVICE_ID });
+
+      expect((await stores.taskStore.get("task-1"))?.description).toBe("oat milk, not soy");
+    });
+
+    // Criterion 2: on an ordinary sync, once this Device has already
+    // caught up to the current row-shape epoch, nothing resets — the
+    // request carries this Device's real, advanced Cursor, not 0.
+    it("does not reset an already-caught-up stream's Cursor, and sends its real Cursor, on an ordinary sync", async () => {
+      const stores = newStores();
+      await stores.taskStore.catchUpRowShapeEpoch(ROW_SHAPE_EPOCH.tasks);
+      await stores.taskStore.setCursor(42);
+
+      const transport = vi.fn(async (request) => {
+        expect(request.since_task_seq).toBe(42);
+        return { ...emptyResponse, task_cursor: 42 };
+      });
+
+      await sync({ ...stores, transport, deviceId: DEVICE_ID });
+
+      expect(transport).toHaveBeenCalledTimes(1);
+      expect(await stores.taskStore.getCursor()).toBe(42);
+    });
+
+    // Criterion 3: a Device that has never synced this stream (Cursor
+    // already 0, no epoch ever recorded) is unaffected by the catch-up —
+    // no reset to observe, and indistinguishable afterward from a Device
+    // that has always been on the current epoch.
+    it("leaves a never-synced Device's Task Cursor at 0, indistinguishable from one that's always been caught up", async () => {
+      const stores = newStores();
+
+      const firstSync = vi.fn(async (request) => {
+        expect(request.since_task_seq).toBe(0);
+        return { ...emptyResponse, task_cursor: 0 };
+      });
+      await sync({ ...stores, transport: firstSync, deviceId: DEVICE_ID });
+      expect(await stores.taskStore.getCursor()).toBe(0);
+
+      // A later, ordinary sync sends whatever this Device's own Cursor
+      // has since become — no further reset, exactly as if this Device
+      // had recorded the current epoch from the start.
+      await stores.taskStore.setCursor(5);
+      const secondSync = vi.fn(async (request) => {
+        expect(request.since_task_seq).toBe(5);
+        return { ...emptyResponse, task_cursor: 5 };
+      });
+      await sync({ ...stores, transport: secondSync, deviceId: DEVICE_ID });
+    });
+
+    // Criterion 4: re-walking a stream during catch-up must not
+    // resurrect a tombstone — `fetch_entries_since`'s own doc comment
+    // (server/src/sync.rs) is explicit that a poll carries tombstones
+    // through unfiltered, so a full re-walk necessarily re-delivers every
+    // tombstone this Device already applied, and the upsert path must
+    // treat that exactly like any other re-delivery: a no-op, not a
+    // revival.
+    it("re-pulling a Task during row-shape catch-up carries a tombstone through without resurrecting it", async () => {
+      const stores = newStores();
+      await stores.taskStore.upsert([
+        task({ id: "task-1", seq: 1, deletedAt: "2026-01-02T00:00:00.000Z", content: "" }),
+      ]);
+      await stores.taskStore.setCursor(1);
+
+      const transport = vi.fn(async (request) => {
+        if (request.since_task_seq === 0) {
+          return {
+            ...emptyResponse,
+            tasks: [
+              wireTaskOutput({
+                id: "task-1",
+                content: "",
+                deleted_at: "2026-01-02T00:00:00.000Z",
+                seq: 1,
+              }),
+            ],
+            task_cursor: 1,
+          };
+        }
+        return { ...emptyResponse, task_cursor: request.since_task_seq };
+      });
+
+      await sync({ ...stores, transport, deviceId: DEVICE_ID });
+
+      expect(transport).toHaveBeenCalledWith(expect.objectContaining({ since_task_seq: 0 }));
+      expect(await stores.taskStore.get("task-1")).toBeUndefined();
+      expect(await stores.taskStore.pending()).toEqual([]);
+    });
+
+    // Criterion 4, restated: calling the catch-up itself twice at the
+    // same epoch — sync() does this on every call — must not repeat the
+    // reset once this Device has already caught up and moved its Cursor
+    // on. Store-level pinning of this lives in each contract suite
+    // (e.g. task-store-contract.ts); this proves it holds through two
+    // real sync() calls in a row, the shape production code actually
+    // takes (a long-lived Device calls sync() repeatedly forever).
+    it("running sync() twice after catch-up does not reset the Cursor a second time", async () => {
+      const stores = newStores();
+      await stores.taskStore.upsert([task({ id: "task-1", seq: 1 })]);
+      await stores.taskStore.setCursor(1);
+
+      const catchUpTransport = vi.fn(async () => ({
+        ...emptyResponse,
+        tasks: [wireTaskOutput({ id: "task-1", description: "first pass", seq: 1 })],
+        task_cursor: 1,
+      }));
+      await sync({ ...stores, transport: catchUpTransport, deviceId: DEVICE_ID });
+      expect(await stores.taskStore.getCursor()).toBe(1);
+
+      await stores.taskStore.setCursor(99);
+      const secondTransport = vi.fn(async (request) => {
+        expect(request.since_task_seq).toBe(99);
+        return { ...emptyResponse, task_cursor: 99 };
+      });
+      await sync({ ...stores, transport: secondTransport, deviceId: DEVICE_ID });
+      expect(await stores.taskStore.getCursor()).toBe(99);
+    });
   });
 });

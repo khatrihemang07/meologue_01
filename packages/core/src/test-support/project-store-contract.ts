@@ -255,6 +255,44 @@ export function projectStoreContract(
 
       expect(await projectStore.getProjectCursor()).toBe(7);
     });
+
+    // Issue #186 / ADR 0057 — see EntryStore.catchUpRowShapeEpoch's own
+    // doc comment (../store.ts) for the mechanism these pin.
+    describe("catchUpProjectRowShapeEpoch", () => {
+      it("does nothing for a Device that has never synced this stream", async () => {
+        expect(await projectStore.getProjectCursor()).toBe(0);
+
+        await projectStore.catchUpProjectRowShapeEpoch(1);
+
+        expect(await projectStore.getProjectCursor()).toBe(0);
+      });
+
+      it("resets an already-advanced Cursor to 0 the first time it sees a higher epoch", async () => {
+        await projectStore.setProjectCursor(50);
+
+        await projectStore.catchUpProjectRowShapeEpoch(1);
+
+        expect(await projectStore.getProjectCursor()).toBe(0);
+      });
+
+      it("is idempotent: catching up to the same epoch again does not reset a Cursor that has since advanced", async () => {
+        await projectStore.catchUpProjectRowShapeEpoch(1);
+        await projectStore.setProjectCursor(50);
+
+        await projectStore.catchUpProjectRowShapeEpoch(1);
+
+        expect(await projectStore.getProjectCursor()).toBe(50);
+      });
+
+      it("does not reset when asked to catch up to an epoch no higher than one already recorded", async () => {
+        await projectStore.catchUpProjectRowShapeEpoch(2);
+        await projectStore.setProjectCursor(50);
+
+        await projectStore.catchUpProjectRowShapeEpoch(1);
+
+        expect(await projectStore.getProjectCursor()).toBe(50);
+      });
+    });
   });
 
   describe("Section", () => {
@@ -538,6 +576,43 @@ export function projectStoreContract(
       await projectStore.setSectionCursor(7);
 
       expect(await projectStore.getSectionCursor()).toBe(7);
+    });
+
+    // The Section-shaped sibling of the Project describe block above.
+    describe("catchUpSectionRowShapeEpoch", () => {
+      it("does nothing for a Device that has never synced this stream", async () => {
+        expect(await projectStore.getSectionCursor()).toBe(0);
+
+        await projectStore.catchUpSectionRowShapeEpoch(1);
+
+        expect(await projectStore.getSectionCursor()).toBe(0);
+      });
+
+      it("resets an already-advanced Cursor to 0 the first time it sees a higher epoch", async () => {
+        await projectStore.setSectionCursor(50);
+
+        await projectStore.catchUpSectionRowShapeEpoch(1);
+
+        expect(await projectStore.getSectionCursor()).toBe(0);
+      });
+
+      it("is idempotent: catching up to the same epoch again does not reset a Cursor that has since advanced", async () => {
+        await projectStore.catchUpSectionRowShapeEpoch(1);
+        await projectStore.setSectionCursor(50);
+
+        await projectStore.catchUpSectionRowShapeEpoch(1);
+
+        expect(await projectStore.getSectionCursor()).toBe(50);
+      });
+
+      it("does not reset when asked to catch up to an epoch no higher than one already recorded", async () => {
+        await projectStore.catchUpSectionRowShapeEpoch(2);
+        await projectStore.setSectionCursor(50);
+
+        await projectStore.catchUpSectionRowShapeEpoch(1);
+
+        expect(await projectStore.getSectionCursor()).toBe(50);
+      });
     });
   });
 }

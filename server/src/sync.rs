@@ -165,6 +165,30 @@ use uuid::Uuid;
 /// Labels and Comments exactly as it always has — there is no wire shape
 /// it now fails to understand, so there is nothing here for a version
 /// number to protect it from.
+///
+/// **If you are about to add a field to an existing kind of row here —
+/// `TaskInput`/`TaskOutput`, `ProjectInput`/`ProjectOutput`, and so on —
+/// read this note before you do, whether or not it also moves this
+/// constant.** Issue #186 / ADR 0057: a Device's own Cursor for a stream
+/// only ever advances through rows it has already asked for
+/// (`fetch_*_since` below); a row it pulled before your new field existed
+/// stays behind that Cursor forever, and your field never reaches that
+/// Device until something unrelated edits the row and reassigns its
+/// `seq`. This bit meologue once already — `TaskInput::description`
+/// below, added by issue #182 onto the Task stream that already existed
+/// from issue #172, is the exact case that was caught only by
+/// coincidence during manual verification. `PROTOCOL_VERSION` cannot
+/// carry this obligation itself: it names "the wire shape a Device's
+/// whole build understands," not "which streams' rows just gained a
+/// field," and the two move independently in both directions — issue
+/// #184 added an entire stream (Events) with **no** bump here, and a
+/// future stream could earn a bump with no existing row gaining a field
+/// at all. The obligation lives client-side instead:
+/// `packages/core/src/protocol.ts`'s `ROW_SHAPE_EPOCH` map, one entry per
+/// stream, bumped only when that stream's row shape gains a field — see
+/// its own doc comment for the mechanism (`EntryStore.catchUpRowShapeEpoch`,
+/// `packages/core/src/store.ts`) and ADR 0057 for the design this
+/// constant's own bumps have nothing to do with.
 pub const PROTOCOL_VERSION: i32 = 6;
 
 /// The lowest protocol version this Server still accepts, alongside
@@ -346,6 +370,14 @@ pub struct TaskInput {
     /// an ordinary `Option<String>` field like every other nullable column
     /// here, that workaround is retired — see that function's own doc
     /// comment for the mechanism it keeps for a future locally-held field.
+    ///
+    /// This is also issue #186 / ADR 0057's own motivating case: a Device
+    /// that had already pulled a Task row before this field existed kept
+    /// its Cursor past that row, and this field alone never reached it.
+    /// `packages/core/src/protocol.ts`'s `ROW_SHAPE_EPOCH.tasks` is bumped
+    /// to 1 for exactly this addition — see `PROTOCOL_VERSION`'s own doc
+    /// comment above for the obligation this places on the next field
+    /// added to any row here.
     pub description: Option<String>,
 }
 

@@ -100,6 +100,22 @@ export class SqliteEventStore implements EventStore {
     await this.setKv(EVENT_CURSOR_KEY, String(seq));
   }
 
+  // Issue #186 / ADR 0057 — see EntryStore.catchUpRowShapeEpoch's own doc
+  // comment (../store.ts) for the mechanism. Unexercised today (no field
+  // has ever been added to an existing Event shape — EventStore's own
+  // doc comment on why), but wired in now for the identical reason this
+  // store already carries seq/pending()/a Cursor ahead of ever needing
+  // them: free to build in, a real migration-shaped retrofit later.
+  async catchUpRowShapeEpoch(currentEpoch: number): Promise<void> {
+    const stored = await this.getKv(EVENT_ROW_SHAPE_EPOCH_KEY);
+    const storedEpoch = stored === undefined ? 0 : Number(stored);
+    if (storedEpoch >= currentEpoch) {
+      return;
+    }
+    await this.setCursor(0);
+    await this.setKv(EVENT_ROW_SHAPE_EPOCH_KEY, String(currentEpoch));
+  }
+
   private async getKv(key: string): Promise<string | undefined> {
     const rows = await this.db.select({ value: kv.value }).from(kv).where(eq(kv.key, key)).limit(1);
     return rows[0]?.value;
@@ -114,3 +130,6 @@ export class SqliteEventStore implements EventStore {
 }
 
 const EVENT_CURSOR_KEY = "event_cursor";
+
+// Issue #186 / ADR 0057: the Event stream's own row-shape-epoch key.
+const EVENT_ROW_SHAPE_EPOCH_KEY = "event_row_shape_epoch";

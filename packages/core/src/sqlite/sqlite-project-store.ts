@@ -176,6 +176,20 @@ export class SqliteProjectStore implements ProjectStore {
     await this.setKv(PROJECT_CURSOR_KEY, String(seq));
   }
 
+  // Issue #186 / ADR 0057 — see EntryStore.catchUpRowShapeEpoch's own doc
+  // comment (../store.ts) for the mechanism; independent of
+  // catchUpSectionRowShapeEpoch below for the identical reason
+  // getProjectCursor/getSectionCursor are two Cursors, not one.
+  async catchUpProjectRowShapeEpoch(currentEpoch: number): Promise<void> {
+    const stored = await this.getKv(PROJECT_ROW_SHAPE_EPOCH_KEY);
+    const storedEpoch = stored === undefined ? 0 : Number(stored);
+    if (storedEpoch >= currentEpoch) {
+      return;
+    }
+    await this.setProjectCursor(0);
+    await this.setKv(PROJECT_ROW_SHAPE_EPOCH_KEY, String(currentEpoch));
+  }
+
   async listSections(projectId: string): Promise<Section[]> {
     return this.db
       .select()
@@ -318,6 +332,17 @@ export class SqliteProjectStore implements ProjectStore {
     await this.setKv(SECTION_CURSOR_KEY, String(seq));
   }
 
+  // The Section-shaped sibling of catchUpProjectRowShapeEpoch above.
+  async catchUpSectionRowShapeEpoch(currentEpoch: number): Promise<void> {
+    const stored = await this.getKv(SECTION_ROW_SHAPE_EPOCH_KEY);
+    const storedEpoch = stored === undefined ? 0 : Number(stored);
+    if (storedEpoch >= currentEpoch) {
+      return;
+    }
+    await this.setSectionCursor(0);
+    await this.setKv(SECTION_ROW_SHAPE_EPOCH_KEY, String(currentEpoch));
+  }
+
   // Mirrors SqliteTaskStore/SqliteLabelStore's identical updateIfLive —
   // a mutation against an unknown or already-tombstoned id is a no-op.
   private async updateProjectIfLive(id: string, patch: Partial<Project>): Promise<void> {
@@ -354,3 +379,8 @@ export class SqliteProjectStore implements ProjectStore {
 // pendingProjects()/pendingSections()'s own separate-streams shape.
 const PROJECT_CURSOR_KEY = "project_cursor";
 const SECTION_CURSOR_KEY = "section_cursor";
+
+// Issue #186 / ADR 0057: each stream's own row-shape-epoch key, mirroring
+// PROJECT_CURSOR_KEY/SECTION_CURSOR_KEY's own separate-streams shape.
+const PROJECT_ROW_SHAPE_EPOCH_KEY = "project_row_shape_epoch";
+const SECTION_ROW_SHAPE_EPOCH_KEY = "section_row_shape_epoch";

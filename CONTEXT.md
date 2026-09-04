@@ -116,9 +116,15 @@ omits things is worse than none.
 
 ### Cursor
 
-A Device's record of how far it has Synced. A Cursor only ever advances — it marks the point up
-to which a Device has already received every Entry there is to receive, so that Syncing again
-only needs to ask for what came after.
+A Device's record of how far it has Synced, one per stream (Entries, Tasks, Projects, Sections,
+Labels, Comments, Events). A Cursor only ever advances — it marks the point up to which a Device
+has already received every row of that stream there is to receive, so that Syncing again only
+needs to ask for what came after — with one deliberate, narrow exception: a Device that adds a
+field to a stream's row shape resets that stream's own Cursor to 0 once, so the next Sync re-walks
+rows it already held and picks up the field it was missing (ADR 0057). This is not a Device
+forgetting what it already has — every row still arrives, the Cursor is simply told to ask for it
+again — and it happens at most once per stream per field added, never as an ordinary consequence
+of Syncing.
 
 ### Server
 

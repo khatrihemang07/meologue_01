@@ -405,3 +405,12 @@ export const kv = sqliteTable("kv", {
 
 export const CURSOR_KEY = "cursor";
 export const DEVICE_ID_KEY = "device_id";
+// Issue #186 / ADR 0057: the Entry stream's own record of the highest
+// `protocol.ts`'s ROW_SHAPE_EPOCH.entries this Device has ever caught up
+// to — see EntryStore.catchUpRowShapeEpoch's own doc comment (../store.ts)
+// for the mechanism. Lives here, alongside CURSOR_KEY, for the identical
+// ADR 0007 reason this table's own header comment already gives for the
+// Cursor: an epoch claiming a re-walk happened, backed by a database that
+// never held it, is the same failure as a Cursor claiming progress the
+// rows behind it never made.
+export const ROW_SHAPE_EPOCH_KEY = "row_shape_epoch";

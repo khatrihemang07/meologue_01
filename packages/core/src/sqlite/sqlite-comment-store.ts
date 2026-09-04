@@ -121,6 +121,18 @@ export class SqliteCommentStore implements CommentStore {
     await this.setKv(COMMENT_CURSOR_KEY, String(seq));
   }
 
+  // Issue #186 / ADR 0057 — see EntryStore.catchUpRowShapeEpoch's own doc
+  // comment (../store.ts) for the mechanism.
+  async catchUpRowShapeEpoch(currentEpoch: number): Promise<void> {
+    const stored = await this.getKv(COMMENT_ROW_SHAPE_EPOCH_KEY);
+    const storedEpoch = stored === undefined ? 0 : Number(stored);
+    if (storedEpoch >= currentEpoch) {
+      return;
+    }
+    await this.setCursor(0);
+    await this.setKv(COMMENT_ROW_SHAPE_EPOCH_KEY, String(currentEpoch));
+  }
+
   // Mirrors SqliteLabelStore.updateIfLive/SqliteTaskStore.updateIfLive
   // exactly — see either's own comment for why a mutation against an
   // unknown or tombstoned id is a no-op rather than an error.
@@ -145,3 +157,6 @@ export class SqliteCommentStore implements CommentStore {
 }
 
 const COMMENT_CURSOR_KEY = "comment_cursor";
+
+// Issue #186 / ADR 0057: the Comment stream's own row-shape-epoch key.
+const COMMENT_ROW_SHAPE_EPOCH_KEY = "comment_row_shape_epoch";

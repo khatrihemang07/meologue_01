@@ -91,4 +91,15 @@ export interface EventStore {
   pending(): Promise<Event[]>;
   getCursor(): Promise<number>;
   setCursor(seq: number): Promise<void>;
+  /**
+   * Issue #186 / ADR 0057 — see `EntryStore.catchUpRowShapeEpoch`'s own
+   * doc comment (./store.ts) for the mechanism; `currentEpoch` here is
+   * `protocol.ts`'s `ROW_SHAPE_EPOCH.events`. Every Event this codebase
+   * has ever shipped is immutable once written (this interface's own
+   * header comment), so nothing has bumped `events` above 0 yet — but the
+   * day a field *is* added to an existing Event shape, it needs the exact
+   * same catch-up every mutable stream already gets, not a special case
+   * argued for because "Events never change."
+   */
+  catchUpRowShapeEpoch(currentEpoch: number): Promise<void>;
 }

@@ -13,6 +13,9 @@ import { matchesSubstring } from "../task-search";
 export class InMemoryCommentStore implements CommentStore {
   private readonly comments = new Map<string, Comment>();
   private cursor = 0;
+  // Issue #186 / ADR 0057 — see EntryStore.catchUpRowShapeEpoch's own doc
+  // comment (../store.ts) for what this tracks.
+  private rowShapeEpoch = 0;
 
   async list(): Promise<Comment[]> {
     return [...this.comments.values()].filter((c) => c.deletedAt === null).sort(byCreatedThenId);
@@ -73,6 +76,16 @@ export class InMemoryCommentStore implements CommentStore {
 
   async setCursor(seq: number): Promise<void> {
     this.cursor = seq;
+  }
+
+  // Issue #186 / ADR 0057 — see EntryStore.catchUpRowShapeEpoch's own doc
+  // comment (../store.ts) for the mechanism this mirrors.
+  async catchUpRowShapeEpoch(currentEpoch: number): Promise<void> {
+    if (this.rowShapeEpoch >= currentEpoch) {
+      return;
+    }
+    this.cursor = 0;
+    this.rowShapeEpoch = currentEpoch;
   }
 
   // Mirrors InMemoryLabelStore.applyIfLive/InMemoryTaskStore.applyIfLive exactly.

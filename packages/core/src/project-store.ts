@@ -134,6 +134,16 @@ export interface ProjectStore {
   pendingProjects(): Promise<Project[]>;
   getProjectCursor(): Promise<number>;
   setProjectCursor(seq: number): Promise<void>;
+  /**
+   * Issue #186 / ADR 0057 — see `EntryStore.catchUpRowShapeEpoch`'s own
+   * doc comment (./store.ts) for the mechanism; `currentEpoch` here is
+   * `protocol.ts`'s `ROW_SHAPE_EPOCH.projects`, tracked independently of
+   * `catchUpSectionRowShapeEpoch` below even though both live on this one
+   * store — Projects and Sections are two Sync streams with two Cursors
+   * (`getProjectCursor`/`getSectionCursor` above), so they earn two
+   * independent epoch watermarks for the identical reason.
+   */
+  catchUpProjectRowShapeEpoch(currentEpoch: number): Promise<void>;
 
   /** Every Section (any `archived` state) belonging to `projectId` that isn't tombstoned, ordered by (orderKey, id) ascending — Sections are flat (../project-types.ts), so unlike listProjects() this is already the caller's whole rendering order, no client-side regrouping needed. */
   listSections(projectId: string): Promise<Section[]>;
@@ -228,4 +238,10 @@ export interface ProjectStore {
   pendingSections(): Promise<Section[]>;
   getSectionCursor(): Promise<number>;
   setSectionCursor(seq: number): Promise<void>;
+  /**
+   * The Section-shaped sibling of `catchUpProjectRowShapeEpoch` above —
+   * `currentEpoch` here is `protocol.ts`'s `ROW_SHAPE_EPOCH.sections`,
+   * its own independent watermark.
+   */
+  catchUpSectionRowShapeEpoch(currentEpoch: number): Promise<void>;
 }

@@ -34,6 +34,8 @@ function fakeEventStore(): EventStore {
     pending: vi.fn(async () => []),
     getCursor: vi.fn(async () => 0),
     setCursor: vi.fn(async () => {}),
+    // Issue #186 / ADR 0057.
+    catchUpRowShapeEpoch: vi.fn(async () => {}),
   };
 }
 
@@ -98,6 +100,8 @@ function createFakeStore(): ProjectStore {
     pendingProjects: vi.fn(async () => []),
     getProjectCursor: vi.fn(async () => 0),
     setProjectCursor: vi.fn(async () => {}),
+    // Issue #186 / ADR 0057.
+    catchUpProjectRowShapeEpoch: vi.fn(async () => {}),
     listSections: vi.fn(async (projectId: string) =>
       sections.filter((s) => s.projectId === projectId),
     ),
@@ -121,6 +125,8 @@ function createFakeStore(): ProjectStore {
     pendingSections: vi.fn(async () => []),
     getSectionCursor: vi.fn(async () => 0),
     setSectionCursor: vi.fn(async () => {}),
+    // Issue #186 / ADR 0057.
+    catchUpSectionRowShapeEpoch: vi.fn(async () => {}),
   };
 }
 

@@ -913,6 +913,44 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
     expect(await store.getCursor()).toBe(7);
   });
 
+  // Issue #186 / ADR 0057 — see EntryStore.catchUpRowShapeEpoch's own doc
+  // comment (../store.ts) for the mechanism these pin.
+  describe("catchUpRowShapeEpoch", () => {
+    it("does nothing for a Device that has never synced this stream", async () => {
+      expect(await store.getCursor()).toBe(0);
+
+      await store.catchUpRowShapeEpoch(1);
+
+      expect(await store.getCursor()).toBe(0);
+    });
+
+    it("resets an already-advanced Cursor to 0 the first time it sees a higher epoch", async () => {
+      await store.setCursor(50);
+
+      await store.catchUpRowShapeEpoch(1);
+
+      expect(await store.getCursor()).toBe(0);
+    });
+
+    it("is idempotent: catching up to the same epoch again does not reset a Cursor that has since advanced", async () => {
+      await store.catchUpRowShapeEpoch(1);
+      await store.setCursor(50);
+
+      await store.catchUpRowShapeEpoch(1);
+
+      expect(await store.getCursor()).toBe(50);
+    });
+
+    it("does not reset when asked to catch up to an epoch no higher than one already recorded", async () => {
+      await store.catchUpRowShapeEpoch(2);
+      await store.setCursor(50);
+
+      await store.catchUpRowShapeEpoch(1);
+
+      expect(await store.getCursor()).toBe(50);
+    });
+  });
+
   describe("search() (issue #183)", () => {
     it("matches a fragment from the middle of a word, not just a prefix", async () => {
       const shopping = task({ id: "a", content: "buy groceries", orderKey: "a" });

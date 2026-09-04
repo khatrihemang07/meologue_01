@@ -127,4 +127,41 @@ export interface EntryStore {
    * everything it needed from a smaller set of ids.
    */
   getMany(ids: string[]): Promise<Entry[]>;
+  /**
+   * Issue #186 / ADR 0057. Must be called once, before this stream's own
+   * Cursor is read for a sync request — `sync-engine.ts`'s `sync()` does
+   * this for every stream, before its `while` loop begins, so no
+   * implementation needs to call it from anywhere else.
+   *
+   * Compares `currentEpoch` (`protocol.ts`'s `ROW_SHAPE_EPOCH.entries`)
+   * against the highest value this Device has ever recorded catching up
+   * to for this stream (kept alongside the Cursor itself — ADR 0007's own
+   * argument for why the Cursor lives in the same database as the rows
+   * it claims are already local applies verbatim here: an epoch claiming
+   * this Device re-walked a stream, backed by a database that never
+   * actually held that walk, is the same failure mode as a Cursor
+   * claiming progress the rows behind it never made). Lower means this
+   * Device pulled at least one row of this kind before the field that
+   * bumped `currentEpoch` existed on the wire, and the fix is to reset
+   * this stream's own Cursor to 0 and record `currentEpoch` as caught up
+   * — in that order, so a process killed between the two still leaves a
+   * Cursor of 0 and a stale recorded epoch, which repeats the reset
+   * harmlessly on the next call rather than silently skipping it forever.
+   * The reset costs one full re-walk of this stream, once: `getCursor()`
+   * genuinely returns 0 afterward, and the ordinary, already-paginated
+   * sync loop re-delivers every row this Device already holds exactly
+   * once more, this time with whatever field it was missing. This is a
+   * deliberate, narrow exception to CONTEXT.md's "a Cursor only ever
+   * advances" — see that entry's own note on why a rewind here is
+   * amended into the definition rather than quietly contradicting it.
+   *
+   * Equal or higher (including the common case: a Device that has never
+   * synced this stream at all, which has never recorded any epoch and
+   * has a Cursor already at 0) does nothing beyond one local `kv` read —
+   * no Cursor touched, no second `kv` write, no query against a Server.
+   * That is what keeps this free on every ordinary sync (this ticket's
+   * own acceptance bar): the check that decides "nothing to do" costs a
+   * single local integer comparison, not a network round trip.
+   */
+  catchUpRowShapeEpoch(currentEpoch: number): Promise<void>;
 }

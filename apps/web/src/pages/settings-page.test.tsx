@@ -46,6 +46,8 @@ function createFakeStore(entries: Entry[] = []): EntryStore {
     pending: vi.fn(async () => []),
     getCursor: vi.fn(async () => 0),
     setCursor: vi.fn(async () => {}),
+    // Issue #186 / ADR 0057.
+    catchUpRowShapeEpoch: vi.fn(async () => {}),
     search: vi.fn(async () => []),
     edit: vi.fn(async () => {}),
     remove: vi.fn(async () => {}),
@@ -89,6 +91,8 @@ function createFakeTaskStore(active: Task[] = [], completed: Task[] = []): TaskS
     pending: vi.fn(async () => []),
     getCursor: vi.fn(async () => 0),
     setCursor: vi.fn(async () => {}),
+    // Issue #186 / ADR 0057.
+    catchUpRowShapeEpoch: vi.fn(async () => {}),
     search: vi.fn(async () => []),
   };
 }
@@ -112,6 +116,8 @@ function createFakeProjectStore(projects: Project[] = []): ProjectStore {
     pendingProjects: vi.fn(async () => []),
     getProjectCursor: vi.fn(async () => 0),
     setProjectCursor: vi.fn(async () => {}),
+    // Issue #186 / ADR 0057.
+    catchUpProjectRowShapeEpoch: vi.fn(async () => {}),
     listSections: vi.fn(async () => []),
     getSection: vi.fn(async () => undefined),
     addSection: vi.fn(async () => {}),
@@ -125,6 +131,8 @@ function createFakeProjectStore(projects: Project[] = []): ProjectStore {
     pendingSections: vi.fn(async () => []),
     getSectionCursor: vi.fn(async () => 0),
     setSectionCursor: vi.fn(async () => {}),
+    // Issue #186 / ADR 0057.
+    catchUpSectionRowShapeEpoch: vi.fn(async () => {}),
   };
 }
 

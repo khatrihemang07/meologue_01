@@ -30,6 +30,11 @@ export class InMemoryProjectStore implements ProjectStore {
   private readonly taskStore: TaskStore;
   private projectCursor = 0;
   private sectionCursor = 0;
+  // Issue #186 / ADR 0057 — see EntryStore.catchUpRowShapeEpoch's own doc
+  // comment (../store.ts) for what these track; two independent
+  // watermarks, mirroring projectCursor/sectionCursor's own split.
+  private projectRowShapeEpoch = 0;
+  private sectionRowShapeEpoch = 0;
 
   constructor(taskStore: TaskStore) {
     this.taskStore = taskStore;
@@ -148,6 +153,16 @@ export class InMemoryProjectStore implements ProjectStore {
     this.projectCursor = seq;
   }
 
+  // Issue #186 / ADR 0057 — see EntryStore.catchUpRowShapeEpoch's own doc
+  // comment (../store.ts) for the mechanism this mirrors.
+  async catchUpProjectRowShapeEpoch(currentEpoch: number): Promise<void> {
+    if (this.projectRowShapeEpoch >= currentEpoch) {
+      return;
+    }
+    this.projectCursor = 0;
+    this.projectRowShapeEpoch = currentEpoch;
+  }
+
   async listSections(projectId: string): Promise<Section[]> {
     return [...this.sections.values()]
       .filter((s) => s.deletedAt === null && s.projectId === projectId)
@@ -256,6 +271,15 @@ export class InMemoryProjectStore implements ProjectStore {
 
   async setSectionCursor(seq: number): Promise<void> {
     this.sectionCursor = seq;
+  }
+
+  // The Section-shaped sibling of catchUpProjectRowShapeEpoch above.
+  async catchUpSectionRowShapeEpoch(currentEpoch: number): Promise<void> {
+    if (this.sectionRowShapeEpoch >= currentEpoch) {
+      return;
+    }
+    this.sectionCursor = 0;
+    this.sectionRowShapeEpoch = currentEpoch;
   }
 
   private applyProjectIfLive(id: string, patch: Partial<Project>): void {

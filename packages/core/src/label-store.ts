@@ -61,4 +61,10 @@ export interface LabelStore {
   pending(): Promise<Label[]>;
   getCursor(): Promise<number>;
   setCursor(seq: number): Promise<void>;
+  /**
+   * Issue #186 / ADR 0057 — see `EntryStore.catchUpRowShapeEpoch`'s own
+   * doc comment (./store.ts) for the mechanism; `currentEpoch` here is
+   * `protocol.ts`'s `ROW_SHAPE_EPOCH.labels`.
+   */
+  catchUpRowShapeEpoch(currentEpoch: number): Promise<void>;
 }

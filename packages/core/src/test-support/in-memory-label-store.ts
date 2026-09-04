@@ -16,6 +16,9 @@ import type { Label } from "../label-types";
 export class InMemoryLabelStore implements LabelStore {
   private readonly labels = new Map<string, Label>();
   private cursor = 0;
+  // Issue #186 / ADR 0057 — see EntryStore.catchUpRowShapeEpoch's own doc
+  // comment (../store.ts) for what this tracks.
+  private rowShapeEpoch = 0;
 
   async list(): Promise<Label[]> {
     return [...this.labels.values()]
@@ -71,6 +74,16 @@ export class InMemoryLabelStore implements LabelStore {
 
   async setCursor(seq: number): Promise<void> {
     this.cursor = seq;
+  }
+
+  // Issue #186 / ADR 0057 — see EntryStore.catchUpRowShapeEpoch's own doc
+  // comment (../store.ts) for the mechanism this mirrors.
+  async catchUpRowShapeEpoch(currentEpoch: number): Promise<void> {
+    if (this.rowShapeEpoch >= currentEpoch) {
+      return;
+    }
+    this.cursor = 0;
+    this.rowShapeEpoch = currentEpoch;
   }
 
   // Mirrors InMemoryTaskStore.applyIfLive exactly.

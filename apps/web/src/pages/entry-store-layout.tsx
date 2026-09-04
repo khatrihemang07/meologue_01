@@ -555,13 +555,30 @@ const ENTRY_STORE_METHODS: StoreMethodNames<EntryStore> = {
   pending: true,
   getCursor: true,
   setCursor: true,
+  // Issue #186 / ADR 0057 — the identical compile-time checkpoint every
+  // method here already gets: `sync()` calls this before anything else in
+  // its loop, so a forgotten entry here would be `undefined is not a
+  // function` on the very first deferred sync tick, not a compile error.
+  catchUpRowShapeEpoch: true,
   search: true,
   edit: true,
   remove: true,
   getMany: true,
 };
 
-function deferUntilOpen(promise: Promise<{ store: EntryStore; deviceId: string }>): EntryStore {
+// Exported, alongside every other `defer*UntilOpen` below (issue #186 /
+// ADR 0057) — not because any real caller outside this file needs one
+// directly (`EntryStoreLayout` below is still the only production call
+// site for all six), but so `entry-store-layout.test.tsx` can build a
+// facade against these same, real `*_STORE_METHODS` registries and run a
+// real `sync()` call through it. `tsc` already catches a method missing
+// from a registry; nothing before this ticket proved the *other* half —
+// that a method actually listed still runs at runtime rather than
+// throwing for some unrelated reason — because no test called a store
+// method through a facade before its own open had resolved.
+export function deferUntilOpen(
+  promise: Promise<{ store: EntryStore; deviceId: string }>,
+): EntryStore {
   return deferStore(promise, ({ store }) => store, ENTRY_STORE_METHODS);
 }
 
@@ -594,6 +611,8 @@ const TASK_STORE_METHODS: StoreMethodNames<TaskStore> = {
   pending: true,
   getCursor: true,
   setCursor: true,
+  // Issue #186 / ADR 0057 — see ENTRY_STORE_METHODS's own comment.
+  catchUpRowShapeEpoch: true,
   search: true,
   // Issue #169's three setters, added to TaskStore alongside the scheduling
   // fields themselves — this is the compile-time checkpoint this registry
@@ -622,7 +641,7 @@ const TASK_STORE_METHODS: StoreMethodNames<TaskStore> = {
   setDescription: true,
 };
 
-function deferTaskStoreUntilOpen(
+export function deferTaskStoreUntilOpen(
   promise: Promise<{ taskStore: TaskStore; deviceId: string }>,
 ): TaskStore {
   return deferStore(promise, ({ taskStore }) => taskStore, TASK_STORE_METHODS);
@@ -642,9 +661,11 @@ const LABEL_STORE_METHODS: StoreMethodNames<LabelStore> = {
   pending: true,
   getCursor: true,
   setCursor: true,
+  // Issue #186 / ADR 0057 — see ENTRY_STORE_METHODS's own comment.
+  catchUpRowShapeEpoch: true,
 };
 
-function deferLabelStoreUntilOpen(
+export function deferLabelStoreUntilOpen(
   promise: Promise<{ labelStore: LabelStore; deviceId: string }>,
 ): LabelStore {
   return deferStore(promise, ({ labelStore }) => labelStore, LABEL_STORE_METHODS);
@@ -670,6 +691,10 @@ const PROJECT_STORE_METHODS: StoreMethodNames<ProjectStore> = {
   pendingProjects: true,
   getProjectCursor: true,
   setProjectCursor: true,
+  // Issue #186 / ADR 0057 — see ENTRY_STORE_METHODS's own comment; two
+  // independent watermarks (Project and Section are two Sync streams),
+  // so both need their own entry here.
+  catchUpProjectRowShapeEpoch: true,
   listSections: true,
   getSection: true,
   addSection: true,
@@ -685,9 +710,11 @@ const PROJECT_STORE_METHODS: StoreMethodNames<ProjectStore> = {
   pendingSections: true,
   getSectionCursor: true,
   setSectionCursor: true,
+  // The Section-shaped sibling of catchUpProjectRowShapeEpoch above.
+  catchUpSectionRowShapeEpoch: true,
 };
 
-function deferProjectStoreUntilOpen(
+export function deferProjectStoreUntilOpen(
   promise: Promise<{ projectStore: ProjectStore; deviceId: string }>,
 ): ProjectStore {
   return deferStore(promise, ({ projectStore }) => projectStore, PROJECT_STORE_METHODS);
@@ -707,12 +734,14 @@ const COMMENT_STORE_METHODS: StoreMethodNames<CommentStore> = {
   pending: true,
   getCursor: true,
   setCursor: true,
+  // Issue #186 / ADR 0057 — see ENTRY_STORE_METHODS's own comment.
+  catchUpRowShapeEpoch: true,
   // Issue #183's Comment search — the identical compile-time checkpoint
   // as every other method above.
   search: true,
 };
 
-function deferCommentStoreUntilOpen(
+export function deferCommentStoreUntilOpen(
   promise: Promise<{ commentStore: CommentStore; deviceId: string }>,
 ): CommentStore {
   return deferStore(promise, ({ commentStore }) => commentStore, COMMENT_STORE_METHODS);
@@ -733,9 +762,11 @@ const EVENT_STORE_METHODS: StoreMethodNames<EventStore> = {
   pending: true,
   getCursor: true,
   setCursor: true,
+  // Issue #186 / ADR 0057 — see ENTRY_STORE_METHODS's own comment.
+  catchUpRowShapeEpoch: true,
 };
 
-function deferEventStoreUntilOpen(
+export function deferEventStoreUntilOpen(
   promise: Promise<{ eventStore: EventStore; deviceId: string }>,
 ): EventStore {
   return deferStore(promise, ({ eventStore }) => eventStore, EVENT_STORE_METHODS);

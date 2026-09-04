@@ -27,6 +27,9 @@ import type { Task } from "../task-types";
 export class InMemoryTaskStore implements TaskStore {
   private readonly tasks = new Map<string, Task>();
   private cursor = 0;
+  // Issue #186 / ADR 0057 — see EntryStore.catchUpRowShapeEpoch's own doc
+  // comment (../store.ts) for what this tracks.
+  private rowShapeEpoch = 0;
 
   async list(): Promise<Task[]> {
     // Active: not completed, not tombstoned — mirrors
@@ -356,6 +359,16 @@ export class InMemoryTaskStore implements TaskStore {
 
   async setCursor(seq: number): Promise<void> {
     this.cursor = seq;
+  }
+
+  // Issue #186 / ADR 0057 — see EntryStore.catchUpRowShapeEpoch's own doc
+  // comment (../store.ts) for the mechanism this mirrors.
+  async catchUpRowShapeEpoch(currentEpoch: number): Promise<void> {
+    if (this.rowShapeEpoch >= currentEpoch) {
+      return;
+    }
+    this.cursor = 0;
+    this.rowShapeEpoch = currentEpoch;
   }
 
   // Mirrors SqliteTaskStore.search — see TaskStore.search's own doc

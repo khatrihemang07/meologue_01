@@ -466,6 +466,20 @@ export class SqliteTaskStore implements TaskStore {
     await this.setKv(TASK_CURSOR_KEY, String(seq));
   }
 
+  // Issue #186 / ADR 0057 — see EntryStore.catchUpRowShapeEpoch's own doc
+  // comment (../store.ts) for the mechanism, and SqliteEntryStore's own
+  // implementation for why the reset (setCursor) happens before the
+  // record (setKv) rather than after.
+  async catchUpRowShapeEpoch(currentEpoch: number): Promise<void> {
+    const stored = await this.getKv(TASK_ROW_SHAPE_EPOCH_KEY);
+    const storedEpoch = stored === undefined ? 0 : Number(stored);
+    if (storedEpoch >= currentEpoch) {
+      return;
+    }
+    await this.setCursor(0);
+    await this.setKv(TASK_ROW_SHAPE_EPOCH_KEY, String(currentEpoch));
+  }
+
   /**
    * See TaskStore.search's own doc comment for the full matching rules
    * (issue #183) — this is their mechanics. `fields` picks which of
@@ -685,6 +699,11 @@ export class SqliteTaskStore implements TaskStore {
 // two streams silently clobbering each other's progress in the same kv
 // row.
 const TASK_CURSOR_KEY = "task_cursor";
+
+// Issue #186 / ADR 0057: the Task stream's own row-shape-epoch key,
+// namespaced apart from every other stream's for the identical reason
+// TASK_CURSOR_KEY's own comment above gives.
+const TASK_ROW_SHAPE_EPOCH_KEY = "task_row_shape_epoch";
 
 // The columns search()'s three query shapes (searchTrigram via
 // fetchTasksByIds, searchSubstringScan/searchWholeWordScan via liveTasks)

@@ -83,6 +83,12 @@ export interface CommentStore {
   getCursor(): Promise<number>;
   setCursor(seq: number): Promise<void>;
   /**
+   * Issue #186 / ADR 0057 — see `EntryStore.catchUpRowShapeEpoch`'s own
+   * doc comment (./store.ts) for the mechanism; `currentEpoch` here is
+   * `protocol.ts`'s `ROW_SHAPE_EPOCH.comments`.
+   */
+  catchUpRowShapeEpoch(currentEpoch: number): Promise<void>;
+  /**
    * Substring search over every live Comment's own `text` (issue #183) —
    * the identical matching rules TaskStore.search's own doc comment gives
    * for a Task's title/Description, shared via ../task-search.ts rather

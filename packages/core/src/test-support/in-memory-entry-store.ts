@@ -9,6 +9,10 @@ import type { Entry } from "../types";
 export class InMemoryEntryStore implements EntryStore {
   private readonly entries = new Map<string, Entry>();
   private cursor = 0;
+  // Issue #186 / ADR 0057: mirrors ROW_SHAPE_EPOCH_KEY's persisted value
+  // in the real SqliteEntryStore — see EntryStore.catchUpRowShapeEpoch's
+  // own doc comment (../store.ts) for what this tracks and why.
+  private rowShapeEpoch = 0;
 
   async list(page?: EntryPage): Promise<Entry[]> {
     // Excludes tombstones (ADR 0028) — mirrors SqliteEntryStore.list()'s
@@ -68,6 +72,16 @@ export class InMemoryEntryStore implements EntryStore {
 
   async setCursor(seq: number): Promise<void> {
     this.cursor = seq;
+  }
+
+  // Issue #186 / ADR 0057 — see EntryStore.catchUpRowShapeEpoch's own doc
+  // comment (../store.ts) for the mechanism this mirrors.
+  async catchUpRowShapeEpoch(currentEpoch: number): Promise<void> {
+    if (this.rowShapeEpoch >= currentEpoch) {
+      return;
+    }
+    this.cursor = 0;
+    this.rowShapeEpoch = currentEpoch;
   }
 
   async search(query: string): Promise<Entry[]> {

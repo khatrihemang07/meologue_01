@@ -18,7 +18,7 @@ import {
   toWireTaskInput,
 } from "./mapping";
 import type { ProjectStore } from "./project-store";
-import { PROTOCOL_VERSION, SYNC_BATCH_SIZE } from "./protocol";
+import { PROTOCOL_VERSION, ROW_SHAPE_EPOCH, SYNC_BATCH_SIZE } from "./protocol";
 import type { EntryStore } from "./store";
 import type { TaskStore } from "./task-store";
 import type { WireSyncRequest, WireSyncResponse } from "./wire";
@@ -80,6 +80,20 @@ export interface SyncEngineOptions {
  * the server — the next request re-pushes nothing new for an
  * already-drained stream (its `pending()` is empty by then) and simply
  * keeps paging the others forward.
+ *
+ * Before any of that: issue #186 / ADR 0057's catch-up runs once, for
+ * every stream, comparing `protocol.ts`'s `ROW_SHAPE_EPOCH` against what
+ * each store itself last recorded catching up to
+ * (`catchUpRowShapeEpoch`/`catchUpProjectRowShapeEpoch`/
+ * `catchUpSectionRowShapeEpoch` — see `EntryStore.catchUpRowShapeEpoch`'s
+ * own doc comment, `store.ts`, for the mechanism). This is a single local
+ * comparison per stream, not a request, so it costs nothing on an
+ * ordinary sync where no stream's row shape has changed; the one time it
+ * does find a stream behind, it resets that stream's own Cursor to 0
+ * before the `while` loop below ever reads it; from there, nothing below
+ * has to know a catch-up happened at all — a Cursor of 0 and a full
+ * backlog is the same shape this loop already handles for a Device that
+ * has never synced.
  */
 export async function sync(options: SyncEngineOptions): Promise<void> {
   const {
@@ -93,6 +107,16 @@ export async function sync(options: SyncEngineOptions): Promise<void> {
     deviceId,
   } = options;
   const now = options.now ?? (() => new Date().toISOString());
+
+  await Promise.all([
+    store.catchUpRowShapeEpoch(ROW_SHAPE_EPOCH.entries),
+    taskStore.catchUpRowShapeEpoch(ROW_SHAPE_EPOCH.tasks),
+    projectStore.catchUpProjectRowShapeEpoch(ROW_SHAPE_EPOCH.projects),
+    projectStore.catchUpSectionRowShapeEpoch(ROW_SHAPE_EPOCH.sections),
+    labelStore.catchUpRowShapeEpoch(ROW_SHAPE_EPOCH.labels),
+    commentStore.catchUpRowShapeEpoch(ROW_SHAPE_EPOCH.comments),
+    eventStore.catchUpRowShapeEpoch(ROW_SHAPE_EPOCH.events),
+  ]);
 
   let batchWasFull = true;
   while (batchWasFull) {

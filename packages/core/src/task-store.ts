@@ -382,6 +382,13 @@ export interface TaskStore {
   getCursor(): Promise<number>;
   setCursor(seq: number): Promise<void>;
   /**
+   * Issue #186 / ADR 0057 — see `EntryStore.catchUpRowShapeEpoch`'s own
+   * doc comment (./store.ts) for the mechanism; `currentEpoch` here is
+   * `protocol.ts`'s `ROW_SHAPE_EPOCH.tasks`, compared and persisted
+   * independently of every other stream's own value.
+   */
+  catchUpRowShapeEpoch(currentEpoch: number): Promise<void>;
+  /**
    * Substring search over a Task's own title (`content`) and/or
    * Description (issue #183, superseding this method's original prefix-
    * only shape from issue #37/#168) — literal text never query syntax
