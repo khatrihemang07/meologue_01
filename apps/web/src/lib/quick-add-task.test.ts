@@ -104,6 +104,71 @@ describe("taskFieldsFromQuickAdd", () => {
       expect(result.dateString).toBeNull();
       expect(result.date).toBe("2026-09-03");
     });
+
+    describe("typed as a phrase (issue #188), not a bare word", () => {
+      it("stores the phrase itself, verbatim, as dateString — no canonical substitution needed", () => {
+        const result = fields("water the plants every day");
+
+        // Unlike a bare word, a phrase is already legal
+        // ../../packages/core/src/recurrence/ input — nothing to bridge
+        // (quick-add-task.ts's own header comment on RECURRENCE_WORD_TO_PHRASE
+        // explains why this is a stronger reading of CONTEXT.md's "what
+        // the user typed is what is stored, unchanged" than a bare word
+        // can offer).
+        expect(result.dateString).toBe("every day");
+        expect(result.content).toBe("water the plants");
+        expect(result.date).not.toBeNull();
+      });
+
+      it("every named phrase form resolves to a real occurrence", () => {
+        for (const [input, expectedDateString] of [
+          ["water the plants every day", "every day"],
+          ["call mum every monday", "every monday"],
+          ["water the plants every 2 weeks", "every 2 weeks"],
+          ["submit report every 3rd friday", "every 3rd friday"],
+          ["water plants every! 2 weeks", "every! 2 weeks"],
+        ] as const) {
+          const result = fields(input);
+          expect(result.dateString, input).toBe(expectedDateString);
+          expect(result.date, input).not.toBeNull();
+        }
+      });
+
+      it("a phrase's own computed date overrides a separate, explicit date token elsewhere in the input", () => {
+        // "27 Jan" is its own, independently-recognised date token
+        // (nothing about it is inside the recurrence phrase's own span);
+        // the recurring Task's next occurrence is still the one true due
+        // date, computed from it as the anchor (due-anchored "every
+        // month" preserves the 27th's own phase) rather than "27 Jan"
+        // being stored as the Task's due date directly.
+        const result = fields("pay rent 27 Jan every month");
+
+        expect(result.dateString).toBe("every month");
+        expect(result.date).toBe("2027-02-27");
+        expect(result.content).toBe("pay rent");
+      });
+
+      it("a phrase's own 'starting' clause is captured whole rather than left as a separate date token", () => {
+        const result = fields("pay rent every month starting 1 oct");
+
+        expect(result.dateString).toBe("every month starting 1 oct");
+        expect(result.content).toBe("pay rent");
+      });
+
+      it("a phrase the recurrence engine can't parse is left as ordinary words — no dateString, no content stripped", () => {
+        const result = fields("water plants every fortnight");
+
+        expect(result.dateString).toBeNull();
+        expect(result.content).toBe("water plants every fortnight");
+      });
+
+      it("smartDates off suppresses a phrase exactly as it does a bare word", () => {
+        const result = fields("water the plants every day", { smartDates: false });
+
+        expect(result.dateString).toBeNull();
+        expect(result.content).toBe("water the plants every day");
+      });
+    });
   });
 
   describe("smartDates off", () => {

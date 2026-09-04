@@ -61,6 +61,42 @@ describe("parseWithDemotions", () => {
 
     expect(result.tokens.map((t) => t.kind)).toEqual(["date", "priority"]);
   });
+
+  describe("a demotion that reveals a second, previously-shadowed token (issue #188 regression)", () => {
+    // "every monday" (the compound recurrence phrase) wins the span over
+    // the plain "monday" weekday candidate it overlaps — demoting the
+    // phrase removes it from competition, and the plain "monday" date
+    // token appears in its place. A reader who demotes *that* too should
+    // land back at fully plain text, in one further click, exactly as a
+    // bare "monday" with no phrase around it demotes in a single click.
+    const input = "verify188 casc every monday";
+
+    it("the phrase's own demotion reveals the bare weekday underneath", () => {
+      const result = parseWithDemotions(input, { now: NOW }, new Set(["recurrence:every monday"]));
+
+      expect(result.tokens).toHaveLength(1);
+      expect(result.tokens[0]).toMatchObject({ kind: "date", raw: "monday" });
+    });
+
+    it("demoting the revealed weekday too removes it — the cascade doesn't dead-end", () => {
+      const firstDemotion = parseWithDemotions(
+        input,
+        { now: NOW },
+        new Set(["recurrence:every monday"]),
+      );
+      // biome-ignore lint/style/noNonNullAssertion: asserted present by the previous test
+      const revealed = firstDemotion.tokens[0]!;
+
+      const result = parseWithDemotions(
+        input,
+        { now: NOW },
+        new Set(["recurrence:every monday", tokenSignature(revealed)]),
+      );
+
+      expect(result.tokens).toHaveLength(0);
+      expect(result.content).toBe(input);
+    });
+  });
 });
 
 describe("tokenHighlightState", () => {

@@ -4,6 +4,7 @@ import {
   matchArithmeticDate,
   matchExplicitTime,
   matchFuzzyTime,
+  matchRecurrencePhrase,
   matchRecurrenceWord,
   matchRelativeDate,
   matchWeekday,
@@ -36,10 +37,11 @@ import type { QuickAddOptions, QuickAddResult, QuickAddSpan, QuickAddToken } fro
  * sigil-family first (unconditionally — see ./types.ts's
  * `QuickAddTokenKind` doc comment for why those carry no false-positive
  * risk to arbitrate away), then, if `smartDates`, the eager family with
- * its own compound-before-simple ordering (`monday in 2 weeks` before
- * plain `monday` and plain `in 2 weeks`, so the longer, more specific
- * match wins the words it needs rather than being shadowed by two
- * shorter ones that fire first). A numeric `priority` field on each rule
+ * its own compound-before-simple ordering (`every monday` before plain
+ * `monday`; `monday in 2 weeks` before plain `monday` and plain `in 2
+ * weeks`; so the longer, more specific match wins the words it needs
+ * rather than being shadowed by two shorter ones that fire first). A
+ * numeric `priority` field on each rule
  * would say the identical thing with one more layer of indirection; the
  * order candidates are pushed in *is* the priority, and reading this
  * function top to bottom is reading the priority order directly.
@@ -98,6 +100,16 @@ function collectCandidates(
   ];
   if (smartDates) {
     candidates.push(
+      // A recurrence phrase is pushed first, ahead of every other eager
+      // rule: "every monday" or "every day at 5pm" is strictly more
+      // specific than the plain weekday/time candidates the same words
+      // would otherwise also match ("monday", "5pm"), and this list's
+      // own push order is what lets the compound match win those words
+      // rather than being shadowed by shorter ones that fire first — the
+      // identical reasoning matchWeekdayArithmeticCombo's own doc
+      // comment gives for going before plain matchWeekday/
+      // matchArithmeticDate.
+      ...matchRecurrencePhrase(input),
       ...matchWeekdayArithmeticCombo(input, dateCtx),
       ...matchAbsoluteDate(input, dateCtx),
       ...matchRelativeDate(input, dateCtx),

@@ -107,6 +107,18 @@ const UNSUPPORTED_TOKEN_KINDS: ReadonlySet<QuickAddTokenKind> = new Set([
  * replacement text nowhere — see add-task-form.tsx — but is what
  * task-row.tsx/task-schedule-sheet.tsx render as the Task's recurrence
  * from that point on), so nothing about it is hidden from them.
+ *
+ * **A recurrence typed as a phrase (issue #188) needs no such
+ * departure.** `every day`, `every 2 weeks`, `every! 3rd friday` are
+ * already, verbatim, legal `../recurrence/` input — that's the whole
+ * point of `date-rules.ts`'s `matchRecurrencePhrase` validating a
+ * candidate against `parseRecurrence` before ever producing a token — so
+ * `resolveRecurrence` below stores a phrase's own `raw` text unchanged
+ * rather than looking it up in this map at all, satisfying CONTEXT.md's
+ * "what the user typed … is what is stored, unchanged" more literally
+ * than a bare word ever can. This map exists only to bridge the seven
+ * words that aren't already legal input; a phrase never needs bridging,
+ * because there is nothing left to translate.
  */
 const RECURRENCE_WORD_TO_PHRASE: Readonly<Record<string, string>> = {
   daily: "every day",
@@ -159,14 +171,32 @@ function findRecurrenceToken(tokens: readonly QuickAddToken[]): QuickAddToken | 
 }
 
 /**
- * The seven canonical phrases above are fixed and each independently
- * exercised by quick-add-task.test.ts against the real
- * ../../packages/core `nextOccurrence` — so a `"refused"` outcome here
- * would mean the map and the engine have drifted apart, not that this
- * particular input was bad. Treated as "not recognised" rather than
- * thrown, the same defensive posture ../../packages/core's own
- * `parseRecurrence` takes for input this module cannot fully vouch for at
- * compile time (a table lookup, unlike a type, admits no such guarantee).
+ * `recurrenceToken.raw` is either one of `RECURRENCE_WORD_TO_PHRASE`'s
+ * seven bare words or an already-canonical phrase — never anything else,
+ * because a "recurrence" token only ever comes from
+ * ../../packages/core/src/quick-add/date-rules.ts's `matchRecurrenceWord`
+ * (a bare word, from that exact table) or its `matchRecurrencePhrase`
+ * (a phrase already validated against ../../packages/core's own
+ * `parseRecurrence` before the token was even produced — see that
+ * function's doc comment). So the map lookup below either finds a bare
+ * word's canonical phrase, or misses because `raw` is a phrase already
+ * and needs no translation at all (this file's own header comment on
+ * `RECURRENCE_WORD_TO_PHRASE` explains why a phrase needs none) — there
+ * is no third case where the miss means "unrecognised text slipped
+ * through." The seven canonical phrases are each independently exercised
+ * by quick-add-task.test.ts against the real ../../packages/core
+ * `nextOccurrence`, and every phrase `matchRecurrencePhrase` can produce
+ * is, by construction, something `parseRecurrence` already accepted — so
+ * a `"refused"` outcome here would mean the map or the tokeniser and the
+ * engine have drifted apart, not that this particular input was bad.
+ * Treated as "not recognised" rather than thrown regardless, the same
+ * defensive posture ../../packages/core's own `parseRecurrence` takes for
+ * input this module cannot fully vouch for at compile time (a table
+ * lookup and a tokeniser's own guarantee, unlike a type, admit no such
+ * guarantee). An `{ kind: "ended" }` outcome — a phrase that parses but
+ * whose own `ending`/`for` bound has already elapsed as of `now` — reads
+ * identically to a refusal here: there is no next occurrence to store
+ * either way.
  */
 function resolveRecurrence(
   recurrenceToken: QuickAddToken | undefined,
@@ -176,10 +206,8 @@ function resolveRecurrence(
   if (recurrenceToken === undefined) {
     return { date: null, dateString: null };
   }
-  const phrase = RECURRENCE_WORD_TO_PHRASE[recurrenceToken.raw.toLowerCase()];
-  if (phrase === undefined) {
-    return { date: null, dateString: null };
-  }
+  const phrase =
+    RECURRENCE_WORD_TO_PHRASE[recurrenceToken.raw.toLowerCase()] ?? recurrenceToken.raw;
   const outcome = nextOccurrence(phrase, { dueDate, now });
   if (outcome.kind !== "occurrence") {
     return { date: null, dateString: null };

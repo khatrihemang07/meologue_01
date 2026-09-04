@@ -319,6 +319,96 @@ describe("AddTaskForm", () => {
     });
   });
 
+  // The parity gap issue #188 fixes: a recurrence typed as the phrase
+  // everyone actually types ("every day"), not just a bare word
+  // ("daily"). Nothing about this field's own code needed to change for
+  // these to highlight and demote — every path here already worked off
+  // a token's `start`/`end`/`raw`, generic to however many words a token
+  // spans (add-task-form.tsx's own header comment on why this field
+  // derives everything fresh from `result.tokens` rather than assuming
+  // one word per token) — so this suite exists to prove that generic
+  // machinery actually covers a multi-word span, not to add anything new
+  // to the component itself.
+  describe("a recurrence typed as a phrase", () => {
+    it("highlights the whole phrase as one span, not just the word 'every'", () => {
+      render(<AddTaskForm onAdd={vi.fn()} disabled={false} />);
+      const input = getInput();
+
+      fireEvent.change(input, { target: { value: "water the plants every day" } });
+
+      expect(highlightedSpans().map((s) => s.textContent)).toEqual(["every day"]);
+    });
+
+    it("clicking anywhere in the phrase demotes the whole span, and content keeps every word typed", () => {
+      const onAdd = vi.fn();
+      render(<AddTaskForm onAdd={onAdd} disabled={false} />);
+      const input = getInput();
+
+      fireEvent.change(input, { target: { value: "water the plants every day" } });
+      clickAt(input, 20); // inside "day"
+
+      expect(highlightedSpans()).toHaveLength(0);
+
+      fireEvent.click(screen.getByRole("button", { name: "Add" }));
+      expect(onAdd).toHaveBeenCalledWith(
+        expect.objectContaining({
+          content: "water the plants every day",
+          dateString: null,
+        }),
+      );
+    });
+
+    it("a phrase the recurrence engine can't parse is never highlighted at all", () => {
+      render(<AddTaskForm onAdd={vi.fn()} disabled={false} />);
+      const input = getInput();
+
+      fireEvent.change(input, { target: { value: "water plants every fortnight" } });
+
+      expect(highlightedSpans()).toHaveLength(0);
+    });
+
+    it("submitting a recognised phrase strips it from content and stores it as dateString", () => {
+      const onAdd = vi.fn();
+      render(<AddTaskForm onAdd={onAdd} disabled={false} />);
+      const input = getInput();
+
+      fireEvent.change(input, { target: { value: "water the plants every day" } });
+      fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+      expect(onAdd).toHaveBeenCalledWith(
+        expect.objectContaining({ content: "water the plants", dateString: "every day" }),
+      );
+    });
+
+    it("a demoted phrase's own revealed fallback token can itself be demoted — the cascade doesn't dead-end", () => {
+      // Demoting "every monday" (the compound match) doesn't demote
+      // "monday" — a *different*, previously-shadowed candidate wins that
+      // span in its place (../../packages/core/src/quick-add's own
+      // overlap priority). A reader who demotes that one too must land
+      // back at fully plain text in one further click, exactly as a bare
+      // "monday" with no phrase around it demotes in a single click —
+      // this pins the fix for the regression reported after this
+      // ticket's first pass: the fallback was reachable but stuck.
+      const onAdd = vi.fn();
+      render(<AddTaskForm onAdd={onAdd} disabled={false} />);
+      const input = getInput();
+
+      fireEvent.change(input, { target: { value: "call mum every monday" } });
+      expect(highlightedSpans().map((s) => s.textContent)).toEqual(["every monday"]);
+
+      clickAt(input, 20); // inside "monday", also inside "every monday"
+      expect(highlightedSpans().map((s) => s.textContent)).toEqual(["monday"]);
+
+      clickAt(input, 20); // inside the now-revealed bare "monday"
+      expect(highlightedSpans()).toHaveLength(0);
+
+      fireEvent.click(screen.getByRole("button", { name: "Add" }));
+      expect(onAdd).toHaveBeenCalledWith(
+        expect.objectContaining({ content: "call mum every monday", dateString: null }),
+      );
+    });
+  });
+
   // A native `<input>` auto-scrolls its own text once the line outgrows
   // the field; the backdrop is a separate element and does not follow on
   // its own. On the built app that did not merely misalign the highlights

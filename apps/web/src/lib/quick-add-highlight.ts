@@ -17,6 +17,7 @@
 import type {
   QuickAddOptions,
   QuickAddResult,
+  QuickAddSpan,
   QuickAddToken,
   QuickAddTokenKind,
 } from "@meologue/core";
@@ -73,26 +74,67 @@ export function tokenSignature(token: Pick<QuickAddToken, "kind" | "raw">): Demo
  * into different text changes its signature, so there is no reason left
  * to keep suppressing a span that no longer contains what the reader
  * demoted in the first place.
+ *
+ * **Cascaded demotion (issue #188's own regression) — a signature can
+ * name a token that only exists *after* an earlier demotion is already
+ * applied.** A compound match wins the span it overlaps with a shorter,
+ * shadowed candidate (../../packages/core/src/quick-add/
+ * parse-quick-add.ts's own push-order priority — "every monday" over
+ * plain "monday"); demoting the compound match removes it from
+ * competition, and the shorter candidate it had been shadowing wins the
+ * span in its place, for the first time, at a *different* offset. A
+ * reader who demotes that revealed token too is naming a signature that
+ * never appears in the single, fully-natural (nothing demoted) parse —
+ * it doesn't exist until the first demotion has already been applied. A
+ * one-shot lookup against the natural parse (this function's own
+ * previous shape) can never translate a signature like that into an
+ * offset span, which is exactly the defect this ticket named: the
+ * fallback is reachable but not itself dismissable.
+ *
+ * The fix is to apply demotions in rounds rather than one lookup: parse,
+ * find every token whose signature is demoted but whose span isn't in
+ * the accumulated list yet, add those spans, and reparse — repeating
+ * until a round finds nothing new. This terminates because a round only
+ * ever *adds* to the accumulated span list, never removes from it
+ * (`resolveOverlaps`'s own comment: "a demoted span simply stops
+ * competing, it doesn't reserve the text as untouchable" — so a span
+ * already demoted can never be un-demoted by a later round revealing
+ * something else), and there can never be more distinct spans over a
+ * fixed string than the string has characters.
  */
 export function parseWithDemotions(
   input: string,
   options: QuickAddOptions,
   demotedSignatures: ReadonlySet<DemotedSignature>,
 ): QuickAddResult {
-  // The natural parse — nothing demoted — is also exactly the set of
-  // candidates a signature could match against; no second, parallel
-  // "what would be recognised" query is needed.
-  const natural = parseQuickAdd(input, options);
   if (demotedSignatures.size === 0) {
-    return natural;
+    return parseQuickAdd(input, options);
   }
-  const demoted = natural.tokens
-    .filter((token) => demotedSignatures.has(tokenSignature(token)))
-    .map((token) => ({ start: token.start, end: token.end }));
-  if (demoted.length === 0) {
-    return natural;
+  let demoted: QuickAddSpan[] = [];
+  let result = parseQuickAdd(input, options);
+  // A hard backstop, not an expected limit: each round strictly grows
+  // `demoted` or returns immediately (below), so this can never actually
+  // reach `input.length` rounds — kept only so a bug in that invariant
+  // becomes a bounded loop, never a hang, the same defensive posture
+  // ../../packages/core/src/recurrence/engine.ts's own MAX_STEPS takes
+  // for the identical reason.
+  const maxRounds = input.length + 1;
+  for (let round = 0; round < maxRounds; round++) {
+    const newlyDemoted = result.tokens.filter(
+      (token) =>
+        demotedSignatures.has(tokenSignature(token)) &&
+        !demoted.some((span) => span.start === token.start && span.end === token.end),
+    );
+    if (newlyDemoted.length === 0) {
+      return result;
+    }
+    demoted = [
+      ...demoted,
+      ...newlyDemoted.map((token) => ({ start: token.start, end: token.end })),
+    ];
+    result = parseQuickAdd(input, { ...options, demoted });
   }
-  return parseQuickAdd(input, { ...options, demoted });
+  return result;
 }
 
 /**

@@ -1,6 +1,7 @@
 import { storedPriorityOf } from "../task-types";
 import {
   type DateRuleContext,
+  isEveryBangAt,
   matchDateForms,
   matchTimeForms,
   resolveWholePhrase,
@@ -150,11 +151,21 @@ export function matchDeadline(input: string, ctx: DateRuleContext): QuickAddToke
  * marker the user typed on purpose, and a caller (the Composer, issue
  * #170's Part D) still needs to know a reminder was asked for even when
  * this parser can't pin down when. Always active regardless of
- * `smartDates`, for the identical reason `{deadline}` is.
+ * `smartDates`, for the identical reason `{deadline}` is. One `!` is
+ * excluded on sight — `isEveryBangAt`'s own doc comment explains why
+ * "every!" belongs to ./date-rules.ts's recurrence-phrase grammar
+ * instead.
  */
 export function matchReminder(input: string, ctx: DateRuleContext): QuickAddToken[] {
   const tokens: QuickAddToken[] = [];
   for (const bang of input.matchAll(/!/g)) {
+    if (isEveryBangAt(input, bang.index)) {
+      // "every!" — ./date-rules.ts's own recurrence-phrase anchor, not
+      // this `!` read as an unrelated reminder marker. See
+      // `isEveryBangAt`'s own doc comment for why this exact character
+      // is the one place the two grammars can collide.
+      continue;
+    }
     const rest = input.slice(bang.index + 1);
     // Two candidate word-counts, longest first — `at 5pm` needs both
     // words; `5pm` needs only one. A single greedy `\S+(?:\s+\S+)?`
