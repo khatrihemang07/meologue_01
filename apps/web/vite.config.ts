@@ -151,6 +151,10 @@ export default defineConfig(({ mode }) => {
           ),
         },
         {
+          find: "@/platform/back-button",
+          replacement: path.resolve(import.meta.dirname, `./src/platform/back-button.${target}.ts`),
+        },
+        {
           find: "@/platform/sqlite-driver",
           replacement: path.resolve(
             import.meta.dirname,

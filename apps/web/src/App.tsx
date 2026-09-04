@@ -1,6 +1,7 @@
 import { lazy, Suspense } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router";
 import { Toaster } from "@/components/ui/sonner";
+import { useBackButton } from "@/hooks/use-back-button";
 import { ChatListPage } from "@/pages/chat-list-page";
 import { ChatShellLayout } from "@/pages/chat-shell-layout";
 
@@ -77,9 +78,25 @@ const SettingsPage = lazy(() =>
 // and issue #75 moving Settings into the persistent Nav instead (see
 // nav.tsx's DESTINATIONS) changes *how* a reader gets to `/settings`, not
 // *what* `/settings` depends on — so this route stays right where it was.
+
+/**
+ * A component, not a bare `useBackButton()` call in `App()` itself: the
+ * hook needs `useLocation`/`useNavigationType` (see its own header comment
+ * for why), which only work inside `<BrowserRouter>`'s context — `App()`
+ * renders that provider, so it isn't inside it. Rendered as a plain sibling
+ * of `<Routes>` below rather than wrapping anything: it paints nothing and
+ * reads no route match, only the current location and how the app got
+ * there.
+ */
+function BackButtonHandler() {
+  useBackButton();
+  return null;
+}
+
 function App() {
   return (
     <BrowserRouter>
+      <BackButtonHandler />
       <Toaster />
       {/* A blank fallback, not a spinner: ChatShellLayout's own root div
           already paints `bg-background` behind the Outlet (see that
