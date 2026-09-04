@@ -9,6 +9,7 @@ import {
   sendEntry,
   uniqueEntryBody,
   waitForEntryId,
+  waitForTaskCompleted,
 } from "./helpers";
 
 /**
@@ -757,7 +758,11 @@ test("opening an Entry and closing it unchanged writes nothing — ADR 0044's di
 
   const row = entryRow(page, body);
   await row.hover();
-  await row.getByRole("button", { name: "Edit" }).click();
+  // `exact: true` — a referenced Task's own words are a real button too
+  // (entry-row.tsx's `TaskReferenceItem`, issue #181); a substring match
+  // on "Edit" could in principle also hit a fixture body containing those
+  // letters.
+  await row.getByRole("button", { name: "Edit", exact: true }).click();
   await expect(page.getByText("Editing Entry")).toBeVisible();
 
   // Send with nothing changed — ADR 0044's rule says this is a Cancel in
@@ -812,7 +817,13 @@ test("editing a Sent checkbox line opens it in the Composer instead of blanking 
 
   const row = entryRow(page, body);
   await row.hover();
-  await row.getByRole("button", { name: "Edit" }).click();
+  // `exact: true` — this fixture's own body, "composer-task-reference-edit
+  // <uuid>", contains the word "edit," which the Task reference's own
+  // clickable words (entry-row.tsx's `TaskReferenceItem`, issue #181)
+  // render as a `<button>` inside this same row — a loose substring match
+  // resolves both buttons and Playwright's strict mode refuses to guess
+  // between them.
+  await row.getByRole("button", { name: "Edit", exact: true }).click();
 
   // The crash this ticket fixes took the WHOLE screen down, not merely the
   // Composer — asserting the app's own persistent chrome ("Editing Entry",
@@ -832,6 +843,107 @@ test("editing a Sent checkbox line opens it in the Composer instead of blanking 
   await page.getByRole("button", { name: "Cancel" }).click();
   await expect(page.getByText("Editing Entry")).toHaveCount(0);
   await expect(entryRow(page, body)).toBeVisible();
+});
+
+// ---------------------------------------------------------------------------
+// Issue #181: the Day block gains completion state, ticking and opening —
+// history.tsx's own `DayTasksRow`. A Sent checkbox with no date typed
+// still mints a Task dated *today* (issue #173's capture-date rule, the
+// identical fact the test just above relies on), which is what puts it in
+// today's Day block without this suite needing to type a date token.
+//
+// `[data-testid="day-tasks-row"]` scopes every locator below to the block
+// itself, never a bare `getByText`/`getByRole("button", {name: body})` —
+// this ticket's own change is exactly what makes that collision worse (the
+// row now also carries chips and a done/total count, on top of the
+// pre-existing entry-reference-vs-day-block duplication the test above
+// already has to work around).
+// ---------------------------------------------------------------------------
+
+test("ticks a Task from the Day block, and the completion survives a reload", async ({ page }) => {
+  const body = uniqueEntryBody("composer-day-block-tick");
+  await page.goto("/composer");
+  await sendEntry(page, `- [ ] ${body}`);
+
+  const dayBlockRow = page.getByTestId("day-tasks-row").locator("li", { hasText: body });
+  const checkbox = dayBlockRow.getByRole("checkbox");
+  await expect(checkbox).toBeVisible();
+  await expect(checkbox).not.toBeChecked();
+  await expect(checkbox).toBeEnabled();
+
+  // A single `click()` is not enough here, confirmed against a captured
+  // trace (issue #181's own coordinator gap-fix report — this test failed
+  // deterministically in a full-file run, never in isolation, which is
+  // the signature of issue #190's leaked Tasks: by test #29 today's Day
+  // block already holds dozens of accumulated rows). The trace's own call
+  // log showed the checkbox reading NATIVELY checked on most polls right
+  // after the click, then reverting to unchecked by the time the
+  // assertion timed out — a controlled `<input>` snapping back to
+  // `checked={done}`'s own value, not a click that missed its target
+  // outright. `history.tsx`'s Day block is one row inside a virtualized
+  // list (`@tanstack/react-virtual`, `OVERSCAN = 25`); a row this far off
+  // its `estimateSize` guess (dozens of accumulated `<li>`s, not the
+  // single line the virtualizer estimates for an unmeasured row) can
+  // still be unmounted and remounted as the viewport's own visible range
+  // is recomputed, which is consistent with exactly this: the native
+  // browser toggle fires because a real, attached `<input>` received the
+  // click, but React's own `onChange` — and therefore `onCompleteTask`,
+  // and therefore the actual `completeTask` mutation — never ran on that
+  // same node, so the very next re-render reasserts the unchanged
+  // `checked={false}` prop and the toggle snaps back. Retrying the CLICK
+  // itself, not merely the read, is what recovers from a click that
+  // genuinely landed on a node about to be replaced — `toPass` bounds it
+  // to the same overall budget every other assertion in this suite gets,
+  // it does not raise anything past that.
+  await expect(async () => {
+    await checkbox.click();
+    await expect(checkbox).toBeChecked({ timeout: 1_000 });
+  }).toPass({ timeout: 15_000 });
+
+  // The checkbox reading checked only proves the LOCAL store agrees (the
+  // query cache behind it only updates once `completeTask`'s mutation
+  // resolves, which awaits the real local write) — it says nothing about
+  // whether that write has reached anywhere a reload's own fresh boot
+  // could race against. `requestSync()` fires from inside that same
+  // mutation's `onSuccess` but is never awaited (`use-tasks.ts`), so
+  // reloading immediately after the UI update races it. Waiting for the
+  // Server's own copy to agree first — the same "wait for the actual,
+  // externally-checkable condition" discipline `waitForEntryId`/
+  // `waitForTombstone` already use for an Entry — is what removes that
+  // race, per issue #181's own coordinator gap-fix report (this test was
+  // observed flaky without it).
+  await waitForTaskCompleted(body, SERVER_A_DATABASE);
+
+  // A reload re-reads the store from scratch — proof this wrote the Task
+  // itself (ADR 0048: ticking writes the Task, never a second, day-block-
+  // local copy of the bit), not merely optimistic UI that a real store
+  // round trip would lose.
+  await page.reload();
+  await expect(
+    page.getByTestId("day-tasks-row").locator("li", { hasText: body }).getByRole("checkbox"),
+  ).toBeChecked();
+});
+
+test("opens a Task from the Day block over the Composer, and Escape returns to it without navigating away", async ({
+  page,
+}) => {
+  const body = uniqueEntryBody("composer-day-block-open");
+  await page.goto("/composer");
+  await sendEntry(page, `- [ ] ${body}`);
+
+  const dayBlockRow = page.getByTestId("day-tasks-row").locator("li", { hasText: body });
+  await dayBlockRow.getByRole("button", { name: body }).click();
+
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("textbox", { name: "Task title" })).toHaveValue(body);
+  // Criterion 4: never left the Composer for `/todo/task/...`.
+  expect(page.url()).toContain("/composer");
+
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(composerField(page)).toBeVisible();
+  expect(page.url()).toContain("/composer");
 });
 
 // ---------------------------------------------------------------------------

@@ -140,6 +140,53 @@ export function entrySeq(id: string, database: string): string | undefined {
 }
 
 /**
+ * Waits until the Task whose own `content` is `content` has a non-null
+ * `completed_at` on the Server (`server/migrations/0010_create_tasks.sql`)
+ * — issue #181's own coordinator gap-fix report: a UI assertion that the
+ * checkbox *reads* checked proves the local store already agrees (the
+ * query cache backing `DayTasksRow`'s own `checked` only ever updates once
+ * `completeTask`'s mutation resolves, which awaits the real local write),
+ * but it says nothing about whether the write has propagated any further
+ * than this one render. A test that then reloads immediately is racing
+ * Sync's own `requestSync()` — fired, but never awaited, from inside that
+ * same mutation's `onSuccess` (`use-tasks.ts`) — against the reload's own
+ * fresh boot. Waiting for the Server's own copy to agree first is the
+ * identical "wait for the causally-later, externally-checkable condition"
+ * discipline `waitForTombstone`/`waitForEntryId` just above already use
+ * for an Entry; this is that same discipline for a Task's completion.
+ * `content`, not `id`: this suite has no door onto a freshly-minted Task's
+ * own id (Promotion mints it client-side, from a plain checkbox line), and
+ * `uniqueEntryBody`'s own randomUUID suffix already keeps content unique
+ * across a test run the identical way it does for an Entry's `body`.
+ *
+ * `timeoutMs` defaults to double `waitForEntryId`/`waitForTombstone`'s own
+ * 20s, not because completing a Task is inherently slower than Sending or
+ * deleting an Entry, but because of *where in this file* the one caller
+ * that matters sits: issue #190 (filed separately, not fixed here) means
+ * every earlier test in `composer.spec.ts` leaks a Task into today's Day
+ * block, so by the time this fires the Server is fielding Sync requests
+ * for a real, accumulated backlog rather than the single-row case
+ * `waitForEntryId`'s own 20s was measured against. `SYNC_INTERVAL_MS`
+ * (`@meologue/core`) is 5s — a request that gets coalesced behind an
+ * already-in-flight one, or simply takes longer under the load a busy
+ * suite run puts on the Server, can need more than one or two ticks to
+ * land. Confirmed by reproducing a real full-file run at load ~11.6/16.4:
+ * a completion this function was asked to find took longer than 20s to
+ * reach the Server, not never — the poll condition itself is unchanged.
+ */
+export async function waitForTaskCompleted(
+  content: string,
+  database: string,
+  timeoutMs = 40_000,
+): Promise<void> {
+  await pollSql(
+    database,
+    `select 1 from tasks where content = ${sqlLiteral(content)} and completed_at is not null;`,
+    timeoutMs,
+  );
+}
+
+/**
  * Waits until the Entry with this id has a non-null `deleted_at` — the
  * condition a delete's tombstone has actually reached the Server, rather
  * than assuming a fixed sleep gave it enough time. `id` (not `body`) since
@@ -546,7 +593,18 @@ export async function editEntryViaMenu(
 ): Promise<void> {
   const row = entryRow(page, currentBody);
   await row.hover();
-  await row.getByRole("button", { name: "Edit" }).click();
+  // `exact: true` — issue #181 gave a referenced Task's own words a real
+  // `<button>` (entry-row.tsx's `TaskReferenceItem`), sitting inside this
+  // same row. `getByRole`'s `name` is substring-matched and case-
+  // insensitive by default, so a fixture body containing the word "edit"
+  // (a real, exercised case — composer.spec.ts's own
+  // "composer-task-reference-edit" fixture) makes that button match `{
+  // name: "Edit" }` too, alongside the real Edit button
+  // (`entry-actions.tsx`'s own `aria-label="Edit"`, nothing else in its
+  // name) — a strict-mode violation Playwright refuses to guess through.
+  // `exact: true` is what makes this mean the action, not any button
+  // whose visible text happens to contain those four letters.
+  await row.getByRole("button", { name: "Edit", exact: true }).click();
   const editor = composerField(page);
   await editor.click();
   await page.keyboard.press("ControlOrMeta+A");

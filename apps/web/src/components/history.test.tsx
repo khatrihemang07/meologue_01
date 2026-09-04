@@ -1379,9 +1379,11 @@ describe("History", () => {
       expect(screen.getAllByText("buy milk")).toHaveLength(1);
     });
 
-    // Read-only: ADR 0053's own argument that this is a rendering, never a
-    // second editing surface for a Task's completion bit (Todo's own job).
-    it("renders a Task's checkbox disabled — this row never toggles a Task's completion itself", () => {
+    // No `onCompleteTask`/`onOpenTask` wired — the same graceful "no door,
+    // no affordance" default every other optional callback in this file
+    // follows, not a claim that the day block must stay read-only (issue
+    // #181 overturns that claim — see the describe block just below).
+    it("renders a Task's checkbox disabled, and its words unclickable, when no onCompleteTask/onOpenTask is supplied", () => {
       render(
         <History
           entries={[entry({ id: "1", createdAt: "2026-08-28T10:00:00.000Z" })]}
@@ -1390,7 +1392,231 @@ describe("History", () => {
         />,
       );
 
-      expect(screen.getByRole("checkbox", { name: /buy milk/ })).toBeDisabled();
+      expect(screen.getByRole("checkbox", { name: "buy milk" })).toBeDisabled();
+      expect(screen.queryByRole("button", { name: "buy milk" })).not.toBeInTheDocument();
+    });
+  });
+
+  // Issue #181, criteria 6/7/8/9 — the Day block gains completion state, a
+  // count, ticking and opening, without becoming a second place a Task's
+  // completion could drift (this file's own `DayTasksRow` doc comment
+  // argues why in full; docs/adr/0053's own "Amendment (issue #181)" is
+  // the ADR-level record).
+  describe("day Tasks: done/undone, ticking, opening, and a recurring record (issue #181)", () => {
+    it("lists both a done and an undone Task for the day, and says how many are finished (criterion 6)", () => {
+      render(
+        <History
+          entries={[entry({ id: "1", createdAt: "2026-08-28T10:00:00.000Z" })]}
+          syncEnabled={false}
+          tasks={[task({ id: "undone", content: "buy milk", date: "2026-08-28" })]}
+          completedTasks={[
+            task({
+              id: "done",
+              content: "renew passport",
+              date: "2026-08-28",
+              completedAt: "2026-08-28T09:00:00.000Z",
+            }),
+          ]}
+        />,
+      );
+
+      expect(screen.getByText("buy milk")).toBeInTheDocument();
+      expect(screen.getByText("renew passport")).toBeInTheDocument();
+      expect(screen.getByText("1/2 done")).toBeInTheDocument();
+    });
+
+    it("ticks an undone Task from the day block via onCompleteTask (criterion 7)", () => {
+      const onCompleteTask = vi.fn();
+      render(
+        <History
+          entries={[entry({ id: "1", createdAt: "2026-08-28T10:00:00.000Z" })]}
+          syncEnabled={false}
+          tasks={[task({ id: "t1", content: "buy milk", date: "2026-08-28" })]}
+          onCompleteTask={onCompleteTask}
+        />,
+      );
+
+      const checkbox = screen.getByRole("checkbox", { name: "buy milk" });
+      expect(checkbox).not.toBeDisabled();
+      fireEvent.click(checkbox);
+
+      expect(onCompleteTask).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "t1", content: "buy milk" }),
+      );
+    });
+
+    it("never offers to un-tick an already-completed Task from the day block", () => {
+      const onCompleteTask = vi.fn();
+      render(
+        <History
+          entries={[entry({ id: "1", createdAt: "2026-08-28T10:00:00.000Z" })]}
+          syncEnabled={false}
+          completedTasks={[
+            task({
+              id: "t1",
+              content: "buy milk",
+              date: "2026-08-28",
+              completedAt: "2026-08-28T09:00:00.000Z",
+            }),
+          ]}
+          onCompleteTask={onCompleteTask}
+        />,
+      );
+
+      const checkbox = screen.getByRole("checkbox", { name: "buy milk" });
+      expect(checkbox).toBeChecked();
+      expect(checkbox).toBeDisabled();
+    });
+
+    it("opens a Task from the day block via onOpenTask (criterion 7)", () => {
+      const onOpenTask = vi.fn();
+      render(
+        <History
+          entries={[entry({ id: "1", createdAt: "2026-08-28T10:00:00.000Z" })]}
+          syncEnabled={false}
+          tasks={[task({ id: "t1", content: "buy milk", date: "2026-08-28" })]}
+          onOpenTask={onOpenTask}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "buy milk" }));
+
+      expect(onOpenTask).toHaveBeenCalledWith("t1");
+    });
+
+    // Criterion 9: `advanceRecurring` already moved `date` on to the NEXT
+    // occurrence by the time anyone opens this day's block again — the
+    // live Task's own `date` (2026-08-29) no longer matches this day
+    // (2026-08-28) at all, so only the completed `"completed"` Event lets
+    // this day still show it.
+    it("shows a completed occurrence of a recurring Task as a record — checked and un-reopenable, on the day it was actually finished", () => {
+      const recurring = task({
+        id: "standup",
+        content: "daily standup",
+        dateString: "every weekday",
+        date: "2026-08-29",
+      });
+      render(
+        <History
+          entries={[entry({ id: "1", createdAt: "2026-08-28T10:00:00.000Z" })]}
+          syncEnabled={false}
+          tasks={[recurring]}
+          events={[
+            {
+              id: "e1",
+              deviceId: "device-a",
+              eventType: "completed",
+              objectType: "task",
+              objectId: "standup",
+              taskId: "standup",
+              projectId: null,
+              occurredAt: "2026-08-28T12:00:00.000Z",
+              extra: null,
+              seq: null,
+              syncedAt: null,
+            },
+          ]}
+          onCompleteTask={vi.fn()}
+        />,
+      );
+
+      const checkbox = screen.getByRole("checkbox", { name: "daily standup" });
+      expect(checkbox).toBeChecked();
+      expect(checkbox).toBeDisabled();
+      expect(screen.getByText("1/1 done")).toBeInTheDocument();
+      // The coordinator's own live-verification catch: the live Task's own
+      // `date` has already moved on to the 29th (the NEXT occurrence) —
+      // showing it on the 28th's own row would contradict the block it
+      // sits in. See `TaskScheduleChips`'s own `hideDate` doc comment.
+      expect(screen.queryByText("Aug 29")).not.toBeInTheDocument();
+    });
+
+    // The exact reproduction from the coordinator's own live-verification
+    // report: "water the plants", dated 2026-09-04, ticked from Sep 4's own
+    // block. `date` advances to 2026-09-05 (`advanceRecurring`'s own
+    // mechanism), and the Sep 4 row must not read "Sep 5" — a reader
+    // looking at the 4th would otherwise reasonably conclude the block was
+    // showing tomorrow's work.
+    it("never claims a Date belonging to a different day for a completed occurrence's own record", () => {
+      const recurring = task({
+        id: "plants",
+        content: "water the plants",
+        dateString: "every day",
+        date: "2026-09-05",
+      });
+      render(
+        <History
+          entries={[entry({ id: "1", createdAt: "2026-09-04T10:00:00.000Z" })]}
+          syncEnabled={false}
+          tasks={[recurring]}
+          events={[
+            {
+              id: "e1",
+              deviceId: "device-a",
+              eventType: "completed",
+              objectType: "task",
+              objectId: "plants",
+              taskId: "plants",
+              projectId: null,
+              occurredAt: "2026-09-04T12:00:00.000Z",
+              extra: null,
+              seq: null,
+              syncedAt: null,
+            },
+          ]}
+          onCompleteTask={vi.fn()}
+        />,
+      );
+
+      expect(screen.getByText("water the plants")).toBeInTheDocument();
+      expect(screen.queryByText("Sep 5")).not.toBeInTheDocument();
+      expect(screen.queryByText("Sep 4")).not.toBeInTheDocument();
+    });
+
+    // Control for the fix above: an ORDINARY completed Task's own `date`
+    // never moves once it's done (only a recurring occurrence's does), so
+    // its Date chip stays correct and must keep showing — the fix must not
+    // overreach into hiding Date for every done row.
+    it("still shows Date for an ordinary (non-recurring) completed Task", () => {
+      render(
+        <History
+          entries={[entry({ id: "1", createdAt: "2026-08-28T10:00:00.000Z" })]}
+          syncEnabled={false}
+          completedTasks={[
+            task({
+              id: "t1",
+              content: "renew passport",
+              date: "2026-08-28",
+              completedAt: "2026-08-28T09:00:00.000Z",
+            }),
+          ]}
+        />,
+      );
+
+      expect(screen.getByText("Aug 28")).toBeInTheDocument();
+    });
+
+    // Criterion 8, the coordinator's own clarification: widening the pool
+    // to completedTasks must never also widen which Tasks qualify — a
+    // Task with nothing placing it on a day stays excluded either way.
+    it("still excludes a completed Task with neither a date nor a deadline", () => {
+      render(
+        <History
+          entries={[entry({ id: "1", createdAt: "2026-08-28T10:00:00.000Z" })]}
+          syncEnabled={false}
+          completedTasks={[
+            task({
+              id: "t1",
+              content: "no day at all",
+              date: null,
+              deadline: null,
+              completedAt: "2026-08-28T09:00:00.000Z",
+            }),
+          ]}
+        />,
+      );
+
+      expect(screen.queryByText("no day at all")).not.toBeInTheDocument();
     });
   });
 

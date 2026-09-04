@@ -25,6 +25,7 @@ import { matchesSubstring, matchesWholeWord } from "@meologue/core";
 import { Check } from "lucide-react";
 import { useEffect, useMemo, useRef } from "react";
 import { useSearchParams } from "react-router";
+import { projectNameFor } from "@/lib/project-name";
 import { cn } from "@/lib/utils";
 
 export interface TaskSearchPageProps {
@@ -44,13 +45,6 @@ type Tab = "tasks" | "comments";
 const QUERY_PARAM = "q";
 const TAB_PARAM = "tab";
 const COMPLETED_PARAM = "completed";
-
-function projectNameFor(projects: Project[], projectId: string | null): string {
-  if (projectId === null) {
-    return "Inbox";
-  }
-  return projects.find((p) => p.id === projectId)?.name ?? "Inbox";
-}
 
 export function TaskSearchPage({
   tasks,

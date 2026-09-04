@@ -206,6 +206,15 @@ export interface EntryBubbleProps {
    * thread.
    */
   onToggleTask?: (entry: Entry, markerFrom: number, markerTo: number) => void;
+  /**
+   * Opens a referenced Task over the Composer (issue #181) — passed
+   * straight through to `entryBodyContent`'s own `onOpenTask`, unwrapped:
+   * unlike `onToggleTask`, opening needs only the Task's own id, never
+   * this Entry's `id`/`body`, so there is nothing here to close over.
+   * Undefined by default, the same "no door, no affordance" shape
+   * `onToggleTask` above already follows.
+   */
+  onOpenTask?: (taskId: string) => void;
 }
 
 export const EntryBubble = memo(function EntryBubble({
@@ -216,6 +225,7 @@ export const EntryBubble = memo(function EntryBubble({
   groupedWithPrevious = false,
   actions,
   highlighted = false,
+  onOpenTask,
   onToggleTask,
 }: EntryBubbleProps) {
   return (
@@ -300,6 +310,7 @@ export const EntryBubble = memo(function EntryBubble({
             ? undefined
             : (markerFrom, markerTo) => onToggleTask(entry, markerFrom, markerTo),
           entry.id,
+          onOpenTask,
         )}
       </div>
       <BubbleMeta
