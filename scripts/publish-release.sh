@@ -420,6 +420,29 @@ cp "$PREAMBLE" "$NOTES"
 # candidate — pass --prerelease by hand for that one, and expect it to be
 # absent from both the sidebar and /releases/latest.
 
+# --target is NOT optional here, and leaving it off is a silent, serious bug.
+# `gh release create` documents that when the tag does not already exist, "one
+# will automatically get created from the latest state of the default branch"
+# — origin/main's tip, NOT local HEAD. Every guard above vets HEAD: the tree is
+# clean at HEAD, the version sites agree at HEAD, the artifacts are no older
+# than HEAD's commit. If origin/main has moved on (someone else pushed, or this
+# is being published from a branch), gh would tag a commit that none of those
+# guards ever looked at, and the Release would carry artifacts built from a
+# different tree than the tag claims. Pinning the resolved SHA makes the commit
+# the guards checked and the commit the tag names the same commit by
+# construction. Guard 2 above is what makes this SHA fetchable by origin.
+#
+# This assignment was deleted once already, which is why it is worth saying so
+# here. The #176 follow-up that removed the `--prerelease` block immediately
+# above rewrote this whole region and took the assignment with it, leaving the
+# `--target "$HEAD_SHA"` reference below with nothing to read. Under `set -u`
+# that aborts the script — on the real publish path exactly as on the dry-run
+# one, since GH_ARGS is built before the two diverge — so no Release has been
+# publishable since 2026-09-02, and nobody noticed because none was attempted.
+# Keep the assignment adjacent to its own reasoning, and to the array that
+# reads it.
+HEAD_SHA=$(git rev-parse HEAD)
+
 GH_ARGS=(release create "v$VERSION" --title "v$VERSION" \
   --target "$HEAD_SHA" \
   --notes-file "$NOTES" --generate-notes \
