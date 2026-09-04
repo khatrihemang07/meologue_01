@@ -504,9 +504,12 @@ test("Backspace at the very start of a list item lifts it out one level, and out
  * nothing to sink in plain prose, returns `false`, and `listKeymap`'s own
  * comment on this binding records that `false` reaching
  * `prosemirror-keymap` here is what lets the browser's native Tab (move
- * focus to the next focusable element) run unopposed. The Send button is
- * the next focusable element after the field in composer.tsx's own DOM
- * order whenever the Composer isn't mid-edit, which this test isn't.
+ * focus to the next focusable element) run unopposed. That next element is
+ * the "Format toolbar" toggle button, not Send — issue #164 landed a button
+ * between the field and Send in composer.tsx's own DOM order, so native Tab
+ * stops there first. Which button it lands on isn't the property this test
+ * guards; only that Tab hands focus onward to the Composer's own controls
+ * instead of trapping it is.
  */
 test("Tab outside a list still moves focus out of the Composer, not swallowed as a keyboard trap", async ({
   page,
@@ -520,7 +523,7 @@ test("Tab outside a list still moves focus out of the Composer, not swallowed as
   await editor.press("Tab");
 
   await expect(editor).not.toBeFocused();
-  await expect(page.getByRole("button", { name: "Send" })).toBeFocused();
+  await expect(page.getByRole("button", { name: "Format toolbar" })).toBeFocused();
 });
 
 test("a nested list survives Send and reloads at the same depth", async ({ page }) => {
@@ -992,6 +995,12 @@ test("the format toolbar is off by default, shows only while the Composer has fo
   // Blurring the Composer hides the row again — it shows only WHILE the
   // Composer has focus, independent of the setting itself, which is still
   // on underneath (the toggle's own `aria-pressed` doesn't move here).
+  // Send needs real content to blur INTO, first: composer.tsx disables it
+  // whenever the field is empty (`disabled={disabled || isEmpty}`), and a
+  // disabled button is not focusable at all — `.focus()` on it is a no-op,
+  // which left this step never actually moving focus anywhere and the
+  // toolbar never actually being tested for hiding.
+  await editor.pressSequentially("plain prose, no list here");
   await page.getByRole("button", { name: "Send" }).focus();
   await expect(toolbar).toHaveCount(0);
   await expect(toggle).toHaveAttribute("aria-pressed", "true");

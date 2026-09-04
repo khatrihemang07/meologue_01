@@ -127,6 +127,30 @@ export async function waitForEntryId(
 }
 
 /**
+ * Returns the id of the Entry whose body CONTAINS `fragment`, once one
+ * exists on the Server — the same poll `waitForEntryId` runs, loosened to a
+ * substring match for the one case where Send does not store the literal
+ * text a test typed. Promotion (issue #173, ADR 0048) rewrites a bare
+ * `- [ ] <label>` checklist line into `- [ ] [[task:id|label]]` the moment
+ * it reaches a real Task, so a test that sends a completed-checklist Entry
+ * and then looks it up by its full typed string never finds the row —
+ * `waitForEntryId`'s exact match is checking for text Promotion has already
+ * rewritten. `fragment` should be the label alone, the part Promotion
+ * leaves untouched, not the leading `- [ ] ` marker.
+ */
+export async function waitForEntryIdContaining(
+  fragment: string,
+  database: string,
+  timeoutMs = 20_000,
+): Promise<string> {
+  return pollSql(
+    database,
+    `select id from entries where body like ${sqlLiteral(`%${fragment}%`)};`,
+    timeoutMs,
+  );
+}
+
+/**
  * The Entry's own `seq` on the Server, right now — a snapshot, not a poll.
  * ADR 0028: `seq` is reassigned on every write (insert OR edit), never
  * merely on read, so it is the strongest signal composer.spec.ts's
