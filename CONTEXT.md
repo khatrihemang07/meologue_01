@@ -313,8 +313,11 @@ user plans to work on the Task before it, only that it must be finished by then.
 ### Recurrence
 
 A Task that comes back. What the user typed to describe the pattern is what is stored, unchanged;
-the next Date is re-derived from that text each time the Task is completed, rather than computed
-once and fixed as a schedule.
+the next Date is re-derived from that text each time the Task is completed, and once more when the
+recurrence is first given to it, rather than computed once and fixed as a schedule. A Task given a
+recurrence is due on the first Date that actually matches the pattern, including the day it was
+given the recurrence, if that day itself matches (issue #191) — completing it is what moves it
+strictly past that Date, never the Date's own computation.
 
 ### Inbox
 

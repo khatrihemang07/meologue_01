@@ -61,7 +61,12 @@ export type {
   RecurrenceUnit,
   Weekday,
 } from "./recurrence";
-export { nextOccurrence, parseRecurrence, tomorrowOf } from "./recurrence";
+export {
+  firstOccurrence,
+  nextOccurrenceAfterCompletion,
+  parseRecurrence,
+  tomorrowOf,
+} from "./recurrence";
 export type {
   CheckServerOptions,
   ServerCapabilities,

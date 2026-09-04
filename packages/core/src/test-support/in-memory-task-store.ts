@@ -1,6 +1,6 @@
 import { withDefaultLabelIds } from "../label-fields";
 import { compareByOrder } from "../order-key";
-import { nextOccurrence, tomorrowOf } from "../recurrence";
+import { nextOccurrenceAfterCompletion, tomorrowOf } from "../recurrence";
 import {
   assertValidDate,
   assertValidDeadline,
@@ -278,7 +278,10 @@ export class InMemoryTaskStore implements TaskStore {
       );
     }
     const now = completedAt.slice(0, 10);
-    const outcome = nextOccurrence(existing.dateString, { dueDate: existing.date, now });
+    const outcome = nextOccurrenceAfterCompletion(existing.dateString, {
+      dueDate: existing.date,
+      now,
+    });
     if (outcome.kind === "refused") {
       throw new Error(
         `Task ${id}'s stored recurrence "${existing.dateString}" no longer parses: ${outcome.reason}`,

@@ -304,9 +304,13 @@ export interface TaskStore {
    * recurring Task's checkbox never "un-ticks itself," and the Task never
    * enters the completed list (CONTEXT.md's Recurrence entry): only
    * `date` moves, `completedAt` stays null. `dateString` is re-parsed
-   * fresh on every call, via ../recurrence/'s nextOccurrence, rather than
-   * incrementing whatever `date` already holds — the string, not the
-   * date it last resolved to, is what this project treats as the truth.
+   * fresh on every call, via ../recurrence/'s nextOccurrenceAfterCompletion,
+   * rather than incrementing whatever `date` already holds — the string,
+   * not the date it last resolved to, is what this project treats as the
+   * truth. (A Task's very *first* occurrence, when the recurrence is
+   * given rather than completed, goes through ../recurrence/'s
+   * firstOccurrence instead — a different question with a different
+   * floor, issue #191 — but this method is never the one asking it.)
    *
    * `completedAt` is a real timestamp, exactly like complete()'s own
    * parameter above — this is a completion event even though it doesn't

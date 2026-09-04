@@ -8,7 +8,7 @@ import type {
   Task,
   TaskStore,
 } from "@meologue/core";
-import { nextOccurrence, tomorrowOf } from "@meologue/core";
+import { nextOccurrenceAfterCompletion, tomorrowOf } from "@meologue/core";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
@@ -158,7 +158,7 @@ function createFakeStore(): TaskStore {
     advanceRecurring: vi.fn(async (id: string, completedAt: string) => {
       const found = active.find((t) => t.id === id);
       if (found === undefined || found.dateString === null) return;
-      const outcome = nextOccurrence(found.dateString, {
+      const outcome = nextOccurrenceAfterCompletion(found.dateString, {
         dueDate: found.date,
         now: completedAt.slice(0, 10),
       });

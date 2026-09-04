@@ -15,7 +15,7 @@ import type {
   QuickAddToken,
   QuickAddTokenKind,
 } from "@meologue/core";
-import { nextOccurrence } from "@meologue/core";
+import { firstOccurrence } from "@meologue/core";
 
 /**
  * Every `QuickAddTokenKind` the parser recognises but Task
@@ -87,7 +87,7 @@ const UNSUPPORTED_TOKEN_KINDS: ReadonlySet<QuickAddTokenKind> = new Set([
  * that module at all"). Something has to bridge "monthly" (the eager,
  * false-positive-prone word this ticket's whole click-to-demote
  * mechanism exists for — Todoist's own "Create **monthly** report"
- * example) to "every month" (what nextOccurrence can compute a date
+ * example) to "every month" (what firstOccurrence can compute a date
  * from), and it belongs on this side of the boundary, not inside either
  * module: the quick-add parser has no reason to know the recurrence
  * grammar exists, and the recurrence engine has no reason to know which
@@ -185,7 +185,7 @@ function findRecurrenceToken(tokens: readonly QuickAddToken[]): QuickAddToken | 
  * is no third case where the miss means "unrecognised text slipped
  * through." The seven canonical phrases are each independently exercised
  * by quick-add-task.test.ts against the real ../../packages/core
- * `nextOccurrence`, and every phrase `matchRecurrencePhrase` can produce
+ * `firstOccurrence`, and every phrase `matchRecurrencePhrase` can produce
  * is, by construction, something `parseRecurrence` already accepted — so
  * a `"refused"` outcome here would mean the map or the tokeniser and the
  * engine have drifted apart, not that this particular input was bad.
@@ -208,7 +208,7 @@ function resolveRecurrence(
   }
   const phrase =
     RECURRENCE_WORD_TO_PHRASE[recurrenceToken.raw.toLowerCase()] ?? recurrenceToken.raw;
-  const outcome = nextOccurrence(phrase, { dueDate, now });
+  const outcome = firstOccurrence(phrase, { dueDate, now });
   if (outcome.kind !== "occurrence") {
     return { date: null, dateString: null };
   }

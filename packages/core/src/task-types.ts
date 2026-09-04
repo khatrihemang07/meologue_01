@@ -190,11 +190,16 @@ export type Task = {
    * `"every! monday"` — or `null` for a Task that doesn't repeat
    * (CONTEXT.md's Recurrence entry, issue #170's recurrence engine,
    * ../recurrence/). The string is the truth and `date` is a consequence
-   * of it, never the other way round: ../recurrence/'s nextOccurrence is
-   * a pure function of this string plus a reference date, re-run fresh
-   * on every completion (../task-store.ts's advanceRecurring), rather
-   * than a schedule computed once when the rule was typed and then just
-   * incremented. That is the identical principle this project already
+   * of it, never the other way round: ../recurrence/'s
+   * nextOccurrenceAfterCompletion is a pure function of this string plus
+   * a reference date, re-run fresh on every completion
+   * (../task-store.ts's advanceRecurring), rather than a schedule
+   * computed once when the rule was typed and then just incremented. The
+   * very first `date` a recurring Task carries is a separate question —
+   * ../recurrence/'s firstOccurrence, called once when the rule is typed
+   * (issue #191) — but the same "the string is the truth" discipline
+   * applies to it too: both functions re-derive `date` from `dateString`
+   * rather than caching a schedule. That is the identical principle this project already
    * holds for an Entry's body, arrived at independently — see
    * ../recurrence/recurrence.ts's own module doc comment for the worked
    * example (a yearly task completed eighteen months late) that a

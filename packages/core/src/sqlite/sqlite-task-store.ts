@@ -1,7 +1,7 @@
 import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
 import { withDefaultLabelIds } from "../label-fields";
-import { nextOccurrence, tomorrowOf } from "../recurrence";
+import { nextOccurrenceAfterCompletion, tomorrowOf } from "../recurrence";
 import {
   assertValidDate,
   assertValidDeadline,
@@ -379,7 +379,10 @@ export class SqliteTaskStore implements TaskStore {
     // calendar day matters to ../recurrence/'s engine, never the exact
     // instant a completion happened at.
     const now = completedAt.slice(0, 10);
-    const outcome = nextOccurrence(current.dateString, { dueDate: current.date, now });
+    const outcome = nextOccurrenceAfterCompletion(current.dateString, {
+      dueDate: current.date,
+      now,
+    });
     if (outcome.kind === "refused") {
       throw new Error(
         `Task ${id}'s stored recurrence "${current.dateString}" no longer parses: ${outcome.reason}`,
