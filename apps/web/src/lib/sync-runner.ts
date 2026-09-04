@@ -1,4 +1,11 @@
-import type { CommentStore, EntryStore, LabelStore, ProjectStore, TaskStore } from "@meologue/core";
+import type {
+  CommentStore,
+  EntryStore,
+  EventStore,
+  LabelStore,
+  ProjectStore,
+  TaskStore,
+} from "@meologue/core";
 import { sync } from "@meologue/core";
 import { refreshNewestEntriesPage } from "@/lib/entries-pagination";
 import { useSettingsStore } from "@/lib/settings";
@@ -23,6 +30,8 @@ export interface SyncStores {
   projectStore: ProjectStore;
   labelStore: LabelStore;
   commentStore: CommentStore;
+  /** Issue #184: Sync's seventh stream, Todo's own activity log — required, mirroring every stream above. */
+  eventStore: EventStore;
 }
 
 let syncInFlight: Promise<void> | null = null;

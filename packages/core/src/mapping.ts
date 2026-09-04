@@ -1,4 +1,5 @@
 import type { Comment } from "./comment-types";
+import type { Event } from "./event-types";
 import type { Label } from "./label-types";
 import type { Project, Section } from "./project-types";
 import type { Task } from "./task-types";
@@ -8,6 +9,8 @@ import type {
   WireCommentOutput,
   WireEntryInput,
   WireEntryOutput,
+  WireEventInput,
+  WireEventOutput,
   WireLabelInput,
   WireLabelOutput,
   WireProjectInput,
@@ -278,5 +281,45 @@ export function fromWireCommentOutput(output: WireCommentOutput, syncedAt: strin
     seq: output.seq,
     syncedAt,
     deletedAt: output.deleted_at ?? null,
+  };
+}
+
+/**
+ * The Event-shaped sibling above — Sync's seventh entity stream (issue
+ * #184). No `deleted_at` either direction, unlike every mapping above it
+ * — an Event has no tombstone (../event-types.ts's own header comment).
+ * No reshaping otherwise, mirroring toWireTaskInput's own doc comment:
+ * `taskId`/`projectId` cross a Task/Project that may not have synced
+ * here yet, carried straight through honest and unresolved, the identical
+ * "an unresolved cross-reference is not this function's problem" rule
+ * every other `toWire*Input` in this file already follows.
+ */
+export function toWireEventInput(event: Event): WireEventInput {
+  return {
+    id: event.id,
+    device_id: event.deviceId,
+    event_type: event.eventType,
+    object_type: event.objectType,
+    object_id: event.objectId,
+    task_id: event.taskId,
+    project_id: event.projectId,
+    occurred_at: event.occurredAt,
+    extra: event.extra,
+  };
+}
+
+export function fromWireEventOutput(output: WireEventOutput, syncedAt: string): Event {
+  return {
+    id: output.id,
+    deviceId: output.device_id,
+    eventType: output.event_type as Event["eventType"],
+    objectType: output.object_type as Event["objectType"],
+    objectId: output.object_id,
+    taskId: output.task_id ?? null,
+    projectId: output.project_id ?? null,
+    occurredAt: output.occurred_at,
+    extra: (output.extra as Record<string, unknown> | null | undefined) ?? null,
+    seq: output.seq,
+    syncedAt,
   };
 }

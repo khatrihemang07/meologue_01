@@ -1,5 +1,6 @@
 import type { Project, Section } from "@meologue/core";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router";
 import { describe, expect, it, vi } from "vitest";
 import { ProjectView } from "./project-view";
 
@@ -76,7 +77,10 @@ function renderProjectView(overrides: Partial<Parameters<typeof ProjectView>[0]>
     listTasksInProject: vi.fn(async () => []),
     ...overrides,
   };
-  return { ...render(<ProjectView {...props} />), props };
+  // Issue #184: ProjectView's own "Activity" link is a react-router
+  // `Link`, which throws outside a Router context — wrapped here, once,
+  // rather than at every call site.
+  return { ...render(<ProjectView {...props} />, { wrapper: MemoryRouter }), props };
 }
 
 describe("ProjectView — Section delete", () => {

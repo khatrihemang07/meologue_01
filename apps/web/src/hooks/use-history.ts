@@ -2,6 +2,7 @@ import type {
   CommentStore,
   Entry,
   EntryStore,
+  EventStore,
   LabelStore,
   ProjectStore,
   Task,
@@ -213,6 +214,9 @@ export function useHistory(
   projectStore: ProjectStore,
   labelStore: LabelStore,
   commentStore: CommentStore,
+  // Issue #184: the identical "needed only to pass through to
+  // requestSync" reasoning as `commentStore` above.
+  eventStore: EventStore,
   deviceId: string,
   /**
    * `use-labels.ts`'s own `resolveLabelIds` (issue #170) — Promotion's
@@ -286,7 +290,10 @@ export function useHistory(
   // shares this same reasoning with).
   const afterLocalWrite = async () => {
     await refreshNewestEntriesPage(store);
-    void requestSync({ store, taskStore, projectStore, labelStore, commentStore }, deviceId);
+    void requestSync(
+      { store, taskStore, projectStore, labelStore, commentStore, eventStore },
+      deviceId,
+    );
   };
 
   /**

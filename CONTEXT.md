@@ -261,6 +261,22 @@ A note added against a Task after the fact, with its own identity and its own ti
 hold many. A Comment is not an Entry: it is never added to History, never covered by Export or
 Digest grounding, and belongs to Todo alone, the same way a Task's Description does.
 
+### Event
+
+A record of something that happened to a Task, a Project, a Section or a Comment — that it was
+added, completed, renamed, rescheduled, moved, or removed. An Event is written once, at the moment
+the thing it describes happens, and is never rewritten afterward: it is a record of what was done,
+not a value that can later be corrected or take back what it said. It is stamped with when the act
+actually happened, on whichever Device the user was using at the time, not with whenever that
+Device next reached a Server — a Task finished on a train, before the Device reconnects, reads as
+finished when it was finished, not when the connection came back. Reordering a Task, collapsing a
+Section, and simply opening a Task to look at it are not acts an Event records.
+
+A Task shows its own Events; a Project shows its own; and one view reads across everything the
+user has done. There is no separate place completed work lives — it is reached by narrowing
+whichever of those three views to Events that record a completion, the same view, seen through a
+narrower lens.
+
 ### Label
 
 A name the user attaches to a Task, freely, across Projects — a way of grouping Tasks that cuts

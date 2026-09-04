@@ -116,6 +116,9 @@ function renderEntryRow(
     deleteSection: vi.fn(),
     archiveSection: vi.fn(),
     unarchiveSection: vi.fn(),
+    events: [],
+    listEventsByTask: vi.fn(async () => []),
+    listEventsByProject: vi.fn(async () => []),
     disabled: false,
     ...overrides,
   };

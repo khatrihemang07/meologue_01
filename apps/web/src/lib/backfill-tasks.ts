@@ -40,6 +40,7 @@ import type {
   CommentStore,
   Entry,
   EntryStore,
+  EventStore,
   LabelStore,
   ProjectStore,
   QuickAddLanguage,
@@ -324,6 +325,9 @@ export async function runTasksBackfillOnce(
   projectStore: ProjectStore,
   labelStore: LabelStore,
   commentStore: CommentStore,
+  // Issue #184: needed only to pass through to requestSync's own
+  // SyncStores bag below — the identical reason `commentStore` above is.
+  eventStore: EventStore,
   deviceId: string,
   resolveLabelIds?: (names: string[]) => Promise<string[]>,
 ): Promise<void> {
@@ -344,6 +348,9 @@ export async function runTasksBackfillOnce(
       refreshTasks(),
       queryClient.invalidateQueries({ queryKey: ENTRIES_QUERY_KEY }),
     ]);
-    void requestSync({ store, taskStore, projectStore, labelStore, commentStore }, deviceId);
+    void requestSync(
+      { store, taskStore, projectStore, labelStore, commentStore, eventStore },
+      deviceId,
+    );
   }
 }

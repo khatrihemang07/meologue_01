@@ -212,3 +212,13 @@ export function sectionsQueryKey(projectId: string) {
  * memory.
  */
 export const COMMENTS_QUERY_KEY = ["comments"] as const;
+
+/**
+ * Issue #184: every Event across the whole app (EventStore.list()), read
+ * by use-events.ts — the view across everything (CONTEXT.md's Event
+ * entry). Flat and unpaginated, mirroring COMMENTS_QUERY_KEY: a personal
+ * task list's own activity log sits at the same scale Comments already
+ * do, and retention is unlimited (issue #184's own acceptance
+ * criterion), not paged the way History's ENTRIES_QUERY_KEY is.
+ */
+export const EVENTS_QUERY_KEY = ["events"] as const;

@@ -4,8 +4,10 @@ import type { SyncTransport } from "./sync-engine";
 import { sync } from "./sync-engine";
 import type { Task } from "./task-types";
 import { comment } from "./test-support/comment-fixture";
+import { event } from "./test-support/event-fixture";
 import { InMemoryCommentStore } from "./test-support/in-memory-comment-store";
 import { InMemoryEntryStore } from "./test-support/in-memory-entry-store";
+import { InMemoryEventStore } from "./test-support/in-memory-event-store";
 import { InMemoryLabelStore } from "./test-support/in-memory-label-store";
 import { InMemoryProjectStore } from "./test-support/in-memory-project-store";
 import { InMemoryTaskStore } from "./test-support/in-memory-task-store";
@@ -14,6 +16,7 @@ import { project, section } from "./test-support/project-fixture";
 import { task } from "./test-support/task-fixture";
 import type {
   WireCommentOutput,
+  WireEventOutput,
   WireLabelOutput,
   WireProjectOutput,
   WireSectionOutput,
@@ -283,6 +286,7 @@ class FakeSyncServer {
   private readonly sections = new FakeStream<WireSectionOutput>();
   private readonly labels = new FakeStream<WireLabelOutput>();
   private readonly comments = new FakeStream<WireCommentOutput>();
+  private readonly events = new FakeStream<WireEventOutput>();
 
   transport: SyncTransport = async (request) => {
     // Every one of these is optional on WireSyncRequest solely to tolerate
@@ -299,12 +303,14 @@ class FakeSyncServer {
     this.sections.push(request.sections ?? []);
     this.labels.push(request.labels ?? []);
     this.comments.push(request.comments ?? []);
+    this.events.push(request.events ?? []);
 
     const tasks = this.tasks.pull(request.since_task_seq ?? 0);
     const projects = this.projects.pull(request.since_project_seq ?? 0);
     const sections = this.sections.pull(request.since_section_seq ?? 0);
     const labels = this.labels.pull(request.since_label_seq ?? 0);
     const comments = this.comments.pull(request.since_comment_seq ?? 0);
+    const events = this.events.pull(request.since_event_seq ?? 0);
 
     return {
       entries: [],
@@ -319,6 +325,8 @@ class FakeSyncServer {
       label_cursor: labels.cursor,
       comments: comments.rows,
       comment_cursor: comments.cursor,
+      events: events.rows,
+      event_cursor: events.cursor,
     };
   };
 }
@@ -336,12 +344,14 @@ function createDevice(deviceId: string, server: FakeSyncServer) {
   const projectStore = new InMemoryProjectStore(taskStore);
   const labelStore = new InMemoryLabelStore();
   const commentStore = new InMemoryCommentStore();
+  const eventStore = new InMemoryEventStore();
   return {
     store,
     taskStore,
     projectStore,
     labelStore,
     commentStore,
+    eventStore,
     sync: () =>
       sync({
         store,
@@ -349,6 +359,7 @@ function createDevice(deviceId: string, server: FakeSyncServer) {
         projectStore,
         labelStore,
         commentStore,
+        eventStore,
         transport: server.transport,
         deviceId,
       }),
@@ -583,6 +594,83 @@ describe("Comment content convergence (issue #182)", () => {
     const finalB = await deviceB.commentStore.get(commentId);
     expect(finalA?.text).toBe(finalB?.text);
     expect(finalA?.text).toBe("sounds good, see you then");
+  });
+});
+
+/**
+ * Issue #184 / ADR 0056's own acceptance criterion, and the whole reason
+ * an Event stream needs no last-writer-wins rule: an Event, unlike every
+ * stream above, is never edited after it's written, so two Devices
+ * writing offline can never *contend* for the same row — there is
+ * nothing to arbitrate. This is the proof that "no conflict can arise"
+ * (this ADR's own Decision) holds under the same offline-then-sync shape
+ * every content-convergence test above exercises: **both** Devices' own
+ * Events must survive, not one overwriting the other the way a Comment's
+ * text does above.
+ */
+describe("Event convergence (issue #184 / ADR 0056)", () => {
+  it("two Devices that each recorded a different Event offline both keep it after both sync", async () => {
+    const server = new FakeSyncServer();
+    const deviceA = createDevice("device-a", server);
+    const deviceB = createDevice("device-b", server);
+
+    await deviceA.eventStore.record(
+      event({ id: "event-a", deviceId: "device-a", eventType: "added", objectId: "task-1" }),
+    );
+    await deviceB.eventStore.record(
+      event({
+        id: "event-b",
+        deviceId: "device-b",
+        eventType: "completed",
+        objectId: "task-2",
+        occurredAt: "2026-01-02T00:00:00.000Z",
+      }),
+    );
+
+    await deviceA.sync();
+    await deviceB.sync();
+    // A second round each: the pull that lets A see B's own Event, and
+    // vice versa, since one sync() call only pushes-then-pulls once
+    // against whatever the server already had *before* this call's own
+    // push landed.
+    await deviceA.sync();
+    await deviceB.sync();
+
+    const idsOnA = (await deviceA.eventStore.list()).map((e) => e.id).sort();
+    const idsOnB = (await deviceB.eventStore.list()).map((e) => e.id).sort();
+    expect(idsOnA).toEqual(["event-a", "event-b"]);
+    expect(idsOnB).toEqual(["event-a", "event-b"]);
+  });
+
+  it("recording two Events under the same object while offline keeps both — there is nothing to arbitrate", async () => {
+    // Contrast with Comment content convergence above: editing text
+    // *does* need last-writer-wins because there is one row being fought
+    // over. Two Events about the same Task are two independent rows from
+    // the start — recording a second one is never "changing" the first.
+    const server = new FakeSyncServer();
+    const deviceA = createDevice("device-a", server);
+    const deviceB = createDevice("device-b", server);
+
+    await deviceA.eventStore.record(
+      event({ id: "renamed-by-a", deviceId: "device-a", eventType: "updated", objectId: "task-1" }),
+    );
+    await deviceB.eventStore.record(
+      event({
+        id: "completed-by-b",
+        deviceId: "device-b",
+        eventType: "completed",
+        objectId: "task-1",
+        occurredAt: "2026-01-02T00:00:00.000Z",
+      }),
+    );
+
+    await deviceA.sync();
+    await deviceB.sync();
+    await deviceA.sync();
+    await deviceB.sync();
+
+    const historyOnA = (await deviceA.eventStore.listByTask("task-1")).map((e) => e.id).sort();
+    expect(historyOnA).toEqual(["completed-by-b", "renamed-by-a"]);
   });
 });
 

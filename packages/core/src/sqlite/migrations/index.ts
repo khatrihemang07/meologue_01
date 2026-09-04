@@ -10,6 +10,7 @@ import taskDescription from "./0008_task_description.sql?raw";
 import commentsTable from "./0009_comments_table.sql?raw";
 import taskDayOrder from "./0010_task_day_order.sql?raw";
 import tasksFtsTrigram from "./0011_tasks_fts_trigram.sql?raw";
+import eventsTable from "./0012_events_table.sql?raw";
 import entriesSearchIndex from "./entries_search_index.sql?raw";
 import tasksSearchIndex from "./tasks_search_index.sql?raw";
 
@@ -207,6 +208,16 @@ export interface Migration {
  * query against one field can never accidentally see a match that only
  * exists in the other — see task-search.ts's own header comment for why
  * that separation is load-bearing, not incidental.
+ *
+ * `0012_events_table` (version 15, issue #184) adds a sixth root noun's
+ * own table, `events` — Todo's own activity log (ADR 0056). `CREATE TABLE
+ * IF NOT EXISTS` covers it the ordinary way, `0009_comments_table`'s own
+ * template, plus three `CREATE INDEX IF NOT EXISTS` statements for the
+ * same reason every other index-creating statement in this file is.
+ * Unlike every table before it, `events` has no `deleted_at` column: an
+ * Event is never edited or removed once written
+ * (../../event-types.ts's own header comment), so there is no "nothing"
+ * state a tombstone would need to represent.
  */
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, sql: initial },
@@ -223,4 +234,5 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 12, sql: commentsTable },
   { version: 13, sql: taskDayOrder },
   { version: 14, sql: tasksFtsTrigram },
+  { version: 15, sql: eventsTable },
 ];

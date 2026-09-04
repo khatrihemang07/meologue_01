@@ -104,6 +104,8 @@ function renderView(overrides: Partial<Parameters<typeof TaskDetailView>[0]> = {
     onClose: vi.fn(),
     onNavigate: vi.fn(),
     onRename: vi.fn(),
+    onComplete: vi.fn(),
+    onUncomplete: vi.fn(),
     onOpenSchedule: vi.fn(),
     onSetProject: vi.fn(),
     onSetLabels: vi.fn(),
@@ -112,6 +114,7 @@ function renderView(overrides: Partial<Parameters<typeof TaskDetailView>[0]> = {
     onAddComment: vi.fn(),
     onEditComment: vi.fn(),
     onRemoveComment: vi.fn(),
+    events: [],
     ...overrides,
   };
   render(<TaskDetailView {...props} />);
@@ -428,6 +431,61 @@ describe("TaskDetailView", () => {
     renderView();
 
     expect(screen.queryByText(/[Dd]uration/)).not.toBeInTheDocument();
+  });
+
+  // Issue #184's own gap-fix report: this view now resolves (and must
+  // render actionable) a completed Task, not only an active one — "do
+  // not make it read-only."
+  describe("a completed Task", () => {
+    it("shows the checkbox checked and the title struck through", () => {
+      renderView({ task: task({ completedAt: "2026-01-02T00:00:00.000Z", content: "call mum" }) });
+
+      const checkbox = screen.getByLabelText('Mark "call mum" not done');
+      expect(checkbox).toBeChecked();
+      expect(screen.getByLabelText("Task title")).toHaveClass("line-through");
+    });
+
+    it("clicking the checkbox calls onUncomplete", () => {
+      const onUncomplete = vi.fn();
+      renderView({
+        task: task({ completedAt: "2026-01-02T00:00:00.000Z", content: "call mum" }),
+        onUncomplete,
+      });
+
+      fireEvent.click(screen.getByLabelText('Mark "call mum" not done'));
+
+      expect(onUncomplete).toHaveBeenCalled();
+    });
+
+    it("the title remains editable", () => {
+      const onRename = vi.fn();
+      renderView({ task: task({ completedAt: "2026-01-02T00:00:00.000Z" }), onRename });
+
+      const field = screen.getByLabelText("Task title");
+      fireEvent.change(field, { target: { value: "changed" } });
+      fireEvent.blur(field);
+
+      expect(onRename).toHaveBeenCalledWith("changed");
+    });
+  });
+
+  describe("an active Task", () => {
+    it("shows the checkbox unchecked, with no strikethrough", () => {
+      renderView({ task: task({ completedAt: null, content: "call mum" }) });
+
+      const checkbox = screen.getByLabelText('Complete "call mum"');
+      expect(checkbox).not.toBeChecked();
+      expect(screen.getByLabelText("Task title")).not.toHaveClass("line-through");
+    });
+
+    it("clicking the checkbox calls onComplete", () => {
+      const onComplete = vi.fn();
+      renderView({ task: task({ completedAt: null, content: "call mum" }), onComplete });
+
+      fireEvent.click(screen.getByLabelText('Complete "call mum"'));
+
+      expect(onComplete).toHaveBeenCalled();
+    });
   });
 });
 

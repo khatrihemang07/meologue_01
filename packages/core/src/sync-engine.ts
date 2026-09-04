@@ -1,14 +1,17 @@
 import type { CommentStore } from "./comment-store";
+import type { EventStore } from "./event-store";
 import type { LabelStore } from "./label-store";
 import {
   fromWireCommentOutput,
   fromWireEntryOutput,
+  fromWireEventOutput,
   fromWireLabelOutput,
   fromWireProjectOutput,
   fromWireSectionOutput,
   fromWireTaskOutput,
   toWireCommentInput,
   toWireEntryInput,
+  toWireEventInput,
   toWireLabelInput,
   toWireProjectInput,
   toWireSectionInput,
@@ -47,6 +50,16 @@ export interface SyncEngineOptions {
   labelStore: LabelStore;
   /** Issue #182: Sync's sixth entity stream. Required, mirroring `taskStore`. */
   commentStore: CommentStore;
+  /**
+   * Issue #184: Sync's seventh entity stream, Todo's own activity log —
+   * required, mirroring `taskStore`. Landed additively inside protocol 6
+   * (no wire-protocol bump — server/src/sync.rs's own `PROTOCOL_VERSION`
+   * doc comment), but this option is exactly as required as every stream
+   * above it: the identical "no future caller can quietly build a loop
+   * that pushes and pulls everything else while silently never touching
+   * Events" reasoning `taskStore`'s own doc comment states.
+   */
+  eventStore: EventStore;
   transport: SyncTransport;
   deviceId: string;
   /** Injected so tests can control the timestamp recorded as syncedAt. */
@@ -55,11 +68,12 @@ export interface SyncEngineOptions {
 
 /**
  * Runs push and pull as a single loop: pending Entries, Tasks, Projects,
- * Sections, Labels and Comments all go out in the same request, everything
- * that comes back (including this Device's own, now-confirmed rows) is
- * upserted into its own store, and every Cursor advances — one endpoint,
- * one round trip (ADR 0051), so a Task and the Entry referencing it (or a
- * Project and the Task naming it) always arrive together rather than
+ * Sections, Labels, Comments and Events all go out in the same request,
+ * everything that comes back (including this Device's own, now-confirmed
+ * rows) is upserted into its own store, and every Cursor advances — one
+ * endpoint, one round trip (ADR 0051), so a Task and the Entry referencing
+ * it (or a Project and the Task naming it, or a Task and the Event
+ * recording what happened to it) always arrive together rather than
  * leaving a window where one exists on this Device and the other doesn't
  * yet. Repeats immediately while *any* stream's response batch is full,
  * since a full batch on one means there's more of *that* stream waiting on
@@ -68,7 +82,16 @@ export interface SyncEngineOptions {
  * keeps paging the others forward.
  */
 export async function sync(options: SyncEngineOptions): Promise<void> {
-  const { store, taskStore, projectStore, labelStore, commentStore, transport, deviceId } = options;
+  const {
+    store,
+    taskStore,
+    projectStore,
+    labelStore,
+    commentStore,
+    eventStore,
+    transport,
+    deviceId,
+  } = options;
   const now = options.now ?? (() => new Date().toISOString());
 
   let batchWasFull = true;
@@ -86,6 +109,8 @@ export async function sync(options: SyncEngineOptions): Promise<void> {
       labelCursor,
       pendingComments,
       commentCursor,
+      pendingEvents,
+      eventCursor,
     ] = await Promise.all([
       store.pending(),
       store.getCursor(),
@@ -99,6 +124,8 @@ export async function sync(options: SyncEngineOptions): Promise<void> {
       labelStore.getCursor(),
       commentStore.pending(),
       commentStore.getCursor(),
+      eventStore.pending(),
+      eventStore.getCursor(),
     ]);
 
     const response = await transport({
@@ -116,6 +143,8 @@ export async function sync(options: SyncEngineOptions): Promise<void> {
       labels: pendingLabels.map(toWireLabelInput),
       since_comment_seq: commentCursor,
       comments: pendingComments.map(toWireCommentInput),
+      since_event_seq: eventCursor,
+      events: pendingEvents.map(toWireEventInput),
     });
 
     if (response.entries.length > 0) {
@@ -195,12 +224,21 @@ export async function sync(options: SyncEngineOptions): Promise<void> {
       await commentStore.setCursor(response.comment_cursor);
     }
 
+    if (response.events.length > 0) {
+      const syncedAt = now();
+      await eventStore.upsert(response.events.map((event) => fromWireEventOutput(event, syncedAt)));
+    }
+    if (response.event_cursor > eventCursor) {
+      await eventStore.setCursor(response.event_cursor);
+    }
+
     batchWasFull =
       response.entries.length >= SYNC_BATCH_SIZE ||
       response.tasks.length >= SYNC_BATCH_SIZE ||
       response.projects.length >= SYNC_BATCH_SIZE ||
       response.sections.length >= SYNC_BATCH_SIZE ||
       response.labels.length >= SYNC_BATCH_SIZE ||
-      response.comments.length >= SYNC_BATCH_SIZE;
+      response.comments.length >= SYNC_BATCH_SIZE ||
+      response.events.length >= SYNC_BATCH_SIZE;
   }
 }

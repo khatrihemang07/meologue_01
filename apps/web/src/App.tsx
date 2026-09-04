@@ -165,6 +165,13 @@ function App() {
               static literal, safe under this file's own no-dot rule
               trivially. */}
               <Route path="/todo/search" element={<TodoPage view="search" />} />
+              {/* Todo's activity log (issue #184, ADR 0056) — the view
+              across everything; a Project's own history is the same route
+              opened with `?projectId=` (project-view.tsx's own "Activity"
+              link), the identical "ordinary search params, not a route
+              segment" shape `/todo/search`'s own comment above already
+              takes for `?q=`. */}
+              <Route path="/todo/activity" element={<TodoPage view="activity" />} />
               {/* A Task's own address (issue #178), still under `/todo/*` per
               ADR 0049's own constraint on where Todo's internal navigation
               may live — no `view` prop: `todo-page.tsx`'s own header

@@ -3,6 +3,8 @@ import type {
   CommentStore,
   Entry,
   EntryStore,
+  Event,
+  EventStore,
   Label,
   LabelStore,
   Project,
@@ -16,6 +18,7 @@ import { queryOptions, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Outlet, useOutletContext } from "react-router";
 import { useComments } from "@/hooks/use-comments";
+import { useEvents } from "@/hooks/use-events";
 import { type UseHistoryPagination, useHistory } from "@/hooks/use-history";
 import { useLabels } from "@/hooks/use-labels";
 import { type AddProjectOverrides, useProjects } from "@/hooks/use-projects";
@@ -239,6 +242,21 @@ export interface EntryStoreOutletContext {
   setTaskSection: (id: string, sectionId: string | null) => void;
   /** Reparents a Task under `parentId`, or to top-level for `null` — use-tasks.ts's own `setTaskParent` doc comment on why this returns a Promise unlike every other Task mutator on this context. */
   setTaskParent: (id: string, parentId: string | null) => Promise<void>;
+  /**
+   * Todo's activity log (issue #184, CONTEXT.md's Event entry, ADR 0056)
+   * — the Event-shaped sibling of `comments`/`projects` above, built the
+   * same way for the same reason: `useEvents` (use-events.ts) runs once,
+   * here, above every route this layout wraps. `events` is the whole,
+   * flat, cross-Task, cross-Project view across everything (issue #184's
+   * own acceptance criterion); `listEventsByTask`/`listEventsByProject`
+   * are the narrower, store-backed reads a Task's own detail view and a
+   * Project's own view use instead of filtering this flat list
+   * client-side — mirroring `listTasksInProject`'s own async-function
+   * shape above rather than a second eagerly-loaded array.
+   */
+  events: Event[];
+  listEventsByTask: (taskId: string) => Promise<Event[]>;
+  listEventsByProject: (projectId: string | null) => Promise<Event[]>;
   disabled: boolean;
   message?: string;
 }
@@ -492,6 +510,18 @@ function noopArchiveSection(_id: string) {}
 
 function noopUnarchiveSection(_id: string) {}
 
+// `events`'s own not-ready stand-ins (issue #184), mirroring
+// `noopListTasksInProject`/`noopGetEntries`: nothing can be resolved
+// before the store opens, and an empty array is already each field's own
+// "nothing found" answer.
+async function noopListEventsByTask(_taskId: string): Promise<Event[]> {
+  return [];
+}
+
+async function noopListEventsByProject(_projectId: string | null): Promise<Event[]> {
+  return [];
+}
+
 function noopFetchMore() {}
 
 // Mirrors `entries: []` just above: nothing to page through before the
@@ -688,6 +718,29 @@ function deferCommentStoreUntilOpen(
   return deferStore(promise, ({ commentStore }) => commentStore, COMMENT_STORE_METHODS);
 }
 
+// Events (issue #184) — a sixth deferred facade over the same open
+// promise, same reasoning as TASK_STORE_METHODS's own comment: this is
+// the compile-time checkpoint that fails `tsc -b` the moment EventStore
+// grows a method this registry doesn't also list. No `edit`/`remove`
+// here — mirrors ../../../packages/core/src/event-store.ts's own
+// interface, which has neither (an Event is never rewritten).
+const EVENT_STORE_METHODS: StoreMethodNames<EventStore> = {
+  list: true,
+  listByTask: true,
+  listByProject: true,
+  record: true,
+  upsert: true,
+  pending: true,
+  getCursor: true,
+  setCursor: true,
+};
+
+function deferEventStoreUntilOpen(
+  promise: Promise<{ eventStore: EventStore; deviceId: string }>,
+): EventStore {
+  return deferStore(promise, ({ eventStore }) => eventStore, EVENT_STORE_METHODS);
+}
+
 /**
  * The composition root for ADR 0001, ADR 0013 and ADR 0047: opens the Entry
  * store and the Task store together (one `open()` call, one shared
@@ -767,6 +820,7 @@ export function EntryStoreLayout() {
       labelStore: LabelStore;
       projectStore: ProjectStore;
       commentStore: CommentStore;
+      eventStore: EventStore;
       deviceId: string;
     }) => void;
     let reject!: (reason: unknown) => void;
@@ -776,6 +830,7 @@ export function EntryStoreLayout() {
       labelStore: LabelStore;
       projectStore: ProjectStore;
       commentStore: CommentStore;
+      eventStore: EventStore;
       deviceId: string;
     }>((res, rej) => {
       resolve = res;
@@ -827,12 +882,16 @@ export function EntryStoreLayout() {
     () => deferCommentStoreUntilOpen(deferred.promise),
     [deferred],
   );
+  // `useEvents`'s own equivalent (issue #184) — a sixth facade over the
+  // same one open.
+  const pendingEventStore = useMemo(() => deferEventStoreUntilOpen(deferred.promise), [deferred]);
 
   const store = data?.store ?? pendingStore;
   const taskStore = data?.taskStore ?? pendingTaskStore;
   const labelStore = data?.labelStore ?? pendingLabelStore;
   const projectStore = data?.projectStore ?? pendingProjectStore;
   const commentStore = data?.commentStore ?? pendingCommentStore;
+  const eventStore = data?.eventStore ?? pendingEventStore;
   const deviceId = data?.deviceId ?? "";
 
   // `useLabels` is called before `useHistory` on purpose: Promotion's own
@@ -870,6 +929,7 @@ export function EntryStoreLayout() {
       data.projectStore,
       data.labelStore,
       data.commentStore,
+      data.eventStore,
       data.deviceId,
       resolveLabelIds,
     );
@@ -881,6 +941,7 @@ export function EntryStoreLayout() {
     projectStore,
     labelStore,
     commentStore,
+    eventStore,
     deviceId,
     resolveLabelIds,
   );
@@ -909,8 +970,14 @@ export function EntryStoreLayout() {
     setTaskProject,
     setTaskSection,
     setTaskParent,
-  } = useTasks(store, taskStore, projectStore, labelStore, commentStore, deviceId);
-  const { comments, addComment, editComment, removeComment } = useComments(commentStore, deviceId);
+  } = useTasks(store, taskStore, projectStore, labelStore, commentStore, eventStore, deviceId);
+  const { comments, addComment, editComment, removeComment } = useComments(
+    commentStore,
+    taskStore,
+    eventStore,
+    deviceId,
+  );
+  const { events, listEventsByTask, listEventsByProject } = useEvents(eventStore, deviceId);
   const {
     projects,
     addProject,
@@ -930,7 +997,7 @@ export function EntryStoreLayout() {
     deleteSection,
     archiveSection,
     unarchiveSection,
-  } = useProjects(projectStore, deviceId);
+  } = useProjects(projectStore, eventStore, deviceId);
 
   return (
     <Outlet
@@ -998,6 +1065,9 @@ export function EntryStoreLayout() {
               deleteSection,
               archiveSection,
               unarchiveSection,
+              events,
+              listEventsByTask,
+              listEventsByProject,
               disabled: false,
             } satisfies EntryStoreOutletContext)
           : ({
@@ -1060,6 +1130,9 @@ export function EntryStoreLayout() {
               deleteSection: noopDeleteSection,
               archiveSection: noopArchiveSection,
               unarchiveSection: noopUnarchiveSection,
+              events: [],
+              listEventsByTask: noopListEventsByTask,
+              listEventsByProject: noopListEventsByProject,
               disabled: true,
               message,
             } satisfies EntryStoreOutletContext)

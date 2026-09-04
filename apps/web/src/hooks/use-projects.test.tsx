@@ -1,4 +1,4 @@
-import type { Project, ProjectStore, Section } from "@meologue/core";
+import type { EventStore, Project, ProjectStore, Section } from "@meologue/core";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
@@ -15,6 +15,26 @@ async function importFresh() {
     import("@/lib/query-client"),
   ]);
   return { ...hook, ...client };
+}
+
+// Issue #184: `useProjects` now records an Event alongside every
+// add/rename/archive/unarchive of a Project or Section — a bare cast
+// would leave `.record`/`.list` undefined and throw the moment any of
+// those mutations reaches for it, so this is a working stub rather than
+// `{} as EventStore` the way sync-runner.test.ts's own fakes get away
+// with (that suite mocks `sync()` itself, so its stores' methods are
+// never actually called).
+function fakeEventStore(): EventStore {
+  return {
+    list: vi.fn(async () => []),
+    listByTask: vi.fn(async () => []),
+    listByProject: vi.fn(async () => []),
+    record: vi.fn(async () => {}),
+    upsert: vi.fn(async () => {}),
+    pending: vi.fn(async () => []),
+    getCursor: vi.fn(async () => 0),
+    setCursor: vi.fn(async () => {}),
+  };
 }
 
 function project(overrides: Partial<Project> = {}): Project {
@@ -109,16 +129,20 @@ describe("useProjects", () => {
     localStorage.clear();
   });
 
-  async function renderUseProjects(store: ProjectStore, deviceId = "device-a") {
+  async function renderUseProjects(
+    store: ProjectStore,
+    deviceId = "device-a",
+    eventStore: EventStore = fakeEventStore(),
+  ) {
     const fresh = await importFresh();
     const wrapper = ({ children }: { children: ReactNode }) => (
       <QueryClientProvider client={fresh.queryClient}>{children}</QueryClientProvider>
     );
     const rendered = renderHook<ReturnType<typeof UseProjects>, void>(
-      () => (fresh.useProjects as typeof UseProjects)(store, deviceId),
+      () => (fresh.useProjects as typeof UseProjects)(store, eventStore, deviceId),
       { wrapper },
     );
-    return { fresh, ...rendered };
+    return { fresh, eventStore, ...rendered };
   }
 
   it("reads every Project from the store", async () => {
@@ -197,5 +221,126 @@ describe("useProjects", () => {
     await expect(result.current.setProjectParent("p1", "p1")).rejects.toThrow(
       "cannot be its own parent",
     );
+  });
+
+  // Issue #184 / ADR 0056: Project and Section add/rename/archive/delete
+  // are each recorded — proving the wiring itself, not the store
+  // mechanism packages/core's own event-store-contract.ts already covers.
+  describe("Event recording (issue #184)", () => {
+    function lastRecordedEvent(eventStore: EventStore) {
+      const recordMock = eventStore.record as unknown as { mock: { calls: unknown[][] } };
+      const call = recordMock.mock.calls.at(-1);
+      return call?.[0] as { eventType: string; objectType: string; extra: unknown } | undefined;
+    }
+
+    it("addProject records an 'added' Project Event", async () => {
+      const store = createFakeStore();
+      const { result, eventStore } = await renderUseProjects(store);
+
+      act(() => result.current.addProject("Groceries"));
+
+      await waitFor(() => expect(eventStore.record).toHaveBeenCalledTimes(1));
+      expect(lastRecordedEvent(eventStore)).toMatchObject({
+        eventType: "added",
+        objectType: "project",
+        extra: { name: "Groceries" },
+      });
+    });
+
+    it("renameProject records an 'updated' Project Event carrying name and lastName", async () => {
+      const store = createFakeStore();
+      await store.upsertProjects([project({ id: "p1", name: "Old Name" })]);
+      const { result, eventStore } = await renderUseProjects(store);
+      await waitFor(() => expect(result.current.projects).toHaveLength(1));
+
+      act(() => result.current.renameProject("p1", "New Name"));
+
+      await waitFor(() => expect(eventStore.record).toHaveBeenCalledTimes(1));
+      expect(lastRecordedEvent(eventStore)).toMatchObject({
+        eventType: "updated",
+        objectType: "project",
+        extra: { name: "New Name", lastName: "Old Name" },
+      });
+    });
+
+    it("archiveProject records an 'archived' Project Event", async () => {
+      const store = createFakeStore();
+      // Seeded, since `archiveProject` now looks the Project up first —
+      // it needs a `name` to cache onto the Event even though archiving
+      // itself doesn't change one (this hook's own `recordProjectEvent`
+      // doc comment).
+      await store.upsertProjects([project({ id: "p1", name: "Groceries" })]);
+      const { result, eventStore } = await renderUseProjects(store);
+      await waitFor(() => expect(result.current.projects).toHaveLength(1));
+
+      act(() => result.current.archiveProject("p1"));
+
+      await waitFor(() => expect(eventStore.record).toHaveBeenCalledTimes(1));
+      expect(lastRecordedEvent(eventStore)).toMatchObject({
+        eventType: "archived",
+        objectType: "project",
+        extra: { name: "Groceries" },
+      });
+    });
+
+    it("unarchiveProject records an 'unarchived' Project Event", async () => {
+      const store = createFakeStore();
+      await store.upsertProjects([project({ id: "p1", name: "Groceries" })]);
+      const { result, eventStore } = await renderUseProjects(store);
+      await waitFor(() => expect(result.current.projects).toHaveLength(1));
+
+      act(() => result.current.unarchiveProject("p1"));
+
+      await waitFor(() => expect(eventStore.record).toHaveBeenCalledTimes(1));
+      expect(lastRecordedEvent(eventStore)).toMatchObject({
+        eventType: "unarchived",
+        objectType: "project",
+        extra: { name: "Groceries" },
+      });
+    });
+
+    it("addSection records an 'added' Section Event", async () => {
+      const store = createFakeStore();
+      const { result, eventStore } = await renderUseProjects(store);
+
+      await act(async () => {
+        await result.current.addSection("p1", "Produce");
+      });
+
+      await waitFor(() => expect(eventStore.record).toHaveBeenCalledTimes(1));
+      expect(lastRecordedEvent(eventStore)).toMatchObject({
+        eventType: "added",
+        objectType: "section",
+        extra: { name: "Produce" },
+      });
+    });
+
+    it("deleteSection records a 'deleted' Section Event carrying the Section's last name", async () => {
+      const store = createFakeStore();
+      await store.addSection(section({ id: "s1", projectId: "p1", name: "Produce" }));
+      const { result, eventStore } = await renderUseProjects(store);
+
+      act(() => result.current.deleteSection("s1"));
+
+      await waitFor(() => expect(eventStore.record).toHaveBeenCalledTimes(1));
+      expect(lastRecordedEvent(eventStore)).toMatchObject({
+        eventType: "deleted",
+        objectType: "section",
+        extra: { name: "Produce" },
+      });
+    });
+
+    // Reordering is explicitly not recorded (issue #184's own acceptance
+    // criterion) — the Project-shaped sibling of use-tasks.test.tsx's
+    // identical reorderTask/reorderTaskToday assertions.
+    it("reorderProject records no Event", async () => {
+      const store = createFakeStore();
+      const { result, eventStore } = await renderUseProjects(store);
+
+      act(() => result.current.reorderProject("p1", "W"));
+
+      await waitFor(() => expect(store.reorderProject).toHaveBeenCalled());
+      expect(eventStore.record).not.toHaveBeenCalled();
+    });
   });
 });

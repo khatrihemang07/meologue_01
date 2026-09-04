@@ -1,4 +1,4 @@
-import { CalendarCheck, FolderKanban, ListTodo } from "lucide-react";
+import { CalendarCheck, FolderKanban, History, ListTodo } from "lucide-react";
 import { NavLink } from "react-router";
 import { cn } from "@/lib/utils";
 
@@ -30,6 +30,11 @@ const VIEWS = [
   { to: "/todo/inbox", label: "Inbox", Icon: ListTodo },
   { to: "/todo/today", label: "Today", Icon: CalendarCheck },
   { to: "/todo/projects", label: "Projects", Icon: FolderKanban },
+  // Issue #184 / ADR 0056: Todo's activity log, the fourth row — exactly
+  // the proof this component's own header comment already names ("a
+  // third row appended to VIEWS, nothing else in this component
+  // touched"), now with a fourth.
+  { to: "/todo/activity", label: "Activity", Icon: History },
 ] as const;
 
 export function TodoNav() {

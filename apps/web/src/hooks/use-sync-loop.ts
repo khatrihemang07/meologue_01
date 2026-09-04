@@ -41,6 +41,7 @@ export function SyncLoop() {
             projectStore: opened.projectStore,
             labelStore: opened.labelStore,
             commentStore: opened.commentStore,
+            eventStore: opened.eventStore,
           },
           opened.deviceId,
         );
@@ -79,6 +80,7 @@ export function SyncLoop() {
           projectStore: opened.projectStore,
           labelStore: opened.labelStore,
           commentStore: opened.commentStore,
+          eventStore: opened.eventStore,
         },
         opened.deviceId,
       );

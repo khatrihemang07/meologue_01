@@ -64,6 +64,25 @@
 //! in `run_sync`, the identical shape the Task stream's own `>= 5` gate
 //! already takes, so a Device on 4 or 5 keeps syncing Entries and Tasks
 //! unaffected and simply never sees a Project, Section, Label or Comment.
+//!
+//! Issue #184 / ADR 0056 adds a seventh stream, Events — Todo's own
+//! activity log — the same way, but lands it **inside** the existing
+//! `>= 6` gate rather than earning a bump of its own: `PROTOCOL_VERSION`
+//! stays 6, because nothing about this stream's own wire shape is
+//! incompatible with what a v6 Device already expects. `EventInput`/
+//! `EventOutput`/`insert_events`/`fetch_events_since` mirror
+//! `CommentInput`/`CommentOutput`/`insert_comments`/`fetch_comments_since`
+//! in every way but one: an Event is never edited or deleted once written
+//! (ADR 0056's own Decision), so it carries no `deleted_at` and
+//! `insert_events`'s own upsert has nothing to reassign `seq` *for* — a
+//! push that names an `id` already on this table is a replay, full stop,
+//! not a change that might or might not be a no-op the way every other
+//! stream's `is distinct from` guard has to work out. See `insert_events`'s
+//! own doc comment for the reasoning spelled out in full. `occurred_at` is
+//! whatever the pushing Device's own clock said when the act happened —
+//! never reassigned, never compared against server arrival time, because
+//! there is no LWW rule here to arbitrate: two Devices can never disagree
+//! about the same Event row, only both hold Events the other doesn't yet.
 
 use axum::{Json, extract::State, http::StatusCode};
 use chrono::{DateTime, Utc};
@@ -132,6 +151,20 @@ use uuid::Uuid;
 /// moving to 5 — nothing about this bump requires dropping the existing
 /// 4-vs-5 transitional window, and doing so here would be an unrelated
 /// policy change riding along on this one.
+///
+/// **Not bumped again by issue #184.** Events — Todo's own activity log,
+/// ADR 0056 — are a seventh stream added the same way the previous six
+/// were, but a bump exists to tell a Device "the wire shape you already
+/// know has changed," and nothing about `SyncRequest`/`SyncResponse`'s
+/// *existing* fields changes here: `events`/`since_event_seq` are new,
+/// additive, `#[serde(default)]` fields, exactly like `tasks`/
+/// `since_task_seq` were the moment protocol 5 introduced them but before
+/// this constant itself had moved past 4. A v6 Device that predates this
+/// ticket sends a request with no `events` key at all, gets one back with
+/// `events: []`, and keeps syncing Entries, Tasks, Projects, Sections,
+/// Labels and Comments exactly as it always has — there is no wire shape
+/// it now fails to understand, so there is nothing here for a version
+/// number to protect it from.
 pub const PROTOCOL_VERSION: i32 = 6;
 
 /// The lowest protocol version this Server still accepts, alongside
@@ -206,6 +239,17 @@ const LABEL_SYNC_INSERT_LOCK_KEY: i64 = 0x6c61626c;
 
 /// The advisory lock key serialising Comment inserts. ASCII "cmnt".
 const COMMENT_SYNC_INSERT_LOCK_KEY: i64 = 0x636d6e74;
+
+/// The advisory lock key serialising Event inserts (issue #184). Held for
+/// the identical reason every stream above holds its own key — ADR 0002's
+/// "commit order must equal seq-assignment order" property, so a Device
+/// polling mid-transaction never advances its Cursor past a row that
+/// hasn't committed yet — even though `insert_events` never reassigns a
+/// `seq` the way every mutable stream's own upsert does: a fresh `bigserial`
+/// value is still assigned once, at insert, and two concurrent inserts
+/// could still commit out of order relative to those values without a
+/// lock serialising them. ASCII "evnt".
+const EVENT_SYNC_INSERT_LOCK_KEY: i64 = 0x65766e74;
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct EntryInput {
@@ -456,6 +500,56 @@ pub struct CommentOutput {
     pub deleted_at: Option<DateTime<Utc>>,
 }
 
+/// The Event-shaped sibling of `CommentInput` (issue #184 / ADR 0056) —
+/// Todo's own activity log, Sync's seventh stream. No `deleted_at`: see
+/// `../migrations/0017_create_events.sql`'s own header comment for why an
+/// Event has no "nothing" state for a tombstone to represent. `event_type`
+/// and `object_type` are plain `String`, not a Postgres `enum` — the fixed
+/// vocabulary (`added`/`deleted`/`updated`/`archived`/`unarchived`/
+/// `completed`/`uncompleted`/`moved`, and `task`/`comment`/`project`/
+/// `section`) is enforced by ../../packages/core/src/event-types.ts's own
+/// union type on every Device that writes one, the same "validated at the
+/// edge that actually knows the vocabulary, not by a database constraint"
+/// choice `tasks.priority`'s 1-4 range already makes
+/// (../../packages/core/src/task-fields.ts) — a Postgres `enum` would also
+/// need a migration of its own the day this vocabulary grows, where a
+/// `text` column and a client-side union do not.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct EventInput {
+    pub id: Uuid,
+    pub device_id: Uuid,
+    pub event_type: String,
+    pub object_type: String,
+    pub object_id: Uuid,
+    pub task_id: Option<Uuid>,
+    pub project_id: Option<Uuid>,
+    /// The acting Device's own clock at the moment the act happened —
+    /// never the time this row reaches the Server. ADR 0056's entire
+    /// Decision turns on this field meaning that and only that; see this
+    /// module's own top-of-file doc comment and the ADR itself for why.
+    pub occurred_at: DateTime<Utc>,
+    /// Whatever this event_type/object_type pair needs to say about what
+    /// changed — see `../migrations/0017_create_events.sql`'s own comment
+    /// on why this is one `jsonb` column rather than a wide table of
+    /// nullable `last_*` columns.
+    pub extra: Option<serde_json::Value>,
+}
+
+/// The Event-shaped sibling of `CommentOutput` — adds only `seq`.
+#[derive(Debug, Serialize, FromRow, ToSchema)]
+pub struct EventOutput {
+    pub id: Uuid,
+    pub device_id: Uuid,
+    pub event_type: String,
+    pub object_type: String,
+    pub object_id: Uuid,
+    pub task_id: Option<Uuid>,
+    pub project_id: Option<Uuid>,
+    pub occurred_at: DateTime<Utc>,
+    pub extra: Option<serde_json::Value>,
+    pub seq: i64,
+}
+
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct SyncRequest {
     pub protocol_version: i32,
@@ -507,6 +601,16 @@ pub struct SyncRequest {
     pub since_comment_seq: i64,
     #[serde(default)]
     pub comments: Vec<CommentInput>,
+    /// Issue #184: Sync's seventh stream, Events — `#[serde(default)]`
+    /// for the identical reason every stream above's own request fields
+    /// are: a Device built before this ticket has no `events`/
+    /// `since_event_seq` key in its request body at all. Unlike the four
+    /// streams above, there was no version bump to hang this on — see
+    /// `PROTOCOL_VERSION`'s own doc comment for why none was needed.
+    #[serde(default)]
+    pub since_event_seq: i64,
+    #[serde(default)]
+    pub events: Vec<EventInput>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -542,6 +646,20 @@ pub struct SyncResponse {
     pub label_cursor: i64,
     pub comments: Vec<CommentOutput>,
     pub comment_cursor: i64,
+    /// Issue #184: Events, always present and always populated — unlike
+    /// `tasks`/`projects`/etc. above, `run_sync` applies **no**
+    /// `protocol_version` gate to this pair (see `PROTOCOL_VERSION`'s own
+    /// doc comment: there is no version number that separates "a v6
+    /// Device that predates this ticket" from "a v6 Device that has it,"
+    /// so a gate here couldn't distinguish anything a v6 Device's own
+    /// `#[serde(default)]` request fields don't already handle). A
+    /// pre-#184 v6 Device that receives a populated `events` array simply
+    /// never reads a JSON key its own `WireSyncResponse` type doesn't
+    /// declare — the same "extra field, harmlessly ignored" tolerance
+    /// every wire response in this codebase already relies on for a
+    /// field it doesn't recognise.
+    pub events: Vec<EventOutput>,
+    pub event_cursor: i64,
 }
 
 #[utoipa::path(
@@ -549,7 +667,7 @@ pub struct SyncResponse {
     path = "/v1/sync",
     request_body = SyncRequest,
     responses(
-        (status = 200, description = "Entries (from protocol 5, Tasks; from protocol 6, Projects/Sections/Labels/Comments too) accepted; every change since each stream's own cursor is returned", body = SyncResponse),
+        (status = 200, description = "Entries (from protocol 5, Tasks; from protocol 6, Projects/Sections/Labels/Comments/Events too) accepted; every change since each stream's own cursor is returned", body = SyncResponse),
         (status = 426, description = "protocol_version is outside the range this server understands"),
     )
 )]
@@ -708,6 +826,18 @@ async fn run_sync(
         (Vec::new(), req.since_comment_seq)
     };
 
+    // Issue #184: no `protocol_version` gate — see `PROTOCOL_VERSION`'s
+    // own doc comment and `SyncResponse::events`' own doc comment for why
+    // one would be meaningless here. Every Device that can reach this
+    // handler at all (protocol_version already checked against the
+    // MIN_PROTOCOL_VERSION..=PROTOCOL_VERSION range above) pushes and
+    // pulls Events unconditionally.
+    if !req.events.is_empty() {
+        insert_events(pool, &req.events).await?;
+    }
+    let events = fetch_events_since(pool, req.since_event_seq).await?;
+    let event_cursor = events.last().map_or(req.since_event_seq, |e| e.seq);
+
     Ok(SyncResponse {
         entries,
         cursor,
@@ -721,6 +851,8 @@ async fn run_sync(
         label_cursor,
         comments,
         comment_cursor,
+        events,
+        event_cursor,
     })
 }
 
@@ -1314,6 +1446,86 @@ async fn fetch_comments_since(
     .await?;
 
     Ok(comments)
+}
+
+/// Held until commit, for the Event stream — mirrors
+/// `acquire_comment_insert_lock` against `EVENT_SYNC_INSERT_LOCK_KEY`.
+async fn acquire_event_insert_lock(conn: &mut PgConnection) -> sqlx::Result<()> {
+    sqlx::query("select pg_advisory_xact_lock($1)")
+        .bind(EVENT_SYNC_INSERT_LOCK_KEY)
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
+/// Inserts a new Event, or silently no-ops against one already on this
+/// table — the one place this ticket's own replay guard genuinely
+/// simplifies rather than merely mirroring `insert_comments`.
+///
+/// Every other `insert_*` in this file above needs an `is distinct from`
+/// chain across its table's mutable columns, because the row it's
+/// upserting *can* legitimately change — a retried push of the same
+/// content, one that changed a field, and a stale replay of an
+/// already-applied write all look identical at the SQL level (same `id`),
+/// and only that comparison tells them apart. An Event has no mutable
+/// column: nothing about this ticket's own Decision (ADR 0056) ever
+/// writes a second version of an Event with the same `id` — there is no
+/// edit door, no tombstone, nothing analogous to a Comment's `edit()` or
+/// `remove()`. So a second push carrying an `id` already in this table
+/// can only be one thing: a replay of the exact same row, whether from a
+/// retried request, a redelivered response, or two Devices that happened
+/// to both hold the same already-synced Event and both still have it in
+/// their own `pending()` for some reason. `on conflict (id) do nothing`
+/// says exactly that: apply it if this is the first time this table has
+/// seen this `id`, otherwise there is nothing to reconcile, and
+/// critically, **no `seq` reassignment** — a replayed Event must not jump
+/// back to the head of the log and cost every Device a redundant re-pull
+/// of a row they already have.
+async fn insert_events(pool: &PgPool, events: &[EventInput]) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
+    acquire_event_insert_lock(&mut tx).await?;
+
+    for event in events {
+        sqlx::query(
+            "insert into events
+               (id, device_id, event_type, object_type, object_id, task_id, project_id,
+                occurred_at, extra)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+             on conflict (id) do nothing",
+        )
+        .bind(event.id)
+        .bind(event.device_id)
+        .bind(&event.event_type)
+        .bind(&event.object_type)
+        .bind(event.object_id)
+        .bind(event.task_id)
+        .bind(event.project_id)
+        .bind(event.occurred_at)
+        .bind(&event.extra)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+    Ok(())
+}
+
+/// The Event-shaped sibling of `fetch_comments_since`.
+async fn fetch_events_since(pool: &PgPool, since_seq: i64) -> anyhow::Result<Vec<EventOutput>> {
+    let events = sqlx::query_as::<_, EventOutput>(
+        "select id, device_id, event_type, object_type, object_id, task_id, project_id,
+                occurred_at, extra, seq
+         from events
+         where seq > $1
+         order by seq asc
+         limit $2",
+    )
+    .bind(since_seq)
+    .bind(SYNC_BATCH_SIZE)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(events)
 }
 
 #[cfg(test)]

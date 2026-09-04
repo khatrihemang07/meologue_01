@@ -1,4 +1,11 @@
-import type { CommentStore, EntryStore, LabelStore, ProjectStore, TaskStore } from "@meologue/core";
+import type {
+  CommentStore,
+  EntryStore,
+  EventStore,
+  LabelStore,
+  ProjectStore,
+  TaskStore,
+} from "@meologue/core";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import { useEffect } from "react";
@@ -270,12 +277,17 @@ describe("EntryStoreLayout", () => {
     const projectStore = {} as ProjectStore;
     const labelStore = {} as LabelStore;
     const commentStore = {} as CommentStore;
+    // Issue #184: a fourth store `runTasksBackfillOnce` now threads
+    // through alongside it — the identical "bare cast, only checked by
+    // reference" reasoning this test's own comment above already states.
+    const eventStore = {} as EventStore;
     openMock.mockResolvedValue({
       store,
       taskStore,
       projectStore,
       labelStore,
       commentStore,
+      eventStore,
       deviceId: "device-a",
     });
 
@@ -288,6 +300,7 @@ describe("EntryStoreLayout", () => {
       projectStore,
       labelStore,
       commentStore,
+      eventStore,
       "device-a",
       expect.any(Function),
     );

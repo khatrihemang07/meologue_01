@@ -1,6 +1,7 @@
 import type {
   CommentStore,
   EntryStore,
+  EventStore,
   LabelStore,
   ProjectStore,
   Task,
@@ -8,6 +9,7 @@ import type {
 } from "@meologue/core";
 import { mintId, orderKeyBetween } from "@meologue/core";
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { type RecordEventInput, useEvents } from "@/hooks/use-events";
 import { queryClient } from "@/lib/query-client";
 import { COMPLETED_TASKS_QUERY_KEY, ENTRIES_QUERY_KEY, TASKS_QUERY_KEY } from "@/lib/query-keys";
 import { requestSync } from "@/lib/sync-runner";
@@ -206,6 +208,12 @@ export function useTasks(
   projectStore: ProjectStore,
   labelStore: LabelStore,
   commentStore: CommentStore,
+  // Issue #184: Todo's activity log — required, alongside every other
+  // store this hook already threads through to `requestSync`'s own
+  // `SyncStores` bag. Also this hook's own means of recording every Task
+  // act CONTEXT.md's Event entry and ADR 0056 name as recorded (see
+  // `recordTaskEvent` below).
+  eventStore: EventStore,
   deviceId: string,
 ): UseTasksResult {
   const tasksQuery = useQuery({
@@ -220,6 +228,62 @@ export function useTasks(
   const tasks = tasksQuery.data ?? [];
   const completedTasks = completedTasksQuery.data ?? [];
 
+  const { recordEvent } = useEvents(eventStore, deviceId);
+
+  // Every setter below already reads the Task it's about to change off
+  // `tasks`/`completedTasks` — TanStack Query's own already-loaded cache,
+  // not a fresh store round trip — because a mutation needs the *old*
+  // value to record a `last_*` diff (issue #184's own acceptance
+  // criterion: "an event that changed a value can say what it changed
+  // from"), and the render-time list already has it. Falls back to an
+  // async `taskStore.get(id)` only when a caller reaches this before
+  // either list has loaded — the identical race `addTask`'s own
+  // `tasks.at(-1)?.orderKey ?? null` already tolerates for the empty-list
+  // case, just written as a lookup instead of a default.
+  async function findTask(id: string): Promise<Task | undefined> {
+    return (
+      tasks.find((t) => t.id === id) ??
+      completedTasks.find((t) => t.id === id) ??
+      (await taskStore.get(id))
+    );
+  }
+
+  // The one place a Task act becomes an Event — every recorded mutation
+  // below calls this exactly once, after resolving whatever `last_*`
+  // value its own `extra` needs. `objectId`/`taskId` are always the
+  // Task's own id here; `projectId` is read fresh from whichever Task the
+  // caller hands in (the *resulting* state for a move, per this
+  // function's own `recordTaskEvent` doc comment on `objectType: "task"`
+  // events), not re-derived — a caller building a "moved" Event passes
+  // the Task it already has in hand after its own store write, not
+  // before.
+  // `content` is always merged into `extra` — the cached label
+  // `format-event.ts`'s own `describeEventLine` falls back to once a
+  // Task can no longer be resolved live (deleted, or not yet Synced to
+  // whichever Device is reading this Event). Every recorded act's own
+  // `extra` needs to name its Task regardless of what else it needed to
+  // say, not only the events (rename, add, delete) that already happened
+  // to carry `content` for a diff's own sake — see this file's header
+  // comment on `ActivityFeed`'s own gap-fix for why.
+  function recordTaskEvent(
+    task: Pick<Task, "id" | "projectId" | "content">,
+    eventType: RecordEventInput["eventType"],
+    extra: Record<string, unknown> | null = null,
+  ): void {
+    void recordEvent({
+      eventType,
+      objectType: "task",
+      objectId: task.id,
+      taskId: task.id,
+      projectId: task.projectId,
+      // `content` defaults to this Task's own — spread first, so a
+      // caller's own explicit `extra.content` (renameTask's new title,
+      // read against `before`'s *old* one) wins instead of being
+      // silently clobbered back to the pre-rename value.
+      extra: { content: task.content, ...extra },
+    });
+  }
+
   // use-history.ts's own `afterLocalWrite` comment explains why this step
   // is shared rather than repeated per mutation: the failure mode of
   // forgetting the Sync nudge is invisible on screen, so every mutation
@@ -233,11 +297,17 @@ export function useTasks(
   // scheduled poll.
   const afterLocalWrite = async () => {
     await refreshTasks();
-    void requestSync({ store, taskStore, projectStore, labelStore, commentStore }, deviceId);
+    void requestSync(
+      { store, taskStore, projectStore, labelStore, commentStore, eventStore },
+      deviceId,
+    );
   };
 
   const addTaskMutation = useMutation({
-    mutationFn: (task: Task) => taskStore.upsert([task]),
+    mutationFn: async (task: Task) => {
+      await taskStore.upsert([task]);
+      recordTaskEvent(task, "added");
+    },
     onSuccess: afterLocalWrite,
   });
 
@@ -351,8 +421,12 @@ export function useTasks(
 
   const completeTaskMutation = useMutation({
     mutationFn: async (id: string) => {
+      const before = await findTask(id);
       await taskStore.complete(id, new Date().toISOString());
       await syncTaskReferenceChecked(store, id, true);
+      if (before) {
+        recordTaskEvent(before, "completed");
+      }
     },
     onSuccess: async () => {
       await afterLocalWrite();
@@ -366,8 +440,12 @@ export function useTasks(
 
   const uncompleteTaskMutation = useMutation({
     mutationFn: async (id: string) => {
+      const before = await findTask(id);
       await taskStore.uncomplete(id);
       await syncTaskReferenceChecked(store, id, false);
+      if (before) {
+        recordTaskEvent(before, "uncompleted");
+      }
     },
     onSuccess: async () => {
       await afterLocalWrite();
@@ -381,11 +459,15 @@ export function useTasks(
 
   const renameTaskMutation = useMutation({
     mutationFn: async ({ id, content }: { id: string; content: string }) => {
+      const before = await findTask(id);
       await taskStore.rename(id, content);
       // ADR 0048: "renaming a Task refreshes the cached label in every
       // Entry referencing it" — the one place in meologue an edit made in
       // Todo visibly changes text rendered in History.
       await syncTaskReferenceLabel(store, id, content);
+      if (before) {
+        recordTaskEvent(before, "updated", { content, lastContent: before.content });
+      }
     },
     onSuccess: async () => {
       await afterLocalWrite();
@@ -422,7 +504,13 @@ export function useTasks(
   }
 
   const removeTaskMutation = useMutation({
-    mutationFn: (id: string) => taskStore.remove(id),
+    mutationFn: async (id: string) => {
+      const before = await findTask(id);
+      await taskStore.remove(id);
+      if (before) {
+        recordTaskEvent(before, "deleted");
+      }
+    },
     onSuccess: afterLocalWrite,
   });
 
@@ -431,7 +519,13 @@ export function useTasks(
   }
 
   const setDateMutation = useMutation({
-    mutationFn: ({ id, date }: { id: string; date: string | null }) => taskStore.setDate(id, date),
+    mutationFn: async ({ id, date }: { id: string; date: string | null }) => {
+      const before = await findTask(id);
+      await taskStore.setDate(id, date);
+      if (before) {
+        recordTaskEvent(before, "updated", { date, lastDate: before.date });
+      }
+    },
     onSuccess: afterLocalWrite,
   });
 
@@ -440,8 +534,13 @@ export function useTasks(
   }
 
   const setDeadlineMutation = useMutation({
-    mutationFn: ({ id, deadline }: { id: string; deadline: string | null }) =>
-      taskStore.setDeadline(id, deadline),
+    mutationFn: async ({ id, deadline }: { id: string; deadline: string | null }) => {
+      const before = await findTask(id);
+      await taskStore.setDeadline(id, deadline);
+      if (before) {
+        recordTaskEvent(before, "updated", { deadline, lastDeadline: before.deadline });
+      }
+    },
     onSuccess: afterLocalWrite,
   });
 
@@ -450,8 +549,13 @@ export function useTasks(
   }
 
   const setPriorityMutation = useMutation({
-    mutationFn: ({ id, priority }: { id: string; priority: number }) =>
-      taskStore.setPriority(id, priority),
+    mutationFn: async ({ id, priority }: { id: string; priority: number }) => {
+      const before = await findTask(id);
+      await taskStore.setPriority(id, priority);
+      if (before) {
+        recordTaskEvent(before, "updated", { priority, lastPriority: before.priority });
+      }
+    },
     onSuccess: afterLocalWrite,
   });
 
@@ -460,8 +564,13 @@ export function useTasks(
   }
 
   const setLabelIdsMutation = useMutation({
-    mutationFn: ({ id, labelIds }: { id: string; labelIds: string[] }) =>
-      taskStore.setLabelIds(id, labelIds),
+    mutationFn: async ({ id, labelIds }: { id: string; labelIds: string[] }) => {
+      const before = await findTask(id);
+      await taskStore.setLabelIds(id, labelIds);
+      if (before) {
+        recordTaskEvent(before, "updated", { labelIds, lastLabelIds: before.labelIds });
+      }
+    },
     onSuccess: afterLocalWrite,
   });
 
@@ -503,7 +612,19 @@ export function useTasks(
   // about what timestamp that means any more than completeTask's own
   // caller does.
   const advanceRecurringMutation = useMutation({
-    mutationFn: (id: string) => taskStore.advanceRecurring(id, new Date().toISOString()),
+    mutationFn: async (id: string) => {
+      const before = await findTask(id);
+      await taskStore.advanceRecurring(id, new Date().toISOString());
+      // TaskStore.advanceRecurring's own doc comment: "this is a
+      // completion event too — they set completedAt for real" (an ended
+      // series) or advance dateString to the next occurrence, neither of
+      // which this app's own taxonomy has a separate event_type for — an
+      // Occurrence finishing is recorded as an ordinary "completed" Task
+      // Event, mirroring completeForeverTask below.
+      if (before) {
+        recordTaskEvent(before, "completed");
+      }
+    },
     onSuccess: afterLocalWrite,
   });
 
@@ -512,7 +633,13 @@ export function useTasks(
   }
 
   const completeForeverMutation = useMutation({
-    mutationFn: (id: string) => taskStore.completeForever(id, new Date().toISOString()),
+    mutationFn: async (id: string) => {
+      const before = await findTask(id);
+      await taskStore.completeForever(id, new Date().toISOString());
+      if (before) {
+        recordTaskEvent(before, "completed");
+      }
+    },
     onSuccess: afterLocalWrite,
   });
 
@@ -521,7 +648,19 @@ export function useTasks(
   }
 
   const postponeMutation = useMutation({
-    mutationFn: (id: string) => taskStore.postpone(id, new Date().toISOString()),
+    mutationFn: async (id: string) => {
+      const before = await findTask(id);
+      await taskStore.postpone(id, new Date().toISOString());
+      // A reschedule like any other setDate call — TaskStore.postpone's
+      // own doc comment: "a plain one-day shift of date." The resulting
+      // value is read back from the store rather than recomputed here,
+      // since this hook has no reason to duplicate ../recurrence/'s
+      // tomorrowOf logic just to describe what already happened.
+      const after = before ? await taskStore.get(id) : undefined;
+      if (before) {
+        recordTaskEvent(before, "updated", { date: after?.date ?? null, lastDate: before.date });
+      }
+    },
     onSuccess: afterLocalWrite,
   });
 
@@ -536,8 +675,22 @@ export function useTasks(
   // accepted, transient state, not a refusal). `setTaskParent` is
   // deliberately different — see its own doc comment below.
   const setProjectMutation = useMutation({
-    mutationFn: ({ id, projectId }: { id: string; projectId: string | null }) =>
-      taskStore.setProject(id, projectId),
+    mutationFn: async ({ id, projectId }: { id: string; projectId: string | null }) => {
+      const before = await findTask(id);
+      await taskStore.setProject(id, projectId);
+      // The "moved" Event's own snapshotted `projectId` is the
+      // *resulting* Project (../../../packages/core/src/event-types.ts's
+      // own `projectId` doc comment) — this Task's move is read as
+      // having happened in the place it moved *to*, mirroring how a
+      // real reference implementation files a "moved" activity row under
+      // the destination.
+      if (before) {
+        recordTaskEvent({ id, projectId, content: before.content }, "moved", {
+          projectId,
+          lastProjectId: before.projectId,
+        });
+      }
+    },
     onSuccess: afterLocalWrite,
   });
 
@@ -546,8 +699,13 @@ export function useTasks(
   }
 
   const setSectionMutation = useMutation({
-    mutationFn: ({ id, sectionId }: { id: string; sectionId: string | null }) =>
-      taskStore.setSection(id, sectionId),
+    mutationFn: async ({ id, sectionId }: { id: string; sectionId: string | null }) => {
+      const before = await findTask(id);
+      await taskStore.setSection(id, sectionId);
+      if (before) {
+        recordTaskEvent(before, "moved", { sectionId, lastSectionId: before.sectionId });
+      }
+    },
     onSuccess: afterLocalWrite,
   });
 
@@ -569,8 +727,13 @@ export function useTasks(
   // handler) is what owns that decision, not this hook. Swallowing it
   // here would be exactly the silent failure that brief warns against.
   const setParentMutation = useMutation({
-    mutationFn: ({ id, parentId }: { id: string; parentId: string | null }) =>
-      taskStore.setParent(id, parentId),
+    mutationFn: async ({ id, parentId }: { id: string; parentId: string | null }) => {
+      const before = await findTask(id);
+      await taskStore.setParent(id, parentId);
+      if (before) {
+        recordTaskEvent(before, "moved", { parentId, lastParentId: before.parentId });
+      }
+    },
     onSuccess: afterLocalWrite,
   });
 

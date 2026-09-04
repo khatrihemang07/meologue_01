@@ -98,6 +98,9 @@ const readyContext: EntryStoreOutletContext = {
   deleteSection: vi.fn(),
   archiveSection: vi.fn(),
   unarchiveSection: vi.fn(),
+  events: [],
+  listEventsByTask: vi.fn(async () => []),
+  listEventsByProject: vi.fn(async () => []),
   disabled: false,
 };
 
@@ -185,6 +188,9 @@ describe("ComposerPage", () => {
       deleteSection: vi.fn(),
       archiveSection: vi.fn(),
       unarchiveSection: vi.fn(),
+      events: [],
+      listEventsByTask: vi.fn(async () => []),
+      listEventsByProject: vi.fn(async () => []),
       disabled: true,
     });
 
@@ -262,6 +268,9 @@ describe("ComposerPage", () => {
       deleteSection: vi.fn(),
       archiveSection: vi.fn(),
       unarchiveSection: vi.fn(),
+      events: [],
+      listEventsByTask: vi.fn(async () => []),
+      listEventsByProject: vi.fn(async () => []),
       disabled: true,
       message: "meologue couldn't open its storage. Reloading may help.",
     });
@@ -344,6 +353,9 @@ describe("ComposerPage", () => {
       deleteSection: vi.fn(),
       archiveSection: vi.fn(),
       unarchiveSection: vi.fn(),
+      events: [],
+      listEventsByTask: vi.fn(async () => []),
+      listEventsByProject: vi.fn(async () => []),
       disabled: false,
     });
 
@@ -445,6 +457,9 @@ describe("ComposerPage", () => {
       deleteSection: vi.fn(),
       archiveSection: vi.fn(),
       unarchiveSection: vi.fn(),
+      events: [],
+      listEventsByTask: vi.fn(async () => []),
+      listEventsByProject: vi.fn(async () => []),
       disabled: false,
     });
 
@@ -591,6 +606,9 @@ describe("ComposerPage", () => {
         deleteSection: vi.fn(),
         archiveSection: vi.fn(),
         unarchiveSection: vi.fn(),
+        events: [],
+        listEventsByTask: vi.fn(async () => []),
+        listEventsByProject: vi.fn(async () => []),
         disabled: false,
       });
 
@@ -693,6 +711,9 @@ describe("ComposerPage", () => {
         deleteSection: vi.fn(),
         archiveSection: vi.fn(),
         unarchiveSection: vi.fn(),
+        events: [],
+        listEventsByTask: vi.fn(async () => []),
+        listEventsByProject: vi.fn(async () => []),
         disabled: false,
       });
 
@@ -799,6 +820,9 @@ describe("ComposerPage", () => {
         deleteSection: vi.fn(),
         archiveSection: vi.fn(),
         unarchiveSection: vi.fn(),
+        events: [],
+        listEventsByTask: vi.fn(async () => []),
+        listEventsByProject: vi.fn(async () => []),
         disabled: false,
       });
 
@@ -901,6 +925,9 @@ describe("ComposerPage", () => {
           deleteSection: vi.fn(),
           archiveSection: vi.fn(),
           unarchiveSection: vi.fn(),
+          events: [],
+          listEventsByTask: vi.fn(async () => []),
+          listEventsByProject: vi.fn(async () => []),
           disabled: false,
         },
         "/?q=wor",

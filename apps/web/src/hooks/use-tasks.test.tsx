@@ -2,6 +2,7 @@ import type {
   CommentStore,
   Entry,
   EntryStore,
+  EventStore,
   LabelStore,
   ProjectStore,
   Task,
@@ -241,6 +242,24 @@ function createFakeEntryStore(initial: readonly Entry[] = []): EntryStore {
   };
 }
 
+// Issue #184: `useTasks` records an Event alongside every recorded Task
+// act — a working stub, not a bare cast (`projectStore`/`labelStore`/
+// `commentStore` below stay bare casts, since `requestSync` is mocked
+// wholesale and never actually reaches them): `eventStore.record`/`.list`
+// are called directly by `useEvents` regardless of that mock.
+function fakeEventStore(): EventStore {
+  return {
+    list: vi.fn(async () => []),
+    listByTask: vi.fn(async () => []),
+    listByProject: vi.fn(async () => []),
+    record: vi.fn(async () => {}),
+    upsert: vi.fn(async () => {}),
+    pending: vi.fn(async () => []),
+    getCursor: vi.fn(async () => 0),
+    setCursor: vi.fn(async () => {}),
+  };
+}
+
 describe("useTasks", () => {
   beforeEach(() => {
     localStorage.clear();
@@ -251,6 +270,7 @@ describe("useTasks", () => {
     store: TaskStore,
     entryStore: EntryStore = createFakeEntryStore(),
     deviceId = "device-a",
+    eventStore: EventStore = fakeEventStore(),
   ) {
     const fresh = await importFresh();
     const wrapper = ({ children }: { children: ReactNode }) => (
@@ -272,11 +292,12 @@ describe("useTasks", () => {
           projectStore,
           labelStore,
           commentStore,
+          eventStore,
           deviceId,
         ),
       { wrapper },
     );
-    return { fresh, entryStore, ...rendered };
+    return { fresh, entryStore, eventStore, ...rendered };
   }
 
   it("reads active Tasks from the store", async () => {
@@ -661,6 +682,158 @@ describe("useTasks", () => {
 
       await waitFor(() => expect(store.postpone).toHaveBeenCalledWith("a", expect.any(String)));
       await waitFor(() => expect(result.current.tasks[0]?.date).not.toBe("2020-01-01"));
+    });
+  });
+
+  // Issue #184 / ADR 0056: every recorded Task act calls through to
+  // EventStore.record — proving the wiring itself, not the store
+  // mechanism packages/core's own event-store-contract.ts already covers.
+  describe("Event recording (issue #184)", () => {
+    function lastRecordedEvent(eventStore: EventStore) {
+      const recordMock = eventStore.record as unknown as { mock: { calls: unknown[][] } };
+      const call = recordMock.mock.calls.at(-1);
+      return call?.[0] as { eventType: string; objectType: string; extra: unknown } | undefined;
+    }
+
+    it("addTask records an 'added' Task Event", async () => {
+      const store = createFakeStore();
+      const { result, eventStore } = await renderUseTasks(store);
+
+      act(() => result.current.addTask("buy milk"));
+
+      await waitFor(() => expect(eventStore.record).toHaveBeenCalledTimes(1));
+      expect(lastRecordedEvent(eventStore)).toMatchObject({
+        eventType: "added",
+        objectType: "task",
+        extra: { content: "buy milk" },
+      });
+    });
+
+    it("completeTask records a 'completed' Task Event", async () => {
+      const store = createFakeStore();
+      await store.upsert([task({ id: "a" })]);
+      const { result, eventStore } = await renderUseTasks(store);
+      await waitFor(() => expect(result.current.tasks).toHaveLength(1));
+
+      act(() => result.current.completeTask("a"));
+
+      await waitFor(() => expect(eventStore.record).toHaveBeenCalledTimes(1));
+      expect(lastRecordedEvent(eventStore)).toMatchObject({
+        eventType: "completed",
+        objectType: "task",
+      });
+    });
+
+    it("uncompleteTask records an 'uncompleted' Task Event", async () => {
+      const store = createFakeStore();
+      await store.upsert([task({ id: "a", completedAt: "2026-01-01T00:00:00.000Z" })]);
+      await store.complete("a", "2026-01-01T00:00:00.000Z");
+      const { result, eventStore } = await renderUseTasks(store);
+      await waitFor(() => expect(result.current.completedTasks).toHaveLength(1));
+
+      act(() => result.current.uncompleteTask("a"));
+
+      await waitFor(() => expect(eventStore.record).toHaveBeenCalledTimes(1));
+      expect(lastRecordedEvent(eventStore)).toMatchObject({
+        eventType: "uncompleted",
+        objectType: "task",
+      });
+    });
+
+    it("renameTask records an 'updated' Task Event carrying content and lastContent", async () => {
+      const store = createFakeStore();
+      await store.upsert([task({ id: "a", content: "old title" })]);
+      const { result, eventStore } = await renderUseTasks(store);
+      await waitFor(() => expect(result.current.tasks).toHaveLength(1));
+
+      act(() => result.current.renameTask("a", "new title"));
+
+      await waitFor(() => expect(eventStore.record).toHaveBeenCalledTimes(1));
+      expect(lastRecordedEvent(eventStore)).toMatchObject({
+        eventType: "updated",
+        objectType: "task",
+        extra: { content: "new title", lastContent: "old title" },
+      });
+    });
+
+    it("removeTask records a 'deleted' Task Event carrying the Task's last content", async () => {
+      const store = createFakeStore();
+      await store.upsert([task({ id: "a", content: "buy milk" })]);
+      const { result, eventStore } = await renderUseTasks(store);
+      await waitFor(() => expect(result.current.tasks).toHaveLength(1));
+
+      act(() => result.current.removeTask("a"));
+
+      await waitFor(() => expect(eventStore.record).toHaveBeenCalledTimes(1));
+      expect(lastRecordedEvent(eventStore)).toMatchObject({
+        eventType: "deleted",
+        objectType: "task",
+        extra: { content: "buy milk" },
+      });
+    });
+
+    it("setTaskProject records a 'moved' Task Event carrying projectId and lastProjectId", async () => {
+      const store = createFakeStore();
+      await store.upsert([task({ id: "a", projectId: null })]);
+      const { result, eventStore } = await renderUseTasks(store);
+      await waitFor(() => expect(result.current.tasks).toHaveLength(1));
+
+      act(() => result.current.setTaskProject("a", "project-1"));
+
+      await waitFor(() => expect(eventStore.record).toHaveBeenCalledTimes(1));
+      expect(lastRecordedEvent(eventStore)).toMatchObject({
+        eventType: "moved",
+        objectType: "task",
+        extra: { projectId: "project-1", lastProjectId: null },
+      });
+    });
+
+    // Issue #184's own acceptance criterion: reordering records nothing.
+    it("reorderTask records no Event — reordering is explicitly not recorded", async () => {
+      const store = createFakeStore();
+      await store.upsert([task({ id: "a" })]);
+      const { result, eventStore } = await renderUseTasks(store);
+      await waitFor(() => expect(result.current.tasks).toHaveLength(1));
+
+      act(() => result.current.reorderTask("a", "W"));
+
+      await waitFor(() => expect(store.reorder).toHaveBeenCalled());
+      expect(eventStore.record).not.toHaveBeenCalled();
+    });
+
+    it("reorderTaskToday records no Event — reordering is explicitly not recorded", async () => {
+      const store = createFakeStore();
+      await store.upsert([task({ id: "a" })]);
+      const { result, eventStore } = await renderUseTasks(store);
+      await waitFor(() => expect(result.current.tasks).toHaveLength(1));
+
+      act(() => result.current.reorderTaskToday("a", "W"));
+
+      await waitFor(() => expect(store.reorderToday).toHaveBeenCalled());
+      expect(eventStore.record).not.toHaveBeenCalled();
+    });
+
+    // ADR 0056's whole reason for existing: occurredAt is the acting
+    // Device's own clock, stamped at the moment the act is recorded —
+    // never left for a Server to fill in later. Asserted here as "a real
+    // ISO timestamp from right now," rather than under `vi.useFakeTimers`
+    // (which `waitFor`'s own internal polling doesn't reliably survive):
+    // the load-bearing property this test checks is "this Device's own
+    // clock, not a placeholder or a stale value," which a tight time
+    // window around the real call already proves.
+    it("stamps occurredAt with a real timestamp from the Device's own clock", async () => {
+      const before = Date.now();
+      const store = createFakeStore();
+      const { result, eventStore } = await renderUseTasks(store);
+
+      act(() => result.current.addTask("buy milk"));
+
+      await waitFor(() => expect(eventStore.record).toHaveBeenCalledTimes(1));
+      const after = Date.now();
+      const recorded = lastRecordedEvent(eventStore) as { occurredAt?: string } | undefined;
+      const occurredAtMs = new Date(recorded?.occurredAt ?? "").getTime();
+      expect(occurredAtMs).toBeGreaterThanOrEqual(before);
+      expect(occurredAtMs).toBeLessThanOrEqual(after);
     });
   });
 });

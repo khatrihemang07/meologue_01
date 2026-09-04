@@ -396,6 +396,71 @@ export interface components {
             seq: number;
         };
         /**
+         * @description The Event-shaped sibling of `CommentInput` (issue #184 / ADR 0056) —
+         *     Todo's own activity log, Sync's seventh stream. No `deleted_at`: see
+         *     `../migrations/0017_create_events.sql`'s own header comment for why an
+         *     Event has no "nothing" state for a tombstone to represent. `event_type`
+         *     and `object_type` are plain `String`, not a Postgres `enum` — the fixed
+         *     vocabulary (`added`/`deleted`/`updated`/`archived`/`unarchived`/
+         *     `completed`/`uncompleted`/`moved`, and `task`/`comment`/`project`/
+         *     `section`) is enforced by ../../packages/core/src/event-types.ts's own
+         *     union type on every Device that writes one, the same "validated at the
+         *     edge that actually knows the vocabulary, not by a database constraint"
+         *     choice `tasks.priority`'s 1-4 range already makes
+         *     (../../packages/core/src/task-fields.ts) — a Postgres `enum` would also
+         *     need a migration of its own the day this vocabulary grows, where a
+         *     `text` column and a client-side union do not.
+         */
+        EventInput: {
+            /** Format: uuid */
+            device_id: string;
+            event_type: string;
+            /**
+             * @description Whatever this event_type/object_type pair needs to say about what
+             *     changed — see `../migrations/0017_create_events.sql`'s own comment
+             *     on why this is one `jsonb` column rather than a wide table of
+             *     nullable `last_*` columns.
+             */
+            extra?: unknown;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            object_id: string;
+            object_type: string;
+            /**
+             * Format: date-time
+             * @description The acting Device's own clock at the moment the act happened —
+             *     never the time this row reaches the Server. ADR 0056's entire
+             *     Decision turns on this field meaning that and only that; see this
+             *     module's own top-of-file doc comment and the ADR itself for why.
+             */
+            occurred_at: string;
+            /** Format: uuid */
+            project_id?: string | null;
+            /** Format: uuid */
+            task_id?: string | null;
+        };
+        /** @description The Event-shaped sibling of `CommentOutput` — adds only `seq`. */
+        EventOutput: {
+            /** Format: uuid */
+            device_id: string;
+            event_type: string;
+            extra?: unknown;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            object_id: string;
+            object_type: string;
+            /** Format: date-time */
+            occurred_at: string;
+            /** Format: uuid */
+            project_id?: string | null;
+            /** Format: int64 */
+            seq: number;
+            /** Format: uuid */
+            task_id?: string | null;
+        };
+        /**
          * @description Which Server-backed features this Server can actually serve right now,
          *     derived from the same configuration `main.rs` already used to decide
          *     whether `/v1/reflect`, `/v1/digests/*` and the embedding worker exist at
@@ -818,6 +883,7 @@ export interface components {
             /** Format: uuid */
             device_id: string;
             entries: components["schemas"]["EntryInput"][];
+            events?: components["schemas"]["EventInput"][];
             labels?: components["schemas"]["LabelInput"][];
             /** @description Mirrors `tasks`' own `#[serde(default)]` reasoning. */
             projects?: components["schemas"]["ProjectInput"][];
@@ -826,6 +892,16 @@ export interface components {
             sections?: components["schemas"]["SectionInput"][];
             /** Format: int64 */
             since_comment_seq?: number;
+            /**
+             * Format: int64
+             * @description Issue #184: Sync's seventh stream, Events — `#[serde(default)]`
+             *     for the identical reason every stream above's own request fields
+             *     are: a Device built before this ticket has no `events`/
+             *     `since_event_seq` key in its request body at all. Unlike the four
+             *     streams above, there was no version bump to hang this on — see
+             *     `PROTOCOL_VERSION`'s own doc comment for why none was needed.
+             */
+            since_event_seq?: number;
             /** Format: int64 */
             since_label_seq?: number;
             /**
@@ -875,6 +951,23 @@ export interface components {
             /** Format: int64 */
             cursor: number;
             entries: components["schemas"]["EntryOutput"][];
+            /** Format: int64 */
+            event_cursor: number;
+            /**
+             * @description Issue #184: Events, always present and always populated — unlike
+             *     `tasks`/`projects`/etc. above, `run_sync` applies **no**
+             *     `protocol_version` gate to this pair (see `PROTOCOL_VERSION`'s own
+             *     doc comment: there is no version number that separates "a v6
+             *     Device that predates this ticket" from "a v6 Device that has it,"
+             *     so a gate here couldn't distinguish anything a v6 Device's own
+             *     `#[serde(default)]` request fields don't already handle). A
+             *     pre-#184 v6 Device that receives a populated `events` array simply
+             *     never reads a JSON key its own `WireSyncResponse` type doesn't
+             *     declare — the same "extra field, harmlessly ignored" tolerance
+             *     every wire response in this codebase already relies on for a
+             *     field it doesn't recognise.
+             */
+            events: components["schemas"]["EventOutput"][];
             /** Format: int64 */
             label_cursor: number;
             labels: components["schemas"]["LabelOutput"][];
@@ -1320,7 +1413,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Entries (from protocol 5, Tasks; from protocol 6, Projects/Sections/Labels/Comments too) accepted; every change since each stream's own cursor is returned */
+            /** @description Entries (from protocol 5, Tasks; from protocol 6, Projects/Sections/Labels/Comments/Events too) accepted; every change since each stream's own cursor is returned */
             200: {
                 headers: {
                     [name: string]: unknown;

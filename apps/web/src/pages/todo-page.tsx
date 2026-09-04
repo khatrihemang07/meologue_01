@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { BackToChats } from "@/components/back-to-chats";
 import { localDayKey } from "@/components/date-picker-sheet";
 import { Shell } from "@/components/shell";
+import { ActivityFeed } from "@/components/todo/activity-feed";
 import { AddTaskForm } from "@/components/todo/add-task-form";
 import { CompletedTasks } from "@/components/todo/completed-tasks";
 import { ProjectView } from "@/components/todo/project-view";
@@ -40,7 +41,7 @@ import { useEntryStore } from "@/pages/entry-store-layout";
  * are one per view.
  */
 interface TodoBackgroundView {
-  view: "inbox" | "today" | "projects" | "project" | "search";
+  view: "inbox" | "today" | "projects" | "project" | "search" | "activity";
   projectId: string | null;
   /**
    * The full search page's own `?q=…&tab=…` (issue #183) — `undefined`
@@ -60,6 +61,9 @@ function backgroundPath(background: TodoBackgroundView): string {
   }
   if (background.view === "search") {
     return `/todo/search${background.search ?? ""}`;
+  }
+  if (background.view === "activity") {
+    return `/todo/activity${background.search ?? ""}`;
   }
   return `/todo/${background.view}`;
 }
@@ -81,7 +85,7 @@ export interface TodoPageProps {
    * `/reflect/:sessionId` reads its own id — not a second prop, since the
    * id is already in the URL a bookmark or a reload has to survive.
    */
-  view?: "inbox" | "today" | "projects" | "project" | "search";
+  view?: "inbox" | "today" | "projects" | "project" | "search" | "activity";
 }
 
 /**
@@ -149,7 +153,7 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
       : {
           view,
           projectId: view === "project" ? (routeProjectId ?? null) : null,
-          search: view === "search" ? location.search : undefined,
+          search: view === "search" || view === "activity" ? location.search : undefined,
         };
   const currentProjectId = backgroundView.projectId;
 
@@ -199,6 +203,7 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     deleteSection,
     archiveSection,
     unarchiveSection,
+    events,
   } = useEntryStore();
 
   // The default date/Project a Task captured *from this view* inherits —
@@ -245,6 +250,11 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
 
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const confirmingTask = tasks.find((task) => task.id === confirmingId) ?? null;
+
+  // Issue #184: "completed work is reached by narrowing the log to
+  // completions, not from a separate destination of its own" — a plain
+  // toggle above the Activity view rather than a second route.
+  const [activityCompletedOnly, setActivityCompletedOnly] = useState(false);
 
   // The one TaskScheduleSheet instance for the whole page (this
   // component's own doc comment) — `schedulingId` names which Task it's
@@ -343,14 +353,23 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     handleOpenSchedule(task.id);
   }
 
-  // Issue #178's Task detail view. `openTask` is looked up against the
-  // flat `tasks` array — the same "still holds every Task anywhere"
-  // property this component's own header comment already leans on for
-  // `confirmingTask`/`schedulingTask` above, so a Task opened from any
-  // view (Inbox, Today, a Project) resolves here regardless of which
-  // view's own scoped query happens to be loaded.
+  // Issue #178's Task detail view. `openTask` is looked up against
+  // `tasks` **and** `completedTasks` — the identical two-list lookup
+  // `entry-row.tsx`'s own Task Reference (`TaskReferenceItem`) already
+  // uses to resolve a Task by id, for the identical reason: `tasks`
+  // (TaskStore.list()) excludes completed rows by its own guarantee, so
+  // a completed Task's own address would otherwise resolve to nothing
+  // and silently fall back to Inbox instead of opening (the coordinator's
+  // own gap-fix report against issue #184's activity feed — every
+  // `completed` row links straight here). `tasks` first, since it's the
+  // far more common case and a Task can never appear in both.
   const openTaskId = taskSlugId !== undefined ? taskIdFromParam(taskSlugId) : null;
-  const openTask = openTaskId !== null ? (tasks.find((t) => t.id === openTaskId) ?? null) : null;
+  const openTask =
+    openTaskId !== null
+      ? (tasks.find((t) => t.id === openTaskId) ??
+        completedTasks.find((t) => t.id === openTaskId) ??
+        null)
+      : null;
   const openTaskProject: Project | null =
     openTask === null ? null : (projects.find((p) => p.id === openTask.projectId) ?? null);
 
@@ -388,7 +407,9 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
           const { overdue, dueToday } = today(tasks, localDayKey(new Date()));
           return [...overdue, ...dueToday];
         })()
-      : backgroundView.view === "projects" || backgroundView.view === "search"
+      : backgroundView.view === "projects" ||
+          backgroundView.view === "search" ||
+          backgroundView.view === "activity"
         ? []
         : scopedTasks;
   const openTaskIndex =
@@ -504,6 +525,22 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   // ProjectStore.deleteSection's own doc comment describes its cascade
   // (direct members, then every descendant of each), so this can never
   // quietly under-count a Section holding sub-tasks.
+  // The Activity view's own scope (issue #184): the view across
+  // everything by default, or one Project's own history when opened with
+  // a `?projectId=` query param (`project-view.tsx`'s own "Activity"
+  // link) — filtered client-side from the one flat `events` list every
+  // surface reads from, the identical "narrow the flat list, don't stand
+  // up a second fetch" reasoning `comment-counts.ts`'s `commentsForTask`
+  // already applies to Comments.
+  const activityProjectId =
+    backgroundView.view === "activity"
+      ? new URLSearchParams(backgroundView.search ?? "").get("projectId")
+      : null;
+  const activityEvents =
+    activityProjectId === null
+      ? events
+      : events.filter((event) => event.projectId === activityProjectId);
+
   async function countSectionDestruction(sectionId: string): Promise<number> {
     const direct = await listTasksInSection(sectionId);
     let total = direct.length;
@@ -522,9 +559,9 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
           full search page (`view === "search"`, issue #183) is a results
           list with no "current view" for a captured Task to inherit
           either, the identical reasoning. */}
-      {backgroundView.view !== "projects" && backgroundView.view !== "search" && (
-        <AddTaskForm onAdd={handleAdd} disabled={disabled} />
-      )}
+      {backgroundView.view !== "projects" &&
+        backgroundView.view !== "search" &&
+        backgroundView.view !== "activity" && <AddTaskForm onAdd={handleAdd} disabled={disabled} />}
 
       {backgroundView.view === "today" && (
         <TodayView
@@ -621,6 +658,37 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
         />
       )}
 
+      {/* Issue #184: the view across everything, or one Project's own
+          history when opened with `?projectId=` — never a second
+          destination for completed work alone (this component's own
+          `activityCompletedOnly` toggle narrows the same log instead). */}
+      {backgroundView.view === "activity" && (
+        <div className="flex flex-col gap-2">
+          <label className="flex items-center gap-2 px-3 py-1 text-muted-foreground text-sm">
+            <input
+              type="checkbox"
+              checked={activityCompletedOnly}
+              onChange={(event) => setActivityCompletedOnly(event.target.checked)}
+            />
+            Completed only
+          </label>
+          <ActivityFeed
+            events={activityEvents}
+            // Both active and completed — a `completed` Event's own Task
+            // lives in `completedTasks`, not `tasks`, and the feed needs
+            // to resolve either to name its subject live.
+            tasks={[...tasks, ...completedTasks]}
+            projects={projects}
+            completedOnly={activityCompletedOnly}
+            emptyMessage={
+              activityProjectId !== null
+                ? "Nothing has happened in this Project yet."
+                : "Nothing has happened yet."
+            }
+          />
+        </div>
+      )}
+
       {/* The Completed disclosure is Inbox-specific — Today's own Tasks
           are never completed *from* Today in a way that would need a
           second copy of this list; completing a Task from either view
@@ -692,6 +760,14 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
           onClose={closeTaskDetail}
           onNavigate={stepTaskDetail}
           onRename={(content) => renameTask(openTask.id, content)}
+          // Issue #184's own gap-fix report: the detail view now resolves
+          // (and must render actionable) a completed Task too — reuses
+          // `handleComplete`'s own recurring-Task/toast handling, the
+          // identical door every other completion entry point already
+          // goes through, rather than this view's own checkbox
+          // duplicating that logic.
+          onComplete={() => handleComplete(openTask.id, openTask.content, openTask.dateString)}
+          onUncomplete={() => uncompleteTask(openTask.id)}
           onOpenSchedule={() => handleOpenSchedule(openTask.id)}
           onSetProject={(projectId) => setTaskProject(openTask.id, projectId)}
           onSetLabels={(labelIds) => setTaskLabels(openTask.id, labelIds)}
@@ -700,6 +776,10 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
           onAddComment={(text) => addComment(openTask.id, text)}
           onEditComment={editComment}
           onRemoveComment={removeComment}
+          // Issue #184: this Task's own history, newest first — narrowed
+          // client-side from the one flat `events` list, mirroring
+          // `commentsForTask`'s identical narrowing just above.
+          events={events.filter((event) => event.taskId === openTask.id)}
         />
       )}
 

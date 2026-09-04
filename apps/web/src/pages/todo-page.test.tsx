@@ -1,4 +1,4 @@
-import type { Task } from "@meologue/core";
+import type { Event, Task } from "@meologue/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { Link, MemoryRouter, Outlet, Route, Routes } from "react-router";
@@ -78,6 +78,7 @@ function renderTodoPage(context: EntryStoreOutletContext, initialPath = "/todo/i
             <Route path="/todo/today" element={<TodoPage view="today" />} />
             <Route path="/todo/projects" element={<TodoPage view="projects" />} />
             <Route path="/todo/projects/:projectId" element={<TodoPage view="project" />} />
+            <Route path="/todo/activity" element={<TodoPage view="activity" />} />
             {/* Issue #178's Task detail route — no `view` prop, mirroring
                 App.tsx's own identical route exactly (that file's own
                 comment explains why). */}
@@ -148,6 +149,9 @@ function readyContext(overrides: Partial<EntryStoreOutletContext> = {}): EntrySt
     deleteSection: vi.fn(),
     archiveSection: vi.fn(),
     unarchiveSection: vi.fn(),
+    events: [],
+    listEventsByTask: vi.fn(async () => []),
+    listEventsByProject: vi.fn(async () => []),
     disabled: false,
     ...overrides,
   };
@@ -296,6 +300,87 @@ describe("TodoPage", () => {
     // an unscoped match that would resolve to both.
     expect(dialog.querySelector("header")).toHaveTextContent("Inbox");
     expect(within(dialog).getByLabelText("Task title")).toHaveValue("call mum");
+  });
+
+  // The coordinator's own gap-fix report: `openTask` used to be looked up
+  // against the active `tasks` array alone, so a completed Task's own
+  // address resolved to nothing and silently fell back to Inbox instead
+  // of opening — the single most useful row an activity log surfaces
+  // (issue #184) linking nowhere.
+  it("opens a completed Task's own view too, not just an active one", async () => {
+    renderTodoPage(
+      inboxContext([], {
+        completedTasks: [
+          task({
+            id: DETAIL_TASK_ID,
+            content: "call mum",
+            completedAt: "2026-01-02T00:00:00.000Z",
+          }),
+        ],
+      }),
+      `/todo/task/call-mum-${DETAIL_TASK_ID}`,
+    );
+
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByLabelText('Mark "call mum" not done')).toBeChecked();
+    expect(within(dialog).getByLabelText("Task title")).toHaveClass("line-through");
+  });
+
+  it("un-completing from a completed Task's own detail view calls uncompleteTask", async () => {
+    const uncompleteTask = vi.fn();
+    renderTodoPage(
+      inboxContext([], {
+        completedTasks: [
+          task({
+            id: DETAIL_TASK_ID,
+            content: "call mum",
+            completedAt: "2026-01-02T00:00:00.000Z",
+          }),
+        ],
+        uncompleteTask,
+      }),
+      `/todo/task/call-mum-${DETAIL_TASK_ID}`,
+    );
+
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+    fireEvent.click(screen.getByLabelText('Mark "call mum" not done'));
+
+    expect(uncompleteTask).toHaveBeenCalledWith(DETAIL_TASK_ID);
+  });
+
+  // The coordinator's own reproduction, end to end: an Activity row for a
+  // completion Event is a real link, and following it lands on a
+  // rendered dialog — not the Inbox fallback a resolution gap used to
+  // produce.
+  it("an Activity link for a completion Event reaches a view that actually renders", async () => {
+    const completedTask = task({
+      id: DETAIL_TASK_ID,
+      content: "call mum",
+      completedAt: "2026-01-02T00:00:00.000Z",
+    });
+    const completionEvent: Event = {
+      id: "e1",
+      deviceId: "device-a",
+      eventType: "completed",
+      objectType: "task",
+      objectId: DETAIL_TASK_ID,
+      taskId: DETAIL_TASK_ID,
+      projectId: null,
+      occurredAt: "2026-01-02T00:00:00.000Z",
+      extra: { content: "call mum" },
+      seq: 1,
+      syncedAt: "2026-01-02T00:00:00.000Z",
+    };
+    renderTodoPage(
+      readyContext({ completedTasks: [completedTask], events: [completionEvent] }),
+      "/todo/activity",
+    );
+
+    const link = await screen.findByRole("link", { name: /call mum/ });
+    fireEvent.click(link);
+
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
   });
 
   it("Esc closes the Task's own view", async () => {

@@ -2,13 +2,15 @@ import { describe, expect, it, vi } from "vitest";
 import { PROTOCOL_VERSION, SYNC_BATCH_SIZE } from "./protocol";
 import { sync } from "./sync-engine";
 import { entry } from "./test-support/entry-fixture";
+import { event } from "./test-support/event-fixture";
 import { InMemoryCommentStore } from "./test-support/in-memory-comment-store";
 import { InMemoryEntryStore } from "./test-support/in-memory-entry-store";
+import { InMemoryEventStore } from "./test-support/in-memory-event-store";
 import { InMemoryLabelStore } from "./test-support/in-memory-label-store";
 import { InMemoryProjectStore } from "./test-support/in-memory-project-store";
 import { InMemoryTaskStore } from "./test-support/in-memory-task-store";
 import { task } from "./test-support/task-fixture";
-import type { WireEntryOutput, WireSyncResponse, WireTaskOutput } from "./wire";
+import type { WireEntryOutput, WireEventOutput, WireSyncResponse, WireTaskOutput } from "./wire";
 
 const DEVICE_ID = "device-1";
 
@@ -48,11 +50,29 @@ function wireTaskOutput(overrides: Partial<WireTaskOutput> = {}): WireTaskOutput
   };
 }
 
+// Issue #184: the Event-shaped sibling of wireTaskOutput above.
+function wireEventOutput(overrides: Partial<WireEventOutput> = {}): WireEventOutput {
+  return {
+    id: "event-1",
+    device_id: DEVICE_ID,
+    event_type: "added",
+    object_type: "task",
+    object_id: "task-1",
+    task_id: "task-1",
+    project_id: null,
+    occurred_at: "2026-01-01T00:00:00.000Z",
+    extra: null,
+    seq: 1,
+    ...overrides,
+  };
+}
+
 // Every stream empty on both request-echoing fields it might carry —
 // most tests below exercise one stream at a time and don't care what the
 // others answer, so this is the baseline every partial `WireSyncResponse`
 // literal spreads onto rather than each test having to spell out every
-// one of issue #182's four new streams by hand.
+// one of issue #182's four new streams (or issue #184's Event stream) by
+// hand.
 const emptyResponse: WireSyncResponse = {
   entries: [],
   cursor: 0,
@@ -66,13 +86,15 @@ const emptyResponse: WireSyncResponse = {
   label_cursor: 0,
   comments: [],
   comment_cursor: 0,
+  events: [],
+  event_cursor: 0,
 };
 
-// A fresh set of the four stores issue #182 added, alongside `store` and
-// `taskStore` — every `sync()` call in this file needs all six now
+// A fresh set of the five stores issue #182/#184 added, alongside `store`
+// and `taskStore` — every `sync()` call in this file needs all seven now
 // (SyncEngineOptions' own doc comment on why each is required, not
-// optional), so this is the one place that plumbing lives rather than six
-// stores constructed at every call site.
+// optional), so this is the one place that plumbing lives rather than
+// seven stores constructed at every call site.
 function newStores() {
   const store = new InMemoryEntryStore();
   const taskStore = new InMemoryTaskStore();
@@ -82,6 +104,7 @@ function newStores() {
     projectStore: new InMemoryProjectStore(taskStore),
     labelStore: new InMemoryLabelStore(),
     commentStore: new InMemoryCommentStore(),
+    eventStore: new InMemoryEventStore(),
   };
 }
 
@@ -118,6 +141,8 @@ describe("sync engine", () => {
         labels: [],
         since_comment_seq: 0,
         comments: [],
+        since_event_seq: 0,
+        events: [],
       });
       return {
         ...emptyResponse,
@@ -243,12 +268,13 @@ describe("sync engine", () => {
   // new stream — each Cursor is its own independent watermark (ADR 0051's
   // own reasoning for `TASK_SYNC_INSERT_LOCK_KEY`, applied a fourth time
   // to why there are four more Cursors rather than one shared number).
-  it("advances the Project, Section, Label and Comment Cursors independently and never regresses any of them", async () => {
+  it("advances the Project, Section, Label, Comment and Event Cursors independently and never regresses any of them", async () => {
     const stores = newStores();
     await stores.projectStore.setProjectCursor(10);
     await stores.projectStore.setSectionCursor(20);
     await stores.labelStore.setCursor(30);
     await stores.commentStore.setCursor(40);
+    await stores.eventStore.setCursor(50);
 
     const staleTransport = vi.fn(async () => ({
       ...emptyResponse,
@@ -256,12 +282,14 @@ describe("sync engine", () => {
       section_cursor: 2,
       label_cursor: 3,
       comment_cursor: 4,
+      event_cursor: 5,
     }));
     await sync({ ...stores, transport: staleTransport, deviceId: DEVICE_ID });
     expect(await stores.projectStore.getProjectCursor()).toBe(10);
     expect(await stores.projectStore.getSectionCursor()).toBe(20);
     expect(await stores.labelStore.getCursor()).toBe(30);
     expect(await stores.commentStore.getCursor()).toBe(40);
+    expect(await stores.eventStore.getCursor()).toBe(50);
 
     const advancingTransport = vi.fn(async () => ({
       ...emptyResponse,
@@ -269,12 +297,79 @@ describe("sync engine", () => {
       section_cursor: 21,
       label_cursor: 31,
       comment_cursor: 41,
+      event_cursor: 51,
     }));
     await sync({ ...stores, transport: advancingTransport, deviceId: DEVICE_ID });
     expect(await stores.projectStore.getProjectCursor()).toBe(11);
     expect(await stores.projectStore.getSectionCursor()).toBe(21);
     expect(await stores.labelStore.getCursor()).toBe(31);
     expect(await stores.commentStore.getCursor()).toBe(41);
+    expect(await stores.eventStore.getCursor()).toBe(51);
+  });
+
+  // The Event-shaped sibling of "pushes pending Tasks..." above — same
+  // push/confirm shape, over Sync's seventh stream (issue #184). Unlike
+  // every stream above it, a re-`record()`ed Event is never expected —
+  // there is no edit or tombstone for a confirmed round trip to reflect
+  // — so this only proves push-then-pull-back, not a subsequent local
+  // mutation surviving a second sync.
+  it("pushes pending Events and confirms them when the server echoes back a sequence", async () => {
+    const stores = newStores();
+    await stores.eventStore.record(event({ id: "local-event-1", seq: null }));
+
+    const transport = vi.fn(async (request) => {
+      expect(request.since_event_seq).toBe(0);
+      expect(request.events).toEqual([
+        {
+          id: "local-event-1",
+          device_id: DEVICE_ID,
+          event_type: "added",
+          object_type: "task",
+          object_id: "task-1",
+          task_id: "task-1",
+          project_id: null,
+          occurred_at: "2026-01-01T00:00:00.000Z",
+          extra: null,
+        },
+      ]);
+      return {
+        ...emptyResponse,
+        events: [wireEventOutput({ id: "local-event-1", seq: 1 })],
+        event_cursor: 1,
+      } satisfies WireSyncResponse;
+    });
+
+    await sync({
+      ...stores,
+      transport,
+      deviceId: DEVICE_ID,
+      now: () => "2026-01-01T00:05:00.000Z",
+    });
+
+    expect(await stores.eventStore.pending()).toEqual([]);
+    const [confirmed] = await stores.eventStore.list();
+    expect(confirmed).toEqual(
+      event({ id: "local-event-1", seq: 1, syncedAt: "2026-01-01T00:05:00.000Z" }),
+    );
+  });
+
+  // A redelivered response — the server echoing the same, already-
+  // confirmed Event a second time (a retried poll, say) — must not
+  // duplicate it. Proves this at the sync-engine level, not only the
+  // store-level guarantee event-store-contract.ts already covers.
+  it("does not duplicate an Event the server echoes twice under the same id", async () => {
+    const stores = newStores();
+    await stores.eventStore.upsert([event({ id: "e1", seq: 1 })]);
+
+    const transport = vi.fn(async () => ({
+      ...emptyResponse,
+      events: [wireEventOutput({ id: "e1", seq: 1 })],
+      event_cursor: 1,
+    }));
+    await sync({ ...stores, transport, deviceId: DEVICE_ID });
+
+    const all = await stores.eventStore.list();
+    expect(all).toHaveLength(1);
   });
 
   it("immediately runs another round when the Entry batch comes back full", async () => {

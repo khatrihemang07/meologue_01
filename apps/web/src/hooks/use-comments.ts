@@ -1,6 +1,7 @@
-import type { Comment, CommentStore } from "@meologue/core";
+import type { Comment, CommentStore, EventStore, TaskStore } from "@meologue/core";
 import { mintId } from "@meologue/core";
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { useEvents } from "@/hooks/use-events";
 import { queryClient } from "@/lib/query-client";
 import { COMMENTS_QUERY_KEY } from "@/lib/query-keys";
 
@@ -27,8 +28,25 @@ export interface UseCommentsResult {
  * write, no `requestSync` nudge — Comment Sync doesn't exist yet, issue
  * #182) for the identical reason that file's own header comment gives
  * for mirroring use-history.ts.
+ *
+ * `taskStore` (issue #184) is read-only here — every Comment Event this
+ * hook records needs its parent Task's own `projectId` for the
+ * per-Project surface (../../../packages/core/src/event-types.ts's own
+ * `projectId` doc comment), and `CommentStore` alone has no way to
+ * answer that. `eventStore` is Todo's activity log itself — recording
+ * add/edit is issue #184's own acceptance criterion; recording delete is
+ * this app's own deliberate divergence from a reference that records
+ * neither (task-detail-view.tsx's own header comment named this seam
+ * before this ticket built it: "the activity log — this view's own
+ * Comment edit/delete doors are left wired straight to the store, with
+ * no event recorded").
  */
-export function useComments(commentStore: CommentStore, deviceId: string): UseCommentsResult {
+export function useComments(
+  commentStore: CommentStore,
+  taskStore: TaskStore,
+  eventStore: EventStore,
+  deviceId: string,
+): UseCommentsResult {
   const commentsQuery = useQuery({
     queryKey: COMMENTS_QUERY_KEY,
     queryFn: () => commentStore.list(),
@@ -36,10 +54,36 @@ export function useComments(commentStore: CommentStore, deviceId: string): UseCo
 
   const comments = commentsQuery.data ?? [];
 
+  const { recordEvent } = useEvents(eventStore, deviceId);
+
+  async function recordCommentEvent(
+    comment: Pick<Comment, "id" | "taskId">,
+    eventType: "added" | "updated" | "deleted",
+    extra: Record<string, unknown> | null,
+  ): Promise<void> {
+    const task = await taskStore.get(comment.taskId);
+    // `taskContent` is always merged in — the cached label
+    // `format-event.ts`'s own `describeEventLine` falls back to for
+    // "which Task was this Comment on" once the Task can no longer be
+    // resolved live, the identical reasoning use-tasks.ts's
+    // `recordTaskEvent` gives for its own `content` merge.
+    await recordEvent({
+      eventType,
+      objectType: "comment",
+      objectId: comment.id,
+      taskId: comment.taskId,
+      projectId: task?.projectId ?? null,
+      extra: { ...extra, taskContent: task?.content ?? null },
+    });
+  }
+
   const afterLocalWrite = () => queryClient.invalidateQueries({ queryKey: COMMENTS_QUERY_KEY });
 
   const upsertMutation = useMutation({
-    mutationFn: (newComment: Comment) => commentStore.upsert([newComment]),
+    mutationFn: async (newComment: Comment) => {
+      await commentStore.upsert([newComment]);
+      await recordCommentEvent(newComment, "added", { text: newComment.text });
+    },
     onSuccess: afterLocalWrite,
   });
 
@@ -61,7 +105,13 @@ export function useComments(commentStore: CommentStore, deviceId: string): UseCo
   }
 
   const editMutation = useMutation({
-    mutationFn: ({ id, text }: { id: string; text: string }) => commentStore.edit(id, text),
+    mutationFn: async ({ id, text }: { id: string; text: string }) => {
+      const before = await commentStore.get(id);
+      await commentStore.edit(id, text);
+      if (before) {
+        await recordCommentEvent(before, "updated", { text, lastText: before.text });
+      }
+    },
     onSuccess: afterLocalWrite,
   });
 
@@ -74,7 +124,13 @@ export function useComments(commentStore: CommentStore, deviceId: string): UseCo
   }
 
   const removeMutation = useMutation({
-    mutationFn: (id: string) => commentStore.remove(id),
+    mutationFn: async (id: string) => {
+      const before = await commentStore.get(id);
+      await commentStore.remove(id);
+      if (before) {
+        await recordCommentEvent(before, "deleted", { text: before.text });
+      }
+    },
     onSuccess: afterLocalWrite,
   });
 

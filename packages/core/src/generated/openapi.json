@@ -329,7 +329,7 @@
         },
         "responses": {
           "200": {
-            "description": "Entries (from protocol 5, Tasks; from protocol 6, Projects/Sections/Labels/Comments too) accepted; every change since each stream's own cursor is returned",
+            "description": "Entries (from protocol 5, Tasks; from protocol 6, Projects/Sections/Labels/Comments/Events too) accepted; every change since each stream's own cursor is returned",
             "content": {
               "application/json": {
                 "schema": {
@@ -604,6 +604,116 @@
           "seq": {
             "type": "integer",
             "format": "int64"
+          }
+        }
+      },
+      "EventInput": {
+        "type": "object",
+        "description": "The Event-shaped sibling of `CommentInput` (issue #184 / ADR 0056) —\nTodo's own activity log, Sync's seventh stream. No `deleted_at`: see\n`../migrations/0017_create_events.sql`'s own header comment for why an\nEvent has no \"nothing\" state for a tombstone to represent. `event_type`\nand `object_type` are plain `String`, not a Postgres `enum` — the fixed\nvocabulary (`added`/`deleted`/`updated`/`archived`/`unarchived`/\n`completed`/`uncompleted`/`moved`, and `task`/`comment`/`project`/\n`section`) is enforced by ../../packages/core/src/event-types.ts's own\nunion type on every Device that writes one, the same \"validated at the\nedge that actually knows the vocabulary, not by a database constraint\"\nchoice `tasks.priority`'s 1-4 range already makes\n(../../packages/core/src/task-fields.ts) — a Postgres `enum` would also\nneed a migration of its own the day this vocabulary grows, where a\n`text` column and a client-side union do not.",
+        "required": [
+          "id",
+          "device_id",
+          "event_type",
+          "object_type",
+          "object_id",
+          "occurred_at"
+        ],
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "event_type": {
+            "type": "string"
+          },
+          "extra": {
+            "description": "Whatever this event_type/object_type pair needs to say about what\nchanged — see `../migrations/0017_create_events.sql`'s own comment\non why this is one `jsonb` column rather than a wide table of\nnullable `last_*` columns."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "object_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "object_type": {
+            "type": "string"
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "The acting Device's own clock at the moment the act happened —\nnever the time this row reaches the Server. ADR 0056's entire\nDecision turns on this field meaning that and only that; see this\nmodule's own top-of-file doc comment and the ADR itself for why."
+          },
+          "project_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "task_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        }
+      },
+      "EventOutput": {
+        "type": "object",
+        "description": "The Event-shaped sibling of `CommentOutput` — adds only `seq`.",
+        "required": [
+          "id",
+          "device_id",
+          "event_type",
+          "object_type",
+          "object_id",
+          "occurred_at",
+          "seq"
+        ],
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "event_type": {
+            "type": "string"
+          },
+          "extra": {},
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "object_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "object_type": {
+            "type": "string"
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "project_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "seq": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "task_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
           }
         }
       },
@@ -1246,6 +1356,12 @@
               "$ref": "#/components/schemas/EntryInput"
             }
           },
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventInput"
+            }
+          },
           "labels": {
             "type": "array",
             "items": {
@@ -1272,6 +1388,11 @@
           "since_comment_seq": {
             "type": "integer",
             "format": "int64"
+          },
+          "since_event_seq": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Issue #184: Sync's seventh stream, Events — `#[serde(default)]`\nfor the identical reason every stream above's own request fields\nare: a Device built before this ticket has no `events`/\n`since_event_seq` key in its request body at all. Unlike the four\nstreams above, there was no version bump to hang this on — see\n`PROTOCOL_VERSION`'s own doc comment for why none was needed."
           },
           "since_label_seq": {
             "type": "integer",
@@ -1318,7 +1439,9 @@
           "labels",
           "label_cursor",
           "comments",
-          "comment_cursor"
+          "comment_cursor",
+          "events",
+          "event_cursor"
         ],
         "properties": {
           "comment_cursor": {
@@ -1340,6 +1463,17 @@
             "items": {
               "$ref": "#/components/schemas/EntryOutput"
             }
+          },
+          "event_cursor": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventOutput"
+            },
+            "description": "Issue #184: Events, always present and always populated — unlike\n`tasks`/`projects`/etc. above, `run_sync` applies **no**\n`protocol_version` gate to this pair (see `PROTOCOL_VERSION`'s own\ndoc comment: there is no version number that separates \"a v6\nDevice that predates this ticket\" from \"a v6 Device that has it,\"\nso a gate here couldn't distinguish anything a v6 Device's own\n`#[serde(default)]` request fields don't already handle). A\npre-#184 v6 Device that receives a populated `events` array simply\nnever reads a JSON key its own `WireSyncResponse` type doesn't\ndeclare — the same \"extra field, harmlessly ignored\" tolerance\nevery wire response in this codebase already relies on for a\nfield it doesn't recognise."
           },
           "label_cursor": {
             "type": "integer",

@@ -1,5 +1,7 @@
 export type { CommentStore } from "./comment-store";
 export type { Comment } from "./comment-types";
+export type { EventStore } from "./event-store";
+export type { Event, EventType, ObjectType } from "./event-types";
 export type { ExportOptions, ExportResult } from "./export/export-zip";
 export { exportEntriesToZip, exportFileName } from "./export/export-zip";
 export type { ExportManifest, ExportManifestEntry, ExportManifestTask } from "./export/manifest";

@@ -22,6 +22,11 @@ export type WireLabelInput = components["schemas"]["LabelInput"];
 export type WireLabelOutput = components["schemas"]["LabelOutput"];
 export type WireCommentInput = components["schemas"]["CommentInput"];
 export type WireCommentOutput = components["schemas"]["CommentOutput"];
+// Issue #184: Sync's seventh entity stream — landed additively inside
+// protocol 6, no version bump (server/src/sync.rs's own PROTOCOL_VERSION
+// doc comment).
+export type WireEventInput = components["schemas"]["EventInput"];
+export type WireEventOutput = components["schemas"]["EventOutput"];
 export type WireSessionResponse = components["schemas"]["SessionResponse"];
 export type WireSessionTurn = components["schemas"]["SessionTurnRow"];
 export type WireSessionSummary = components["schemas"]["SessionRow"];

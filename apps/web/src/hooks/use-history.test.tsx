@@ -3,6 +3,7 @@ import type {
   Entry,
   EntryPage,
   EntryStore,
+  EventStore,
   LabelStore,
   ProjectStore,
   Task,
@@ -138,6 +139,7 @@ describe("useHistory", () => {
     const projectStore = {} as ProjectStore;
     const labelStore = {} as LabelStore;
     const commentStore = {} as CommentStore;
+    const eventStore = {} as EventStore;
     const rendered = renderHook<ReturnType<typeof UseHistory>, void>(
       () =>
         (fresh.useHistory as typeof UseHistory)(
@@ -146,6 +148,7 @@ describe("useHistory", () => {
           projectStore,
           labelStore,
           commentStore,
+          eventStore,
           deviceId,
           resolveLabelIds,
         ),

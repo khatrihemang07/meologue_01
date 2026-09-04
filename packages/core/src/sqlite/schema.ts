@@ -342,6 +342,56 @@ export const comments = sqliteTable(
 );
 
 /**
+ * Mirrors the `Event` type (../event-types.ts) exactly (issue #184) —
+ * Todo's own activity log, a sixth root noun (ADR 0047's move made a
+ * fifth time after Project/Section/Label/Comment). Structurally unlike
+ * every table above it: there is no `deletedAt`, because an Event is
+ * never edited or removed once written (../event-types.ts's own header
+ * comment) — nothing here needs a "nothing" state for a tombstone to
+ * represent.
+ */
+export const events = sqliteTable(
+  "events",
+  {
+    id: text("id").primaryKey(),
+    deviceId: text("device_id").notNull(),
+    eventType: text("event_type").notNull(),
+    objectType: text("object_type").notNull(),
+    objectId: text("object_id").notNull(),
+    // The Task this Event concerns — null for a project/section Event.
+    // See ../event-types.ts's own `taskId` doc comment for why this is
+    // not always equal to `objectId`.
+    taskId: text("task_id"),
+    // The Project this Event happened in, snapshotted at record time —
+    // see ../event-types.ts's own `projectId` doc comment for why this
+    // is deliberately not "this Task's current Project."
+    projectId: text("project_id"),
+    // The acting Device's own clock, never arrival time (ADR 0056) — the
+    // only timestamp this table carries (../event-types.ts's own
+    // `occurredAt` doc comment on why there is deliberately no second
+    // `created_at` column the way every other table here has one).
+    occurredAt: text("occurred_at").notNull(),
+    // Whatever this event_type/object_type pair needs to say about what
+    // changed — a JSON blob, the same `{ mode: "json" }` treatment
+    // `tasks.labelIds` already gets, for the identical reason
+    // (../event-types.ts's own `extra` doc comment).
+    extra: text("extra", { mode: "json" }).$type<Record<string, unknown> | null>(),
+    seq: integer("seq"),
+    syncedAt: text("synced_at"),
+  },
+  (table) => [
+    // Supports listByTask() — `WHERE task_id = ? ORDER BY occurred_at
+    // DESC, id DESC` (no `deleted_at` filter, unlike every other table's
+    // equivalent index: there is no tombstone here to exclude).
+    index("events_task_id_occurred_at_id_idx").on(table.taskId, table.occurredAt, table.id),
+    // Supports listByProject().
+    index("events_project_id_occurred_at_id_idx").on(table.projectId, table.occurredAt, table.id),
+    // Supports list()'s own global ORDER BY.
+    index("events_occurred_at_id_idx").on(table.occurredAt, table.id),
+  ],
+);
+
+/**
  * Small key-value table holding the Cursor and this Device's id, alongside
  * the Entries they account for. See ADR 0007: the Cursor must live in the
  * same database as the Entries it claims are already local, or a database

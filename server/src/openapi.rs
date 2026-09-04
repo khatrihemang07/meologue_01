@@ -7,8 +7,9 @@ use crate::models::ModelsResponse;
 use crate::reflect::{ReflectRequest, ReflectResponse};
 use crate::sessions::{SessionResponse, SessionRow, SessionTurnRow};
 use crate::sync::{
-    CommentInput, CommentOutput, EntryInput, EntryOutput, LabelInput, LabelOutput, ProjectInput,
-    ProjectOutput, SectionInput, SectionOutput, SyncRequest, SyncResponse, TaskInput, TaskOutput,
+    CommentInput, CommentOutput, EntryInput, EntryOutput, EventInput, EventOutput, LabelInput,
+    LabelOutput, ProjectInput, ProjectOutput, SectionInput, SectionOutput, SyncRequest,
+    SyncResponse, TaskInput, TaskOutput,
 };
 
 #[derive(OpenApi)]
@@ -42,6 +43,8 @@ use crate::sync::{
         LabelOutput,
         CommentInput,
         CommentOutput,
+        EventInput,
+        EventOutput,
         ReflectRequest,
         ReflectResponse,
         SessionResponse,

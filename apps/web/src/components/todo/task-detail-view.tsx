@@ -25,11 +25,17 @@
  * **Out of scope, deliberately** (issue #178's own report names these
  * rather than leaving them to look like oversights): the composer chip
  * that would open this route directly from a Sent checkbox (issue #181),
- * the activity log (issue #184 — this view's own Comment edit/delete
- * doors are left wired straight to the store, with no event recorded,
- * exactly the "seams clean, log not built" scope issue #180 draws), and
- * duration — `Task.duration` is being removed in a concurrent ticket
+ * and duration — `Task.duration` is being removed in a concurrent ticket
  * (issue #179) and nothing here reads or renders it.
+ *
+ * **Activity** (issue #184, ADR 0056) sits below Comments, a `<details>`
+ * disclosure mirroring `CompletedTasks`'s own "collapsed by default, open
+ * on request" shape — a secondary, occasional thing to check, not
+ * something worth the vertical space open by default the way Comments
+ * are. `events` is already narrowed to this one Task by the caller
+ * (`listEventsByTask`, entry-store-layout.tsx), the identical "the
+ * caller scopes it, this view only renders" split `comments` above
+ * already takes.
  *
  * **Date, Deadline and Priority all open the identical `TaskScheduleSheet`
  * every row's own "Date" hover action already opens** (`onOpenSchedule`
@@ -40,13 +46,14 @@
  * app edits either), so this file builds the one inline control each
  * needs.
  */
-import type { Comment, Label, Project, Section, Task } from "@meologue/core";
+import type { Comment, Event, Label, Project, Section, Task } from "@meologue/core";
 import { uiPriorityOf } from "@meologue/core";
 import { ChevronLeft, ChevronRight, Pencil, Trash2, X } from "lucide-react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import type * as React from "react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { entryProse } from "@/components/entry-prose";
+import { ActivityFeed } from "@/components/todo/activity-feed";
 import { useWideLayout } from "@/hooks/use-wide-layout";
 import { formatDay, formatTaskDate } from "@/lib/format-task-date";
 import { priorityColour } from "@/lib/task-priority-colors";
@@ -69,6 +76,23 @@ export interface TaskDetailViewProps {
   /** Steps to `prevTask`/`nextTask` without closing (issue #178's own acceptance criterion) — the caller's job is to navigate to that Task's own address; this view never closes itself for a step. */
   onNavigate: (task: Task) => void;
   onRename: (content: string) => void;
+  /**
+   * Completes/un-completes this Task (issue #184's own gap-fix report) —
+   * a real toggle, unlike `task-row.tsx`'s own checkbox, which never
+   * renders a completed Task at all (a completed row leaves that list
+   * entirely). This view has to render *both* states, since its own
+   * address now resolves a completed Task too (`todo-page.tsx`'s own
+   * `openTask` lookup), and "reachable but not actionable" is exactly
+   * the half-feature the coordinator's own report refused to leave in
+   * place. No recurring-Task Shift+Click distinction here — that
+   * gesture is `task-row.tsx`'s own checkbox-specific shortcut for
+   * "complete and archive the whole series"; this view's checkbox is a
+   * plain toggle, and a recurring Task's own advance-vs-end choice stays
+   * wherever the caller's own `onComplete` routes it (`todo-page.tsx`'s
+   * `handleComplete`, unchanged).
+   */
+  onComplete: () => void;
+  onUncomplete: () => void;
   /** Opens the shared `TaskScheduleSheet` — this file's own header comment on why Date/Deadline/Priority all funnel through the one door rather than each growing a picker of its own. */
   onOpenSchedule: () => void;
   onSetProject: (projectId: string | null) => void;
@@ -81,6 +105,14 @@ export interface TaskDetailViewProps {
   onAddComment: (text: string) => void;
   onEditComment: (id: string, text: string) => void;
   onRemoveComment: (id: string) => void;
+  /**
+   * This Task's own history (issue #184), newest first — already scoped
+   * to this Task by the caller (`listEventsByTask`), the identical split
+   * `comments` above already takes. `projects` above (this file's own
+   * "Move to…" picker) doubles as `ActivityFeed`'s own "moved to
+   * <Project>" name resolution — no second list needed for it.
+   */
+  events: Event[];
 }
 
 /** A Task's attribute, before it has one — a small, tappable pill rather than an empty row (this file's own header comment: "the view grows with the Task instead of showing empty fields"). */
@@ -273,6 +305,8 @@ function TaskDetailBody({
   nextTask,
   onNavigate,
   onRename,
+  onComplete,
+  onUncomplete,
   onOpenSchedule,
   onSetProject,
   onSetLabels,
@@ -281,8 +315,14 @@ function TaskDetailBody({
   onAddComment,
   onEditComment,
   onRemoveComment,
+  events,
   wide,
-}: Omit<TaskDetailViewProps, "onClose"> & { wide: boolean }) {
+  titleRef,
+}: Omit<TaskDetailViewProps, "onClose"> & {
+  wide: boolean;
+  /** The outer `TaskDetailView`'s own ref (its header comment explains why) — attached to the title textarea below so Radix's `onOpenAutoFocus` can name it explicitly. */
+  titleRef: React.RefObject<HTMLTextAreaElement | null>;
+}) {
   const [title, setTitle] = useState(task.content);
   const [pickingProject, setPickingProject] = useState(false);
   const [pickingLabels, setPickingLabels] = useState(false);
@@ -365,26 +405,53 @@ function TaskDetailBody({
           {/* The title, editable in place (issue #178's own acceptance
               criterion) — commits on blur or Enter, mirroring
               project-view.tsx's identical `commitRename` shape for its
-              own name field. */}
-          <DialogPrimitive.Title asChild>
-            <textarea
-              aria-label="Task title"
-              value={title}
-              onChange={(event) => setTitle(event.target.value)}
-              onBlur={commitTitle}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey) {
-                  event.preventDefault();
-                  event.currentTarget.blur();
-                }
-                if (event.key === "Escape") {
-                  setTitle(task.content);
-                }
-              }}
-              rows={1}
-              className="w-full resize-none border-none bg-transparent p-0 font-medium text-base outline-none"
+              own name field. Editable regardless of completion state:
+              nothing about this view's own scope refuses a rename of a
+              completed Task, and task-row.tsx's own checkbox doesn't
+              either — completing something is not "locking" it. */}
+          <div className="flex items-start gap-2">
+            {/* Completes/un-completes this Task (issue #184's own
+                gap-fix report: "not read-only" — a real toggle, not the
+                `readOnly` button-shaped-like-a-checkbox task-row.tsx's
+                own active-only checkbox is, since this is the one place
+                in the app both states of the same checkbox render.
+                Filled and struck through when done, mirroring the
+                reference's own completed-row rendering. */}
+            <input
+              type="checkbox"
+              checked={task.completedAt !== null}
+              onChange={() => (task.completedAt !== null ? onUncomplete() : onComplete())}
+              aria-label={
+                task.completedAt !== null
+                  ? `Mark "${task.content}" not done`
+                  : `Complete "${task.content}"`
+              }
+              className="mt-1.5 size-4 shrink-0 accent-current"
             />
-          </DialogPrimitive.Title>
+            <DialogPrimitive.Title asChild>
+              <textarea
+                ref={titleRef}
+                aria-label="Task title"
+                value={title}
+                onChange={(event) => setTitle(event.target.value)}
+                onBlur={commitTitle}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    event.currentTarget.blur();
+                  }
+                  if (event.key === "Escape") {
+                    setTitle(task.content);
+                  }
+                }}
+                rows={1}
+                className={cn(
+                  "w-full resize-none border-none bg-transparent p-0 font-medium text-base outline-none",
+                  task.completedAt !== null && "text-muted-foreground line-through",
+                )}
+              />
+            </DialogPrimitive.Title>
+          </div>
 
           {/* Description (issue #180) — directly under the title, not in
               the sidebar (this file's own header comment). Pill until it
@@ -447,6 +514,32 @@ function TaskDetailBody({
             )}
             <CommentComposer onSubmit={onAddComment} />
           </div>
+
+          {/* Activity (issue #184, ADR 0056) — collapsed by default,
+              mirroring CompletedTasks' own disclosure shape (this file's
+              own header comment). Renders nothing when there's nothing
+              to show yet, the same "don't show a section with nothing in
+              it" restraint CompletedTasks itself takes. */}
+          {events.length > 0 && (
+            <details className="rounded-lg border border-border">
+              <summary className="cursor-pointer select-none px-3 py-2 text-muted-foreground text-sm">
+                Activity ({events.length})
+              </summary>
+              <div className="border-t border-border">
+                <ActivityFeed
+                  events={events}
+                  // Every Event this view reads is already scoped to
+                  // `task.id` (`listEventsByTask`, entry-store-layout.tsx),
+                  // so its own subject is always suppressed below and
+                  // `resolveTaskSubject` never actually runs against this
+                  // list — see `format-event.ts`'s own `describeEventLine`.
+                  tasks={[]}
+                  projects={projects}
+                  currentTaskId={task.id}
+                />
+              </div>
+            </details>
+          )}
         </div>
 
         {/* The attribute sidebar — Project, Date, Deadline, Priority,
@@ -580,6 +673,17 @@ function TaskDetailBody({
  */
 export function TaskDetailView(props: TaskDetailViewProps) {
   const wide = useWideLayout();
+  // Radix Dialog's own default `onOpenAutoFocus` focuses the first
+  // tabbable descendant of `Content` — the title textarea, before issue
+  // #184's own completion checkbox landed just ahead of it in the DOM.
+  // Adding that checkbox silently moved initial focus onto it instead
+  // (caught by a pre-existing test, "Enter commits the title," which
+  // relies on the title already being focused when Enter is pressed —
+  // the identical assumption a reader opening a Task to edit its title
+  // makes). Naming the title explicitly here restores that regardless of
+  // which element happens to sit first in tab order, rather than this
+  // view's own initial focus depending on an incidental ordering.
+  const titleRef = useRef<HTMLTextAreaElement>(null);
 
   function handleOpenChange(open: boolean) {
     if (!open) {
@@ -593,6 +697,10 @@ export function TaskDetailView(props: TaskDetailViewProps) {
         <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/50 duration-150 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0" />
         <DialogPrimitive.Content
           aria-describedby={undefined}
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            titleRef.current?.focus();
+          }}
           className={cn(
             "fixed z-50 flex flex-col overflow-hidden border border-border bg-popover text-popover-foreground shadow-lg outline-hidden duration-150",
             wide
@@ -613,7 +721,7 @@ export function TaskDetailView(props: TaskDetailViewProps) {
               className="mx-auto mt-2 h-1 w-10 shrink-0 rounded-full bg-muted-foreground/30"
             />
           )}
-          <TaskDetailBody {...props} wide={wide} />
+          <TaskDetailBody {...props} wide={wide} titleRef={titleRef} />
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>
     </DialogPrimitive.Root>

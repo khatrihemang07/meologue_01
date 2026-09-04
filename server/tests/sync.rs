@@ -1345,3 +1345,214 @@ async fn a_v5_client_syncs_entries_and_tasks_and_receives_none_of_the_four_new_s
         );
     }
 }
+
+// Issue #184 / ADR 0056: Todo's own activity log, a seventh stream added
+// inside protocol 6 with no version bump — see `server/src/sync.rs`'s own
+// `PROTOCOL_VERSION` doc comment. `event` mirrors `comment` above field
+// for field; every test below proves the properties that stream's own
+// module comment argues for: a compacted-log round trip exactly like
+// every other stream, but a replay guard that reduces to "insert if
+// absent" (no `is distinct from` chain, no `seq` reassignment) because an
+// Event is never edited or deleted once written.
+
+fn event(id: Uuid, device_id: Uuid, task_id: Uuid, event_type: &str) -> Value {
+    json!({
+        "id": id,
+        "device_id": device_id,
+        "event_type": event_type,
+        "object_type": "task",
+        "object_id": task_id,
+        "task_id": task_id,
+        "project_id": Value::Null,
+        "occurred_at": "2026-01-01T00:00:00Z",
+        "extra": Value::Null,
+    })
+}
+
+/// A protocol-6 `SyncRequest` carrying only the Event stream — every other
+/// stream empty, mirroring `sync_request_v6`'s own shape.
+fn sync_request_events(device_id: Uuid, since_event_seq: i64, events: Vec<Value>) -> Value {
+    json!({
+        "protocol_version": 6,
+        "device_id": device_id,
+        "since_seq": 0,
+        "entries": [],
+        "since_task_seq": 0,
+        "tasks": [],
+        "since_project_seq": 0,
+        "projects": [],
+        "since_section_seq": 0,
+        "sections": [],
+        "since_label_seq": 0,
+        "labels": [],
+        "since_comment_seq": 0,
+        "comments": [],
+        "since_event_seq": since_event_seq,
+        "events": events,
+    })
+}
+
+#[sqlx::test]
+async fn an_event_round_trips_to_a_later_poll_with_a_lower_event_cursor(pool: PgPool) {
+    let device_a = Uuid::new_v4();
+    let device_b = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    let event_id = Uuid::new_v4();
+
+    let (status, posted) = post_sync(
+        &pool,
+        sync_request_events(device_a, 0, vec![event(event_id, device_a, task_id, "added")]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let event_cursor = posted["event_cursor"].as_i64().unwrap();
+    assert!(event_cursor > 0);
+
+    let (status, polled) = post_sync(&pool, sync_request_events(device_b, 0, vec![])).await;
+    assert_eq!(status, StatusCode::OK);
+    let events = polled["events"].as_array().unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["id"], event_id.to_string());
+    assert_eq!(events[0]["event_type"], "added");
+    assert_eq!(events[0]["task_id"], task_id.to_string());
+    assert_eq!(events[0]["seq"], event_cursor);
+}
+
+/// The occurred_at this test pushes is what a real client always sends —
+/// the acting Device's own clock, never a server-assigned value — and
+/// this test's whole point is that the Server stores it back unchanged:
+/// nothing here recomputes or overwrites it with the moment the row was
+/// inserted, unlike a Comment's `created_at`-vs-`seq` split doesn't even
+/// need to make (ADR 0056's own Decision).
+#[sqlx::test]
+async fn occurred_at_is_stored_and_returned_exactly_as_the_device_sent_it(pool: PgPool) {
+    let device = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    let event_id = Uuid::new_v4();
+    let offline_time = "2026-03-01T23:24:44Z";
+
+    let mut pushed = event(event_id, device, task_id, "completed");
+    pushed["occurred_at"] = json!(offline_time);
+
+    let (status, response) =
+        post_sync(&pool, sync_request_events(device, 0, vec![pushed])).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let events = response["events"].as_array().unwrap();
+    assert_eq!(
+        events[0]["occurred_at"], offline_time,
+        "occurred_at must survive exactly as sent — never rewritten to whenever the Server received it"
+    );
+}
+
+/// The replay guard this stream's own module comment argues reduces to
+/// "insert if absent": pushing the identical Event twice must not
+/// reassign `seq` a second time, mirroring
+/// `replaying_an_unchanged_project_across_two_pushes_does_not_move_the_project_cursor`
+/// above.
+#[sqlx::test]
+async fn replaying_the_same_event_request_does_not_move_the_event_cursor(pool: PgPool) {
+    let device = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    let event_id = Uuid::new_v4();
+    let request =
+        sync_request_events(device, 0, vec![event(event_id, device, task_id, "added")]);
+
+    let (_, first) = post_sync(&pool, request.clone()).await;
+    let first_cursor = first["event_cursor"].as_i64().unwrap();
+
+    let (status, second) = post_sync(&pool, request).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(second["event_cursor"], first_cursor);
+
+    let seq: i64 = sqlx::query_scalar("select seq from events where id = $1")
+        .bind(event_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(seq, first_cursor, "a replayed push must not reassign seq");
+}
+
+/// An Event is never rewritten once written (issue #184's own acceptance
+/// criterion) — proved here by pushing a *different* payload under an
+/// `id` this table already holds and asserting the original row survives
+/// untouched, in contrast to `insert_tasks`/`insert_projects`/etc., which
+/// would apply such a push as a real edit.
+#[sqlx::test]
+async fn a_second_push_under_the_same_id_never_rewrites_the_original_event(pool: PgPool) {
+    let device = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    let event_id = Uuid::new_v4();
+
+    post_sync(
+        &pool,
+        sync_request_events(device, 0, vec![event(event_id, device, task_id, "added")]),
+    )
+    .await;
+
+    let mut conflicting = event(event_id, device, task_id, "deleted");
+    conflicting["occurred_at"] = json!("2026-06-01T00:00:00Z");
+    let (status, _) = post_sync(&pool, sync_request_events(device, 0, vec![conflicting])).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (event_type, occurred_at): (String, chrono::DateTime<chrono::Utc>) = sqlx::query_as(
+        "select event_type, occurred_at from events where id = $1",
+    )
+    .bind(event_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(event_type, "added", "the original Event must survive unchanged");
+    assert_eq!(occurred_at.to_rfc3339(), "2026-01-01T00:00:00+00:00");
+}
+
+/// No `protocol_version` gate exists for this stream (see
+/// `SyncResponse::events`'s own doc comment) — a request built by hand
+/// without the `since_event_seq`/`events` keys at all, modelling a real
+/// build that predates issue #184, still gets a populated `events` array
+/// back when another Device has pushed to it. That's deliberately
+/// tolerated, not a bug: an old build simply never reads a JSON key its
+/// own `WireSyncResponse` type doesn't declare.
+#[sqlx::test]
+async fn a_pre_184_request_with_no_event_keys_at_all_still_receives_events_in_its_response(
+    pool: PgPool,
+) {
+    let device_a = Uuid::new_v4();
+    let device_b = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+    let event_id = Uuid::new_v4();
+
+    post_sync(
+        &pool,
+        sync_request_events(device_a, 0, vec![event(event_id, device_a, task_id, "added")]),
+    )
+    .await;
+
+    // A hand-built protocol-6 request with no `since_event_seq`/`events`
+    // keys — exactly what a real pre-#184 v6 build's JSON looks like.
+    let (status, response) = post_sync(
+        &pool,
+        json!({
+            "protocol_version": 6,
+            "device_id": device_b,
+            "since_seq": 0,
+            "entries": [],
+            "since_task_seq": 0,
+            "tasks": [],
+            "since_project_seq": 0,
+            "projects": [],
+            "since_section_seq": 0,
+            "sections": [],
+            "since_label_seq": 0,
+            "labels": [],
+            "since_comment_seq": 0,
+            "comments": [],
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let events = response["events"].as_array().unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["id"], event_id.to_string());
+}
