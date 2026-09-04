@@ -305,6 +305,15 @@ export function ComposerPage() {
   // reversible except where a series just ended, which this function is
   // never asked to do (that stays `completeForeverTask`, Todo's own
   // Shift+Click — this ticket adds no such gesture outside Todo).
+  //
+  // Toast-with-Undo here, no toast on `handleUncompleteTask` below — a
+  // deliberate asymmetry, not an oversight. The toast earns its place on a
+  // completion specifically because a recurring advance is destructive to
+  // *look* at even though it's reversible in fact: the row's own date
+  // jumps to the next occurrence and the row leaves this day's block
+  // entirely, so a reader who didn't mean to tick it needs a visible way
+  // back. Un-ticking has no such surprise to soften — the row just goes
+  // back to how it already looked a moment ago.
   function handleCompleteTask(task: Task) {
     if (task.dateString !== null) {
       advanceRecurringTask(task.id);
@@ -314,6 +323,18 @@ export function ComposerPage() {
     toast(`Completed "${task.content}"`, {
       action: { label: "Undo", onClick: () => uncompleteTask(task.id) },
     });
+  }
+
+  // Un-ticks an already-completed Task from the Day block — no
+  // `dateString` branch, unlike `handleCompleteTask` above: a recurring
+  // Task never carries a non-null `completedAt` from an ordinary tick
+  // (`advanceRecurring` moves `date` on instead of setting `completedAt`),
+  // so the only done recurring Task this can ever be asked to un-complete
+  // is one `completeForeverTask` ended, and `uncompleteTask` is already
+  // the correct, single write for that case too — see `onUncompleteTask`'s
+  // own doc comment (history.tsx) for the fuller argument.
+  function handleUncompleteTask(task: Task) {
+    uncompleteTask(task.id);
   }
 
   // Issue #144's "Refer" action (entry-actions.tsx, reached through
@@ -392,6 +413,7 @@ export function ComposerPage() {
           events={events}
           projects={projects}
           onCompleteTask={handleCompleteTask}
+          onUncompleteTask={handleUncompleteTask}
           onOpenTask={openTaskOverlay}
           seek={seek}
           onSeekNeedsOlder={handleSeekNeedsOlder}

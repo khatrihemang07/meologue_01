@@ -317,11 +317,8 @@ function TaskDetailBody({
   onRemoveComment,
   events,
   wide,
-  titleRef,
 }: Omit<TaskDetailViewProps, "onClose"> & {
   wide: boolean;
-  /** The outer `TaskDetailView`'s own ref (its header comment explains why) — attached to the title textarea below so Radix's `onOpenAutoFocus` can name it explicitly. */
-  titleRef: React.RefObject<HTMLTextAreaElement | null>;
 }) {
   const [title, setTitle] = useState(task.content);
   const [pickingProject, setPickingProject] = useState(false);
@@ -430,7 +427,6 @@ function TaskDetailBody({
             />
             <DialogPrimitive.Title asChild>
               <textarea
-                ref={titleRef}
                 aria-label="Task title"
                 value={title}
                 onChange={(event) => setTitle(event.target.value)}
@@ -673,17 +669,12 @@ function TaskDetailBody({
  */
 export function TaskDetailView(props: TaskDetailViewProps) {
   const wide = useWideLayout();
-  // Radix Dialog's own default `onOpenAutoFocus` focuses the first
-  // tabbable descendant of `Content` — the title textarea, before issue
-  // #184's own completion checkbox landed just ahead of it in the DOM.
-  // Adding that checkbox silently moved initial focus onto it instead
-  // (caught by a pre-existing test, "Enter commits the title," which
-  // relies on the title already being focused when Enter is pressed —
-  // the identical assumption a reader opening a Task to edit its title
-  // makes). Naming the title explicitly here restores that regardless of
-  // which element happens to sit first in tab order, rather than this
-  // view's own initial focus depending on an incidental ordering.
-  const titleRef = useRef<HTMLTextAreaElement>(null);
+  // A ref rather than the handler's own `event.currentTarget`: Radix types
+  // `onOpenAutoFocus` as taking a bare DOM `Event`, whose `currentTarget` is
+  // `EventTarget | null` and carries no `focus()` at all — reaching the
+  // element through it needs a cast, and a cast here would be asserting the
+  // one fact this file can simply hold instead.
+  const contentRef = useRef<HTMLDivElement>(null);
 
   function handleOpenChange(open: boolean) {
     if (!open) {
@@ -697,9 +688,42 @@ export function TaskDetailView(props: TaskDetailViewProps) {
         <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/50 duration-150 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0" />
         <DialogPrimitive.Content
           aria-describedby={undefined}
+          // Opening a Task is usually "look at this," not "rename it" —
+          // on a phone, focusing the title textarea pops the soft
+          // keyboard the instant the row is tapped, and the bottom sheet
+          // then jumps as the visual viewport shrinks to make room for
+          // it. Radix's own default `onOpenAutoFocus` would focus the
+          // first tabbable descendant of `Content` anyway — the
+          // completion checkbox (issue #184 put it just ahead of the
+          // title in the DOM) — which is worse than the title, not
+          // better, so `preventDefault()` has to stay regardless of
+          // where focus ends up. Prior to this, that default was
+          // overridden by naming the title textarea explicitly, restoring
+          // Radix's pre-#184 behaviour (issue #184's own history — the
+          // reason this handler exists at all rather than never having
+          // one). That citation named the "Enter commits the title" test
+          // below as relying on the title already being focused, and it
+          // was right by accident, for a reason it did not give. The
+          // dispatch is not what needs focus: `fireEvent.change`/
+          // `fireEvent.keyDown` fire straight at the node regardless of
+          // `document.activeElement`. The COMMIT is — the Enter branch
+          // just below calls `event.currentTarget.blur()`, and a `blur()`
+          // against an element that was never the active element is a
+          // no-op (in jsdom and in a real browser alike), so `onBlur=
+          // {commitTitle}` never runs and the rename is silently lost.
+          // Nothing about that is a regression here: a reader who is
+          // typing in the title has, by definition, already focused it.
+          // The test now focuses the field itself, which is what a real
+          // tap does. Landing focus on `Content` itself (Radix
+          // gives it `tabIndex={-1}`) rather than doing nothing keeps Esc,
+          // the focus trap and focus-restore-on-close all working — a
+          // bare `preventDefault()` with no follow-up would leave focus
+          // on the row `<button>` outside the dialog instead. The title
+          // is one tap away for a reader who actually wants to rename it.
+          ref={contentRef}
           onOpenAutoFocus={(event) => {
             event.preventDefault();
-            titleRef.current?.focus();
+            contentRef.current?.focus();
           }}
           className={cn(
             "fixed z-50 flex flex-col overflow-hidden border border-border bg-popover text-popover-foreground shadow-lg outline-hidden duration-150",
@@ -721,7 +745,7 @@ export function TaskDetailView(props: TaskDetailViewProps) {
               className="mx-auto mt-2 h-1 w-10 shrink-0 rounded-full bg-muted-foreground/30"
             />
           )}
-          <TaskDetailBody {...props} wide={wide} titleRef={titleRef} />
+          <TaskDetailBody {...props} wide={wide} />
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>
     </DialogPrimitive.Root>

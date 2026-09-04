@@ -218,6 +218,33 @@ export async function waitForTaskCompleted(
 }
 
 /**
+ * The inverse of `waitForTaskCompleted` above, for a Task that has just been
+ * *un*-ticked — the Day block writes in both directions now, so a test that
+ * reloads to prove an un-tick reached the store needs the same "wait for the
+ * Server's own copy to agree first" step the tick already needed, for the
+ * identical reason: `uncompleteTask`'s own mutation fires `requestSync()`
+ * from `onSuccess` without awaiting it (`use-tasks.ts`), so reloading right
+ * after the UI updates races that push against whatever a periodic pull
+ * already in flight hands the fresh boot back.
+ *
+ * The query names `content` as well as `completed_at is null`, so it can only
+ * pass once a row for this Task actually exists on the Server — a bare
+ * `completed_at is null` over the table would be satisfied by any other Task
+ * and would pass without the un-tick ever arriving.
+ */
+export async function waitForTaskUncompleted(
+  content: string,
+  database: string,
+  timeoutMs = 40_000,
+): Promise<void> {
+  await pollSql(
+    database,
+    `select 1 from tasks where content = ${sqlLiteral(content)} and completed_at is null;`,
+    timeoutMs,
+  );
+}
+
+/**
  * Waits until the Server's own copy agrees that `beforeContent`'s Task
  * sorts before `afterContent`'s Task — `order_key` compared the same way
  * `order-key.ts`'s own `compareOrder` does (`a.orderKey < b.orderKey`),

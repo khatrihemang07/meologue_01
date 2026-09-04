@@ -214,3 +214,14 @@ applied here to a second surface rather than invented twice.
 No code in this ADR's own Decision needed to change. `history.tsx`'s own `DayTasksRow` doc comment
 did — issue #181 rewrote it to state the ticking/opening behaviour and the reasoning above directly,
 rather than the inverted argument this amendment now retires.
+
+## Amendment: the day block un-ticks too, and the first amendment named the wrong escape hatch
+
+The day block now offers `onUncompleteTask` alongside `onCompleteTask`, so an already-done Task can be
+un-ticked from here as well as ticked — the identical single write to the same `tasks` row, the same
+reasoning as above, extended to the reverse direction. The amendment just above justified the original
+one-way tick partly by pointing at `task-row.tsx` as "where an already-done Task can be reopened"; that
+was factually wrong — `TaskRow`'s own checkbox is `checked={false} readOnly`, with no `onUncomplete` at
+all, because a completed Task leaves Todo's list entirely. It is the Occurrence carve-out just above,
+not `task-row.tsx`, that actually holds the line, and it is unchanged: a recurring occurrence's own
+record still cannot be reopened from here or anywhere else.

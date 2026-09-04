@@ -162,6 +162,31 @@ interface HistoryProps {
    */
   onCompleteTask?: (task: Task) => void;
   /**
+   * Un-ticks an already-completed Task from a day's block — the day
+   * block's own counterpart to `onCompleteTask` just above, not a second
+   * `dateString` branch layered onto it. `task-detail-view.tsx` (~L423)
+   * already models this identical checkbox as an `onComplete`/`onUncomplete`
+   * pair, branched at the call site on `task.completedAt !== null`, rather
+   * than one `onToggleTask` the callback itself would have to branch
+   * inside; two props here reuses that shape rather than inventing a
+   * second one, and leaves `onCompleteTask`'s own documented
+   * recurrence-branching contract untouched — every existing call site
+   * that only wires `onCompleteTask` keeps compiling and behaving exactly
+   * as before.
+   *
+   * Unlike `onCompleteTask`, this one needs no `dateString` branch of its
+   * own. A recurring Task never carries a non-null `completedAt` from an
+   * ordinary tick — `advanceRecurring` moves `date` on to the next
+   * occurrence instead of setting `completedAt` (TaskStore.advanceRecurring's
+   * own doc comment; CONTEXT.md's Recurrence entry) — so the only *done*
+   * recurring Task this callback can ever be asked to un-complete is one
+   * `completeForeverTask` ended, and un-completing that is already
+   * permitted from `task-detail-view.tsx`. Undefined leaves a done row's
+   * checkbox disabled, the same "no door, no affordance" default
+   * `onCompleteTask` itself already follows for an undone one.
+   */
+  onUncompleteTask?: (task: Task) => void;
+  /**
    * Opens a Task over the Composer (issue #181, criteria 4/7) — shared by
    * a referenced checkbox's own words (`EntryBubble`'s `onOpenTask`,
    * forwarded unchanged) and a day block row's words (`DayTasksRow`
@@ -329,11 +354,12 @@ interface FlatDayReferrersItem {
  * `done`/`canToggle` are two separate booleans, not one three-state enum,
  * because they answer two different questions a future case could in
  * principle disagree on: `done` is "does this checkbox read checked,"
- * `canToggle` is "can a click change that." Today they only ever combine
- * as done+immutable (a completed Task, or a recurring occurrence's own
- * record) or undone+toggleable (anything still open) — see
- * `dayTaskEntries`'s own doc comment for why an already-done row never
- * offers to be un-ticked from here.
+ * `canToggle` is "can a click change that." They combine three ways, not
+ * two: done+toggleable (an ordinary completed Task, un-tickable from here
+ * since issue #181's amendment), undone+toggleable (anything still open),
+ * and done+immutable (a recurring occurrence's own record, and only that
+ * one case) — see `dayTaskEntries`'s own doc comment for exactly which
+ * Tasks land in which combination.
  *
  * `isOccurrenceRecord` is a *third*, independent boolean rather than
  * folded into `done`/`canToggle` — the coordinator's own live-verification
@@ -417,14 +443,16 @@ type FlatItem = FlatSeparatorItem | FlatDayTasksItem | FlatDayReferrersItem | Fl
  * null` — true for a completed Task pulled in from `completedTasks`,
  * always false for anything still in the active `tasks` pool (a
  * currently-due, not-yet-ticked recurring occurrence included).
- * `canToggle` is simply `!done` — this Day block offers to complete an
- * undone Task (criterion 7) but never to *un*-complete one from here: none
- * of the nine acceptance criteria ask for that, and Todo's own row
- * (task-row.tsx) and the Task detail view remain where an already-done
- * Task can be reopened. A recurring occurrence's own record is always
- * `done: true, canToggle: false` — CONTEXT.md's Occurrence entry, "cannot
- * be reopened," the identical rule `entry-row.tsx`'s `TaskReferenceItem`
- * already enforces for a referenced checkbox.
+ * `canToggle` is unconditionally `true` for this pool — not `!done` — so
+ * this Day block both completes an undone Task (criterion 7) and
+ * un-completes an already-done one, matching the rule `entry-row.tsx`'s
+ * `TaskReferenceItem` already applies to the identical Task rendered as a
+ * referenced checkbox (`!(recurring && resolvedChecked)`, ~L324 there): an
+ * ordinary Task's completion is always reversible, from wherever it's
+ * rendered. A recurring occurrence's own record is
+ * always `done: true, canToggle: false` — CONTEXT.md's Occurrence entry,
+ * "cannot be reopened," the identical rule `entry-row.tsx`'s
+ * `TaskReferenceItem` already enforces for a referenced checkbox.
  */
 function dayTaskEntries(
   tasks: Task[],
@@ -437,7 +465,14 @@ function dayTaskEntries(
   const entries: DayTaskEntry[] = matched.map((task) => ({
     task,
     done: task.completedAt !== null,
-    canToggle: task.completedAt === null,
+    // Always toggleable, not `task.completedAt === null` — this function's
+    // own doc comment above argues why an ordinary Task's completion stays
+    // reversible from here, the same as `entry-row.tsx`'s referenced
+    // checkbox. Written as the literal `true` it means, rather than a
+    // condition that would read as if some ordinary entry here could still
+    // come out `false`: none does. Only the occurrence-record push just
+    // below sets `canToggle: false`.
+    canToggle: true,
     // Never an occurrence record: this pool's own `date`/`deadline` is
     // exactly what put it on this day, active or completed alike — see
     // `DayTaskEntry`'s own doc comment.
@@ -574,10 +609,14 @@ const EMPTY_PROJECTS: Project[] = [];
  * was never wrong and needs no amendment to its own claims; only this
  * component's inference from it was.
  *
- * `done` decides the checkbox's own checked state and strikethrough;
- * `canToggle` decides whether `onCompleteTask` is wired for that row at
- * all — see `dayTaskEntries`'s own doc comment for exactly which Tasks
- * land in which state. `onOpenTask` (criterion 7's "opens from it") is
+ * `done` decides the checkbox's own checked state and strikethrough, AND
+ * which of `onCompleteTask`/`onUncompleteTask` a click means — the same
+ * `done ? onUncompleteTask : onCompleteTask` branch `task-detail-view.tsx`
+ * (~L423) already makes for this identical control. `canToggle` decides
+ * whether the chosen handler is actually wired for that row at all — see
+ * `dayTaskEntries`'s own doc comment for exactly which Tasks land in which
+ * state; today only a recurring occurrence's own record ever has
+ * `canToggle: false`. `onOpenTask` (criterion 7's "opens from it") is
  * independent of `canToggle`: a completed Task, and even a recurring
  * occurrence's own un-reopenable record, can still be opened to LOOK at
  * — opening is not editing, and criterion 9's "cannot be reopened" is
@@ -606,11 +645,13 @@ function DayTasksRow({
   projects,
   onOpenTask,
   onCompleteTask,
+  onUncompleteTask,
 }: {
   entries: readonly DayTaskEntry[];
   projects: readonly Project[];
   onOpenTask?: (taskId: string) => void;
   onCompleteTask?: (task: Task) => void;
+  onUncompleteTask?: (task: Task) => void;
 }) {
   const done = entries.filter((entry) => entry.done).length;
   return (
@@ -628,7 +669,13 @@ function DayTasksRow({
       </p>
       <ul className="mx-auto flex w-full max-w-prose flex-col gap-1">
         {entries.map(({ task, done, canToggle, isOccurrenceRecord }) => {
-          const toggleable = canToggle && onCompleteTask !== undefined;
+          // `done` picks which half of the pair a click means — the
+          // identical branch `task-detail-view.tsx` (~L423) already makes
+          // for this same checkbox — so `handler` stays a single reference
+          // `toggleable`/`onChange` both agree on, rather than each
+          // re-deriving the branch and risking disagreement.
+          const handler = done ? onUncompleteTask : onCompleteTask;
+          const toggleable = canToggle && handler !== undefined;
           const openable = onOpenTask !== undefined;
           return (
             <li
@@ -640,7 +687,7 @@ function DayTasksRow({
                 type="checkbox"
                 checked={done}
                 disabled={!toggleable}
-                onChange={toggleable ? () => onCompleteTask(task) : undefined}
+                onChange={toggleable ? () => handler(task) : undefined}
                 aria-label={task.content}
                 className="mt-[0.2em] shrink-0 accent-current"
               />
@@ -756,6 +803,7 @@ export function History({
   events = EMPTY_EVENTS,
   projects = EMPTY_PROJECTS,
   onCompleteTask,
+  onUncompleteTask,
   onOpenTask,
   seek,
   onSeekNeedsOlder,
@@ -1362,6 +1410,7 @@ export function History({
                   projects={projects}
                   onOpenTask={onOpenTask}
                   onCompleteTask={onCompleteTask}
+                  onUncompleteTask={onUncompleteTask}
                 />
               ) : item.kind === "dayReferrers" ? (
                 // Issue #147: see `DayReferrersRow`'s own comment for why

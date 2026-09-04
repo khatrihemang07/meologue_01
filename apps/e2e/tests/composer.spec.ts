@@ -10,6 +10,7 @@ import {
   uniqueEntryBody,
   waitForEntryId,
   waitForTaskCompleted,
+  waitForTaskUncompleted,
 } from "./helpers";
 
 /**
@@ -863,7 +864,9 @@ test("editing a Sent checkbox line opens it in the Composer instead of blanking 
 // already has to work around).
 // ---------------------------------------------------------------------------
 
-test("ticks a Task from the Day block, and the completion survives a reload", async ({ page }) => {
+test("ticks and un-ticks a Task from the Day block, and each survives a reload", async ({
+  page,
+}) => {
   const body = uniqueEntryBody("composer-day-block-tick");
   await page.goto("/composer");
   await sendEntry(page, `- [ ] ${body}`);
@@ -922,9 +925,40 @@ test("ticks a Task from the Day block, and the completion survives a reload", as
   // local copy of the bit), not merely optimistic UI that a real store
   // round trip would lose.
   await page.reload();
+  const reloaded = page
+    .getByTestId("day-tasks-row")
+    .locator("li", { hasText: body })
+    .getByRole("checkbox");
+  await expect(reloaded).toBeChecked();
+
+  // The un-tick half. The Day block's checkbox writes in BOTH directions
+  // now (`onUncompleteTask`, history.tsx) — the rule an Entry's own
+  // checkbox already followed (`entry-row.tsx`'s `TaskReferenceItem`),
+  // which the day block previously refused on the strength of a claim
+  // that Todo's own row could reopen a done Task. It cannot: `TaskRow`'s
+  // checkbox is hardcoded `checked={false} readOnly`.
+  //
+  // Extended onto this test rather than given one of its own: every extra
+  // Day-block test leaves another row in today's block for every later
+  // test to work around (issue #190's own history, and the very reason
+  // the retry below exists at all), and the reload above has already left
+  // exactly the checked, server-agreed state this half starts from.
+  await expect(reloaded).toBeEnabled();
+  // Same retry-the-CLICK shape as the tick above, for the same reason —
+  // see that comment: a virtualized row can be unmounted and remounted
+  // between the click landing and React's own `onChange` running, and a
+  // controlled `<input>` then snaps back to its `checked` prop.
+  await expect(async () => {
+    await reloaded.click();
+    await expect(reloaded).not.toBeChecked({ timeout: 1_000 });
+  }).toPass({ timeout: 15_000 });
+
+  await waitForTaskUncompleted(body, SERVER_A_DATABASE);
+
+  await page.reload();
   await expect(
     page.getByTestId("day-tasks-row").locator("li", { hasText: body }).getByRole("checkbox"),
-  ).toBeChecked();
+  ).not.toBeChecked();
 });
 
 test("opens a Task from the Day block over the Composer, and Escape returns to it without navigating away", async ({
@@ -939,7 +973,18 @@ test("opens a Task from the Day block over the Composer, and Escape returns to i
 
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByRole("textbox", { name: "Task title" })).toHaveValue(body);
+  const titleField = dialog.getByRole("textbox", { name: "Task title" });
+  await expect(titleField).toHaveValue(body);
+  // Opening a Task must not take TEXT focus. On a phone, focusing the title
+  // opens the soft keyboard the instant a Task is tapped and the bottom
+  // sheet jumps as the visual viewport resizes — for a gesture that is
+  // usually "look at this Task", not "rename it". Focus parks on the dialog
+  // itself instead (`onOpenAutoFocus`, task-detail-view.tsx): still inside
+  // the dialog, which is what keeps the Escape below reaching it and keeps
+  // focus restorable on close — the reason this is not simply
+  // `preventDefault()` with nothing after it.
+  await expect(titleField).not.toBeFocused();
+  await expect(dialog).toBeFocused();
   // Criterion 4: never left the Composer for `/todo/task/...`.
   expect(page.url()).toContain("/composer");
 

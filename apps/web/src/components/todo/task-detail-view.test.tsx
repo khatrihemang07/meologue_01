@@ -129,6 +129,13 @@ describe("TaskDetailView", () => {
     expect(screen.getByLabelText("Task title")).toHaveValue("call mum");
   });
 
+  it("does not autofocus the title on open, so a phone doesn't pop the keyboard for a tap that's usually just a look", () => {
+    renderView();
+
+    expect(screen.getByLabelText("Task title")).not.toHaveFocus();
+    expect(document.activeElement).toBe(screen.getByRole("dialog"));
+  });
+
   it("the breadcrumb reads Inbox for a Task with no Project", () => {
     renderView({ project: null, section: null });
 
@@ -175,6 +182,13 @@ describe("TaskDetailView", () => {
     renderView({ task: task({ content: "old title" }), onRename });
 
     const titleField = screen.getByLabelText("Task title");
+    // The field no longer autofocuses on open (a phone would pop its
+    // keyboard for a tap that's usually just a look), so this test
+    // focuses it itself — a real edit starts with a tap, which focuses
+    // the field the same way. Without this, jsdom's `.blur()` inside the
+    // component's own Enter handler is a no-op against an element that
+    // was never the `document.activeElement`, and `onRename` never fires.
+    titleField.focus();
     fireEvent.change(titleField, { target: { value: "new title" } });
     fireEvent.keyDown(titleField, { key: "Enter" });
 

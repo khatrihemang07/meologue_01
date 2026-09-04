@@ -1445,7 +1445,89 @@ describe("History", () => {
       );
     });
 
-    it("never offers to un-tick an already-completed Task from the day block", () => {
+    // This test used to pin the opposite — "never offers to un-tick" — on
+    // the (wrong) belief that Todo's own row remained a reopen path. It
+    // doesn't (task-row.tsx's checkbox is `checked={false} readOnly`, with
+    // no `onUncomplete` at all), so the day block's refusal named an
+    // escape hatch that didn't exist. See history.tsx's own `dayTaskEntries`
+    // doc comment and docs/adr/0053's second amendment for the reversal.
+    it("un-ticks an already-completed Task from the day block", () => {
+      const onCompleteTask = vi.fn();
+      const onUncompleteTask = vi.fn();
+      const completedTask = task({
+        id: "t1",
+        content: "buy milk",
+        date: "2026-08-28",
+        completedAt: "2026-08-28T09:00:00.000Z",
+      });
+      render(
+        <History
+          entries={[entry({ id: "1", createdAt: "2026-08-28T10:00:00.000Z" })]}
+          syncEnabled={false}
+          completedTasks={[completedTask]}
+          onCompleteTask={onCompleteTask}
+          onUncompleteTask={onUncompleteTask}
+        />,
+      );
+
+      const checkbox = screen.getByRole("checkbox", { name: "buy milk" });
+      expect(checkbox).toBeChecked();
+      expect(checkbox).not.toBeDisabled();
+      fireEvent.click(checkbox);
+
+      expect(onUncompleteTask).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "t1", content: "buy milk" }),
+      );
+      expect(onCompleteTask).not.toHaveBeenCalled();
+    });
+
+    // The carve-out that DOES hold: a completed recurring occurrence's own
+    // record stays checked and un-reopenable even with `onUncompleteTask`
+    // supplied — CONTEXT.md's Occurrence entry, "cannot be reopened," the
+    // one case `canToggle` is still `false` for (see the test just below
+    // this one, and `dayTaskEntries`'s own doc comment).
+    it("still shows a completed recurring occurrence's record as un-reopenable when onUncompleteTask is supplied", () => {
+      const recurring = task({
+        id: "standup",
+        content: "daily standup",
+        dateString: "every weekday",
+        date: "2026-08-29",
+      });
+      render(
+        <History
+          entries={[entry({ id: "1", createdAt: "2026-08-28T10:00:00.000Z" })]}
+          syncEnabled={false}
+          tasks={[recurring]}
+          events={[
+            {
+              id: "e1",
+              deviceId: "device-a",
+              eventType: "completed",
+              objectType: "task",
+              objectId: "standup",
+              taskId: "standup",
+              projectId: null,
+              occurredAt: "2026-08-28T12:00:00.000Z",
+              extra: null,
+              seq: null,
+              syncedAt: null,
+            },
+          ]}
+          onCompleteTask={vi.fn()}
+          onUncompleteTask={vi.fn()}
+        />,
+      );
+
+      const checkbox = screen.getByRole("checkbox", { name: "daily standup" });
+      expect(checkbox).toBeChecked();
+      expect(checkbox).toBeDisabled();
+    });
+
+    // "No callback, no affordance" (per the day block's own convention,
+    // shared with every other optional callback in this file): supplying
+    // only `onCompleteTask` must not accidentally make a done row
+    // toggleable — there is no handler to call for it.
+    it("leaves a done row's checkbox disabled when only onCompleteTask is supplied, with no onUncompleteTask", () => {
       const onCompleteTask = vi.fn();
       render(
         <History
