@@ -10,13 +10,13 @@ function task(overrides: Partial<Task> = {}): Task {
     content: "buy milk",
     completedAt: null,
     orderKey: "V",
+    dayOrder: "V",
     createdAt: "2026-01-01T00:00:00.000Z",
     seq: 1,
     syncedAt: "2026-01-01T00:00:00.000Z",
     deletedAt: null,
     date: null,
     deadline: null,
-    duration: null,
     priority: 1,
     // No Labels, doesn't repeat — the same "concrete value, not a gap"
     // default packages/core/src/test-support/task-fixture.ts's own
@@ -29,6 +29,7 @@ function task(overrides: Partial<Task> = {}): Task {
     projectId: null,
     sectionId: null,
     parentId: null,
+    description: null,
     ...overrides,
   };
 }
@@ -36,7 +37,6 @@ function task(overrides: Partial<Task> = {}): Task {
 function renderSheet(overrides: Partial<Task> = {}) {
   const onSetDate = vi.fn();
   const onSetDeadline = vi.fn();
-  const onSetDuration = vi.fn();
   const onSetPriority = vi.fn();
   render(
     <TaskScheduleSheet
@@ -45,11 +45,10 @@ function renderSheet(overrides: Partial<Task> = {}) {
       onOpenChange={vi.fn()}
       onSetDate={onSetDate}
       onSetDeadline={onSetDeadline}
-      onSetDuration={onSetDuration}
       onSetPriority={onSetPriority}
     />,
   );
-  return { onSetDate, onSetDeadline, onSetDuration, onSetPriority };
+  return { onSetDate, onSetDeadline, onSetPriority };
 }
 
 describe("TaskScheduleSheet", () => {
@@ -177,37 +176,6 @@ describe("TaskScheduleSheet", () => {
       fireEvent.click(screen.getByRole("button", { name: "Clear deadline" }));
 
       expect(onSetDeadline).toHaveBeenCalledWith("1", null);
-    });
-  });
-
-  describe("Duration", () => {
-    it("is disabled without a timed date", () => {
-      renderSheet({ date: null });
-
-      expect(screen.getByLabelText("Duration")).toBeDisabled();
-    });
-
-    it("stays disabled for an all-day date with no time", () => {
-      renderSheet({ date: "2026-09-05" });
-
-      expect(screen.getByLabelText("Duration")).toBeDisabled();
-    });
-
-    it("is enabled once the date carries a time, and selecting a preset calls onSetDuration", () => {
-      const { onSetDuration } = renderSheet({ date: "2026-09-05T09:00" });
-
-      expect(screen.getByLabelText("Duration")).not.toBeDisabled();
-      fireEvent.change(screen.getByLabelText("Duration"), { target: { value: "30" } });
-
-      expect(onSetDuration).toHaveBeenCalledWith("1", 30);
-    });
-
-    it("choosing 'No duration' clears it", () => {
-      const { onSetDuration } = renderSheet({ date: "2026-09-05T09:00", duration: 30 });
-
-      fireEvent.change(screen.getByLabelText("Duration"), { target: { value: "" } });
-
-      expect(onSetDuration).toHaveBeenCalledWith("1", null);
     });
   });
 

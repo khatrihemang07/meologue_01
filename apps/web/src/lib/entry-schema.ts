@@ -26,6 +26,7 @@
 import type { Attrs, MarkSpec, NodeSpec } from "prosemirror-model";
 import { Schema } from "prosemirror-model";
 import { bulletList, listItem, orderedList } from "prosemirror-schema-list";
+import { formatTaskReference } from "./inline-markdown";
 
 /**
  * What kind of Reference a `reference` node points at — the node-level
@@ -66,16 +67,33 @@ const referenceAttrs: { [name: string]: { default?: unknown; validate?: string }
  * from `taskId`/`label` (`formatTaskReference`, inline-markdown.ts) on
  * every write instead of replaying a stored string.
  *
- * `checked` has no `default`, unlike `reference`'s own `date`/`entryId`:
- * every `task_reference` a real parse produces sits inside a checkbox list
- * item and always has an answer for it (`entry-document.ts`'s
- * `inlineNodesToPM` reads it straight off the enclosing item's own task
- * marker), so there is no state this attr needs to fall back to.
+ * `checked` carries `default: false` (issue #177), even though every
+ * `task_reference` a real parse produces sits inside a checkbox list item
+ * and always has an answer for it (`entry-document.ts`'s `inlineNodesToPM`
+ * reads it straight off the enclosing item's own task marker) — a real
+ * parse is not the only path that ever builds one of these nodes. ProseMirror
+ * itself synthesizes a node from its spec alone in several places
+ * (`NodeType.createAndFill`, `ContentMatch.fillBefore`, and anything a
+ * paste rule or a schema-level content-repair pass reaches for) and none
+ * of those callers have an enclosing task marker to read `checked` off —
+ * they call `entrySchema.nodes.task_reference.create()` (or `createAndFill`)
+ * with no `checked` in the attrs object at all. Without a `default`,
+ * `prosemirror-model`'s own `Node` constructor throws
+ * `RangeError: No value supplied for attribute checked` the moment any of
+ * those paths reaches this node type — which is exactly the second half of
+ * issue #177's crash, distinct from (and a precondition for testing) the
+ * missing-`toDOM` one `taskReferenceNodeView`'s own comment
+ * (composer-editor.ts) fixes. `taskId`/`label` need no such fallback: a
+ * `task_reference` with an empty id or label is merely a Task nobody can
+ * resolve, ADR 0042's own "unresolved is plain text" case Composer already
+ * has to render either way, so there is nothing for a missing value to
+ * corrupt the way a missing `boolean` would (ProseMirror validates a
+ * declared type strictly; `false` is a value, `undefined` is not).
  */
 const taskReferenceAttrs: { [name: string]: { default?: unknown; validate?: string } } = {
   taskId: { validate: "string" },
   label: { validate: "string" },
-  checked: { validate: "boolean" },
+  checked: { default: false, validate: "boolean" },
 };
 
 const nodes: { [name: string]: NodeSpec } = {
@@ -105,12 +123,45 @@ const nodes: { [name: string]: NodeSpec } = {
    * to a day or an Entry. Atom, like `reference`, for the identical
    * reason: the Composer can select or delete the whole thing, never edit
    * inside it, so it can never end up half-typed.
+   *
+   * `toDOM` (issue #177) is the one exception this file's own module
+   * comment's "keep `entrySchema` free of anything view-specific"
+   * preference makes, for a reason `reference` above doesn't have to:
+   * `EditorView`'s clipboard copy path (`serializeForClipboard`,
+   * prosemirror-view) builds its HTML through
+   * `DOMSerializer.fromSchema(state.schema)`, never through a registered
+   * `NodeView` — a NodeView only ever renders the LIVE editor DOM, and
+   * `DOMSerializer`'s own `gatherToDOM` (prosemirror-model) silently
+   * *drops* any node type whose spec has no `toDOM` from the map it
+   * builds, so copying a selection that spans a `task_reference` node
+   * called `undefined(node)` and threw, same failure family as the
+   * missing-NodeView crash this ticket's own diagnosis opens with, just
+   * reached through the clipboard instead of through render. The DOM this
+   * produces is deliberately the mark's own literal characters
+   * (`formatTaskReference`, the same function `entry-document.ts`'s
+   * `writeTaskReference` calls to serialize this node to Markdown) rather
+   * than a checkbox+label rendering that would only ever be seen for the
+   * length of a copy — there is no `parseDOM` paired with it, so pasting
+   * this back into any `entrySchema` document degrades to plain text
+   * carrying those same characters (ADR 0042's "unresolved is plain text"
+   * rule), which `entryMarkdownToDocument` reconstitutes into a live
+   * `task_reference` again the next time that text is parsed (a Send, or
+   * this same paste target's own next reload) — correctness for the
+   * clipboard, not a second rendering to keep in step with
+   * `taskReferenceNodeView`'s (composer-editor.ts).
    */
   task_reference: {
     inline: true,
     group: "inline",
     atom: true,
     attrs: taskReferenceAttrs,
+    toDOM(node) {
+      return [
+        "span",
+        { "data-task-reference": "true" },
+        formatTaskReference(String(node.attrs.taskId), String(node.attrs.label)),
+      ];
+    },
   },
 
   // `itemContent` below is `"paragraph block*"`, the shape

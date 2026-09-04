@@ -157,9 +157,17 @@ nb_publish() {
 # on a directory without -s walks every subdirectory and prints one line per
 # entry, and only -s collapses that to the single total this report wants.
 #
-# Usage: nb_report_artifact <path> <identifier-label> <identifier-value>
+# Usage: nb_report_artifact <path> [<label> <value>]...
+# Any number of label/value pairs may follow the path — the macOS callers
+# pass two (authority, identifier; see nb_verify_app_signature) where the
+# Android caller passes one (identifier). Nothing here reads the values
+# it prints; it only ever prints what a caller already knows or already
+# verified. Passing an *expected* value here rather than one actually read
+# off the artifact was exactly the false reassurance issue #187 is about —
+# see nb_verify_app_signature for the check that reads the real thing.
 nb_report_artifact() {
-  local path=$1 label=$2 identifier=$3
+  local path=$1
+  shift
   if [ ! -e "$path" ]; then
     printf 'error: expected build artifact not found at %s\n' "$path" >&2
     printf 'the build reported success but produced nothing there — check the tool output above.\n' >&2
@@ -168,6 +176,116 @@ nb_report_artifact() {
   printf '\n--- artifact ---\n'
   printf 'path:        %s\n' "$path"
   printf 'size:        %s\n' "$(du -sh "$path" | cut -f1)"
-  printf '%s: %s\n' "$label" "$identifier"
+  while [ "$#" -ge 2 ]; do
+    printf '%s: %s\n' "$1" "$2"
+    shift 2
+  done
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# Signature verification (macOS)
+# ---------------------------------------------------------------------------
+
+# Reads codesign's own opinion of a built .app rather than trusting that its
+# existence, or `cargo tauri build`'s exit code, says anything about whether
+# it was signed with THIS project's identity. Issue #187: codesign failed
+# with errSecInternalComponent (see nb_diagnose_tauri_failure below), Tauri's
+# bundler fell back to an adhoc signature rather than treating that as fatal,
+# `cargo tauri build` exited non-zero for what the build scripts assumed was
+# the unrelated .dmg step, and an adhoc-signed .app carrying a generated
+# identifier (`meologue-166e81fce17d0f09`, not `com.meologue.app.sandbox`)
+# published clean. macOS runs adhoc-signed apps locally with no warning at
+# all, so nothing surfaced it for six builds.
+#
+# Two codesign facts distinguish a real signature from that fallback, and
+# both are checked because either alone can lie:
+#
+#   Authority=<name>   Present only on a signature made with an identity
+#                       codesign actually found usable. Adhoc signing prints
+#                       `Signature=adhoc` instead and omits Authority=
+#                       entirely — there is no partial or malformed Authority
+#                       line to accidentally match, so its absence alone is
+#                       already the tell.
+#   Identifier=<id>    The CFBundleIdentifier when signed properly. Under an
+#                       adhoc fallback this becomes a generated
+#                       `<product>-<16 hex chars>` instead, because no
+#                       identity was available to bind the requested one to.
+#                       ADR 0029 relies on this exact string as the entire
+#                       isolation mechanism between the Production and
+#                       Sandbox installs, so a mismatch here is not cosmetic.
+#
+# `codesign --verify --strict` is the other half: a bundle could in principle
+# carry a correct Authority/Identifier pair from a stale or partially-copied
+# signature and still not verify structurally (e.g. contents changed after
+# signing), so both the content check and the structural check must pass.
+#
+# Sets NB_VERIFIED_AUTHORITY and NB_VERIFIED_IDENTIFIER to what was actually
+# read, for the caller to report — see nb_report_artifact.
+#
+# Usage: nb_verify_app_signature <app-path> <expected-authority> <expected-identifier>
+nb_verify_app_signature() {
+  local app=$1 want_authority=$2 want_identifier=$3 info authority identifier
+  if ! info=$(codesign -dv --verbose=4 "$app" 2>&1); then
+    printf 'error: codesign could not read a signature from %s at all:\n' "$app" >&2
+    printf '%s\n' "$info" | sed 's/^/  /' >&2
+    return 1
+  fi
+
+  authority=$(printf '%s\n' "$info" | sed -n 's/^Authority=//p' | head -1)
+  identifier=$(printf '%s\n' "$info" | sed -n 's/^Identifier=//p' | head -1)
+
+  if [ -z "$authority" ]; then
+    printf 'error: %s is ADHOC-SIGNED, not signed with "%s" — it has no Authority= line.\n' "$app" "$want_authority" >&2
+    printf '  identifier read off the bundle: %s\n' "${identifier:-<none>}" >&2
+    printf '  fix: ./scripts/setup-signing.sh, then rebuild.\n' >&2
+    return 1
+  fi
+  if [ "$authority" != "$want_authority" ]; then
+    printf 'error: %s is signed by "%s", not the expected "%s".\n' "$app" "$authority" "$want_authority" >&2
+    return 1
+  fi
+  if [ "$identifier" != "$want_identifier" ]; then
+    printf 'error: %s carries identifier "%s", not the expected "%s".\n' "$app" "$identifier" "$want_identifier" >&2
+    printf '  ADR 0029 relies on this identifier alone to keep Production and Sandbox data separate.\n' >&2
+    return 1
+  fi
+  if ! codesign --verify --strict "$app" >/dev/null 2>&1; then
+    printf 'error: %s reports Authority=%s and Identifier=%s but fails `codesign --verify --strict`.\n' "$app" "$authority" "$identifier" >&2
+    return 1
+  fi
+
+  NB_VERIFIED_AUTHORITY=$authority
+  NB_VERIFIED_IDENTIFIER=$identifier
+  return 0
+}
+
+# Translates the one OSStatus this project has actually hit in the wild
+# (issue #187) into a named cause and a named fix, instead of letting
+# `errSecInternalComponent` reach the terminal as a bare code that means
+# nothing without reading Apple's own Security framework source. It signals
+# that the signing key scripts/setup-signing.sh imported is no longer usable
+# without an interactive keychain prompt — empirically, this keychain lapses
+# out of that state on its own after enough time or enough unrelated keychain
+# activity — and `cargo tauri build`'s own bundler has no idea why codesign
+# just failed, so it reports the same generic non-zero exit whether the cause
+# was this or an unrelated .dmg failure. Grepping its captured output for the
+# one string Apple actually prints is the only way to tell them apart short
+# of reimplementing codesign's own error handling.
+#
+# Purely informational — always returns 0. The caller decides whether the
+# build actually failed by checking the produced .app's signature
+# (nb_verify_app_signature), not by whether this function found the string.
+#
+# Usage: nb_diagnose_tauri_failure <log-file>
+nb_diagnose_tauri_failure() {
+  local log=$1
+  if [ -f "$log" ] && grep -q 'errSecInternalComponent' "$log" 2>/dev/null; then
+    nb_say "diagnosis: codesign failed with errSecInternalComponent"
+    nb_say "  The signing keychain has lapsed out of the state ./scripts/setup-signing.sh"
+    nb_say "  establishes — its private key is no longer reachable without an interactive"
+    nb_say "  prompt, which a non-interactive build can never answer, so codesign fails."
+    nb_say "  Fix: ./scripts/setup-signing.sh   (safe to re-run — recreates only the macOS half)"
+  fi
   return 0
 }

@@ -9,7 +9,9 @@ verbatim rather than inventing a second recognition rule for the identical shape
 [0043](0043-an-entry-may-carry-structure.md)'s checkbox list items — the thing this ADR backfills —
 and issue #173's own Promotion (`apps/web/src/lib/promote-tasks.ts`), which already turns a bare
 checkbox into exactly this shape for anything written *after* it shipped; this ADR is what happens
-to everything written *before*. Leans on [0016](0016-export-per-day-text-plus-a-lossless-manifest-grouped-by-local-day.md)'s
+to everything written *before*. Amended by issue #181: the day block gains completion state, a
+done/total count, ticking and opening — see the "Amendment (issue #181)" section at the end for why
+that is not a reversal of anything this ADR actually decided. Leans on [0016](0016-export-per-day-text-plus-a-lossless-manifest-grouped-by-local-day.md)'s
 "a backup that quietly omits things is worse than none" precedent for reading the whole of History
 at once, and on [0039](0039-digests-gain-revisions-and-can-be-asked-for.md)'s staleness mechanism,
 which the backfill's own Entry rewrites trigger for free, the same way any other Entry edit does.
@@ -170,3 +172,56 @@ than a UI setting) means a fully-backfilled Device does not re-scan its whole Hi
 open. Losing that flag — a cleared browser profile, a fresh install — costs one redundant, still
 perfectly safe re-scan; it is a performance optimisation, never the source of correctness, which
 stays with the loop guard exactly as it does mid-run.
+
+## Amendment (issue #181): the day block ticks and opens, and this ADR's own Decision needed no change to say so
+
+Issue #181 gave the day block (`history.tsx`'s `DayTasksRow`) three things it didn't have before:
+completion state for each Task it lists (done or undone, with a done/total count), a checkbox that
+actually completes an undone one, and a click that opens a Task's own detail view over the Composer.
+`history.tsx`'s own `DayTasksRow` doc comment, before this amendment, argued the block had to stay
+read-only forever: ticking there would give a Task "two places its own completion could be toggled
+from," the identical two-copies risk this ADR's sibling, [0048](0048-a-task-reference-is-a-node-with-a-cached-label.md),
+already refused for a Task's name and completion bit.
+
+**That argument was wrong for the reason it gave, and this amendment is the record of why, not a
+reversal of anything this ADR's own Decision actually said.** Re-read this ADR's own words above:
+"the day block is a rendering, never a record… nothing about it is stored, cached against a day
+key, or written anywhere." That claim is about *day membership* — whether there is a table
+mapping a day to the Tasks that belong to it — and it is exactly as true after issue #181 as
+before it. `onCompleteTask` (the day block's new prop, wired by `composer-page.tsx`) calls straight
+through to `completeTask`/`advanceRecurringTask` (`use-tasks.ts`), the identical single write
+`task-row.tsx`'s own checkbox already performs on the identical `tasks` table. No second place
+remembers a Task's completion; no day-key-to-Task membership row exists now that didn't exist
+before. What ADR 0048 actually refuses is a *second stored copy* of a fact ADR 0047 already owns —
+that is what "two places it could be toggled from" has to mean for it to be a real risk, and a
+second **rendering** reading and writing the identical row through the identical mutation is not
+that. Today and Inbox already read and write the same `tasks` table from two different rows with no
+such objection; the day block joining them is the ordinary case of a personal task list rendered
+more than once, not a new one.
+
+**What issue #181 actually needed from Events (ADR 0056), not from this ADR.** A completed
+*occurrence* of a recurring Task is the one case `tasksForDay`'s plain date/deadline filter cannot
+answer on its own: `advanceRecurring` moves `date` on to the next occurrence the moment one
+finishes, and a recurring Task's own `completedAt` never becomes non-null at all (CONTEXT.md's
+Recurrence entry). `completedRecurringOccurrencesForDay` (`packages/core/src/task-views.ts`) answers
+it instead, from the `"completed"` Event `advanceRecurring` already records — a fact ADR 0056 gives
+this app for the first time, which is why this couldn't have been solved when this ADR shipped. The
+day block still reads it purely from memory, still writes nothing of its own, and an occurrence's
+own record still cannot be reopened or rescheduled once shown (CONTEXT.md's Occurrence entry) — the
+identical rule `entry-row.tsx`'s `TaskReferenceItem` already enforces for a referenced checkbox,
+applied here to a second surface rather than invented twice.
+
+No code in this ADR's own Decision needed to change. `history.tsx`'s own `DayTasksRow` doc comment
+did — issue #181 rewrote it to state the ticking/opening behaviour and the reasoning above directly,
+rather than the inverted argument this amendment now retires.
+
+## Amendment: the day block un-ticks too, and the first amendment named the wrong escape hatch
+
+The day block now offers `onUncompleteTask` alongside `onCompleteTask`, so an already-done Task can be
+un-ticked from here as well as ticked — the identical single write to the same `tasks` row, the same
+reasoning as above, extended to the reverse direction. The amendment just above justified the original
+one-way tick partly by pointing at `task-row.tsx` as "where an already-done Task can be reopened"; that
+was factually wrong — `TaskRow`'s own checkbox is `checked={false} readOnly`, with no `onUncomplete` at
+all, because a completed Task leaves Todo's list entirely. It is the Occurrence carve-out just above,
+not `task-row.tsx`, that actually holds the line, and it is unchanged: a recurring occurrence's own
+record still cannot be reopened from here or anywhere else.

@@ -1,5 +1,5 @@
-import { expect, test } from "@playwright/test";
 import { SERVER_B_URL } from "../servers";
+import { expect, test } from "./fixtures";
 import { closeDevices, openTwoDevices, SYNC_TICK_MS, sendEntry, uniqueEntryBody } from "./helpers";
 
 // ADR 0011: a Device is not bound to a particular Server — the Server URL

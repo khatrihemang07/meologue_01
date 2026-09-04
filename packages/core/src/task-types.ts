@@ -13,7 +13,7 @@
  * (../sqlite/schema.ts's own comment on `entries` names the same trap
  * under ADR 0007, before ADR 0028 gave it a real use).
  *
- * Date, deadline, duration and priority (issue #169) are on the type
+ * Date, deadline and priority (issue #169) are on the type
  * below, and so, since issue #171, are `projectId`, `sectionId` and
  * `parentId` — sequenced behind their own migration (version 9,
  * ../sqlite/migrations/index.ts) rather than folded into an earlier one,
@@ -34,6 +34,30 @@ export type Task = {
   completedAt: string | null;
   /** Fractional index — see order-key.ts. Sorts lexicographically; ties break on id. */
   orderKey: string;
+  /**
+   * A second, independent fractional index (issue #182, ADR 0050 reused
+   * rather than reinvented — see that ADR's own amendment) — the Today
+   * view's own manual order, kept apart from `orderKey` above so dragging
+   * a Task in Today does not silently reorder it inside its Project too.
+   * Real Todoist keeps the identical split on disk: `child_order`
+   * (position within a Project or Section) and `day_order` (position
+   * within Today) as two independent fields on the same row, and this
+   * follows that precedent deliberately rather than inventing a
+   * meologue-specific shape for it.
+   *
+   * Required, like every field on this type (Task.priority's own doc
+   * comment states the rule this follows): "nothing chosen in Today yet"
+   * is not an absence this type lets a caller omit, it is a concrete
+   * starting position — see task-fields.ts's withDefaultDayOrder for what
+   * that starting position is.
+   *
+   * Carried on the wire as `day_order`, alongside `order_key`, in the
+   * same protocol bump that added the four new entity streams (issue
+   * #182) — a Today drag reaches a Device's other Devices the same way
+   * dragging a Task in a Project already does. See mapping.ts's
+   * `toWireTaskInput`/`fromWireTaskOutput`.
+   */
+  dayOrder: string;
   createdAt: string;
   seq: number | null;
   syncedAt: string | null;
@@ -68,13 +92,6 @@ export type Task = {
    * rather than re-checking the shape itself.
    */
   deadline: string | null;
-  /**
-   * Minutes, capped at 1440 (24 hours). Requires `date` to carry a time —
-   * there's nothing to measure a length from otherwise — enforced by
-   * task-fields.ts's assertValidDuration rather than by this field's type,
-   * because the rule spans two fields and a type can't express that.
-   */
-  duration: number | null;
   /**
    * 1-4, where 4 is the most urgent — inverted against the UI's p1-p4
    * naming, exactly as Todoist's own API is (CONTEXT.md's Priority entry).
@@ -173,11 +190,16 @@ export type Task = {
    * `"every! monday"` — or `null` for a Task that doesn't repeat
    * (CONTEXT.md's Recurrence entry, issue #170's recurrence engine,
    * ../recurrence/). The string is the truth and `date` is a consequence
-   * of it, never the other way round: ../recurrence/'s nextOccurrence is
-   * a pure function of this string plus a reference date, re-run fresh
-   * on every completion (../task-store.ts's advanceRecurring), rather
-   * than a schedule computed once when the rule was typed and then just
-   * incremented. That is the identical principle this project already
+   * of it, never the other way round: ../recurrence/'s
+   * nextOccurrenceAfterCompletion is a pure function of this string plus
+   * a reference date, re-run fresh on every completion
+   * (../task-store.ts's advanceRecurring), rather than a schedule
+   * computed once when the rule was typed and then just incremented. The
+   * very first `date` a recurring Task carries is a separate question —
+   * ../recurrence/'s firstOccurrence, called once when the rule is typed
+   * (issue #191) — but the same "the string is the truth" discipline
+   * applies to it too: both functions re-derive `date` from `dateString`
+   * rather than caching a schedule. That is the identical principle this project already
    * holds for an Entry's body, arrived at independently — see
    * ../recurrence/recurrence.ts's own module doc comment for the worked
    * example (a yearly task completed eighteen months late) that a
@@ -192,7 +214,7 @@ export type Task = {
    * when the two halves land together, while the weakened type would have
    * outlived it. The rule ../types.ts states for `Entry.deletedAt` holds
    * here unchanged — every caller says explicitly rather than letting an
-   * omission default silently — and `date`/`deadline`/`duration`/
+   * omission default silently — and `date`/`deadline`/
    * `priority`/`labelIds` above all obey it.
    *
    * ../task-fields.ts's withDefaultDateString still normalises a missing
@@ -254,6 +276,28 @@ export type Task = {
    * cascades back up.
    */
   parentId: string | null;
+  /**
+   * The Task's own words about itself, beyond its `content` — Markdown,
+   * rendered by the identical renderer an Entry's body already uses
+   * (issue #180, apps/web's `entryProse`/inline-markdown.ts — this
+   * package holds no rendering code of its own for either an Entry or a
+   * Task, so there is nothing here to duplicate). `null` until the user
+   * gives it one, the same "nothing chosen yet" state every attribute
+   * above defaults to (Task.dateString's own doc comment states the
+   * identical rule): a Task created in Todo, or promoted from a
+   * checkbox, starts with no Description.
+   *
+   * Required and nullable, like every field above it, for the identical
+   * reason (Task.priority's own doc comment): a caller states explicitly
+   * that a Task has no Description rather than an omitted key silently
+   * defaulting one way or the other.
+   *
+   * Deliberately **not** an Entry, never enters History, Export's day
+   * files, or Digest grounding — CONTEXT.md's History entry is emphatic
+   * that History is what the user actually wrote, and a Task's own words
+   * about itself are Todo's, not History's (issue #180).
+   */
+  description: string | null;
 };
 
 /**

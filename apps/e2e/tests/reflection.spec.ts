@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { expect, type Page, test } from "@playwright/test";
+import type { Page } from "@playwright/test";
 import { SERVER_A_DATABASE } from "../servers";
+import { expect, test } from "./fixtures";
 import {
   deleteEntryViaMenu,
   openDestination,

@@ -3,13 +3,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useSettingsStore } from "@/lib/settings";
 import { AddTaskForm } from "./add-task-form";
 
-// Every highlighted span carries this class (quick-add-highlight.ts's
-// `QUICK_ADD_HIGHLIGHT_CLASS`) — matched directly here rather than
-// imported, so a rename of the constant's own value still leaves this
-// suite testing "is *a* highlight class present," the same thing a reader
-// looking at the screen would actually judge by, not "does this string
-// equal that string."
-const HIGHLIGHT_CLASS = "bg-primary/15";
+// Every one of the three live states (quick-add-highlight.ts's own
+// `QuickAddHighlightState`) is painted through a class containing this
+// substring — `bg-quick-add-pending`/`bg-quick-add-resolved`/
+// `bg-quick-add-resolved-accent` all share it — so this is "is *a*
+// highlight present at all," the coarse question most of this suite
+// actually asks; `spanClasses` below is what the handful of tests that
+// care WHICH of the three states a span is in reach for instead.
+const ANY_HIGHLIGHT_CLASS = "bg-quick-add-";
 
 function highlightedSpans(): HTMLElement[] {
   // The backdrop is `aria-hidden` and `pointer-events-none` (add-task-
@@ -18,12 +19,24 @@ function highlightedSpans(): HTMLElement[] {
   // directly, the same way task-row.test.tsx's own drag tests reach past
   // Testing Library's accessible queries for a detail those queries have
   // no vocabulary for. Filtered by `className.includes` rather than a CSS
-  // class selector: Tailwind's own `/` (an opacity modifier, `bg-primary/15`)
-  // needs escaping to appear literally in a `querySelector` string, and a
-  // substring check on the rendered className needs none of that.
+  // class selector: Tailwind's own `[...]` arbitrary-value syntax
+  // (`rounded-[3px]`) needs escaping to appear literally in a
+  // `querySelector` string, and a substring check on the rendered
+  // className needs none of that.
   return Array.from(document.querySelectorAll("span")).filter((span) =>
-    span.className.includes(HIGHLIGHT_CLASS),
+    span.className.includes(ANY_HIGHLIGHT_CLASS),
   );
+}
+
+// The exact class list on the one span whose text is `text` — for the
+// tests that care which of the three states a token is in, not merely
+// whether it's highlighted at all. Splitting on whitespace (rather than
+// another `.includes` check) is what tells `bg-quick-add-resolved` and
+// `bg-quick-add-resolved-accent` apart: the former is a literal substring
+// of the latter, so a substring check alone can't distinguish them.
+function spanClasses(text: string): string[] {
+  const span = Array.from(document.querySelectorAll("span")).find((s) => s.textContent === text);
+  return span === undefined ? [] : span.className.split(/\s+/);
 }
 
 function getInput(): HTMLInputElement {
@@ -137,6 +150,80 @@ describe("AddTaskForm", () => {
     });
   });
 
+  // Issue #179's Part A: a resolved token, a still-being-typed (pending)
+  // token, and a token that never resolves to anything real now each read
+  // differently — see quick-add-highlight.ts's own `QuickAddHighlightState`
+  // doc comment for exactly what each means and why.
+  describe("the three live states", () => {
+    it("reads as pending while the caret still sits right after the word it just finished typing", () => {
+      render(<AddTaskForm onAdd={vi.fn()} disabled={false} />);
+
+      // A native `<input>`'s own value-setting behaviour moves the caret
+      // to the end of the new value — exactly "immediately after" the
+      // token that ends the line, which is what makes this the live,
+      // in-progress state a reader sees while still typing, before they
+      // click away or type further.
+      fireEvent.change(getInput(), { target: { value: "buy milk tomorrow" } });
+
+      expect(spanClasses("tomorrow")).toContain("bg-quick-add-pending");
+    });
+
+    it("upgrades to resolved, with this app's one reserved accent, once the caret moves off a Date token", () => {
+      render(<AddTaskForm onAdd={vi.fn()} disabled={false} />);
+      const input = getInput();
+
+      fireEvent.change(input, { target: { value: "buy milk tomorrow" } });
+      clickAt(input, 0); // caret moves to the very start — well clear of "tomorrow"
+
+      const classes = spanClasses("tomorrow");
+      expect(classes).toContain("bg-quick-add-resolved-accent");
+      expect(classes).not.toContain("bg-quick-add-pending");
+    });
+
+    it("resolves a Label to the grayscale chip, not the colour-worthy one — colour is reserved for Priority and Dates", () => {
+      render(<AddTaskForm onAdd={vi.fn()} disabled={false} />);
+      const input = getInput();
+
+      fireEvent.change(input, { target: { value: "buy milk %errands" } });
+      clickAt(input, 0); // caret away from the label token
+
+      const classes = spanClasses("%errands");
+      expect(classes).toContain("bg-quick-add-resolved");
+      expect(classes).not.toContain("bg-quick-add-resolved-accent");
+    });
+
+    it("an unresolved token (#project — nowhere to land yet) stays plain: neither highlighted nor stripped from what was typed", () => {
+      const onAdd = vi.fn();
+      render(<AddTaskForm onAdd={onAdd} disabled={false} />);
+      const input = getInput();
+
+      fireEvent.change(input, { target: { value: "buy milk #Work" } });
+
+      // Neither highlighted — no `bg-quick-add-*` class at all, in any of
+      // the three states, just the base `text-transparent` every backdrop
+      // span carries — nor removed from the field itself.
+      expect(spanClasses("#Work")).toEqual(["text-transparent"]);
+      expect(input).toHaveValue("buy milk #Work");
+
+      // Nor stripped from what actually gets stored on submit — the
+      // acceptance criterion's own second half: "not removed from what
+      // the reader typed."
+      fireEvent.click(screen.getByRole("button", { name: "Add" }));
+      expect(onAdd).toHaveBeenCalledWith(expect.objectContaining({ content: "buy milk #Work" }));
+    });
+
+    it("clicking into an unresolved token leaves the field showing no highlight at all — there was never anything visibly lit up to demote", () => {
+      render(<AddTaskForm onAdd={vi.fn()} disabled={false} />);
+      const input = getInput();
+
+      fireEvent.change(input, { target: { value: "buy milk #Work" } });
+      clickAt(input, 11); // inside "#Work"
+
+      expect(highlightedSpans()).toHaveLength(0);
+      expect(input).toHaveValue("buy milk #Work");
+    });
+  });
+
   describe("click-to-demote", () => {
     it("clicking a highlighted token demotes it to plain text", () => {
       const onAdd = vi.fn();
@@ -229,6 +316,96 @@ describe("AddTaskForm", () => {
       clickAt(field, 2); // inside "buy"
 
       expect(highlightedSpans().map((s) => s.textContent)).toEqual(["tomorrow"]);
+    });
+  });
+
+  // The parity gap issue #188 fixes: a recurrence typed as the phrase
+  // everyone actually types ("every day"), not just a bare word
+  // ("daily"). Nothing about this field's own code needed to change for
+  // these to highlight and demote — every path here already worked off
+  // a token's `start`/`end`/`raw`, generic to however many words a token
+  // spans (add-task-form.tsx's own header comment on why this field
+  // derives everything fresh from `result.tokens` rather than assuming
+  // one word per token) — so this suite exists to prove that generic
+  // machinery actually covers a multi-word span, not to add anything new
+  // to the component itself.
+  describe("a recurrence typed as a phrase", () => {
+    it("highlights the whole phrase as one span, not just the word 'every'", () => {
+      render(<AddTaskForm onAdd={vi.fn()} disabled={false} />);
+      const input = getInput();
+
+      fireEvent.change(input, { target: { value: "water the plants every day" } });
+
+      expect(highlightedSpans().map((s) => s.textContent)).toEqual(["every day"]);
+    });
+
+    it("clicking anywhere in the phrase demotes the whole span, and content keeps every word typed", () => {
+      const onAdd = vi.fn();
+      render(<AddTaskForm onAdd={onAdd} disabled={false} />);
+      const input = getInput();
+
+      fireEvent.change(input, { target: { value: "water the plants every day" } });
+      clickAt(input, 20); // inside "day"
+
+      expect(highlightedSpans()).toHaveLength(0);
+
+      fireEvent.click(screen.getByRole("button", { name: "Add" }));
+      expect(onAdd).toHaveBeenCalledWith(
+        expect.objectContaining({
+          content: "water the plants every day",
+          dateString: null,
+        }),
+      );
+    });
+
+    it("a phrase the recurrence engine can't parse is never highlighted at all", () => {
+      render(<AddTaskForm onAdd={vi.fn()} disabled={false} />);
+      const input = getInput();
+
+      fireEvent.change(input, { target: { value: "water plants every fortnight" } });
+
+      expect(highlightedSpans()).toHaveLength(0);
+    });
+
+    it("submitting a recognised phrase strips it from content and stores it as dateString", () => {
+      const onAdd = vi.fn();
+      render(<AddTaskForm onAdd={onAdd} disabled={false} />);
+      const input = getInput();
+
+      fireEvent.change(input, { target: { value: "water the plants every day" } });
+      fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+      expect(onAdd).toHaveBeenCalledWith(
+        expect.objectContaining({ content: "water the plants", dateString: "every day" }),
+      );
+    });
+
+    it("a demoted phrase's own revealed fallback token can itself be demoted — the cascade doesn't dead-end", () => {
+      // Demoting "every monday" (the compound match) doesn't demote
+      // "monday" — a *different*, previously-shadowed candidate wins that
+      // span in its place (../../packages/core/src/quick-add's own
+      // overlap priority). A reader who demotes that one too must land
+      // back at fully plain text in one further click, exactly as a bare
+      // "monday" with no phrase around it demotes in a single click —
+      // this pins the fix for the regression reported after this
+      // ticket's first pass: the fallback was reachable but stuck.
+      const onAdd = vi.fn();
+      render(<AddTaskForm onAdd={onAdd} disabled={false} />);
+      const input = getInput();
+
+      fireEvent.change(input, { target: { value: "call mum every monday" } });
+      expect(highlightedSpans().map((s) => s.textContent)).toEqual(["every monday"]);
+
+      clickAt(input, 20); // inside "monday", also inside "every monday"
+      expect(highlightedSpans().map((s) => s.textContent)).toEqual(["monday"]);
+
+      clickAt(input, 20); // inside the now-revealed bare "monday"
+      expect(highlightedSpans()).toHaveLength(0);
+
+      fireEvent.click(screen.getByRole("button", { name: "Add" }));
+      expect(onAdd).toHaveBeenCalledWith(
+        expect.objectContaining({ content: "call mum every monday", dateString: null }),
+      );
     });
   });
 

@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import type { Browser, BrowserContext, Locator, Page } from "@playwright/test";
-import { POSTGRES_CONTAINER, SERVER_A_URL } from "../servers";
+import { POSTGRES_CONTAINER, SERVER_A_DATABASE, SERVER_A_URL, SERVER_B_DATABASE } from "../servers";
 
 /** A body unique to this test run, so leftover rows from a prior local run never collide. */
 export function uniqueEntryBody(label: string): string {
@@ -127,6 +127,30 @@ export async function waitForEntryId(
 }
 
 /**
+ * Returns the id of the Entry whose body CONTAINS `fragment`, once one
+ * exists on the Server — the same poll `waitForEntryId` runs, loosened to a
+ * substring match for the one case where Send does not store the literal
+ * text a test typed. Promotion (issue #173, ADR 0048) rewrites a bare
+ * `- [ ] <label>` checklist line into `- [ ] [[task:id|label]]` the moment
+ * it reaches a real Task, so a test that sends a completed-checklist Entry
+ * and then looks it up by its full typed string never finds the row —
+ * `waitForEntryId`'s exact match is checking for text Promotion has already
+ * rewritten. `fragment` should be the label alone, the part Promotion
+ * leaves untouched, not the leading `- [ ] ` marker.
+ */
+export async function waitForEntryIdContaining(
+  fragment: string,
+  database: string,
+  timeoutMs = 20_000,
+): Promise<string> {
+  return pollSql(
+    database,
+    `select id from entries where body like ${sqlLiteral(`%${fragment}%`)};`,
+    timeoutMs,
+  );
+}
+
+/**
  * The Entry's own `seq` on the Server, right now — a snapshot, not a poll.
  * ADR 0028: `seq` is reassigned on every write (insert OR edit), never
  * merely on read, so it is the strongest signal composer.spec.ts's
@@ -137,6 +161,169 @@ export async function waitForEntryId(
  */
 export function entrySeq(id: string, database: string): string | undefined {
   return sqlScalar(database, `select seq from entries where id = ${sqlLiteral(id)};`);
+}
+
+/**
+ * Waits until the Task whose own `content` is `content` has a non-null
+ * `completed_at` on the Server (`server/migrations/0010_create_tasks.sql`)
+ * — issue #181's own coordinator gap-fix report: a UI assertion that the
+ * checkbox *reads* checked proves the local store already agrees (the
+ * query cache backing `DayTasksRow`'s own `checked` only ever updates once
+ * `completeTask`'s mutation resolves, which awaits the real local write),
+ * but it says nothing about whether the write has propagated any further
+ * than this one render. A test that then reloads immediately is racing
+ * Sync's own `requestSync()` — fired, but never awaited, from inside that
+ * same mutation's `onSuccess` (`use-tasks.ts`) — against the reload's own
+ * fresh boot. Waiting for the Server's own copy to agree first is the
+ * identical "wait for the causally-later, externally-checkable condition"
+ * discipline `waitForTombstone`/`waitForEntryId` just above already use
+ * for an Entry; this is that same discipline for a Task's completion.
+ * `content`, not `id`: this suite has no door onto a freshly-minted Task's
+ * own id (Promotion mints it client-side, from a plain checkbox line), and
+ * `uniqueEntryBody`'s own randomUUID suffix already keeps content unique
+ * across a test run the identical way it does for an Entry's `body`.
+ *
+ * `timeoutMs` defaults to double `waitForEntryId`/`waitForTombstone`'s own
+ * 20s, not because completing a Task is inherently slower than Sending or
+ * deleting an Entry, but because of *where in this file* the one caller
+ * that matters sits: at the time this default was measured, issue #190
+ * meant every earlier test in `composer.spec.ts` leaked a Task into today's
+ * Day block, so by the time this fired the Server was fielding Sync
+ * requests for a real, accumulated backlog rather than the single-row case
+ * `waitForEntryId`'s own 20s was measured against. `SYNC_INTERVAL_MS`
+ * (`@meologue/core`) is 5s — a request that gets coalesced behind an
+ * already-in-flight one, or simply takes longer under the load a busy
+ * suite run puts on the Server, can need more than one or two ticks to
+ * land. Confirmed by reproducing a real full-file run at load ~11.6/16.4:
+ * a completion this function was asked to find took longer than 20s to
+ * reach the Server, not never.
+ *
+ * Issue #190 is now fixed (`fixtures.ts`'s `resetTasks` fixture — this same
+ * file), so a fresh measurement would likely find `waitForEntryId`'s own
+ * 20s enough again; the wider budget is left in place rather than tightened
+ * back down; it costs nothing on a test that finishes well within it, and
+ * general machine-load variance (the actual subject of issue #112) is still
+ * a real reason a poll can run long even with nothing left accumulating.
+ */
+export async function waitForTaskCompleted(
+  content: string,
+  database: string,
+  timeoutMs = 40_000,
+): Promise<void> {
+  await pollSql(
+    database,
+    `select 1 from tasks where content = ${sqlLiteral(content)} and completed_at is not null;`,
+    timeoutMs,
+  );
+}
+
+/**
+ * The inverse of `waitForTaskCompleted` above, for a Task that has just been
+ * *un*-ticked — the Day block writes in both directions now, so a test that
+ * reloads to prove an un-tick reached the store needs the same "wait for the
+ * Server's own copy to agree first" step the tick already needed, for the
+ * identical reason: `uncompleteTask`'s own mutation fires `requestSync()`
+ * from `onSuccess` without awaiting it (`use-tasks.ts`), so reloading right
+ * after the UI updates races that push against whatever a periodic pull
+ * already in flight hands the fresh boot back.
+ *
+ * The query names `content` as well as `completed_at is null`, so it can only
+ * pass once a row for this Task actually exists on the Server — a bare
+ * `completed_at is null` over the table would be satisfied by any other Task
+ * and would pass without the un-tick ever arriving.
+ */
+export async function waitForTaskUncompleted(
+  content: string,
+  database: string,
+  timeoutMs = 40_000,
+): Promise<void> {
+  await pollSql(
+    database,
+    `select 1 from tasks where content = ${sqlLiteral(content)} and completed_at is null;`,
+    timeoutMs,
+  );
+}
+
+/**
+ * Waits until the Server's own copy agrees that `beforeContent`'s Task
+ * sorts before `afterContent`'s Task — `order_key` compared the same way
+ * `order-key.ts`'s own `compareOrder` does (`a.orderKey < b.orderKey`),
+ * lexicographically, ascending.
+ *
+ * The same "wait for the Server to agree before reloading" discipline
+ * `waitForTaskCompleted`'s own doc comment already gives for a completion,
+ * applied to a reorder instead: a drag-and-drop's `commitDrop` writes the
+ * new `order_key` locally and fires `requestSync()` the identical
+ * fire-and-forget way `completeTask` does (`use-tasks.ts`), so a
+ * `page.reload()` right after a drop is racing that push against whatever
+ * a periodic pull already in flight hands the fresh boot back — a pull
+ * that still carries the Server's own pre-drop order can land after the
+ * reload and overwrite the very swap a test just watched render, purely
+ * because the corresponding push hadn't reached the Server yet. Confirmed
+ * flaky on a real full-file run, this test's own reorder-then-reload step
+ * specifically, only at real load (~10-13): reproduced twice in five tries
+ * at that load, and not at all at a quieter one — the signature of exactly
+ * this race, not a deterministic bug.
+ */
+export async function waitForTaskOrder(
+  beforeContent: string,
+  afterContent: string,
+  database: string,
+  timeoutMs = 20_000,
+): Promise<void> {
+  await pollSql(
+    database,
+    `select 1 from tasks a, tasks b
+     where a.content = ${sqlLiteral(beforeContent)}
+       and b.content = ${sqlLiteral(afterContent)}
+       and a.order_key < b.order_key;`,
+    timeoutMs,
+  );
+}
+
+/**
+ * Waits until the Server's own copy agrees that `childContent`'s Task has
+ * `parentContent`'s Task as its own `parent_id` — the same "wait for the
+ * Server to agree before asserting anything" discipline `waitForTaskOrder`'s
+ * own doc comment already gives for a reorder, applied to a reparent
+ * instead: `setTaskParent` (task-tree.tsx's own `handleIndent`, reached from
+ * `Alt`+`ArrowRight`, and `handleNestDrop`, reached from a drag) writes the
+ * new `parent_id` locally and fires `requestSync()` the identical
+ * fire-and-forget way every other Task mutation does (`use-tasks.ts`'s own
+ * `afterLocalWrite`), so asserting anything that depends on the Server's own
+ * state right after the gesture races that push against whatever pull is
+ * already in flight — exactly `waitForTaskOrder`'s own race, for a different
+ * column.
+ *
+ * Naming both `content`s, joined through `parent_id`, rather than polling
+ * `parent_id is not null` alone, is deliberate, and the same care
+ * `waitForTaskCompleted` above takes in naming the Task it is waiting on:
+ * this can only pass once the row for *this* child actually names *this*
+ * parent, not merely once some Task somewhere has acquired some parent —
+ * which, on a shared Server every spec in this suite writes to, is a
+ * condition some other test's leftover could satisfy on its own.
+ *
+ * This is also what turns a keyboard gesture that never reached its target
+ * — the reparent action itself never firing, as opposed to firing and
+ * merely taking a while to reach the Server — into a clear, named timeout
+ * here ("no row agrees" for the full budget) rather than a confusing
+ * mismatch several assertions later against whatever the DOM happened to
+ * still show.
+ */
+export async function waitForTaskParent(
+  childContent: string,
+  parentContent: string,
+  database: string,
+  timeoutMs = 20_000,
+): Promise<void> {
+  await pollSql(
+    database,
+    `select 1 from tasks child, tasks parent
+     where child.content = ${sqlLiteral(childContent)}
+       and parent.content = ${sqlLiteral(parentContent)}
+       and child.parent_id = parent.id;`,
+    timeoutMs,
+  );
 }
 
 /**
@@ -218,6 +405,43 @@ export function deleteDigest(
     `delete from digests where period = ${sqlLiteral(period)} and period_start = ${sqlLiteral(periodStart)};`,
     database,
   );
+}
+
+/**
+ * Deletes every row from `tasks`, on both e2e databases — issue #190's
+ * structural fix. `fixtures.ts`'s own autouse fixture calls this before
+ * every single test, not merely at a spec-file boundary, so the guarantee
+ * holds regardless of which earlier file — or even which earlier test in
+ * the SAME file — happened to create a Task.
+ *
+ * A Task has no per-Device or per-user scope to isolate along in the first
+ * place (server/migrations/0010_create_tasks.sql's own header comment:
+ * "meologue is one person's journal and one person's task list" — every
+ * Device pulls every row), so the only place isolation between one test and
+ * the next can live is the shared table itself. Truncating it is cheap
+ * (`docker exec`/`psql`, the same round trip `pollSql` already pays inside
+ * this same test run) next to the cost a real per-file Server or database
+ * would add on top of the two this suite already boots.
+ *
+ * Both databases, not only `SERVER_A_DATABASE`: multi-server.spec.ts is the
+ * one spec that ever talks to `SERVER_B_DATABASE`, and it does not exercise
+ * Todo, but resetting a database this suite never dirties is a no-op, not a
+ * risk — leaving it out on the assumption "nothing writes Tasks there today"
+ * is exactly the kind of convention this fix is trying not to depend on.
+ *
+ * Deliberately `tasks` only, not `entries`: every other spec that reads back
+ * a broad surface (History, Search) already matches its own row by
+ * `uniqueEntryBody`'s random content rather than by counting the whole page
+ * (todo.spec.ts's own former `toHaveCount` — see git history — was the one
+ * assertion counting a whole surface instead). Widening the reset to
+ * `entries` would be a second, unasked-for change with a real cost
+ * (reflection.spec.ts's embeddings, search.spec.ts's index) for no failure
+ * this ticket needs it to fix.
+ */
+export function resetTasks(): void {
+  for (const database of [SERVER_A_DATABASE, SERVER_B_DATABASE]) {
+    runSql("delete from tasks;", database);
+  }
 }
 
 function runSql(sql: string, database: string): void {
@@ -546,7 +770,18 @@ export async function editEntryViaMenu(
 ): Promise<void> {
   const row = entryRow(page, currentBody);
   await row.hover();
-  await row.getByRole("button", { name: "Edit" }).click();
+  // `exact: true` — issue #181 gave a referenced Task's own words a real
+  // `<button>` (entry-row.tsx's `TaskReferenceItem`), sitting inside this
+  // same row. `getByRole`'s `name` is substring-matched and case-
+  // insensitive by default, so a fixture body containing the word "edit"
+  // (a real, exercised case — composer.spec.ts's own
+  // "composer-task-reference-edit" fixture) makes that button match `{
+  // name: "Edit" }` too, alongside the real Edit button
+  // (`entry-actions.tsx`'s own `aria-label="Edit"`, nothing else in its
+  // name) — a strict-mode violation Playwright refuses to guess through.
+  // `exact: true` is what makes this mean the action, not any button
+  // whose visible text happens to contain those four letters.
+  await row.getByRole("button", { name: "Edit", exact: true }).click();
   const editor = composerField(page);
   await editor.click();
   await page.keyboard.press("ControlOrMeta+A");

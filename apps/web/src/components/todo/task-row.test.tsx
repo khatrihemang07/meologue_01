@@ -10,17 +10,17 @@ function task(overrides: Partial<Task> = {}): Task {
     content: "buy milk",
     completedAt: null,
     orderKey: "V",
+    dayOrder: "V",
     createdAt: "2026-01-01T00:00:00.000Z",
     seq: 1,
     syncedAt: "2026-01-01T00:00:00.000Z",
     deletedAt: null,
-    // Undated, no deadline, no duration, priority 1 ("no priority") — the
+    // Undated, no deadline, priority 1 ("no priority") — the
     // same default packages/core/src/test-support/task-fixture.ts uses,
     // so a test that wants a scheduled Task says so explicitly via
     // `overrides` rather than this fixture guessing at one.
     date: null,
     deadline: null,
-    duration: null,
     priority: 1,
     // No Labels, doesn't repeat — the same "concrete value, not a gap"
     // default packages/core/src/test-support/task-fixture.ts's own
@@ -33,6 +33,7 @@ function task(overrides: Partial<Task> = {}): Task {
     projectId: null,
     sectionId: null,
     parentId: null,
+    description: null,
     ...overrides,
   };
 }
@@ -40,6 +41,16 @@ function task(overrides: Partial<Task> = {}): Task {
 function renderRow(overrides: Partial<Parameters<typeof TaskRow>[0]> = {}) {
   const props = {
     task: task(),
+    detailActions: {
+      projects: [],
+      labels: [],
+      onOpenDetail: vi.fn(),
+      onSetPriority: vi.fn(),
+      onSetProject: vi.fn(),
+      onSetLabels: vi.fn(),
+      onCopyLink: vi.fn(),
+      commentCountFor: vi.fn(() => 0),
+    },
     onComplete: vi.fn(),
     onCompleteForever: vi.fn(),
     onRequestDelete: vi.fn(),
@@ -61,6 +72,20 @@ function renderRow(overrides: Partial<Parameters<typeof TaskRow>[0]> = {}) {
     </ul>,
   );
   return props;
+}
+
+/**
+ * The `[data-task-row-box]` `<div>` inside the rendered row — issue #192
+ * moved every visual class, the depth padding, and (since exactly one
+ * `TaskRow` ever renders per `renderRow` call here) every one of those
+ * onto this element rather than the `<li>` around it, so a test asserting
+ * on any of them has to look here now — task-row.tsx's own header comment
+ * carries the fuller reasoning for the split.
+ */
+function rowBox(): HTMLElement {
+  const box = document.querySelector<HTMLElement>("[data-task-row-box]");
+  if (!box) throw new Error("expected a row box");
+  return box;
 }
 
 describe("TaskRow", () => {
@@ -152,11 +177,15 @@ describe("TaskRow", () => {
     expect(screen.getByText("every other monday")).toBeInTheDocument();
   });
 
-  it("the delete button calls onRequestDelete, not the store directly", () => {
+  // Issue #178 moved Delete off the row's own hover actions entirely — it
+  // lives behind the "More actions" (⋯) menu now, alongside the rest of
+  // the full command set, per this ticket's own reference behaviour.
+  it("Delete, in the More actions menu, calls onRequestDelete, not the store directly", () => {
     const onRequestDelete = vi.fn();
     renderRow({ task: task({ content: "call mum" }), onRequestDelete });
 
-    fireEvent.click(screen.getByRole("button", { name: 'Delete "call mum"' }));
+    fireEvent.pointerDown(screen.getByRole("button", { name: 'More actions for "call mum"' }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /Delete/ }));
 
     expect(onRequestDelete).toHaveBeenCalledTimes(1);
   });
@@ -246,7 +275,7 @@ describe("TaskRow", () => {
   it("draws the drop indicator only while it is the drop target", () => {
     renderRow({ isDropTarget: true });
 
-    expect(screen.getByRole("listitem")).toHaveClass("border-t-primary");
+    expect(rowBox()).toHaveClass("border-t-primary");
   });
 
   // Issue #171's drag-to-reparent: nesting draws a genuinely different
@@ -258,29 +287,107 @@ describe("TaskRow", () => {
   it("draws a distinct row-highlight indicator, not the reorder line, while it is the nest target", () => {
     renderRow({ isNestTarget: true });
 
-    const row = screen.getByRole("listitem");
-    expect(row).toHaveClass("ring-primary");
-    expect(row).not.toHaveClass("border-t-primary");
+    const box = rowBox();
+    expect(box).toHaveClass("ring-primary");
+    expect(box).not.toHaveClass("border-t-primary");
   });
 
   it("draws neither indicator when the row is neither the reorder nor the nest target", () => {
     renderRow({ isDropTarget: false, isNestTarget: false });
 
-    const row = screen.getByRole("listitem");
-    expect(row).not.toHaveClass("border-t-primary");
-    expect(row).not.toHaveClass("ring-primary");
+    const box = rowBox();
+    expect(box).not.toHaveClass("border-t-primary");
+    expect(box).not.toHaveClass("ring-primary");
   });
 
   // Issue #169: the schedule button is the one door onto Date/Deadline/
-  // Duration/Priority pickers from any row, in either Inbox or Today
+  // Priority pickers from any row, in either Inbox or Today
   // (TaskRow's own doc comment on `onOpenSchedule`).
-  it("the schedule button calls onOpenSchedule", () => {
+  // "Schedule" was renamed "Date" (issue #178's own reference behaviour —
+  // the row's four hover actions read Edit, Date, Comment, More).
+  it("the Date button calls onOpenSchedule", () => {
     const onOpenSchedule = vi.fn();
     renderRow({ task: task({ content: "call mum" }), onOpenSchedule });
 
-    fireEvent.click(screen.getByRole("button", { name: 'Schedule "call mum"' }));
+    fireEvent.click(screen.getByRole("button", { name: 'Date "call mum"' }));
 
     expect(onOpenSchedule).toHaveBeenCalledTimes(1);
+  });
+
+  it("on a hover-capable pointer, a row's actions render in the fixed order Edit, Date, Comment, More", () => {
+    renderRow({ task: task({ content: "call mum" }) });
+
+    const buttons = screen
+      .getAllByRole("button")
+      .map((button) => button.getAttribute("aria-label"))
+      .filter((label): label is string => label !== null);
+
+    // Only the four hover actions, checked by their relative order — the
+    // drag handle and the checkbox carry their own, differently-shaped
+    // labels and aren't part of this claim.
+    const hoverActionLabels = buttons.filter((label) =>
+      /^(Edit|Date|Comment on|More actions for)/.test(label),
+    );
+    expect(hoverActionLabels).toEqual([
+      'Edit "call mum"',
+      'Date "call mum"',
+      'Comment on "call mum"',
+      'More actions for "call mum"',
+    ]);
+  });
+
+  // A real device (1080x2400) found this the hard way: with all four
+  // hover actions following the pre-existing `(hover: hover)` convention
+  // — visible unless a hover-capable pointer says otherwise — a touch
+  // reader with no hover at all got all four, permanently, on a 349px
+  // row. Four 44px buttons plus the grip handle and checkbox left "call
+  // the dentist" as little as 37px to render in, and it came out "call …".
+  //
+  // jsdom (this project's test environment, `vite.config.ts`'s own `test.
+  // environment: "jsdom"`, with no `css: true`) never loads Tailwind's
+  // actual generated stylesheet, so nothing here can assert real
+  // `display`/visibility the way a browser would — `toBeVisible()` would
+  // pass or fail independent of any class on the element. What's actually
+  // load-bearing, and what this asserts instead, is the exact utility
+  // classes Tailwind mechanically turns into that CSS: `hidden` (the base,
+  // no-hover state) overridden only by `[@media(hover:hover)]:flex`, on
+  // Edit/Date/Comment specifically — the same pattern entry-actions.tsx's
+  // own `EntryHoverActions` already uses for its own two buttons. More
+  // carries no `hidden` at all: it has to stay the one thing a touch
+  // reader can always tap, since it's now the only door onto the other
+  // three's own actions at rest.
+  it("only More actions renders unconditionally — Edit, Date and Comment are hidden outside a hover-capable pointer", () => {
+    renderRow({ task: task({ content: "call mum" }) });
+
+    for (const label of ['Edit "call mum"', 'Date "call mum"', 'Comment on "call mum"']) {
+      const button = screen.getByRole("button", { name: label });
+      expect(button).toHaveClass("hidden");
+      expect(button).toHaveClass("[@media(hover:hover)]:flex");
+    }
+
+    const more = screen.getByRole("button", { name: 'More actions for "call mum"' });
+    expect(more).not.toHaveClass("hidden");
+    expect(more).toHaveClass("flex");
+  });
+
+  it('opens the full command menu on right-click, and on the "." key', () => {
+    renderRow({ task: task({ content: "call mum" }) });
+
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+
+    fireEvent.contextMenu(screen.getByRole("listitem"));
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /^Edit/ })).toBeInTheDocument();
+
+    // Escaped on the menu itself, not the row — Radix hides the rest of
+    // the page from the accessibility tree while an open menu's focus
+    // scope is active, so the `<li>` isn't a `listitem` to query against
+    // until the menu closes again.
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+
+    fireEvent.keyDown(screen.getByRole("listitem"), { key: "." });
+    expect(screen.getByRole("menu")).toBeInTheDocument();
   });
 
   it("shows no schedule summary for a Task with no date, deadline or priority set", () => {
@@ -309,6 +416,30 @@ describe("TaskRow", () => {
     renderRow({ task: task({ content: "call mum", date: "2026-09-03T09:30" }) });
 
     expect(screen.getByText("Sep 3, 9:30 AM")).toBeInTheDocument();
+  });
+
+  describe("comment count — issue #180", () => {
+    it("shows no comment count when there are none", () => {
+      renderRow({ task: task({ content: "call mum" }), commentCount: 0 });
+
+      expect(screen.queryByText("0")).not.toBeInTheDocument();
+    });
+
+    it("shows the count next to the date chip when non-zero", () => {
+      renderRow({
+        task: task({ content: "call mum", date: "2026-09-03" }),
+        commentCount: 3,
+      });
+
+      expect(screen.getByText("Sep 3")).toBeInTheDocument();
+      expect(screen.getByText("3")).toBeInTheDocument();
+    });
+
+    it("shows the count even on a Task with no date, deadline or priority", () => {
+      renderRow({ task: task({ content: "call mum" }), commentCount: 1 });
+
+      expect(screen.getByText("1")).toBeInTheDocument();
+    });
   });
 
   // Issue #169's Today view is the first caller with no drag handlers at
@@ -355,5 +486,34 @@ describe("TaskRow", () => {
     });
 
     expect(screen.queryByTestId("task-drag-handle")).not.toBeInTheDocument();
+  });
+
+  // Issue #192's own acceptance criterion, pinned at the level that
+  // actually owns the `<li>`: whatever `children` this row is given (a
+  // sub-task's own nested `TaskTree`, in practice — task-tree.tsx's own
+  // `TaskTreeRow`) has to land *inside* this row's own `<li>`, not beside
+  // it, or the markup is invalid HTML again (a `ul` may hold only `li`).
+  // A plain `<ul>` stands in for the real `TaskTree` here — this test
+  // only needs to know where `TaskRow` puts whatever it's handed, not
+  // whether a real sub-task list renders correctly, which task-tree.test.tsx's
+  // own structural test already covers end to end.
+  it("renders children inside its own <li>, not as a sibling of it", () => {
+    renderRow({
+      task: task({ content: "plan trip" }),
+      children: (
+        <ul data-testid="fake-subtasks">
+          <li>book flights</li>
+        </ul>
+      ),
+    });
+
+    // `rowBox()`'s own `<li>` — not `screen.getByRole("listitem")`, which
+    // would now also match the fake sub-task `<li>` this test hands in as
+    // `children`, and fail on being asked for exactly one of two.
+    const li = rowBox().closest("li");
+    const subtasks = screen.getByTestId("fake-subtasks");
+    expect(li).not.toBeNull();
+    expect(li?.contains(subtasks)).toBe(true);
+    expect(subtasks.parentElement).toBe(li);
   });
 });

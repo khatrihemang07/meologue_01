@@ -11,6 +11,7 @@ import { type MouseEvent, memo, type ReactNode, useState } from "react";
 import { Link } from "react-router";
 import { EntryHoverActions, hoverCapable } from "@/components/entry-actions";
 import { entryProse } from "@/components/entry-prose";
+import { TaskScheduleChips } from "@/components/task-schedule-chips";
 import { useDayHasEntries } from "@/hooks/use-day-has-entries";
 import { useEntryReference } from "@/hooks/use-entry-reference";
 import {
@@ -236,6 +237,46 @@ function EntryReferenceLink({ entryId, raw }: { entryId: string; raw: string }) 
  * reorder affordance on this checkbox to refuse in the first place, so
  * refusing the untick is the one refusal this component actually has to
  * make.
+ *
+ * **Date, Priority and Project (issue #181, criteria 1/2) read off `live`
+ * — but Date gets the identical recurring exception `resolvedChecked`
+ * already needs, Priority and Project don't.** `resolvedChecked` above
+ * prefers the Entry's own cached marker for a recurring Task, because the
+ * checked bit answers "was THIS occurrence finished" and only the Entry
+ * pins which occurrence that was. Priority and Project have no such
+ * question to answer — they are attributes of the Task's current series,
+ * not of one past occurrence, so the live value is simply correct
+ * (ADR 0048 mints the mark with a cached `label`/`checked` and nothing
+ * else — see inline-markdown.ts's `EntryTaskMarker` — so there is no
+ * second, historical copy of either for a cached mark to have carried in
+ * the first place). Date is NOT in that category, and treating it as if
+ * it were was a bug this ticket's own coordinator caught live:
+ * `advanceRecurringTask` moves `date` on to the NEXT occurrence the
+ * instant this one completes, so once `recurring && resolvedChecked` (this
+ * line already reads as a finished, un-reopenable record — the same
+ * condition `canToggle` below refuses a further click for), `live.date`
+ * answers "when is this series next due," never "when was THIS
+ * occurrence" — `TaskScheduleChips`'s own `hideDate` is passed `true`
+ * exactly then, suppressing the one chip that would otherwise claim a day
+ * that isn't this occurrence's own. `TaskScheduleChips` is only ever
+ * handed `live`, and only once `live !== undefined` — criterion 5's
+ * "leads nowhere" extends to the chips too: an unresolved reference shows
+ * no chips at all, exactly as it shows no live label.
+ *
+ * **Clicking the words opens the Task (issue #181, criterion 4), only
+ * where `onOpenTask` says so.** Threaded through unwrapped from
+ * `entryBodyContent` below, `onOpenTask` is only ever supplied by
+ * History's own call (composer-page.tsx), never by `EntryBody`
+ * (Grounding) — the identical "interactive only where the caller says so"
+ * rule `interactive` already follows for ticking, applied to opening too:
+ * Grounding must stay a read-only view of what an Answer was based on,
+ * and a door onto editing a Task's own detail view would let that look
+ * negotiable. Gated additionally on `live !== undefined` — criterion 5's
+ * own words, "a reference to a Task this Device does not have shows its
+ * words and leads nowhere," meant literally: no link, not a link to
+ * nothing, on the one row type composer-page.tsx's activity log exists to
+ * show correctly (a prior ticket in this arc left exactly that gap for a
+ * different row type; this component does not repeat it here).
  */
 function TaskReferenceItem({
   taskId,
@@ -247,6 +288,7 @@ function TaskReferenceItem({
   body,
   entryId,
   interactive,
+  onOpenTask,
 }: {
   taskId: string;
   label: string;
@@ -259,9 +301,18 @@ function TaskReferenceItem({
   /** `undefined` when the caller (`EntryBody`, Grounding) has no Entry to write back to at all. */
   entryId: string | undefined;
   interactive: boolean;
+  /** Opens the Task over the Composer (issue #181) — see this function's own doc comment for why this is gated on `live !== undefined` independently of `interactive`. */
+  onOpenTask: ((taskId: string) => void) | undefined;
 }) {
-  const { tasks, completedTasks, completeTask, uncompleteTask, advanceRecurringTask, editEntry } =
-    useEntryStore();
+  const {
+    tasks,
+    completedTasks,
+    completeTask,
+    uncompleteTask,
+    advanceRecurringTask,
+    editEntry,
+    projects,
+  } = useEntryStore();
   const live =
     tasks.find((task) => task.id === taskId) ?? completedTasks.find((task) => task.id === taskId);
   const recurring = live !== undefined && live.dateString !== null;
@@ -272,6 +323,7 @@ function TaskReferenceItem({
   // "cannot be reopened" rule, not a separate guard bolted onto it.
   const canToggle =
     interactive && live !== undefined && entryId !== undefined && !(recurring && resolvedChecked);
+  const canOpen = live !== undefined && onOpenTask !== undefined;
 
   function handleChange() {
     if (!canToggle || entryId === undefined) {
@@ -310,7 +362,24 @@ function TaskReferenceItem({
         className="mt-[0.2em] shrink-0 accent-current"
       />
       <div className="min-w-0 flex-1">
-        <p className="whitespace-pre-wrap first:mt-0 mt-1">{resolvedLabel}</p>
+        {canOpen ? (
+          <button
+            type="button"
+            onClick={() => onOpenTask(taskId)}
+            className="block w-full whitespace-pre-wrap text-left first:mt-0 mt-1 hover:underline"
+          >
+            {resolvedLabel}
+          </button>
+        ) : (
+          <p className="whitespace-pre-wrap first:mt-0 mt-1">{resolvedLabel}</p>
+        )}
+        {live !== undefined && (
+          <TaskScheduleChips
+            task={live}
+            projects={projects}
+            hideDate={recurring && resolvedChecked}
+          />
+        )}
         {content}
       </div>
     </li>
@@ -370,12 +439,22 @@ function TaskReferenceItem({
  * separate parameters rather than one, since `interactive` (whether
  * ticking is permitted at all) and `entryId` (what to splice if it is) are
  * two different questions a caller could in principle answer separately.
+ *
+ * `onOpenTask` (issue #181) passes straight through to `TaskReferenceItem`,
+ * unwrapped — unlike `onToggleTask`, it needs no per-marker offsets, only a
+ * Task id, so there is nothing for this function to adapt between its own
+ * signature and `TaskReferenceItem`'s. `undefined` for every caller that
+ * doesn't supply one (`EntryBody`'s own call below, and every test in this
+ * file's own suite), which is what keeps a referenced Task's words
+ * unclickable — see `TaskReferenceItem`'s own doc comment for why that's
+ * gated independently of `interactive`.
  */
 export function entryBodyContent(
   body: string,
   query: string,
   onToggleTask?: (markerFrom: number, markerTo: number) => void,
   entryId?: string,
+  onOpenTask?: (taskId: string) => void,
 ): ReactNode {
   return entryProse(
     body,
@@ -392,6 +471,7 @@ export function entryBodyContent(
         body={body}
         entryId={entryId}
         interactive={onToggleTask !== undefined}
+        onOpenTask={onOpenTask}
       />
     ),
   );

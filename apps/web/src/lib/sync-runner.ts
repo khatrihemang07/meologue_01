@@ -1,9 +1,38 @@
-import type { EntryStore, TaskStore } from "@meologue/core";
+import type {
+  CommentStore,
+  EntryStore,
+  EventStore,
+  LabelStore,
+  ProjectStore,
+  TaskStore,
+} from "@meologue/core";
 import { sync } from "@meologue/core";
 import { refreshNewestEntriesPage } from "@/lib/entries-pagination";
 import { useSettingsStore } from "@/lib/settings";
 import { useSyncStatusStore } from "@/lib/sync-status";
 import { syncTransport } from "@/lib/sync-transport";
+import { refreshTasks } from "@/lib/tasks-refresh";
+
+/**
+ * Every store one `sync()` call needs (issue #182 widened this from two —
+ * `EntryStore`/`TaskStore` — to six: `sync()`'s own `SyncEngineOptions`
+ * doc comment explains why each is required, not optional, for the
+ * identical "no stream can silently go unsynced" reason `taskStore` was
+ * already required for. A named bag, not six positional parameters, is
+ * what keeps `requestSync`'s own signature — and every caller that has to
+ * thread these through (use-tasks.ts, use-history.ts, backfill-tasks.ts,
+ * use-sync-loop.ts) — legible as the six streams grow rather than as an
+ * ever-longer parameter list.
+ */
+export interface SyncStores {
+  store: EntryStore;
+  taskStore: TaskStore;
+  projectStore: ProjectStore;
+  labelStore: LabelStore;
+  commentStore: CommentStore;
+  /** Issue #184: Sync's seventh stream, Todo's own activity log — required, mirroring every stream above. */
+  eventStore: EventStore;
+}
 
 let syncInFlight: Promise<void> | null = null;
 let rerunRequested = false;
@@ -15,17 +44,14 @@ let rerunRequested = false;
 // also recorded to `sync-status.ts` so the ambient indicator and Settings'
 // detail can both show it, and it keeps retrying on the next trigger either
 // way.
-async function runSyncOnce(
-  store: EntryStore,
-  taskStore: TaskStore,
-  deviceId: string,
-): Promise<void> {
+async function runSyncOnce(stores: SyncStores, deviceId: string): Promise<void> {
+  const { store } = stores;
   const serverUrl = useSettingsStore.getState().serverUrl;
   if (serverUrl === "") {
     return;
   }
   try {
-    await sync({ store, taskStore, transport: syncTransport, deviceId });
+    await sync({ ...stores, transport: syncTransport, deviceId });
     // Issue #79: refreshes the newest loaded page only, not every page the
     // reader has scrolled back through — see refreshNewestEntriesPage's own
     // doc comment (entries-pagination.ts) for why a whole-key invalidation
@@ -34,6 +60,15 @@ async function runSyncOnce(
     // scrolled, and why "newest page only" is still correct for what a
     // sync pull can actually change.
     await refreshNewestEntriesPage(store);
+    // Issue #177: a Task pulled from another Device during this sync (ADR
+    // 0047's Consequence 3, issue #172's Task Sync) otherwise leaves
+    // `TASKS_QUERY_KEY`/`COMPLETED_TASKS_QUERY_KEY` (tasks-refresh.ts) stale
+    // — Todo keeps showing whatever it already had cached until something
+    // else happens to invalidate them, which could be a reload away. Task
+    // Sync has no paged "newest page" the way Entries do
+    // (`refreshTasks`'s own doc comment), so this is a plain invalidate,
+    // same as every other caller of it.
+    await refreshTasks();
     useSyncStatusStore.getState().recordSuccess(serverUrl);
   } catch (error) {
     console.error("meologue: sync failed", error);
@@ -51,11 +86,7 @@ async function runSyncOnce(
  * tick. Instead, an overlapping caller schedules exactly one more run right
  * after the current one finishes.
  */
-export function requestSync(
-  store: EntryStore,
-  taskStore: TaskStore,
-  deviceId: string,
-): Promise<void> {
+export function requestSync(stores: SyncStores, deviceId: string): Promise<void> {
   if (syncInFlight) {
     rerunRequested = true;
     return syncInFlight;
@@ -63,7 +94,7 @@ export function requestSync(
   syncInFlight = (async () => {
     do {
       rerunRequested = false;
-      await runSyncOnce(store, taskStore, deviceId);
+      await runSyncOnce(stores, deviceId);
     } while (rerunRequested);
   })().finally(() => {
     syncInFlight = null;

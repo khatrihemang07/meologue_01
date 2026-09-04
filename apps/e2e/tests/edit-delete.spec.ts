@@ -1,6 +1,6 @@
 import type { Page } from "@playwright/test";
-import { expect, test } from "@playwright/test";
 import { SERVER_A_DATABASE } from "../servers";
+import { expect, test } from "./fixtures";
 import {
   closeDevices,
   deleteEntryViaMenu,
@@ -297,8 +297,14 @@ test("hovering a History row reveals Edit and Delete", async ({ page }) => {
   const row = entryRow(page, body);
   await row.hover();
 
-  await expect(row.getByRole("button", { name: "Edit" })).toBeVisible();
-  await expect(row.getByRole("button", { name: "Delete" })).toBeVisible();
+  // `exact: true` on both — issue #181's `TaskReferenceItem` gave a
+  // referenced Task's own words a real button too, sitting in this same
+  // row for a checkbox line; a substring match on "Edit"/"Delete" would
+  // resolve two buttons the moment a fixture body happened to contain
+  // either word (composer.spec.ts's own "composer-task-reference-edit"
+  // fixture is exactly that case).
+  await expect(row.getByRole("button", { name: "Edit", exact: true })).toBeVisible();
+  await expect(row.getByRole("button", { name: "Delete", exact: true })).toBeVisible();
 });
 
 // #127's touch model, in a real browser at real layout. The gesture itself
@@ -319,9 +325,10 @@ test("swiping an Entry left opens its actions — Edit, Copy and Delete", async 
   await swipeEntryLeft(page, body);
 
   const sheet = page.getByRole("dialog");
-  await expect(sheet.getByRole("button", { name: "Edit" })).toBeVisible();
-  await expect(sheet.getByRole("button", { name: "Copy" })).toBeVisible();
-  await expect(sheet.getByRole("button", { name: "Delete" })).toBeVisible();
+  // `exact: true` — same reasoning as the hover test just above.
+  await expect(sheet.getByRole("button", { name: "Edit", exact: true })).toBeVisible();
+  await expect(sheet.getByRole("button", { name: "Copy", exact: true })).toBeVisible();
+  await expect(sheet.getByRole("button", { name: "Delete", exact: true })).toBeVisible();
 });
 
 // THE DEFECT THIS TICKET EXISTS TO AVOID. The retired prototype kept the

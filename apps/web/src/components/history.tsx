@@ -1,5 +1,5 @@
-import type { Entry, Task } from "@meologue/core";
-import { tasksForDay } from "@meologue/core";
+import type { Entry, Event, Project, Task } from "@meologue/core";
+import { completedRecurringOccurrencesForDay, tasksForDay } from "@meologue/core";
 import {
   measureElement as measureElementDefault,
   useVirtualizer,
@@ -21,6 +21,7 @@ import { EntryActionsSheet } from "@/components/entry-actions";
 import { EntryBubble } from "@/components/entry-bubble";
 import { entrySnippet } from "@/components/entry-row";
 import { HistoryScrollContext } from "@/components/shell";
+import { TaskScheduleChips } from "@/components/task-schedule-chips";
 import { ConfirmDialog } from "@/components/ui/alert-dialog";
 import { useDayReferrers } from "@/hooks/use-day-referrers";
 import { useSwipeActions } from "@/hooks/use-swipe-actions";
@@ -118,6 +119,83 @@ interface HistoryProps {
    * with no `tasks` prop at all keeps passing unchanged.
    */
   tasks?: Task[];
+  /**
+   * Completed Tasks (issue #181, criterion 6: "a day's block lists that
+   * day's Tasks both done and undone") — `flattenGroups` below
+   * concatenates this with `tasks` before calling `tasksForDay`, since
+   * `tasksForDay` was always indifferent to `completedAt` and the
+   * "active-only" expectation lived only in a doc comment, never in the
+   * filter itself (task-views.ts's own `tasksForDay` doc comment, rewritten
+   * for this ticket). Defaults to an empty array, the same
+   * pre-existing-test-keeps-passing reasoning `tasks` above already gives.
+   */
+  completedTasks?: Task[];
+  /**
+   * Every Event (issue #181, criterion 9; ADR 0056) — `flattenGroups`
+   * reads this to find a recurring Task's completed *occurrences*, the one
+   * fact `tasks`/`completedTasks` alone cannot answer (a recurring Task's
+   * own `completedAt` never becomes non-null, and `advanceRecurring`
+   * moves `date` on to the next occurrence the moment one finishes — see
+   * `completedRecurringOccurrencesForDay`'s own doc comment,
+   * `@meologue/core`, for the full argument). Defaults to an empty array.
+   */
+  events?: Event[];
+  /**
+   * Every Project (issue #181) — `DayTasksRow`'s own `TaskScheduleChips`
+   * needs this to resolve a Task's Project name, the identical prop
+   * `TaskReferenceItem` already reads off `useEntryStore()` directly
+   * (this component has no store access of its own, so composer-page.tsx
+   * hands it over the same way it already hands over `tasks`). Defaults
+   * to an empty array — a Task's Project chip reads "Inbox" rather than
+   * throwing when this is omitted, the same graceful-degradation `projects`
+   * everywhere else in this app already gets.
+   */
+  projects?: Project[];
+  /**
+   * Ticks a Task from a day's block (issue #181, criterion 7) — the
+   * caller's job is to branch on `dateString` the same way `todo-page.tsx`'s
+   * own `handleComplete` already does (`completeTask` vs.
+   * `advanceRecurringTask`): this component has no TaskStore access, only
+   * the Task in hand from whichever row was clicked. Undefined leaves
+   * every checkbox in the day block disabled, the same "no door, no
+   * affordance" default every other optional callback here follows.
+   */
+  onCompleteTask?: (task: Task) => void;
+  /**
+   * Un-ticks an already-completed Task from a day's block — the day
+   * block's own counterpart to `onCompleteTask` just above, not a second
+   * `dateString` branch layered onto it. `task-detail-view.tsx` (~L423)
+   * already models this identical checkbox as an `onComplete`/`onUncomplete`
+   * pair, branched at the call site on `task.completedAt !== null`, rather
+   * than one `onToggleTask` the callback itself would have to branch
+   * inside; two props here reuses that shape rather than inventing a
+   * second one, and leaves `onCompleteTask`'s own documented
+   * recurrence-branching contract untouched — every existing call site
+   * that only wires `onCompleteTask` keeps compiling and behaving exactly
+   * as before.
+   *
+   * Unlike `onCompleteTask`, this one needs no `dateString` branch of its
+   * own. A recurring Task never carries a non-null `completedAt` from an
+   * ordinary tick — `advanceRecurring` moves `date` on to the next
+   * occurrence instead of setting `completedAt` (TaskStore.advanceRecurring's
+   * own doc comment; CONTEXT.md's Recurrence entry) — so the only *done*
+   * recurring Task this callback can ever be asked to un-complete is one
+   * `completeForeverTask` ended, and un-completing that is already
+   * permitted from `task-detail-view.tsx`. Undefined leaves a done row's
+   * checkbox disabled, the same "no door, no affordance" default
+   * `onCompleteTask` itself already follows for an undone one.
+   */
+  onUncompleteTask?: (task: Task) => void;
+  /**
+   * Opens a Task over the Composer (issue #181, criteria 4/7) — shared by
+   * a referenced checkbox's own words (`EntryBubble`'s `onOpenTask`,
+   * forwarded unchanged) and a day block row's words (`DayTasksRow`
+   * below): both are "click this Task's words, see the Task," the
+   * identical door, so there is one prop for it rather than two that would
+   * have to agree by convention. Undefined leaves both surfaces'
+   * words as plain, unclickable text.
+   */
+  onOpenTask?: (taskId: string) => void;
   /**
    * Issue #142/#143: the day or Entry a Reference seek (composer-page.tsx)
    * is looking for, or `null`/omitted while no seek is active. History is
@@ -266,27 +344,64 @@ interface FlatDayReferrersItem {
   dayKey: string;
 }
 /**
+ * One Task in a day's block, together with what `DayTasksRow` needs to
+ * decide whether it reads as done and whether it can be ticked (issue
+ * #181, criteria 6/7/9) — computed once by `dayTaskEntries` below rather
+ * than re-derived per row, the same "flattenGroups is where every per-day
+ * derivation happens" reasoning `FlatDayTasksItem`'s own comment already
+ * gives.
+ *
+ * `done`/`canToggle` are two separate booleans, not one three-state enum,
+ * because they answer two different questions a future case could in
+ * principle disagree on: `done` is "does this checkbox read checked,"
+ * `canToggle` is "can a click change that." They combine three ways, not
+ * two: done+toggleable (an ordinary completed Task, un-tickable from here
+ * since issue #181's amendment), undone+toggleable (anything still open),
+ * and done+immutable (a recurring occurrence's own record, and only that
+ * one case) — see `dayTaskEntries`'s own doc comment for exactly which
+ * Tasks land in which combination.
+ *
+ * `isOccurrenceRecord` is a *third*, independent boolean rather than
+ * folded into `done`/`canToggle` — the coordinator's own live-verification
+ * report against criterion 9: an ordinary completed Task and a completed
+ * recurring occurrence both read `done: true, canToggle: false`, but only
+ * the occurrence's own `task.date` has already moved on to a DIFFERENT
+ * day (`advanceRecurring` bumps it the instant this occurrence finishes),
+ * so only it needs `TaskScheduleChips`'s `hideDate` suppressed — an
+ * ordinary completed Task's own `date` never moves once it's done, and
+ * stays correct to show. See `TaskScheduleChips`'s own doc comment for the
+ * full argument.
+ */
+interface DayTaskEntry {
+  task: Task;
+  done: boolean;
+  canToggle: boolean;
+  isOccurrenceRecord: boolean;
+}
+
+/**
  * Issue #174: the day block — the Tasks dated or deadlined this day
  * (`tasksForDay`, `@meologue/core`), right after the separator it opens
  * and ahead of `FlatDayReferrersItem` — "this day; here is what it
  * opens with; here is what refers back to it," in that reading order.
  * Unlike `FlatDayReferrersItem`, `flattenGroups` only ever emits this item
- * when `tasksForDay` actually found something: the filter is synchronous
- * and already known at flatten time, so there is no "still resolving"
- * state to reserve a zero-height row for the way the async referrers
- * probe needs one — an empty day simply gets no row at all. `tasks` is
- * carried on the item itself, already filtered and sorted, rather than
- * recomputed inside `DayTasksRow`: `flattenGroups` is where every other
- * per-day derivation already happens (the separator's own `dayKey`, the
- * referrers row's own probe target), and doing it a second time inside
- * the row component would just be the identical call repeated for no
- * reason.
+ * when `dayTaskEntries` actually found something: the filter is
+ * synchronous and already known at flatten time, so there is no "still
+ * resolving" state to reserve a zero-height row for the way the async
+ * referrers probe needs one — an empty day simply gets no row at all.
+ * `tasks` (a `DayTaskEntry[]`, since issue #181) is carried on the item
+ * itself, already filtered, sorted and done/canToggle-resolved, rather
+ * than recomputed inside `DayTasksRow`: `flattenGroups` is where every
+ * other per-day derivation already happens (the separator's own `dayKey`,
+ * the referrers row's own probe target), and doing it a second time
+ * inside the row component would just be the identical call repeated for
+ * no reason.
  */
 interface FlatDayTasksItem {
   kind: "dayTasks";
   key: string;
   dayKey: string;
-  tasks: Task[];
+  tasks: DayTaskEntry[];
 }
 interface FlatEntryItem {
   kind: "entry";
@@ -299,17 +414,98 @@ interface FlatEntryItem {
 }
 type FlatItem = FlatSeparatorItem | FlatDayTasksItem | FlatDayReferrersItem | FlatEntryItem;
 
-function flattenGroups(groups: DayGroup[], tasks: Task[]): FlatItem[] {
+/**
+ * A day's own `DayTaskEntry[]` (issue #181) — `tasksForDay`'s existing
+ * date-or-deadline filter, read against `tasks` **and** `completedTasks`
+ * concatenated (criterion 6: "both done and undone"), plus a recurring
+ * Task's completed *occurrences* for this exact day
+ * (`completedRecurringOccurrencesForDay`, `@meologue/core`, criterion 9),
+ * appended rather than sorted in among the rest.
+ *
+ * **Appended, not merged into `compareForToday`'s own order.** A
+ * recurring occurrence's record is keyed to a day its own Task has
+ * already moved past — `advanceRecurring` bumped `date` on to the NEXT
+ * occurrence the moment this one finished — so sorting it against that
+ * now-wrong `date` would place it somewhere `compareForToday` never
+ * actually reasoned about. There is no live "when was this occurrence
+ * due" fact left to sort it by; appending it after the ordinarily-sorted
+ * Tasks is honest about that, rather than pretending a position for it.
+ *
+ * **Deduplicated by Task id against the ordinary pool.** In the common
+ * case a recurring occurrence's own record never collides with the
+ * ordinary filter (the Task's live `date` has moved off this day by the
+ * time a record for it exists) — the guard exists for the rarer case a
+ * reader re-dates a recurring Task back onto a day it already has a
+ * completed-occurrence record for, where showing both would read as the
+ * same Task twice.
+ *
+ * `done`/`canToggle` per ordinary entry: `done` reads `completedAt !==
+ * null` — true for a completed Task pulled in from `completedTasks`,
+ * always false for anything still in the active `tasks` pool (a
+ * currently-due, not-yet-ticked recurring occurrence included).
+ * `canToggle` is unconditionally `true` for this pool — not `!done` — so
+ * this Day block both completes an undone Task (criterion 7) and
+ * un-completes an already-done one, matching the rule `entry-row.tsx`'s
+ * `TaskReferenceItem` already applies to the identical Task rendered as a
+ * referenced checkbox (`!(recurring && resolvedChecked)`, ~L324 there): an
+ * ordinary Task's completion is always reversible, from wherever it's
+ * rendered. A recurring occurrence's own record is
+ * always `done: true, canToggle: false` — CONTEXT.md's Occurrence entry,
+ * "cannot be reopened," the identical rule `entry-row.tsx`'s
+ * `TaskReferenceItem` already enforces for a referenced checkbox.
+ */
+function dayTaskEntries(
+  tasks: Task[],
+  completedTasks: Task[],
+  events: Event[],
+  dayKey: string,
+  offsetMinutes: number,
+): DayTaskEntry[] {
+  const matched = tasksForDay([...tasks, ...completedTasks], dayKey);
+  const entries: DayTaskEntry[] = matched.map((task) => ({
+    task,
+    done: task.completedAt !== null,
+    // Always toggleable, not `task.completedAt === null` — this function's
+    // own doc comment above argues why an ordinary Task's completion stays
+    // reversible from here, the same as `entry-row.tsx`'s referenced
+    // checkbox. Written as the literal `true` it means, rather than a
+    // condition that would read as if some ordinary entry here could still
+    // come out `false`: none does. Only the occurrence-record push just
+    // below sets `canToggle: false`.
+    canToggle: true,
+    // Never an occurrence record: this pool's own `date`/`deadline` is
+    // exactly what put it on this day, active or completed alike — see
+    // `DayTaskEntry`'s own doc comment.
+    isOccurrenceRecord: false,
+  }));
+  const matchedIds = new Set(matched.map((task) => task.id));
+  for (const task of completedRecurringOccurrencesForDay(tasks, events, dayKey, offsetMinutes)) {
+    if (matchedIds.has(task.id)) {
+      continue;
+    }
+    entries.push({ task, done: true, canToggle: false, isOccurrenceRecord: true });
+  }
+  return entries;
+}
+
+function flattenGroups(
+  groups: DayGroup[],
+  tasks: Task[],
+  completedTasks: Task[],
+  events: Event[],
+  offsetMinutes: number,
+): FlatItem[] {
   const items: FlatItem[] = [];
   for (const group of groups) {
     if (group.dayKey !== null) {
       items.push({ kind: "separator", key: `sep:${group.dayKey}`, dayKey: group.dayKey });
       // Issue #174: right after the separator it belongs to — the day
       // "opens with" these, ahead of #147's dayReferrers row just below.
-      // `tasks` is passed in as a plain array rather than read from
-      // context, matching every other per-day derivation this function
-      // already computes from its own arguments alone.
-      const dayTasks = tasksForDay(tasks, group.dayKey);
+      // `tasks`/`completedTasks`/`events` are passed in as plain arrays
+      // rather than read from context, matching every other per-day
+      // derivation this function already computes from its own arguments
+      // alone.
+      const dayTasks = dayTaskEntries(tasks, completedTasks, events, group.dayKey, offsetMinutes);
       if (dayTasks.length > 0) {
         items.push({
           kind: "dayTasks",
@@ -377,49 +573,146 @@ const MAX_FALLBACK_ROWS = OVERSCAN;
 // the prop entirely, and a fresh `[]` literal on every render would give
 // `flattenGroups`'s own `useMemo` below a new dependency identity every
 // time, defeating memoisation for a prop that, absent, never actually
-// changes.
+// changes. Reused for `completedTasks`/`events`/`projects` below (issue
+// #181) rather than one fresh empty array per prop — all four are the
+// identical "nothing supplied" case, and they never need telling apart by
+// reference identity from one another.
 const EMPTY_TASKS: Task[] = [];
+const EMPTY_EVENTS: Event[] = [];
+const EMPTY_PROJECTS: Project[] = [];
 
 /**
  * Issue #174: the day block — the Tasks dated or deadlined this exact day
- * (task-views.ts's own `tasksForDay`, already filtered and sorted onto
- * `item.tasks` by `flattenGroups`), rendered right after the separator so
- * a day in History opens with them, ahead of `DayReferrersRow` next door
- * (later Entries pointing back at this day is a different, secondary fact
- * about it, not what the day itself has to show first).
+ * (`dayTaskEntries` above, already filtered, sorted and done/canToggle-
+ * resolved onto `item.tasks` by `flattenGroups`), rendered right after the
+ * separator so a day in History opens with them, ahead of `DayReferrersRow`
+ * next door (later Entries pointing back at this day is a different,
+ * secondary fact about it, not what the day itself has to show first).
  *
- * **Read-only, and deliberately so.** ADR 0053's whole argument is that
- * this block is a rendering, never a record — nothing here writes a Task,
- * and nothing here needs a TaskStore handle to do it with. Ticking a Task
- * complete, or opening it to reschedule, stays Todo's own job
- * (task-row.tsx); duplicating that editing surface a second time inside
- * History would give a Task two places its own completion could be
- * toggled from, the identical two-copies risk ADR 0048 already refused
- * for a Task's name and completion bit. The checkbox below is `disabled`
- * for exactly this reason — a visual echo of what Todo would show, not a
- * second control for it.
+ * **No longer read-only — issue #181 overturns that, on purpose.** This
+ * comment used to argue the opposite: that ticking here would give a Task
+ * "two places its own completion could be toggled from," the identical
+ * two-copies risk ADR 0048 already refused. That argument was wrong for
+ * the reason it gave. The two-copies risk ADR 0048 actually refuses is a
+ * second *stored* copy of a Task's completion bit — a place completion is
+ * remembered independently of the Task's own row, which could drift from
+ * it. `onCompleteTask` below is not that: it calls straight through to
+ * `completeTask`/`advanceRecurringTask` (use-tasks.ts, via
+ * composer-page.tsx), the exact same single write `task-row.tsx`'s own
+ * checkbox already performs. Two *rows* reading and writing the same
+ * Task's own `completedAt` is not two copies of the fact — it's the
+ * ordinary case of a personal task list rendered in more than one place,
+ * which Today and Inbox already do to each other with no such objection.
+ * See docs/adr/0053's own "Amendment (issue #181)" for the ADR-level
+ * record of this — ADR 0053's actual Decision (the day block is a
+ * rendering, never a record: nothing about *day membership* is stored)
+ * was never wrong and needs no amendment to its own claims; only this
+ * component's inference from it was.
+ *
+ * `done` decides the checkbox's own checked state and strikethrough, AND
+ * which of `onCompleteTask`/`onUncompleteTask` a click means — the same
+ * `done ? onUncompleteTask : onCompleteTask` branch `task-detail-view.tsx`
+ * (~L423) already makes for this identical control. `canToggle` decides
+ * whether the chosen handler is actually wired for that row at all — see
+ * `dayTaskEntries`'s own doc comment for exactly which Tasks land in which
+ * state; today only a recurring occurrence's own record ever has
+ * `canToggle: false`. `onOpenTask` (criterion 7's "opens from it") is
+ * independent of `canToggle`: a completed Task, and even a recurring
+ * occurrence's own un-reopenable record, can still be opened to LOOK at
+ * — opening is not editing, and criterion 9's "cannot be reopened" is
+ * about the checkbox alone.
+ *
+ * **The `n/m` count (criterion 6) reads quiet, not a scoreboard** —
+ * Todoist's own register for this, a small muted line above the list
+ * rather than a progress bar or a percentage.
  *
  * A day with nothing dated or deadlined to it renders no row at all:
- * `flattenGroups` only ever emits `FlatDayTasksItem` when `tasksForDay`
+ * `flattenGroups` only ever emits `FlatDayTasksItem` when `dayTaskEntries`
  * found something, so there is no empty state to design for here either.
+ *
+ * Chips wrap onto their own line under the title (`TaskScheduleChips`,
+ * stacked in a `flex-col` beside the checkbox) rather than sitting beside
+ * it — the same layout `task-row.tsx`'s own schedule badge already uses,
+ * chosen there and reused here for the identical reason: a Task with a
+ * Date, a Priority ring's ring and now a Project chip on top of that
+ * cannot also share a horizontal line with its own title on a 360px
+ * viewport without squeezing the title toward unreadable, the exact
+ * defect this arc's own coordinator report named on a different row type
+ * ("a task title squeezed to 37px on a phone").
  */
-function DayTasksRow({ tasks }: { tasks: readonly Task[] }) {
+function DayTasksRow({
+  entries,
+  projects,
+  onOpenTask,
+  onCompleteTask,
+  onUncompleteTask,
+}: {
+  entries: readonly DayTaskEntry[];
+  projects: readonly Project[];
+  onOpenTask?: (taskId: string) => void;
+  onCompleteTask?: (task: Task) => void;
+  onUncompleteTask?: (task: Task) => void;
+}) {
+  const done = entries.filter((entry) => entry.done).length;
   return (
-    <div className="flex flex-col gap-1 px-4 pb-2">
+    // `data-testid="day-tasks-row"` on the row, `data-task-id` per `<li>`
+    // (issue #181) — apps/e2e's own locator trap (composer.spec.ts's
+    // header comment on `entryRow`): a Task dated today renders in both
+    // its Entry reference and this block, and this ticket adds MORE text
+    // to the block (chips, a count) that a bare `getByText` could now
+    // also collide with. A stable scope for e2e to filter through, the
+    // same role `data-task-id` already plays on a Todo row
+    // (task-row.tsx).
+    <div data-testid="day-tasks-row" className="flex flex-col gap-1 px-4 pb-2">
+      <p className="mx-auto w-full max-w-prose text-muted-foreground text-xs">
+        {done}/{entries.length} done
+      </p>
       <ul className="mx-auto flex w-full max-w-prose flex-col gap-1">
-        {tasks.map((t) => (
-          <li key={t.id} className="flex items-baseline gap-1.5 text-sm">
-            <input
-              type="checkbox"
-              checked={false}
-              disabled
-              readOnly
-              aria-label={`${t.content} — open in Todo to complete`}
-              className="mt-[0.2em] shrink-0 accent-current"
-            />
-            <span className="min-w-0 flex-1 truncate text-muted-foreground">{t.content}</span>
-          </li>
-        ))}
+        {entries.map(({ task, done, canToggle, isOccurrenceRecord }) => {
+          // `done` picks which half of the pair a click means — the
+          // identical branch `task-detail-view.tsx` (~L423) already makes
+          // for this same checkbox — so `handler` stays a single reference
+          // `toggleable`/`onChange` both agree on, rather than each
+          // re-deriving the branch and risking disagreement.
+          const handler = done ? onUncompleteTask : onCompleteTask;
+          const toggleable = canToggle && handler !== undefined;
+          const openable = onOpenTask !== undefined;
+          return (
+            <li
+              key={task.id}
+              data-task-id={task.id}
+              className="flex items-baseline gap-1.5 text-sm"
+            >
+              <input
+                type="checkbox"
+                checked={done}
+                disabled={!toggleable}
+                onChange={toggleable ? () => handler(task) : undefined}
+                aria-label={task.content}
+                className="mt-[0.2em] shrink-0 accent-current"
+              />
+              <span className="flex min-w-0 flex-1 flex-col">
+                {openable ? (
+                  <button
+                    type="button"
+                    onClick={() => onOpenTask(task.id)}
+                    className={cn(
+                      "truncate text-left hover:underline",
+                      done && "text-muted-foreground line-through",
+                    )}
+                  >
+                    {task.content}
+                  </button>
+                ) : (
+                  <span className={cn("truncate", done && "text-muted-foreground line-through")}>
+                    {task.content}
+                  </span>
+                )}
+                <TaskScheduleChips task={task} projects={projects} hideDate={isOccurrenceRecord} />
+              </span>
+            </li>
+          );
+        })}
       </ul>
     </div>
   );
@@ -506,6 +799,12 @@ export function History({
   onToggleTask,
   dayReferrers,
   tasks = EMPTY_TASKS,
+  completedTasks = EMPTY_TASKS,
+  events = EMPTY_EVENTS,
+  projects = EMPTY_PROJECTS,
+  onCompleteTask,
+  onUncompleteTask,
+  onOpenTask,
   seek,
   onSeekNeedsOlder,
   onSeekSettled,
@@ -626,10 +925,15 @@ export function History({
   // Issue #83: separators flattened in alongside Entries — see FlatItem's
   // own comment for why this needs a real, stable per-row key rather than
   // just position. Cheap (one pass over what `groups` already computed) and
-  // memoised on `groups` alone, the same reasoning as `groups`' own memo
-  // just above: a render triggered by something grouping doesn't depend on
-  // (`query` changing, say) must not re-walk the Entries a second time.
-  const flatItems = useMemo(() => flattenGroups(groups, tasks), [groups, tasks]);
+  // memoised on `groups` and every input `dayTaskEntries` reads (issue
+  // #181 added `completedTasks`/`events`/`offsetMinutes` to that list) —
+  // the same reasoning as `groups`' own memo just above: a render
+  // triggered by something grouping doesn't depend on (`query` changing,
+  // say) must not re-walk the Entries a second time.
+  const flatItems = useMemo(
+    () => flattenGroups(groups, tasks, completedTasks, events, offsetMinutes),
+    [groups, tasks, completedTasks, events, offsetMinutes],
+  );
 
   // Issue #83: the scroll element and the upward jump-to-newest hookup —
   // see HistoryScrollContext's own comment (shell.tsx) for why both cross
@@ -1101,7 +1405,13 @@ export function History({
                 // Issue #174: see `DayTasksRow`'s own comment for why the
                 // day block is its own row, right after the separator and
                 // ahead of `dayReferrers` below.
-                <DayTasksRow tasks={item.tasks} />
+                <DayTasksRow
+                  entries={item.tasks}
+                  projects={projects}
+                  onOpenTask={onOpenTask}
+                  onCompleteTask={onCompleteTask}
+                  onUncompleteTask={onUncompleteTask}
+                />
               ) : item.kind === "dayReferrers" ? (
                 // Issue #147: see `DayReferrersRow`'s own comment for why
                 // this is a row of its own rather than something folded
@@ -1129,6 +1439,7 @@ export function History({
                   actions={actions}
                   highlighted={item.entry.id === highlightedEntryId}
                   onToggleTask={onToggleTask}
+                  onOpenTask={onOpenTask}
                 />
               )}
             </div>

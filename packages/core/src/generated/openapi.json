@@ -329,7 +329,7 @@
         },
         "responses": {
           "200": {
-            "description": "Entries (and, from protocol 5, Tasks) accepted; every change after since_seq/since_task_seq is returned",
+            "description": "Entries (from protocol 5, Tasks; from protocol 6, Projects/Sections/Labels/Comments/Events too) accepted; every change since each stream's own cursor is returned",
             "content": {
               "application/json": {
                 "schema": {
@@ -347,6 +347,89 @@
   },
   "components": {
     "schemas": {
+      "CommentInput": {
+        "type": "object",
+        "description": "The Comment-shaped sibling of `TaskInput` — `task_id` is a plain\nrequired `Uuid`, unvalidated against `tasks` for the identical reason\n`SectionInput::project_id`'s own doc comment gives.",
+        "required": [
+          "id",
+          "device_id",
+          "task_id",
+          "text",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "deleted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "device_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "task_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "text": {
+            "type": "string"
+          }
+        }
+      },
+      "CommentOutput": {
+        "type": "object",
+        "description": "The Comment-shaped sibling of `TaskOutput` — adds only `seq`.",
+        "required": [
+          "id",
+          "device_id",
+          "task_id",
+          "text",
+          "created_at",
+          "seq"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "deleted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "device_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "seq": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "task_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "text": {
+            "type": "string"
+          }
+        }
+      },
       "Digest": {
         "type": "object",
         "description": "The wire shape of one Digest — everything a client needs to render it\n(its Period, its inclusive local date range, its prose, the Entries it\ngrounds in) plus the two neighbour dates described on `DigestResponse`.\n`period` is the plain string (`Period::as_str`) rather than the `Period`\nenum itself — `Period` carries no `Serialize`/`ToSchema` impl of its own\n(nothing before this ticket ever put it on the wire), and adding one\njust for this single field would be more machinery than reusing the\nstring every other layer already keys on.",
@@ -524,6 +607,116 @@
           }
         }
       },
+      "EventInput": {
+        "type": "object",
+        "description": "The Event-shaped sibling of `CommentInput` (issue #184 / ADR 0056) —\nTodo's own activity log, Sync's seventh stream. No `deleted_at`: see\n`../migrations/0017_create_events.sql`'s own header comment for why an\nEvent has no \"nothing\" state for a tombstone to represent. `event_type`\nand `object_type` are plain `String`, not a Postgres `enum` — the fixed\nvocabulary (`added`/`deleted`/`updated`/`archived`/`unarchived`/\n`completed`/`uncompleted`/`moved`, and `task`/`comment`/`project`/\n`section`) is enforced by ../../packages/core/src/event-types.ts's own\nunion type on every Device that writes one, the same \"validated at the\nedge that actually knows the vocabulary, not by a database constraint\"\nchoice `tasks.priority`'s 1-4 range already makes\n(../../packages/core/src/task-fields.ts) — a Postgres `enum` would also\nneed a migration of its own the day this vocabulary grows, where a\n`text` column and a client-side union do not.",
+        "required": [
+          "id",
+          "device_id",
+          "event_type",
+          "object_type",
+          "object_id",
+          "occurred_at"
+        ],
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "event_type": {
+            "type": "string"
+          },
+          "extra": {
+            "description": "Whatever this event_type/object_type pair needs to say about what\nchanged — see `../migrations/0017_create_events.sql`'s own comment\non why this is one `jsonb` column rather than a wide table of\nnullable `last_*` columns."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "object_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "object_type": {
+            "type": "string"
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "The acting Device's own clock at the moment the act happened —\nnever the time this row reaches the Server. ADR 0056's entire\nDecision turns on this field meaning that and only that; see this\nmodule's own top-of-file doc comment and the ADR itself for why."
+          },
+          "project_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "task_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        }
+      },
+      "EventOutput": {
+        "type": "object",
+        "description": "The Event-shaped sibling of `CommentOutput` — adds only `seq`.",
+        "required": [
+          "id",
+          "device_id",
+          "event_type",
+          "object_type",
+          "object_id",
+          "occurred_at",
+          "seq"
+        ],
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "event_type": {
+            "type": "string"
+          },
+          "extra": {},
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "object_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "object_type": {
+            "type": "string"
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "project_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "seq": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "task_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        }
+      },
       "HealthCapabilities": {
         "type": "object",
         "description": "Which Server-backed features this Server can actually serve right now,\nderived from the same configuration `main.rs` already used to decide\nwhether `/v1/reflect`, `/v1/digests/*` and the embedding worker exist at\nall (issue #133). Reported alongside `HealthResponse` rather than left\nfor a Device to infer from probing each route in turn: a Device that only\nasked \"does `/v1/reflect` 404\" would still show a working-looking\nReflect row on a Server that has the route but no model behind it, since\n`router_with_digests` only ever gates *registration*, not per-request\nconfiguration checks.\n\n- `reflect` mirrors `reflect.is_some()` — the exact condition\n  `router_with_digests` gates `/v1/reflect`, `/v1/sessions*` and\n  `/v1/models` on.\n- `digest` mirrors `digests_enabled` — the exact bool `main.rs` computes\n  from `LlmConfig::digest_worker_config().is_some()` and\n  `router_with_digests` gates `/v1/digests/*` on.\n- `embeddings` reports whether Reflection's own embed client resolved\n  (`ReflectState::embed_client`). Issue #130: `reflect_config()` now\n  needs chat alone and hands back `None` for the embed half when no\n  embed config is resolvable, so a chat-only Server still reports\n  `reflect: true` while `embeddings: false` — exactly the Server on\n  which `reflect.rs`'s tool loop quietly omits `similar_entries`.\n- `todo` — issue #172 / ADR 0051 — is **unconditionally `true`**, not\n  read off any `LlmConfig`. Task Sync has no model behind it and no\n  configuration that can disable it: any Server that answers\n  `/v1/health` at all is one that runs `sync_handler` and speaks\n  `PROTOCOL_VERSION` 5 (or the transitional 4), so it always accepts\n  Tasks the moment it accepts Entries. This is deliberately unlike the\n  three capabilities above, all of which name a real \"maybe not\" —\n  `todo` names a \"yes, structurally.\" It is reported anyway, rather\n  than left off `HealthCapabilities` entirely, because it exists for a\n  *different* reader than `chat-list.tsx`'s lock check\n  (`apps/web/src/components/chat-list.tsx`'s own header comment: Todo's\n  row is never locked by this field, since Todo works fully offline\n  like Composer): issue #175's Digest and Reflection coverage of Tasks\n  is what actually consults it, to tell \"this Server has never heard of\n  Tasks\" (an old build, protocol 4 behaviour) apart from \"this Server\n  has Tasks but nothing configured to talk about them,\" which no other\n  field here can distinguish.",
@@ -575,6 +768,87 @@
           }
         }
       },
+      "LabelInput": {
+        "type": "object",
+        "description": "The Label-shaped sibling of `TaskInput` — no `order_key`, mirroring\n`../../packages/core/src/label-types.ts`'s own Label (no manual order —\nsee that type's own doc comment for why).",
+        "required": [
+          "id",
+          "device_id",
+          "name",
+          "colour",
+          "created_at"
+        ],
+        "properties": {
+          "colour": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "deleted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "device_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "LabelOutput": {
+        "type": "object",
+        "description": "The Label-shaped sibling of `TaskOutput` — adds only `seq`.",
+        "required": [
+          "id",
+          "device_id",
+          "name",
+          "colour",
+          "created_at",
+          "seq"
+        ],
+        "properties": {
+          "colour": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "deleted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "device_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
       "ModelInfo": {
         "type": "object",
         "description": "One Model the configured wrapper can serve — the subset of\n`localAIWrapper`'s own `OpenAIModel.local_ai_wrapper`\n(`discovery.ts::toOpenAIModel`) issue #96's `GET /v1/models` actually\nneeds to hand a client choosing a per-Session model (issue #98's own\nfeature; this ticket only wires the endpoint): which model to ask for,\nwhether it can stream — `streaming` is how a client tells \"answer-token\ndeltas ride the same stream\" apart from \"on codex-terra they simply\ndon't arrive\" (this module's own `ChatReply`, and\n`harness::prompted::PromptedToolClient`'s doc comment, are the server\nside of that same split) — and how much context it holds, the same\nfield `resolve_context_window` already reads for the *configured* model\nalone (`parse_context_window`, reused here for every Model the wrapper\nlists, not just that one).",
@@ -611,6 +885,138 @@
               "$ref": "#/components/schemas/ModelInfo"
             },
             "description": "The wrapper's own list, verbatim — empty, not an error or a missing\nfield, when the wrapper cannot be reached (`llm::list_models`'s own\ndoc comment covers every way that can happen). A client sees \"no\nmodels offered\" rather than a failed request."
+          }
+        }
+      },
+      "ProjectInput": {
+        "type": "object",
+        "description": "The Project-shaped sibling of `TaskInput` (ADR 0047's second/third root\nnouns, ADR 0051's third Sync stream, issue #182). `parent_id` is a\nplain `Option<Uuid>`, unvalidated — a Project can nest under another\nProject this Server has never heard of, the identical \"dangling\ncross-reference is not this server's problem\" rule `TaskInput`'s own\ndoc comment states, applied here because there is nothing to validate\nagainst: no foreign key, no self-join check.",
+        "required": [
+          "id",
+          "device_id",
+          "name",
+          "colour",
+          "favourite",
+          "archived",
+          "order_key",
+          "created_at"
+        ],
+        "properties": {
+          "archived": {
+            "type": "boolean"
+          },
+          "colour": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "deleted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Tombstone — see `EntryInput::deleted_at`'s own doc comment."
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "device_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "favourite": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "order_key": {
+            "type": "string"
+          },
+          "parent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        }
+      },
+      "ProjectOutput": {
+        "type": "object",
+        "description": "The Project-shaped sibling of `TaskOutput` — adds only `seq`.",
+        "required": [
+          "id",
+          "device_id",
+          "name",
+          "colour",
+          "favourite",
+          "archived",
+          "order_key",
+          "created_at",
+          "seq"
+        ],
+        "properties": {
+          "archived": {
+            "type": "boolean"
+          },
+          "colour": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "deleted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "device_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "favourite": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "order_key": {
+            "type": "string"
+          },
+          "parent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "seq": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -699,6 +1105,117 @@
           "tool_called": {
             "type": "boolean",
             "description": "Whether this run called a tool at all — `true` the moment any\n`harness::agent_loop::Step::ToolResult` appears in `outcome.steps`,\nregardless of whether that call (or any other) found anything.\nIssue #103's own acceptance criterion: an empty `grounding_entry_ids`\nalone cannot tell a client, or a person reading a log, which of two\nvery different runs actually happened — one that called\n`search_entries` and it came back empty, or one that never called\nanything and wrote a reply anyway (the bug this issue was filed\nagainst: the model answered \"I can't access any journal entries from\nhere\" having tried nothing). Both reach this struct with an\nidentical `grounding_entry_ids: []`, and both used to render\nidentically to the user (\"Nothing in your History matched this\nQuestion\") for exactly that reason. This field is what lets that\ndistinction survive past `run_reflect_stream_inner` — both server-\nside (the `tracing::warn!` below) and on the wire, where the client\nrenders it as a distinct \"never looked\" outcome\n(`apps/web/src/lib/conversation.ts`'s `groundingOutcome`)."
+          }
+        }
+      },
+      "SectionInput": {
+        "type": "object",
+        "description": "The Section-shaped sibling of `TaskInput` — `project_id` is a plain\nrequired `Uuid`, unvalidated against a `projects` table for the\nidentical reason `TaskInput::project_id`'s own doc comment gives: a\nSection can arrive naming a Project this Server has never heard of\n(or, within one push, a Project pushed in the very same request — this\nServer does not require Sections to arrive after their own Project),\nand that is an accepted, transient state carried straight through.",
+        "required": [
+          "id",
+          "device_id",
+          "project_id",
+          "name",
+          "order_key",
+          "archived",
+          "created_at"
+        ],
+        "properties": {
+          "archived": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "deleted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "device_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "order_key": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "SectionOutput": {
+        "type": "object",
+        "description": "The Section-shaped sibling of `TaskOutput` — adds only `seq`.",
+        "required": [
+          "id",
+          "device_id",
+          "project_id",
+          "name",
+          "order_key",
+          "archived",
+          "created_at",
+          "seq"
+        ],
+        "properties": {
+          "archived": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "deleted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "device_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "order_key": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "seq": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -823,6 +1340,12 @@
           "entries"
         ],
         "properties": {
+          "comments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CommentInput"
+            }
+          },
           "device_id": {
             "type": "string",
             "format": "uuid"
@@ -833,9 +1356,56 @@
               "$ref": "#/components/schemas/EntryInput"
             }
           },
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventInput"
+            }
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LabelInput"
+            }
+          },
+          "projects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectInput"
+            },
+            "description": "Mirrors `tasks`' own `#[serde(default)]` reasoning."
+          },
           "protocol_version": {
             "type": "integer",
             "format": "int32"
+          },
+          "sections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SectionInput"
+            }
+          },
+          "since_comment_seq": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "since_event_seq": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Issue #184: Sync's seventh stream, Events — `#[serde(default)]`\nfor the identical reason every stream above's own request fields\nare: a Device built before this ticket has no `events`/\n`since_event_seq` key in its request body at all. Unlike the four\nstreams above, there was no version bump to hang this on — see\n`PROTOCOL_VERSION`'s own doc comment for why none was needed."
+          },
+          "since_label_seq": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "since_project_seq": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Issue #182: four more streams, each mirroring `since_task_seq`'s own\n`#[serde(default)]` reasoning exactly — a Device on 4 or 5 has none\nof these keys in its request body at all, and defaulting to 0 is\nexactly \"this Device has never synced one of these,\" true of every\nsuch Device by construction."
+          },
+          "since_section_seq": {
+            "type": "integer",
+            "format": "int64"
           },
           "since_seq": {
             "type": "integer",
@@ -861,9 +1431,29 @@
           "entries",
           "cursor",
           "tasks",
-          "task_cursor"
+          "task_cursor",
+          "projects",
+          "project_cursor",
+          "sections",
+          "section_cursor",
+          "labels",
+          "label_cursor",
+          "comments",
+          "comment_cursor",
+          "events",
+          "event_cursor"
         ],
         "properties": {
+          "comment_cursor": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "comments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CommentOutput"
+            }
+          },
           "cursor": {
             "type": "integer",
             "format": "int64"
@@ -872,6 +1462,48 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/EntryOutput"
+            }
+          },
+          "event_cursor": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventOutput"
+            },
+            "description": "Issue #184: Events, always present and always populated — unlike\n`tasks`/`projects`/etc. above, `run_sync` applies **no**\n`protocol_version` gate to this pair (see `PROTOCOL_VERSION`'s own\ndoc comment: there is no version number that separates \"a v6\nDevice that predates this ticket\" from \"a v6 Device that has it,\"\nso a gate here couldn't distinguish anything a v6 Device's own\n`#[serde(default)]` request fields don't already handle). A\npre-#184 v6 Device that receives a populated `events` array simply\nnever reads a JSON key its own `WireSyncResponse` type doesn't\ndeclare — the same \"extra field, harmlessly ignored\" tolerance\nevery wire response in this codebase already relies on for a\nfield it doesn't recognise."
+          },
+          "label_cursor": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LabelOutput"
+            }
+          },
+          "project_cursor": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "projects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectOutput"
+            },
+            "description": "Issue #182: four more pulls, each mirroring `tasks`' own doc\ncomment exactly — always present on the wire, but `run_sync` sets\neach to `[]` (and each cursor to its own `since_*_seq`, unchanged)\nwhen `protocol_version < 6`, so a Device on 4 or 5 never receives\ndata it has no representation for and never asked to see."
+          },
+          "section_cursor": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "sections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SectionOutput"
             }
           },
           "task_cursor": {
@@ -927,6 +1559,10 @@
               "null"
             ]
           },
+          "day_order": {
+            "type": "string",
+            "description": "Today's own manual order (issue #182,\n`../../packages/core/src/task-types.ts`'s own `dayOrder` doc\ncomment) — a second, independent fractional index alongside\n`order_key`, opaque text this Server never interprets, exactly as\n`order_key` already is (ADR 0050/0051). `#[serde(default)]`, not\nbecause a v6 Device ever omits it, but because this field did not\nexist before issue #182: a Device still on protocol 5 has no such\nkey in its request body at all, the identical reasoning\n`SyncRequest::since_task_seq`'s own doc comment gives for a whole\nstream rather than one column of one. Defaulting to `\"\"` (an empty\nstring) is not a synthesised position — this Server does not\ncompute one from `order_key` or anything else, the same \"never\ngenerates or repairs one\" restraint ADR 0051 already states for\n`order_key` — it is simply the type's own default, sorting first\nunder lexicographic comparison until the Task's own Device gives it\na real one."
+          },
           "deadline": {
             "type": [
               "string",
@@ -941,16 +1577,16 @@
             "format": "date-time",
             "description": "Tombstone — see `EntryInput::deleted_at`'s own doc comment; the\nidentical representation, reused for the identical reason (ADR\n0028, applied to Tasks by ADR 0047)."
           },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Task's own words about itself (#180,\n`../../packages/core/src/task-types.ts`'s own `description` field) —\ngains a wire representation here for the first time (issue #182).\nBefore this, `packages/core/src/mapping.ts`'s `fromWireTaskOutput`\ncarried a Device's existing local copy through unconditionally,\nbecause the wire had nothing to say about it at all; now that it's\nan ordinary `Option<String>` field like every other nullable column\nhere, that workaround is retired — see that function's own doc\ncomment for the mechanism it keeps for a future locally-held field."
+          },
           "device_id": {
             "type": "string",
             "format": "uuid"
-          },
-          "duration": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int32"
           },
           "id": {
             "type": "string",
@@ -1001,6 +1637,7 @@
           "device_id",
           "content",
           "order_key",
+          "day_order",
           "created_at",
           "seq",
           "priority",
@@ -1033,6 +1670,10 @@
               "null"
             ]
           },
+          "day_order": {
+            "type": "string",
+            "description": "See `TaskInput::day_order`'s own doc comment."
+          },
           "deadline": {
             "type": [
               "string",
@@ -1046,16 +1687,15 @@
             ],
             "format": "date-time"
           },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "device_id": {
             "type": "string",
             "format": "uuid"
-          },
-          "duration": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int32"
           },
           "id": {
             "type": "string",

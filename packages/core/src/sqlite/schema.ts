@@ -47,10 +47,14 @@ export const entries = sqliteTable(
  * describes, made permanent rather than provisional, because collaboration
  * was never even sketched the way editing was before ADR 0028 landed.
  *
- * Date, deadline, duration and priority were added by issue #169;
+ * Date, deadline and priority were added by issue #169;
  * `projectId`/`sectionId`/`parentId` by issue #171, behind their own
  * migration (version 9) — sequencing the tickets this way keeps each
- * migration's blast radius to the one thing it's actually adding.
+ * migration's blast radius to the one thing it's actually adding. Duration
+ * (also added by #169) was removed again by issue #179: it existed to
+ * serve calendar and time-blocking views this app never built, so it had
+ * nowhere to be. Migration 10 (../sqlite/migrations/index.ts) drops the
+ * column; this table no longer declares it.
  */
 export const tasks = sqliteTable(
   "tasks",
@@ -64,6 +68,13 @@ export const tasks = sqliteTable(
     // Fractional index (../order-key.ts) — sorts lexicographically as
     // plain text, no numeric column involved.
     orderKey: text("order_key").notNull(),
+    // A second, independent fractional index — the Today view's own
+    // manual order (issue #182, ../task-types.ts's own `dayOrder` doc
+    // comment). Migration 13 backfills every pre-#182 row from its own
+    // `order_key` rather than leaving it null, since this column has no
+    // SQL-level `NOT NULL` of its own (see that migration's own comment
+    // for why — the same reasoning `description` below already needed).
+    dayOrder: text("day_order").notNull(),
     createdAt: text("created_at").notNull(),
     seq: integer("seq"),
     syncedAt: text("synced_at"),
@@ -80,12 +91,6 @@ export const tasks = sqliteTable(
     // #169). Independent of `date`: a Task may carry either, both, or
     // neither.
     deadline: text("deadline"),
-    // Minutes; requires `date` to carry a time (there's nothing to measure
-    // a length from otherwise) and is capped at 1440 (24 hours). Both
-    // rules are enforced in ../task-fields.ts, not here — a column
-    // constraint can't express "requires another column to have a
-    // particular shape."
-    duration: integer("duration"),
     // 1-4, stored inverted against the UI's p1-p4 naming (Todoist's own API
     // does the same) — see ../task-types.ts's uiPriorityOf/storedPriorityOf
     // for the one named place that inversion lives. Not nullable: "no
@@ -112,13 +117,13 @@ export const tasks = sqliteTable(
     // ../task-types.ts's `dateString` doc comment has the full reasoning
     // for why this column, not `date`, is the thing ../recurrence/'s
     // engine treats as the truth. Nullable with no DEFAULT, the same
-    // shape `date`/`deadline`/`duration` above take, not `priority`'s
+    // shape `date`/`deadline` above take, not `priority`'s
     // NOT NULL DEFAULT: "doesn't repeat" is the absence of a rule, not a
     // concrete value the way "no priority" is a real priority level.
     dateString: text("date_string"),
     // `null` is Inbox — there is no `projects` row for it (../project-
     // types.ts's own header comment). Nullable with no DEFAULT, the same
-    // shape `date`/`deadline`/`duration` take: a pre-#171 row backfilled
+    // shape `date`/`deadline` take: a pre-#171 row backfilled
     // by migration 9 below gets `null` from `ALTER TABLE ADD COLUMN`'s own
     // implicit default, which happens to be exactly the right value
     // (every Task that existed before Projects did was, in effect,
@@ -133,6 +138,13 @@ export const tasks = sqliteTable(
     // walking this column, not by a CHECK constraint SQLite has no way to
     // express across rows.
     parentId: text("parent_id"),
+    // The Task's own words about itself, beyond `content` (issue #180) —
+    // Markdown, rendered by the identical renderer an Entry's body
+    // already uses. Nullable with no DEFAULT, the same shape
+    // `date`/`deadline`/`projectId` above take: a pre-#180 row backfilled
+    // by migration 11 below gets `null` from `ALTER TABLE ADD COLUMN`'s
+    // own implicit default, which is exactly "no Description yet."
+    description: text("description"),
   },
   (table) => [
     // Supports list()'s actual query: `WHERE completed_at IS NULL AND
@@ -290,6 +302,140 @@ export const labels = sqliteTable(
 );
 
 /**
+ * Mirrors the `Filter` type (../filter-types.ts) exactly (issue #185) —
+ * a saved query over Tasks (CONTEXT.md's Filter entry), the last of the
+ * glossary's nouns to get a table. Structurally identical to `labels`
+ * above for the identical reason: `deviceId`, `createdAt`, `seq`,
+ * `syncedAt`, `deletedAt` are ADR 0028's sync-and-tombstone scaffolding,
+ * shipped ahead of any actual Filter Sync stream — see
+ * ../filter-store.ts's own header comment for why, the same argument
+ * `labels`' own comment above already makes for Labels. `query` carries
+ * whatever the user typed, unparsed and unvalidated at rest by this
+ * table itself (validation is ../filter-fields.ts's
+ * `assertValidFilterQuery`, enforced by the store's `setQuery`, never by
+ * a `CHECK` constraint SQLite has no way to run a recursive-descent
+ * parser inside).
+ */
+export const filters = sqliteTable(
+  "filters",
+  {
+    id: text("id").primaryKey(),
+    deviceId: text("device_id").notNull(),
+    name: text("name").notNull(),
+    // Shares LABEL_COLOURS with `projects`/`labels` above — see
+    // ../filter-types.ts's `Filter.colour` doc comment.
+    colour: text("colour").notNull(),
+    // The literal query text (../filter-query/), never a pre-parsed tree
+    // — mirrors `tasks.date_string`'s identical "the string is the
+    // truth" reasoning for Recurrence, applied to a Filter's own query.
+    query: text("query").notNull(),
+    createdAt: text("created_at").notNull(),
+    seq: integer("seq"),
+    syncedAt: text("synced_at"),
+    // Tombstone (ADR 0028's rule, applied to Filters) — identical
+    // representation to every other table's `deleted_at` above.
+    deletedAt: text("deleted_at"),
+  },
+  (table) => [
+    // Supports list()'s actual query — identical shape to
+    // `labels_name_id_idx` above, for the identical reason: alphabetical
+    // by name is this table's only ordering (../filter-store.ts's own
+    // comment on why there's no `order_key`).
+    index("filters_name_id_idx").on(table.name, table.id),
+  ],
+);
+
+/**
+ * Mirrors the `Comment` type (../comment-types.ts) exactly (issue #180) —
+ * a fourth root noun (ADR 0047's move, made a second time), for the
+ * identical reason `tasks`/`projects`/`labels` above each got their own
+ * table: a Comment has its own identity and its own lifecycle, and it is
+ * unbounded and individually addressable in a way `tasks.labelIds`'
+ * own doc comment explains a JSON array cannot be. No collaboration
+ * column, mirroring every table above it for the identical reason.
+ */
+export const comments = sqliteTable(
+  "comments",
+  {
+    id: text("id").primaryKey(),
+    deviceId: text("device_id").notNull(),
+    // The Task this Comment belongs to — no foreign key constraint,
+    // mirroring `tasks.projectId`'s own comment: this store does not
+    // reach across tables to enforce or clean up a cross-store reference
+    // (../comment-store.ts's own header comment on why deleting a Task
+    // leaves its Comments behind rather than cascading).
+    taskId: text("task_id").notNull(),
+    // The Comment's own words — Markdown, rendered by the identical
+    // renderer an Entry's body and a Task's description both use.
+    text: text("text").notNull(),
+    createdAt: text("created_at").notNull(),
+    seq: integer("seq"),
+    syncedAt: text("synced_at"),
+    // Tombstone (ADR 0028's rule, applied to Comments) — identical
+    // representation to every other table's `deleted_at` above.
+    deletedAt: text("deleted_at"),
+  },
+  (table) => [
+    // Supports listByTask()'s actual query — `WHERE task_id = ? AND
+    // deleted_at IS NULL ORDER BY created_at ASC, id ASC` — mirroring
+    // `sections_project_id_order_key_id_idx`'s identical shape for the
+    // identical reason: a plain composite index on the WHERE column plus
+    // the ORDER BY columns lets SQLite walk it directly.
+    index("comments_task_id_created_at_id_idx").on(table.taskId, table.createdAt, table.id),
+  ],
+);
+
+/**
+ * Mirrors the `Event` type (../event-types.ts) exactly (issue #184) —
+ * Todo's own activity log, a sixth root noun (ADR 0047's move made a
+ * fifth time after Project/Section/Label/Comment). Structurally unlike
+ * every table above it: there is no `deletedAt`, because an Event is
+ * never edited or removed once written (../event-types.ts's own header
+ * comment) — nothing here needs a "nothing" state for a tombstone to
+ * represent.
+ */
+export const events = sqliteTable(
+  "events",
+  {
+    id: text("id").primaryKey(),
+    deviceId: text("device_id").notNull(),
+    eventType: text("event_type").notNull(),
+    objectType: text("object_type").notNull(),
+    objectId: text("object_id").notNull(),
+    // The Task this Event concerns — null for a project/section Event.
+    // See ../event-types.ts's own `taskId` doc comment for why this is
+    // not always equal to `objectId`.
+    taskId: text("task_id"),
+    // The Project this Event happened in, snapshotted at record time —
+    // see ../event-types.ts's own `projectId` doc comment for why this
+    // is deliberately not "this Task's current Project."
+    projectId: text("project_id"),
+    // The acting Device's own clock, never arrival time (ADR 0056) — the
+    // only timestamp this table carries (../event-types.ts's own
+    // `occurredAt` doc comment on why there is deliberately no second
+    // `created_at` column the way every other table here has one).
+    occurredAt: text("occurred_at").notNull(),
+    // Whatever this event_type/object_type pair needs to say about what
+    // changed — a JSON blob, the same `{ mode: "json" }` treatment
+    // `tasks.labelIds` already gets, for the identical reason
+    // (../event-types.ts's own `extra` doc comment).
+    extra: text("extra", { mode: "json" }).$type<Record<string, unknown> | null>(),
+    seq: integer("seq"),
+    syncedAt: text("synced_at"),
+  },
+  (table) => [
+    // Supports listByTask() — `WHERE task_id = ? ORDER BY occurred_at
+    // DESC, id DESC` (no `deleted_at` filter, unlike every other table's
+    // equivalent index: there is no tombstone here to exclude).
+    index("events_task_id_occurred_at_id_idx").on(table.taskId, table.occurredAt, table.id),
+    // Supports listByProject().
+    index("events_project_id_occurred_at_id_idx").on(table.projectId, table.occurredAt, table.id),
+    // Supports list()'s own global ORDER BY.
+    index("events_occurred_at_id_idx").on(table.occurredAt, table.id),
+  ],
+);
+
+/**
  * Small key-value table holding the Cursor and this Device's id, alongside
  * the Entries they account for. See ADR 0007: the Cursor must live in the
  * same database as the Entries it claims are already local, or a database
@@ -303,3 +449,12 @@ export const kv = sqliteTable("kv", {
 
 export const CURSOR_KEY = "cursor";
 export const DEVICE_ID_KEY = "device_id";
+// Issue #186 / ADR 0057: the Entry stream's own record of the highest
+// `protocol.ts`'s ROW_SHAPE_EPOCH.entries this Device has ever caught up
+// to — see EntryStore.catchUpRowShapeEpoch's own doc comment (../store.ts)
+// for the mechanism. Lives here, alongside CURSOR_KEY, for the identical
+// ADR 0007 reason this table's own header comment already gives for the
+// Cursor: an epoch claiming a re-walk happened, backed by a database that
+// never held it, is the same failure as a Cursor claiming progress the
+// rows behind it never made.
+export const ROW_SHAPE_EPOCH_KEY = "row_shape_epoch";

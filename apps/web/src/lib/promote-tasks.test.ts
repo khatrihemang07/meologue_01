@@ -31,7 +31,6 @@ describe("promoteBareCheckboxes", () => {
         content: "buy milk",
         date: null,
         deadline: null,
-        duration: null,
         priority: 1,
         dateString: null,
         labelNames: [],

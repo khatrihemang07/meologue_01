@@ -188,14 +188,16 @@ describe("tokens", () => {
     });
   });
 
-  describe("for 45min — duration", () => {
-    it.each<[string, number]>([
-      ["meeting for 45min", 45],
-      ["meeting for 45 min", 45],
-      ["meeting for 2 hours", 120],
-      ["meeting for 1 hr", 60],
-    ])("%s -> %i minutes", (input, expected) => {
-      expect(parse(input).duration).toBe(expected);
+  describe("'for 45min' — no longer a token (issue #179 removed Duration)", () => {
+    it.each<string>([
+      "meeting for 45min",
+      "meeting for 45 min",
+      "meeting for 2 hours",
+      "meeting for 1 hr",
+    ])("%s produces no token, and stays exactly as typed", (input) => {
+      const result = parse(input);
+      expect(result.tokens).toEqual([]);
+      expect(result.content).toBe(input);
     });
   });
 
@@ -246,6 +248,134 @@ describe("the 'Create monthly report' false positive and demotion", () => {
 
     expect(demoted.tokens.some((t) => t.kind === "recurrence")).toBe(false);
     expect(demoted.content).toBe("Create monthly report");
+  });
+});
+
+describe("recurrence phrases (issue #188)", () => {
+  // The parity gap the ticket names: a bare word ("daily") was already
+  // recognised, but the phrase everyone actually types ("every day") did
+  // nothing at all. `matchRecurrencePhrase` (./date-rules.ts) closes it
+  // by validating a candidate span against ../recurrence/'s own
+  // `parseRecurrence` before ever producing a token — never a second,
+  // hand-rolled grammar of what "looks like" a recurrence phrase.
+  describe.each<[string, string, string]>([
+    ["water the plants every day", "every day", "water the plants"],
+    ["call mum every monday", "every monday", "call mum"],
+    ["water the plants every 2 weeks", "every 2 weeks", "water the plants"],
+    ["submit report every 3rd friday", "every 3rd friday", "submit report"],
+    ["water plants every! 2 weeks", "every! 2 weeks", "water plants"],
+    // An optional trailing clause the grammar supports is captured whole
+    // rather than the matcher stopping at the shortest thing that
+    // happens to parse ("every day" alone also parses, but would leave
+    // "at 5pm" behind as stray words).
+    ["take pills every day at 5pm", "every day at 5pm", "take pills"],
+    ["pay rent every month starting 1 oct", "every month starting 1 oct", "pay rent"],
+  ])("%s", (input, expectedRaw, expectedContent) => {
+    it(`recognises "${expectedRaw}" as one recurrence span and strips it from content`, () => {
+      const result = parse(input);
+      const recurrenceTokens = result.tokens.filter((t) => t.kind === "recurrence");
+      expect(recurrenceTokens).toHaveLength(1);
+      const [token] = recurrenceTokens as [QuickAddToken];
+      expect(token.raw).toBe(expectedRaw);
+      // Span boundaries: `raw` is exactly `input.slice(start, end)`, the
+      // same guarantee every other token in this parser carries.
+      expect(input.slice(token.start, token.end)).toBe(expectedRaw);
+      expect(result.content).toBe(expectedContent);
+      // Never resolved here — this parser only ever flags the span
+      // (this describe block's own header comment); `result.date` stays
+      // untouched by a recurrence token, exactly as it does for a bare
+      // recurrence word.
+      expect(result.date).toBeNull();
+    });
+  });
+
+  it("a compound phrase wins the words a shorter, plain rule would otherwise also match", () => {
+    // Without push-order priority, "monday" alone would be claimed by
+    // matchWeekday first and the surrounding "every "/"" would be left as
+    // stray text — the identical reasoning matchWeekdayArithmeticCombo's
+    // own doc comment gives for "monday in 2 weeks" over plain "monday".
+    const result = parse("call mum every monday");
+    expect(result.tokens).toHaveLength(1);
+    expect(result.tokens[0]).toMatchObject({ kind: "recurrence", raw: "every monday" });
+  });
+
+  it("does not swallow the rest of the sentence — only the longest prefix the engine accepts", () => {
+    const result = parse("every day I will water the plants and read");
+    const recurrenceToken = result.tokens.find((t) => t.kind === "recurrence");
+    expect(recurrenceToken?.raw).toBe("every day");
+    expect(result.content).toBe("I will water the plants and read");
+  });
+
+  it("coexists with a separate, explicit date token elsewhere in the input", () => {
+    const result = parse("review contract 27 Jan every month");
+    const kinds = result.tokens.map((t) => t.kind);
+    expect(kinds).toEqual(["date", "recurrence"]);
+    const dateToken = result.tokens.find((t) => t.kind === "date");
+    expect(dateToken?.raw).toBe("27 Jan");
+    const recurrenceToken = result.tokens.find((t) => t.kind === "recurrence");
+    expect(recurrenceToken?.raw).toBe("every month");
+    expect(result.content).toBe("review contract");
+    // A bare recurrence word overrides result.date in quick-add-task.ts's
+    // own bridge (apps/web), never here — this parser's own `date` field
+    // is still whatever plain date token was recognised, unmodified by
+    // the separate recurrence token.
+    expect(result.date).toBe("2027-01-27");
+  });
+
+  describe("smart date recognition can be turned off entirely", () => {
+    it("stops recognising a recurrence phrase, exactly as it does a bare recurrence word", () => {
+      const result = parse("water the plants every day", { smartDates: false });
+      expect(result.tokens.some((t) => t.kind === "recurrence")).toBe(false);
+      expect(result.content).toBe("water the plants every day");
+    });
+
+    it("does not let the suppressed phrase's own bang fall back to an unrelated !reminder", () => {
+      // `isEveryBangAt` (./date-rules.ts) excludes "every!"'s own `!` from
+      // matchReminder unconditionally — settled by what precedes the
+      // `!`, not by whether smartDates would actually surface a
+      // recurrence token this parse. With smartDates off there is no
+      // recurrence token to claim it either, so the `!` is left as
+      // plain, unrecognised text rather than becoming a reminder marker
+      // it was never meant to be.
+      const result = parse("water plants every! 2 weeks", { smartDates: false });
+      expect(result.tokens).toHaveLength(0);
+      expect(result.content).toBe("water plants every! 2 weeks");
+    });
+  });
+
+  describe("demotion", () => {
+    it("restores the phrase to plain content and removes the token", () => {
+      const input = "water the plants every day";
+      const first = parse(input);
+      const recurrenceToken = first.tokens.find((t) => t.kind === "recurrence");
+      expect(recurrenceToken).toBeDefined();
+      // biome-ignore lint/style/noNonNullAssertion: asserted present above
+      const demoted = demoteQuickAddToken(input, recurrenceToken!, { now: NOW });
+
+      expect(demoted.tokens.some((t) => t.kind === "recurrence")).toBe(false);
+      expect(demoted.content).toBe(input);
+    });
+  });
+
+  describe("a phrase the recurrence engine refuses is left as ordinary words", () => {
+    it.each<string>([
+      // "fortnight" isn't a unit ../recurrence/'s grammar accepts (only
+      // "fortnightly", the *bare word* this parser's own separate table
+      // maps to "every 2 weeks" — this ticket's whole point is that a
+      // phrase reuses the real grammar rather than a second one, so
+      // this is expected to fail, not a gap to special-case).
+      "water plants every fortnight",
+      // A dangling interval with no unit at all.
+      "water plants every 2",
+      // Not even the fixed "every" anchor.
+      "water plants regularly",
+      // Nonsense after the anchor.
+      "water plants every zorp thing",
+    ])("%s", (input) => {
+      const result = parse(input);
+      expect(result.tokens.some((t) => t.kind === "recurrence")).toBe(false);
+      expect(result.content).toBe(input);
+    });
   });
 });
 
@@ -314,7 +444,7 @@ describe("smart date recognition can be turned off entirely", () => {
 
 describe("offsets", () => {
   it("every token's raw text is exactly input.slice(start, end)", () => {
-    const input = "* Buy milk #Home /Chores %urgent p1 !5pm for 45min tomorrow //don't forget bags";
+    const input = "* Buy milk #Home /Chores %urgent p1 !5pm tomorrow //don't forget bags";
     const result = parse(input);
     expect(result.tokens.length).toBeGreaterThan(0);
     for (const token of result.tokens) {
@@ -350,7 +480,7 @@ describe("offsets", () => {
 
 describe("a fully-loaded input — every non-colliding token family at once", () => {
   it("recognises every piece and strips it all from content", () => {
-    const input = "* Buy milk #Home /Chores %urgent p1 for 45min //don't forget bags";
+    const input = "* Buy milk #Home /Chores %urgent p1 //don't forget bags";
     const result = parse(input);
 
     expect(result.uncompletable).toBe(true);
@@ -358,7 +488,6 @@ describe("a fully-loaded input — every non-colliding token family at once", ()
     expect(result.sectionName).toBe("Chores");
     expect(result.labelNames).toEqual(["urgent"]);
     expect(result.priority).toBe(4);
-    expect(result.duration).toBe(45);
     expect(result.description).toBe("don't forget bags");
     expect(result.content).toBe("Buy milk");
   });

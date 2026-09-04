@@ -1,20 +1,36 @@
 import { describe, expect, it } from "vitest";
-import { nextOccurrence, parseRecurrence, tomorrowOf } from "./index";
+import {
+  firstOccurrence,
+  nextOccurrenceAfterCompletion,
+  parseRecurrence,
+  tomorrowOf,
+} from "./index";
 import type { RecurrenceOutcome, RecurrenceReference } from "./rule";
 
 /**
  * The recurrence engine's specification, not merely its test suite — see
  * CLAUDE.md's brief for #170: "if a grammar form is not in this table, it
- * is not built." Every row exercises `nextOccurrence` end to end (parse +
- * compute), because that's the one function ../task-store.ts's
- * advanceRecurring actually calls; a handful of `parseRecurrence`-only
- * cases at the bottom check grammar shape directly where a date-only
- * assertion wouldn't show it (interval, anchor, weekday-list order).
+ * is not built." The first big block below exercises
+ * `nextOccurrenceAfterCompletion` end to end (parse + compute), because
+ * that's the one function ../task-store.ts's advanceRecurring actually
+ * calls; a handful of `parseRecurrence`-only cases further down check
+ * grammar shape directly where a date-only assertion wouldn't show it
+ * (interval, anchor, weekday-list order). The second big block, further
+ * down still, exercises `firstOccurrence` — issue #191's fix: a Task
+ * given a recurrence at creation, rather than completed on one, is due on
+ * the first day the pattern actually matches, including today. The two
+ * blocks deliberately share almost no fixtures: mixing a completion's
+ * "strictly after now" floor into a creation-time table (or vice versa)
+ * would hide exactly the divergence #191 is about.
  *
  * Dates below were checked against a real Gregorian calendar
  * independently of this package (python's `datetime`) before being
  * written down, precisely so a bug in ../calendar.ts couldn't validate
- * itself against its own arithmetic.
+ * itself against its own arithmetic. In particular, 2026-09-04 (used
+ * throughout the firstOccurrence block, matching issue #191's own
+ * measured table) is a Friday, and September 2026's Fridays fall on the
+ * 4th, 11th, 18th and 25th — confirmed against python's `datetime`
+ * before being relied on below.
  */
 
 interface Case {
@@ -232,10 +248,12 @@ const CASES: readonly Case[] = [
   },
 ];
 
-describe("nextOccurrence — the recurrence grammar's specification", () => {
+describe("nextOccurrenceAfterCompletion — the recurrence grammar's specification", () => {
   for (const testCase of CASES) {
     it(testCase.description, () => {
-      expect(nextOccurrence(testCase.dateString, testCase.reference)).toEqual(testCase.expect);
+      expect(nextOccurrenceAfterCompletion(testCase.dateString, testCase.reference)).toEqual(
+        testCase.expect,
+      );
     });
   }
 });
@@ -296,10 +314,13 @@ const REFUSAL_CASES: readonly RefusalCase[] = [
   },
 ];
 
-describe("nextOccurrence — refusals (a legible reason, never a throw)", () => {
+describe("nextOccurrenceAfterCompletion — refusals (a legible reason, never a throw)", () => {
   for (const testCase of REFUSAL_CASES) {
     it(`refuses ${testCase.description}`, () => {
-      const result = nextOccurrence(testCase.dateString, { dueDate: null, now: "2026-01-01" });
+      const result = nextOccurrenceAfterCompletion(testCase.dateString, {
+        dueDate: null,
+        now: "2026-01-01",
+      });
       expect(result.kind).toBe("refused");
       if (result.kind === "refused") {
         expect(result.reason.toLowerCase()).toContain(testCase.reasonContains.toLowerCase());
@@ -310,12 +331,166 @@ describe("nextOccurrence — refusals (a legible reason, never a throw)", () => 
   // A refusal is a value a caller inspects — never an exception a caller
   // has to catch, which is the whole point of returning `{ kind:
   // "refused" }` instead: every string in REFUSAL_CASES above (and every
-  // grammar form in CASES) can call nextOccurrence without a try/catch
-  // anywhere near it.
+  // grammar form in CASES) can call nextOccurrenceAfterCompletion without
+  // a try/catch anywhere near it.
   it("never throws for any string in this file's own test tables", () => {
     for (const testCase of [...CASES, ...REFUSAL_CASES]) {
       expect(() =>
-        nextOccurrence(testCase.dateString, { dueDate: null, now: "2026-01-01" }),
+        nextOccurrenceAfterCompletion(testCase.dateString, { dueDate: null, now: "2026-01-01" }),
+      ).not.toThrow();
+    }
+  });
+});
+
+// --- firstOccurrence (issue #191): "when is this due for the first
+// time," not "when is it next due after a completion." Friday
+// 2026-09-04 throughout, matching the issue's own measured table exactly
+// (this file's own header comment records the calendar check for that
+// week's Fridays).
+const FRIDAY = "2026-09-04";
+
+const FIRST_OCCURRENCE_CASES: readonly Case[] = [
+  // --- The issue's own measured table, verbatim: four grammar forms
+  // typed on the same day, two of which used to skip an entire period.
+  {
+    description: '"every day" typed today is due today, not tomorrow (issue #191\'s own example)',
+    dateString: "every day",
+    reference: { dueDate: null, now: FRIDAY },
+    expect: occurrence("2026-09-04"),
+  },
+  {
+    description:
+      "\"every 3rd friday\" typed on the month's *first* Friday finds that same month's still-ahead third Friday, not next month's — the case that proves this isn't just \"return today\" (issue #191's measured table: got 2026-10-16 before the fix)",
+    dateString: "every 3rd friday",
+    reference: { dueDate: null, now: FRIDAY },
+    expect: occurrence("2026-09-18"),
+  },
+  {
+    description:
+      '"every 2 weeks" with no prior due date anchors to `now`, which always matches a phase-locked kind trivially — "arguably 2026-09-04" per the issue\'s own table',
+    dateString: "every 2 weeks",
+    reference: { dueDate: null, now: FRIDAY },
+    expect: occurrence("2026-09-04"),
+  },
+  {
+    description:
+      '"every monday" typed on a Friday correctly finds the next Monday — this one was already right before the fix, since no Monday was actually skipped',
+    dateString: "every monday",
+    reference: { dueDate: null, now: FRIDAY },
+    expect: occurrence("2026-09-07"),
+  },
+
+  // --- Every remaining phase-locked frequency (criterion 5: "covers
+  // every recurrence form, not just daily") — each always matches its
+  // own origin trivially, so each is due today when created today.
+  {
+    description: '"every week" created today is due today',
+    dateString: "every week",
+    reference: { dueDate: null, now: FRIDAY },
+    expect: occurrence("2026-09-04"),
+  },
+  {
+    description:
+      '"every month" created today is due today, not next month — the shape #191 named explicitly ("a monthly-shaped one created this month is due next month")',
+    dateString: "every month",
+    reference: { dueDate: null, now: FRIDAY },
+    expect: occurrence("2026-09-04"),
+  },
+  {
+    description: '"every year" created today is due today',
+    dateString: "every year",
+    reference: { dueDate: null, now: FRIDAY },
+    expect: occurrence("2026-09-04"),
+  },
+  {
+    description:
+      '"every 3 months" (an interval greater than 1) created today is still due today — zero intervals from the origin is zero intervals regardless of the interval\'s size',
+    dateString: "every 3 months",
+    reference: { dueDate: null, now: FRIDAY },
+    expect: occurrence("2026-09-04"),
+  },
+
+  // --- The absolute-calendar frequencies, where the origin only
+  // sometimes matches.
+  {
+    description:
+      '"every workday" created on a Friday (itself a workday) is due today, not the following Monday',
+    dateString: "every workday",
+    reference: { dueDate: null, now: FRIDAY },
+    expect: occurrence("2026-09-04"),
+  },
+  {
+    description: '"every wednesday" created on a Friday finds next Wednesday, three days out',
+    dateString: "every wednesday",
+    reference: { dueDate: null, now: FRIDAY },
+    expect: occurrence("2026-09-09"),
+  },
+  {
+    description:
+      '"every 1st friday" created on 2026-09-04, which genuinely *is* this month\'s first Friday, is due today',
+    dateString: "every 1st friday",
+    reference: { dueDate: null, now: FRIDAY },
+    expect: occurrence("2026-09-04"),
+  },
+  {
+    description:
+      "\"every 1st friday\" created after this month's first Friday has already passed rolls to next month's, the same one-month step nextOrdinalWeekday always took — proving the fix doesn't break the already-passed case while fixing the still-ahead one",
+    dateString: "every 1st friday",
+    reference: { dueDate: null, now: "2026-09-20" },
+    expect: occurrence("2026-10-02"),
+  },
+
+  // --- The dueDate anchor: a rule anchored to a due date the caller also
+  // supplied lands on that due date itself, not one interval past it.
+  {
+    description:
+      '"buy milk friday every 2 weeks" (a due-anchored interval rule, typed on a Monday with the parsed "friday" token resolving to the coming Friday) lands on that Friday itself, not two weeks later',
+    dateString: "every 2 weeks",
+    reference: { dueDate: "2026-09-04", now: "2026-08-31" },
+    expect: occurrence("2026-09-04"),
+  },
+
+  // --- Bounds: the inclusive floor interacts with "starting" and
+  // "ending" the same way it interacts with `now` itself.
+  {
+    description:
+      '"starting" still snaps the first occurrence forward to the bound when the rule alone would fire on `now`',
+    dateString: "every day starting 10 Jan",
+    reference: { dueDate: null, now: "2026-01-05" },
+    expect: occurrence("2026-01-10"),
+  },
+  {
+    description:
+      '"ending" allows an occurrence exactly on the end-bound day itself, the inclusive twin of nextOccurrenceAfterCompletion\'s own "on or before the bound" case',
+    dateString: "every day ending 8 Jan",
+    reference: { dueDate: null, now: "2026-01-08" },
+    expect: occurrence("2026-01-08"),
+  },
+  {
+    description:
+      '"ending" refuses an occurrence after the bound, exactly as it does after a completion',
+    dateString: "every day ending 8 Jan",
+    reference: { dueDate: null, now: "2026-01-09" },
+    expect: ended,
+  },
+];
+
+describe("firstOccurrence — the first day the pattern actually matches, including today (issue #191)", () => {
+  for (const testCase of FIRST_OCCURRENCE_CASES) {
+    it(testCase.description, () => {
+      expect(firstOccurrence(testCase.dateString, testCase.reference)).toEqual(testCase.expect);
+    });
+  }
+
+  it("refuses malformed input identically to nextOccurrenceAfterCompletion — both share the same parse step", () => {
+    const result = firstOccurrence("every fortnight", { dueDate: null, now: FRIDAY });
+    expect(result.kind).toBe("refused");
+  });
+
+  it("never throws for any string in this file's own test tables", () => {
+    for (const testCase of [...FIRST_OCCURRENCE_CASES, ...REFUSAL_CASES]) {
+      expect(() =>
+        firstOccurrence(testCase.dateString, { dueDate: null, now: "2026-01-01" }),
       ).not.toThrow();
     }
   });

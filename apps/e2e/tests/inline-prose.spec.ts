@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 import { sendEntry, uniqueEntryBody } from "./helpers";
 
 // What's guaranteed now, checked where it can actually fail.

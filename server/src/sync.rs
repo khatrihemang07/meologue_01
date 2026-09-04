@@ -53,6 +53,36 @@
 //! against each other for no reason, and `PROTOCOL_VERSION`'s bump to 5
 //! accepting a transitional range rather than a single value
 //! (`MIN_PROTOCOL_VERSION`) — see each constant's own doc comment.
+//!
+//! Issue #182 / ADR 0051's own forward reference repeats the identical move
+//! four more times: Projects, Sections, Labels and Comments (ADR 0047's
+//! remaining root nouns, plus #180's Comment) each get their own array,
+//! their own Cursor, their own advisory-lock key, and their own
+//! `insert_*`/`fetch_*_since` pair, mirroring `TaskInput`/`TaskOutput`/
+//! `insert_tasks`/`fetch_tasks_since` field for field. `PROTOCOL_VERSION`
+//! moves to 6; the four new streams are gated on `protocol_version >= 6`
+//! in `run_sync`, the identical shape the Task stream's own `>= 5` gate
+//! already takes, so a Device on 4 or 5 keeps syncing Entries and Tasks
+//! unaffected and simply never sees a Project, Section, Label or Comment.
+//!
+//! Issue #184 / ADR 0056 adds a seventh stream, Events — Todo's own
+//! activity log — the same way, but lands it **inside** the existing
+//! `>= 6` gate rather than earning a bump of its own: `PROTOCOL_VERSION`
+//! stays 6, because nothing about this stream's own wire shape is
+//! incompatible with what a v6 Device already expects. `EventInput`/
+//! `EventOutput`/`insert_events`/`fetch_events_since` mirror
+//! `CommentInput`/`CommentOutput`/`insert_comments`/`fetch_comments_since`
+//! in every way but one: an Event is never edited or deleted once written
+//! (ADR 0056's own Decision), so it carries no `deleted_at` and
+//! `insert_events`'s own upsert has nothing to reassign `seq` *for* — a
+//! push that names an `id` already on this table is a replay, full stop,
+//! not a change that might or might not be a no-op the way every other
+//! stream's `is distinct from` guard has to work out. See `insert_events`'s
+//! own doc comment for the reasoning spelled out in full. `occurred_at` is
+//! whatever the pushing Device's own clock said when the act happened —
+//! never reassigned, never compared against server arrival time, because
+//! there is no LWW rule here to arbitrate: two Devices can never disagree
+//! about the same Event row, only both hold Events the other doesn't yet.
 
 use axum::{Json, extract::State, http::StatusCode};
 use chrono::{DateTime, Utc};
@@ -111,7 +141,55 @@ use uuid::Uuid;
 /// not-yet-updated Device, for a change that has nothing to do with
 /// Entries at all. Dropping protocol 4 support is a later, deliberate
 /// release (ADR 0051's Consequences), not a side effect of shipping Tasks.
-pub const PROTOCOL_VERSION: i32 = 5;
+///
+/// Bumped again, to 6, by issue #182: four more entity streams — Projects,
+/// Sections, Labels and Comments (ADR 0047's remaining root nouns, plus
+/// #180's Comment) — alongside Entries and Tasks. The identical reasoning
+/// as the bump to 5 applies again: a Device that has never opened a
+/// Project or Label picker still deserves its journal and its Tasks to
+/// keep syncing unaffected. `MIN_PROTOCOL_VERSION` stays 4 rather than
+/// moving to 5 — nothing about this bump requires dropping the existing
+/// 4-vs-5 transitional window, and doing so here would be an unrelated
+/// policy change riding along on this one.
+///
+/// **Not bumped again by issue #184.** Events — Todo's own activity log,
+/// ADR 0056 — are a seventh stream added the same way the previous six
+/// were, but a bump exists to tell a Device "the wire shape you already
+/// know has changed," and nothing about `SyncRequest`/`SyncResponse`'s
+/// *existing* fields changes here: `events`/`since_event_seq` are new,
+/// additive, `#[serde(default)]` fields, exactly like `tasks`/
+/// `since_task_seq` were the moment protocol 5 introduced them but before
+/// this constant itself had moved past 4. A v6 Device that predates this
+/// ticket sends a request with no `events` key at all, gets one back with
+/// `events: []`, and keeps syncing Entries, Tasks, Projects, Sections,
+/// Labels and Comments exactly as it always has — there is no wire shape
+/// it now fails to understand, so there is nothing here for a version
+/// number to protect it from.
+///
+/// **If you are about to add a field to an existing kind of row here —
+/// `TaskInput`/`TaskOutput`, `ProjectInput`/`ProjectOutput`, and so on —
+/// read this note before you do, whether or not it also moves this
+/// constant.** Issue #186 / ADR 0057: a Device's own Cursor for a stream
+/// only ever advances through rows it has already asked for
+/// (`fetch_*_since` below); a row it pulled before your new field existed
+/// stays behind that Cursor forever, and your field never reaches that
+/// Device until something unrelated edits the row and reassigns its
+/// `seq`. This bit meologue once already — `TaskInput::description`
+/// below, added by issue #182 onto the Task stream that already existed
+/// from issue #172, is the exact case that was caught only by
+/// coincidence during manual verification. `PROTOCOL_VERSION` cannot
+/// carry this obligation itself: it names "the wire shape a Device's
+/// whole build understands," not "which streams' rows just gained a
+/// field," and the two move independently in both directions — issue
+/// #184 added an entire stream (Events) with **no** bump here, and a
+/// future stream could earn a bump with no existing row gaining a field
+/// at all. The obligation lives client-side instead:
+/// `packages/core/src/protocol.ts`'s `ROW_SHAPE_EPOCH` map, one entry per
+/// stream, bumped only when that stream's row shape gains a field — see
+/// its own doc comment for the mechanism (`EntryStore.catchUpRowShapeEpoch`,
+/// `packages/core/src/store.ts`) and ADR 0057 for the design this
+/// constant's own bumps have nothing to do with.
+pub const PROTOCOL_VERSION: i32 = 6;
 
 /// The lowest protocol version this Server still accepts, alongside
 /// `PROTOCOL_VERSION` itself — together they describe an accepted
@@ -120,14 +198,17 @@ pub const PROTOCOL_VERSION: i32 = 5;
 /// bump to 5 for why: a Device on 4 has no way to represent a Task at all
 /// (its own `SyncRequest`/`SyncResponse` types predate the field), but it
 /// has every ability to keep sending and receiving Entries exactly as it
-/// always has, and there is no reason to 426 it out of that. `sync_handler`
+/// always has, and there is no reason to 426 it out of that. The identical
+/// argument holds for a Device on 5 once Projects/Sections/Labels/
+/// Comments exist (issue #182): it has no way to represent any of the
+/// four, but every ability to keep syncing Entries and Tasks. `sync_handler`
 /// rejects anything outside `MIN_PROTOCOL_VERSION..=PROTOCOL_VERSION`; a
-/// Device at exactly 4 is accepted and simply never touches the Task
-/// stream — `run_sync`'s own doc comment covers how. This constant is
-/// deleted, and the check tightened back to a single accepted value, once
-/// enough time has passed that no Device still speaks 4 (ADR 0051's
-/// Consequences names this as a later, deliberate release, not a date
-/// fixed in advance).
+/// Device at 4 or 5 is accepted and simply never touches whichever streams
+/// postdate its own build — `run_sync`'s own doc comment covers how. This
+/// constant is deleted, and the check tightened back to a single accepted
+/// value, once enough time has passed that no Device still speaks below
+/// `PROTOCOL_VERSION` (ADR 0051's Consequences names this as a later,
+/// deliberate release, not a date fixed in advance).
 const MIN_PROTOCOL_VERSION: i32 = 4;
 
 /// Caps how many Entries a single sync response returns, so a Device far behind
@@ -162,6 +243,37 @@ const SYNC_INSERT_LOCK_KEY: i64 = 0x6d656f6c;
 /// out in hex as ASCII "task", mirroring `SYNC_INSERT_LOCK_KEY`'s own
 /// ASCII "meol" above.
 const TASK_SYNC_INSERT_LOCK_KEY: i64 = 0x7461736b;
+
+/// The advisory lock key serialising Project inserts — issue #182's own
+/// repeat of `TASK_SYNC_INSERT_LOCK_KEY`'s reasoning: Projects get their
+/// own `seq` sequence and their own Cursor, never compared against any
+/// other stream's, so sharing a lock key would only serialise an unrelated
+/// stream's push for no correctness reason. ASCII "proj".
+const PROJECT_SYNC_INSERT_LOCK_KEY: i64 = 0x70726f6a;
+
+/// The advisory lock key serialising Section inserts — a Section's own
+/// `seq` sequence is independent of a Project's even though a Section
+/// always belongs to one, for the identical reason `SYNC_INSERT_LOCK_KEY`
+/// and `TASK_SYNC_INSERT_LOCK_KEY` are two keys rather than one shared
+/// between Entries and Tasks. ASCII "sect".
+const SECTION_SYNC_INSERT_LOCK_KEY: i64 = 0x73656374;
+
+/// The advisory lock key serialising Label inserts. ASCII "labl".
+const LABEL_SYNC_INSERT_LOCK_KEY: i64 = 0x6c61626c;
+
+/// The advisory lock key serialising Comment inserts. ASCII "cmnt".
+const COMMENT_SYNC_INSERT_LOCK_KEY: i64 = 0x636d6e74;
+
+/// The advisory lock key serialising Event inserts (issue #184). Held for
+/// the identical reason every stream above holds its own key — ADR 0002's
+/// "commit order must equal seq-assignment order" property, so a Device
+/// polling mid-transaction never advances its Cursor past a row that
+/// hasn't committed yet — even though `insert_events` never reassigns a
+/// `seq` the way every mutable stream's own upsert does: a fresh `bigserial`
+/// value is still assigned once, at insert, and two concurrent inserts
+/// could still commit out of order relative to those values without a
+/// lock serialising them. ASCII "evnt".
+const EVENT_SYNC_INSERT_LOCK_KEY: i64 = 0x65766e74;
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct EntryInput {
@@ -214,6 +326,24 @@ pub struct TaskInput {
     pub content: String,
     pub completed_at: Option<DateTime<Utc>>,
     pub order_key: String,
+    /// Today's own manual order (issue #182,
+    /// `../../packages/core/src/task-types.ts`'s own `dayOrder` doc
+    /// comment) — a second, independent fractional index alongside
+    /// `order_key`, opaque text this Server never interprets, exactly as
+    /// `order_key` already is (ADR 0050/0051). `#[serde(default)]`, not
+    /// because a v6 Device ever omits it, but because this field did not
+    /// exist before issue #182: a Device still on protocol 5 has no such
+    /// key in its request body at all, the identical reasoning
+    /// `SyncRequest::since_task_seq`'s own doc comment gives for a whole
+    /// stream rather than one column of one. Defaulting to `""` (an empty
+    /// string) is not a synthesised position — this Server does not
+    /// compute one from `order_key` or anything else, the same "never
+    /// generates or repairs one" restraint ADR 0051 already states for
+    /// `order_key` — it is simply the type's own default, sorting first
+    /// under lexicographic comparison until the Task's own Device gives it
+    /// a real one.
+    #[serde(default)]
+    pub day_order: String,
     pub created_at: DateTime<Utc>,
     /// Tombstone — see `EntryInput::deleted_at`'s own doc comment; the
     /// identical representation, reused for the identical reason (ADR
@@ -225,13 +355,30 @@ pub struct TaskInput {
     /// `dateString`/`deadline` below are.
     pub date: Option<String>,
     pub deadline: Option<String>,
-    pub duration: Option<i32>,
     pub priority: i32,
     pub label_ids: Vec<Uuid>,
     pub date_string: Option<String>,
     pub project_id: Option<Uuid>,
     pub section_id: Option<Uuid>,
     pub parent_id: Option<Uuid>,
+    /// The Task's own words about itself (#180,
+    /// `../../packages/core/src/task-types.ts`'s own `description` field) —
+    /// gains a wire representation here for the first time (issue #182).
+    /// Before this, `packages/core/src/mapping.ts`'s `fromWireTaskOutput`
+    /// carried a Device's existing local copy through unconditionally,
+    /// because the wire had nothing to say about it at all; now that it's
+    /// an ordinary `Option<String>` field like every other nullable column
+    /// here, that workaround is retired — see that function's own doc
+    /// comment for the mechanism it keeps for a future locally-held field.
+    ///
+    /// This is also issue #186 / ADR 0057's own motivating case: a Device
+    /// that had already pulled a Task row before this field existed kept
+    /// its Cursor past that row, and this field alone never reached it.
+    /// `packages/core/src/protocol.ts`'s `ROW_SHAPE_EPOCH.tasks` is bumped
+    /// to 1 for exactly this addition — see `PROTOCOL_VERSION`'s own doc
+    /// comment above for the obligation this places on the next field
+    /// added to any row here.
+    pub description: Option<String>,
 }
 
 /// The Task-shaped sibling of `EntryOutput` — see `TaskInput`'s own doc
@@ -244,18 +391,195 @@ pub struct TaskOutput {
     pub content: String,
     pub completed_at: Option<DateTime<Utc>>,
     pub order_key: String,
+    /// See `TaskInput::day_order`'s own doc comment.
+    pub day_order: String,
     pub created_at: DateTime<Utc>,
     pub seq: i64,
     pub deleted_at: Option<DateTime<Utc>>,
     pub date: Option<String>,
     pub deadline: Option<String>,
-    pub duration: Option<i32>,
     pub priority: i32,
     pub label_ids: Vec<Uuid>,
     pub date_string: Option<String>,
     pub project_id: Option<Uuid>,
     pub section_id: Option<Uuid>,
     pub parent_id: Option<Uuid>,
+    pub description: Option<String>,
+}
+
+/// The Project-shaped sibling of `TaskInput` (ADR 0047's second/third root
+/// nouns, ADR 0051's third Sync stream, issue #182). `parent_id` is a
+/// plain `Option<Uuid>`, unvalidated — a Project can nest under another
+/// Project this Server has never heard of, the identical "dangling
+/// cross-reference is not this server's problem" rule `TaskInput`'s own
+/// doc comment states, applied here because there is nothing to validate
+/// against: no foreign key, no self-join check.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct ProjectInput {
+    pub id: Uuid,
+    pub device_id: Uuid,
+    pub name: String,
+    pub colour: String,
+    pub favourite: bool,
+    pub archived: bool,
+    pub parent_id: Option<Uuid>,
+    pub description: Option<String>,
+    pub order_key: String,
+    pub created_at: DateTime<Utc>,
+    /// Tombstone — see `EntryInput::deleted_at`'s own doc comment.
+    pub deleted_at: Option<DateTime<Utc>>,
+}
+
+/// The Project-shaped sibling of `TaskOutput` — adds only `seq`.
+#[derive(Debug, Serialize, FromRow, ToSchema)]
+pub struct ProjectOutput {
+    pub id: Uuid,
+    pub device_id: Uuid,
+    pub name: String,
+    pub colour: String,
+    pub favourite: bool,
+    pub archived: bool,
+    pub parent_id: Option<Uuid>,
+    pub description: Option<String>,
+    pub order_key: String,
+    pub created_at: DateTime<Utc>,
+    pub seq: i64,
+    pub deleted_at: Option<DateTime<Utc>>,
+}
+
+/// The Section-shaped sibling of `TaskInput` — `project_id` is a plain
+/// required `Uuid`, unvalidated against a `projects` table for the
+/// identical reason `TaskInput::project_id`'s own doc comment gives: a
+/// Section can arrive naming a Project this Server has never heard of
+/// (or, within one push, a Project pushed in the very same request — this
+/// Server does not require Sections to arrive after their own Project),
+/// and that is an accepted, transient state carried straight through.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct SectionInput {
+    pub id: Uuid,
+    pub device_id: Uuid,
+    pub project_id: Uuid,
+    pub name: String,
+    pub description: Option<String>,
+    pub order_key: String,
+    pub archived: bool,
+    pub created_at: DateTime<Utc>,
+    pub deleted_at: Option<DateTime<Utc>>,
+}
+
+/// The Section-shaped sibling of `TaskOutput` — adds only `seq`.
+#[derive(Debug, Serialize, FromRow, ToSchema)]
+pub struct SectionOutput {
+    pub id: Uuid,
+    pub device_id: Uuid,
+    pub project_id: Uuid,
+    pub name: String,
+    pub description: Option<String>,
+    pub order_key: String,
+    pub archived: bool,
+    pub created_at: DateTime<Utc>,
+    pub seq: i64,
+    pub deleted_at: Option<DateTime<Utc>>,
+}
+
+/// The Label-shaped sibling of `TaskInput` — no `order_key`, mirroring
+/// `../../packages/core/src/label-types.ts`'s own Label (no manual order —
+/// see that type's own doc comment for why).
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct LabelInput {
+    pub id: Uuid,
+    pub device_id: Uuid,
+    pub name: String,
+    pub colour: String,
+    pub created_at: DateTime<Utc>,
+    pub deleted_at: Option<DateTime<Utc>>,
+}
+
+/// The Label-shaped sibling of `TaskOutput` — adds only `seq`.
+#[derive(Debug, Serialize, FromRow, ToSchema)]
+pub struct LabelOutput {
+    pub id: Uuid,
+    pub device_id: Uuid,
+    pub name: String,
+    pub colour: String,
+    pub created_at: DateTime<Utc>,
+    pub seq: i64,
+    pub deleted_at: Option<DateTime<Utc>>,
+}
+
+/// The Comment-shaped sibling of `TaskInput` — `task_id` is a plain
+/// required `Uuid`, unvalidated against `tasks` for the identical reason
+/// `SectionInput::project_id`'s own doc comment gives.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct CommentInput {
+    pub id: Uuid,
+    pub device_id: Uuid,
+    pub task_id: Uuid,
+    pub text: String,
+    pub created_at: DateTime<Utc>,
+    pub deleted_at: Option<DateTime<Utc>>,
+}
+
+/// The Comment-shaped sibling of `TaskOutput` — adds only `seq`.
+#[derive(Debug, Serialize, FromRow, ToSchema)]
+pub struct CommentOutput {
+    pub id: Uuid,
+    pub device_id: Uuid,
+    pub task_id: Uuid,
+    pub text: String,
+    pub created_at: DateTime<Utc>,
+    pub seq: i64,
+    pub deleted_at: Option<DateTime<Utc>>,
+}
+
+/// The Event-shaped sibling of `CommentInput` (issue #184 / ADR 0056) —
+/// Todo's own activity log, Sync's seventh stream. No `deleted_at`: see
+/// `../migrations/0017_create_events.sql`'s own header comment for why an
+/// Event has no "nothing" state for a tombstone to represent. `event_type`
+/// and `object_type` are plain `String`, not a Postgres `enum` — the fixed
+/// vocabulary (`added`/`deleted`/`updated`/`archived`/`unarchived`/
+/// `completed`/`uncompleted`/`moved`, and `task`/`comment`/`project`/
+/// `section`) is enforced by ../../packages/core/src/event-types.ts's own
+/// union type on every Device that writes one, the same "validated at the
+/// edge that actually knows the vocabulary, not by a database constraint"
+/// choice `tasks.priority`'s 1-4 range already makes
+/// (../../packages/core/src/task-fields.ts) — a Postgres `enum` would also
+/// need a migration of its own the day this vocabulary grows, where a
+/// `text` column and a client-side union do not.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct EventInput {
+    pub id: Uuid,
+    pub device_id: Uuid,
+    pub event_type: String,
+    pub object_type: String,
+    pub object_id: Uuid,
+    pub task_id: Option<Uuid>,
+    pub project_id: Option<Uuid>,
+    /// The acting Device's own clock at the moment the act happened —
+    /// never the time this row reaches the Server. ADR 0056's entire
+    /// Decision turns on this field meaning that and only that; see this
+    /// module's own top-of-file doc comment and the ADR itself for why.
+    pub occurred_at: DateTime<Utc>,
+    /// Whatever this event_type/object_type pair needs to say about what
+    /// changed — see `../migrations/0017_create_events.sql`'s own comment
+    /// on why this is one `jsonb` column rather than a wide table of
+    /// nullable `last_*` columns.
+    pub extra: Option<serde_json::Value>,
+}
+
+/// The Event-shaped sibling of `CommentOutput` — adds only `seq`.
+#[derive(Debug, Serialize, FromRow, ToSchema)]
+pub struct EventOutput {
+    pub id: Uuid,
+    pub device_id: Uuid,
+    pub event_type: String,
+    pub object_type: String,
+    pub object_id: Uuid,
+    pub task_id: Option<Uuid>,
+    pub project_id: Option<Uuid>,
+    pub occurred_at: DateTime<Utc>,
+    pub extra: Option<serde_json::Value>,
+    pub seq: i64,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -287,6 +611,38 @@ pub struct SyncRequest {
     /// construct such a request in the first place.
     #[serde(default)]
     pub tasks: Vec<TaskInput>,
+    /// Issue #182: four more streams, each mirroring `since_task_seq`'s own
+    /// `#[serde(default)]` reasoning exactly — a Device on 4 or 5 has none
+    /// of these keys in its request body at all, and defaulting to 0 is
+    /// exactly "this Device has never synced one of these," true of every
+    /// such Device by construction.
+    #[serde(default)]
+    pub since_project_seq: i64,
+    /// Mirrors `tasks`' own `#[serde(default)]` reasoning.
+    #[serde(default)]
+    pub projects: Vec<ProjectInput>,
+    #[serde(default)]
+    pub since_section_seq: i64,
+    #[serde(default)]
+    pub sections: Vec<SectionInput>,
+    #[serde(default)]
+    pub since_label_seq: i64,
+    #[serde(default)]
+    pub labels: Vec<LabelInput>,
+    #[serde(default)]
+    pub since_comment_seq: i64,
+    #[serde(default)]
+    pub comments: Vec<CommentInput>,
+    /// Issue #184: Sync's seventh stream, Events — `#[serde(default)]`
+    /// for the identical reason every stream above's own request fields
+    /// are: a Device built before this ticket has no `events`/
+    /// `since_event_seq` key in its request body at all. Unlike the four
+    /// streams above, there was no version bump to hang this on — see
+    /// `PROTOCOL_VERSION`'s own doc comment for why none was needed.
+    #[serde(default)]
+    pub since_event_seq: i64,
+    #[serde(default)]
+    pub events: Vec<EventInput>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -309,6 +665,33 @@ pub struct SyncResponse {
     /// comment).
     pub tasks: Vec<TaskOutput>,
     pub task_cursor: i64,
+    /// Issue #182: four more pulls, each mirroring `tasks`' own doc
+    /// comment exactly — always present on the wire, but `run_sync` sets
+    /// each to `[]` (and each cursor to its own `since_*_seq`, unchanged)
+    /// when `protocol_version < 6`, so a Device on 4 or 5 never receives
+    /// data it has no representation for and never asked to see.
+    pub projects: Vec<ProjectOutput>,
+    pub project_cursor: i64,
+    pub sections: Vec<SectionOutput>,
+    pub section_cursor: i64,
+    pub labels: Vec<LabelOutput>,
+    pub label_cursor: i64,
+    pub comments: Vec<CommentOutput>,
+    pub comment_cursor: i64,
+    /// Issue #184: Events, always present and always populated — unlike
+    /// `tasks`/`projects`/etc. above, `run_sync` applies **no**
+    /// `protocol_version` gate to this pair (see `PROTOCOL_VERSION`'s own
+    /// doc comment: there is no version number that separates "a v6
+    /// Device that predates this ticket" from "a v6 Device that has it,"
+    /// so a gate here couldn't distinguish anything a v6 Device's own
+    /// `#[serde(default)]` request fields don't already handle). A
+    /// pre-#184 v6 Device that receives a populated `events` array simply
+    /// never reads a JSON key its own `WireSyncResponse` type doesn't
+    /// declare — the same "extra field, harmlessly ignored" tolerance
+    /// every wire response in this codebase already relies on for a
+    /// field it doesn't recognise.
+    pub events: Vec<EventOutput>,
+    pub event_cursor: i64,
 }
 
 #[utoipa::path(
@@ -316,7 +699,7 @@ pub struct SyncResponse {
     path = "/v1/sync",
     request_body = SyncRequest,
     responses(
-        (status = 200, description = "Entries (and, from protocol 5, Tasks) accepted; every change after since_seq/since_task_seq is returned", body = SyncResponse),
+        (status = 200, description = "Entries (from protocol 5, Tasks; from protocol 6, Projects/Sections/Labels/Comments/Events too) accepted; every change since each stream's own cursor is returned", body = SyncResponse),
         (status = 426, description = "protocol_version is outside the range this server understands"),
     )
 )]
@@ -342,6 +725,10 @@ pub async fn sync_handler(
 
     let pushed = req.entries.len() as u64;
     let tasks_pushed = req.tasks.len() as u64;
+    let projects_pushed = req.projects.len() as u64;
+    let sections_pushed = req.sections.len() as u64;
+    let labels_pushed = req.labels.len() as u64;
+    let comments_pushed = req.comments.len() as u64;
 
     run_sync(&pool, &embed_tx, req)
         .await
@@ -350,6 +737,14 @@ pub async fn sync_handler(
             metrics::counter!("sync_entries_pulled_total").increment(resp.entries.len() as u64);
             metrics::counter!("sync_tasks_pushed_total").increment(tasks_pushed);
             metrics::counter!("sync_tasks_pulled_total").increment(resp.tasks.len() as u64);
+            metrics::counter!("sync_projects_pushed_total").increment(projects_pushed);
+            metrics::counter!("sync_projects_pulled_total").increment(resp.projects.len() as u64);
+            metrics::counter!("sync_sections_pushed_total").increment(sections_pushed);
+            metrics::counter!("sync_sections_pulled_total").increment(resp.sections.len() as u64);
+            metrics::counter!("sync_labels_pushed_total").increment(labels_pushed);
+            metrics::counter!("sync_labels_pulled_total").increment(resp.labels.len() as u64);
+            metrics::counter!("sync_comments_pushed_total").increment(comments_pushed);
+            metrics::counter!("sync_comments_pulled_total").increment(resp.comments.len() as u64);
             Json(resp)
         })
         .map_err(|err| {
@@ -358,8 +753,10 @@ pub async fn sync_handler(
         })
 }
 
-/// Runs both entity streams for one `/v1/sync` round trip — Entries first
-/// (unchanged from before this ticket), then Tasks (ADR 0051).
+/// Runs every entity stream for one `/v1/sync` round trip — Entries first
+/// (unchanged from before this ticket), then Tasks (ADR 0051), then
+/// Projects, Sections, Labels and Comments (issue #182), each gated on its
+/// own protocol version.
 ///
 /// **The Task stream only runs for a Device speaking protocol 5 or
 /// later.** `req.tasks`/`req.since_task_seq` are already `[]`/`0` for a
@@ -413,7 +810,82 @@ async fn run_sync(
         (Vec::new(), req.since_task_seq)
     };
 
-    Ok(SyncResponse { entries, cursor, tasks, task_cursor })
+    // Issue #182: the identical protocol-6 gate, run four more times — see
+    // this function's own doc comment for why the gate has to cover the
+    // whole stream, push and pull alike, not merely "don't act on an empty
+    // push."
+    let (projects, project_cursor) = if req.protocol_version >= 6 {
+        if !req.projects.is_empty() {
+            insert_projects(pool, &req.projects).await?;
+        }
+        let projects = fetch_projects_since(pool, req.since_project_seq).await?;
+        let project_cursor = projects.last().map_or(req.since_project_seq, |p| p.seq);
+        (projects, project_cursor)
+    } else {
+        (Vec::new(), req.since_project_seq)
+    };
+
+    let (sections, section_cursor) = if req.protocol_version >= 6 {
+        if !req.sections.is_empty() {
+            insert_sections(pool, &req.sections).await?;
+        }
+        let sections = fetch_sections_since(pool, req.since_section_seq).await?;
+        let section_cursor = sections.last().map_or(req.since_section_seq, |s| s.seq);
+        (sections, section_cursor)
+    } else {
+        (Vec::new(), req.since_section_seq)
+    };
+
+    let (labels, label_cursor) = if req.protocol_version >= 6 {
+        if !req.labels.is_empty() {
+            insert_labels(pool, &req.labels).await?;
+        }
+        let labels = fetch_labels_since(pool, req.since_label_seq).await?;
+        let label_cursor = labels.last().map_or(req.since_label_seq, |l| l.seq);
+        (labels, label_cursor)
+    } else {
+        (Vec::new(), req.since_label_seq)
+    };
+
+    let (comments, comment_cursor) = if req.protocol_version >= 6 {
+        if !req.comments.is_empty() {
+            insert_comments(pool, &req.comments).await?;
+        }
+        let comments = fetch_comments_since(pool, req.since_comment_seq).await?;
+        let comment_cursor = comments.last().map_or(req.since_comment_seq, |c| c.seq);
+        (comments, comment_cursor)
+    } else {
+        (Vec::new(), req.since_comment_seq)
+    };
+
+    // Issue #184: no `protocol_version` gate — see `PROTOCOL_VERSION`'s
+    // own doc comment and `SyncResponse::events`' own doc comment for why
+    // one would be meaningless here. Every Device that can reach this
+    // handler at all (protocol_version already checked against the
+    // MIN_PROTOCOL_VERSION..=PROTOCOL_VERSION range above) pushes and
+    // pulls Events unconditionally.
+    if !req.events.is_empty() {
+        insert_events(pool, &req.events).await?;
+    }
+    let events = fetch_events_since(pool, req.since_event_seq).await?;
+    let event_cursor = events.last().map_or(req.since_event_seq, |e| e.seq);
+
+    Ok(SyncResponse {
+        entries,
+        cursor,
+        tasks,
+        task_cursor,
+        projects,
+        project_cursor,
+        sections,
+        section_cursor,
+        labels,
+        label_cursor,
+        comments,
+        comment_cursor,
+        events,
+        event_cursor,
+    })
 }
 
 /// Held until commit: makes commit order equal sequence-assignment order, so a Device
@@ -623,57 +1095,60 @@ async fn insert_tasks(pool: &PgPool, tasks: &[TaskInput]) -> anyhow::Result<()> 
     for task in tasks {
         sqlx::query(
             "insert into tasks (
-                 id, device_id, content, completed_at, order_key, created_at,
-                 deleted_at, date, deadline, duration, priority, label_ids,
-                 date_string, project_id, section_id, parent_id
+                 id, device_id, content, completed_at, order_key, day_order, created_at,
+                 deleted_at, date, deadline, priority, label_ids,
+                 date_string, project_id, section_id, parent_id, description
              )
-             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
              on conflict (id) do update
                set content       = excluded.content,
                    completed_at  = excluded.completed_at,
                    order_key     = excluded.order_key,
+                   day_order     = excluded.day_order,
                    deleted_at    = excluded.deleted_at,
                    date          = excluded.date,
                    deadline      = excluded.deadline,
-                   duration      = excluded.duration,
                    priority      = excluded.priority,
                    label_ids     = excluded.label_ids,
                    date_string   = excluded.date_string,
                    project_id    = excluded.project_id,
                    section_id    = excluded.section_id,
                    parent_id     = excluded.parent_id,
+                   description   = excluded.description,
                    seq           = nextval(pg_get_serial_sequence('tasks', 'seq'))
                where tasks.deleted_at is null
                  and (tasks.content      is distinct from excluded.content
                    or tasks.completed_at is distinct from excluded.completed_at
                    or tasks.order_key    is distinct from excluded.order_key
+                   or tasks.day_order    is distinct from excluded.day_order
                    or tasks.deleted_at   is distinct from excluded.deleted_at
                    or tasks.date         is distinct from excluded.date
                    or tasks.deadline     is distinct from excluded.deadline
-                   or tasks.duration     is distinct from excluded.duration
                    or tasks.priority     is distinct from excluded.priority
                    or tasks.label_ids    is distinct from excluded.label_ids
                    or tasks.date_string  is distinct from excluded.date_string
                    or tasks.project_id   is distinct from excluded.project_id
                    or tasks.section_id   is distinct from excluded.section_id
-                   or tasks.parent_id    is distinct from excluded.parent_id)",
+                   or tasks.parent_id    is distinct from excluded.parent_id
+                   or tasks.description  is distinct from excluded.description)",
         )
         .bind(task.id)
         .bind(task.device_id)
         .bind(&task.content)
         .bind(task.completed_at)
         .bind(&task.order_key)
+        .bind(&task.day_order)
         .bind(task.created_at)
         .bind(task.deleted_at)
         .bind(&task.date)
         .bind(&task.deadline)
-        .bind(task.duration)
         .bind(task.priority)
         .bind(&task.label_ids)
         .bind(&task.date_string)
         .bind(task.project_id)
         .bind(task.section_id)
         .bind(task.parent_id)
+        .bind(&task.description)
         .execute(&mut *tx)
         .await?;
     }
@@ -693,9 +1168,9 @@ async fn insert_tasks(pool: &PgPool, tasks: &[TaskInput]) -> anyhow::Result<()> 
 /// this transport exists yet.
 async fn fetch_tasks_since(pool: &PgPool, since_seq: i64) -> anyhow::Result<Vec<TaskOutput>> {
     let tasks = sqlx::query_as::<_, TaskOutput>(
-        "select id, device_id, content, completed_at, order_key, created_at, seq,
-                deleted_at, date, deadline, duration, priority, label_ids,
-                date_string, project_id, section_id, parent_id
+        "select id, device_id, content, completed_at, order_key, day_order, created_at, seq,
+                deleted_at, date, deadline, priority, label_ids,
+                date_string, project_id, section_id, parent_id, description
          from tasks
          where seq > $1
          order by seq asc
@@ -707,6 +1182,382 @@ async fn fetch_tasks_since(pool: &PgPool, since_seq: i64) -> anyhow::Result<Vec<
     .await?;
 
     Ok(tasks)
+}
+
+/// Held until commit, for the Project stream — mirrors
+/// `acquire_task_insert_lock` against `PROJECT_SYNC_INSERT_LOCK_KEY`
+/// instead. ADR 0002 again.
+async fn acquire_project_insert_lock(conn: &mut PgConnection) -> sqlx::Result<()> {
+    sqlx::query("select pg_advisory_xact_lock($1)")
+        .bind(PROJECT_SYNC_INSERT_LOCK_KEY)
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
+/// Inserts a new Project, or applies an edit/delete to an existing one —
+/// the Project-shaped sibling of `insert_tasks`, reusing the identical
+/// guard shape for the identical reasons that function's own doc comment
+/// gives: delete is terminal (`projects.deleted_at is null`), replay is a
+/// true no-op (`is distinct from` across every mutable column), and `seq`
+/// is reassigned from `projects`'s own `bigserial` on every real write.
+/// `device_id` and `created_at` are absent from the `set` list for the
+/// identical "identified by creator, never re-attributed" reason.
+async fn insert_projects(pool: &PgPool, projects: &[ProjectInput]) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
+    acquire_project_insert_lock(&mut tx).await?;
+
+    for project in projects {
+        sqlx::query(
+            "insert into projects (
+                 id, device_id, name, colour, favourite, archived, parent_id,
+                 description, order_key, created_at, deleted_at
+             )
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+             on conflict (id) do update
+               set name        = excluded.name,
+                   colour      = excluded.colour,
+                   favourite   = excluded.favourite,
+                   archived    = excluded.archived,
+                   parent_id   = excluded.parent_id,
+                   description = excluded.description,
+                   order_key   = excluded.order_key,
+                   deleted_at  = excluded.deleted_at,
+                   seq         = nextval(pg_get_serial_sequence('projects', 'seq'))
+               where projects.deleted_at is null
+                 and (projects.name        is distinct from excluded.name
+                   or projects.colour      is distinct from excluded.colour
+                   or projects.favourite   is distinct from excluded.favourite
+                   or projects.archived    is distinct from excluded.archived
+                   or projects.parent_id   is distinct from excluded.parent_id
+                   or projects.description is distinct from excluded.description
+                   or projects.order_key   is distinct from excluded.order_key
+                   or projects.deleted_at  is distinct from excluded.deleted_at)",
+        )
+        .bind(project.id)
+        .bind(project.device_id)
+        .bind(&project.name)
+        .bind(&project.colour)
+        .bind(project.favourite)
+        .bind(project.archived)
+        .bind(project.parent_id)
+        .bind(&project.description)
+        .bind(&project.order_key)
+        .bind(project.created_at)
+        .bind(project.deleted_at)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+    Ok(())
+}
+
+/// The Project-shaped sibling of `fetch_tasks_since` — `deleted_at`
+/// travels unfiltered for the identical reason.
+async fn fetch_projects_since(
+    pool: &PgPool,
+    since_seq: i64,
+) -> anyhow::Result<Vec<ProjectOutput>> {
+    let projects = sqlx::query_as::<_, ProjectOutput>(
+        "select id, device_id, name, colour, favourite, archived, parent_id,
+                description, order_key, created_at, seq, deleted_at
+         from projects
+         where seq > $1
+         order by seq asc
+         limit $2",
+    )
+    .bind(since_seq)
+    .bind(SYNC_BATCH_SIZE)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(projects)
+}
+
+/// Held until commit, for the Section stream — mirrors
+/// `acquire_project_insert_lock` against `SECTION_SYNC_INSERT_LOCK_KEY`.
+async fn acquire_section_insert_lock(conn: &mut PgConnection) -> sqlx::Result<()> {
+    sqlx::query("select pg_advisory_xact_lock($1)")
+        .bind(SECTION_SYNC_INSERT_LOCK_KEY)
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
+/// Inserts a new Section, or applies an edit/delete to an existing one —
+/// mirrors `insert_projects` field for field, over `sections` instead.
+async fn insert_sections(pool: &PgPool, sections: &[SectionInput]) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
+    acquire_section_insert_lock(&mut tx).await?;
+
+    for section in sections {
+        sqlx::query(
+            "insert into sections (
+                 id, device_id, project_id, name, description, order_key,
+                 archived, created_at, deleted_at
+             )
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+             on conflict (id) do update
+               set project_id  = excluded.project_id,
+                   name        = excluded.name,
+                   description = excluded.description,
+                   order_key   = excluded.order_key,
+                   archived    = excluded.archived,
+                   deleted_at  = excluded.deleted_at,
+                   seq         = nextval(pg_get_serial_sequence('sections', 'seq'))
+               where sections.deleted_at is null
+                 and (sections.project_id  is distinct from excluded.project_id
+                   or sections.name        is distinct from excluded.name
+                   or sections.description is distinct from excluded.description
+                   or sections.order_key   is distinct from excluded.order_key
+                   or sections.archived    is distinct from excluded.archived
+                   or sections.deleted_at  is distinct from excluded.deleted_at)",
+        )
+        .bind(section.id)
+        .bind(section.device_id)
+        .bind(section.project_id)
+        .bind(&section.name)
+        .bind(&section.description)
+        .bind(&section.order_key)
+        .bind(section.archived)
+        .bind(section.created_at)
+        .bind(section.deleted_at)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+    Ok(())
+}
+
+/// The Section-shaped sibling of `fetch_projects_since`.
+async fn fetch_sections_since(
+    pool: &PgPool,
+    since_seq: i64,
+) -> anyhow::Result<Vec<SectionOutput>> {
+    let sections = sqlx::query_as::<_, SectionOutput>(
+        "select id, device_id, project_id, name, description, order_key,
+                archived, created_at, seq, deleted_at
+         from sections
+         where seq > $1
+         order by seq asc
+         limit $2",
+    )
+    .bind(since_seq)
+    .bind(SYNC_BATCH_SIZE)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(sections)
+}
+
+/// Held until commit, for the Label stream — mirrors
+/// `acquire_project_insert_lock` against `LABEL_SYNC_INSERT_LOCK_KEY`.
+async fn acquire_label_insert_lock(conn: &mut PgConnection) -> sqlx::Result<()> {
+    sqlx::query("select pg_advisory_xact_lock($1)")
+        .bind(LABEL_SYNC_INSERT_LOCK_KEY)
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
+/// Inserts a new Label, or applies an edit/delete to an existing one —
+/// mirrors `insert_projects` field for field, over `labels` instead (no
+/// `order_key` — see `LabelInput`'s own doc comment).
+async fn insert_labels(pool: &PgPool, labels: &[LabelInput]) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
+    acquire_label_insert_lock(&mut tx).await?;
+
+    for label in labels {
+        sqlx::query(
+            "insert into labels (id, device_id, name, colour, created_at, deleted_at)
+             values ($1, $2, $3, $4, $5, $6)
+             on conflict (id) do update
+               set name       = excluded.name,
+                   colour     = excluded.colour,
+                   deleted_at = excluded.deleted_at,
+                   seq        = nextval(pg_get_serial_sequence('labels', 'seq'))
+               where labels.deleted_at is null
+                 and (labels.name       is distinct from excluded.name
+                   or labels.colour     is distinct from excluded.colour
+                   or labels.deleted_at is distinct from excluded.deleted_at)",
+        )
+        .bind(label.id)
+        .bind(label.device_id)
+        .bind(&label.name)
+        .bind(&label.colour)
+        .bind(label.created_at)
+        .bind(label.deleted_at)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+    Ok(())
+}
+
+/// The Label-shaped sibling of `fetch_projects_since`.
+async fn fetch_labels_since(pool: &PgPool, since_seq: i64) -> anyhow::Result<Vec<LabelOutput>> {
+    let labels = sqlx::query_as::<_, LabelOutput>(
+        "select id, device_id, name, colour, created_at, seq, deleted_at
+         from labels
+         where seq > $1
+         order by seq asc
+         limit $2",
+    )
+    .bind(since_seq)
+    .bind(SYNC_BATCH_SIZE)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(labels)
+}
+
+/// Held until commit, for the Comment stream — mirrors
+/// `acquire_project_insert_lock` against `COMMENT_SYNC_INSERT_LOCK_KEY`.
+async fn acquire_comment_insert_lock(conn: &mut PgConnection) -> sqlx::Result<()> {
+    sqlx::query("select pg_advisory_xact_lock($1)")
+        .bind(COMMENT_SYNC_INSERT_LOCK_KEY)
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
+/// Inserts a new Comment, or applies an edit/delete to an existing one —
+/// mirrors `insert_projects` field for field, over `comments` instead.
+/// `task_id` is absent from the `set` list, alongside `device_id`/
+/// `created_at` — mirroring `EntryInput`'s "identified by creator, never
+/// re-attributed" rule: a Comment's own Task never changes after it's
+/// written, the same way an Entry's own authorship doesn't.
+async fn insert_comments(pool: &PgPool, comments: &[CommentInput]) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
+    acquire_comment_insert_lock(&mut tx).await?;
+
+    for comment in comments {
+        sqlx::query(
+            "insert into comments (id, device_id, task_id, text, created_at, deleted_at)
+             values ($1, $2, $3, $4, $5, $6)
+             on conflict (id) do update
+               set text       = excluded.text,
+                   deleted_at = excluded.deleted_at,
+                   seq        = nextval(pg_get_serial_sequence('comments', 'seq'))
+               where comments.deleted_at is null
+                 and (comments.text       is distinct from excluded.text
+                   or comments.deleted_at is distinct from excluded.deleted_at)",
+        )
+        .bind(comment.id)
+        .bind(comment.device_id)
+        .bind(comment.task_id)
+        .bind(&comment.text)
+        .bind(comment.created_at)
+        .bind(comment.deleted_at)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+    Ok(())
+}
+
+/// The Comment-shaped sibling of `fetch_projects_since`.
+async fn fetch_comments_since(
+    pool: &PgPool,
+    since_seq: i64,
+) -> anyhow::Result<Vec<CommentOutput>> {
+    let comments = sqlx::query_as::<_, CommentOutput>(
+        "select id, device_id, task_id, text, created_at, seq, deleted_at
+         from comments
+         where seq > $1
+         order by seq asc
+         limit $2",
+    )
+    .bind(since_seq)
+    .bind(SYNC_BATCH_SIZE)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(comments)
+}
+
+/// Held until commit, for the Event stream — mirrors
+/// `acquire_comment_insert_lock` against `EVENT_SYNC_INSERT_LOCK_KEY`.
+async fn acquire_event_insert_lock(conn: &mut PgConnection) -> sqlx::Result<()> {
+    sqlx::query("select pg_advisory_xact_lock($1)")
+        .bind(EVENT_SYNC_INSERT_LOCK_KEY)
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
+/// Inserts a new Event, or silently no-ops against one already on this
+/// table — the one place this ticket's own replay guard genuinely
+/// simplifies rather than merely mirroring `insert_comments`.
+///
+/// Every other `insert_*` in this file above needs an `is distinct from`
+/// chain across its table's mutable columns, because the row it's
+/// upserting *can* legitimately change — a retried push of the same
+/// content, one that changed a field, and a stale replay of an
+/// already-applied write all look identical at the SQL level (same `id`),
+/// and only that comparison tells them apart. An Event has no mutable
+/// column: nothing about this ticket's own Decision (ADR 0056) ever
+/// writes a second version of an Event with the same `id` — there is no
+/// edit door, no tombstone, nothing analogous to a Comment's `edit()` or
+/// `remove()`. So a second push carrying an `id` already in this table
+/// can only be one thing: a replay of the exact same row, whether from a
+/// retried request, a redelivered response, or two Devices that happened
+/// to both hold the same already-synced Event and both still have it in
+/// their own `pending()` for some reason. `on conflict (id) do nothing`
+/// says exactly that: apply it if this is the first time this table has
+/// seen this `id`, otherwise there is nothing to reconcile, and
+/// critically, **no `seq` reassignment** — a replayed Event must not jump
+/// back to the head of the log and cost every Device a redundant re-pull
+/// of a row they already have.
+async fn insert_events(pool: &PgPool, events: &[EventInput]) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
+    acquire_event_insert_lock(&mut tx).await?;
+
+    for event in events {
+        sqlx::query(
+            "insert into events
+               (id, device_id, event_type, object_type, object_id, task_id, project_id,
+                occurred_at, extra)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+             on conflict (id) do nothing",
+        )
+        .bind(event.id)
+        .bind(event.device_id)
+        .bind(&event.event_type)
+        .bind(&event.object_type)
+        .bind(event.object_id)
+        .bind(event.task_id)
+        .bind(event.project_id)
+        .bind(event.occurred_at)
+        .bind(&event.extra)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+    Ok(())
+}
+
+/// The Event-shaped sibling of `fetch_comments_since`.
+async fn fetch_events_since(pool: &PgPool, since_seq: i64) -> anyhow::Result<Vec<EventOutput>> {
+    let events = sqlx::query_as::<_, EventOutput>(
+        "select id, device_id, event_type, object_type, object_id, task_id, project_id,
+                occurred_at, extra, seq
+         from events
+         where seq > $1
+         order by seq asc
+         limit $2",
+    )
+    .bind(since_seq)
+    .bind(SYNC_BATCH_SIZE)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(events)
 }
 
 #[cfg(test)]

@@ -1,4 +1,13 @@
-import type { Entry, EntryStore, Task, TaskStore } from "@meologue/core";
+import type {
+  CommentStore,
+  Entry,
+  EntryStore,
+  EventStore,
+  LabelStore,
+  ProjectStore,
+  Task,
+  TaskStore,
+} from "@meologue/core";
 import { mintId, orderKeyBetween } from "@meologue/core";
 import { useInfiniteQuery, useMutation } from "@tanstack/react-query";
 import { quickAddOptionsNow } from "@/lib/composer-editor";
@@ -51,7 +60,7 @@ function defaultPromotionContext(): ComposerPromotionContext {
  * Composer highlights recognised tokens... so it files itself" (issue
  * #173's own acceptance criterion) actually means, and it wins instead
  * — this is `??`, not an unconditional overwrite, on purpose.
- * `deadline`/`duration`/`priority`/`dateString`/`labelIds` all carry the
+ * `deadline`/`priority`/`dateString`/`labelIds` all carry the
  * parse's own resolved values unconditionally, the identical fields
  * `todo-page.tsx`'s own `handleAdd` already writes from
  * `taskFieldsFromQuickAdd` for the add field — Promotion is that same
@@ -78,19 +87,25 @@ export function promotedTaskToTask(
     content: promoted.content,
     completedAt: promoted.checked ? capturedAt : null,
     orderKey,
+    // Same starting value as orderKey (issue #182) — see use-tasks.ts's
+    // addTask own identical bootstrap for why.
+    dayOrder: orderKey,
     createdAt: capturedAt,
     seq: null,
     syncedAt: null,
     deletedAt: null,
     date: promoted.date ?? entryDayKey(capturedAt, deviceUtcOffsetMinutes()),
     deadline: promoted.deadline,
-    duration: promoted.duration,
     priority: promoted.priority,
     labelIds,
     dateString: promoted.dateString,
     projectId: null,
     sectionId: null,
     parentId: null,
+    // No Description — a Task promoted out of a checkbox line starts
+    // with the same "nothing chosen yet" state one created directly in
+    // Todo does (issue #180, @meologue/core's task-types.ts).
+    description: null,
   };
 }
 
@@ -192,6 +207,16 @@ export interface UseHistoryResult {
 export function useHistory(
   store: EntryStore,
   taskStore: TaskStore,
+  // Issue #182: needed only to pass through to requestSync's own
+  // SyncStores bag below (sync-runner.ts's own doc comment on why every
+  // stream is required there) — this hook does no read or write of its
+  // own against any of the three.
+  projectStore: ProjectStore,
+  labelStore: LabelStore,
+  commentStore: CommentStore,
+  // Issue #184: the identical "needed only to pass through to
+  // requestSync" reasoning as `commentStore` above.
+  eventStore: EventStore,
   deviceId: string,
   /**
    * `use-labels.ts`'s own `resolveLabelIds` (issue #170) — Promotion's
@@ -265,7 +290,10 @@ export function useHistory(
   // shares this same reasoning with).
   const afterLocalWrite = async () => {
     await refreshNewestEntriesPage(store);
-    void requestSync(store, taskStore, deviceId);
+    void requestSync(
+      { store, taskStore, projectStore, labelStore, commentStore, eventStore },
+      deviceId,
+    );
   };
 
   /**

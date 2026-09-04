@@ -9,13 +9,13 @@ function task(overrides: Partial<Task> = {}): Task {
     content: "content",
     completedAt: null,
     orderKey: "V",
+    dayOrder: "V",
     createdAt: "2026-01-01T00:00:00.000Z",
     seq: null,
     syncedAt: null,
     deletedAt: null,
     date: null,
     deadline: null,
-    duration: null,
     priority: 1,
     // No Labels, doesn't repeat — the same "concrete value, not a gap"
     // default packages/core/src/test-support/task-fixture.ts's own
@@ -28,6 +28,7 @@ function task(overrides: Partial<Task> = {}): Task {
     projectId: null,
     sectionId: null,
     parentId: null,
+    description: null,
     ...overrides,
   };
 }

@@ -11,12 +11,11 @@ import type { QuickAddLanguage } from "./language";
  * is not).
  *
  * **Recognition, not persistence.** This module never touches a
- * TaskStore and never validates against ../task-fields.ts's rules
- * (`assertValidDuration`'s 1440-minute cap, say) — a caller that goes on
- * to persist a QuickAddResult's fields does that through the ordinary
- * TaskStore setters, which already enforce them. Duplicating that
- * validation here would be a second place the rule could drift from the
- * first.
+ * TaskStore and never validates against ../task-fields.ts's rules — a
+ * caller that goes on to persist a QuickAddResult's fields does that
+ * through the ordinary TaskStore setters, which already enforce them.
+ * Duplicating that validation here would be a second place the rule could
+ * drift from the first.
  */
 
 /**
@@ -25,15 +24,20 @@ import type { QuickAddLanguage } from "./language";
  * parse-quick-add.ts's own header comment for the full reasoning):
  *
  * - **Sigil-marked** (`project`, `section`, `label`, `priority`,
- *   `reminder`, `deadline`, `duration`, `uncompletable`, `description`):
+ *   `reminder`, `deadline`, `uncompletable`, `description`):
  *   the user typed an explicit marker — `#`, `/`, `%`, `p1`, `!`, `{}`,
- *   `for`, a leading `* `, `//` — so there is no false-positive risk to
+ *   a leading `* `, `//` — so there is no false-positive risk to
  *   guard against. These are always recognised.
  * - **Eager/natural-language** (`date`, `time`, `recurrence`): inferred
  *   from ordinary words with no marker at all — `monday`, `5pm`,
  *   `monthly` — which is exactly the family Todoist's own "Create
  *   **monthly** report" false positive belongs to. These are the ones
  *   `smartDates: false` turns off, and the ones demotion exists for.
+ *
+ * `duration` (`for 45min`) was a third sigil-marked kind here until issue
+ * #179 removed it — Duration exists nowhere in the product any more, so
+ * `for 45min` is now just ordinary words, exactly as `for 45min` would
+ * have read before issue #169 ever added the field.
  */
 export type QuickAddTokenKind =
   | "date"
@@ -44,7 +48,6 @@ export type QuickAddTokenKind =
   | "priority"
   | "reminder"
   | "deadline"
-  | "duration"
   | "uncompletable"
   | "description"
   | "recurrence";
@@ -68,7 +71,6 @@ export type QuickAddToken =
   | (TokenBase & { kind: "priority"; priority: number })
   | (TokenBase & { kind: "reminder"; time: string | null })
   | (TokenBase & { kind: "deadline"; deadline: string })
-  | (TokenBase & { kind: "duration"; minutes: number })
   | (TokenBase & { kind: "uncompletable" })
   | (TokenBase & { kind: "description"; text: string })
   | (TokenBase & { kind: "recurrence" });
@@ -102,8 +104,6 @@ export interface QuickAddResult {
   date: string | null;
   /** `YYYY-MM-DD`, or `null` — ../task-types.ts's `Task.deadline` encoding. */
   deadline: string | null;
-  /** Minutes, uncapped — ../task-fields.ts's `assertValidDuration` cap is a persistence-time rule, not this parser's to enforce (this module's own header comment). */
-  duration: number | null;
   /** Stored 1-4 (4 most urgent) via ../task-types.ts's `storedPriorityOf` — never open-coded. Defaults to 1 ("no priority"), matching `Task.priority`'s own default. */
   priority: number;
   projectName: string | null;
@@ -148,7 +148,7 @@ export interface QuickAddOptions {
    * clean call-site distinction issue #170's Part A brief asks for,
    * instead of a flag threaded through every individual rule function.
    * Defaults to `true`. Sigil-marked tokens (`#project`, `%label`, `p1`,
-   * `!reminder`, `{deadline}`, `for 45min`, leading `* `, `//`) are
+   * `!reminder`, `{deadline}`, leading `* `, `//`) are
    * unaffected — see QuickAddTokenKind's own doc comment for why an
    * explicit marker carries no false-positive risk to turn off.
    */

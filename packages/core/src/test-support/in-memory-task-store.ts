@@ -1,18 +1,20 @@
 import { withDefaultLabelIds } from "../label-fields";
 import { compareByOrder } from "../order-key";
-import { nextOccurrence, tomorrowOf } from "../recurrence";
+import { nextOccurrenceAfterCompletion, tomorrowOf } from "../recurrence";
 import {
   assertValidDate,
   assertValidDeadline,
-  assertValidDuration,
   assertValidNestingDepth,
   assertValidPriority,
   hasTime,
   withDefaultDateString,
+  withDefaultDayOrder,
+  withDefaultDescription,
   withDefaultSchedulingFields,
   withDefaultStructureFields,
 } from "../task-fields";
-import type { TaskStore } from "../task-store";
+import { matchesSubstring, matchesWholeWord } from "../task-search";
+import type { TaskSearchOptions, TaskStore } from "../task-store";
 import type { Task } from "../task-types";
 
 /**
@@ -25,6 +27,9 @@ import type { Task } from "../task-types";
 export class InMemoryTaskStore implements TaskStore {
   private readonly tasks = new Map<string, Task>();
   private cursor = 0;
+  // Issue #186 / ADR 0057 — see EntryStore.catchUpRowShapeEpoch's own doc
+  // comment (../store.ts) for what this tracks.
+  private rowShapeEpoch = 0;
 
   async list(): Promise<Task[]> {
     // Active: not completed, not tombstoned — mirrors
@@ -108,7 +113,7 @@ export class InMemoryTaskStore implements TaskStore {
 
   async upsert(tasks: Task[]): Promise<void> {
     // withDefaultSchedulingFields — see SqliteTaskStore.upsert's identical
-    // call for why: a caller that omits date/deadline/duration/priority
+    // call for why: a caller that omits date/deadline/priority
     // (Task.priority's own doc comment on why that key is TS-optional)
     // must not leave this store holding a Task whose priority is actually
     // `undefined`, which would silently break every reader that treats
@@ -116,8 +121,12 @@ export class InMemoryTaskStore implements TaskStore {
     for (const t of tasks) {
       this.tasks.set(
         t.id,
-        withDefaultStructureFields(
-          withDefaultDateString(withDefaultLabelIds(withDefaultSchedulingFields(t))),
+        withDefaultDayOrder(
+          withDefaultDescription(
+            withDefaultStructureFields(
+              withDefaultDateString(withDefaultLabelIds(withDefaultSchedulingFields(t))),
+            ),
+          ),
         ),
       );
     }
@@ -164,6 +173,11 @@ export class InMemoryTaskStore implements TaskStore {
     this.applyIfLive(id, { orderKey, seq: null, syncedAt: null });
   }
 
+  /** Mirrors SqliteTaskStore.reorderToday() — see TaskStore.reorderToday's own doc comment. */
+  async reorderToday(id: string, dayOrder: string): Promise<void> {
+    this.applyIfLive(id, { dayOrder, seq: null, syncedAt: null });
+  }
+
   async setDate(id: string, date: string | null): Promise<void> {
     assertValidDate(date);
     this.applyIfLive(id, { date, seq: null, syncedAt: null });
@@ -172,20 +186,6 @@ export class InMemoryTaskStore implements TaskStore {
   async setDeadline(id: string, deadline: string | null): Promise<void> {
     assertValidDeadline(deadline);
     this.applyIfLive(id, { deadline, seq: null, syncedAt: null });
-  }
-
-  // Mirrors SqliteTaskStore.setDuration's ordering — a no-op against an
-  // unknown or tombstoned id happens before validation runs, not after,
-  // because "no-op against a tombstone" is unconditional (see
-  // TaskStore.setDuration's doc comment) and there's no `date` to validate
-  // a duration against for a Task that isn't live in the first place.
-  async setDuration(id: string, duration: number | null): Promise<void> {
-    const existing = this.tasks.get(id);
-    if (existing === undefined || existing.deletedAt !== null) {
-      return;
-    }
-    assertValidDuration(duration, existing.date);
-    this.applyIfLive(id, { duration, seq: null, syncedAt: null });
   }
 
   async setPriority(id: string, priority: number): Promise<void> {
@@ -197,6 +197,11 @@ export class InMemoryTaskStore implements TaskStore {
   // doc comment for why this replaces the array wholesale.
   async setLabelIds(id: string, labelIds: string[]): Promise<void> {
     this.applyIfLive(id, { labelIds, seq: null, syncedAt: null });
+  }
+
+  // Mirrors SqliteTaskStore.setDescription — see TaskStore.setDescription's own doc comment.
+  async setDescription(id: string, description: string | null): Promise<void> {
+    this.applyIfLive(id, { description, seq: null, syncedAt: null });
   }
 
   // Mirrors SqliteTaskStore.setProject — see TaskStore.setProject's own
@@ -212,7 +217,7 @@ export class InMemoryTaskStore implements TaskStore {
 
   // Mirrors SqliteTaskStore.setParent — see TaskStore.setParent's own doc
   // comment for the three shapes this refuses. Reads the target Task
-  // first, the same as setDuration/advanceRecurring above: "no-op against
+  // first, the same as complete/advanceRecurring above: "no-op against
   // a tombstone" for `id` itself is unconditional, checked before any of
   // `parentId`'s own validation runs.
   async setParent(id: string, parentId: string | null): Promise<void> {
@@ -260,7 +265,7 @@ export class InMemoryTaskStore implements TaskStore {
 
   // Mirrors SqliteTaskStore.advanceRecurring — see TaskStore.advanceRecurring's
   // own doc comment for the full reasoning. "No-op against a tombstone"
-  // is checked here the same way setDuration's own no-op check is: before
+  // is checked here the same way setParent's own no-op check is: before
   // either throw below becomes reachable.
   async advanceRecurring(id: string, completedAt: string): Promise<void> {
     const existing = this.tasks.get(id);
@@ -273,7 +278,10 @@ export class InMemoryTaskStore implements TaskStore {
       );
     }
     const now = completedAt.slice(0, 10);
-    const outcome = nextOccurrence(existing.dateString, { dueDate: existing.date, now });
+    const outcome = nextOccurrenceAfterCompletion(existing.dateString, {
+      dueDate: existing.date,
+      now,
+    });
     if (outcome.kind === "refused") {
       throw new Error(
         `Task ${id}'s stored recurrence "${existing.dateString}" no longer parses: ${outcome.reason}`,
@@ -307,7 +315,7 @@ export class InMemoryTaskStore implements TaskStore {
   }
 
   // Mirrors SqliteTaskStore.postpone — see TaskStore.postpone's own doc
-  // comment. Reads the Task first, the same as setDuration/
+  // comment. Reads the Task first, the same as setParent/
   // advanceRecurring above, to know whether `date` carries a time-of-day
   // to preserve on the new day.
   async postpone(id: string, today: string): Promise<void> {
@@ -356,20 +364,40 @@ export class InMemoryTaskStore implements TaskStore {
     this.cursor = seq;
   }
 
-  async search(query: string): Promise<Task[]> {
-    const queryTokens = tokenize(query);
-    if (queryTokens.length === 0) {
+  // Issue #186 / ADR 0057 — see EntryStore.catchUpRowShapeEpoch's own doc
+  // comment (../store.ts) for the mechanism this mirrors.
+  async catchUpRowShapeEpoch(currentEpoch: number): Promise<void> {
+    if (this.rowShapeEpoch >= currentEpoch) {
+      return;
+    }
+    this.cursor = 0;
+    this.rowShapeEpoch = currentEpoch;
+  }
+
+  // Mirrors SqliteTaskStore.search — see TaskStore.search's own doc
+  // comment for the full matching rules (issue #183) and
+  // ../task-search.ts for the shared matchers this and the SQLite store
+  // both call, so the two can't drift on what "matches" means. Unlike
+  // SqliteTaskStore, there's no FTS5 here to fast-path: this store is a
+  // plain JS scan regardless of query length, which is exactly what
+  // SqliteTaskStore's own JS fallback path already is for a query FTS5's
+  // trigram tokenizer can't see.
+  async search(query: string, options?: TaskSearchOptions): Promise<Task[]> {
+    const trimmed = query.trim();
+    if (trimmed === "") {
       return [];
     }
-    // Completed and tombstoned Tasks are both excluded — see
-    // TaskStore.search's doc comment for why a completed Task doesn't
-    // belong in "find something I still need to act on."
+    const fields = options?.fields ?? (["title", "description"] as const);
+    const includeCompleted = options?.includeCompleted ?? false;
+    const matcher = includeCompleted ? matchesWholeWord : matchesSubstring;
     const candidates = [...this.tasks.values()].filter(
-      (t) => t.completedAt === null && t.deletedAt === null,
+      (t) => t.deletedAt === null && (includeCompleted || t.completedAt === null),
     );
     return candidates
-      .filter((t) => matchesPrefixPhrase(tokenize(t.content), queryTokens))
-      .sort(compareByOrder);
+      .filter((t) =>
+        fields.some((field) => matcher(field === "title" ? t.content : t.description, trimmed)),
+      )
+      .sort(byCreatedThenId);
   }
 
   // A local mutation against an unknown or already-tombstoned id is a
@@ -386,31 +414,15 @@ export class InMemoryTaskStore implements TaskStore {
   }
 }
 
-// Mirrors the SQLite store's FTS5 unicode61 tokenizer closely enough for
-// the shared contract to assert the same behaviour against both — see
-// ./in-memory-entry-store.ts's identical pair of helpers, duplicated
-// rather than shared, for the same reason that file's tokenizer isn't
-// exported: it's a small, store-local mirror of SQLite's own tokenizer,
-// not a shared implementation the two stores both depend on.
-function tokenize(text: string): string[] {
-  return text
-    .toLowerCase()
-    .split(/[^\p{L}\p{N}]+/u)
-    .filter((token) => token.length > 0);
-}
-
-function matchesPrefixPhrase(bodyTokens: string[], queryTokens: string[]): boolean {
-  const lastQueryToken = queryTokens.length - 1;
-  for (let start = 0; start <= bodyTokens.length - queryTokens.length; start++) {
-    const window = bodyTokens.slice(start, start + queryTokens.length);
-    const matchesHere = queryTokens.every((queryToken, offset) =>
-      offset === lastQueryToken
-        ? window[offset]?.startsWith(queryToken)
-        : window[offset] === queryToken,
-    );
-    if (matchesHere) {
-      return true;
-    }
+// Creation order — search()'s own ordering (TaskStore.search's doc
+// comment, issue #183), distinct from list()'s manual compareByOrder.
+// Task ids are time-ordered uuidv7 (../id.ts), so the id tie-break orders
+// a same-millisecond pair the same way createdAt itself would if it had
+// finer resolution — mirrors listCompleted()'s own tie-break above, just
+// ascending instead of descending.
+function byCreatedThenId(a: Task, b: Task): number {
+  if (a.createdAt !== b.createdAt) {
+    return a.createdAt < b.createdAt ? -1 : 1;
   }
-  return false;
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }

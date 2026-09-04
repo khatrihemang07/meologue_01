@@ -2154,8 +2154,8 @@ mod tests {
         deadline: Option<&str>,
     ) {
         sqlx::query(
-            "insert into tasks (id, device_id, content, completed_at, order_key, created_at, date, deadline) \
-             values ($1, $2, $3, $4, 'a', now(), $5, $6)",
+            "insert into tasks (id, device_id, content, completed_at, order_key, day_order, created_at, date, deadline) \
+             values ($1, $2, $3, $4, 'a', 'a', now(), $5, $6)",
         )
         .bind(id)
         .bind(Uuid::new_v4())

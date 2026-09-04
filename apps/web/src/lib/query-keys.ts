@@ -195,3 +195,39 @@ export const PROJECTS_QUERY_KEY = ["projects"] as const;
 export function sectionsQueryKey(projectId: string) {
   return ["sections", projectId] as const;
 }
+
+/**
+ * Issue #180: every live Comment across every Task (CommentStore.list()),
+ * read by use-comments.ts. Flat and unpaginated, mirroring
+ * LABELS_QUERY_KEY — a personal task list's own Comments sit at the same
+ * scale Labels and Tasks themselves already do, not History's (ADR
+ * 0016's own reasoning for why *that* list() gained paging). One key for
+ * the whole app rather than one per Task: task-row.tsx's own
+ * comment-count badge needs every Task's count at once, and the Task
+ * detail view's own thread narrows this same list to one Task's Comments
+ * client-side (comment-counts.ts's `commentsForTask`) rather than this
+ * file growing a second, per-Task key the way `taskChildrenQueryKey`
+ * exists for Tasks — a personal Comment list is small enough that a
+ * second round trip buys nothing list() itself doesn't already have in
+ * memory.
+ */
+export const COMMENTS_QUERY_KEY = ["comments"] as const;
+
+/**
+ * Issue #184: every Event across the whole app (EventStore.list()), read
+ * by use-events.ts — the view across everything (CONTEXT.md's Event
+ * entry). Flat and unpaginated, mirroring COMMENTS_QUERY_KEY: a personal
+ * task list's own activity log sits at the same scale Comments already
+ * do, and retention is unlimited (issue #184's own acceptance
+ * criterion), not paged the way History's ENTRIES_QUERY_KEY is.
+ */
+export const EVENTS_QUERY_KEY = ["events"] as const;
+
+/**
+ * Issue #185: every active Filter (FilterStore.list()), read by
+ * use-filters.ts. Flat and unpaginated, mirroring LABELS_QUERY_KEY — a
+ * personal task list's own saved Filters sit at the same small scale
+ * Labels and Projects already do, and there is no archived/active split
+ * the way COMPLETED_TASKS_QUERY_KEY exists for Tasks.
+ */
+export const FILTERS_QUERY_KEY = ["filters"] as const;

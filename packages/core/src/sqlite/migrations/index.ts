@@ -5,6 +5,13 @@ import taskSchedulingFields from "./0003_task_scheduling_fields.sql?raw";
 import labelsTable from "./0004_labels_table.sql?raw";
 import taskRecurrenceString from "./0005_task_recurrence_string.sql?raw";
 import projectsSections from "./0006_projects_sections.sql?raw";
+import dropTaskDuration from "./0007_drop_task_duration.sql?raw";
+import taskDescription from "./0008_task_description.sql?raw";
+import commentsTable from "./0009_comments_table.sql?raw";
+import taskDayOrder from "./0010_task_day_order.sql?raw";
+import tasksFtsTrigram from "./0011_tasks_fts_trigram.sql?raw";
+import eventsTable from "./0012_events_table.sql?raw";
+import filtersTable from "./0013_filters_table.sql?raw";
 import entriesSearchIndex from "./entries_search_index.sql?raw";
 import tasksSearchIndex from "./tasks_search_index.sql?raw";
 
@@ -131,6 +138,97 @@ export interface Migration {
  * `duplicate column name` swallow, migration 6's template. All of this
  * migration's `CREATE INDEX` statements are `IF NOT EXISTS` for the same
  * reason every other index-creating statement in this file is.
+ *
+ * `0007_drop_task_duration` (version 10, issue #179) drops `tasks.duration`
+ * — the field existed to serve calendar and time-blocking views this app
+ * never built, so it had nowhere to be. A single `ALTER TABLE tasks DROP
+ * COLUMN duration`, hand-written rather than `drizzle-kit generate` output
+ * for the same stale-`meta/`-snapshot reason every migration since
+ * `0004_labels_table` has been. SQLite has no `IF EXISTS` form for `DROP
+ * COLUMN` either, so idempotence leans on the identical statement-level
+ * technique migration 3 established for `ADD COLUMN`, mirrored in the
+ * opposite direction: ../migrator.ts's own `NO_SUCH_COLUMN` swallows the
+ * error a second run throws once the column is already gone, the same way
+ * `DUPLICATE_COLUMN_NAME` already covers the add-side error. Not to be
+ * confused with ../../recurrence/rule.ts's `durationBound` — a
+ * recurrence's own end bound (`every day for 3 weeks`) — which was never a
+ * column on this table and is untouched by this migration.
+ *
+ * `0008_task_description` (version 11, issue #180) is a single
+ * `ALTER TABLE tasks ADD description text`, hand-written for the same
+ * stale-`meta/`-snapshot reason every migration since `0004_labels_table`
+ * has been, leaning on ../migrator.ts's `duplicate column name` swallow,
+ * migration 6's template.
+ *
+ * `0009_comments_table` (version 12, issue #180) adds a fourth root
+ * noun's own table, `comments` — representable in ../schema.ts, so
+ * `CREATE TABLE IF NOT EXISTS` covers it the ordinary way, migration 4's
+ * own template, plus one `CREATE INDEX IF NOT EXISTS` for the same
+ * reason every other index-creating statement in this file is. Sequenced
+ * after `0008_task_description` even though both ship in the same
+ * ticket, for the identical "each migration's blast radius stays the one
+ * thing it's actually adding" reasoning every migration above already
+ * follows: a Task gaining a column and a new table existing are two
+ * different things, not one.
+ *
+ * `0010_task_day_order` (version 13, issue #182) adds `tasks.day_order` — a
+ * second, independent fractional index for Today's own manual order
+ * (../../task-types.ts's own `dayOrder` doc comment). Two statements: an
+ * `ALTER TABLE ADD COLUMN` leaning on the identical `duplicate column name`
+ * swallow every other `ADD COLUMN` migration here already relies on, then
+ * an `UPDATE ... WHERE day_order IS NULL` backfill — the same guarded-
+ * backfill-needs-no-transaction shape `entries_search_index`'s own header
+ * comment describes, applied to an ordinary table instead of an FTS5 one.
+ * The column carries no SQL-level `NOT NULL` (unlike `priority`'s own
+ * `ADD COLUMN ... DEFAULT 1 NOT NULL`, migration 6): its backfill value is
+ * computed from another column (`order_key`), which `DEFAULT` can't
+ * express, so the guarantee that every row ends up with a real value comes
+ * from the backfill statement running unconditionally on every open,
+ * rather than from a constraint SQLite would enforce on write.
+ *
+ * `0011_tasks_fts_trigram` (version 14, issue #183) rebuilds `tasks_fts`
+ * with `tokenize='trigram'` instead of the `unicode61` migration 5 gave it,
+ * and adds a second FTS5 table, `task_descriptions_fts`, indexing
+ * `tasks.description` the same way — both maintained through
+ * SqliteTaskStore's existing `indexForSearch`/`reindexFromCurrentState`
+ * seam (../sqlite-task-store.ts), not a second write path. A `CREATE
+ * VIRTUAL TABLE` can't be altered in place once shipped (ADR 0014's own
+ * Consequences said so explicitly), so changing `tasks_fts`'s tokenizer
+ * means `DROP TABLE IF EXISTS` then `CREATE VIRTUAL TABLE IF NOT EXISTS`
+ * with the new tokenizer, then re-backfilling from `tasks` — the same
+ * `WHERE id NOT IN (...)` guard `tasks_search_index.sql` already uses,
+ * now also excluding a tombstone's blanked `content`/`description`
+ * (ADR 0014's Amendment: nothing worth matching a Search against). This
+ * three-statement shape (drop, create, backfill) is still safe to re-run
+ * from the top on an interrupted process: `DROP TABLE IF EXISTS` no-ops
+ * once the table is already gone, `CREATE VIRTUAL TABLE IF NOT EXISTS`
+ * no-ops once it's already recreated, and the backfill's own guard is
+ * unaffected either way — there is nothing partial for a second run to
+ * collide with. `task_descriptions_fts` is a second, independent virtual
+ * table rather than a second column on `tasks_fts` itself, so that a
+ * query against one field can never accidentally see a match that only
+ * exists in the other — see task-search.ts's own header comment for why
+ * that separation is load-bearing, not incidental.
+ *
+ * `0012_events_table` (version 15, issue #184) adds a sixth root noun's
+ * own table, `events` — Todo's own activity log (ADR 0056). `CREATE TABLE
+ * IF NOT EXISTS` covers it the ordinary way, `0009_comments_table`'s own
+ * template, plus three `CREATE INDEX IF NOT EXISTS` statements for the
+ * same reason every other index-creating statement in this file is.
+ * Unlike every table before it, `events` has no `deleted_at` column: an
+ * Event is never edited or removed once written
+ * (../../event-types.ts's own header comment), so there is no "nothing"
+ * state a tombstone would need to represent.
+ *
+ * `0013_filters_table` (version 16, issue #185) adds a seventh root
+ * noun's own table, `filters` — CONTEXT.md's Filter entry, "a saved
+ * query over Tasks," the last of the glossary's terms to get one.
+ * `CREATE TABLE IF NOT EXISTS` covers it the ordinary way,
+ * `0012_events_table`'s own template, plus one `CREATE INDEX IF NOT
+ * EXISTS` for the same reason every other index-creating statement in
+ * this file is. Unlike `events`, `filters` does carry `deleted_at` — a
+ * Filter can be removed the same tombstoned way a Label or Project can
+ * (../filter-store.ts's own `remove()`).
  */
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, sql: initial },
@@ -142,4 +240,11 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 7, sql: taskRecurrenceString },
   { version: 8, sql: labelsTable },
   { version: 9, sql: projectsSections },
+  { version: 10, sql: dropTaskDuration },
+  { version: 11, sql: taskDescription },
+  { version: 12, sql: commentsTable },
+  { version: 13, sql: taskDayOrder },
+  { version: 14, sql: tasksFtsTrigram },
+  { version: 15, sql: eventsTable },
+  { version: 16, sql: filtersTable },
 ];

@@ -1,5 +1,6 @@
-import { expect, type Request, test } from "@playwright/test";
+import type { Request } from "@playwright/test";
 import { SERVER_A_URL } from "../servers";
+import { expect, test } from "./fixtures";
 import { openDestination, SYNC_TICK_MS, sendEntry, uniqueEntryBody } from "./helpers";
 
 // ADR 0011: an unset Server URL means sync is off, not "attempt and fail" —

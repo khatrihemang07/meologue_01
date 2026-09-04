@@ -354,6 +354,59 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
     });
   });
 
+  describe("reorderToday()", () => {
+    it("changes dayOrder and clears seq, leaving orderKey untouched", async () => {
+      const synced = task({ id: "a", orderKey: "project-position", dayOrder: "m", seq: 5 });
+      await store.upsert([synced]);
+
+      const newDayOrder = orderKeyBetween(null, "m");
+      await store.reorderToday("a", newDayOrder);
+
+      const [found] = await store.list();
+      expect(found).toMatchObject({
+        id: "a",
+        dayOrder: newDayOrder,
+        orderKey: "project-position",
+        seq: null,
+      });
+    });
+
+    // The reverse of the guarantee above, and the one this issue's own
+    // acceptance criterion names explicitly: dragging a Task in its
+    // Project must never move it inside Today, and dragging it in Today
+    // must never move it inside its Project.
+    it("reorder() (a Project drag) leaves dayOrder untouched, the reverse of reorderToday()", async () => {
+      const synced = task({ id: "a", orderKey: "m", dayOrder: "today-position", seq: 5 });
+      await store.upsert([synced]);
+
+      const newOrderKey = orderKeyBetween(null, "m");
+      await store.reorder("a", newOrderKey);
+
+      const [found] = await store.list();
+      expect(found).toMatchObject({
+        id: "a",
+        orderKey: newOrderKey,
+        dayOrder: "today-position",
+        seq: null,
+      });
+    });
+
+    it("touches only the reordered Task — every sibling's dayOrder and seq are untouched", async () => {
+      const a = task({ id: "a", dayOrder: "a", seq: 1 });
+      const b = task({ id: "b", dayOrder: "b", seq: 2 });
+      const c = task({ id: "c", dayOrder: "c", seq: 3 });
+      await store.upsert([a, b, c]);
+
+      await store.reorderToday("c", orderKeyBetween(null, "a"));
+
+      const found = await store.list();
+      const byId = new Map(found.map((t) => [t.id, t]));
+      expect(byId.get("a")).toEqual(a);
+      expect(byId.get("b")).toEqual(b);
+      expect(byId.get("c")).toMatchObject({ id: "c" });
+    });
+  });
+
   describe("setDate()", () => {
     it("changes date and clears seq", async () => {
       await store.upsert([task({ id: "a", seq: 5 })]);
@@ -419,53 +472,6 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
     });
   });
 
-  describe("setDuration()", () => {
-    it("changes duration (minutes) and clears seq, given a Task with a timed date", async () => {
-      await store.upsert([task({ id: "a", date: "2026-01-05T09:00", seq: 5 })]);
-
-      await store.setDuration("a", 30);
-
-      const [found] = await store.list();
-      expect(found).toMatchObject({ id: "a", duration: 30, seq: null });
-    });
-
-    it("clears the duration back to null", async () => {
-      await store.upsert([task({ id: "a", date: "2026-01-05T09:00", duration: 30, seq: 5 })]);
-
-      await store.setDuration("a", null);
-
-      const [found] = await store.list();
-      expect(found).toMatchObject({ id: "a", duration: null, seq: null });
-    });
-
-    it("refuses a duration on a Task with no date at all", async () => {
-      await store.upsert([task({ id: "a", date: null, seq: 1 })]);
-
-      await expect(store.setDuration("a", 30)).rejects.toThrow();
-    });
-
-    it("refuses a duration on an all-day Task — there's nothing to measure a length from without a time", async () => {
-      await store.upsert([task({ id: "a", date: "2026-01-05", seq: 1 })]);
-
-      await expect(store.setDuration("a", 30)).rejects.toThrow();
-    });
-
-    it("refuses a duration over 24 hours (1440 minutes)", async () => {
-      await store.upsert([task({ id: "a", date: "2026-01-05T09:00", seq: 1 })]);
-
-      await expect(store.setDuration("a", 1441)).rejects.toThrow();
-    });
-
-    it("accepts exactly 1440 minutes — the cap is inclusive", async () => {
-      await store.upsert([task({ id: "a", date: "2026-01-05T09:00", seq: 1 })]);
-
-      await store.setDuration("a", 1440);
-
-      const [found] = await store.list();
-      expect(found).toMatchObject({ duration: 1440 });
-    });
-  });
-
   describe("setPriority()", () => {
     it("changes priority and clears seq", async () => {
       await store.upsert([task({ id: "a", seq: 5 })]);
@@ -519,6 +525,26 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
 
       const [found] = await store.list();
       expect(found?.labelIds).toEqual(["c", "a", "b"]);
+    });
+  });
+
+  describe("setDescription() — issue #180", () => {
+    it("changes description and clears seq", async () => {
+      await store.upsert([task({ id: "a", seq: 5 })]);
+
+      await store.setDescription("a", "some *markdown* text");
+
+      const [found] = await store.list();
+      expect(found).toMatchObject({ id: "a", description: "some *markdown* text", seq: null });
+    });
+
+    it("clears description back to null", async () => {
+      await store.upsert([task({ id: "a", description: "already has one", seq: 5 })]);
+
+      await store.setDescription("a", null);
+
+      const [found] = await store.list();
+      expect(found).toMatchObject({ description: null });
     });
   });
 
@@ -808,7 +834,7 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
 
     // Every local mutation against a tombstone is a no-op — no
     // resurrection, no matter which door a caller tries.
-    it("complete(), uncomplete(), rename(), reorder(), the four #169 setters, setLabelIds(), the three #171 setters, advanceRecurring(), completeForever() and postpone() are all no-ops against a tombstone", async () => {
+    it("complete(), uncomplete(), rename(), reorder(), the three #169 setters, setLabelIds(), the three #171 setters, setDescription(), advanceRecurring(), completeForever() and postpone() are all no-ops against a tombstone", async () => {
       await store.upsert([task({ id: "a", content: "something", seq: 1, orderKey: "m" })]);
       await store.remove("a");
 
@@ -818,14 +844,11 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
       await store.reorder("a", orderKeyBetween(null, "m"));
       await store.setDate("a", "2026-01-05");
       await store.setDeadline("a", "2026-01-10");
-      // setDuration's own no-op check runs before its date-shape
-      // validation (its doc comment explains why), so this doesn't throw
-      // even though the live Task above was never given a timed date.
-      await store.setDuration("a", 30);
       await store.setPriority("a", 4);
       await store.setLabelIds("a", ["work"]);
       await store.setProject("a", "some-project");
       await store.setSection("a", "some-section");
+      await store.setDescription("a", "trying to bring it back");
       // setParent's own no-op check runs before its parent-existence
       // check, so this doesn't throw even though "not-a-real-parent" was
       // never created.
@@ -890,27 +913,101 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
     expect(await store.getCursor()).toBe(7);
   });
 
-  describe("search()", () => {
-    it("matches by a word prefix", async () => {
+  // Issue #186 / ADR 0057 — see EntryStore.catchUpRowShapeEpoch's own doc
+  // comment (../store.ts) for the mechanism these pin.
+  describe("catchUpRowShapeEpoch", () => {
+    it("does nothing for a Device that has never synced this stream", async () => {
+      expect(await store.getCursor()).toBe(0);
+
+      await store.catchUpRowShapeEpoch(1);
+
+      expect(await store.getCursor()).toBe(0);
+    });
+
+    it("resets an already-advanced Cursor to 0 the first time it sees a higher epoch", async () => {
+      await store.setCursor(50);
+
+      await store.catchUpRowShapeEpoch(1);
+
+      expect(await store.getCursor()).toBe(0);
+    });
+
+    it("is idempotent: catching up to the same epoch again does not reset a Cursor that has since advanced", async () => {
+      await store.catchUpRowShapeEpoch(1);
+      await store.setCursor(50);
+
+      await store.catchUpRowShapeEpoch(1);
+
+      expect(await store.getCursor()).toBe(50);
+    });
+
+    it("does not reset when asked to catch up to an epoch no higher than one already recorded", async () => {
+      await store.catchUpRowShapeEpoch(2);
+      await store.setCursor(50);
+
+      await store.catchUpRowShapeEpoch(1);
+
+      expect(await store.getCursor()).toBe(50);
+    });
+  });
+
+  describe("search() (issue #183)", () => {
+    it("matches a fragment from the middle of a word, not just a prefix", async () => {
       const shopping = task({ id: "a", content: "buy groceries", orderKey: "a" });
       const other = task({ id: "b", content: "call the dentist", orderKey: "b" });
       await store.upsert([shopping, other]);
 
       expect((await store.search("groc")).map((t) => t.id)).toEqual(["a"]);
+      // The headline change: a fragment from the *middle* of a word
+      // — not just a prefix — now finds the Task, unlike this method's
+      // pre-#183 prefix-only shape.
+      expect((await store.search("uildz")).map((t) => t.id)).toEqual([]);
+      await store.upsert([task({ id: "c", content: "Buildzzzing" })]);
+      expect((await store.search("uildz")).map((t) => t.id)).toEqual(["c"]);
     });
 
-    it("does not match a word that merely contains the query, not as a prefix", async () => {
-      await store.upsert([task({ id: "a", content: "a recurring task" })]);
+    it("ignores case and folds accents", async () => {
+      await store.upsert([task({ id: "a", content: "grab a café" })]);
 
-      expect(await store.search("urring")).toEqual([]);
+      expect((await store.search("CAFE")).map((t) => t.id)).toEqual(["a"]);
+
+      await store.upsert([task({ id: "b", content: "résumé writing" })]);
+      expect((await store.search("resume")).map((t) => t.id)).toEqual(["b"]);
     });
 
-    it("treats quotes, wildcards and boolean-looking words as literal text, never throwing", async () => {
-      await store.upsert([task({ id: "a", content: 'AND OR NOT "quoted" * text' })]);
+    it("requires every word, in any order, but never assembled from more than one word boundary", async () => {
+      const both = task({ id: "a", content: "BetaqqZ AlphaqqZ task" });
+      const onlyOne = task({ id: "b", content: "AlphaqqZ only" });
+      await store.upsert([both, onlyOne]);
 
-      expect((await store.search('AND OR NOT "quoted" *')).map((t) => t.id)).toEqual(["a"]);
-      await expect(store.search('he said "hello')).resolves.toEqual([]);
-      await expect(store.search("!!!")).resolves.toEqual([]);
+      expect((await store.search("AlphaqqZ BetaqqZ")).map((t) => t.id)).toEqual(["a"]);
+      expect((await store.search("BetaqqZ AlphaqqZ")).map((t) => t.id)).toEqual(["a"]);
+    });
+
+    it("treats a quote as a literal character, never a phrase operator", async () => {
+      await store.upsert([task({ id: "a", content: "a b" })]);
+
+      // The whole string, quote marks included, is matched literally —
+      // this content has no literal `"`, so it matches nothing, exactly
+      // as a real Todoist was observed doing (issue #183's own
+      // reference-behaviour research: quoting a query does not make it a
+      // phrase search).
+      expect(await store.search('"a b"')).toEqual([]);
+    });
+
+    it("matches punctuation literally rather than stripping it", async () => {
+      await store.upsert([task({ id: "a", content: "Test-Punct! 🎉 Task" })]);
+
+      expect(await store.search("TestPunct")).toEqual([]);
+      // Each whitespace-separated word is still matched independently.
+      expect((await store.search("punct task")).map((t) => t.id)).toEqual(["a"]);
+    });
+
+    it("has no minimum query length — a 1- or 2-character query still matches", async () => {
+      await store.upsert([task({ id: "a", content: "ok" })]);
+
+      expect((await store.search("o")).map((t) => t.id)).toEqual(["a"]);
+      expect((await store.search("ok")).map((t) => t.id)).toEqual(["a"]);
     });
 
     it("treats an empty or whitespace-only query as matching nothing", async () => {
@@ -920,7 +1017,7 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
       expect(await store.search("   ")).toEqual([]);
     });
 
-    it("excludes a completed Task", async () => {
+    it("excludes a completed Task by default", async () => {
       await store.upsert([task({ id: "a", content: "a recurring task", seq: 1 })]);
 
       await store.complete("a", "2026-01-05T00:00:00.000Z");
@@ -928,12 +1025,110 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
       expect(await store.search("recur")).toEqual([]);
     });
 
-    it("excludes a tombstoned Task", async () => {
+    it("excludes a tombstoned Task, even with includeCompleted", async () => {
       await store.upsert([task({ id: "a", content: "a recurring task", seq: 1 })]);
 
       await store.remove("a");
 
       expect(await store.search("recur")).toEqual([]);
+      expect(await store.search("recur", { includeCompleted: true })).toEqual([]);
+    });
+
+    it("rename() updates what a rename search matches, substring included", async () => {
+      await store.upsert([task({ id: "a", content: "old wording", seq: 1 })]);
+
+      await store.rename("a", "brand new phrasing");
+
+      expect((await store.search("phras")).map((t) => t.id)).toEqual(["a"]);
+      expect(await store.search("wording")).toEqual([]);
+    });
+
+    it("orders results by creation order, not manual orderKey order", async () => {
+      const first = task({
+        id: "a",
+        content: "match me",
+        orderKey: "z",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      });
+      const second = task({
+        id: "b",
+        content: "match me too",
+        orderKey: "a",
+        createdAt: "2026-01-02T00:00:00.000Z",
+      });
+      await store.upsert([first, second]);
+
+      expect((await store.search("match")).map((t) => t.id)).toEqual(["a", "b"]);
+    });
+
+    describe("a Task's Description", () => {
+      it("a word only in the Description finds the Task", async () => {
+        const withDescription = task({
+          id: "a",
+          content: "plan the trip",
+          description: "remember the passports",
+        });
+        await store.upsert([withDescription]);
+
+        expect((await store.search("passport")).map((t) => t.id)).toEqual(["a"]);
+      });
+
+      it("does not span the title and the Description in one query", async () => {
+        const task1 = task({
+          id: "a",
+          content: "desc-task",
+          description: "carries uniqbetaword here",
+        });
+        await store.upsert([task1]);
+
+        // "desc-task" is only in the title, "uniqbetaword" only in the
+        // Description — issue #183's own reference-behaviour research
+        // measured a real Todoist returning no match here, a kept quirk
+        // rather than something this store smooths over.
+        expect(await store.search("desc-task uniqbetaword")).toEqual([]);
+      });
+
+      it("fields option narrows search to just the title, excluding the Description", async () => {
+        const task1 = task({ id: "a", content: "plain title", description: "hidden phrase" });
+        await store.upsert([task1]);
+
+        expect(await store.search("hidden", { fields: ["title"] })).toEqual([]);
+        expect(
+          (await store.search("hidden", { fields: ["description"] })).map((t) => t.id),
+        ).toEqual(["a"]);
+      });
+    });
+
+    describe("includeCompleted — whole-word matching only", () => {
+      it("excludes a completed Task unless includeCompleted is set", async () => {
+        await store.upsert([task({ id: "a", content: "uniqzetaword", seq: 1 })]);
+        await store.complete("a", "2026-01-05T00:00:00.000Z");
+
+        expect(await store.search("uniqzetaword")).toEqual([]);
+        expect(
+          (await store.search("uniqzetaword", { includeCompleted: true })).map((t) => t.id),
+        ).toEqual(["a"]);
+      });
+
+      it("a substring fragment no longer matches a completed Task once includeCompleted is set", async () => {
+        await store.upsert([task({ id: "a", content: "uniqzetaword", seq: 1 })]);
+        await store.complete("a", "2026-01-05T00:00:00.000Z");
+
+        expect(await store.search("zetaword", { includeCompleted: true })).toEqual([]);
+        expect(
+          (await store.search("uniqzetaword", { includeCompleted: true })).map((t) => t.id),
+        ).toEqual(["a"]);
+      });
+
+      it("also switches an active Task's own match to whole-word only", async () => {
+        await store.upsert([task({ id: "a", content: "uniqzetaword" })]);
+
+        expect((await store.search("zetaword")).map((t) => t.id)).toEqual(["a"]);
+        expect(await store.search("zetaword", { includeCompleted: true })).toEqual([]);
+        expect(
+          (await store.search("uniqzetaword", { includeCompleted: true })).map((t) => t.id),
+        ).toEqual(["a"]);
+      });
     });
   });
 }

@@ -1,6 +1,37 @@
 import type { Task } from "./task-types";
 
 /**
+ * search()'s own options (issue #183). Both are additive narrowings of the
+ * default — omitting either keeps `search`'s pre-#183 shape (title and
+ * Description, active Tasks only) exactly as its own doc comment below
+ * still describes as the default.
+ */
+export interface TaskSearchOptions {
+  /**
+   * Which of a Task's own fields to match against — defaults to both.
+   * `["title"]` is what apps/web's Quick-find dropdown passes (issue
+   * #183's own reference-behaviour finding: the dropdown matches Task
+   * titles only, never a Description, unlike the full search page). Every
+   * word of the query still has to be satisfied within *one* field for a
+   * Task to match — see `search`'s own doc comment on why a field named
+   * here never spans into another one also named here.
+   */
+  fields?: readonly ("title" | "description")[];
+  /**
+   * Opt in to completed Tasks, excluded by default (`search`'s own doc
+   * comment explains why). **Switches every result in this call to
+   * whole-word matching**, not merely the completed rows it adds — issue
+   * #183's own reference-behaviour research measured this against a real
+   * Todoist and found it applies uniformly, not just to the newly-included
+   * completed rows: "Searching for partial keywords won't match completed
+   * tasks" is Todoist's own documented wording for it. Replicated
+   * faithfully here rather than smoothed into "just search substrings a
+   * little wider," which is not what was observed.
+   */
+  includeCompleted?: boolean;
+}
+
+/**
  * The Task-shaped sibling of EntryStore (./store.ts) — a second store
  * interface beside it, not a widening of it (ADR 0047: `EntryStore` is
  * Entry-specific down to its method names, `list`/`upsert`/`pending`/
@@ -149,6 +180,16 @@ export interface TaskStore {
    */
   reorder(id: string, orderKey: string): Promise<void>;
   /**
+   * Changes `dayOrder` and clears `seq` — the Today-shaped sibling of
+   * reorder() above (issue #182, ADR 0050 reused a second time). Writes
+   * exactly one row, for the identical reason reorder() does: dragging a
+   * Task in Today never touches `orderKey`, and dragging it in a Project
+   * never touches `dayOrder` — the two fractional indices are independent
+   * columns on the same row, each written by its own setter. No-op
+   * against a tombstone.
+   */
+  reorderToday(id: string, dayOrder: string): Promise<void>;
+  /**
    * Sets `date` and clears `seq` (issue #169) — mirrors rename()'s doc
    * comment for why this is its own method rather than upsert() with a
    * mutated Task: ./task-fields.ts's assertValidDate is what refuses a
@@ -169,16 +210,6 @@ export interface TaskStore {
    * tombstone.
    */
   setDeadline(id: string, deadline: string | null): Promise<void>;
-  /**
-   * Sets `duration` (minutes) and clears `seq`. Refuses (throws) a
-   * duration on a Task whose *current* `date` doesn't carry a time, and
-   * refuses one over 1440 (24 hours) — ./task-fields.ts's
-   * assertValidDuration. Checked against the Task's current `date`, not a
-   * `date` this same call might also be setting: change both by calling
-   * setDate() then setDuration(), in that order. `null` clears the
-   * duration. No-op against a tombstone.
-   */
-  setDuration(id: string, duration: number | null): Promise<void>;
   /**
    * Sets `priority` and clears `seq`. Refuses (throws) anything outside
    * 1-4 — ./task-fields.ts's assertValidPriority. Unlike the other three
@@ -218,7 +249,7 @@ export interface TaskStore {
    * the Task filed into a Section of the *new* Project calls setSection()
    * as a deliberate second step, exactly as setTaskDate's own doc comment
    * (apps/web's use-tasks.ts) already documents a similar two-step
-   * pattern for `date`/`duration`. No validation of `projectId` itself
+   * pattern for `date`/`deadline`. No validation of `projectId` itself
    * against ProjectStore — this is the identical accepted, transient
    * dangling-reference state `labelIds`' own doc comment names, applied
    * here for the same reason: cross-store validation would need the
@@ -255,14 +286,31 @@ export interface TaskStore {
    */
   setParent(id: string, parentId: string | null): Promise<void>;
   /**
+   * Sets `description` and clears `seq` (issue #180) — mirrors
+   * setLabelIds' own doc comment for why this is its own method rather
+   * than upsert() with a mutated Task: a caller building its own patch
+   * object has no way to know it must no-op against a tombstone, the
+   * trap every setter here guards against. `null` clears the
+   * Description back to "nothing chosen yet," the same state a Task
+   * created directly in Todo starts in. No validation beyond the string
+   * shape itself — a Description is Markdown text, and this store has no
+   * more business refusing one shape of it than TaskStore.rename refuses
+   * a `content` it doesn't like. No-op against a tombstone.
+   */
+  setDescription(id: string, description: string | null): Promise<void>;
+  /**
    * Advances a recurring Task to its next occurrence (issue #170's
    * recurrence engine, ../recurrence/) instead of completing it — a
    * recurring Task's checkbox never "un-ticks itself," and the Task never
    * enters the completed list (CONTEXT.md's Recurrence entry): only
    * `date` moves, `completedAt` stays null. `dateString` is re-parsed
-   * fresh on every call, via ../recurrence/'s nextOccurrence, rather than
-   * incrementing whatever `date` already holds — the string, not the
-   * date it last resolved to, is what this project treats as the truth.
+   * fresh on every call, via ../recurrence/'s nextOccurrenceAfterCompletion,
+   * rather than incrementing whatever `date` already holds — the string,
+   * not the date it last resolved to, is what this project treats as the
+   * truth. (A Task's very *first* occurrence, when the recurrence is
+   * given rather than completed, goes through ../recurrence/'s
+   * firstOccurrence instead — a different question with a different
+   * floor, issue #191 — but this method is never the one asking it.)
    *
    * `completedAt` is a real timestamp, exactly like complete()'s own
    * parameter above — this is a completion event even though it doesn't
@@ -284,7 +332,7 @@ export interface TaskStore {
    * outcome — data that reached this Device already corrupted, rather
    * than something this method can silently paper over). No-op against a
    * tombstone or an unknown id — checked before either throw becomes
-   * reachable, the same ordering setDuration's own doc comment explains
+   * reachable, the same ordering setDeadline's own doc comment explains
    * for the identical reason. Clears `seq`.
    */
   advanceRecurring(id: string, completedAt: string): Promise<void>;
@@ -338,17 +386,37 @@ export interface TaskStore {
   getCursor(): Promise<number>;
   setCursor(seq: number): Promise<void>;
   /**
-   * Prefix search over `content`, literal text never query syntax
-   * (EntryStore.search's own guarantees — quotes, `*`, and AND/OR/NOT in
-   * the query are matched as literal characters, not parsed). An empty or
-   * whitespace-only query matches nothing.
-   *
-   * Excludes both tombstoned and *completed* Tasks. A completed Task is
-   * deliberately not searchable: Todo's search is "find something I still
-   * need to act on," not a general archive query, and a completed Task
-   * that resurfaced here would read as still-open to anyone who found it
-   * this way. (A completed Task remains reachable through
-   * listCompleted().)
+   * Issue #186 / ADR 0057 — see `EntryStore.catchUpRowShapeEpoch`'s own
+   * doc comment (./store.ts) for the mechanism; `currentEpoch` here is
+   * `protocol.ts`'s `ROW_SHAPE_EPOCH.tasks`, compared and persisted
+   * independently of every other stream's own value.
    */
-  search(query: string): Promise<Task[]>;
+  catchUpRowShapeEpoch(currentEpoch: number): Promise<void>;
+  /**
+   * Substring search over a Task's own title (`content`) and/or
+   * Description (issue #183, superseding this method's original prefix-
+   * only shape from issue #37/#168) — literal text never query syntax
+   * (quotes, punctuation and boolean-looking words are matched as literal
+   * characters, never parsed, the same guarantee EntryStore.search
+   * already gives), case-insensitive and diacritic-folded (`cafe` matches
+   * `café`). Every whitespace-separated word of the query has to appear
+   * *somewhere* in the same field, in any order — `uildz` matches
+   * `Buildzzzing`, and `beta alpha` matches a title containing both words
+   * in either order — but **a match can never be assembled by combining a
+   * word found in the title with a word found only in the Description**:
+   * each field is checked on its own, exactly as issue #183's own
+   * reference-behaviour research measured a real Todoist doing (a
+   * deliberately-kept quirk, not an oversight — see task-search.ts's own
+   * header comment). An empty or whitespace-only query matches nothing.
+   *
+   * Excludes both tombstoned and *completed* Tasks by default. A completed
+   * Task is deliberately not searchable this way: Todo's search is "find
+   * something I still need to act on," not a general archive query, and a
+   * completed Task that resurfaced here would read as still-open to
+   * anyone who found it this way. (A completed Task remains reachable
+   * through listCompleted().) `options.includeCompleted` opts back in —
+   * see TaskSearchOptions's own doc comment for the whole-word-matching
+   * trade that opt-in carries.
+   */
+  search(query: string, options?: TaskSearchOptions): Promise<Task[]>;
 }

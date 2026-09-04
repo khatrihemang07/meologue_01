@@ -2,8 +2,14 @@ import { describe, expect, it } from "vitest";
 import { groupEntriesIntoDayFiles } from "./export/day-file";
 import type { Task } from "./task-types";
 import { storedPriorityOf } from "./task-types";
-import { compareForToday, tasksForDay, today } from "./task-views";
+import {
+  compareForToday,
+  completedRecurringOccurrencesForDay,
+  tasksForDay,
+  today,
+} from "./task-views";
 import { entry } from "./test-support/entry-fixture";
+import { event } from "./test-support/event-fixture";
 import { task } from "./test-support/task-fixture";
 
 // A fixed "now" for every test below — a floating timestamp, matching
@@ -140,20 +146,20 @@ describe("compareForToday's chain: date-and-time -> priority -> deadline -> manu
     expect(view.dueToday.map((t) => t.id)).toEqual(["with-deadline", "no-deadline"]);
   });
 
-  it("falls back to manual order (orderKey) once date-and-time, priority and deadline all tie", () => {
+  it("falls back to manual order (dayOrder) once date-and-time, priority and deadline all tie", () => {
     const b = task({
       id: "b",
       date: "2026-09-02T09:00",
       priority: 2,
       deadline: "2026-09-05",
-      orderKey: "b",
+      dayOrder: "b",
     });
     const a = task({
       id: "a",
       date: "2026-09-02T09:00",
       priority: 2,
       deadline: "2026-09-05",
-      orderKey: "a",
+      dayOrder: "a",
     });
 
     const view = today([b, a], NOW);
@@ -161,19 +167,19 @@ describe("compareForToday's chain: date-and-time -> priority -> deadline -> manu
     expect(view.dueToday.map((t) => t.id)).toEqual(["a", "b"]);
   });
 
-  it("falls back to createdAt once orderKey ties too — the last named step of the chain", () => {
+  it("falls back to createdAt once dayOrder ties too — the last named step of the chain", () => {
     const older = task({
       id: "older",
       date: "2026-09-02T09:00",
       priority: 2,
-      orderKey: "m",
+      dayOrder: "m",
       createdAt: "2026-01-01T00:00:00.000Z",
     });
     const newer = task({
       id: "newer",
       date: "2026-09-02T09:00",
       priority: 2,
-      orderKey: "m",
+      dayOrder: "m",
       createdAt: "2026-02-01T00:00:00.000Z",
     });
 
@@ -193,8 +199,8 @@ describe("compareForToday's chain: date-and-time -> priority -> deadline -> manu
 });
 
 describe("overdue is its own section, always ordered chronologically", () => {
-  it("orders overdue Tasks by date, even when orderKey would say the opposite", () => {
-    // orderKey alone ("z" then "a") would put `earlier` last and `later`
+  it("orders overdue Tasks by date, even when dayOrder would say the opposite", () => {
+    // dayOrder alone ("z" then "a") would put `earlier` last and `later`
     // first — the opposite of due-date order. Overdue never reaches the
     // manual step at all: its Tasks tie neither on date-and-time (their
     // dates differ) nor on any earlier step, so the chain's first
@@ -202,8 +208,8 @@ describe("overdue is its own section, always ordered chronologically", () => {
     // what a "manual sort" display mode might otherwise do to other
     // sections. See task-views.ts's own doc comment for why this holds by
     // construction rather than by a special case for `overdue`.
-    const earlier = task({ id: "earlier", date: "2026-08-01", orderKey: "z" });
-    const later = task({ id: "later", date: "2026-08-20", orderKey: "a" });
+    const earlier = task({ id: "earlier", date: "2026-08-01", dayOrder: "z" });
+    const later = task({ id: "later", date: "2026-08-20", dayOrder: "a" });
 
     const view = today([later, earlier], NOW);
 
@@ -216,13 +222,13 @@ describe("grouping does not collapse the order to priority", () => {
     // Two Tasks share a priority, so grouping by priority puts them in one
     // bucket together — the only thing left to decide their order inside
     // that bucket is the chain's first step, date-and-time, priority being
-    // constant within the group. orderKey ("a" then "z") is deliberately
+    // constant within the group. dayOrder ("a" then "z") is deliberately
     // set to the *opposite* of date order, so a grouping implementation
     // that quietly falls back to manual order inside a group — instead of
     // preserving the chain-sorted list it was handed — would produce
     // "late" before "early" here and fail this test.
-    const late = task({ id: "late", date: "2026-09-02T18:00", priority: 3, orderKey: "a" });
-    const early = task({ id: "early", date: "2026-09-02T06:00", priority: 3, orderKey: "z" });
+    const late = task({ id: "late", date: "2026-09-02T18:00", priority: 3, dayOrder: "a" });
+    const early = task({ id: "early", date: "2026-09-02T06:00", priority: 3, dayOrder: "z" });
 
     const view = today([late, early], NOW);
 
@@ -338,5 +344,139 @@ describe("tasksForDay — the day block's own filter (issue #174)", () => {
 
     expect(files.map((f) => f.path)).toEqual(["entries/2026-08-31.txt"]);
     expect(files.some((f) => f.path === "entries/2026-09-01.txt")).toBe(false);
+  });
+
+  // Issue #181, criterion 6: "a day's block lists that day's Tasks both
+  // done and undone" — history.tsx now calls this with `tasks` and
+  // `completedTasks` concatenated (this function's own doc comment,
+  // rewritten for this ticket). The filter itself is unchanged; these
+  // cases pin that a completed Task still surfaces correctly through it,
+  // and that widening the pool never also widens which Tasks qualify.
+  describe("issue #181: still correct once the caller merges completedTasks in", () => {
+    it("shows a completed Task dated this day, done or not distinguishable only by completedAt", () => {
+      const doneToday = task({
+        id: "done",
+        date: "2026-09-01",
+        completedAt: "2026-09-01T12:00:00.000Z",
+      });
+      const undoneToday = task({ id: "undone", date: "2026-09-01" });
+
+      const block = tasksForDay([undoneToday, doneToday], "2026-09-01");
+
+      expect(new Set(block.map((t) => t.id))).toEqual(new Set(["done", "undone"]));
+    });
+
+    // Criterion 8, read as the coordinator's own clarification states it:
+    // "a Task with nothing placing it on a day never appears" — not a
+    // narrowing of the existing date-or-deadline union, but a guard
+    // against the regression merging completedTasks in could invite.
+    it("still excludes a completed Task with neither a date nor a deadline", () => {
+      const completedNeither = task({
+        id: "completed-neither",
+        date: null,
+        deadline: null,
+        completedAt: "2026-09-01T12:00:00.000Z",
+      });
+      const activeNeither = task({ id: "active-neither", date: null, deadline: null });
+
+      const block = tasksForDay([activeNeither, completedNeither], "2026-09-01");
+
+      expect(block).toEqual([]);
+    });
+  });
+});
+
+// Issue #181, criterion 9: "a completed occurrence of a repeating Task
+// reads as a record, not as something still to do." See this function's
+// own doc comment (task-views.ts) for why `completedAt` alone can never
+// answer this for a recurring Task, and why `occurredAt`'s own local
+// calendar day is what stands in for "which day's occurrence this was."
+describe("completedRecurringOccurrencesForDay (issue #181)", () => {
+  // Minutes east of UTC — 0 throughout, so `occurredAt`'s own UTC day and
+  // the local day this function reports coincide, keeping every case
+  // below about the function's own filtering rather than the offset math
+  // `toLocalParts` (export/offset.ts) already has its own suite for.
+  const OFFSET = 0;
+
+  it("surfaces a recurring Task with a completed Event on that day", () => {
+    const recurring = task({ id: "standup", dateString: "every weekday", date: "2026-09-04" });
+    const completedOnThe3rd = event({
+      taskId: "standup",
+      eventType: "completed",
+      occurredAt: "2026-09-03T09:05:00.000Z",
+    });
+
+    const record = completedRecurringOccurrencesForDay(
+      [recurring],
+      [completedOnThe3rd],
+      "2026-09-03",
+      OFFSET,
+    );
+
+    expect(record.map((t) => t.id)).toEqual(["standup"]);
+    // The live Task, not a snapshot — its own current `date` (already
+    // advanced past the 3rd) rides along, exactly as criterion 2 asks for.
+    expect(record[0]?.date).toBe("2026-09-04");
+  });
+
+  it("excludes a completed Event for a Task that isn't recurring — that Task surfaces through tasksForDay + completedTasks instead", () => {
+    const plain = task({ id: "plain", dateString: null, date: "2026-09-03" });
+    const completed = event({ taskId: "plain", eventType: "completed" });
+
+    expect(completedRecurringOccurrencesForDay([plain], [completed], "2026-09-03", OFFSET)).toEqual(
+      [],
+    );
+  });
+
+  it("excludes a completed Event on a different day", () => {
+    const recurring = task({ id: "standup", dateString: "every weekday", date: "2026-09-04" });
+    const completed = event({
+      taskId: "standup",
+      eventType: "completed",
+      occurredAt: "2026-09-02T09:00:00.000Z",
+    });
+
+    expect(
+      completedRecurringOccurrencesForDay([recurring], [completed], "2026-09-03", OFFSET),
+    ).toEqual([]);
+  });
+
+  it("excludes a non-completed Event (a reschedule, say) even for a recurring Task on that day", () => {
+    const recurring = task({ id: "standup", dateString: "every weekday", date: "2026-09-04" });
+    const updated = event({
+      taskId: "standup",
+      eventType: "updated",
+      occurredAt: "2026-09-03T09:00:00.000Z",
+    });
+
+    expect(
+      completedRecurringOccurrencesForDay([recurring], [updated], "2026-09-03", OFFSET),
+    ).toEqual([]);
+  });
+
+  it("deduplicates two completed Events for the same recurring Task on the same day into one record", () => {
+    const recurring = task({ id: "standup", dateString: "every weekday", date: "2026-09-04" });
+    const first = event({
+      id: "e1",
+      taskId: "standup",
+      eventType: "completed",
+      occurredAt: "2026-09-03T09:00:00.000Z",
+    });
+    const second = event({
+      id: "e2",
+      taskId: "standup",
+      eventType: "completed",
+      occurredAt: "2026-09-03T10:00:00.000Z",
+    });
+
+    expect(
+      completedRecurringOccurrencesForDay([recurring], [first, second], "2026-09-03", OFFSET),
+    ).toHaveLength(1);
+  });
+
+  it("excludes a completed Event whose Task this Device no longer resolves — deleted, or a series that ended and is no longer recurring", () => {
+    const completed = event({ taskId: "gone", eventType: "completed" });
+
+    expect(completedRecurringOccurrencesForDay([], [completed], "2026-09-03", OFFSET)).toEqual([]);
   });
 });

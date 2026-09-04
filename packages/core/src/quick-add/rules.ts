@@ -1,18 +1,18 @@
 import { storedPriorityOf } from "../task-types";
 import {
   type DateRuleContext,
+  isEveryBangAt,
   matchDateForms,
   matchTimeForms,
   resolveWholePhrase,
 } from "./date-rules";
-import type { QuickAddLanguage } from "./language";
 import type { QuickAddToken } from "./types";
 
 /**
  * The sigil-marked rules (issue #170's Part A) — every one of these is
  * always active, regardless of `QuickAddOptions.smartDates`, because the
  * user typed an explicit marker on purpose: `#`, `/`, `%`, `p1`-`p4`,
- * `!`, `{}`, `for`, a leading `* `, `//`. See ./types.ts's
+ * `!`, `{}`, a leading `* `, `//`. See ./types.ts's
  * `QuickAddTokenKind` doc comment for why that's the line
  * `smartDates` draws, and ./date-rules.ts for the family it turns off.
  */
@@ -114,40 +114,6 @@ export function matchPriority(input: string): QuickAddToken[] {
 }
 
 /**
- * `for 45min` — a duration, in minutes. Deliberately not capped at 1440
- * here (../task-fields.ts's assertValidDuration owns that rule; this
- * module's own header comment explains why it isn't re-derived here) and
- * deliberately grouped with the sigil family, not the eager one, even
- * though it infers meaning from an ordinary preposition ("for") rather
- * than punctuation: the word alone is ambiguous ("wait for me"), but
- * "for" immediately followed by a number and a unit word is not — the
- * false-positive risk `smartDates` exists to let a user turn off doesn't
- * apply here the way it does to a bare "monday" or "monthly", so this
- * stays on regardless of that setting.
- */
-export function matchDuration(input: string, language: QuickAddLanguage): QuickAddToken[] {
-  const unitAlt = Object.keys(language.durationUnits)
-    .sort((a, b) => b.length - a.length)
-    .join("|");
-  const regex = new RegExp(`\\b${language.durationWord}\\s+(\\d+)\\s*(${unitAlt})\\b`, "gi");
-  const tokens: QuickAddToken[] = [];
-  for (const match of input.matchAll(regex)) {
-    const amount = Number(match[1]);
-    // biome-ignore lint/style/noNonNullAssertion: the alternation is built from this exact table's own keys
-    const unit = language.durationUnits[match[2]!.toLowerCase()]!;
-    const minutes = unit === "hours" ? amount * 60 : amount;
-    tokens.push({
-      kind: "duration",
-      start: match.index,
-      end: match.index + match[0].length,
-      raw: match[0],
-      minutes,
-    });
-  }
-  return tokens;
-}
-
-/**
  * `{deadline}` — the text inside the braces has to resolve, as a whole,
  * to one of ./date-rules.ts's date forms (`resolveWholePhrase`); braces
  * around anything else produce no token at all, rather than a deadline
@@ -185,11 +151,21 @@ export function matchDeadline(input: string, ctx: DateRuleContext): QuickAddToke
  * marker the user typed on purpose, and a caller (the Composer, issue
  * #170's Part D) still needs to know a reminder was asked for even when
  * this parser can't pin down when. Always active regardless of
- * `smartDates`, for the identical reason `{deadline}` is.
+ * `smartDates`, for the identical reason `{deadline}` is. One `!` is
+ * excluded on sight — `isEveryBangAt`'s own doc comment explains why
+ * "every!" belongs to ./date-rules.ts's recurrence-phrase grammar
+ * instead.
  */
 export function matchReminder(input: string, ctx: DateRuleContext): QuickAddToken[] {
   const tokens: QuickAddToken[] = [];
   for (const bang of input.matchAll(/!/g)) {
+    if (isEveryBangAt(input, bang.index)) {
+      // "every!" — ./date-rules.ts's own recurrence-phrase anchor, not
+      // this `!` read as an unrelated reminder marker. See
+      // `isEveryBangAt`'s own doc comment for why this exact character
+      // is the one place the two grammars can collide.
+      continue;
+    }
     const rest = input.slice(bang.index + 1);
     // Two candidate word-counts, longest first — `at 5pm` needs both
     // words; `5pm` needs only one. A single greedy `\S+(?:\s+\S+)?`

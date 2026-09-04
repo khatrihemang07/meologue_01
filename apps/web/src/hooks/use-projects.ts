@@ -1,6 +1,7 @@
-import type { Project, ProjectStore, Section } from "@meologue/core";
+import type { EventStore, Project, ProjectStore, Section } from "@meologue/core";
 import { DEFAULT_LABEL_COLOUR, mintId, orderKeyBetween } from "@meologue/core";
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { useEvents } from "@/hooks/use-events";
 import { queryClient } from "@/lib/query-client";
 import { PROJECTS_QUERY_KEY, sectionsQueryKey } from "@/lib/query-keys";
 import { refreshTasks } from "@/lib/tasks-refresh";
@@ -87,13 +88,68 @@ export interface UseProjectsResult {
  * identical "seam lands with the feature that needs it" posture
  * use-tasks.ts's own `afterLocalWrite` comment describes for issue #172.
  */
-export function useProjects(projectStore: ProjectStore, deviceId: string): UseProjectsResult {
+export function useProjects(
+  projectStore: ProjectStore,
+  // Issue #184: Todo's activity log — Project/Section add/rename/archive/
+  // unarchive/delete are each recorded (CONTEXT.md's Event entry, ADR
+  // 0056's own taxonomy). Not threaded to `requestSync` here the way
+  // Tasks' own `eventStore` is: this hook still carries no `requestSync`
+  // nudge of its own (this file's own header comment already states why
+  // — Project/Section Sync predates this ticket and was never wired to a
+  // nudge here), so an Event recorded from this hook simply rides along
+  // on the next scheduled sync tick or another mutation's own nudge,
+  // exactly as every other write from this hook already does.
+  eventStore: EventStore,
+  deviceId: string,
+): UseProjectsResult {
   const projectsQuery = useQuery({
     queryKey: PROJECTS_QUERY_KEY,
     queryFn: () => projectStore.listProjects(),
   });
 
   const projects = projectsQuery.data ?? [];
+
+  const { recordEvent } = useEvents(eventStore, deviceId);
+
+  // `name` is always merged into `extra` — the cached label
+  // `format-event.ts`'s own `describeEventLine` falls back to once a
+  // Project can no longer be resolved live, the identical reasoning
+  // use-tasks.ts's `recordTaskEvent` gives for merging `content` in
+  // unconditionally rather than only for the events (rename) that
+  // already happened to carry it for a diff's own sake. Spread order
+  // matches that function's own fix: the default goes first, so a
+  // rename's own explicit `extra.name` (the *new* name) still wins over
+  // the fallback rather than being clobbered back to the pre-rename one.
+  function recordProjectEvent(
+    project: Pick<Project, "id" | "name">,
+    eventType: "added" | "updated" | "archived" | "unarchived",
+    extra: Record<string, unknown> | null = null,
+  ): void {
+    void recordEvent({
+      eventType,
+      objectType: "project",
+      objectId: project.id,
+      taskId: null,
+      projectId: project.id,
+      extra: { name: project.name, ...extra },
+    });
+  }
+
+  // Mirrors recordProjectEvent's own `name` merge above, over Sections.
+  function recordSectionEvent(
+    section: Pick<Section, "id" | "projectId" | "name">,
+    eventType: "added" | "updated" | "archived" | "unarchived" | "deleted",
+    extra: Record<string, unknown> | null = null,
+  ): void {
+    void recordEvent({
+      eventType,
+      objectType: "section",
+      objectId: section.id,
+      taskId: null,
+      projectId: section.projectId,
+      extra: { name: section.name, ...extra },
+    });
+  }
 
   function invalidateProjects() {
     return queryClient.invalidateQueries({ queryKey: PROJECTS_QUERY_KEY });
@@ -107,7 +163,10 @@ export function useProjects(projectStore: ProjectStore, deviceId: string): UsePr
   }
 
   const addProjectMutation = useMutation({
-    mutationFn: (project: Project) => projectStore.upsertProjects([project]),
+    mutationFn: async (project: Project) => {
+      await projectStore.upsertProjects([project]);
+      recordProjectEvent(project, "added", { name: project.name });
+    },
     onSuccess: invalidateProjects,
   });
 
@@ -142,8 +201,13 @@ export function useProjects(projectStore: ProjectStore, deviceId: string): UsePr
   }
 
   const renameProjectMutation = useMutation({
-    mutationFn: ({ id, name }: { id: string; name: string }) =>
-      projectStore.renameProject(id, name),
+    mutationFn: async ({ id, name }: { id: string; name: string }) => {
+      const before = projects.find((p) => p.id === id) ?? (await projectStore.getProject(id));
+      await projectStore.renameProject(id, name);
+      if (before) {
+        recordProjectEvent(before, "updated", { name, lastName: before.name });
+      }
+    },
     onSuccess: invalidateProjects,
   });
 
@@ -186,7 +250,16 @@ export function useProjects(projectStore: ProjectStore, deviceId: string): UsePr
   }
 
   const archiveProjectMutation = useMutation({
-    mutationFn: (id: string) => projectStore.archiveProject(id),
+    mutationFn: async (id: string) => {
+      // Looked up before the write, mirroring use-tasks.ts's own
+      // `findTask` — `recordProjectEvent` needs a `name` to cache even
+      // though archiving itself doesn't change one.
+      const before = projects.find((p) => p.id === id) ?? (await projectStore.getProject(id));
+      await projectStore.archiveProject(id);
+      if (before) {
+        recordProjectEvent(before, "archived");
+      }
+    },
     onSuccess: invalidateProjects,
   });
 
@@ -195,7 +268,13 @@ export function useProjects(projectStore: ProjectStore, deviceId: string): UsePr
   }
 
   const unarchiveProjectMutation = useMutation({
-    mutationFn: (id: string) => projectStore.unarchiveProject(id),
+    mutationFn: async (id: string) => {
+      const before = projects.find((p) => p.id === id) ?? (await projectStore.getProject(id));
+      await projectStore.unarchiveProject(id);
+      if (before) {
+        recordProjectEvent(before, "unarchived");
+      }
+    },
     onSuccess: invalidateProjects,
   });
 
@@ -228,7 +307,10 @@ export function useProjects(projectStore: ProjectStore, deviceId: string): UsePr
   }
 
   const addSectionMutation = useMutation({
-    mutationFn: (section: Section) => projectStore.addSection(section),
+    mutationFn: async (section: Section) => {
+      await projectStore.addSection(section);
+      recordSectionEvent(section, "added", { name: section.name });
+    },
     onSuccess: invalidateSections,
   });
 
@@ -269,8 +351,13 @@ export function useProjects(projectStore: ProjectStore, deviceId: string): UsePr
   }
 
   const renameSectionMutation = useMutation({
-    mutationFn: ({ id, name }: { id: string; name: string }) =>
-      projectStore.renameSection(id, name),
+    mutationFn: async ({ id, name }: { id: string; name: string }) => {
+      const before = await projectStore.getSection(id);
+      await projectStore.renameSection(id, name);
+      if (before) {
+        recordSectionEvent(before, "updated", { name, lastName: before.name });
+      }
+    },
     onSuccess: invalidateSections,
   });
 
@@ -303,7 +390,13 @@ export function useProjects(projectStore: ProjectStore, deviceId: string): UsePr
   }
 
   const deleteSectionMutation = useMutation({
-    mutationFn: (id: string) => projectStore.deleteSection(id),
+    mutationFn: async (id: string) => {
+      const before = await projectStore.getSection(id);
+      await projectStore.deleteSection(id);
+      if (before) {
+        recordSectionEvent(before, "deleted");
+      }
+    },
     // Destroys Tasks too (ProjectStore.deleteSection's own doc comment),
     // so both caches need to know: Sections for the Section itself, Tasks
     // for every row it just tombstoned.
@@ -315,7 +408,13 @@ export function useProjects(projectStore: ProjectStore, deviceId: string): UsePr
   }
 
   const archiveSectionMutation = useMutation({
-    mutationFn: (id: string) => projectStore.archiveSection(id),
+    mutationFn: async (id: string) => {
+      const before = await projectStore.getSection(id);
+      await projectStore.archiveSection(id);
+      if (before) {
+        recordSectionEvent(before, "archived");
+      }
+    },
     onSuccess: () => Promise.all([invalidateSections(), invalidateTasks()]),
   });
 
@@ -324,7 +423,13 @@ export function useProjects(projectStore: ProjectStore, deviceId: string): UsePr
   }
 
   const unarchiveSectionMutation = useMutation({
-    mutationFn: (id: string) => projectStore.unarchiveSection(id),
+    mutationFn: async (id: string) => {
+      const before = await projectStore.getSection(id);
+      await projectStore.unarchiveSection(id);
+      if (before) {
+        recordSectionEvent(before, "unarchived");
+      }
+    },
     onSuccess: invalidateSections,
   });
 

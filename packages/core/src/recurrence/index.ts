@@ -7,7 +7,7 @@
  * nothing more.
  */
 export { parseRecurrence } from "./parser";
-export { nextOccurrence, tomorrowOf } from "./recurrence";
+export { firstOccurrence, nextOccurrenceAfterCompletion, tomorrowOf } from "./recurrence";
 export type {
   MonthDay,
   RecurrenceFrequency,

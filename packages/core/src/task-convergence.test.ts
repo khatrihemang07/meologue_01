@@ -3,10 +3,25 @@ import { compareByOrder, orderKeyBetween } from "./order-key";
 import type { SyncTransport } from "./sync-engine";
 import { sync } from "./sync-engine";
 import type { Task } from "./task-types";
+import { comment } from "./test-support/comment-fixture";
+import { event } from "./test-support/event-fixture";
+import { InMemoryCommentStore } from "./test-support/in-memory-comment-store";
 import { InMemoryEntryStore } from "./test-support/in-memory-entry-store";
+import { InMemoryEventStore } from "./test-support/in-memory-event-store";
+import { InMemoryLabelStore } from "./test-support/in-memory-label-store";
+import { InMemoryProjectStore } from "./test-support/in-memory-project-store";
 import { InMemoryTaskStore } from "./test-support/in-memory-task-store";
+import { label } from "./test-support/label-fixture";
+import { project, section } from "./test-support/project-fixture";
 import { task } from "./test-support/task-fixture";
-import type { WireTaskOutput } from "./wire";
+import type {
+  WireCommentOutput,
+  WireEventOutput,
+  WireLabelOutput,
+  WireProjectOutput,
+  WireSectionOutput,
+  WireTaskOutput,
+} from "./wire";
 
 /**
  * The test ADR 0050 exists to justify: two Devices reordering a shared
@@ -228,84 +243,155 @@ describe("Task order convergence (ADR 0050)", () => {
  * actual mapping and upsert path this ticket built, not only the
  * store-level behaviour underneath it.
  */
-class FakeSyncServer {
-  private readonly taskRows = new Map<string, { task: WireTaskOutput; seq: number }>();
-  private taskSeq = 0;
+// A tiny generic compacted change log — the identical shape every one of
+// server/src/sync.rs's `insert_*`/`fetch_*_since` pairs implements (ADR
+// 0028, reused unchanged for every stream added since): each push
+// overwrites the current row for a given id wholesale and hands it a
+// fresh, monotonically increasing seq. There is no per-field merge and no
+// memory of the row it replaced, which is exactly what makes this
+// last-write-wins-by-arrival rather than "cleverest edit wins."
+class FakeStream<Row extends { id: string; seq: number }> {
+  private readonly rows = new Map<string, { row: Row; seq: number }>();
+  private seq = 0;
 
-  // A compacted change log keyed by Task id (ADR 0028, reused for Tasks by
-  // ADR 0047) — the identical shape server/src/sync.rs's own `insert_tasks`
-  // implements: each push overwrites the current row for a given id
-  // wholesale and hands it a fresh, monotonically increasing seq. There is
-  // no per-field merge and no memory of the row it replaced, which is
-  // exactly what makes this last-write-wins-by-arrival rather than
-  // "cleverest edit wins."
-  transport: SyncTransport = async (request) => {
-    // `tasks`/`since_task_seq` are optional on WireSyncRequest solely to
-    // tolerate a v4 Device's request body, which has no such keys at all
-    // (server/src/sync.rs's own SyncRequest doc comment) — this Device
-    // always sends both, since it's this ticket's own real sync() engine,
-    // but the wire type has to admit the v4 case regardless.
-    const pushedTasks = request.tasks ?? [];
-    const sinceTaskSeq = request.since_task_seq ?? 0;
-    for (const t of pushedTasks) {
-      this.taskSeq += 1;
-      this.taskRows.set(t.id, { task: { ...t, seq: this.taskSeq }, seq: this.taskSeq });
+  // `pushed` is shaped like the wire's own *input* — every field `Row`
+  // (the wire's *output* shape) has except `seq`, which this fake server
+  // assigns itself, exactly as the real one does.
+  push(pushed: Array<Omit<Row, "seq">>): void {
+    for (const row of pushed) {
+      this.seq += 1;
+      this.rows.set(row.id, { row: { ...row, seq: this.seq } as Row, seq: this.seq });
     }
-    const tasks = [...this.taskRows.values()]
-      .filter((row) => row.seq > sinceTaskSeq)
-      .map((row) => row.task);
-    const taskCursor = tasks.reduce((max, t) => Math.max(max, t.seq), sinceTaskSeq);
-    // This test never touches the Entry stream — entries always empty,
-    // the Entry Cursor never advances past whatever this Device already
-    // claims. One endpoint carries both streams regardless (ADR 0051), so
-    // a real WireSyncResponse still has to answer both.
-    return { entries: [], cursor: request.since_seq, tasks, task_cursor: taskCursor };
+  }
+
+  pull(sinceSeq: number): { rows: Row[]; cursor: number } {
+    const rows = [...this.rows.values()].filter((r) => r.seq > sinceSeq).map((r) => r.row);
+    const cursor = rows.reduce((max, r) => Math.max(max, r.seq), sinceSeq);
+    return { rows, cursor };
+  }
+}
+
+/**
+ * A fake `/v1/sync` — every stream this ticket (issue #182) added, plus
+ * the Task stream ADR 0051 already had, each its own `FakeStream` (its own
+ * doc comment explains why that's a faithful model of `server/src/sync.rs`
+ * rather than a simplification of it). Entries are never exercised here —
+ * always empty, the Entry Cursor never advances — but a real
+ * `WireSyncResponse` still has to answer every field regardless (ADR
+ * 0051's "one endpoint, one round trip").
+ */
+class FakeSyncServer {
+  private readonly tasks = new FakeStream<WireTaskOutput>();
+  private readonly projects = new FakeStream<WireProjectOutput>();
+  private readonly sections = new FakeStream<WireSectionOutput>();
+  private readonly labels = new FakeStream<WireLabelOutput>();
+  private readonly comments = new FakeStream<WireCommentOutput>();
+  private readonly events = new FakeStream<WireEventOutput>();
+
+  transport: SyncTransport = async (request) => {
+    // Every one of these is optional on WireSyncRequest solely to tolerate
+    // an older Device's request body, which genuinely has no such keys at
+    // all (server/src/sync.rs's own SyncRequest doc comment) — this Device
+    // always sends all of them, since it's this ticket's own real sync()
+    // engine, but the wire type has to admit the older case regardless.
+    // `day_order` is optional on WireTaskInput for the identical reason
+    // (a Device on protocol 5 predates the field) — this Device's own
+    // toWireTaskInput always sends a real one, so the `?? ""` below only
+    // ever satisfies the type, never actually substitutes anything.
+    this.tasks.push((request.tasks ?? []).map((t) => ({ ...t, day_order: t.day_order ?? "" })));
+    this.projects.push(request.projects ?? []);
+    this.sections.push(request.sections ?? []);
+    this.labels.push(request.labels ?? []);
+    this.comments.push(request.comments ?? []);
+    this.events.push(request.events ?? []);
+
+    const tasks = this.tasks.pull(request.since_task_seq ?? 0);
+    const projects = this.projects.pull(request.since_project_seq ?? 0);
+    const sections = this.sections.pull(request.since_section_seq ?? 0);
+    const labels = this.labels.pull(request.since_label_seq ?? 0);
+    const comments = this.comments.pull(request.since_comment_seq ?? 0);
+    const events = this.events.pull(request.since_event_seq ?? 0);
+
+    return {
+      entries: [],
+      cursor: request.since_seq,
+      tasks: tasks.rows,
+      task_cursor: tasks.cursor,
+      projects: projects.rows,
+      project_cursor: projects.cursor,
+      sections: sections.rows,
+      section_cursor: sections.cursor,
+      labels: labels.rows,
+      label_cursor: labels.cursor,
+      comments: comments.rows,
+      comment_cursor: comments.cursor,
+      events: events.rows,
+      event_cursor: events.cursor,
+    };
+  };
+}
+
+// One Device's full set of stores plus a bound sync() call against a
+// shared FakeSyncServer — every content-convergence test below (Task,
+// Project, Section, Label, Comment) is the identical shape ("seed on A,
+// pull on B, diverge offline, sync both, assert one value survives"), so
+// this factory is what keeps the five tests from re-deriving that
+// plumbing five times (issue #182: four more streams, the same proof
+// repeated for each).
+function createDevice(deviceId: string, server: FakeSyncServer) {
+  const store = new InMemoryEntryStore();
+  const taskStore = new InMemoryTaskStore();
+  const projectStore = new InMemoryProjectStore(taskStore);
+  const labelStore = new InMemoryLabelStore();
+  const commentStore = new InMemoryCommentStore();
+  const eventStore = new InMemoryEventStore();
+  return {
+    store,
+    taskStore,
+    projectStore,
+    labelStore,
+    commentStore,
+    eventStore,
+    sync: () =>
+      sync({
+        store,
+        taskStore,
+        projectStore,
+        labelStore,
+        commentStore,
+        eventStore,
+        transport: server.transport,
+        deviceId,
+      }),
   };
 }
 
 describe("Task content convergence (issue #172 / ADR 0051)", () => {
   it("a Task renamed on two stores while both are pending converges to one value after both sync", async () => {
     const server = new FakeSyncServer();
-    const entryStoreA = new InMemoryEntryStore();
-    const entryStoreB = new InMemoryEntryStore();
-    const taskStoreA = new InMemoryTaskStore();
-    const taskStoreB = new InMemoryTaskStore();
+    const deviceA = createDevice("device-a", server);
+    const deviceB = createDevice("device-b", server);
     const taskId = "shared-task";
-
-    const syncA = () =>
-      sync({
-        store: entryStoreA,
-        taskStore: taskStoreA,
-        transport: server.transport,
-        deviceId: "device-a",
-      });
-    const syncB = () =>
-      sync({
-        store: entryStoreB,
-        taskStore: taskStoreB,
-        transport: server.transport,
-        deviceId: "device-b",
-      });
 
     // Seed: Device A creates the Task and syncs it up; Device B then pulls
     // that same, already-converged Task down — the common ancestor both
     // Devices' offline edits diverge from.
-    await taskStoreA.upsert([task({ id: taskId, content: "buy milk", seq: null })]);
-    await syncA();
-    await syncB();
-    expect((await taskStoreB.get(taskId))?.content).toBe("buy milk");
+    await deviceA.taskStore.upsert([task({ id: taskId, content: "buy milk", seq: null })]);
+    await deviceA.sync();
+    await deviceB.sync();
+    expect((await deviceB.taskStore.get(taskId))?.content).toBe("buy milk");
 
     // Both Devices, independently and offline, rename the *same* Task to
     // two different things.
-    await taskStoreA.rename(taskId, "buy milk and eggs");
-    await taskStoreB.rename(taskId, "buy oat milk");
+    await deviceA.taskStore.rename(taskId, "buy milk and eggs");
+    await deviceB.taskStore.rename(taskId, "buy oat milk");
 
     // Fractional-index reasoning doesn't apply to a content edit — there
     // is exactly one `content` column, so this is a genuine collision on
     // one field, not two independent writes the way reordering two
     // different Tasks is. Both renames are pending until synced.
-    expect((await taskStoreA.pending()).map((t) => t.id)).toEqual([taskId]);
-    expect((await taskStoreB.pending()).map((t) => t.id)).toEqual([taskId]);
+    expect((await deviceA.taskStore.pending()).map((t) => t.id)).toEqual([taskId]);
+    expect((await deviceB.taskStore.pending()).map((t) => t.id)).toEqual([taskId]);
 
     // A syncs first, then B — B's push is the one that arrives at the
     // server last, so ADR 0028's last-write-wins-by-arrival (reused for
@@ -313,13 +399,13 @@ describe("Task content convergence (issue #172 / ADR 0051)", () => {
     // survives. A second round each so both Devices actually observe the
     // final, converged state — mirrors this file's own ordering-
     // convergence tests above.
-    await syncA();
-    await syncB();
-    await syncA();
-    await syncB();
+    await deviceA.sync();
+    await deviceB.sync();
+    await deviceA.sync();
+    await deviceB.sync();
 
-    const finalA = await taskStoreA.get(taskId);
-    const finalB = await taskStoreB.get(taskId);
+    const finalA = await deviceA.taskStore.get(taskId);
+    const finalB = await deviceB.taskStore.get(taskId);
 
     // Converged: both Devices agree —
     expect(finalA?.content).toBe(finalB?.content);
@@ -330,6 +416,261 @@ describe("Task content convergence (issue #172 / ADR 0051)", () => {
     // contested field, not a bug this ticket owes a fix for.
     expect(finalA?.content).toBe("buy oat milk");
     expect(finalA?.content).not.toBe("buy milk and eggs");
+  });
+});
+
+// Issue #182: `dayOrder` reached the wire in the same bump as the four new
+// streams below — the identical last-write-wins-by-arrival proof the
+// `content` test above gives for a Task's one-column-one-value field,
+// applied to Today's own manual order instead. This is deliberately a
+// content-convergence test, not another fractional-index-collision test
+// like this file's own "Task order convergence" describe block above:
+// two Devices dragging the *same* Task in Today, offline, both compute a
+// real `dayOrder` value each, and there is exactly one column for the
+// Server to arbitrate between them, the same shape a rename collision
+// already has — not the "two different Tasks, two disjoint rows" shape
+// the fractional-index tests exist to prove converges *without* a
+// collision at all.
+describe("Task dayOrder convergence (issue #182)", () => {
+  it("a Task dragged in Today on two stores while both are pending converges to one dayOrder after both sync", async () => {
+    const server = new FakeSyncServer();
+    const deviceA = createDevice("device-a", server);
+    const deviceB = createDevice("device-b", server);
+    const taskId = "shared-task";
+
+    await deviceA.taskStore.upsert([task({ id: taskId, content: "buy milk", seq: null })]);
+    await deviceA.sync();
+    await deviceB.sync();
+    expect((await deviceB.taskStore.get(taskId))?.dayOrder).toBe(
+      (await deviceA.taskStore.get(taskId))?.dayOrder,
+    );
+
+    // Both Devices, independently and offline, drag the *same* Task to
+    // two different positions in their own Today.
+    await deviceA.taskStore.reorderToday(taskId, "device-a-position");
+    await deviceB.taskStore.reorderToday(taskId, "device-b-position");
+
+    await deviceA.sync();
+    await deviceB.sync();
+    await deviceA.sync();
+    await deviceB.sync();
+
+    const finalA = await deviceA.taskStore.get(taskId);
+    const finalB = await deviceB.taskStore.get(taskId);
+
+    // Converged, and it's specifically B's drag that won — the same
+    // last-write-wins-by-arrival outcome the `content` test above proves,
+    // over `dayOrder` instead. `orderKey` is untouched throughout: neither
+    // Device ever called reorder(), only reorderToday().
+    expect(finalA?.dayOrder).toBe(finalB?.dayOrder);
+    expect(finalA?.dayOrder).toBe("device-b-position");
+    expect(finalA?.dayOrder).not.toBe("device-a-position");
+    expect(finalA?.orderKey).toBe(finalB?.orderKey);
+  });
+});
+
+// Issue #182: the identical proof, once per new stream — a Project, a
+// Section, a Label and a Comment each converge under the same
+// last-write-wins-by-arrival rule the Task test above already proves,
+// because `insert_projects`/`insert_sections`/`insert_labels`/
+// `insert_comments` (server/src/sync.rs) each reuse ADR 0028's rule
+// unchanged rather than reinventing it (this file's own header comment on
+// `FakeStream`).
+describe("Project content convergence (issue #182)", () => {
+  it("a Project renamed on two stores while both are pending converges to one value after both sync", async () => {
+    const server = new FakeSyncServer();
+    const deviceA = createDevice("device-a", server);
+    const deviceB = createDevice("device-b", server);
+    const projectId = "shared-project";
+
+    await deviceA.projectStore.upsertProjects([
+      project({ id: projectId, name: "Errands", seq: null }),
+    ]);
+    await deviceA.sync();
+    await deviceB.sync();
+    expect((await deviceB.projectStore.getProject(projectId))?.name).toBe("Errands");
+
+    await deviceA.projectStore.renameProject(projectId, "Errands and chores");
+    await deviceB.projectStore.renameProject(projectId, "Weekend errands");
+
+    await deviceA.sync();
+    await deviceB.sync();
+    await deviceA.sync();
+    await deviceB.sync();
+
+    const finalA = await deviceA.projectStore.getProject(projectId);
+    const finalB = await deviceB.projectStore.getProject(projectId);
+    expect(finalA?.name).toBe(finalB?.name);
+    expect(finalA?.name).toBe("Weekend errands");
+  });
+});
+
+describe("Section content convergence (issue #182)", () => {
+  it("a Section renamed on two stores while both are pending converges to one value after both sync", async () => {
+    const server = new FakeSyncServer();
+    const deviceA = createDevice("device-a", server);
+    const deviceB = createDevice("device-b", server);
+    const sectionId = "shared-section";
+
+    // A Section needs a live Project on each Device to be reachable from
+    // — addSection() itself refuses one that doesn't (ProjectStore's own
+    // doc comment), but the direct upsertSections() Sync path this test
+    // exercises does not, mirroring server/src/sync.rs's own unvalidated
+    // `project_id` (SectionInput's own doc comment). Seeding the Project
+    // on both Devices keeps this test about convergence, not about that
+    // separate, already-covered dangling-reference behaviour.
+    await deviceA.projectStore.upsertProjects([project({ id: "project-1", seq: null })]);
+    await deviceB.projectStore.upsertProjects([project({ id: "project-1", seq: null })]);
+    await deviceA.projectStore.upsertSections([
+      section({ id: sectionId, projectId: "project-1", name: "Groceries", seq: null }),
+    ]);
+    await deviceA.sync();
+    await deviceB.sync();
+    expect((await deviceB.projectStore.getSection(sectionId))?.name).toBe("Groceries");
+
+    await deviceA.projectStore.renameSection(sectionId, "Weekly groceries");
+    await deviceB.projectStore.renameSection(sectionId, "Grocery list");
+
+    await deviceA.sync();
+    await deviceB.sync();
+    await deviceA.sync();
+    await deviceB.sync();
+
+    const finalA = await deviceA.projectStore.getSection(sectionId);
+    const finalB = await deviceB.projectStore.getSection(sectionId);
+    expect(finalA?.name).toBe(finalB?.name);
+    expect(finalA?.name).toBe("Grocery list");
+  });
+});
+
+describe("Label content convergence (issue #182)", () => {
+  it("a Label renamed on two stores while both are pending converges to one value after both sync", async () => {
+    const server = new FakeSyncServer();
+    const deviceA = createDevice("device-a", server);
+    const deviceB = createDevice("device-b", server);
+    const labelId = "shared-label";
+
+    await deviceA.labelStore.upsert([label({ id: labelId, name: "errand", seq: null })]);
+    await deviceA.sync();
+    await deviceB.sync();
+    expect((await deviceB.labelStore.get(labelId))?.name).toBe("errand");
+
+    await deviceA.labelStore.rename(labelId, "chore");
+    await deviceB.labelStore.rename(labelId, "weekend");
+
+    await deviceA.sync();
+    await deviceB.sync();
+    await deviceA.sync();
+    await deviceB.sync();
+
+    const finalA = await deviceA.labelStore.get(labelId);
+    const finalB = await deviceB.labelStore.get(labelId);
+    expect(finalA?.name).toBe(finalB?.name);
+    expect(finalA?.name).toBe("weekend");
+  });
+});
+
+describe("Comment content convergence (issue #182)", () => {
+  it("a Comment edited on two stores while both are pending converges to one value after both sync", async () => {
+    const server = new FakeSyncServer();
+    const deviceA = createDevice("device-a", server);
+    const deviceB = createDevice("device-b", server);
+    const commentId = "shared-comment";
+
+    await deviceA.commentStore.upsert([comment({ id: commentId, text: "sounds good", seq: null })]);
+    await deviceA.sync();
+    await deviceB.sync();
+    expect((await deviceB.commentStore.get(commentId))?.text).toBe("sounds good");
+
+    await deviceA.commentStore.edit(commentId, "sounds good, I'll bring snacks");
+    await deviceB.commentStore.edit(commentId, "sounds good, see you then");
+
+    await deviceA.sync();
+    await deviceB.sync();
+    await deviceA.sync();
+    await deviceB.sync();
+
+    const finalA = await deviceA.commentStore.get(commentId);
+    const finalB = await deviceB.commentStore.get(commentId);
+    expect(finalA?.text).toBe(finalB?.text);
+    expect(finalA?.text).toBe("sounds good, see you then");
+  });
+});
+
+/**
+ * Issue #184 / ADR 0056's own acceptance criterion, and the whole reason
+ * an Event stream needs no last-writer-wins rule: an Event, unlike every
+ * stream above, is never edited after it's written, so two Devices
+ * writing offline can never *contend* for the same row — there is
+ * nothing to arbitrate. This is the proof that "no conflict can arise"
+ * (this ADR's own Decision) holds under the same offline-then-sync shape
+ * every content-convergence test above exercises: **both** Devices' own
+ * Events must survive, not one overwriting the other the way a Comment's
+ * text does above.
+ */
+describe("Event convergence (issue #184 / ADR 0056)", () => {
+  it("two Devices that each recorded a different Event offline both keep it after both sync", async () => {
+    const server = new FakeSyncServer();
+    const deviceA = createDevice("device-a", server);
+    const deviceB = createDevice("device-b", server);
+
+    await deviceA.eventStore.record(
+      event({ id: "event-a", deviceId: "device-a", eventType: "added", objectId: "task-1" }),
+    );
+    await deviceB.eventStore.record(
+      event({
+        id: "event-b",
+        deviceId: "device-b",
+        eventType: "completed",
+        objectId: "task-2",
+        occurredAt: "2026-01-02T00:00:00.000Z",
+      }),
+    );
+
+    await deviceA.sync();
+    await deviceB.sync();
+    // A second round each: the pull that lets A see B's own Event, and
+    // vice versa, since one sync() call only pushes-then-pulls once
+    // against whatever the server already had *before* this call's own
+    // push landed.
+    await deviceA.sync();
+    await deviceB.sync();
+
+    const idsOnA = (await deviceA.eventStore.list()).map((e) => e.id).sort();
+    const idsOnB = (await deviceB.eventStore.list()).map((e) => e.id).sort();
+    expect(idsOnA).toEqual(["event-a", "event-b"]);
+    expect(idsOnB).toEqual(["event-a", "event-b"]);
+  });
+
+  it("recording two Events under the same object while offline keeps both — there is nothing to arbitrate", async () => {
+    // Contrast with Comment content convergence above: editing text
+    // *does* need last-writer-wins because there is one row being fought
+    // over. Two Events about the same Task are two independent rows from
+    // the start — recording a second one is never "changing" the first.
+    const server = new FakeSyncServer();
+    const deviceA = createDevice("device-a", server);
+    const deviceB = createDevice("device-b", server);
+
+    await deviceA.eventStore.record(
+      event({ id: "renamed-by-a", deviceId: "device-a", eventType: "updated", objectId: "task-1" }),
+    );
+    await deviceB.eventStore.record(
+      event({
+        id: "completed-by-b",
+        deviceId: "device-b",
+        eventType: "completed",
+        objectId: "task-1",
+        occurredAt: "2026-01-02T00:00:00.000Z",
+      }),
+    );
+
+    await deviceA.sync();
+    await deviceB.sync();
+    await deviceA.sync();
+    await deviceB.sync();
+
+    const historyOnA = (await deviceA.eventStore.listByTask("task-1")).map((e) => e.id).sort();
+    expect(historyOnA).toEqual(["completed-by-b", "renamed-by-a"]);
   });
 });
 

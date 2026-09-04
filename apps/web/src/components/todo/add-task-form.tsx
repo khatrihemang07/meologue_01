@@ -23,11 +23,21 @@
  * optional polish" for an eager parser (Todoist's own documented false
  * positive, "Create **monthly** report" becoming a monthly recurrence, is
  * exactly the failure mode this exists to catch).
+ *
+ * Issue #179's Part A adds the caret tracking a highlighted token's own
+ * live state (quick-add-highlight.ts's `QuickAddHighlightState`) needs:
+ * `caretOffset` is plain React state, not read imperatively off
+ * `inputRef` at render time, because a click that moves the caret without
+ * changing `value` (turning a token from "pending" to "resolved," say)
+ * has to trigger a re-render on its own — reading the ref during render
+ * would silently show stale state until something else happened to
+ * re-render this component for an unrelated reason.
  */
 import type { QuickAddOptions } from "@meologue/core";
 import {
   type FormEvent,
   type MouseEvent as ReactMouseEvent,
+  type SyntheticEvent,
   useLayoutEffect,
   useRef,
   useState,
@@ -39,7 +49,7 @@ import {
   type DemotedSignature,
   highlightSegments,
   parseWithDemotions,
-  QUICK_ADD_HIGHLIGHT_CLASS,
+  quickAddHighlightClass,
   tokenAtOffset,
   tokenSignature,
 } from "@/lib/quick-add-highlight";
@@ -79,6 +89,13 @@ export function AddTaskForm({ onAdd, disabled }: AddTaskFormProps) {
   const [demotedSignatures, setDemotedSignatures] = useState<ReadonlySet<DemotedSignature>>(
     new Set(),
   );
+  // `null` means "nothing focused, or a range is selected rather than a
+  // plain caret" — quick-add-highlight.ts's own `tokenHighlightState`
+  // treats `null` identically to "the caret isn't touching this token,"
+  // which is exactly right for both cases: a blurred field has nothing
+  // being actively composed, and a selection spanning multiple characters
+  // isn't "the caret sitting inside this one token" either.
+  const [caretOffset, setCaretOffset] = useState<number | null>(null);
   const smartDates = useSettingsStore((state) => state.smartDatesEnabled);
   const inputRef = useRef<HTMLInputElement>(null);
   const backdropRef = useRef<HTMLDivElement>(null);
@@ -92,7 +109,7 @@ export function AddTaskForm({ onAdd, disabled }: AddTaskFormProps) {
   // correct across a midnight the field happens to stay open through.
   const options: QuickAddOptions = { now: localDayKey(new Date()), smartDates };
   const result = parseWithDemotions(value, options, demotedSignatures);
-  const segments = highlightSegments(value, result.tokens);
+  const segments = highlightSegments(value, result.tokens, caretOffset);
 
   /**
    * Keeps the backdrop scrolled to exactly where the real `<input>` is
@@ -137,6 +154,39 @@ export function AddTaskForm({ onAdd, disabled }: AddTaskFormProps) {
   // property write against two refs, which is not worth guarding.
   useLayoutEffect(syncBackdropScroll);
 
+  // Reads the real `<input>`'s own live selection and stores it as plain
+  // caret state (this component's own header comment on why a ref read
+  // during render isn't enough). A non-collapsed selection (`start !==
+  // end`) reads as `null`, matching `caretOffset`'s own doc comment.
+  function syncCaretOffset(target: HTMLInputElement) {
+    setCaretOffset(target.selectionStart === target.selectionEnd ? target.selectionStart : null);
+  }
+
+  function handleChange(event: SyntheticEvent<HTMLInputElement>) {
+    const target = event.currentTarget;
+    setValue(target.value);
+    syncCaretOffset(target);
+  }
+
+  // Fires on every selection change a browser reports outside of typing —
+  // arrow-key navigation, a drag-select, a programmatic `setSelectionRange`
+  // — so a token's own "pending" state stays live even when nothing about
+  // `value` itself changed. `handleChange`/`handleInputClick` each also
+  // call `syncCaretOffset` directly, for the two cases (typing, a click)
+  // this component already has its own handler for and where relying on
+  // `select` firing at all would be one more browser behaviour to trust.
+  function handleSelect(event: SyntheticEvent<HTMLInputElement>) {
+    syncCaretOffset(event.currentTarget);
+  }
+
+  // Nothing is being actively composed once the field loses focus — every
+  // token still shown reads as fully "resolved" (or stays "unresolved",
+  // for a kind that never does) rather than lingering in "pending" simply
+  // because no later event happened to move the caret away first.
+  function handleBlur() {
+    setCaretOffset(null);
+  }
+
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const fields = taskFieldsFromQuickAdd(value, result, options);
@@ -165,6 +215,7 @@ export function AddTaskForm({ onAdd, disabled }: AddTaskFormProps) {
   // own — see this ticket's own report for what wasn't verified beyond
   // jsdom).
   function handleInputClick(event: ReactMouseEvent<HTMLInputElement>) {
+    syncCaretOffset(event.currentTarget);
     const offset = event.currentTarget.selectionStart;
     if (offset === null) {
       return;
@@ -208,7 +259,10 @@ export function AddTaskForm({ onAdd, disabled }: AddTaskFormProps) {
               <span
                 // biome-ignore lint/suspicious/noArrayIndexKey: segments are rebuilt fresh from `value`/`result.tokens` on every render (this component's own header comment on why nothing here is patched incrementally) — there is no identity to key on across renders other than position, and React never needs to preserve one span's own DOM node across a full re-derivation like this.
                 key={index}
-                className={cn("text-transparent", segment.highlighted && QUICK_ADD_HIGHLIGHT_CLASS)}
+                className={cn(
+                  "text-transparent",
+                  segment.kind !== null && quickAddHighlightClass(segment.kind, segment.state),
+                )}
               >
                 {segment.text}
               </span>
@@ -221,9 +275,11 @@ export function AddTaskForm({ onAdd, disabled }: AddTaskFormProps) {
           placeholder="Add a Task"
           aria-label="Add a Task"
           value={value}
-          onChange={(event) => setValue(event.target.value)}
+          onChange={handleChange}
           onScroll={syncBackdropScroll}
           onClick={handleInputClick}
+          onSelect={handleSelect}
+          onBlur={handleBlur}
           disabled={disabled}
           className="relative bg-transparent dark:bg-transparent"
         />

@@ -18,6 +18,7 @@
  * target.
  */
 import type { Project, Section, Task } from "@meologue/core";
+import type { TaskDetailActions } from "@/components/todo/task-row";
 import { TaskTree } from "@/components/todo/task-tree";
 
 export interface TaskListProps {
@@ -29,6 +30,8 @@ export interface TaskListProps {
   projectId: Project["id"] | null;
   /** Shown in place of every row when `tasks` is empty — the caller's own words, since Inbox's and a Project's empty states read differently (todo-page.tsx). */
   emptyMessage: string;
+  /** Passed straight through to every `TaskTree`/`TaskRow` this list renders — see `TaskDetailActions`'s own doc comment (task-row.tsx). */
+  detailActions: TaskDetailActions;
   onComplete: (task: Task) => void;
   onCompleteForever: (task: Task) => void;
   onRequestDelete: (task: Task) => void;
@@ -46,6 +49,7 @@ export function TaskList({
   sections,
   projectId,
   emptyMessage,
+  detailActions,
   onComplete,
   onCompleteForever,
   onRequestDelete,
@@ -71,6 +75,7 @@ export function TaskList({
   // bucket its own row happens to render from.
   const treeProps = {
     projectId,
+    detailActions,
     onComplete,
     onCompleteForever,
     onRequestDelete,

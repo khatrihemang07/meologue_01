@@ -1,19 +1,26 @@
 import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
 import { withDefaultLabelIds } from "../label-fields";
-import { nextOccurrence, tomorrowOf } from "../recurrence";
+import { nextOccurrenceAfterCompletion, tomorrowOf } from "../recurrence";
 import {
   assertValidDate,
   assertValidDeadline,
-  assertValidDuration,
   assertValidNestingDepth,
   assertValidPriority,
   hasTime,
   withDefaultDateString,
+  withDefaultDayOrder,
+  withDefaultDescription,
   withDefaultSchedulingFields,
   withDefaultStructureFields,
 } from "../task-fields";
-import type { TaskStore } from "../task-store";
+import {
+  isTrigramSafe,
+  matchesSubstring,
+  matchesWholeWord,
+  toTrigramMatchQuery,
+} from "../task-search";
+import type { TaskSearchOptions, TaskStore } from "../task-store";
 import type { Task } from "../task-types";
 import type { SqliteDriver } from "./driver";
 import { kv, tasks } from "./schema";
@@ -23,9 +30,13 @@ import { kv, tasks } from "./schema";
  * SqliteEntryStore (./sqlite-entry-store.ts) closely enough that a reader
  * of one recognises the other, including its hand-maintained FTS index
  * and the same non-atomicity it carries. Use ./open.ts rather than this
- * constructor directly: `tasks_fts` (migration 5) has to exist before
- * this can index anything into it, the same way `entries_fts` (migration
- * 2) has to exist before SqliteEntryStore can.
+ * constructor directly: `tasks_fts` (migration 5, rebuilt with a
+ * `trigram` tokenizer by migration 14 — issue #183) and
+ * `task_descriptions_fts` (also migration 14) both have to exist before
+ * this can index anything into either, the same way `entries_fts`
+ * (migration 2) has to exist before SqliteEntryStore can. See
+ * ../task-search.ts's own header comment for why title and Description
+ * get two separate FTS5 tables rather than two columns on one.
  */
 export class SqliteTaskStore implements TaskStore {
   private readonly db: ReturnType<typeof drizzle>;
@@ -132,7 +143,7 @@ export class SqliteTaskStore implements TaskStore {
     if (newTasks.length === 0) {
       return;
     }
-    // withDefaultSchedulingFields fills date/deadline/duration/priority
+    // withDefaultSchedulingFields fills date/deadline/priority
     // in for a caller that omits them (Task.priority's own doc comment on
     // why that key is TS-optional at all) — done once here, before the
     // insert, rather than trusted to drizzle's own handling of a missing
@@ -154,7 +165,9 @@ export class SqliteTaskStore implements TaskStore {
       .map(withDefaultSchedulingFields)
       .map(withDefaultLabelIds)
       .map(withDefaultDateString)
-      .map(withDefaultStructureFields);
+      .map(withDefaultStructureFields)
+      .map(withDefaultDescription)
+      .map(withDefaultDayOrder);
     // A single statement (mirrors SqliteEntryStore.upsert — see ADR
     // 0007): SQLite's native upsert applies each conflicting row's own
     // `excluded` values, so this stays correct for a batch of unrelated
@@ -169,19 +182,20 @@ export class SqliteTaskStore implements TaskStore {
           content: sql`excluded.content`,
           completedAt: sql`excluded.completed_at`,
           orderKey: sql`excluded.order_key`,
+          dayOrder: sql`excluded.day_order`,
           createdAt: sql`excluded.created_at`,
           seq: sql`excluded.seq`,
           syncedAt: sql`excluded.synced_at`,
           deletedAt: sql`excluded.deleted_at`,
           date: sql`excluded.date`,
           deadline: sql`excluded.deadline`,
-          duration: sql`excluded.duration`,
           priority: sql`excluded.priority`,
           labelIds: sql`excluded.label_ids`,
           dateString: sql`excluded.date_string`,
           projectId: sql`excluded.project_id`,
           sectionId: sql`excluded.section_id`,
           parentId: sql`excluded.parent_id`,
+          description: sql`excluded.description`,
         },
       });
     for (const t of normalized) {
@@ -189,7 +203,7 @@ export class SqliteTaskStore implements TaskStore {
     }
   }
 
-  // Reads the Task first, like setDuration/postpone below, so the
+  // Reads the Task first, like setParent/postpone below, so the
   // cascade below only runs against a live Task's own children — not
   // when updateIfLive would have silently no-opped against a tombstone.
   async complete(id: string, completedAt: string): Promise<void> {
@@ -247,6 +261,17 @@ export class SqliteTaskStore implements TaskStore {
     await this.updateIfLive(id, { orderKey, seq: null, syncedAt: null });
   }
 
+  /**
+   * Changes a Task's dayOrder locally — the Today-shaped sibling of
+   * reorder() above (issue #182). Writes exactly one row via the
+   * identical `WHERE id = ?` UPDATE, and leaves `orderKey` untouched:
+   * dragging in Today never reaches into a Task's Project position.
+   * No-op against a tombstone.
+   */
+  async reorderToday(id: string, dayOrder: string): Promise<void> {
+    await this.updateIfLive(id, { dayOrder, seq: null, syncedAt: null });
+  }
+
   async setDate(id: string, date: string | null): Promise<void> {
     assertValidDate(date);
     await this.updateIfLive(id, { date, seq: null, syncedAt: null });
@@ -255,23 +280,6 @@ export class SqliteTaskStore implements TaskStore {
   async setDeadline(id: string, deadline: string | null): Promise<void> {
     assertValidDeadline(deadline);
     await this.updateIfLive(id, { deadline, seq: null, syncedAt: null });
-  }
-
-  // Reads the Task's current `date` first, unlike every other setter here
-  // — assertValidDuration's "requires a timed date" rule spans two
-  // columns, so there's nothing to validate against without a read. This
-  // is also why an unknown or tombstoned id no-ops *before* validation
-  // runs rather than after: "no-op against a tombstone" is unconditional
-  // for every mutator on this store (see TaskStore.setDuration's doc
-  // comment), and a row that doesn't exist has no `date` to validate
-  // against in the first place.
-  async setDuration(id: string, duration: number | null): Promise<void> {
-    const current = await this.get(id);
-    if (current === undefined) {
-      return;
-    }
-    assertValidDuration(duration, current.date);
-    await this.updateIfLive(id, { duration, seq: null, syncedAt: null });
   }
 
   async setPriority(id: string, priority: number): Promise<void> {
@@ -288,6 +296,12 @@ export class SqliteTaskStore implements TaskStore {
     await this.updateIfLive(id, { labelIds, seq: null, syncedAt: null });
   }
 
+  // See TaskStore.setDescription's own doc comment. No validation beyond
+  // the string shape itself — a Description is free-form Markdown.
+  async setDescription(id: string, description: string | null): Promise<void> {
+    await this.updateIfLive(id, { description, seq: null, syncedAt: null });
+  }
+
   // See TaskStore.setProject's own doc comment for why `sectionId` is
   // cleared unconditionally alongside `projectId`.
   async setProject(id: string, projectId: string | null): Promise<void> {
@@ -299,7 +313,7 @@ export class SqliteTaskStore implements TaskStore {
   }
 
   // See TaskStore.setParent's own doc comment for the three shapes this
-  // refuses. Reads the target Task first, mirroring setDuration above:
+  // refuses. Reads the target Task first, mirroring complete above:
   // "no-op against a tombstone" for `id` itself is unconditional, checked
   // before any of `parentId`'s own validation runs.
   async setParent(id: string, parentId: string | null): Promise<void> {
@@ -347,7 +361,7 @@ export class SqliteTaskStore implements TaskStore {
 
   // See TaskStore.advanceRecurring's own doc comment for the full
   // reasoning; this is its mechanics. Reads the Task first (mirrors
-  // setDuration's own reasoning above): "no-op against a tombstone" has
+  // setParent's own reasoning above): "no-op against a tombstone" has
   // to be checked before either throw below becomes reachable, and
   // there's no `dateString` to re-parse for a row that isn't live in the
   // first place.
@@ -365,7 +379,10 @@ export class SqliteTaskStore implements TaskStore {
     // calendar day matters to ../recurrence/'s engine, never the exact
     // instant a completion happened at.
     const now = completedAt.slice(0, 10);
-    const outcome = nextOccurrence(current.dateString, { dueDate: current.date, now });
+    const outcome = nextOccurrenceAfterCompletion(current.dateString, {
+      dueDate: current.date,
+      now,
+    });
     if (outcome.kind === "refused") {
       throw new Error(
         `Task ${id}'s stored recurrence "${current.dateString}" no longer parses: ${outcome.reason}`,
@@ -400,7 +417,7 @@ export class SqliteTaskStore implements TaskStore {
 
   // See TaskStore.postpone's own doc comment for the full reasoning;
   // this is its mechanics. Reads the Task first, the same as
-  // setDuration/advanceRecurring above, to know whether `date` carries a
+  // setParent/advanceRecurring above, to know whether `date` carries a
   // time-of-day to preserve on the new day — postpone has no rule of its
   // own to re-parse, but it still needs the Task's *current* shape.
   async postpone(id: string, today: string): Promise<void> {
@@ -452,23 +469,144 @@ export class SqliteTaskStore implements TaskStore {
     await this.setKv(TASK_CURSOR_KEY, String(seq));
   }
 
-  async search(query: string): Promise<Task[]> {
+  // Issue #186 / ADR 0057 — see EntryStore.catchUpRowShapeEpoch's own doc
+  // comment (../store.ts) for the mechanism, and SqliteEntryStore's own
+  // implementation for why the reset (setCursor) happens before the
+  // record (setKv) rather than after.
+  async catchUpRowShapeEpoch(currentEpoch: number): Promise<void> {
+    const stored = await this.getKv(TASK_ROW_SHAPE_EPOCH_KEY);
+    const storedEpoch = stored === undefined ? 0 : Number(stored);
+    if (storedEpoch >= currentEpoch) {
+      return;
+    }
+    await this.setCursor(0);
+    await this.setKv(TASK_ROW_SHAPE_EPOCH_KEY, String(currentEpoch));
+  }
+
+  /**
+   * See TaskStore.search's own doc comment for the full matching rules
+   * (issue #183) — this is their mechanics. `fields` picks which of
+   * `tasks_fts` (title) and `task_descriptions_fts` (Description) to
+   * consult, each queried and matched **on its own**, never combined into
+   * one query, which is what keeps a title-only word and a
+   * Description-only word from together satisfying a two-word query (see
+   * task-search.ts's own header comment). `options.includeCompleted`
+   * switches the whole call to whole-word matching via a plain JS scan
+   * (searchWholeWord below) instead of either FTS5 table — see
+   * TaskSearchOptions's own doc comment for why.
+   *
+   * Absent that opt-in, a query containing a word shorter than
+   * MIN_TRIGRAM_WORD_LENGTH (task-search.ts) can't be expressed as a
+   * trigram MATCH at all, so it's routed through searchSubstringScan
+   * below (a plain JS scan, same matcher InMemoryTaskStore.search uses)
+   * instead of silently returning nothing — see MIN_TRIGRAM_WORD_LENGTH's
+   * own comment for why FTS5 can't help there regardless of query length
+   * elsewhere in the same call.
+   *
+   * Ordered by `created_at` ascending, then `id` ascending — creation
+   * order, not `list()`'s manual `order_key` order. Issue #183's own
+   * reference-behaviour research measured a real Todoist search doing
+   * exactly this (an exact match ranked *last* when it was created last,
+   * no relevance re-ranking observed), which is a deliberate change from
+   * this method's pre-#183 "same order as list()" guarantee.
+   */
+  async search(query: string, options?: TaskSearchOptions): Promise<Task[]> {
     const trimmed = query.trim();
     if (trimmed === "") {
       return [];
     }
-    // Excludes both tombstoned and completed Tasks — see
-    // TaskStore.search's doc comment for why a completed Task doesn't
-    // belong in "find something I still need to act on." Ordered to
-    // match list()'s own order (order_key asc, id asc), mirroring
-    // SqliteEntryStore.search's "same order as list()" guarantee.
+    const fields = options?.fields ?? (["title", "description"] as const);
+    if (options?.includeCompleted === true) {
+      return this.searchWholeWordScan(trimmed, fields);
+    }
+    return isTrigramSafe(trimmed)
+      ? this.searchTrigram(trimmed, fields)
+      : this.searchSubstringScan(trimmed, fields);
+  }
+
+  // The fast path: one MATCH per requested field's own FTS5 table, ids
+  // unioned in JS (a personal task list's own match counts never justify
+  // a hand-rolled dynamic SQL UNION for this), then fetched back through
+  // fetchTasksByIds below.
+  private async searchTrigram(
+    query: string,
+    fields: readonly ("title" | "description")[],
+  ): Promise<Task[]> {
+    const matchExpr = toTrigramMatchQuery(query);
+    const ids = new Set<string>();
+    if (fields.includes("title")) {
+      for (const id of await this.matchingIds("tasks_fts", matchExpr)) {
+        ids.add(id);
+      }
+    }
+    if (fields.includes("description")) {
+      for (const id of await this.matchingIds("task_descriptions_fts", matchExpr)) {
+        ids.add(id);
+      }
+    }
+    return this.fetchTasksByIds([...ids], { includeCompleted: false });
+  }
+
+  private async matchingIds(
+    table: "tasks_fts" | "task_descriptions_fts",
+    matchExpr: string,
+  ): Promise<string[]> {
     const result = await this.driver.execute(
-      `SELECT tasks.id, tasks.device_id, tasks.content, tasks.completed_at, tasks.order_key, tasks.created_at, tasks.seq, tasks.synced_at, tasks.deleted_at, tasks.date, tasks.deadline, tasks.duration, tasks.priority, tasks.label_ids, tasks.date_string, tasks.project_id, tasks.section_id, tasks.parent_id
-       FROM tasks_fts
-       JOIN tasks ON tasks.id = tasks_fts.id
-       WHERE tasks_fts MATCH ? AND tasks.deleted_at IS NULL AND tasks.completed_at IS NULL
-       ORDER BY tasks.order_key ASC, tasks.id ASC`,
-      [toPrefixMatchQuery(trimmed)],
+      `SELECT id FROM ${table} WHERE ${table} MATCH ?`,
+      [matchExpr],
+      "all",
+    );
+    return result.rows.map((row) => (row as [string])[0]);
+  }
+
+  // A plain scan over active, non-tombstoned Tasks, substring-matched in
+  // JS via task-search.ts's matchesSubstring — the fallback for a query
+  // MIN_TRIGRAM_WORD_LENGTH's own comment says a trigram MATCH can't see.
+  private async searchSubstringScan(
+    query: string,
+    fields: readonly ("title" | "description")[],
+  ): Promise<Task[]> {
+    const candidates = await this.liveTasks({ includeCompleted: false });
+    return candidates.filter((t) => matchesAnyField(t, query, fields, matchesSubstring));
+  }
+
+  // Whole-word mode (TaskSearchOptions.includeCompleted's own doc
+  // comment) — active and completed Tasks alike, tombstones excluded,
+  // matched via task-search.ts's matchesWholeWord rather than any FTS5
+  // table: this mode exists specifically to *not* be substring matching.
+  private async searchWholeWordScan(
+    query: string,
+    fields: readonly ("title" | "description")[],
+  ): Promise<Task[]> {
+    const candidates = await this.liveTasks({ includeCompleted: true });
+    return candidates.filter((t) => matchesAnyField(t, query, fields, matchesWholeWord));
+  }
+
+  private async liveTasks({ includeCompleted }: { includeCompleted: boolean }): Promise<Task[]> {
+    const completedClause = includeCompleted ? "" : "AND tasks.completed_at IS NULL";
+    const result = await this.driver.execute(
+      `SELECT ${TASK_SEARCH_COLUMNS} FROM tasks WHERE tasks.deleted_at IS NULL ${completedClause}
+       ORDER BY tasks.created_at ASC, tasks.id ASC`,
+      [],
+      "all",
+    );
+    return result.rows.map(rowToTask);
+  }
+
+  private async fetchTasksByIds(
+    ids: string[],
+    { includeCompleted }: { includeCompleted: boolean },
+  ): Promise<Task[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+    const completedClause = includeCompleted ? "" : "AND tasks.completed_at IS NULL";
+    const placeholders = ids.map(() => "?").join(", ");
+    const result = await this.driver.execute(
+      `SELECT ${TASK_SEARCH_COLUMNS} FROM tasks
+       WHERE tasks.deleted_at IS NULL ${completedClause} AND tasks.id IN (${placeholders})
+       ORDER BY tasks.created_at ASC, tasks.id ASC`,
+      ids,
       "all",
     );
     return result.rows.map(rowToTask);
@@ -492,25 +630,42 @@ export class SqliteTaskStore implements TaskStore {
   // blocked by the tombstone guard.
   private async reindexFromCurrentState(id: string): Promise<void> {
     const [current] = await this.db
-      .select({ content: tasks.content, deletedAt: tasks.deletedAt })
+      .select({
+        content: tasks.content,
+        description: tasks.description,
+        deletedAt: tasks.deletedAt,
+      })
       .from(tasks)
       .where(eq(tasks.id, id))
       .limit(1);
     if (current === undefined) {
       return;
     }
-    await this.indexForSearch({ id, content: current.content, deletedAt: current.deletedAt });
+    await this.indexForSearch({
+      id,
+      content: current.content,
+      description: current.description,
+      deletedAt: current.deletedAt,
+    });
   }
 
-  // DELETE-then-INSERT, not atomic across the two statements (no
-  // transaction — ADR 0007) — mirrors SqliteEntryStore.indexForSearch's
-  // identical technique and the identical trade-off: a process that dies
-  // between the two statements leaves this Task temporarily missing from
+  // DELETE-then-INSERT against both tasks_fts (title) and
+  // task_descriptions_fts (Description, issue #183), not atomic across the
+  // statements (no transaction — ADR 0007) — mirrors SqliteEntryStore.
+  // indexForSearch's identical technique and the identical trade-off: a
+  // process that dies mid-way leaves this Task temporarily missing from
   // Search, which is self-healing (the next write that touches this id
-  // redelivers the INSERT) rather than lossy, and is worth naming rather
-  // than leaving as a silent race.
-  private async indexForSearch(t: Pick<Task, "id" | "content" | "deletedAt">): Promise<void> {
+  // redelivers the INSERTs) rather than lossy, and is worth naming rather
+  // than leaving as a silent race. `task_descriptions_fts` gets no row at
+  // all for a null or empty Description — matchesSubstring/matchesWholeWord
+  // (../task-search.ts) already treat "no Description" as "never matches,"
+  // and an indexed empty string would only cost storage to say the same
+  // thing FTS5 already says by the row's absence.
+  private async indexForSearch(
+    t: Pick<Task, "id" | "content" | "description" | "deletedAt">,
+  ): Promise<void> {
     await this.driver.execute("DELETE FROM tasks_fts WHERE id = ?", [t.id], "run");
+    await this.driver.execute("DELETE FROM task_descriptions_fts WHERE id = ?", [t.id], "run");
     if (t.deletedAt !== null) {
       return;
     }
@@ -519,6 +674,13 @@ export class SqliteTaskStore implements TaskStore {
       [t.id, t.content],
       "run",
     );
+    if (t.description !== null && t.description !== undefined && t.description !== "") {
+      await this.driver.execute(
+        "INSERT INTO task_descriptions_fts (id, description) VALUES (?, ?)",
+        [t.id, t.description],
+        "run",
+      );
+    }
   }
 
   private async getKv(key: string): Promise<string | undefined> {
@@ -541,23 +703,39 @@ export class SqliteTaskStore implements TaskStore {
 // row.
 const TASK_CURSOR_KEY = "task_cursor";
 
-/**
- * Builds an FTS5 MATCH expression that searches for `text` literally —
- * mirrors SqliteEntryStore's toPrefixMatchQuery exactly (see its comment
- * for the escaping and prefix-match mechanics; identical here because
- * FTS5's phrase-quoting behaviour doesn't depend on which table it's
- * matching against).
- */
-function toPrefixMatchQuery(text: string): string {
-  return `"${text.replaceAll('"', '""')}"*`;
+// Issue #186 / ADR 0057: the Task stream's own row-shape-epoch key,
+// namespaced apart from every other stream's for the identical reason
+// TASK_CURSOR_KEY's own comment above gives.
+const TASK_ROW_SHAPE_EPOCH_KEY = "task_row_shape_epoch";
+
+// The columns search()'s three query shapes (searchTrigram via
+// fetchTasksByIds, searchSubstringScan/searchWholeWordScan via liveTasks)
+// all select, in the exact order rowToTask below expects — pulled out
+// once so the three call sites can't drift into selecting different
+// columns from one another.
+const TASK_SEARCH_COLUMNS =
+  "tasks.id, tasks.device_id, tasks.content, tasks.completed_at, tasks.order_key, tasks.day_order, tasks.created_at, tasks.seq, tasks.synced_at, tasks.deleted_at, tasks.date, tasks.deadline, tasks.priority, tasks.label_ids, tasks.date_string, tasks.project_id, tasks.section_id, tasks.parent_id, tasks.description";
+
+// Shared by searchSubstringScan and searchWholeWordScan above: true when
+// `matcher` (matchesSubstring or matchesWholeWord, ../task-search.ts)
+// is satisfied by at least one of `fields`'s own text — title (`content`)
+// or Description — checked independently per field, never combined, the
+// same "no cross-field AND" rule search()'s own doc comment describes.
+function matchesAnyField(
+  t: Task,
+  query: string,
+  fields: readonly ("title" | "description")[],
+  matcher: (field: string | null | undefined, query: string) => boolean,
+): boolean {
+  return fields.some((field) => matcher(field === "title" ? t.content : t.description, query));
 }
 
 // Asserted here rather than cast, mirroring SqliteEntryStore's
 // rowToEntry — a row that doesn't match the shape this query asked for
 // throws instead of silently mis-mapping a value into the wrong field.
 function rowToTask(row: unknown): Task {
-  if (!Array.isArray(row) || row.length !== 18) {
-    throw new Error(`sqlite search expected an 18-column tasks row, got ${JSON.stringify(row)}`);
+  if (!Array.isArray(row) || row.length !== 19) {
+    throw new Error(`sqlite search expected a 19-column tasks row, got ${JSON.stringify(row)}`);
   }
   const [
     id,
@@ -565,19 +743,20 @@ function rowToTask(row: unknown): Task {
     content,
     completedAt,
     orderKey,
+    dayOrder,
     createdAt,
     seq,
     syncedAt,
     deletedAt,
     date,
     deadline,
-    duration,
     priority,
     labelIdsJson,
     dateString,
     projectId,
     sectionId,
     parentId,
+    description,
   ] = row as [
     string,
     string,
@@ -585,14 +764,15 @@ function rowToTask(row: unknown): Task {
     string | null,
     string,
     string,
+    string,
     number | null,
     string | null,
     string | null,
     string | null,
     string | null,
-    number | null,
     number,
     string,
+    string | null,
     string | null,
     string | null,
     string | null,
@@ -604,13 +784,13 @@ function rowToTask(row: unknown): Task {
     content,
     completedAt,
     orderKey,
+    dayOrder,
     createdAt,
     seq,
     syncedAt,
     deletedAt,
     date,
     deadline,
-    duration,
     priority,
     // This query runs through this.driver.execute directly rather than
     // drizzle's query builder, so none of drizzle's `{ mode: "json" }`
@@ -621,5 +801,6 @@ function rowToTask(row: unknown): Task {
     projectId,
     sectionId,
     parentId,
+    description,
   };
 }

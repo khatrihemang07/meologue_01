@@ -116,6 +116,18 @@ export class SqliteLabelStore implements LabelStore {
     await this.setKv(LABEL_CURSOR_KEY, String(seq));
   }
 
+  // Issue #186 / ADR 0057 — see EntryStore.catchUpRowShapeEpoch's own doc
+  // comment (../store.ts) for the mechanism.
+  async catchUpRowShapeEpoch(currentEpoch: number): Promise<void> {
+    const stored = await this.getKv(LABEL_ROW_SHAPE_EPOCH_KEY);
+    const storedEpoch = stored === undefined ? 0 : Number(stored);
+    if (storedEpoch >= currentEpoch) {
+      return;
+    }
+    await this.setCursor(0);
+    await this.setKv(LABEL_ROW_SHAPE_EPOCH_KEY, String(currentEpoch));
+  }
+
   // Mirrors SqliteTaskStore.updateIfLive exactly — see its own comment
   // for why a mutation against an unknown or tombstoned id is a no-op
   // rather than an error.
@@ -140,3 +152,6 @@ export class SqliteLabelStore implements LabelStore {
 }
 
 const LABEL_CURSOR_KEY = "label_cursor";
+
+// Issue #186 / ADR 0057: the Label stream's own row-shape-epoch key.
+const LABEL_ROW_SHAPE_EPOCH_KEY = "label_row_shape_epoch";

@@ -37,6 +37,7 @@ import {
   checklistHighlightPluginKey,
   checklistShortcutInputRulePattern,
   liftAtStartOfListItem,
+  taskReferenceSeparatorPlugin,
 } from "./composer-editor";
 import { entryMarkdownToDocument } from "./entry-document";
 import { entrySchema } from "./entry-schema";
@@ -739,5 +740,61 @@ describe("checklistHighlightPlugin", () => {
         demoted: new Set(["priority:p1"]),
       });
     });
+  });
+});
+
+// taskReferenceSeparatorPlugin (issue #177) — a pure function of
+// `state.doc` alone (no selection, no plugin state), so it's testable the
+// identical way `checklistHighlightPlugin`'s own `props.decorations` is
+// above: construct a state, ask the plugin for decorations, check the
+// spans. Whether that hidden span actually renders with no visual width in
+// a real browser is a `white-space: pre-wrap` / `display: none` CSS
+// question this file has no DOM to answer — apps/e2e's composer.spec.ts
+// (or a screenshot) is where that gets checked for real.
+describe("taskReferenceSeparatorPlugin", () => {
+  const TASK_ID = "11111111-2222-4333-8444-555555555555";
+
+  function decorationSpans(doc: PMNode): Array<{ from: number; to: number }> {
+    const state = EditorState.create({ schema: entrySchema, doc });
+    const plugin = taskReferenceSeparatorPlugin();
+    const decorations = plugin.props.decorations?.call(plugin, state) as DecorationSet | undefined;
+    const found = decorations?.find() ?? [];
+    return found
+      .map((d) => ({ from: d.from, to: d.to }))
+      .sort((a, b) => a.from - b.from || a.to - b.to);
+  }
+
+  it("hides the mandatory separator space on a referenced checklist item", () => {
+    const body = `- [ ] ${formatTaskReference(TASK_ID, "buy milk")}`;
+    const doc = entryMarkdownToDocument(body);
+    const blockStart = startOfFirstParagraph(doc);
+
+    // The paragraph's own content is exactly [text(" "), task_reference]
+    // (entry-document.test.ts's own comment on why) — the separator is
+    // the one character right at the paragraph's own content start.
+    expect(decorationSpans(doc)).toEqual([{ from: blockStart, to: blockStart + 1 }]);
+  });
+
+  it("hides nothing on an ordinary bare checklist item — only a referenced line has a separator to hide", () => {
+    const doc = entryMarkdownToDocument("- [ ] buy milk\n- [x] call mum\n- plain");
+
+    expect(decorationSpans(doc)).toEqual([]);
+  });
+
+  it("hides nothing on an ordinary paragraph with no checklist item at all", () => {
+    const doc = entryMarkdownToDocument("buy milk, please");
+
+    expect(decorationSpans(doc)).toEqual([]);
+  });
+
+  it("hides one separator per referenced item when a checklist holds several", () => {
+    const body = [
+      `- [ ] ${formatTaskReference(TASK_ID, "buy milk")}`,
+      "- [ ] a bare checkbox",
+      `- [x] ${formatTaskReference("22222222-3333-4444-8555-666666666666", "call mum")}`,
+    ].join("\n");
+    const doc = entryMarkdownToDocument(body);
+
+    expect(decorationSpans(doc)).toHaveLength(2);
   });
 });

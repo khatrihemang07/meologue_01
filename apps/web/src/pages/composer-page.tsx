@@ -1,11 +1,15 @@
-import type { Entry } from "@meologue/core";
+import type { Entry, Task } from "@meologue/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
+import { toast } from "sonner";
 import { BackToChats } from "@/components/back-to-chats";
 import { Composer, type ComposerHandle } from "@/components/composer";
 import { History, type HistorySeekTarget } from "@/components/history";
 import { Shell } from "@/components/shell";
+import { TaskDetailView } from "@/components/todo/task-detail-view";
+import { TaskScheduleSheet } from "@/components/todo/task-schedule-sheet";
 import { useHistorySearch } from "@/hooks/use-history-search";
+import { commentsForTask } from "@/lib/comment-counts";
 import type { ComposerPromotionContext } from "@/lib/promote-tasks";
 import { useSyncEnabled } from "@/lib/settings";
 import { toggleTaskAt } from "@/lib/toggle-task";
@@ -33,6 +37,28 @@ const SEEK_ENTRY_PARAM = "e";
 const ENTRY_ID_SHAPE =
   /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
+// The Task detail overlay's own address (issue #181, criterion 4: "opens
+// the Task over the Composer, without leaving the Composer"). `?task=<id>`
+// joins `?d=`/`?e=` above as a third query param this same route answers,
+// rather than `/todo/task/<slug>-<id>` (task-detail-route.ts) — navigating
+// there would leave the Composer entirely (a different route, a different
+// `<Shell>` title, a different History instance), losing exactly the
+// in-progress draft and scroll position criterion 4 asks to keep. Reusing
+// `ENTRY_ID_SHAPE` rather than a second, identical regex: a Task's id and
+// an Entry's id are both `mintId()`'s own uuidv7 shape (id.ts), so the
+// pattern is the same regardless of which root noun it names.
+//
+// Opening pushes a real history entry (`setSearchParams`'s own default —
+// see `openTaskOverlay` below), so the phone/browser Back button dismisses
+// the overlay and lands back on this same Composer with nothing else
+// disturbed, rather than leaving it — the "strongly preferred" half of
+// criterion 4's own design room. Closing explicitly (the overlay's own X,
+// or Escape) instead *replaces* the current entry (`closeTaskOverlay`
+// below) — the identical "this param's own job is already done, don't
+// leave a dead entry for Back to skip past" reasoning `settleSeek` already
+// applies to `?d=`/`?e=` once a seek resolves.
+const TASK_PARAM = "task";
+
 // `/` — the Composer plus the same, uncapped History that had its own
 // route at `/history` before issue #75 deleted it (a second door onto the
 // identical component with the identical props, once judged redundant).
@@ -54,6 +80,28 @@ export function ComposerPage() {
     // array Today and Inbox already render from, handed to History so it
     // can filter it per day with `tasksForDay` (task-views.ts).
     tasks,
+    // Issue #181: the rest of Todo's own machinery, handed straight
+    // through to History's day block and to the Task detail overlay below
+    // — the identical fields todo-page.tsx already reads off this same
+    // context, none of it re-derived here a second time.
+    completedTasks,
+    projects,
+    labels,
+    comments,
+    events,
+    completeTask,
+    uncompleteTask,
+    advanceRecurringTask,
+    renameTask,
+    setTaskDate,
+    setTaskDeadline,
+    setTaskPriority,
+    setTaskProject,
+    setTaskLabels,
+    setTaskDescription,
+    addComment,
+    editComment,
+    removeComment,
   } = useEntryStore();
   // Subscribed, not a one-off read: a change saved on Settings now updates
   // this without a reload or a remount (ticket 36), on top of the render
@@ -205,6 +253,90 @@ export function ComposerPage() {
     editEntry(entry.id, toggleTaskAt(entry.body, markerFrom, markerTo));
   }
 
+  // Issue #181: the Task detail overlay's own target — see `TASK_PARAM`'s
+  // own comment above for why this rides in the URL rather than plain
+  // component state. `tasks` first, `completedTasks` second, the identical
+  // two-list lookup order `todo-page.tsx`'s own `openTask` already uses
+  // (far more common case first; a Task is never in both).
+  const openTaskIdParam = searchParams.get(TASK_PARAM);
+  const openTaskId =
+    openTaskIdParam !== null && ENTRY_ID_SHAPE.test(openTaskIdParam) ? openTaskIdParam : null;
+  const openTask =
+    openTaskId !== null
+      ? (tasks.find((t) => t.id === openTaskId) ??
+        completedTasks.find((t) => t.id === openTaskId) ??
+        null)
+      : null;
+  const openTaskProject =
+    openTask === null ? null : (projects.find((p) => p.id === openTask.projectId) ?? null);
+
+  function openTaskOverlay(taskId: string) {
+    setSearchParams((previous) => {
+      const params = new URLSearchParams(previous);
+      params.set(TASK_PARAM, taskId);
+      return params;
+    });
+  }
+
+  function closeTaskOverlay() {
+    setSearchParams(
+      (previous) => {
+        const params = new URLSearchParams(previous);
+        params.delete(TASK_PARAM);
+        return params;
+      },
+      { replace: true },
+    );
+  }
+
+  // The one TaskScheduleSheet instance the overlay needs (mirroring
+  // todo-page.tsx's own single shared instance) — no id of its own to
+  // track, unlike that page's `schedulingId`: the Composer's overlay only
+  // ever shows one Task at a time (`openTask`), so "which Task is being
+  // scheduled" is never a separate question from "which Task is open."
+  const [schedulingOpen, setSchedulingOpen] = useState(false);
+
+  // Completes a Task from outside Todo's own row (the Day block, or the
+  // overlay's own checkbox) — the identical `dateString` branch
+  // todo-page.tsx's `handleComplete` already makes, reused rather than
+  // reimplemented so a recurring Task advances instead of entering
+  // `completedTasks` regardless of which surface ticked it. Undo is
+  // offered for the same reason it is there: completing is always
+  // reversible except where a series just ended, which this function is
+  // never asked to do (that stays `completeForeverTask`, Todo's own
+  // Shift+Click — this ticket adds no such gesture outside Todo).
+  //
+  // Toast-with-Undo here, no toast on `handleUncompleteTask` below — a
+  // deliberate asymmetry, not an oversight. The toast earns its place on a
+  // completion specifically because a recurring advance is destructive to
+  // *look* at even though it's reversible in fact: the row's own date
+  // jumps to the next occurrence and the row leaves this day's block
+  // entirely, so a reader who didn't mean to tick it needs a visible way
+  // back. Un-ticking has no such surprise to soften — the row just goes
+  // back to how it already looked a moment ago.
+  function handleCompleteTask(task: Task) {
+    if (task.dateString !== null) {
+      advanceRecurringTask(task.id);
+      return;
+    }
+    completeTask(task.id);
+    toast(`Completed "${task.content}"`, {
+      action: { label: "Undo", onClick: () => uncompleteTask(task.id) },
+    });
+  }
+
+  // Un-ticks an already-completed Task from the Day block — no
+  // `dateString` branch, unlike `handleCompleteTask` above: a recurring
+  // Task never carries a non-null `completedAt` from an ordinary tick
+  // (`advanceRecurring` moves `date` on instead of setting `completedAt`),
+  // so the only done recurring Task this can ever be asked to un-complete
+  // is one `completeForeverTask` ended, and `uncompleteTask` is already
+  // the correct, single write for that case too — see `onUncompleteTask`'s
+  // own doc comment (history.tsx) for the fuller argument.
+  function handleUncompleteTask(task: Task) {
+    uncompleteTask(task.id);
+  }
+
   // Issue #144's "Refer" action (entry-actions.tsx, reached through
   // History's sheet or hover row) needs to reach into whichever Composer
   // is live on screen — see ComposerHandle's own comment (composer.tsx)
@@ -277,6 +409,12 @@ export function ComposerPage() {
           onToggleTask={handleToggleTask}
           dayReferrers={dayReferrers}
           tasks={tasks}
+          completedTasks={completedTasks}
+          events={events}
+          projects={projects}
+          onCompleteTask={handleCompleteTask}
+          onUncompleteTask={handleUncompleteTask}
+          onOpenTask={openTaskOverlay}
           seek={seek}
           onSeekNeedsOlder={handleSeekNeedsOlder}
           onSeekSettled={settleSeek}
@@ -329,6 +467,54 @@ export function ComposerPage() {
           </Link>{" "}
           to reach your other Devices.
         </p>
+      )}
+
+      {/* Issue #181's Task detail overlay — `TaskDetailView` reused
+          wholesale (task-detail-view.tsx's own header comment names this
+          exact door as the gap it left open), not a second, stripped-down
+          Task surface. `section` stays `null` here: resolving the Task's
+          own Section would need a `listSections` query this page has no
+          other use for, and the one thing it buys is the breadcrumb's
+          second segment — a cosmetic gap, not a functional one, left for
+          a follow-up rather than growing this page's own store surface
+          for it. `prevTask`/`nextTask` stay `null` and `onNavigate` is
+          never called: the Composer has no "list of Tasks" for a chevron
+          to step through the way Today or a Project's own view does. */}
+      {openTask !== null && (
+        <TaskDetailView
+          task={openTask}
+          project={openTaskProject}
+          section={null}
+          projects={projects}
+          labels={labels}
+          prevTask={null}
+          nextTask={null}
+          onClose={closeTaskOverlay}
+          onNavigate={() => {}}
+          onRename={(content) => renameTask(openTask.id, content)}
+          onComplete={() => handleCompleteTask(openTask)}
+          onUncomplete={() => uncompleteTask(openTask.id)}
+          onOpenSchedule={() => setSchedulingOpen(true)}
+          onSetProject={(projectId) => setTaskProject(openTask.id, projectId)}
+          onSetLabels={(labelIds) => setTaskLabels(openTask.id, labelIds)}
+          onSetDescription={(description) => setTaskDescription(openTask.id, description)}
+          comments={commentsForTask(comments, openTask.id)}
+          onAddComment={(text) => addComment(openTask.id, text)}
+          onEditComment={editComment}
+          onRemoveComment={removeComment}
+          events={events.filter((event) => event.taskId === openTask.id)}
+        />
+      )}
+
+      {openTask !== null && schedulingOpen && (
+        <TaskScheduleSheet
+          task={openTask}
+          open={true}
+          onOpenChange={setSchedulingOpen}
+          onSetDate={setTaskDate}
+          onSetDeadline={setTaskDeadline}
+          onSetPriority={setTaskPriority}
+        />
       )}
     </Shell>
   );

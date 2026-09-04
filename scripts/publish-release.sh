@@ -11,13 +11,19 @@
 # have neither the macOS keychain nor the Android keystore, so there is nothing
 # to automate here beyond what this script already does by hand.
 #
-# The seven guards below exist because the failure they each catch already
+# The eight guards below exist because the failure they each catch already
 # happened once, or is one keystroke away from happening. In particular:
 # guard 6 (freshness) is the one issue #157 is about — see
 # build-macos-production.sh for the incident. This script guards the same
 # hazard one layer up: even a build script that always publishes a FRESH
 # artifact is no protection if a stale one is sitting in build/production/
-# from days ago and nobody rebuilt before running this script.
+# from days ago and nobody rebuilt before running this script. Guard 8
+# (signature) is issue #187, one layer up again: even a build script that now
+# refuses to publish an adhoc-signed .app into build/production/ (see
+# nb_verify_app_signature) is no protection against a build/production/
+# left over from BEFORE that fix existed — this script is the last thing
+# standing between whatever is sitting in that directory and a public
+# download.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -26,9 +32,13 @@ cd "$(dirname "$0")/.."
 
 OUT_DIR=build/production
 APK_SRC="$OUT_DIR/meologue.apk"
+APP_SRC="$OUT_DIR/meologue.app"
 DMG_PRODUCT=meologue
 VERSION_FILE=apps/macos/tauri.conf.json
 PREAMBLE=scripts/lib/release-preamble.md
+BUNDLE_ID=com.meologue.app
+# Matches CERT_NAME in scripts/setup-signing.sh.
+SIGNING_AUTHORITY="meologue Dev"
 
 _usage() {
   cat <<USAGE
@@ -330,6 +340,28 @@ case $DMG_BASENAME in
   "${DMG_PRODUCT}_${VERSION}_"*.dmg) : ;;
   *) _abort "$DMG_BASENAME does not embed version $VERSION — rebuild macOS (--build, or scripts/build-macos-production.sh) so the .dmg matches $VERSION_FILE." ;;
 esac
+
+# ---------------------------------------------------------------------------
+# Guard 8 — the .app carries a real signature, not an adhoc fallback.
+# ---------------------------------------------------------------------------
+# The .dmg staged and uploaded below is a disk image OF this exact .app —
+# Tauri bundles them from the same build — so an adhoc-signed .app here means
+# an adhoc-signed .app inside the .dmg going out on a public GitHub Release.
+# build-macos-production.sh now refuses to ever leave one of those in
+# $OUT_DIR (nb_verify_app_signature, added for issue #187), which makes this
+# guard redundant against anything that script just produced. It is NOT
+# redundant against $OUT_DIR being stale in the one way guard 6 cannot see:
+# a .app that predates that fix and has simply never been rebuilt since. This
+# is the check that would have caught the six adhoc-signed builds issue #187
+# describes, run at the one point that actually gates a public download.
+nb_say "guard: $(basename "$APP_SRC") is signed with \"$SIGNING_AUTHORITY\" as \"$BUNDLE_ID\""
+if [ ! -e "$APP_SRC" ]; then
+  _abort "$APP_SRC does not exist — build it first: re-run with --build, or run scripts/build-macos-production.sh yourself."
+fi
+if ! nb_verify_app_signature "$APP_SRC" "$SIGNING_AUTHORITY" "$BUNDLE_ID"; then
+  _abort "$APP_SRC is not correctly signed (see codesign output above) — this is precisely the failure issue #187 describes. Rebuild with scripts/build-macos-production.sh (after confirming ./scripts/setup-signing.sh if that build's preflight flags the signing identity) and re-run."
+fi
+nb_say "  Authority=$NB_VERIFIED_AUTHORITY Identifier=$NB_VERIFIED_IDENTIFIER"
 
 # ---------------------------------------------------------------------------
 # Stage under public names, then upload.

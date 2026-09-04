@@ -7,17 +7,21 @@ export function task(overrides: Partial<Task> = {}): Task {
     content: "buy milk",
     completedAt: null,
     orderKey: "V",
+    // Same starting value as orderKey — the identical bootstrap
+    // mapping.ts's fromWireTaskOutput and task-fields.ts's
+    // withDefaultDayOrder both use for a Task with no Today position of
+    // its own yet (issue #182).
+    dayOrder: "V",
     createdAt: "2026-01-01T00:00:00.000Z",
     seq: null,
     syncedAt: null,
     deletedAt: null,
-    // Undated, no deadline, no duration, priority 1 ("no priority",
+    // Undated, no deadline, priority 1 ("no priority",
     // ../task-types.ts's uiPriorityOf/storedPriorityOf) — the same state
     // a Task created directly in Todo starts in, and the migration
     // default every pre-#169 row got (../sqlite/schema.ts).
     date: null,
     deadline: null,
-    duration: null,
     priority: 1,
     // No Labels — the same "concrete value, not a gap" default every
     // pre-#170 row gets from the migration (../sqlite/schema.ts).
@@ -31,6 +35,10 @@ export function task(overrides: Partial<Task> = {}): Task {
     projectId: null,
     sectionId: null,
     parentId: null,
+    // No description — the same "nothing chosen yet" state a Task
+    // created directly in Todo starts with (issue #180,
+    // ../task-types.ts's own `description` doc comment).
+    description: null,
     ...overrides,
   };
 }

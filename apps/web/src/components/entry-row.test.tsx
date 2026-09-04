@@ -1,4 +1,4 @@
-import type { Entry, Task } from "@meologue/core";
+import type { Entry, Project, Task } from "@meologue/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
@@ -8,7 +8,7 @@ import * as entryDayModule from "@/lib/entry-day";
 import { formatTaskReference } from "@/lib/inline-markdown";
 import { entryReferenceQueryKey } from "@/lib/query-keys";
 import type { EntryStoreOutletContext } from "@/pages/entry-store-layout";
-import { EntryRow } from "./entry-row";
+import { EntryRow, entryBodyContent } from "./entry-row";
 
 function entry(overrides: Partial<Entry>): Entry {
   return {
@@ -41,20 +41,14 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-/**
- * A date Reference's own renderer (entry-row.tsx's `DateReferenceLink`)
- * reads `dayHasEntries` off `useEntryStore()` and resolves it through
- * TanStack Query — this stands EntryRow up inside the same outlet-context
- * plus router plus query-client wiring composer-page.test.tsx uses for the
- * page above it, scoped down to a bare `<EntryRow>`.
- */
-function renderEntryRow(
-  target: Entry,
+// Shared by `renderEntryRow` and `renderTaskReferenceLine` below — both
+// need the identical outlet context shape, and pulling the object literal
+// out once means a field EntryStoreOutletContext grows only has to be
+// stubbed in one place for both harnesses.
+function buildOutletContext(
   overrides: Partial<EntryStoreOutletContext> = {},
-  query = "",
-  queryClient = new QueryClient(),
-) {
-  const context: EntryStoreOutletContext = {
+): EntryStoreOutletContext {
+  return {
     entries: [],
     pagination: { hasMore: false, fetching: false, fetchMore: vi.fn() },
     sendEntry: vi.fn(),
@@ -70,11 +64,13 @@ function renderEntryRow(
     uncompleteTask: vi.fn(),
     renameTask: vi.fn(),
     reorderTask: vi.fn(),
+    reorderTaskToday: vi.fn(),
     removeTask: vi.fn(),
     setTaskDate: vi.fn(),
     setTaskDeadline: vi.fn(),
-    setTaskDuration: vi.fn(),
     setTaskPriority: vi.fn(),
+    setTaskLabels: vi.fn(),
+    setTaskDescription: vi.fn(),
     listTasksInProject: vi.fn(async () => []),
     listTaskChildren: vi.fn(async () => []),
     listTasksInSection: vi.fn(async () => []),
@@ -90,6 +86,10 @@ function renderEntryRow(
     setTaskParent: vi.fn(async () => {}),
     labels: [],
     resolveLabelIds: vi.fn(async () => []),
+    comments: [],
+    addComment: vi.fn(),
+    editComment: vi.fn(),
+    removeComment: vi.fn(),
     // Issue #171's Projects and Sections — these tests never exercise
     // them either, same reasoning as the setTaskProject/etc. stubs above.
     projects: [],
@@ -110,9 +110,34 @@ function renderEntryRow(
     deleteSection: vi.fn(),
     archiveSection: vi.fn(),
     unarchiveSection: vi.fn(),
+    events: [],
+    listEventsByTask: vi.fn(async () => []),
+    listEventsByProject: vi.fn(async () => []),
+    filters: [],
+    addFilter: vi.fn(() => "filter-1"),
+    renameFilter: vi.fn(),
+    setFilterColour: vi.fn(),
+    setFilterQuery: vi.fn(async () => {}),
+    removeFilter: vi.fn(),
     disabled: false,
     ...overrides,
   };
+}
+
+/**
+ * A date Reference's own renderer (entry-row.tsx's `DateReferenceLink`)
+ * reads `dayHasEntries` off `useEntryStore()` and resolves it through
+ * TanStack Query — this stands EntryRow up inside the same outlet-context
+ * plus router plus query-client wiring composer-page.test.tsx uses for the
+ * page above it, scoped down to a bare `<EntryRow>`.
+ */
+function renderEntryRow(
+  target: Entry,
+  overrides: Partial<EntryStoreOutletContext> = {},
+  query = "",
+  queryClient = new QueryClient(),
+) {
+  const context = buildOutletContext(overrides);
   return {
     queryClient,
     ...render(
@@ -130,6 +155,37 @@ function renderEntryRow(
       </QueryClientProvider>,
     ),
   };
+}
+
+/**
+ * `EntryRow`'s own `EntryBody` never supplies `onOpenTask` (Grounding
+ * stays read-only — `entry-row.tsx`'s own comment on why), so a click-to-
+ * open test needs a caller that renders `entryBodyContent` directly with
+ * one, the same way `EntryBubble` (history.tsx's own caller) does. This
+ * is that caller, scoped down to a bare body with no bubble chrome around
+ * it.
+ */
+function renderTaskReferenceLine(
+  body: string,
+  onOpenTask: (taskId: string) => void,
+  overrides: Partial<EntryStoreOutletContext> = {},
+) {
+  const context = buildOutletContext(overrides);
+  const queryClient = new QueryClient();
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter>
+        <Routes>
+          <Route element={<Outlet context={context} />}>
+            <Route
+              path="/"
+              element={entryBodyContent(body, "", undefined, "entry-1", onOpenTask)}
+            />
+          </Route>
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
 }
 
 describe("EntryRow", () => {
@@ -703,19 +759,20 @@ describe("EntryRow", () => {
         content: "buy milk",
         completedAt: null,
         orderKey: "V",
+        dayOrder: "V",
         createdAt: "2026-01-01T00:00:00.000Z",
         seq: null,
         syncedAt: null,
         deletedAt: null,
         date: null,
         deadline: null,
-        duration: null,
         priority: 1,
         labelIds: [],
         dateString: null,
         projectId: null,
         sectionId: null,
         parentId: null,
+        description: null,
         ...overrides,
       };
     }
@@ -757,6 +814,111 @@ describe("EntryRow", () => {
       });
 
       expect(screen.getByRole("checkbox")).toBeDisabled();
+    });
+
+    // Issue #181, criteria 1/2: Date, Priority and Project, read live off
+    // the Task itself — never from the mark's own cache, which carries
+    // only `label`/`checked` (ADR 0048's `EntryTaskMarker`).
+    describe("Date, Priority and Project chips (issue #181)", () => {
+      function projectFixture(overrides: Partial<Project> = {}): Project {
+        return {
+          id: "project-1",
+          deviceId: "device-a",
+          name: "Groceries",
+          colour: "#b8256f",
+          favourite: false,
+          archived: false,
+          parentId: null,
+          description: null,
+          orderKey: "V",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          seq: null,
+          syncedAt: null,
+          deletedAt: null,
+          ...overrides,
+        };
+      }
+
+      it("shows the live Task's Date, Priority and Project", () => {
+        renderEntryRow(entry({ body: `- [ ] ${formatTaskReference(taskId, "buy milk")}` }), {
+          tasks: [taskFixture({ date: "2026-09-03", priority: 4, projectId: "project-1" })],
+          projects: [projectFixture()],
+        });
+
+        expect(screen.getByText("Sep 3")).toBeInTheDocument();
+        expect(screen.getByText("P1")).toBeInTheDocument();
+        expect(screen.getByText("Groceries")).toBeInTheDocument();
+      });
+
+      it("shows no chips at all for a reference this Device cannot resolve (criterion 5)", () => {
+        renderEntryRow(entry({ body: `- [ ] ${formatTaskReference(taskId, "buy milk")}` }), {
+          tasks: [],
+          completedTasks: [],
+        });
+
+        expect(screen.queryByText("Sep 3")).not.toBeInTheDocument();
+        expect(screen.queryByText(/^P\d$/)).not.toBeInTheDocument();
+      });
+
+      // Coordinator's own live-verification report against criterion 9: a
+      // recurring occurrence's own Date has already moved on to the NEXT
+      // occurrence by the time it reads checked (`advanceRecurringTask`
+      // bumps `date` the instant this one completes), so showing it here
+      // would claim a day that isn't this occurrence's own — the exact
+      // defect first shipped in history.tsx's `DayTasksRow` and fixed the
+      // same way in both places (`TaskScheduleChips`'s own `hideDate`).
+      // Priority has no such problem (it's an attribute of the Task's
+      // current series, not of one past occurrence) and keeps reading live.
+      it("hides Date but still shows Priority for a recurring occurrence already checked — Date has already moved to the NEXT occurrence", () => {
+        renderEntryRow(entry({ body: `- [x] ${formatTaskReference(taskId, "daily standup")}` }), {
+          tasks: [
+            taskFixture({
+              dateString: "every weekday",
+              date: "2026-09-04",
+              priority: 3,
+            }),
+          ],
+        });
+
+        expect(screen.queryByText("Sep 4")).not.toBeInTheDocument();
+        expect(screen.getByText("P2")).toBeInTheDocument();
+      });
+
+      it("still shows Date for a recurring Task's own row while it is NOT yet checked — only a finished occurrence's own record hides it", () => {
+        renderEntryRow(entry({ body: `- [ ] ${formatTaskReference(taskId, "daily standup")}` }), {
+          tasks: [taskFixture({ dateString: "every weekday", date: "2026-09-04" })],
+        });
+
+        expect(screen.getByText("Sep 4")).toBeInTheDocument();
+      });
+    });
+
+    // Issue #181, criterion 4: clicking the words opens the Task over the
+    // Composer. `EntryRow`/`EntryBody` (Grounding) never supplies
+    // `onOpenTask` at all — `renderTaskReferenceLine` below stands in for
+    // `EntryBubble`'s own call instead, the one caller that does.
+    describe("opening a referenced Task (issue #181, criterion 4)", () => {
+      it("calls onOpenTask with the Task's id when its words are clicked", () => {
+        const onOpenTask = vi.fn();
+        renderTaskReferenceLine(`- [ ] ${formatTaskReference(taskId, "buy milk")}`, onOpenTask, {
+          tasks: [taskFixture()],
+        });
+
+        fireEvent.click(screen.getByRole("button", { name: "buy milk" }));
+
+        expect(onOpenTask).toHaveBeenCalledWith(taskId);
+      });
+
+      it("renders no link at all for a reference this Device cannot resolve — leads nowhere, not to a dead link (criterion 5)", () => {
+        const onOpenTask = vi.fn();
+        renderTaskReferenceLine(`- [ ] ${formatTaskReference(taskId, "buy milk")}`, onOpenTask, {
+          tasks: [],
+          completedTasks: [],
+        });
+
+        expect(screen.queryByRole("button", { name: "buy milk" })).not.toBeInTheDocument();
+        expect(screen.getByText("buy milk")).toBeInTheDocument();
+      });
     });
   });
 });

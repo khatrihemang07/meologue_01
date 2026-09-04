@@ -90,13 +90,25 @@ export function addYears(epoch: Epoch, count: number): Epoch {
   return epochOf(nextYear, month, clampedDay);
 }
 
-/** The next date strictly after `epoch` whose weekday is `targetWeekday` (weekdayOf's own 0-6 convention). */
-export function nextWeekdayAfter(epoch: Epoch, targetWeekday: number): Epoch {
-  let candidate = addDays(epoch, 1);
+/**
+ * The earliest date on or after `epoch` whose weekday is `targetWeekday`
+ * (weekdayOf's own 0-6 convention) — `epoch` itself, if it already is one.
+ * ./engine.ts's inclusive ("first occurrence, including today") search
+ * needs exactly this on-or-after question for `weekdays`/`workdays`;
+ * nextWeekdayAfter below needs the strictly-after one, and is written as
+ * this function applied to tomorrow rather than duplicating the walk.
+ */
+export function nextWeekdayOnOrAfter(epoch: Epoch, targetWeekday: number): Epoch {
+  let candidate = epoch;
   while (weekdayOf(candidate) !== targetWeekday) {
     candidate = addDays(candidate, 1);
   }
   return candidate;
+}
+
+/** The next date strictly after `epoch` whose weekday is `targetWeekday` (weekdayOf's own 0-6 convention). */
+export function nextWeekdayAfter(epoch: Epoch, targetWeekday: number): Epoch {
+  return nextWeekdayOnOrAfter(addDays(epoch, 1), targetWeekday);
 }
 
 /**

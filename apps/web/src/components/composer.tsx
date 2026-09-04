@@ -50,6 +50,7 @@ import {
   referenceNodeView,
   SLASH_DISMISS_META,
   slashPluginKey,
+  taskReferenceNodeView,
 } from "@/lib/composer-editor";
 import {
   buildDateSuggestions,
@@ -773,6 +774,7 @@ export function Composer({
           paragraph: () => paragraphNodeView(),
           list_item: (node, nodeView, getPos) => listItemNodeView(node, nodeView, getPos),
           reference: (node) => referenceNodeView(node),
+          task_reference: (node) => taskReferenceNodeView(node),
         },
         // ProseMirror owns `view.dom`'s attributes outright once mounted
         // (it recomputes and re-applies them from this function on every

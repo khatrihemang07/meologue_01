@@ -24,6 +24,27 @@
  * levels up could compute a position against rows that were never its own
  * siblings at all.
  *
+ * **The `<ul>` really is inside that row's own `<li>` — issue #192, not
+ * an aspiration this comment used to state ahead of the code.** Before
+ * #192, a nested `TaskTree` rendering a row's own sub-tasks emitted that
+ * `<ul>` as a *sibling* of the row's own `<li>`, both direct children of
+ * this level's own `<ul>` — invalid HTML (a `ul` may hold only `li`), and
+ * this paragraph's own claim about where the nested list lives was true
+ * of the *intent*, not the markup, until that ticket made it true of the
+ * markup too (`task-row.tsx`'s own header comment carries the fix). That
+ * changes what `:scope > li[data-task-id]` finds a rect *for*, even
+ * though it changes nothing about which `<li>`s it finds: a matched
+ * `<li>` can now itself contain an entire rendered subtree beneath its
+ * own row, so `measureRows` below reads each row's own
+ * `[data-task-row-box]` — task-row.tsx's own inner `<div>` that carries
+ * every visual/interaction concern the `<li>` used to — rather than the
+ * `<li>`'s own `getBoundingClientRect()`, which would otherwise hand
+ * `dropIndexForPointer` a box tall enough to swallow every visible
+ * descendant of a row with children open. `:scope > li` itself needed no
+ * change for this — it was never wrong about *membership*, only ever
+ * silent about *geometry*, and only once #192 gave it something to be
+ * silent about.
+ *
  * **Drag-to-reparent nests by dropping in a row's own middle band.** The
  * pointer recogniser (`lib/task-drag-recognizer.ts`) now answers three
  * questions instead of two — "insert before this row," "insert after
@@ -44,7 +65,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { PointerEvent } from "react";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
-import { TaskRow } from "@/components/todo/task-row";
+import { type TaskDetailActions, TaskRow } from "@/components/todo/task-row";
 import { taskChildrenQueryKey } from "@/lib/query-keys";
 import { refocusTaskHandle } from "@/lib/refocus-task-handle";
 import { dropIndexForPointer } from "@/lib/task-drag-recognizer";
@@ -66,6 +87,8 @@ export interface TaskTreeProps {
   projectId: string | null;
   /** Passed straight through to every row's own `TaskRow` — see that component's own doc comment on `sectionOptions`. */
   sectionOptions?: { id: string; name: string }[];
+  /** Passed straight through, unbound, to every row's own `TaskRow` — see `TaskDetailActions`'s own doc comment (task-row.tsx) for why this needs no per-row binding here the way `onComplete`/etc. below do. */
+  detailActions: TaskDetailActions;
   onComplete: (task: Task) => void;
   onCompleteForever: (task: Task) => void;
   onRequestDelete: (task: Task) => void;
@@ -95,6 +118,7 @@ export function TaskTree({
   depth,
   projectId,
   sectionOptions,
+  detailActions,
   onComplete,
   onCompleteForever,
   onRequestDelete,
@@ -147,12 +171,40 @@ export function TaskTree({
     // `:scope > li` — this level's own direct rows only, never a
     // descendant several `TaskTree`s down (this file's own header
     // comment explains why that distinction matters here specifically).
+    // Issue #192 nested each row's own sub-task `<ul>` *inside* that row's
+    // own `<li>` (task-row.tsx's own header comment), which is what makes
+    // this membership check alone insufficient: a matched `<li>` here can
+    // now itself contain an entire, already-rendered subtree, several rows
+    // tall, beneath its own row. `:scope > li` still names the right set
+    // of `<li>`s — this level's own siblings, and only those — but is
+    // never asked for a *rect* below; see the `rowBox`/`rects.map` split
+    // just below for what actually stands in for each `<li>`'s geometry.
     const rows = Array.from(
       container.querySelectorAll<HTMLElement>(":scope > li[data-task-id]"),
     ).filter((element) => element.dataset.taskId !== excludeId);
     return {
       ids: rows.map((element) => element.dataset.taskId ?? ""),
-      rects: rows.map((element) => element.getBoundingClientRect()),
+      // Deliberately *not* `element.getBoundingClientRect()` — a matched
+      // `<li>`'s own border-box now encloses its rendered sub-tasks too
+      // (issue #192), so measuring the `<li>` directly would hand
+      // `dropIndexForPointer` a box tall enough to swallow several rows
+      // whenever the row it belongs to has any children open beneath it,
+      // and a pointer visually over a grandchild row several rows down
+      // would misread as still hovering the ancestor's own band. Reading
+      // `[data-task-row-box]` instead — task-row.tsx's own inner `<div>`
+      // that now carries every visual/interaction concern the `<li>` used
+      // to (that file's own header comment) — measures exactly this row's
+      // own header strip and nothing beneath it, which is what every
+      // caller of `measureRows` (`dropIndexForPointer`, `siblingMoveDropIndex`
+      // indirectly through `handleMove`) has always assumed a "row" means.
+      // The `?? element` fallback only guards a `TaskRow` that somehow
+      // rendered without its own row box — never expected, since `TaskRow`
+      // always renders one — rather than something this level has any way
+      // to construct a better rect from.
+      rects: rows.map((element) => {
+        const rowBox = element.querySelector<HTMLElement>(":scope > [data-task-row-box]");
+        return (rowBox ?? element).getBoundingClientRect();
+      }),
     };
   }
 
@@ -351,6 +403,7 @@ export function TaskTree({
           depth={depth}
           projectId={projectId}
           sectionOptions={sectionOptions}
+          detailActions={detailActions}
           isDropTarget={drag !== null && overTarget?.kind === "before" && overTarget.id === task.id}
           isNestTarget={drag !== null && overTarget?.kind === "nest" && overTarget.id === task.id}
           // The raw, task-taking callbacks — not bound to this row here —
@@ -397,6 +450,7 @@ interface TaskTreeRowProps {
   depth: number;
   projectId: string | null;
   sectionOptions?: { id: string; name: string }[];
+  detailActions: TaskDetailActions;
   isDropTarget: boolean;
   isNestTarget: boolean;
   // The raw, task-taking callbacks — see this component's own call site in
@@ -435,6 +489,7 @@ function TaskTreeRow({
   depth,
   projectId,
   sectionOptions,
+  detailActions,
   isDropTarget,
   isNestTarget,
   onComplete,
@@ -467,33 +522,46 @@ function TaskTreeRow({
   const children = childrenQuery.data ?? [];
 
   return (
-    <>
-      <TaskRow
-        task={task}
-        depth={depth}
-        isDropTarget={isDropTarget}
-        isNestTarget={isNestTarget}
-        onComplete={() => onComplete(task)}
-        onCompleteForever={() => onCompleteForever(task)}
-        onRequestDelete={() => onRequestDelete(task)}
-        onOpenSchedule={() => onOpenSchedule(task)}
-        sectionOptions={sectionOptions}
-        onMoveToSection={onMoveToSection && ((sectionId) => onMoveToSection(task.id, sectionId))}
-        onHandlePointerDown={onHandlePointerDown}
-        onHandlePointerMove={onHandlePointerMove}
-        onHandlePointerUp={onHandlePointerUp}
-        onHandlePointerCancel={onHandlePointerCancel}
-        onMoveUp={onMoveUp}
-        onMoveDown={onMoveDown}
-        onIndent={onIndent}
-        onOutdent={onOutdent}
-      />
+    // No Fragment of `<TaskRow>` then a sibling `<TaskTree>` any more
+    // (issue #192) — `TaskRow` itself accepts this row's own sub-tasks as
+    // `children` and renders them inside its own `<li>` (that component's
+    // own doc comment on `children` explains why the acceptance criterion
+    // — "a `<ul>` inside that row's own `<li>`" — has to be met there,
+    // not here: this component has no `<li>` of its own to nest anything
+    // inside). Passing `undefined` rather than `null`/`false` when there
+    // are no children is deliberate only in that it costs nothing extra:
+    // `TaskRow`'s own `children?: ReactNode` already treats an absent
+    // value as "nothing to render," the same default every other optional
+    // prop on that component uses.
+    <TaskRow
+      task={task}
+      detailActions={detailActions}
+      commentCount={detailActions.commentCountFor(task.id)}
+      depth={depth}
+      isDropTarget={isDropTarget}
+      isNestTarget={isNestTarget}
+      onComplete={() => onComplete(task)}
+      onCompleteForever={() => onCompleteForever(task)}
+      onRequestDelete={() => onRequestDelete(task)}
+      onOpenSchedule={() => onOpenSchedule(task)}
+      sectionOptions={sectionOptions}
+      onMoveToSection={onMoveToSection && ((sectionId) => onMoveToSection(task.id, sectionId))}
+      onHandlePointerDown={onHandlePointerDown}
+      onHandlePointerMove={onHandlePointerMove}
+      onHandlePointerUp={onHandlePointerUp}
+      onHandlePointerCancel={onHandlePointerCancel}
+      onMoveUp={onMoveUp}
+      onMoveDown={onMoveDown}
+      onIndent={onIndent}
+      onOutdent={onOutdent}
+    >
       {children.length > 0 && (
         <TaskTree
           tasks={children}
           parentTask={task}
           depth={depth + 1}
           projectId={projectId}
+          detailActions={detailActions}
           onComplete={onComplete}
           onCompleteForever={onCompleteForever}
           onRequestDelete={onRequestDelete}
@@ -505,6 +573,6 @@ function TaskTreeRow({
           listTasksInProject={listTasksInProject}
         />
       )}
-    </>
+    </TaskRow>
   );
 }

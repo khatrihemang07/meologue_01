@@ -15,9 +15,11 @@
  */
 import type { Project, Section, Task } from "@meologue/core";
 import { orderKeyBetween } from "@meologue/core";
-import { ChevronDown, ChevronUp, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronUp, History, Trash2 } from "lucide-react";
 import { type FormEvent, useState } from "react";
+import { Link } from "react-router";
 import { TaskList } from "@/components/todo/task-list";
+import type { TaskDetailActions } from "@/components/todo/task-row";
 import { ConfirmDialog } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,6 +28,8 @@ export interface ProjectViewProps {
   project: Project;
   sections: Section[];
   tasks: Task[];
+  /** Forwarded straight through to `TaskList` — see `TaskDetailActions`'s own doc comment (task-row.tsx). */
+  detailActions: TaskDetailActions;
   onRename: (name: string) => void;
   onSetDescription: (description: string | null) => void;
   onToggleFavourite: (favourite: boolean) => void;
@@ -67,6 +71,7 @@ export function ProjectView({
   project,
   sections,
   tasks,
+  detailActions,
   onRename,
   onSetDescription,
   onToggleFavourite,
@@ -176,6 +181,18 @@ export function ProjectView({
             onClick={() => onToggleArchived(!project.archived)}
           >
             {project.archived ? "Unarchive" : "Archive"}
+          </Button>
+          {/* Issue #184 / ADR 0056: this Project's own history — the same
+              `/todo/activity` route the global view uses, opened with
+              `?projectId=` (todo-page.tsx's own `activityProjectId`),
+              never a second view rendering the identical log. */}
+          <Button type="button" size="sm" variant="outline" asChild>
+            <Link
+              to={`/todo/activity?projectId=${project.id}`}
+              aria-label="View this Project's activity"
+            >
+              <History aria-hidden="true" className="size-4" />
+            </Link>
           </Button>
         </div>
         <textarea
@@ -315,6 +332,7 @@ export function ProjectView({
           sections={sections.filter((section) => !section.archived)}
           projectId={project.id}
           emptyMessage="Nothing in this Project yet. Add a Task above to get started."
+          detailActions={detailActions}
           onComplete={onComplete}
           onCompleteForever={onCompleteForever}
           onRequestDelete={onRequestDelete}

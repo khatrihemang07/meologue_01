@@ -1,3 +1,4 @@
+import { parseRecurrence } from "../recurrence";
 import {
   addDays,
   addMonths,
@@ -326,14 +327,16 @@ export function matchFuzzyTime(input: string, ctx: DateRuleContext): QuickAddTok
 
 /**
  * Bare recurrence keywords (`monthly`, `weekly`, ...) — flagged, not
- * resolved. This is deliberately the *entire* extent of this parser's
- * recurrence awareness: ../recurrence/ owns the grammar for everything
- * beyond a single bare word (`every 3rd friday`, `every! 2 weeks`, and
- * so on), and this parser has no dependency on that module at all — see
- * QuickAddLanguage.recurrenceWords' own doc comment. What this rule
- * exists for is issue #170's own required test case: "Create **monthly**
- * report" has to be *recognised* (this rule) before demotion (click the
- * highlighted word back to plain text) can mean anything.
+ * resolved, against a small, closed, language-specific vocabulary that
+ * needs no knowledge of ../recurrence/'s grammar at all: this rule has no
+ * dependency on that module — see QuickAddLanguage.recurrenceWords' own
+ * doc comment. `matchRecurrencePhrase` below is the *other* half of this
+ * parser's recurrence awareness, added for issue #188, and it does
+ * import ../recurrence/ (for validation only — see its own doc comment
+ * for why that's a narrower dependency than it might look like). What
+ * this rule exists for is issue #170's own required test case: "Create
+ * **monthly** report" has to be *recognised* (this rule) before demotion
+ * (click the highlighted word back to plain text) can mean anything.
  */
 export function matchRecurrenceWord(input: string, ctx: DateRuleContext): QuickAddToken[] {
   const alt = alternation(Object.keys(ctx.language.recurrenceWords));
@@ -346,6 +349,129 @@ export function matchRecurrenceWord(input: string, ctx: DateRuleContext): QuickA
       end: match.index + match[0].length,
       raw: match[0],
     });
+  }
+  return tokens;
+}
+
+// "every"/"every!" followed by whitespace — the one fixed anchor
+// ../recurrence/parser.ts's own EVERY_PREFIX requires, mirrored here
+// (not read off that module, which exports no such pattern) only far
+// enough to find where a *candidate* phrase might start; nothing here
+// decides whether what follows is actually a legal recurrence, which is
+// exactly why `\b` alone (not the full grammar) is enough for this
+// regex's own job.
+const EVERY_ANCHOR = /\bevery!?(?=\s)/gi;
+
+/**
+ * True when `input[bangIndex]` is the `!` glued onto the end of the word
+ * "every" — `../recurrence/parser.ts`'s own completion-anchor bang
+ * (`EVERY_PREFIX`'s `(!)?`), not an unrelated `!reminder` sigil that
+ * happens to land on the same character. `./rules.ts`'s `matchReminder`
+ * is a sigil rule and runs unconditionally, ahead of this file's own
+ * eager family, so without this check "every! 2 weeks" would lose its
+ * bang to a reminder token before `matchRecurrencePhrase` below ever got
+ * a chance to claim it — the one span in this whole parser where two
+ * *different* markers (an eager keyword's own bang, and an explicit `!`
+ * sigil) can legally collide on the identical character. Deliberately a
+ * textual check, not "does the rest of the phrase actually parse as a
+ * recurrence": the ambiguity is about which grammar this exact `!`
+ * belongs to, which is settled by what precedes it, not by whether
+ * whatever follows happens to be well-formed — "every! zorp" still
+ * isn't a reminder either, it's just a `!` with nothing recognisable on
+ * either side of it, exactly as "zorp" alone would be.
+ */
+export function isEveryBangAt(input: string, bangIndex: number): boolean {
+  return input[bangIndex] === "!" && /\bevery$/i.test(input.slice(0, bangIndex));
+}
+
+/**
+ * The longest prefix of `phrase` (which always starts with "every"/
+ * "every!") that ../recurrence/'s own `parseRecurrence` accepts, tried
+ * word-by-word from the whole remainder down to nothing, or `null` if no
+ * prefix at all parses. Longest-first, not first-match, so an optional
+ * trailing clause this grammar supports (`every day at 5pm`, `every 2
+ * weeks starting 1 oct`) is captured whole rather than the matcher
+ * stopping at the shortest thing that happens to parse and leaving
+ * "at 5pm" behind as ordinary words.
+ */
+function longestParsableEnd(phrase: string): number | null {
+  const words = [...phrase.matchAll(/\S+/g)];
+  for (let count = words.length; count >= 1; count--) {
+    const lastWord = words[count - 1];
+    // biome-ignore lint/style/noNonNullAssertion: `count` only ever indexes an element `words` actually has, 1..words.length
+    const end = lastWord!.index + lastWord![0].length;
+    if (parseRecurrence(phrase.slice(0, end)).kind === "parsed") {
+      return end;
+    }
+  }
+  return null;
+}
+
+/**
+ * `every day`, `every monday`, `every 2 weeks`, `every 3rd friday`,
+ * `every! 2 weeks` — the full recurrence grammar `../recurrence/parser.ts`
+ * already accepts, typed inline rather than as a bare keyword (issue
+ * #188). This is the one place in this parser that reaches into
+ * ../recurrence/ at all, and it does so narrowly: `parseRecurrence` is
+ * called only to ask "would the engine accept this exact text," and its
+ * result — a `RecurrenceRule`, on success — is thrown away immediately.
+ * Nothing here resolves a rule, computes a date, or stores anything;
+ * this function still only ever flags a span, exactly as
+ * `matchRecurrenceWord` does, which is what keeps this module's own
+ * header comment ("recognition, not persistence") true of this rule too.
+ *
+ * **Why the dependency is safe to add, and narrower than it looks.** The
+ * previous shape of this file's recurrence awareness — a closed,
+ * seven-word vocabulary needing no grammar at all — no longer describes
+ * the *whole* of it once phrases are reachable too, but the one-way
+ * dependency this creates (quick-add -> recurrence, never the reverse)
+ * doesn't invert anything ../recurrence/ itself relies on: that package
+ * has never imported anything from this one, has no reason to start, and
+ * still knows nothing about the add field, `QuickAddToken`, or any of
+ * this module's own concerns. What changes is only that this parser is
+ * no longer *ignorant* of the grammar — it still resolves nothing,
+ * exactly as before.
+ *
+ * **Why a candidate has to be validated at all, rather than just
+ * matching "every" plus some words.** A second, hand-rolled "what looks
+ * like a recurrence phrase" grammar living here would be exactly the
+ * "second, smaller grammar invented alongside" the real one that issue
+ * #188 rules out, and it would drift from ../recurrence/parser.ts's own
+ * grammar the moment either one changes without the other. Delegating
+ * the actual accept/refuse decision to `parseRecurrence` itself is also
+ * this rule's own false-positive guard (issue #188's acceptance
+ * criterion 5): `every zorp` or `every 2` never becomes a token at all,
+ * left as ordinary words for the reader to see exactly as typed, rather
+ * than a `dateString` ../recurrence/'s own engine would refuse the first
+ * time the Task is completed.
+ */
+export function matchRecurrencePhrase(input: string): QuickAddToken[] {
+  const tokens: QuickAddToken[] = [];
+  let searchFrom = 0;
+  for (const anchor of input.matchAll(EVERY_ANCHOR)) {
+    const start = anchor.index;
+    if (start < searchFrom) {
+      continue; // Inside a span this loop already accepted — see below.
+    }
+    const end = longestParsableEnd(input.slice(start));
+    if (end === null) {
+      continue;
+    }
+    const absoluteEnd = start + end;
+    tokens.push({
+      kind: "recurrence",
+      start,
+      end: absoluteEnd,
+      raw: input.slice(start, absoluteEnd),
+    });
+    // A later "every" that this accepted span already swallowed (an
+    // "every" inside a "starting"/"ending" clause's own text, however
+    // unlikely) is not a second, independent candidate — advancing past
+    // the accepted span keeps this loop's own candidates non-overlapping
+    // by construction, the same guarantee every other free-text rule in
+    // this file gets for free from `matchAll` never re-scanning consumed
+    // text.
+    searchFrom = absoluteEnd;
   }
   return tokens;
 }

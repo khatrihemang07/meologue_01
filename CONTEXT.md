@@ -53,11 +53,14 @@ blocks without touching any Entry that mentions it.
 
 ### Search
 
-Narrowing a collection to the items whose text matches what you typed — Entries in History,
-Sessions whose Conversation matches, or Tasks in Todo. Search reads text, not time, and it
-narrows the collection in place rather than producing a separate one. Todo's Search is its own
-instance of this over Tasks, not an extension of the Search that already covers Entries and
-Sessions — narrowing one collection never reaches into another.
+Narrowing a collection to the items whose text matches what you typed. One concept, three
+instances — Entries in the Composer, Sessions whose Conversation matches in Reflection, and Tasks
+in Todo — each its own instance over its own collection, not one Search extended to reach a
+second. Search reads text, not time, and each instance narrows its own collection in place rather
+than producing a separate one. Narrowing one collection never reaches into another: Todo's Search
+finds a Task by its title, its Description, or a Comment made against it, and nothing it finds
+ever comes from an Entry or a Session, the same boundary that keeps the Composer's own Search from
+ever reaching into Todo.
 
 ### Reference
 
@@ -113,9 +116,15 @@ omits things is worse than none.
 
 ### Cursor
 
-A Device's record of how far it has Synced. A Cursor only ever advances — it marks the point up
-to which a Device has already received every Entry there is to receive, so that Syncing again
-only needs to ask for what came after.
+A Device's record of how far it has Synced, one per stream (Entries, Tasks, Projects, Sections,
+Labels, Comments, Events). A Cursor only ever advances — it marks the point up to which a Device
+has already received every row of that stream there is to receive, so that Syncing again only
+needs to ask for what came after — with one deliberate, narrow exception: a Device that adds a
+field to a stream's row shape resets that stream's own Cursor to 0 once, so the next Sync re-walks
+rows it already held and picks up the field it was missing (ADR 0057). This is not a Device
+forgetting what it already has — every row still arrives, the Cursor is simply told to ask for it
+again — and it happens at most once per stream per field added, never as an ordinary consequence
+of Syncing.
 
 ### Server
 
@@ -219,6 +228,10 @@ actually wrote, not everything the user is tracking. The Task owns its text: whi
 Task started life on, there is exactly one copy of what it says and one copy of whether it is
 done.
 
+A Task also owns a Description and the Comments made against it — see their own entries below.
+Both belong to Todo alone: neither enters History, and History's own rule above ("what the user
+actually wrote") is why not.
+
 ### Todo
 
 The fifth Destination (ADR 0036, ADR 0049): the view where the user manages Tasks — creating
@@ -241,6 +254,34 @@ A Task whose parent is another Task. A sub-task is a full Task in every other re
 carry its own Date, Priority and Labels, and can have sub-tasks of its own. Completing a parent
 completes its sub-tasks along with it; completing every sub-task does not complete the parent,
 because the parent may still name work its sub-tasks don't cover.
+
+### Description
+
+A Task's own words about itself, beyond its name — Markdown, read the same way an Entry's body
+is. A Task need not carry one; unlike an Entry's body, which exists the moment the Entry does, a
+Description starts absent and is added, or not, afterward.
+
+### Comment
+
+A note added against a Task after the fact, with its own identity and its own time — a Task can
+hold many. A Comment is not an Entry: it is never added to History, never covered by Export or
+Digest grounding, and belongs to Todo alone, the same way a Task's Description does.
+
+### Event
+
+A record of something that happened to a Task, a Project, a Section or a Comment — that it was
+added, completed, renamed, rescheduled, moved, or removed. An Event is written once, at the moment
+the thing it describes happens, and is never rewritten afterward: it is a record of what was done,
+not a value that can later be corrected or take back what it said. It is stamped with when the act
+actually happened, on whichever Device the user was using at the time, not with whenever that
+Device next reached a Server — a Task finished on a train, before the Device reconnects, reads as
+finished when it was finished, not when the connection came back. Reordering a Task, collapsing a
+Section, and simply opening a Task to look at it are not acts an Event records.
+
+A Task shows its own Events; a Project shows its own; and one view reads across everything the
+user has done. There is no separate place completed work lives — it is reached by narrowing
+whichever of those three views to Events that record a completion, the same view, seen through a
+narrower lens.
 
 ### Label
 
@@ -269,16 +310,14 @@ The hard cutoff by which a Task must be done. Date-only — no time, no recurren
 of Date: a Task may carry a Date, a Deadline, both, or neither, and a Deadline does not imply the
 user plans to work on the Task before it, only that it must be finished by then.
 
-### Duration
-
-How long a Task is expected to take. A Duration requires a Date that carries a time, because there
-is nothing to measure a length from otherwise.
-
 ### Recurrence
 
 A Task that comes back. What the user typed to describe the pattern is what is stored, unchanged;
-the next Date is re-derived from that text each time the Task is completed, rather than computed
-once and fixed as a schedule.
+the next Date is re-derived from that text each time the Task is completed, and once more when the
+recurrence is first given to it, rather than computed once and fixed as a schedule. A Task given a
+recurrence is due on the first Date that actually matches the pattern, including the day it was
+given the recurrence, if that day itself matches (issue #191) — completing it is what moves it
+strictly past that Date, never the Date's own computation.
 
 ### Inbox
 

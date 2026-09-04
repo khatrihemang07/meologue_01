@@ -4,14 +4,15 @@
  * mirrors `Task` (../task-types.ts) closely on purpose — `deviceId`,
  * `createdAt`, `seq`, `syncedAt`, `deletedAt` are the identical
  * sync-and-tombstone scaffolding TaskStore already carries (ADR 0028's
- * rule, applied a third time after Entry and Task), even though nothing
- * in this ticket wires a Label sync stream up to the wire protocol or the
- * server — see label-store.ts's header comment for why that scaffolding
- * exists now anyway rather than being deferred until a sync ticket adds
- * it. A Label that starts without these columns and has them bolted on
- * later would need its own migration to add them, plus a backfill for
+ * rule, applied a third time after Entry and Task) — issue #170 shipped
+ * this scaffolding well before issue #182 actually wired a Label Sync
+ * stream up to the wire protocol and the server; see label-store.ts's
+ * header comment for why that scaffolding was worth having ahead of time
+ * rather than deferred until the sync ticket that would go on to use it.
+ * A Label that started without these columns and had them bolted on later
+ * would have needed its own migration to add them, plus a backfill for
  * every row minted in between; starting with the same shape TaskStore
- * already proved out costs nothing today and avoids that entirely.
+ * already proved out cost nothing and avoided that entirely.
  *
  * Deliberately excludes the same collaboration columns Task's own header
  * comment refuses (`responsibleUid`, `workspaceId`, a role, `isShared`)

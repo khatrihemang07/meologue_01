@@ -1,6 +1,12 @@
 import type {
+  Comment,
+  CommentStore,
   Entry,
   EntryStore,
+  Event,
+  EventStore,
+  Filter,
+  FilterStore,
   Label,
   LabelStore,
   Project,
@@ -13,6 +19,9 @@ import { open } from "@meologue/core";
 import { queryOptions, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Outlet, useOutletContext } from "react-router";
+import { useComments } from "@/hooks/use-comments";
+import { useEvents } from "@/hooks/use-events";
+import { type AddFilterOverrides, useFilters } from "@/hooks/use-filters";
 import { type UseHistoryPagination, useHistory } from "@/hooks/use-history";
 import { useLabels } from "@/hooks/use-labels";
 import { type AddProjectOverrides, useProjects } from "@/hooks/use-projects";
@@ -150,20 +159,25 @@ export interface EntryStoreOutletContext {
   uncompleteTask: (id: string) => void;
   renameTask: (id: string, content: string) => void;
   reorderTask: (id: string, orderKey: string) => void;
+  /** Writes the one `dayOrder` a Today drag computed (issue #182) — use-tasks.ts's own `reorderTaskToday` doc comment. */
+  reorderTaskToday: (id: string, dayOrder: string) => void;
   removeTask: (id: string) => void;
   /**
-   * The four scheduling setters issue #169 adds (use-tasks.ts's own doc
-   * comments carry the reasoning each individually needs — the duration/
-   * date coupling in particular). Grouped under `tasks`/`addTask`/etc.
-   * above rather than a nested object: every other Task mutation on this
-   * context is a flat, top-level field, and a `scheduling: {...}` bag here
-   * would be the one field on this interface that reads differently from
-   * its neighbours for no reason a caller benefits from.
+   * The three scheduling setters issue #169 adds (use-tasks.ts's own doc
+   * comments carry the reasoning each individually needs). Grouped under
+   * `tasks`/`addTask`/etc. above rather than a nested object: every other
+   * Task mutation on this context is a flat, top-level field, and a
+   * `scheduling: {...}` bag here would be the one field on this interface
+   * that reads differently from its neighbours for no reason a caller
+   * benefits from.
    */
   setTaskDate: (id: string, date: string | null) => void;
   setTaskDeadline: (id: string, deadline: string | null) => void;
-  setTaskDuration: (id: string, duration: number | null) => void;
   setTaskPriority: (id: string, priority: number) => void;
+  /** Replaces a Task's Labels wholesale — use-tasks.ts's own `setTaskLabels` doc comment. */
+  setTaskLabels: (id: string, labelIds: string[]) => void;
+  /** Sets a Task's Description (issue #180) — use-tasks.ts's own `setTaskDescription` doc comment. */
+  setTaskDescription: (id: string, description: string | null) => void;
   /** A Project's own top-level Tasks (`null` for Inbox) — use-tasks.ts's own `listTasksInProject` doc comment. */
   listTasksInProject: (projectId: string | null) => Promise<Task[]>;
   /** A Task's own direct sub-tasks — use-tasks.ts's own `listTaskChildren` doc comment. */
@@ -186,6 +200,19 @@ export interface EntryStoreOutletContext {
    */
   labels: Label[];
   resolveLabelIds: (names: string[]) => Promise<string[]>;
+  /**
+   * Todo's Comments (issue #180) — the Comment-shaped sibling of `labels`
+   * above, built the same way for the same reason: `useComments`
+   * (use-comments.ts) runs once, here, above every route this layout
+   * wraps. `comments` is the whole, flat, cross-Task list — task-row.tsx's
+   * own comment-count badge and the Task detail view's own thread both
+   * narrow it client-side (comment-counts.ts) rather than this context
+   * growing a second, per-Task field.
+   */
+  comments: Comment[];
+  addComment: (taskId: string, text: string) => void;
+  editComment: (id: string, text: string) => void;
+  removeComment: (id: string) => void;
   /**
    * Todo's Projects and Sections (issue #171) — the Project-shaped sibling
    * of `labels`/`tasks` above, built the same way for the same reason:
@@ -218,6 +245,37 @@ export interface EntryStoreOutletContext {
   setTaskSection: (id: string, sectionId: string | null) => void;
   /** Reparents a Task under `parentId`, or to top-level for `null` — use-tasks.ts's own `setTaskParent` doc comment on why this returns a Promise unlike every other Task mutator on this context. */
   setTaskParent: (id: string, parentId: string | null) => Promise<void>;
+  /**
+   * Todo's activity log (issue #184, CONTEXT.md's Event entry, ADR 0056)
+   * — the Event-shaped sibling of `comments`/`projects` above, built the
+   * same way for the same reason: `useEvents` (use-events.ts) runs once,
+   * here, above every route this layout wraps. `events` is the whole,
+   * flat, cross-Task, cross-Project view across everything (issue #184's
+   * own acceptance criterion); `listEventsByTask`/`listEventsByProject`
+   * are the narrower, store-backed reads a Task's own detail view and a
+   * Project's own view use instead of filtering this flat list
+   * client-side — mirroring `listTasksInProject`'s own async-function
+   * shape above rather than a second eagerly-loaded array.
+   */
+  events: Event[];
+  listEventsByTask: (taskId: string) => Promise<Event[]>;
+  listEventsByProject: (projectId: string | null) => Promise<Event[]>;
+  /**
+   * Todo's Filters (issue #185, CONTEXT.md's Filter entry) — the
+   * Filter-shaped sibling of `labels`/`projects` above, built the same
+   * way for the same reason: `useFilters` (use-filters.ts) runs once,
+   * here, above every route this layout wraps. `filters` is the whole,
+   * flat, alphabetical list (FilterStore.list()'s own guarantee) — a
+   * personal task list's own saved Filters sit at the same small scale
+   * Labels and Projects already do, so there's no per-Filter query the
+   * way `listTasksInProject` exists for a Project's own Tasks.
+   */
+  filters: Filter[];
+  addFilter: (name: string, query: string, overrides?: AddFilterOverrides) => string;
+  renameFilter: (id: string, name: string) => void;
+  setFilterColour: (id: string, colour: string) => void;
+  setFilterQuery: (id: string, query: string) => Promise<void>;
+  removeFilter: (id: string) => void;
   disabled: boolean;
   message?: string;
 }
@@ -356,18 +414,26 @@ function noopRenameTask(_id: string, _content: string) {}
 
 function noopReorderTask(_id: string, _orderKey: string) {}
 
+function noopReorderTaskToday(_id: string, _dayOrder: string) {}
+
 function noopRemoveTask(_id: string) {}
 
-// Issue #169's four setters — the not-ready stand-ins for a Today view or a
+// Issue #169's three setters — the not-ready stand-ins for a Today view or a
 // picker mounted before the store opens, same reasoning as
 // noopAddTask/noopReorderTask above.
 function noopSetTaskDate(_id: string, _date: string | null) {}
 
 function noopSetTaskDeadline(_id: string, _deadline: string | null) {}
 
-function noopSetTaskDuration(_id: string, _duration: number | null) {}
-
 function noopSetTaskPriority(_id: string, _priority: number) {}
+
+// Issue #178's Task detail view — the not-ready stand-in for `setTaskLabels`,
+// same reasoning as the four setters just above.
+function noopSetTaskLabels(_id: string, _labelIds: string[]) {}
+
+// Issue #180's Task detail view — the not-ready stand-in for
+// `setTaskDescription`, same reasoning as the setters just above.
+function noopSetTaskDescription(_id: string, _description: string | null) {}
 
 // `listTasksInProject`/`listTaskChildren`'s own not-ready stand-ins,
 // mirroring `noopGetEntries`: nothing can be resolved before the store
@@ -409,6 +475,16 @@ async function noopSetTaskParent(_id: string, _parentId: string | null): Promise
 async function noopResolveLabelIds(_names: string[]): Promise<string[]> {
   return [];
 }
+
+// `comments`'s own not-ready stand-ins (issue #180), mirroring
+// `noopAddTask`/`noopRemoveTask`: `comments: []` below has nothing to
+// act on regardless, but every field `EntryStoreOutletContext` declares
+// still has to exist.
+function noopAddComment(_taskId: string, _text: string) {}
+
+function noopEditComment(_id: string, _text: string) {}
+
+function noopRemoveComment(_id: string) {}
 
 // Todo's Projects and Sections (issue #171) — same not-ready reasoning as
 // `noopAddTask`/`noopRemoveTask` above: `projects: []` below has nothing
@@ -453,6 +529,38 @@ function noopArchiveSection(_id: string) {}
 
 function noopUnarchiveSection(_id: string) {}
 
+// `events`'s own not-ready stand-ins (issue #184), mirroring
+// `noopListTasksInProject`/`noopGetEntries`: nothing can be resolved
+// before the store opens, and an empty array is already each field's own
+// "nothing found" answer.
+async function noopListEventsByTask(_taskId: string): Promise<Event[]> {
+  return [];
+}
+
+async function noopListEventsByProject(_projectId: string | null): Promise<Event[]> {
+  return [];
+}
+
+// `filters`'s own not-ready stand-ins (issue #185), mirroring
+// `noopAddProject`/`noopRenameProject` above: `filters: []` below has
+// nothing to act on regardless, but every field `EntryStoreOutletContext`
+// declares still has to exist. `noopAddFilter` returns a placeholder id
+// rather than throwing — nothing can call it before the store opens (the
+// "New Filter" screen is itself behind this same layout), but the type
+// this stand-in fills is a synchronous `string`, not a `Promise`, so
+// there is no rejection for a caller to await instead.
+function noopAddFilter(_name: string, _query: string, _overrides?: AddFilterOverrides): string {
+  return "";
+}
+
+function noopRenameFilter(_id: string, _name: string) {}
+
+function noopSetFilterColour(_id: string, _colour: string) {}
+
+async function noopSetFilterQuery(_id: string, _query: string): Promise<void> {}
+
+function noopRemoveFilter(_id: string) {}
+
 function noopFetchMore() {}
 
 // Mirrors `entries: []` just above: nothing to page through before the
@@ -486,13 +594,30 @@ const ENTRY_STORE_METHODS: StoreMethodNames<EntryStore> = {
   pending: true,
   getCursor: true,
   setCursor: true,
+  // Issue #186 / ADR 0057 — the identical compile-time checkpoint every
+  // method here already gets: `sync()` calls this before anything else in
+  // its loop, so a forgotten entry here would be `undefined is not a
+  // function` on the very first deferred sync tick, not a compile error.
+  catchUpRowShapeEpoch: true,
   search: true,
   edit: true,
   remove: true,
   getMany: true,
 };
 
-function deferUntilOpen(promise: Promise<{ store: EntryStore; deviceId: string }>): EntryStore {
+// Exported, alongside every other `defer*UntilOpen` below (issue #186 /
+// ADR 0057) — not because any real caller outside this file needs one
+// directly (`EntryStoreLayout` below is still the only production call
+// site for all six), but so `entry-store-layout.test.tsx` can build a
+// facade against these same, real `*_STORE_METHODS` registries and run a
+// real `sync()` call through it. `tsc` already catches a method missing
+// from a registry; nothing before this ticket proved the *other* half —
+// that a method actually listed still runs at runtime rather than
+// throwing for some unrelated reason — because no test called a store
+// method through a facade before its own open had resolved.
+export function deferUntilOpen(
+  promise: Promise<{ store: EntryStore; deviceId: string }>,
+): EntryStore {
   return deferStore(promise, ({ store }) => store, ENTRY_STORE_METHODS);
 }
 
@@ -518,12 +643,17 @@ const TASK_STORE_METHODS: StoreMethodNames<TaskStore> = {
   uncomplete: true,
   rename: true,
   reorder: true,
+  // Issue #182's Today-shaped sibling of reorder — the identical
+  // compile-time checkpoint as every setter here.
+  reorderToday: true,
   remove: true,
   pending: true,
   getCursor: true,
   setCursor: true,
+  // Issue #186 / ADR 0057 — see ENTRY_STORE_METHODS's own comment.
+  catchUpRowShapeEpoch: true,
   search: true,
-  // Issue #169's four setters, added to TaskStore alongside the scheduling
+  // Issue #169's three setters, added to TaskStore alongside the scheduling
   // fields themselves — this is the compile-time checkpoint this registry
   // exists for (StoreMethodNames's own doc comment): a method added to
   // TaskStore and not listed here fails `tsc -b` right at this line,
@@ -531,7 +661,6 @@ const TASK_STORE_METHODS: StoreMethodNames<TaskStore> = {
   // one time a picker calls it before the store finishes opening.
   setDate: true,
   setDeadline: true,
-  setDuration: true,
   setPriority: true,
   // Issue #170 adds setLabelIds alongside the Labels feature itself, and
   // its recurrence engine adds three more (../../packages/core/
@@ -546,9 +675,12 @@ const TASK_STORE_METHODS: StoreMethodNames<TaskStore> = {
   setProject: true,
   setSection: true,
   setParent: true,
+  // Issue #180's Description setter — the identical compile-time
+  // checkpoint as every setter above.
+  setDescription: true,
 };
 
-function deferTaskStoreUntilOpen(
+export function deferTaskStoreUntilOpen(
   promise: Promise<{ taskStore: TaskStore; deviceId: string }>,
 ): TaskStore {
   return deferStore(promise, ({ taskStore }) => taskStore, TASK_STORE_METHODS);
@@ -568,9 +700,11 @@ const LABEL_STORE_METHODS: StoreMethodNames<LabelStore> = {
   pending: true,
   getCursor: true,
   setCursor: true,
+  // Issue #186 / ADR 0057 — see ENTRY_STORE_METHODS's own comment.
+  catchUpRowShapeEpoch: true,
 };
 
-function deferLabelStoreUntilOpen(
+export function deferLabelStoreUntilOpen(
   promise: Promise<{ labelStore: LabelStore; deviceId: string }>,
 ): LabelStore {
   return deferStore(promise, ({ labelStore }) => labelStore, LABEL_STORE_METHODS);
@@ -596,9 +730,16 @@ const PROJECT_STORE_METHODS: StoreMethodNames<ProjectStore> = {
   pendingProjects: true,
   getProjectCursor: true,
   setProjectCursor: true,
+  // Issue #186 / ADR 0057 — see ENTRY_STORE_METHODS's own comment; two
+  // independent watermarks (Project and Section are two Sync streams),
+  // so both need their own entry here.
+  catchUpProjectRowShapeEpoch: true,
   listSections: true,
   getSection: true,
   addSection: true,
+  // Issue #182's Sync write path for Sections — the identical
+  // compile-time checkpoint as every method here.
+  upsertSections: true,
   renameSection: true,
   setSectionDescription: true,
   reorderSection: true,
@@ -608,12 +749,94 @@ const PROJECT_STORE_METHODS: StoreMethodNames<ProjectStore> = {
   pendingSections: true,
   getSectionCursor: true,
   setSectionCursor: true,
+  // The Section-shaped sibling of catchUpProjectRowShapeEpoch above.
+  catchUpSectionRowShapeEpoch: true,
 };
 
-function deferProjectStoreUntilOpen(
+export function deferProjectStoreUntilOpen(
   promise: Promise<{ projectStore: ProjectStore; deviceId: string }>,
 ): ProjectStore {
   return deferStore(promise, ({ projectStore }) => projectStore, PROJECT_STORE_METHODS);
+}
+
+// Comments (issue #180) — a fifth deferred facade over the same open
+// promise, same reasoning as TASK_STORE_METHODS's own comment: this is
+// the compile-time checkpoint that fails `tsc -b` the moment CommentStore
+// grows a method this registry doesn't also list.
+const COMMENT_STORE_METHODS: StoreMethodNames<CommentStore> = {
+  list: true,
+  listByTask: true,
+  get: true,
+  upsert: true,
+  edit: true,
+  remove: true,
+  pending: true,
+  getCursor: true,
+  setCursor: true,
+  // Issue #186 / ADR 0057 — see ENTRY_STORE_METHODS's own comment.
+  catchUpRowShapeEpoch: true,
+  // Issue #183's Comment search — the identical compile-time checkpoint
+  // as every other method above.
+  search: true,
+};
+
+export function deferCommentStoreUntilOpen(
+  promise: Promise<{ commentStore: CommentStore; deviceId: string }>,
+): CommentStore {
+  return deferStore(promise, ({ commentStore }) => commentStore, COMMENT_STORE_METHODS);
+}
+
+// Events (issue #184) — a sixth deferred facade over the same open
+// promise, same reasoning as TASK_STORE_METHODS's own comment: this is
+// the compile-time checkpoint that fails `tsc -b` the moment EventStore
+// grows a method this registry doesn't also list. No `edit`/`remove`
+// here — mirrors ../../../packages/core/src/event-store.ts's own
+// interface, which has neither (an Event is never rewritten).
+const EVENT_STORE_METHODS: StoreMethodNames<EventStore> = {
+  list: true,
+  listByTask: true,
+  listByProject: true,
+  record: true,
+  upsert: true,
+  pending: true,
+  getCursor: true,
+  setCursor: true,
+  // Issue #186 / ADR 0057 — see ENTRY_STORE_METHODS's own comment.
+  catchUpRowShapeEpoch: true,
+};
+
+export function deferEventStoreUntilOpen(
+  promise: Promise<{ eventStore: EventStore; deviceId: string }>,
+): EventStore {
+  return deferStore(promise, ({ eventStore }) => eventStore, EVENT_STORE_METHODS);
+}
+
+// Filters (issue #185) — a seventh deferred facade over the same open
+// promise, same reasoning as TASK_STORE_METHODS's own comment: this is
+// the compile-time checkpoint that fails `tsc -b` the moment FilterStore
+// grows a method this registry doesn't also list.
+const FILTER_STORE_METHODS: StoreMethodNames<FilterStore> = {
+  list: true,
+  get: true,
+  upsert: true,
+  rename: true,
+  setColour: true,
+  setQuery: true,
+  remove: true,
+  pending: true,
+  getCursor: true,
+  setCursor: true,
+  // Issue #186 / ADR 0057 — see ENTRY_STORE_METHODS's own comment. Never
+  // called yet (Filters carry no Sync stream — ../../packages/core/src/
+  // filter-store.ts's own header comment), but every store carries this
+  // method regardless, so the registry lists it regardless too.
+  catchUpRowShapeEpoch: true,
+};
+
+export function deferFilterStoreUntilOpen(
+  promise: Promise<{ filterStore: FilterStore; deviceId: string }>,
+): FilterStore {
+  return deferStore(promise, ({ filterStore }) => filterStore, FILTER_STORE_METHODS);
 }
 
 /**
@@ -694,6 +917,9 @@ export function EntryStoreLayout() {
       taskStore: TaskStore;
       labelStore: LabelStore;
       projectStore: ProjectStore;
+      commentStore: CommentStore;
+      eventStore: EventStore;
+      filterStore: FilterStore;
       deviceId: string;
     }) => void;
     let reject!: (reason: unknown) => void;
@@ -702,6 +928,9 @@ export function EntryStoreLayout() {
       taskStore: TaskStore;
       labelStore: LabelStore;
       projectStore: ProjectStore;
+      commentStore: CommentStore;
+      eventStore: EventStore;
+      filterStore: FilterStore;
       deviceId: string;
     }>((res, rej) => {
       resolve = res;
@@ -747,11 +976,26 @@ export function EntryStoreLayout() {
     () => deferProjectStoreUntilOpen(deferred.promise),
     [deferred],
   );
+  // `useComments`'s own equivalent (issue #180) — a fifth facade over the
+  // same one open.
+  const pendingCommentStore = useMemo(
+    () => deferCommentStoreUntilOpen(deferred.promise),
+    [deferred],
+  );
+  // `useEvents`'s own equivalent (issue #184) — a sixth facade over the
+  // same one open.
+  const pendingEventStore = useMemo(() => deferEventStoreUntilOpen(deferred.promise), [deferred]);
+  // `useFilters`'s own equivalent (issue #185) — a seventh facade over
+  // the same one open.
+  const pendingFilterStore = useMemo(() => deferFilterStoreUntilOpen(deferred.promise), [deferred]);
 
   const store = data?.store ?? pendingStore;
   const taskStore = data?.taskStore ?? pendingTaskStore;
   const labelStore = data?.labelStore ?? pendingLabelStore;
   const projectStore = data?.projectStore ?? pendingProjectStore;
+  const commentStore = data?.commentStore ?? pendingCommentStore;
+  const eventStore = data?.eventStore ?? pendingEventStore;
+  const filterStore = data?.filterStore ?? pendingFilterStore;
   const deviceId = data?.deviceId ?? "";
 
   // `useLabels` is called before `useHistory` on purpose: Promotion's own
@@ -783,12 +1027,25 @@ export function EntryStoreLayout() {
       return;
     }
     backfillStarted.current = true;
-    void runTasksBackfillOnce(data.store, data.taskStore, data.deviceId, resolveLabelIds);
+    void runTasksBackfillOnce(
+      data.store,
+      data.taskStore,
+      data.projectStore,
+      data.labelStore,
+      data.commentStore,
+      data.eventStore,
+      data.deviceId,
+      resolveLabelIds,
+    );
   }, [data]);
 
   const { entries, pagination, sendEntry, editEntry, commitEntryEdit, removeEntry } = useHistory(
     store,
     taskStore,
+    projectStore,
+    labelStore,
+    commentStore,
+    eventStore,
     deviceId,
     resolveLabelIds,
   );
@@ -800,11 +1057,13 @@ export function EntryStoreLayout() {
     uncompleteTask,
     renameTask,
     reorderTask,
+    reorderTaskToday,
     removeTask,
     setTaskDate,
     setTaskDeadline,
-    setTaskDuration,
     setTaskPriority,
+    setTaskLabels,
+    setTaskDescription,
     listTasksInProject,
     listTaskChildren,
     listTasksInSection,
@@ -815,7 +1074,14 @@ export function EntryStoreLayout() {
     setTaskProject,
     setTaskSection,
     setTaskParent,
-  } = useTasks(store, taskStore, deviceId);
+  } = useTasks(store, taskStore, projectStore, labelStore, commentStore, eventStore, deviceId);
+  const { comments, addComment, editComment, removeComment } = useComments(
+    commentStore,
+    taskStore,
+    eventStore,
+    deviceId,
+  );
+  const { events, listEventsByTask, listEventsByProject } = useEvents(eventStore, deviceId);
   const {
     projects,
     addProject,
@@ -835,7 +1101,9 @@ export function EntryStoreLayout() {
     deleteSection,
     archiveSection,
     unarchiveSection,
-  } = useProjects(projectStore, deviceId);
+  } = useProjects(projectStore, eventStore, deviceId);
+  const { filters, addFilter, renameFilter, setFilterColour, setFilterQuery, removeFilter } =
+    useFilters(filterStore, deviceId);
 
   return (
     <Outlet
@@ -862,11 +1130,13 @@ export function EntryStoreLayout() {
               uncompleteTask,
               renameTask,
               reorderTask,
+              reorderTaskToday,
               removeTask,
               setTaskDate,
               setTaskDeadline,
-              setTaskDuration,
               setTaskPriority,
+              setTaskLabels,
+              setTaskDescription,
               listTasksInProject,
               listTaskChildren,
               listTasksInSection,
@@ -879,6 +1149,10 @@ export function EntryStoreLayout() {
               setTaskParent,
               labels,
               resolveLabelIds,
+              comments,
+              addComment,
+              editComment,
+              removeComment,
               projects,
               addProject,
               renameProject,
@@ -897,6 +1171,15 @@ export function EntryStoreLayout() {
               deleteSection,
               archiveSection,
               unarchiveSection,
+              events,
+              listEventsByTask,
+              listEventsByProject,
+              filters,
+              addFilter,
+              renameFilter,
+              setFilterColour,
+              setFilterQuery,
+              removeFilter,
               disabled: false,
             } satisfies EntryStoreOutletContext)
           : ({
@@ -918,11 +1201,13 @@ export function EntryStoreLayout() {
               uncompleteTask: noopUncompleteTask,
               renameTask: noopRenameTask,
               reorderTask: noopReorderTask,
+              reorderTaskToday: noopReorderTaskToday,
               removeTask: noopRemoveTask,
               setTaskDate: noopSetTaskDate,
               setTaskDeadline: noopSetTaskDeadline,
-              setTaskDuration: noopSetTaskDuration,
               setTaskPriority: noopSetTaskPriority,
+              setTaskLabels: noopSetTaskLabels,
+              setTaskDescription: noopSetTaskDescription,
               listTasksInProject: noopListTasksInProject,
               listTaskChildren: noopListTaskChildren,
               listTasksInSection: noopListTasksInSection,
@@ -935,6 +1220,10 @@ export function EntryStoreLayout() {
               setTaskParent: noopSetTaskParent,
               labels: [],
               resolveLabelIds: noopResolveLabelIds,
+              comments: [],
+              addComment: noopAddComment,
+              editComment: noopEditComment,
+              removeComment: noopRemoveComment,
               projects: [],
               addProject: noopAddProject,
               renameProject: noopRenameProject,
@@ -953,6 +1242,15 @@ export function EntryStoreLayout() {
               deleteSection: noopDeleteSection,
               archiveSection: noopArchiveSection,
               unarchiveSection: noopUnarchiveSection,
+              events: [],
+              listEventsByTask: noopListEventsByTask,
+              listEventsByProject: noopListEventsByProject,
+              filters: [],
+              addFilter: noopAddFilter,
+              renameFilter: noopRenameFilter,
+              setFilterColour: noopSetFilterColour,
+              setFilterQuery: noopSetFilterQuery,
+              removeFilter: noopRemoveFilter,
               disabled: true,
               message,
             } satisfies EntryStoreOutletContext)

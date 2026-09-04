@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 import { openDestination, sendEntry, uniqueEntryBody } from "./helpers";
 
 // Search's app bar (ticket 55, generalising ticket 39/54's earlier

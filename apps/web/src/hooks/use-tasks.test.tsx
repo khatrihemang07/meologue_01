@@ -1,10 +1,30 @@
-import type { Entry, EntryStore, Task, TaskStore } from "@meologue/core";
-import { nextOccurrence, tomorrowOf } from "@meologue/core";
+import type {
+  CommentStore,
+  Entry,
+  EntryStore,
+  EventStore,
+  LabelStore,
+  ProjectStore,
+  Task,
+  TaskStore,
+} from "@meologue/core";
+import { nextOccurrenceAfterCompletion, tomorrowOf } from "@meologue/core";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { useTasks as UseTasks } from "./use-tasks";
+
+// Issue #177: `afterLocalWrite`'s own nudge, mocked the identical way
+// use-history.test.tsx's own `requestSyncMock` is (that file's own comment
+// explains why `vi.mock` rather than spying on the real thing — sync-runner
+// keeps module-scope in-flight state that a real call would need a live
+// Server to resolve).
+const { requestSyncMock } = vi.hoisted(() => ({
+  requestSyncMock: vi.fn(async () => {}),
+}));
+
+vi.mock("@/lib/sync-runner", () => ({ requestSync: requestSyncMock }));
 
 // use-tasks.ts reaches for the `queryClient` singleton exported by
 // lib/query-client.ts directly (not React context), the same shape
@@ -23,15 +43,15 @@ function task(overrides: Partial<Task> = {}): Task {
     content: "buy milk",
     completedAt: null,
     orderKey: "V",
+    dayOrder: "V",
     createdAt: "2026-01-01T00:00:00.000Z",
     seq: 1,
     syncedAt: "2026-01-01T00:00:00.000Z",
     deletedAt: null,
-    // Undated, no deadline, no duration, priority 1 ("no priority") — the
+    // Undated, no deadline, priority 1 ("no priority") — the
     // same default packages/core/src/test-support/task-fixture.ts uses.
     date: null,
     deadline: null,
-    duration: null,
     priority: 1,
     // No Labels, doesn't repeat — the same "concrete value, not a gap"
     // default packages/core/src/test-support/task-fixture.ts's own
@@ -44,6 +64,7 @@ function task(overrides: Partial<Task> = {}): Task {
     projectId: null,
     sectionId: null,
     parentId: null,
+    description: null,
     ...overrides,
   };
 }
@@ -100,14 +121,19 @@ function createFakeStore(): TaskStore {
     reorder: vi.fn(async (id: string, orderKey: string) => {
       active = active.map((t) => (t.id === id ? { ...t, orderKey, seq: null } : t));
     }),
+    reorderToday: vi.fn(async (id: string, dayOrder: string) => {
+      active = active.map((t) => (t.id === id ? { ...t, dayOrder, seq: null } : t));
+    }),
     remove: vi.fn(async (id: string) => {
       active = active.filter((t) => t.id !== id);
     }),
     pending: vi.fn(async () => []),
     getCursor: vi.fn(async () => 0),
     setCursor: vi.fn(async () => {}),
+    // Issue #186 / ADR 0057.
+    catchUpRowShapeEpoch: vi.fn(async () => {}),
     search: vi.fn(async () => []),
-    // Issue #169's four setters — this fake never needs to observe their
+    // Issue #169's three setters — this fake never needs to observe their
     // effect (no test here exercises the picker path; that lives in
     // task-row.test.tsx and today-view.test.tsx), so each just mutates
     // `active` the same shape complete()/uncomplete() above do, enough to
@@ -117,9 +143,6 @@ function createFakeStore(): TaskStore {
     }),
     setDeadline: vi.fn(async (id: string, deadline: string | null) => {
       active = active.map((t) => (t.id === id ? { ...t, deadline, seq: null } : t));
-    }),
-    setDuration: vi.fn(async (id: string, duration: number | null) => {
-      active = active.map((t) => (t.id === id ? { ...t, duration, seq: null } : t));
     }),
     setPriority: vi.fn(async (id: string, priority: number) => {
       active = active.map((t) => (t.id === id ? { ...t, priority, seq: null } : t));
@@ -135,7 +158,7 @@ function createFakeStore(): TaskStore {
     advanceRecurring: vi.fn(async (id: string, completedAt: string) => {
       const found = active.find((t) => t.id === id);
       if (found === undefined || found.dateString === null) return;
-      const outcome = nextOccurrence(found.dateString, {
+      const outcome = nextOccurrenceAfterCompletion(found.dateString, {
         dueDate: found.date,
         now: completedAt.slice(0, 10),
       });
@@ -176,6 +199,9 @@ function createFakeStore(): TaskStore {
     setParent: vi.fn(async (id: string, parentId: string | null) => {
       active = active.map((t) => (t.id === id ? { ...t, parentId, seq: null } : t));
     }),
+    setDescription: vi.fn(async (id: string, description: string | null) => {
+      active = active.map((t) => (t.id === id ? { ...t, description, seq: null } : t));
+    }),
   };
 }
 
@@ -205,6 +231,8 @@ function createFakeEntryStore(initial: readonly Entry[] = []): EntryStore {
     pending: vi.fn(async () => []),
     getCursor: vi.fn(async () => 0),
     setCursor: vi.fn(async () => {}),
+    // Issue #186 / ADR 0057.
+    catchUpRowShapeEpoch: vi.fn(async () => {}),
     search: vi.fn(async (query: string) => entries.filter((e) => e.body.includes(query))),
     edit: vi.fn(async (id: string, body: string) => {
       entries = entries.map((e) => (e.id === id ? { ...e, body, seq: null } : e));
@@ -218,25 +246,64 @@ function createFakeEntryStore(initial: readonly Entry[] = []): EntryStore {
   };
 }
 
+// Issue #184: `useTasks` records an Event alongside every recorded Task
+// act — a working stub, not a bare cast (`projectStore`/`labelStore`/
+// `commentStore` below stay bare casts, since `requestSync` is mocked
+// wholesale and never actually reaches them): `eventStore.record`/`.list`
+// are called directly by `useEvents` regardless of that mock.
+function fakeEventStore(): EventStore {
+  return {
+    list: vi.fn(async () => []),
+    listByTask: vi.fn(async () => []),
+    listByProject: vi.fn(async () => []),
+    record: vi.fn(async () => {}),
+    upsert: vi.fn(async () => {}),
+    pending: vi.fn(async () => []),
+    getCursor: vi.fn(async () => 0),
+    setCursor: vi.fn(async () => {}),
+    // Issue #186 / ADR 0057.
+    catchUpRowShapeEpoch: vi.fn(async () => {}),
+  };
+}
+
 describe("useTasks", () => {
   beforeEach(() => {
     localStorage.clear();
+    requestSyncMock.mockClear();
   });
 
   async function renderUseTasks(
     store: TaskStore,
     entryStore: EntryStore = createFakeEntryStore(),
     deviceId = "device-a",
+    eventStore: EventStore = fakeEventStore(),
   ) {
     const fresh = await importFresh();
     const wrapper = ({ children }: { children: ReactNode }) => (
       <QueryClientProvider client={fresh.queryClient}>{children}</QueryClientProvider>
     );
+    // Issue #182: `useTasks` now takes three more stores solely to pass
+    // through to `requestSync` (use-tasks.ts's own doc comment) — this
+    // suite mocks `requestSync` wholesale (`requestSyncMock` above), so
+    // none of the three is ever actually called; a bare cast is enough to
+    // satisfy the parameter's type without a full fake implementation.
+    const projectStore = {} as ProjectStore;
+    const labelStore = {} as LabelStore;
+    const commentStore = {} as CommentStore;
     const rendered = renderHook<ReturnType<typeof UseTasks>, void>(
-      () => (fresh.useTasks as typeof UseTasks)(entryStore, store, deviceId),
+      () =>
+        (fresh.useTasks as typeof UseTasks)(
+          entryStore,
+          store,
+          projectStore,
+          labelStore,
+          commentStore,
+          eventStore,
+          deviceId,
+        ),
       { wrapper },
     );
-    return { fresh, entryStore, ...rendered };
+    return { fresh, entryStore, eventStore, ...rendered };
   }
 
   it("reads active Tasks from the store", async () => {
@@ -270,7 +337,7 @@ describe("useTasks", () => {
     await waitFor(() => expect(result.current.tasks).toHaveLength(2));
     expect(store.upsert).toHaveBeenLastCalledWith([
       // Issue #169's own acceptance criterion: a Task created in Todo
-      // starts undated, with no deadline, no duration, and priority 1
+      // starts undated, with no deadline, and priority 1
       // ("no priority") — asserted explicitly here rather than trusted,
       // since addTask states this as a decision at its own call site.
       expect.objectContaining({
@@ -279,13 +346,51 @@ describe("useTasks", () => {
         completedAt: null,
         date: null,
         deadline: null,
-        duration: null,
         priority: 1,
       }),
     ]);
     const added = result.current.tasks.find((t) => t.content === "call mum");
     expect(added).toBeDefined();
     expect((added as Task).orderKey > "M").toBe(true);
+  });
+
+  // Issue #177: `afterLocalWrite`'s own nudge — before this fix, a Task
+  // mutation refreshed the local TanStack Query cache but never called
+  // `requestSync`, so a Task created, completed or edited here reached
+  // another Device only at the next scheduled poll rather than
+  // immediately, unlike every Entry mutation (use-history.ts's own
+  // `afterLocalWrite`) and the Tasks backfill (backfill-tasks.ts), both of
+  // which already nudge.
+  it("nudges Sync right away after adding a Task, rather than waiting for the next poll", async () => {
+    const store = createFakeStore();
+    const { result } = await renderUseTasks(store);
+    await waitFor(() => expect(result.current.tasks).toEqual([]));
+
+    act(() => result.current.addTask("call mum"));
+
+    await waitFor(() =>
+      expect(requestSyncMock).toHaveBeenCalledWith(
+        expect.objectContaining({ taskStore: store }),
+        "device-a",
+      ),
+    );
+  });
+
+  it("nudges Sync right away after completing a Task", async () => {
+    const store = createFakeStore();
+    await store.upsert([task({ id: "a" })]);
+    const { result } = await renderUseTasks(store);
+    await waitFor(() => expect(result.current.tasks).toHaveLength(1));
+    requestSyncMock.mockClear();
+
+    act(() => result.current.completeTask("a"));
+
+    await waitFor(() =>
+      expect(requestSyncMock).toHaveBeenCalledWith(
+        expect.objectContaining({ taskStore: store }),
+        "device-a",
+      ),
+    );
   });
 
   it("completes a Task, moving it out of the active list and into completedTasks", async () => {
@@ -323,6 +428,20 @@ describe("useTasks", () => {
     act(() => result.current.renameTask("a", "  new  "));
 
     await waitFor(() => expect(store.rename).toHaveBeenCalledWith("a", "new"));
+  });
+
+  // Issue #178: setTaskLabels is this hook's own door onto
+  // TaskStore.setLabelIds — the first UI caller of a mutation this hook
+  // already exposed (this ticket's own report names the gap).
+  it("setTaskLabels writes the whole replacement array through setLabelIds", async () => {
+    const store = createFakeStore();
+    await store.upsert([task({ id: "a", labelIds: ["l1"] })]);
+    const { result } = await renderUseTasks(store);
+    await waitFor(() => expect(result.current.tasks).toHaveLength(1));
+
+    act(() => result.current.setTaskLabels("a", ["l1", "l2"]));
+
+    await waitFor(() => expect(store.setLabelIds).toHaveBeenCalledWith("a", ["l1", "l2"]));
   });
 
   // ADR 0048's fan-out: an act on the Task side refreshes every Entry
@@ -488,7 +607,6 @@ describe("useTasks", () => {
       result.current.addTask("pay rent", {
         date: "2026-09-05",
         deadline: "2026-09-10",
-        duration: 30,
         priority: 4,
         labelIds: ["label-1"],
         dateString: "every month",
@@ -501,7 +619,6 @@ describe("useTasks", () => {
       content: "pay rent",
       date: "2026-09-05",
       deadline: "2026-09-10",
-      duration: 30,
       priority: 4,
       labelIds: ["label-1"],
       dateString: "every month",
@@ -518,7 +635,6 @@ describe("useTasks", () => {
     expect(result.current.tasks[0]).toMatchObject({
       date: null,
       deadline: null,
-      duration: null,
       priority: 1,
       labelIds: [],
       dateString: null,
@@ -572,6 +688,158 @@ describe("useTasks", () => {
 
       await waitFor(() => expect(store.postpone).toHaveBeenCalledWith("a", expect.any(String)));
       await waitFor(() => expect(result.current.tasks[0]?.date).not.toBe("2020-01-01"));
+    });
+  });
+
+  // Issue #184 / ADR 0056: every recorded Task act calls through to
+  // EventStore.record — proving the wiring itself, not the store
+  // mechanism packages/core's own event-store-contract.ts already covers.
+  describe("Event recording (issue #184)", () => {
+    function lastRecordedEvent(eventStore: EventStore) {
+      const recordMock = eventStore.record as unknown as { mock: { calls: unknown[][] } };
+      const call = recordMock.mock.calls.at(-1);
+      return call?.[0] as { eventType: string; objectType: string; extra: unknown } | undefined;
+    }
+
+    it("addTask records an 'added' Task Event", async () => {
+      const store = createFakeStore();
+      const { result, eventStore } = await renderUseTasks(store);
+
+      act(() => result.current.addTask("buy milk"));
+
+      await waitFor(() => expect(eventStore.record).toHaveBeenCalledTimes(1));
+      expect(lastRecordedEvent(eventStore)).toMatchObject({
+        eventType: "added",
+        objectType: "task",
+        extra: { content: "buy milk" },
+      });
+    });
+
+    it("completeTask records a 'completed' Task Event", async () => {
+      const store = createFakeStore();
+      await store.upsert([task({ id: "a" })]);
+      const { result, eventStore } = await renderUseTasks(store);
+      await waitFor(() => expect(result.current.tasks).toHaveLength(1));
+
+      act(() => result.current.completeTask("a"));
+
+      await waitFor(() => expect(eventStore.record).toHaveBeenCalledTimes(1));
+      expect(lastRecordedEvent(eventStore)).toMatchObject({
+        eventType: "completed",
+        objectType: "task",
+      });
+    });
+
+    it("uncompleteTask records an 'uncompleted' Task Event", async () => {
+      const store = createFakeStore();
+      await store.upsert([task({ id: "a", completedAt: "2026-01-01T00:00:00.000Z" })]);
+      await store.complete("a", "2026-01-01T00:00:00.000Z");
+      const { result, eventStore } = await renderUseTasks(store);
+      await waitFor(() => expect(result.current.completedTasks).toHaveLength(1));
+
+      act(() => result.current.uncompleteTask("a"));
+
+      await waitFor(() => expect(eventStore.record).toHaveBeenCalledTimes(1));
+      expect(lastRecordedEvent(eventStore)).toMatchObject({
+        eventType: "uncompleted",
+        objectType: "task",
+      });
+    });
+
+    it("renameTask records an 'updated' Task Event carrying content and lastContent", async () => {
+      const store = createFakeStore();
+      await store.upsert([task({ id: "a", content: "old title" })]);
+      const { result, eventStore } = await renderUseTasks(store);
+      await waitFor(() => expect(result.current.tasks).toHaveLength(1));
+
+      act(() => result.current.renameTask("a", "new title"));
+
+      await waitFor(() => expect(eventStore.record).toHaveBeenCalledTimes(1));
+      expect(lastRecordedEvent(eventStore)).toMatchObject({
+        eventType: "updated",
+        objectType: "task",
+        extra: { content: "new title", lastContent: "old title" },
+      });
+    });
+
+    it("removeTask records a 'deleted' Task Event carrying the Task's last content", async () => {
+      const store = createFakeStore();
+      await store.upsert([task({ id: "a", content: "buy milk" })]);
+      const { result, eventStore } = await renderUseTasks(store);
+      await waitFor(() => expect(result.current.tasks).toHaveLength(1));
+
+      act(() => result.current.removeTask("a"));
+
+      await waitFor(() => expect(eventStore.record).toHaveBeenCalledTimes(1));
+      expect(lastRecordedEvent(eventStore)).toMatchObject({
+        eventType: "deleted",
+        objectType: "task",
+        extra: { content: "buy milk" },
+      });
+    });
+
+    it("setTaskProject records a 'moved' Task Event carrying projectId and lastProjectId", async () => {
+      const store = createFakeStore();
+      await store.upsert([task({ id: "a", projectId: null })]);
+      const { result, eventStore } = await renderUseTasks(store);
+      await waitFor(() => expect(result.current.tasks).toHaveLength(1));
+
+      act(() => result.current.setTaskProject("a", "project-1"));
+
+      await waitFor(() => expect(eventStore.record).toHaveBeenCalledTimes(1));
+      expect(lastRecordedEvent(eventStore)).toMatchObject({
+        eventType: "moved",
+        objectType: "task",
+        extra: { projectId: "project-1", lastProjectId: null },
+      });
+    });
+
+    // Issue #184's own acceptance criterion: reordering records nothing.
+    it("reorderTask records no Event — reordering is explicitly not recorded", async () => {
+      const store = createFakeStore();
+      await store.upsert([task({ id: "a" })]);
+      const { result, eventStore } = await renderUseTasks(store);
+      await waitFor(() => expect(result.current.tasks).toHaveLength(1));
+
+      act(() => result.current.reorderTask("a", "W"));
+
+      await waitFor(() => expect(store.reorder).toHaveBeenCalled());
+      expect(eventStore.record).not.toHaveBeenCalled();
+    });
+
+    it("reorderTaskToday records no Event — reordering is explicitly not recorded", async () => {
+      const store = createFakeStore();
+      await store.upsert([task({ id: "a" })]);
+      const { result, eventStore } = await renderUseTasks(store);
+      await waitFor(() => expect(result.current.tasks).toHaveLength(1));
+
+      act(() => result.current.reorderTaskToday("a", "W"));
+
+      await waitFor(() => expect(store.reorderToday).toHaveBeenCalled());
+      expect(eventStore.record).not.toHaveBeenCalled();
+    });
+
+    // ADR 0056's whole reason for existing: occurredAt is the acting
+    // Device's own clock, stamped at the moment the act is recorded —
+    // never left for a Server to fill in later. Asserted here as "a real
+    // ISO timestamp from right now," rather than under `vi.useFakeTimers`
+    // (which `waitFor`'s own internal polling doesn't reliably survive):
+    // the load-bearing property this test checks is "this Device's own
+    // clock, not a placeholder or a stale value," which a tight time
+    // window around the real call already proves.
+    it("stamps occurredAt with a real timestamp from the Device's own clock", async () => {
+      const before = Date.now();
+      const store = createFakeStore();
+      const { result, eventStore } = await renderUseTasks(store);
+
+      act(() => result.current.addTask("buy milk"));
+
+      await waitFor(() => expect(eventStore.record).toHaveBeenCalledTimes(1));
+      const after = Date.now();
+      const recorded = lastRecordedEvent(eventStore) as { occurredAt?: string } | undefined;
+      const occurredAtMs = new Date(recorded?.occurredAt ?? "").getTime();
+      expect(occurredAtMs).toBeGreaterThanOrEqual(before);
+      expect(occurredAtMs).toBeLessThanOrEqual(after);
     });
   });
 });

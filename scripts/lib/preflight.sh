@@ -471,12 +471,31 @@ check_macos_signing() {
   # Without -v on purpose. setup-signing.sh's own output says it: `-v` reports
   # 0 identities for a self-signed certificate like this one, while codesign
   # uses it fine either way.
-  if security find-identity -p codesigning 2>/dev/null | grep -q 'meologue Dev'; then
-    pf_ok "signing identity" "meologue Dev"
-  else
+  if ! security find-identity -p codesigning 2>/dev/null | grep -q 'meologue Dev'; then
     pf_fail "signing identity" "'meologue Dev' not in any keychain" "./scripts/setup-signing.sh"
     return 0
   fi
+
+  # Being LISTED is not being USABLE, and that gap is exactly how issue #187
+  # happened: this check passed (the identity WAS listed), yet codesign still
+  # failed deep inside `cargo tauri build`'s bundler with
+  # errSecInternalComponent — the keychain had lapsed out of the state
+  # setup-signing.sh establishes, so the private key needed an interactive
+  # keychain prompt a non-interactive build can never answer. Six adhoc-signed
+  # builds shipped before anyone looked at `codesign -dv`. Actually signing a
+  # throwaway file with this identity right here costs a fraction of a second
+  # and catches that lapse before a multi-minute compile runs into it instead.
+  local probe probe_out
+  probe=$(mktemp)
+  if probe_out=$(codesign --force --sign "meologue Dev" "$probe" 2>&1); then
+    pf_ok "signing identity" "meologue Dev"
+  elif printf '%s' "$probe_out" | grep -q 'errSecInternalComponent'; then
+    pf_fail "signing identity" "'meologue Dev' is listed but its private key is unreachable (errSecInternalComponent) — the keychain has lapsed out of the state setup-signing.sh establishes" "./scripts/setup-signing.sh"
+  else
+    pf_fail "signing identity" "'meologue Dev' failed a test sign: $probe_out" "./scripts/setup-signing.sh"
+  fi
+  rm -f "$probe"
+
   if [ -f "$keychain" ] && ! security list-keychains 2>/dev/null | grep -q 'meologue-signing'; then
     pf_warn "signing keychain" "exists but is not in the search list" "security list-keychains -d user -s \"\$HOME/Library/Keychains/login.keychain-db\" \"$keychain\""
   fi

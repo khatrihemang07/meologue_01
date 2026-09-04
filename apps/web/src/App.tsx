@@ -1,6 +1,7 @@
 import { lazy, Suspense } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router";
 import { Toaster } from "@/components/ui/sonner";
+import { useBackButton } from "@/hooks/use-back-button";
 import { ChatListPage } from "@/pages/chat-list-page";
 import { ChatShellLayout } from "@/pages/chat-shell-layout";
 
@@ -77,9 +78,25 @@ const SettingsPage = lazy(() =>
 // and issue #75 moving Settings into the persistent Nav instead (see
 // nav.tsx's DESTINATIONS) changes *how* a reader gets to `/settings`, not
 // *what* `/settings` depends on — so this route stays right where it was.
+
+/**
+ * A component, not a bare `useBackButton()` call in `App()` itself: the
+ * hook needs `useLocation`/`useNavigationType` (see its own header comment
+ * for why), which only work inside `<BrowserRouter>`'s context — `App()`
+ * renders that provider, so it isn't inside it. Rendered as a plain sibling
+ * of `<Routes>` below rather than wrapping anything: it paints nothing and
+ * reads no route match, only the current location and how the app got
+ * there.
+ */
+function BackButtonHandler() {
+  useBackButton();
+  return null;
+}
+
 function App() {
   return (
     <BrowserRouter>
+      <BackButtonHandler />
       <Toaster />
       {/* A blank fallback, not a spinner: ChatShellLayout's own root div
           already paints `bg-background` behind the Outlet (see that
@@ -156,6 +173,52 @@ function App() {
               <Route path="/todo/today" element={<TodoPage view="today" />} />
               <Route path="/todo/projects" element={<TodoPage view="projects" />} />
               <Route path="/todo/projects/:projectId" element={<TodoPage view="project" />} />
+              {/* The full search page (issue #183) — Quick-find's
+              (task-quick-find.tsx) "Show more results" own destination, and
+              its own linkable, bookmarkable URL, `?q=` and the rest carried
+              as ordinary search params rather than a route segment (the
+              same shape use-history-search.ts's own `q` param already
+              takes) — no dynamic segment here, so this stays a plain
+              static literal, safe under this file's own no-dot rule
+              trivially. */}
+              <Route path="/todo/search" element={<TodoPage view="search" />} />
+              {/* Todo's activity log (issue #184, ADR 0056) — the view
+              across everything; a Project's own history is the same route
+              opened with `?projectId=` (project-view.tsx's own "Activity"
+              link), the identical "ordinary search params, not a route
+              segment" shape `/todo/search`'s own comment above already
+              takes for `?q=`. */}
+              <Route path="/todo/activity" element={<TodoPage view="activity" />} />
+              {/* Filters (issue #185, ADR 0058): `/todo/filters` names the
+              list of every saved Filter (`filters-view.tsx`);
+              `/todo/filters/new` is the composer for one not yet saved
+              (`filter-view.tsx`'s create mode); `/todo/filters/:filterId`
+              opens a saved one. `new` is a static literal ranked above
+              the dynamic segment by react-router regardless of
+              declaration order, the identical `/reflect/list` vs
+              `/reflect/:sessionId` precedent this file's own comment on
+              that pair already states — and `filterId` is a `mintId()`
+              uuid, so, like every dynamic segment above, it never
+              contains a "." and stays safe under this file's own no-dot
+              rule. */}
+              <Route path="/todo/filters" element={<TodoPage view="filters" />} />
+              <Route path="/todo/filters/new" element={<TodoPage view="filter" />} />
+              <Route path="/todo/filters/:filterId" element={<TodoPage view="filter" />} />
+              {/* A Task's own address (issue #178), still under `/todo/*` per
+              ADR 0049's own constraint on where Todo's internal navigation
+              may live — no `view` prop: `todo-page.tsx`'s own header
+              comment on `taskSlugId` explains how it recovers *which*
+              background view (Inbox/Today/a Project) to render dimmed
+              behind the Task's own modal/sheet from `location.state`
+              rather than from a prop this route would otherwise have to
+              guess at. `taskSlugId` is `<slug>-<id>`
+              (lib/task-detail-route.ts) — the trailing id is a `mintId()`
+              uuid, so, like every dynamic segment above, it never
+              contains a "." and stays safe under this file's own
+              no-dot-in-a-`/todo/*`-segment rule; the slug half is
+              stripped of everything but `[a-z0-9-]` by the same module,
+              for the identical reason. */}
+              <Route path="/todo/task/:taskSlugId" element={<TodoPage />} />
             </Route>
             {/* A sibling of EntryStoreLayout's children above, not nested under
               it — see this file's own top comment for why that has to hold

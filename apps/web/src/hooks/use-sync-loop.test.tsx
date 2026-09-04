@@ -45,6 +45,8 @@ function createFakeStore(): EntryStore {
     pending: vi.fn(async () => []),
     getCursor: vi.fn(async () => 0),
     setCursor: vi.fn(async () => {}),
+    // Issue #186 / ADR 0057.
+    catchUpRowShapeEpoch: vi.fn(async () => {}),
     search: vi.fn(async () => []),
     edit: vi.fn(async () => {}),
     remove: vi.fn(async () => {}),
@@ -70,14 +72,15 @@ function createFakeTaskStore(): TaskStore {
     uncomplete: vi.fn(async () => {}),
     rename: vi.fn(async () => {}),
     reorder: vi.fn(async () => {}),
+    reorderToday: vi.fn(async () => {}),
     setDate: vi.fn(async () => {}),
     setDeadline: vi.fn(async () => {}),
-    setDuration: vi.fn(async () => {}),
     setPriority: vi.fn(async () => {}),
     setLabelIds: vi.fn(async () => {}),
     setProject: vi.fn(async () => {}),
     setSection: vi.fn(async () => {}),
     setParent: vi.fn(async () => {}),
+    setDescription: vi.fn(async () => {}),
     advanceRecurring: vi.fn(async () => {}),
     completeForever: vi.fn(async () => {}),
     postpone: vi.fn(async () => {}),
@@ -85,6 +88,8 @@ function createFakeTaskStore(): TaskStore {
     pending: vi.fn(async () => []),
     getCursor: vi.fn(async () => 0),
     setCursor: vi.fn(async () => {}),
+    // Issue #186 / ADR 0057.
+    catchUpRowShapeEpoch: vi.fn(async () => {}),
     search: vi.fn(async () => []),
   };
 }

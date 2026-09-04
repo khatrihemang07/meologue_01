@@ -4,7 +4,7 @@ import { mintId } from "../id";
 import type { EntryPage, EntryStore } from "../store";
 import type { Entry } from "../types";
 import type { SqliteDriver } from "./driver";
-import { CURSOR_KEY, DEVICE_ID_KEY, entries, kv } from "./schema";
+import { CURSOR_KEY, DEVICE_ID_KEY, entries, kv, ROW_SHAPE_EPOCH_KEY } from "./schema";
 
 /**
  * The SQLite-backed EntryStore (ADR 0007), platform-free — it talks to a
@@ -261,6 +261,21 @@ export class SqliteEntryStore implements EntryStore {
 
   async setCursor(seq: number): Promise<void> {
     await this.setKv(CURSOR_KEY, String(seq));
+  }
+
+  // Issue #186 / ADR 0057 — see EntryStore.catchUpRowShapeEpoch's own doc
+  // comment (../store.ts) for the mechanism this implements. Reset before
+  // record: a process killed between the two leaves getCursor() at 0 and
+  // ROW_SHAPE_EPOCH_KEY stale, which repeats this same reset harmlessly
+  // on the next call rather than silently skipping it.
+  async catchUpRowShapeEpoch(currentEpoch: number): Promise<void> {
+    const stored = await this.getKv(ROW_SHAPE_EPOCH_KEY);
+    const storedEpoch = stored === undefined ? 0 : Number(stored);
+    if (storedEpoch >= currentEpoch) {
+      return;
+    }
+    await this.setCursor(0);
+    await this.setKv(ROW_SHAPE_EPOCH_KEY, String(currentEpoch));
   }
 
   /** Resolves this Device's id, minting and persisting one on first run. */

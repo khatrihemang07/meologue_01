@@ -1,6 +1,6 @@
-import type { Task } from "@meologue/core";
+import type { Event, Task } from "@meologue/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { Link, MemoryRouter, Outlet, Route, Routes } from "react-router";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -27,15 +27,15 @@ function task(overrides: Partial<Task> = {}): Task {
     content: "buy milk",
     completedAt: null,
     orderKey: "V",
+    dayOrder: "V",
     createdAt: "2026-01-01T00:00:00.000Z",
     seq: 1,
     syncedAt: "2026-01-01T00:00:00.000Z",
     deletedAt: null,
-    // Undated, no deadline, no duration, priority 1 ("no priority") — the
+    // Undated, no deadline, priority 1 ("no priority") — the
     // same default packages/core/src/test-support/task-fixture.ts uses.
     date: null,
     deadline: null,
-    duration: null,
     priority: 1,
     // No Labels, doesn't repeat — the same "concrete value, not a gap"
     // default packages/core/src/test-support/task-fixture.ts's own
@@ -48,6 +48,7 @@ function task(overrides: Partial<Task> = {}): Task {
     projectId: null,
     sectionId: null,
     parentId: null,
+    description: null,
     ...overrides,
   };
 }
@@ -77,6 +78,14 @@ function renderTodoPage(context: EntryStoreOutletContext, initialPath = "/todo/i
             <Route path="/todo/today" element={<TodoPage view="today" />} />
             <Route path="/todo/projects" element={<TodoPage view="projects" />} />
             <Route path="/todo/projects/:projectId" element={<TodoPage view="project" />} />
+            <Route path="/todo/activity" element={<TodoPage view="activity" />} />
+            <Route path="/todo/filters" element={<TodoPage view="filters" />} />
+            <Route path="/todo/filters/new" element={<TodoPage view="filter" />} />
+            <Route path="/todo/filters/:filterId" element={<TodoPage view="filter" />} />
+            {/* Issue #178's Task detail route — no `view` prop, mirroring
+                App.tsx's own identical route exactly (that file's own
+                comment explains why). */}
+            <Route path="/todo/task/:taskSlugId" element={<TodoPage />} />
             <Route path="/composer" element={<p>Composer</p>} />
           </Route>
         </Routes>
@@ -102,11 +111,13 @@ function readyContext(overrides: Partial<EntryStoreOutletContext> = {}): EntrySt
     uncompleteTask: vi.fn(),
     renameTask: vi.fn(),
     reorderTask: vi.fn(),
+    reorderTaskToday: vi.fn(),
     removeTask: vi.fn(),
     setTaskDate: vi.fn(),
     setTaskDeadline: vi.fn(),
-    setTaskDuration: vi.fn(),
     setTaskPriority: vi.fn(),
+    setTaskLabels: vi.fn(),
+    setTaskDescription: vi.fn(),
     listTasksInProject: vi.fn(async () => []),
     listTaskChildren: vi.fn(async () => []),
     listTasksInSection: vi.fn(async () => []),
@@ -119,6 +130,10 @@ function readyContext(overrides: Partial<EntryStoreOutletContext> = {}): EntrySt
     setTaskParent: vi.fn(async () => {}),
     labels: [],
     resolveLabelIds: vi.fn(async () => []),
+    comments: [],
+    addComment: vi.fn(),
+    editComment: vi.fn(),
+    removeComment: vi.fn(),
     projects: [],
     addProject: vi.fn(),
     renameProject: vi.fn(),
@@ -137,6 +152,15 @@ function readyContext(overrides: Partial<EntryStoreOutletContext> = {}): EntrySt
     deleteSection: vi.fn(),
     archiveSection: vi.fn(),
     unarchiveSection: vi.fn(),
+    events: [],
+    listEventsByTask: vi.fn(async () => []),
+    listEventsByProject: vi.fn(async () => []),
+    filters: [],
+    addFilter: vi.fn(() => "filter-1"),
+    renameFilter: vi.fn(),
+    setFilterColour: vi.fn(),
+    setFilterQuery: vi.fn(async () => {}),
+    removeFilter: vi.fn(),
     disabled: false,
     ...overrides,
   };
@@ -178,11 +202,24 @@ describe("TodoPage", () => {
     // geometry `task-tree.tsx` reads off real row rects needs a stand-in
     // here. Each row's rect is derived purely from its position among its
     // DOM siblings, which is all `dropIndexForPointer` ever looks at.
+    //
+    // Issue #192 nested a row's own sub-task `<ul>` *inside* that row's
+    // own `<li>`, and `measureRows` (task-tree.tsx) now reads each row's
+    // own `[data-task-row-box]` rather than the `<li>` itself (that
+    // file's own header comment explains why: the `<li>` now encloses any
+    // already-rendered subtree too, which would otherwise report a
+    // height tall enough to swallow several rows). This stub keys its
+    // stacked, `ROW_HEIGHT`-tall positions off the *row* regardless of
+    // which of the two elements actually asked — `closest("li")` finds
+    // the same `<li>` whether `this` is the `<li>` itself or the row box
+    // inside it — so every Inbox row here (none of which have sub-tasks
+    // in these tests) still stacks with no gaps exactly as before.
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
       this: HTMLElement,
     ) {
-      const siblings = this.parentElement ? Array.from(this.parentElement.children) : [];
-      const index = siblings.indexOf(this);
+      const li = this.closest("li") ?? this;
+      const siblings = li.parentElement ? Array.from(li.parentElement.children) : [];
+      const index = siblings.indexOf(li);
       const top = index * ROW_HEIGHT;
       return {
         top,
@@ -243,6 +280,141 @@ describe("TodoPage", () => {
 
     expect(screen.getByText("Composer")).toBeInTheDocument();
     expect(screen.queryByRole("navigation", { name: "Todo" })).not.toBeInTheDocument();
+  });
+
+  // Issue #178's own Task route is still `/todo/*` — ADR 0049's own
+  // constraint on where Todo's internal navigation may live has to hold
+  // for it too, not only for Inbox/Today/Projects.
+  it("still shows Todo's own navigation while a Task's own address is open, and still unmounts it on leaving Todo from there", () => {
+    renderTodoPage(inboxContext([task({ id: "a", content: "call mum" })]), "/todo/task/call-mum-a");
+
+    expect(screen.getByRole("navigation", { name: "Todo" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("link", { name: "Leave Todo" }));
+
+    expect(screen.getByText("Composer")).toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Todo" })).not.toBeInTheDocument();
+  });
+
+  // A real uuid — `taskIdFromParam`'s own regex (lib/task-detail-route.ts)
+  // only ever reads the trailing uuid, so this suite's usual plain `"a"`
+  // ids don't resolve to anything and are deliberately reused just above
+  // for the "bad/typo'd address must not break nav scoping" case.
+  const DETAIL_TASK_ID = "11111111-1111-7111-8111-111111111111";
+
+  it("opens a Task's own view over its background, with a breadcrumb and an editable title", async () => {
+    renderTodoPage(
+      inboxContext([task({ id: DETAIL_TASK_ID, content: "call mum" })]),
+      `/todo/task/call-mum-${DETAIL_TASK_ID}`,
+    );
+
+    // The background — Inbox, the fallback for a direct link with no
+    // `location.state.from` (todo-page.tsx's own `backgroundView` doc
+    // comment) — is still rendered, dimmed behind the modal/sheet.
+    await waitFor(() => expect(screen.getAllByText("call mum")).not.toHaveLength(0));
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toBeInTheDocument();
+    // "Inbox" appears twice inside the dialog — the breadcrumb and the
+    // Project attribute row both say it, for different reasons (this
+    // file's own comment on the breadcrumb vs. `AttributeRow`'s "Project
+    // is never truly unset" doc comment, task-detail-view.tsx) — so this
+    // scopes to the breadcrumb's own `<header>` specifically rather than
+    // an unscoped match that would resolve to both.
+    expect(dialog.querySelector("header")).toHaveTextContent("Inbox");
+    expect(within(dialog).getByLabelText("Task title")).toHaveValue("call mum");
+  });
+
+  // The coordinator's own gap-fix report: `openTask` used to be looked up
+  // against the active `tasks` array alone, so a completed Task's own
+  // address resolved to nothing and silently fell back to Inbox instead
+  // of opening — the single most useful row an activity log surfaces
+  // (issue #184) linking nowhere.
+  it("opens a completed Task's own view too, not just an active one", async () => {
+    renderTodoPage(
+      inboxContext([], {
+        completedTasks: [
+          task({
+            id: DETAIL_TASK_ID,
+            content: "call mum",
+            completedAt: "2026-01-02T00:00:00.000Z",
+          }),
+        ],
+      }),
+      `/todo/task/call-mum-${DETAIL_TASK_ID}`,
+    );
+
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByLabelText('Mark "call mum" not done')).toBeChecked();
+    expect(within(dialog).getByLabelText("Task title")).toHaveClass("line-through");
+  });
+
+  it("un-completing from a completed Task's own detail view calls uncompleteTask", async () => {
+    const uncompleteTask = vi.fn();
+    renderTodoPage(
+      inboxContext([], {
+        completedTasks: [
+          task({
+            id: DETAIL_TASK_ID,
+            content: "call mum",
+            completedAt: "2026-01-02T00:00:00.000Z",
+          }),
+        ],
+        uncompleteTask,
+      }),
+      `/todo/task/call-mum-${DETAIL_TASK_ID}`,
+    );
+
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+    fireEvent.click(screen.getByLabelText('Mark "call mum" not done'));
+
+    expect(uncompleteTask).toHaveBeenCalledWith(DETAIL_TASK_ID);
+  });
+
+  // The coordinator's own reproduction, end to end: an Activity row for a
+  // completion Event is a real link, and following it lands on a
+  // rendered dialog — not the Inbox fallback a resolution gap used to
+  // produce.
+  it("an Activity link for a completion Event reaches a view that actually renders", async () => {
+    const completedTask = task({
+      id: DETAIL_TASK_ID,
+      content: "call mum",
+      completedAt: "2026-01-02T00:00:00.000Z",
+    });
+    const completionEvent: Event = {
+      id: "e1",
+      deviceId: "device-a",
+      eventType: "completed",
+      objectType: "task",
+      objectId: DETAIL_TASK_ID,
+      taskId: DETAIL_TASK_ID,
+      projectId: null,
+      occurredAt: "2026-01-02T00:00:00.000Z",
+      extra: { content: "call mum" },
+      seq: 1,
+      syncedAt: "2026-01-02T00:00:00.000Z",
+    };
+    renderTodoPage(
+      readyContext({ completedTasks: [completedTask], events: [completionEvent] }),
+      "/todo/activity",
+    );
+
+    const link = await screen.findByRole("link", { name: /call mum/ });
+    fireEvent.click(link);
+
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+  });
+
+  it("Esc closes the Task's own view", async () => {
+    renderTodoPage(
+      inboxContext([task({ id: DETAIL_TASK_ID, content: "call mum" })]),
+      `/todo/task/call-mum-${DETAIL_TASK_ID}`,
+    );
+
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("reads an empty Inbox as a real state, not a blank panel", () => {
@@ -370,12 +542,16 @@ describe("TodoPage", () => {
     expect(uncompleteTask).toHaveBeenCalledWith("a");
   });
 
+  // Issue #178 moved Delete off the row's own hover actions into the
+  // "More actions" (⋯) menu — task-row.test.tsx's own equivalent test has
+  // the fuller reasoning.
   it("deletes a Task only after confirming, mirroring sessions-page.tsx's ConfirmDialog", async () => {
     const removeTask = vi.fn();
     renderTodoPage(inboxContext([task({ id: "a", content: "call mum" })], { removeTask }));
 
     await waitFor(() => expect(screen.getByText("call mum")).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: 'Delete "call mum"' }));
+    fireEvent.pointerDown(screen.getByRole("button", { name: 'More actions for "call mum"' }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /Delete/ }));
     expect(removeTask).not.toHaveBeenCalled();
     expect(screen.getByRole("alertdialog")).toBeInTheDocument();
 
@@ -389,7 +565,8 @@ describe("TodoPage", () => {
     renderTodoPage(inboxContext([task({ id: "a", content: "call mum" })], { removeTask }));
 
     await waitFor(() => expect(screen.getByText("call mum")).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: 'Delete "call mum"' }));
+    fireEvent.pointerDown(screen.getByRole("button", { name: 'More actions for "call mum"' }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /Delete/ }));
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
     expect(removeTask).not.toHaveBeenCalled();
@@ -629,12 +806,14 @@ describe("TodoPage — Today", () => {
 // from Inbox here, since task-schedule-sheet.test.tsx already covers the
 // sheet's own picker behaviour in isolation.
 describe("TodoPage — scheduling", () => {
+  // "Schedule" was renamed "Date" on the row (issue #178's own reference
+  // behaviour) — the sheet it opens, and its own title, are unchanged.
   it("opens the schedule sheet for the tapped Task, and a picker action calls the context's setter", async () => {
     const setTaskPriority = vi.fn();
     renderTodoPage(inboxContext([task({ id: "a", content: "call mum" })], { setTaskPriority }));
 
     await waitFor(() => expect(screen.getByText("call mum")).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: 'Schedule "call mum"' }));
+    fireEvent.click(screen.getByRole("button", { name: 'Date "call mum"' }));
     expect(screen.getByText('Schedule "call mum"')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "P1" }));
@@ -647,7 +826,7 @@ describe("TodoPage — scheduling", () => {
     renderTodoPage(inboxContext([task({ id: "a", content: "call mum" })]));
 
     await waitFor(() => expect(screen.getByText("call mum")).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: 'Schedule "call mum"' }));
+    fireEvent.click(screen.getByRole("button", { name: 'Date "call mum"' }));
     fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
 
     expect(screen.queryByText('Schedule "call mum"')).not.toBeInTheDocument();
@@ -762,5 +941,114 @@ describe("TodoPage — Projects", () => {
         expect.objectContaining({ projectId: "p1" }),
       ),
     );
+  });
+});
+
+// Issue #185, ADR 0058 — Filters wired into TodoPage exactly the way
+// Projects were: a list view (`/todo/filters`) and a single Filter's own
+// screen (`/todo/filters/new`, `/todo/filters/:filterId`), both rendered
+// through this same lazy chunk (this file's own header comment on the
+// `view` prop). FilterView's and FiltersView's own unit tests already
+// cover the grammar, the live preview, and the parse-error/Save-disabled
+// behaviour in full (filter-view.test.tsx) — these three exist only to
+// prove the page-level wiring: the right component mounts for the right
+// route, and `addFilter`/the outlet context's other Filter setters are
+// the ones actually reached.
+describe("TodoPage — Filters", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 8, 10, 12, 0)); // Sep 10, 2026, local noon
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("lists every Filter, linking to its own screen", () => {
+    renderTodoPage(
+      readyContext({
+        filters: [
+          {
+            id: "f1",
+            deviceId: "device-a",
+            name: "Due today",
+            colour: "#DC4C3E",
+            query: "today",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            seq: 1,
+            syncedAt: "2026-01-01T00:00:00.000Z",
+            deletedAt: null,
+          },
+        ],
+      }),
+      "/todo/filters",
+    );
+
+    expect(screen.getByRole("link", { name: "Due today" })).toHaveAttribute(
+      "href",
+      "/todo/filters/f1",
+    );
+  });
+
+  it("opening a saved Filter shows its name, its query, and what it matches (criterion 1)", () => {
+    renderTodoPage(
+      readyContext({
+        filters: [
+          {
+            id: "f1",
+            deviceId: "device-a",
+            name: "Due today",
+            colour: "#DC4C3E",
+            query: "today",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            seq: 1,
+            syncedAt: "2026-01-01T00:00:00.000Z",
+            deletedAt: null,
+          },
+        ],
+        tasks: [task({ id: "a", content: "call mum", date: "2026-09-10" })],
+      }),
+      "/todo/filters/f1",
+    );
+
+    expect(screen.getByRole("textbox", { name: "Filter name" })).toHaveValue("Due today");
+    expect(screen.getByRole("textbox", { name: "Filter query" })).toHaveValue("today");
+    expect(screen.getByText("call mum")).toBeInTheDocument();
+  });
+
+  it("creating a new Filter (criterion 7's live preview, then Save) calls addFilter with the typed name and query", () => {
+    const addFilter = vi.fn(() => "new-filter-id");
+    renderTodoPage(readyContext({ addFilter }), "/todo/filters/new");
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Filter name" }), {
+      target: { value: "My overdue" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "Filter query" }), {
+      target: { value: "overdue" },
+    });
+
+    const saveButton = screen.getByRole("button", { name: "Save" });
+    expect(saveButton).not.toBeDisabled();
+    fireEvent.click(saveButton);
+
+    expect(addFilter).toHaveBeenCalledWith(
+      "My overdue",
+      "overdue",
+      expect.objectContaining({ colour: expect.any(String) }),
+    );
+  });
+
+  it("a query this grammar cannot parse keeps Save disabled and shows the error plainly (criterion 6)", () => {
+    renderTodoPage(readyContext(), "/todo/filters/new");
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Filter name" }), {
+      target: { value: "Bad filter" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "Filter query" }), {
+      target: { value: "today & p1 | subtask" },
+    });
+
+    expect(screen.getByRole("alert")).toHaveTextContent(/parentheses/i);
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
   });
 });

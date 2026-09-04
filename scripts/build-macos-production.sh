@@ -28,6 +28,10 @@ DMG_DIR=apps/macos/target/release/bundle/dmg
 DMG_PRODUCT=meologue
 OUT_DIR=build/production
 BUNDLE_ID=com.meologue.app
+# Matches CERT_NAME in scripts/setup-signing.sh — the only place this
+# identity is created, and check_macos_signing already checks for it under
+# this exact name.
+SIGNING_AUTHORITY="meologue Dev"
 
 _usage() {
   cat <<USAGE
@@ -78,24 +82,64 @@ nb_say "cargo tauri build"
 # FRESH .app came out of it — checked by mtime against the moment the build
 # started, so a leftover .app from an earlier run can never be mistaken for
 # this run's output and republished.
+#
+# But "fresh" alone is NOT enough, and treating it as enough is exactly what
+# issue #187 happened through: codesign failed with errSecInternalComponent
+# (a lapsed signing keychain — see nb_diagnose_tauri_failure), Tauri's
+# bundler fell back to an adhoc signature rather than aborting, `cargo tauri
+# build` exited non-zero, this script attributed that to the .dmg step
+# because a fresh .app existed, and the adhoc-signed .app — carrying a
+# generated identifier instead of $BUNDLE_ID — published anyway. macOS runs
+# adhoc-signed apps locally without any warning, so nothing surfaced it for
+# six builds. A fresh .app is therefore necessary but not sufficient; the
+# gate below is whether that fresh .app is ALSO signed the way it is
+# supposed to be, checked by reading codesign's own opinion of it
+# (nb_verify_app_signature), never by cargo tauri build's exit code alone.
+#
+# Output is captured to a log (while still streaming to the terminal via
+# `tee`) so a failure can be diagnosed by what codesign actually said, not
+# just by the fact that something failed. `if ! ... ; then` (not `||`) around
+# the piped command is what keeps `set -e`/`pipefail` from aborting the
+# script before this can look at the result, and `${PIPESTATUS[0]}` recovers
+# `cargo tauri build`'s own exit code rather than `tee`'s.
 _tauri_started_at=$(date +%s)
+_tauri_log=$(mktemp)
+trap 'rm -f "$_tauri_log"' EXIT
 _tauri_status=0
-(cd apps/macos && cargo tauri build) || _tauri_status=$?
-
-if [ "$_tauri_status" -ne 0 ]; then
-  _app_bin=$(find "$APP/Contents/MacOS" -maxdepth 1 -type f -perm -u+x 2>/dev/null | head -1)
-  if [ -n "$_app_bin" ] && [ "$(stat -f %m "$_app_bin")" -ge "$_tauri_started_at" ]; then
-    nb_say "WARNING: cargo tauri build exited $_tauri_status, but a fresh .app was produced and signed."
-    nb_say "  This is almost always the .dmg step, which runs AFTER the .app is complete."
-    nb_say "  Publishing the .app anyway; the disk image is a convenience, not a gate."
-    nb_say "  If a disk image is stuck, clear it with:  hdiutil detach /Volumes/meologue -force"
-  else
-    nb_say "cargo tauri build exited $_tauri_status and produced no fresh .app — aborting."
-    exit "$_tauri_status"
-  fi
+if ! (cd apps/macos && cargo tauri build) 2>&1 | tee "$_tauri_log"; then
+  _tauri_status=${PIPESTATUS[0]}
 fi
 
-nb_report_artifact "$APP" identifier "$BUNDLE_ID"
+if [ "$_tauri_status" -ne 0 ]; then
+  nb_diagnose_tauri_failure "$_tauri_log"
+fi
+
+_app_bin=$(find "$APP/Contents/MacOS" -maxdepth 1 -type f -perm -u+x 2>/dev/null | head -1)
+if [ -z "$_app_bin" ] || [ "$(stat -f %m "$_app_bin")" -lt "$_tauri_started_at" ]; then
+  nb_say "cargo tauri build exited $_tauri_status and produced no fresh .app — aborting."
+  # NOT `exit "${_tauri_status:-1}"`. `${x:-1}` only substitutes when $x is
+  # UNSET or EMPTY, and _tauri_status is initialised to the string "0" —
+  # non-empty — so that form let a `cargo tauri build` that itself exited 0
+  # (while $APP was missing, stale, or had moved) fall through to `exit 0`
+  # here, reporting success for exactly the kind of failure this whole script
+  # exists to catch. This abort must never exit zero regardless of
+  # $_tauri_status's value.
+  [ "$_tauri_status" -ne 0 ] && exit "$_tauri_status" || exit 1
+fi
+
+if ! nb_verify_app_signature "$APP" "$SIGNING_AUTHORITY" "$BUNDLE_ID"; then
+  nb_say "cargo tauri build exited $_tauri_status and produced a fresh .app, but it is NOT correctly signed — aborting, NOT publishing."
+  exit 1
+fi
+
+if [ "$_tauri_status" -ne 0 ]; then
+  nb_say "WARNING: cargo tauri build exited $_tauri_status, but a fresh, correctly-signed .app was produced."
+  nb_say "  This is almost always the .dmg step, which runs AFTER the .app is complete."
+  nb_say "  Publishing the .app anyway; the disk image is a convenience, not a gate."
+  nb_say "  If a disk image is stuck, clear it with:  hdiutil detach /Volumes/meologue -force"
+fi
+
+nb_report_artifact "$APP" authority "$NB_VERIFIED_AUTHORITY" identifier "$NB_VERIFIED_IDENTIFIER"
 
 nb_say "collecting into $OUT_DIR/"
 # Real bundle names kept, unlike the APKs: the .app filename is what

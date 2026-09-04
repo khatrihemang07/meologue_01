@@ -113,9 +113,17 @@ export interface RecurrenceReference {
   readonly dueDate: string | null;
   /**
    * "Today," in the same floating encoding — the anchor for a
-   * completion-anchored rule, and always the floor: only a date strictly
-   * after `now` is ever returned by computeNextOccurrence, which is what
-   * "only future dates are ever scheduled" means in practice.
+   * completion-anchored rule, and always the floor below (or, for
+   * ./engine.ts's computeFirstOccurrence, at) which no occurrence is ever
+   * returned. Which of those two a given call gets depends on which
+   * function it called, not on this field: computeNextOccurrence only
+   * ever returns a date strictly after `now` ("you just completed
+   * today's, the next one can't also be today"), while
+   * computeFirstOccurrence returns `now` itself when today already
+   * matches the pattern ("a recurrence just given to a Task can be due
+   * the day it was given," issue #191). Both still treat `now` as an
+   * absolute floor — no occurrence before today is ever returned by
+   * either — only whether today itself counts as "before" differs.
    */
   readonly now: string;
 }
@@ -126,7 +134,8 @@ export interface RecurrenceReference {
  * `starting`/`ending`/`for` clause) has no occurrence left inside its own
  * window. `"refused"` never reaches this type directly — it's
  * RecurrenceParseResult's own outcome — but ../recurrence.ts's top-level
- * nextOccurrence() folds both steps into one call, so its own return type
+ * nextOccurrenceAfterCompletion() and firstOccurrence() each fold both
+ * steps (parse, then compute) into one call, so their shared return type
  * has to carry all three.
  */
 export type RecurrenceOutcome =

@@ -381,19 +381,20 @@ describe("backfillTasksFromHistory", () => {
       content: "already in Todo",
       completedAt: null,
       orderKey: "V",
+      dayOrder: "V",
       createdAt: "2026-01-01T00:00:00.000Z",
       seq: null,
       syncedAt: null,
       deletedAt: null,
       date: null,
       deadline: null,
-      duration: null,
       priority: 1,
       labelIds: [],
       dateString: null,
       projectId: null,
       sectionId: null,
       parentId: null,
+      description: null,
     });
 
     await backfillTasksFromHistory({

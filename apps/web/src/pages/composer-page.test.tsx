@@ -1,7 +1,9 @@
+import type { Task } from "@meologue/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter, Outlet, Route, Routes, useSearchParams } from "react-router";
+import { MemoryRouter, Outlet, Route, Routes, useNavigate, useSearchParams } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { formatTaskReference } from "@/lib/inline-markdown";
 import { useSettingsStore } from "@/lib/settings";
 import type { EntryStoreOutletContext } from "@/pages/entry-store-layout";
 import { swipeLeft } from "@/test/swipe";
@@ -12,6 +14,22 @@ import { ComposerPage } from "./composer-page";
 function SearchParamProbe() {
   const [searchParams] = useSearchParams();
   return <p data-testid="url-query">{searchParams.toString()}</p>;
+}
+
+// Stands in for a hardware/browser Back press (issue #181, criterion 4's
+// own design room: "a hardware/browser Back that dismisses the overlay
+// instead of leaving the Composer is strongly preferred"). MemoryRouter
+// has no `window.history` of its own for a real Back gesture to act on,
+// so this drives the identical mechanism a real Back press triggers —
+// `navigate(-1)` popping the router's own in-memory stack — the same way
+// every other MemoryRouter-based suite in this codebase simulates Back.
+function GoBackProbe() {
+  const navigate = useNavigate();
+  return (
+    <button type="button" onClick={() => navigate(-1)}>
+      Simulate Back
+    </button>
+  );
 }
 
 // EntryStoreLayout is what normally supplies this context (it owns the
@@ -26,6 +44,7 @@ function renderComposerPage(context: EntryStoreOutletContext, initialPath = "/")
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={[initialPath]}>
         <SearchParamProbe />
+        <GoBackProbe />
         <Routes>
           <Route element={<Outlet context={context} />}>
             <Route path="/" element={<ComposerPage />} />
@@ -52,11 +71,13 @@ const readyContext: EntryStoreOutletContext = {
   uncompleteTask: vi.fn(),
   renameTask: vi.fn(),
   reorderTask: vi.fn(),
+  reorderTaskToday: vi.fn(),
   removeTask: vi.fn(),
   setTaskDate: vi.fn(),
   setTaskDeadline: vi.fn(),
-  setTaskDuration: vi.fn(),
   setTaskPriority: vi.fn(),
+  setTaskLabels: vi.fn(),
+  setTaskDescription: vi.fn(),
   listTasksInProject: vi.fn(async () => []),
   listTaskChildren: vi.fn(async () => []),
   listTasksInSection: vi.fn(async () => []),
@@ -72,6 +93,10 @@ const readyContext: EntryStoreOutletContext = {
   setTaskParent: vi.fn(async () => {}),
   labels: [],
   resolveLabelIds: vi.fn(async () => []),
+  comments: [],
+  addComment: vi.fn(),
+  editComment: vi.fn(),
+  removeComment: vi.fn(),
   // Issue #171's Projects and Sections — these tests never exercise
   // them either, same reasoning as the setTaskProject/etc. stubs above.
   projects: [],
@@ -92,6 +117,15 @@ const readyContext: EntryStoreOutletContext = {
   deleteSection: vi.fn(),
   archiveSection: vi.fn(),
   unarchiveSection: vi.fn(),
+  events: [],
+  listEventsByTask: vi.fn(async () => []),
+  listEventsByProject: vi.fn(async () => []),
+  filters: [],
+  addFilter: vi.fn(() => "filter-1"),
+  renameFilter: vi.fn(),
+  setFilterColour: vi.fn(),
+  setFilterQuery: vi.fn(async () => {}),
+  removeFilter: vi.fn(),
   disabled: false,
 };
 
@@ -133,11 +167,13 @@ describe("ComposerPage", () => {
       uncompleteTask: vi.fn(),
       renameTask: vi.fn(),
       reorderTask: vi.fn(),
+      reorderTaskToday: vi.fn(),
       removeTask: vi.fn(),
       setTaskDate: vi.fn(),
       setTaskDeadline: vi.fn(),
-      setTaskDuration: vi.fn(),
       setTaskPriority: vi.fn(),
+      setTaskLabels: vi.fn(),
+      setTaskDescription: vi.fn(),
       listTasksInProject: vi.fn(async () => []),
       listTaskChildren: vi.fn(async () => []),
       listTasksInSection: vi.fn(async () => []),
@@ -153,6 +189,10 @@ describe("ComposerPage", () => {
       setTaskParent: vi.fn(async () => {}),
       labels: [],
       resolveLabelIds: vi.fn(async () => []),
+      comments: [],
+      addComment: vi.fn(),
+      editComment: vi.fn(),
+      removeComment: vi.fn(),
       // Issue #171's Projects and Sections — these tests never exercise
       // them either, same reasoning as the setTaskProject/etc. stubs above.
       projects: [],
@@ -173,6 +213,15 @@ describe("ComposerPage", () => {
       deleteSection: vi.fn(),
       archiveSection: vi.fn(),
       unarchiveSection: vi.fn(),
+      events: [],
+      listEventsByTask: vi.fn(async () => []),
+      listEventsByProject: vi.fn(async () => []),
+      filters: [],
+      addFilter: vi.fn(() => "filter-1"),
+      renameFilter: vi.fn(),
+      setFilterColour: vi.fn(),
+      setFilterQuery: vi.fn(async () => {}),
+      removeFilter: vi.fn(),
       disabled: true,
     });
 
@@ -204,11 +253,13 @@ describe("ComposerPage", () => {
       uncompleteTask: vi.fn(),
       renameTask: vi.fn(),
       reorderTask: vi.fn(),
+      reorderTaskToday: vi.fn(),
       removeTask: vi.fn(),
       setTaskDate: vi.fn(),
       setTaskDeadline: vi.fn(),
-      setTaskDuration: vi.fn(),
       setTaskPriority: vi.fn(),
+      setTaskLabels: vi.fn(),
+      setTaskDescription: vi.fn(),
       listTasksInProject: vi.fn(async () => []),
       listTaskChildren: vi.fn(async () => []),
       listTasksInSection: vi.fn(async () => []),
@@ -224,6 +275,10 @@ describe("ComposerPage", () => {
       setTaskParent: vi.fn(async () => {}),
       labels: [],
       resolveLabelIds: vi.fn(async () => []),
+      comments: [],
+      addComment: vi.fn(),
+      editComment: vi.fn(),
+      removeComment: vi.fn(),
       // Issue #171's Projects and Sections — these tests never exercise
       // them either, same reasoning as the setTaskProject/etc. stubs above.
       projects: [],
@@ -244,6 +299,15 @@ describe("ComposerPage", () => {
       deleteSection: vi.fn(),
       archiveSection: vi.fn(),
       unarchiveSection: vi.fn(),
+      events: [],
+      listEventsByTask: vi.fn(async () => []),
+      listEventsByProject: vi.fn(async () => []),
+      filters: [],
+      addFilter: vi.fn(() => "filter-1"),
+      renameFilter: vi.fn(),
+      setFilterColour: vi.fn(),
+      setFilterQuery: vi.fn(async () => {}),
+      removeFilter: vi.fn(),
       disabled: true,
       message: "meologue couldn't open its storage. Reloading may help.",
     });
@@ -280,11 +344,13 @@ describe("ComposerPage", () => {
       uncompleteTask: vi.fn(),
       renameTask: vi.fn(),
       reorderTask: vi.fn(),
+      reorderTaskToday: vi.fn(),
       removeTask: vi.fn(),
       setTaskDate: vi.fn(),
       setTaskDeadline: vi.fn(),
-      setTaskDuration: vi.fn(),
       setTaskPriority: vi.fn(),
+      setTaskLabels: vi.fn(),
+      setTaskDescription: vi.fn(),
       listTasksInProject: vi.fn(async () => []),
       listTaskChildren: vi.fn(async () => []),
       listTasksInSection: vi.fn(async () => []),
@@ -300,6 +366,10 @@ describe("ComposerPage", () => {
       setTaskParent: vi.fn(async () => {}),
       labels: [],
       resolveLabelIds: vi.fn(async () => []),
+      comments: [],
+      addComment: vi.fn(),
+      editComment: vi.fn(),
+      removeComment: vi.fn(),
       // Issue #171's Projects and Sections — these tests never exercise
       // them either, same reasoning as the setTaskProject/etc. stubs above.
       projects: [],
@@ -320,6 +390,15 @@ describe("ComposerPage", () => {
       deleteSection: vi.fn(),
       archiveSection: vi.fn(),
       unarchiveSection: vi.fn(),
+      events: [],
+      listEventsByTask: vi.fn(async () => []),
+      listEventsByProject: vi.fn(async () => []),
+      filters: [],
+      addFilter: vi.fn(() => "filter-1"),
+      renameFilter: vi.fn(),
+      setFilterColour: vi.fn(),
+      setFilterQuery: vi.fn(async () => {}),
+      removeFilter: vi.fn(),
       disabled: false,
     });
 
@@ -375,11 +454,13 @@ describe("ComposerPage", () => {
       uncompleteTask: vi.fn(),
       renameTask: vi.fn(),
       reorderTask: vi.fn(),
+      reorderTaskToday: vi.fn(),
       removeTask: vi.fn(),
       setTaskDate: vi.fn(),
       setTaskDeadline: vi.fn(),
-      setTaskDuration: vi.fn(),
       setTaskPriority: vi.fn(),
+      setTaskLabels: vi.fn(),
+      setTaskDescription: vi.fn(),
       listTasksInProject: vi.fn(async () => []),
       listTaskChildren: vi.fn(async () => []),
       listTasksInSection: vi.fn(async () => []),
@@ -395,6 +476,10 @@ describe("ComposerPage", () => {
       setTaskParent: vi.fn(async () => {}),
       labels: [],
       resolveLabelIds: vi.fn(async () => []),
+      comments: [],
+      addComment: vi.fn(),
+      editComment: vi.fn(),
+      removeComment: vi.fn(),
       // Issue #171's Projects and Sections — these tests never exercise
       // them either, same reasoning as the setTaskProject/etc. stubs above.
       projects: [],
@@ -415,6 +500,15 @@ describe("ComposerPage", () => {
       deleteSection: vi.fn(),
       archiveSection: vi.fn(),
       unarchiveSection: vi.fn(),
+      events: [],
+      listEventsByTask: vi.fn(async () => []),
+      listEventsByProject: vi.fn(async () => []),
+      filters: [],
+      addFilter: vi.fn(() => "filter-1"),
+      renameFilter: vi.fn(),
+      setFilterColour: vi.fn(),
+      setFilterQuery: vi.fn(async () => {}),
+      removeFilter: vi.fn(),
       disabled: false,
     });
 
@@ -515,11 +609,13 @@ describe("ComposerPage", () => {
         uncompleteTask: vi.fn(),
         renameTask: vi.fn(),
         reorderTask: vi.fn(),
+        reorderTaskToday: vi.fn(),
         removeTask: vi.fn(),
         setTaskDate: vi.fn(),
         setTaskDeadline: vi.fn(),
-        setTaskDuration: vi.fn(),
         setTaskPriority: vi.fn(),
+        setTaskLabels: vi.fn(),
+        setTaskDescription: vi.fn(),
         listTasksInProject: vi.fn(async () => []),
         listTaskChildren: vi.fn(async () => []),
         listTasksInSection: vi.fn(async () => []),
@@ -535,6 +631,10 @@ describe("ComposerPage", () => {
         setTaskParent: vi.fn(async () => {}),
         labels: [],
         resolveLabelIds: vi.fn(async () => []),
+        comments: [],
+        addComment: vi.fn(),
+        editComment: vi.fn(),
+        removeComment: vi.fn(),
         // Issue #171's Projects and Sections — these tests never exercise
         // them either, same reasoning as the setTaskProject/etc. stubs above.
         projects: [],
@@ -555,6 +655,15 @@ describe("ComposerPage", () => {
         deleteSection: vi.fn(),
         archiveSection: vi.fn(),
         unarchiveSection: vi.fn(),
+        events: [],
+        listEventsByTask: vi.fn(async () => []),
+        listEventsByProject: vi.fn(async () => []),
+        filters: [],
+        addFilter: vi.fn(() => "filter-1"),
+        renameFilter: vi.fn(),
+        setFilterColour: vi.fn(),
+        setFilterQuery: vi.fn(async () => {}),
+        removeFilter: vi.fn(),
         disabled: false,
       });
 
@@ -611,11 +720,13 @@ describe("ComposerPage", () => {
         uncompleteTask: vi.fn(),
         renameTask: vi.fn(),
         reorderTask: vi.fn(),
+        reorderTaskToday: vi.fn(),
         removeTask: vi.fn(),
         setTaskDate: vi.fn(),
         setTaskDeadline: vi.fn(),
-        setTaskDuration: vi.fn(),
         setTaskPriority: vi.fn(),
+        setTaskLabels: vi.fn(),
+        setTaskDescription: vi.fn(),
         listTasksInProject: vi.fn(async () => []),
         listTaskChildren: vi.fn(async () => []),
         listTasksInSection: vi.fn(async () => []),
@@ -631,6 +742,10 @@ describe("ComposerPage", () => {
         setTaskParent: vi.fn(async () => {}),
         labels: [],
         resolveLabelIds: vi.fn(async () => []),
+        comments: [],
+        addComment: vi.fn(),
+        editComment: vi.fn(),
+        removeComment: vi.fn(),
         // Issue #171's Projects and Sections — these tests never exercise
         // them either, same reasoning as the setTaskProject/etc. stubs above.
         projects: [],
@@ -651,6 +766,15 @@ describe("ComposerPage", () => {
         deleteSection: vi.fn(),
         archiveSection: vi.fn(),
         unarchiveSection: vi.fn(),
+        events: [],
+        listEventsByTask: vi.fn(async () => []),
+        listEventsByProject: vi.fn(async () => []),
+        filters: [],
+        addFilter: vi.fn(() => "filter-1"),
+        renameFilter: vi.fn(),
+        setFilterColour: vi.fn(),
+        setFilterQuery: vi.fn(async () => {}),
+        removeFilter: vi.fn(),
         disabled: false,
       });
 
@@ -711,11 +835,13 @@ describe("ComposerPage", () => {
         uncompleteTask: vi.fn(),
         renameTask: vi.fn(),
         reorderTask: vi.fn(),
+        reorderTaskToday: vi.fn(),
         removeTask: vi.fn(),
         setTaskDate: vi.fn(),
         setTaskDeadline: vi.fn(),
-        setTaskDuration: vi.fn(),
         setTaskPriority: vi.fn(),
+        setTaskLabels: vi.fn(),
+        setTaskDescription: vi.fn(),
         listTasksInProject: vi.fn(async () => []),
         listTaskChildren: vi.fn(async () => []),
         listTasksInSection: vi.fn(async () => []),
@@ -731,6 +857,10 @@ describe("ComposerPage", () => {
         setTaskParent: vi.fn(async () => {}),
         labels: [],
         resolveLabelIds: vi.fn(async () => []),
+        comments: [],
+        addComment: vi.fn(),
+        editComment: vi.fn(),
+        removeComment: vi.fn(),
         // Issue #171's Projects and Sections — these tests never exercise
         // them either, same reasoning as the setTaskProject/etc. stubs above.
         projects: [],
@@ -751,6 +881,15 @@ describe("ComposerPage", () => {
         deleteSection: vi.fn(),
         archiveSection: vi.fn(),
         unarchiveSection: vi.fn(),
+        events: [],
+        listEventsByTask: vi.fn(async () => []),
+        listEventsByProject: vi.fn(async () => []),
+        filters: [],
+        addFilter: vi.fn(() => "filter-1"),
+        renameFilter: vi.fn(),
+        setFilterColour: vi.fn(),
+        setFilterQuery: vi.fn(async () => {}),
+        removeFilter: vi.fn(),
         disabled: false,
       });
 
@@ -807,11 +946,13 @@ describe("ComposerPage", () => {
           uncompleteTask: vi.fn(),
           renameTask: vi.fn(),
           reorderTask: vi.fn(),
+          reorderTaskToday: vi.fn(),
           removeTask: vi.fn(),
           setTaskDate: vi.fn(),
           setTaskDeadline: vi.fn(),
-          setTaskDuration: vi.fn(),
           setTaskPriority: vi.fn(),
+          setTaskLabels: vi.fn(),
+          setTaskDescription: vi.fn(),
           listTasksInProject: vi.fn(async () => []),
           listTaskChildren: vi.fn(async () => []),
           listTasksInSection: vi.fn(async () => []),
@@ -827,6 +968,10 @@ describe("ComposerPage", () => {
           setTaskParent: vi.fn(async () => {}),
           labels: [],
           resolveLabelIds: vi.fn(async () => []),
+          comments: [],
+          addComment: vi.fn(),
+          editComment: vi.fn(),
+          removeComment: vi.fn(),
           // Issue #171's Projects and Sections — these tests never exercise
           // them either, same reasoning as the setTaskProject/etc. stubs above.
           projects: [],
@@ -847,6 +992,15 @@ describe("ComposerPage", () => {
           deleteSection: vi.fn(),
           archiveSection: vi.fn(),
           unarchiveSection: vi.fn(),
+          events: [],
+          listEventsByTask: vi.fn(async () => []),
+          listEventsByProject: vi.fn(async () => []),
+          filters: [],
+          addFilter: vi.fn(() => "filter-1"),
+          renameFilter: vi.fn(),
+          setFilterColour: vi.fn(),
+          setFilterQuery: vi.fn(async () => {}),
+          removeFilter: vi.fn(),
           disabled: false,
         },
         "/?q=wor",
@@ -1384,6 +1538,198 @@ describe("ComposerPage", () => {
       await waitFor(() => expect(fetchMore).toHaveBeenCalledTimes(1));
       expect(screen.getByTestId("url-query")).toHaveTextContent(`e=${targetId}`);
       expect(screen.getByTestId("url-query")).toHaveTextContent("d=2020-01-01");
+    });
+  });
+
+  // Issue #181, criterion 4: "clicking its words opens the Task over the
+  // Composer, without leaving the Composer." The overlay is `TaskDetailView`
+  // (components/todo/task-detail-view.tsx) reused wholesale, addressed by
+  // `?task=<id>` on this same `/` route rather than a navigation to
+  // `/todo/task/<slug>-<id>` — see composer-page.tsx's own `TASK_PARAM`
+  // comment for why.
+  describe("the Task detail overlay (issue #181)", () => {
+    const taskId = "0192abcd-1234-7890-abcd-0123456789ac";
+
+    function taskFixture(overrides: Partial<Task> = {}): Task {
+      return {
+        id: taskId,
+        deviceId: "device-a",
+        content: "buy milk",
+        completedAt: null,
+        orderKey: "V",
+        dayOrder: "V",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        seq: null,
+        syncedAt: null,
+        deletedAt: null,
+        date: null,
+        deadline: null,
+        priority: 1,
+        labelIds: [],
+        dateString: null,
+        projectId: null,
+        sectionId: null,
+        parentId: null,
+        description: null,
+        ...overrides,
+      };
+    }
+
+    // History's own day block only ever renders alongside a day that
+    // already has an Entry (the day separator it opens with comes from
+    // `groupByDay(entries, ...)`, never from a Task on its own) — a Day
+    // block test needs an Entry on the same day as its Task, the same
+    // pairing every "day Tasks" test in history.test.tsx already makes.
+    const entryOnTheSameDay = [
+      {
+        id: "1",
+        deviceId: "device-a",
+        body: "hello",
+        createdAt: "2026-08-28T10:00:00.000Z",
+        seq: 1,
+        syncedAt: "now",
+        deletedAt: null,
+      },
+    ];
+
+    function stillOnComposer() {
+      // The Composer's own Send button (composer.tsx) — present only on
+      // this route, so its continued presence is proof the overlay opened
+      // *over* the Composer rather than navigating away from it.
+      // `hidden: true` because Radix's own Dialog marks the rest of the
+      // page `aria-hidden` while it's open (the correct, standard modal
+      // behaviour — trapping a screen reader inside the dialog) — this
+      // assertion is about the DOM still holding the Composer, not about
+      // whether it's reachable through the accessibility tree right now.
+      expect(screen.getByRole("button", { name: "Send", hidden: true })).toBeInTheDocument();
+    }
+
+    it("opens over the Composer when a referenced checkbox's words are clicked", () => {
+      renderComposerPage({
+        ...readyContext,
+        entries: [
+          {
+            id: "1",
+            deviceId: "device-a",
+            body: `- [ ] ${formatTaskReference(taskId, "buy milk")}`,
+            createdAt: "2026-08-28T10:00:00.000Z",
+            seq: 1,
+            syncedAt: "now",
+            deletedAt: null,
+          },
+        ],
+        tasks: [taskFixture()],
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "buy milk" }));
+
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+      expect(screen.getByDisplayValue("buy milk")).toBeInTheDocument();
+      stillOnComposer();
+    });
+
+    it("opens over the Composer from the day block", () => {
+      renderComposerPage({
+        ...readyContext,
+        entries: [
+          {
+            id: "1",
+            deviceId: "device-a",
+            body: "hello",
+            createdAt: "2026-08-28T10:00:00.000Z",
+            seq: 1,
+            syncedAt: "now",
+            deletedAt: null,
+          },
+        ],
+        tasks: [taskFixture({ date: "2026-08-28" })],
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "buy milk" }));
+
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+      stillOnComposer();
+    });
+
+    it("reflects ?task=<id> on a direct load — a bookmark or a reload opens straight to the Task", () => {
+      renderComposerPage(
+        {
+          ...readyContext,
+          tasks: [taskFixture()],
+        },
+        `/?task=${taskId}`,
+      );
+
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+      expect(screen.getByDisplayValue("buy milk")).toBeInTheDocument();
+    });
+
+    it("shows nothing for a ?task= this Device cannot resolve", () => {
+      renderComposerPage({ ...readyContext, tasks: [] }, `/?task=${taskId}`);
+
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      stillOnComposer();
+    });
+
+    it("closing the overlay (Escape — task-detail-view.test.tsx's own established close gesture) removes ?task= and returns to the Composer", () => {
+      renderComposerPage({
+        ...readyContext,
+        entries: entryOnTheSameDay,
+        tasks: [taskFixture({ date: "2026-08-28" })],
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "buy milk" }));
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+
+      // The bottom-sheet layout (jsdom's default, narrow viewport) has no
+      // "Close" button of its own — task-detail-view.tsx's own comment:
+      // "Esc, the header's own back-to-list chevron behaviour and a tap
+      // outside all already close this sheet" — so Escape is the one
+      // close gesture available regardless of layout width.
+      fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(screen.getByTestId("url-query")).not.toHaveTextContent("task=");
+      stillOnComposer();
+    });
+
+    // Criterion 4's own design room: "a hardware/browser Back that dismisses
+    // the overlay instead of leaving the Composer is strongly preferred."
+    // Opening pushes a real history entry (composer-page.tsx's own
+    // `openTaskOverlay` comment) specifically so this works.
+    it("a Back press dismisses the overlay and lands back on the Composer, not one screen further back", () => {
+      renderComposerPage({
+        ...readyContext,
+        entries: entryOnTheSameDay,
+        tasks: [taskFixture({ date: "2026-08-28" })],
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "buy milk" }));
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+
+      // `hidden: true` — Radix's own Dialog marks this background button
+      // `aria-hidden` while open (the same reason `stillOnComposer`'s own
+      // query needs it); the click still fires on the real DOM node
+      // regardless of what the accessibility tree currently exposes.
+      fireEvent.click(screen.getByRole("button", { name: "Simulate Back", hidden: true }));
+
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      stillOnComposer();
+    });
+
+    it("ticks a Task from inside the overlay through the same completeTask door Todo's own row uses", () => {
+      const completeTask = vi.fn();
+      renderComposerPage({
+        ...readyContext,
+        entries: entryOnTheSameDay,
+        tasks: [taskFixture({ date: "2026-08-28" })],
+        completeTask,
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "buy milk" }));
+      fireEvent.click(screen.getByRole("checkbox", { name: 'Complete "buy milk"' }));
+
+      expect(completeTask).toHaveBeenCalledWith(taskId);
     });
   });
 });

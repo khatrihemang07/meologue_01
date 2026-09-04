@@ -1,3 +1,5 @@
+import type { Event } from "./event-types";
+import { toLocalParts } from "./export/offset";
 import type { Task } from "./task-types";
 
 /**
@@ -32,8 +34,15 @@ import type { Task } from "./task-types";
  * independent of what was separately planned.
  *
  * **The sort chain.** `date-and-time (or deadline, where there is no
- * date) -> priority -> deadline -> manual (orderKey) -> created`, applied
+ * date) -> priority -> deadline -> manual (dayOrder) -> created`, applied
  * by compareForToday below to every Task this module places in a section.
+ * The manual step reads `dayOrder`, Today's own fractional index (issue
+ * #182), not `orderKey` — `orderKey` is a Task's position inside its
+ * Project or Section, and letting Today's tie-break read it would mean a
+ * drag in Today silently reordering a Task inside its Project too, the
+ * exact bug ADR 0050's second index exists to rule out. See task-store.ts's
+ * `reorderToday` and mapping.ts's `fromWireTaskOutput` for the rest of
+ * that split.
  * Priority is a *tie-break inside a shared date-and-time*, not a global
  * rank — swapping the first two steps is the specific regression
  * Todoist itself shipped and then fixed twice in 2026, which is why
@@ -57,10 +66,10 @@ import type { Task } from "./task-types";
  * `dueToday` are returned separately, both sorted by the same
  * compareForToday chain — there's no second, "manual" comparator anywhere
  * in this module, so there's nothing that could reorder `overdue` by
- * `orderKey` first even under a future "manual sort" display mode: the
+ * `dayOrder` first even under a future "manual sort" display mode: the
  * chain's first step is always the date-and-time key, for every Task in
  * every section. task-views.test.ts proves this isn't merely true by
- * construction: it gives a set of overdue Tasks `orderKey`s that would
+ * construction: it gives a set of overdue Tasks `dayOrder`s that would
  * reorder them if sorted by manual order alone, and asserts `overdue`
  * still comes back in due-date order regardless.
  */
@@ -164,11 +173,13 @@ export function compareForToday(a: Task, b: Task): number {
     return deadlineOrder;
   }
 
-  // Manual: orderKey alone, not order-key.ts's compareByOrder — that
-  // helper folds in an id tie-break, which would make the "created" step
-  // below unreachable and collapse two steps of this chain into one.
-  if (a.orderKey !== b.orderKey) {
-    return a.orderKey < b.orderKey ? -1 : 1;
+  // Manual: dayOrder alone (Today's own fractional index, issue #182 —
+  // this module's own doc comment explains why not orderKey), not
+  // order-key.ts's compareByOrder — that helper folds in an id tie-break,
+  // which would make the "created" step below unreachable and collapse
+  // two steps of this chain into one.
+  if (a.dayOrder !== b.dayOrder) {
+    return a.dayOrder < b.dayOrder ? -1 : 1;
   }
 
   if (a.createdAt !== b.createdAt) {
@@ -176,7 +187,7 @@ export function compareForToday(a: Task, b: Task): number {
   }
 
   // Every step above tied — vanishingly unlikely (it needs an exact
-  // orderKey collision on top of everything else matching), but Array.sort
+  // dayOrder collision on top of everything else matching), but Array.sort
   // isn't guaranteed stable on every engine this runs on, so this is the
   // one tie-break that has to exist to keep the result deterministic
   // rather than merely usually-deterministic.
@@ -186,12 +197,23 @@ export function compareForToday(a: Task, b: Task): number {
   return a.id < b.id ? -1 : 1;
 }
 
-// A Task's primary sort key: its `date` if it has one, its `deadline`
-// otherwise — "date-and-time (or deadline, where there is no date)". Both
-// fields are ISO-ordered strings that compare correctly with plain `<`,
-// which is also what gives the all-day-before-timed rule (this module's
-// own doc comment) for free.
-function effectiveDateKey(t: Task): string | null {
+/**
+ * A Task's primary sort key: its `date` if it has one, its `deadline`
+ * otherwise — "date-and-time (or deadline, where there is no date)". Both
+ * fields are ISO-ordered strings that compare correctly with plain `<`,
+ * which is also what gives the all-day-before-timed rule (this module's
+ * own doc comment) for free.
+ *
+ * Exported (issue #185) for ../filter-query/evaluate.ts to reuse directly:
+ * a Filter's `today`/`tomorrow`/`overdue` flags ask "what is due,
+ * preferring the Date when a Task has both" (criterion 4's own wording),
+ * which is exactly what this function already computes — a *narrower*
+ * rule than today()'s own inclusive union of "Date matches, or Deadline
+ * matches" above, not a second spelling of it. See that module's own
+ * header comment for the one case the two deliberately disagree on (a
+ * future Date with a passed Deadline) and why.
+ */
+export function effectiveDateKey(t: Task): string | null {
   return t.date ?? t.deadline;
 }
 
@@ -239,12 +261,20 @@ function compareNullableAscending(a: string | null, b: string | null): number {
  * exactly what a Task's own `date`/`deadline` already says, and
  * immediately stale the moment either changes.
  *
- * **Completed Tasks are the caller's concern, not this function's.**
- * `tasks` is expected to already be an *active* list (TaskStore.list()'s
- * own guarantee, the same expectation today() carries) — a completed Task
- * filed alongside its still-open siblings would otherwise keep surfacing
- * in a day's block forever, the identical reasoning that keeps a
- * completed Task out of Inbox in the first place.
+ * **Whether `tasks` is active-only is the caller's decision, not this
+ * function's — revised by issue #181.** Before issue #181 the Day block
+ * only ever showed undone Tasks, and this doc comment said so
+ * ("`tasks` is expected to already be an *active* list"). Criterion 6
+ * ("a day's block lists that day's Tasks both done and undone") overturns
+ * that: `history.tsx` now calls this with `tasks` **and** `completedTasks`
+ * concatenated, so a completed Task dated this day still shows here —
+ * `done` reads straight off `completedAt`, which this filter never
+ * inspects. Nothing in the filter itself changed to make that true: it
+ * was already indifferent to `completedAt`, the restriction lived only in
+ * this comment's own description of what a caller was expected to pass.
+ * A Task with neither `date` nor `deadline` is excluded exactly as
+ * before, active or completed alike — see task-views.test.ts's own case
+ * naming this explicitly now that a completed Task is in the pool too.
  *
  * Sorted with the same compareForToday chain today() uses for its own
  * sections, so a reader who already learned "date-and-time, then
@@ -258,4 +288,86 @@ export function tasksForDay(tasks: Task[], dayKey: string): Task[] {
   });
   matches.sort(compareForToday);
   return matches;
+}
+
+/**
+ * A completed *occurrence* of a recurring Task, for a day's block (issue
+ * #181, criterion 9: "a completed occurrence of a repeating Task reads as
+ * a record, not as something still to do"). This exists because
+ * `tasksForDay` above cannot answer this question by itself for a
+ * recurring Task: `advanceRecurring` (task-store.ts) moves `date` forward
+ * to the *next* occurrence the moment one is completed, and a recurring
+ * Task's own `completedAt` never becomes non-null at all (CONTEXT.md's
+ * Recurrence entry — "the checkbox does not un-tick itself," Todo's own
+ * `advanceRecurringTask`). So the day a reader actually finished an
+ * occurrence on is, by the time anyone opens that day's block again, a
+ * day the Task's own live `date` has already moved past — `tasksForDay`
+ * would filter it straight out, exactly as it should for an ordinary
+ * *undone* Task no longer due that day, but wrong for a day that ought to
+ * still read "here is what got done."
+ *
+ * **Events (ADR 0056) are where that fact survives.** `advanceRecurring`
+ * records an ordinary `"completed"` Event for the Task
+ * (`use-tasks.ts`'s `advanceRecurringMutation`) with no extra
+ * occurrence-specific payload — there is no second `dateString` or
+ * `date` snapshotting which occurrence it was. What it does carry,
+ * because every Event does, is `occurredAt`: the acting Device's own
+ * clock at the moment the tick happened, never a server's arrival time
+ * (ADR 0056's entire reason for existing). Reading `occurredAt`'s own
+ * local calendar day as "which day's occurrence this was" is therefore
+ * not an approximation bolted on here — it is the one fact this app's
+ * data model actually records about when the act happened, the same
+ * "the Device that was there is trusted" precedent `entries.created_at`
+ * already set. A reader who ticks a recurring Task late (the morning
+ * after it was due) gets a record on the day they actually finished it,
+ * which is what this function reports; there is no separate "which day
+ * was this occurrence FOR" fact anywhere in this app to report instead.
+ *
+ * **Scoped to Tasks that are recurring right now** (`dateString !== null`
+ * — see Task.dateString's own doc comment, task-types.ts). A Task whose
+ * recurrence has since ended (`completeForever`, TaskStore's own doc
+ * comment: "an ordinary completed Task from that point on") is excluded
+ * here on purpose — it now carries a real `completedAt` and its own
+ * `date`/`deadline` never moved off the day it was dated, so it already
+ * surfaces correctly through the ordinary `tasksForDay` path above, read
+ * against `tasks` **and** `completedTasks` concatenated (this module's
+ * own `tasksForDay` doc comment). Including it here too would show the
+ * identical Task twice in the same block.
+ *
+ * Deduplicated by Task id: two `"completed"` Events for the same
+ * recurring Task landing on the same calendar day (an accidental double
+ * tick, corrected and re-ticked) still produce one record, not two —
+ * a Day block names *that a day's occurrence was finished*, not how many
+ * times a click happened to register.
+ *
+ * `offsetMinutes` is minutes east of UTC, the identical convention
+ * `entryDayKey`/`toLocalParts` already use — this function stays
+ * platform-free like the rest of this module (`today()`'s own doc
+ * comment): the caller (`history.tsx`) is the one place a host's own
+ * timezone is ever read, and hands the already-computed offset in.
+ */
+export function completedRecurringOccurrencesForDay(
+  tasks: Task[],
+  events: Event[],
+  dayKey: string,
+  offsetMinutes: number,
+): Task[] {
+  const recurring = new Map(tasks.filter((t) => t.dateString !== null).map((t) => [t.id, t]));
+  const seen = new Set<string>();
+  const occurrences: Task[] = [];
+  for (const event of events) {
+    if (event.eventType !== "completed" || event.taskId === null) {
+      continue;
+    }
+    const task = recurring.get(event.taskId);
+    if (task === undefined || seen.has(task.id)) {
+      continue;
+    }
+    if (toLocalParts(event.occurredAt, offsetMinutes).date !== dayKey) {
+      continue;
+    }
+    seen.add(task.id);
+    occurrences.push(task);
+  }
+  return occurrences;
 }

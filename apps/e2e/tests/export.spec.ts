@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
-import { expect, test } from "@playwright/test";
 import { strFromU8, unzipSync } from "fflate";
+import { expect, test } from "./fixtures";
 import { openDestination, sendEntry, uniqueEntryBody } from "./helpers";
 
 // Ticket 46: Export lives on Settings, a sibling route outside

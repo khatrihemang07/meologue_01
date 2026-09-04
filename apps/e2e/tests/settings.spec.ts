@@ -1,7 +1,13 @@
 import type { Locator, Page } from "@playwright/test";
-import { expect, test } from "@playwright/test";
 import { SERVER_A_DATABASE } from "../servers";
-import { entrySeq, entrySwipeTarget, sendEntry, uniqueEntryBody, waitForEntryId } from "./helpers";
+import { expect, test } from "./fixtures";
+import {
+  entrySeq,
+  entrySwipeTarget,
+  sendEntry,
+  uniqueEntryBody,
+  waitForEntryIdContaining,
+} from "./helpers";
 
 /**
  * #128's Settings, checked where it is actually checkable.
@@ -269,14 +275,22 @@ test("an Entry's fill carries the hue of the Accent the reader chose", async ({ 
  * All four values are exercised, not just one: the default is `gray`, so a
  * test that only tried `gray` could pass while writing nothing simply
  * because nothing changed.
+ *
+ * The Entry has to actually carry a completed checklist to exercise the
+ * setting at all — but Promotion (issue #173, ADR 0048) means the body Send
+ * commits is not the literal string typed: a bare `- [ ] <label>` mints a
+ * Task and gets rewritten to `- [ ] [[task:id|label]]` the instant it
+ * reaches the Server, so looking the row up by the full typed string never
+ * finds it. `waitForEntryIdContaining` matches on `label` alone — the part
+ * Promotion leaves untouched — rather than on the checkbox line as typed.
  */
 test("changing the completed-checklist style rewrites no Entry (#163, ADR 0028)", async ({
   page,
 }) => {
-  const body = uniqueEntryBody("- [ ] call mum");
+  const checklistLabel = uniqueEntryBody("call mum");
   await page.goto("/composer");
-  await sendEntry(page, body);
-  const id = await waitForEntryId(body, SERVER_A_DATABASE);
+  await sendEntry(page, `- [ ] ${checklistLabel}`);
+  const id = await waitForEntryIdContaining(checklistLabel, SERVER_A_DATABASE);
   expect(id).toBeDefined();
   const before = entrySeq(id as string, SERVER_A_DATABASE);
   expect(before).toBeDefined();

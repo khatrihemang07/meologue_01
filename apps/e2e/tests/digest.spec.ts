@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 import { openDestination, seedDigest } from "./helpers";
 
 // Digest covered end to end (issue #73): open Digest from the root screen,

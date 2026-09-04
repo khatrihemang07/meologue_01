@@ -39,6 +39,9 @@
   --color-card: var(--card);
   --color-foreground: var(--foreground);
   --color-background: var(--background);
+  --color-quick-add-pending: var(--quick-add-pending);
+  --color-quick-add-resolved: var(--quick-add-resolved);
+  --color-quick-add-resolved-accent: var(--quick-add-resolved-accent);
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -195,6 +198,50 @@
 }
 :root[data-accent="graphite"] {
   --entry-accent: var(--accent-graphite);
+}
+
+/*
+ * The add field's three live-token states (issue #179's Part A) —
+ * `lib/quick-add-highlight.ts`'s own `quickAddHighlightClass` is the only
+ * thing that reads these three, via the `bg-quick-add-*` utilities the
+ * `@theme inline` block above derives from them. "Resolved" and
+ * "unresolved" already existed in spirit (every recognised token used to
+ * get the identical single treatment `--quick-add-resolved` now is); what
+ * issue #179 actually adds is the three-way split itself and this middle,
+ * lighter "pending" state, plus a second, colour-worthy resolved tint for
+ * Priority and the Date family (CONTEXT.md's own Date/Deadline/Priority
+ * entries) — this app's one reserved accent, reused rather than a bespoke
+ * second hue (`--entry-accent`'s own doc comment above: grayscale-plus-
+ * one-accent is the whole palette).
+ *
+ * `color-mix(in oklab, ..., var(--background))`, not an alpha-transparent
+ * colour — the identical recipe `--entry-accent-fill` above already uses,
+ * and for the identical reason its own comment gives: an opaque mix never
+ * picks up whatever the row happens to be scrolling behind, and mixing
+ * toward `--background` (not `--foreground`) keeps every one of these
+ * three tints legible against the real, opaque `<input>` text sitting on
+ * top of it in both themes — see quick-add-highlight.ts's own
+ * `quickAddHighlightClass` doc comment for why these three custom
+ * properties are the ONLY thing a highlighted span's own class may vary
+ * (never padding, a border width, or a text colour): add-task-form.tsx's
+ * backdrop paints every character `text-transparent`, so only the
+ * background actually shows, behind the real input's own always-
+ * `--foreground`-coloured glyphs.
+ *
+ * Dark takes a visibly larger share of each mix than light for every one
+ * of the three, the identical "the same proportion of colour reads far
+ * weaker against a dark ground" correction `--entry-accent-fill`'s own
+ * comment already states and already applies once above.
+ */
+:root {
+  --quick-add-pending: color-mix(in oklab, var(--foreground) 10%, var(--background));
+  --quick-add-resolved: color-mix(in oklab, var(--foreground) 22%, var(--background));
+  --quick-add-resolved-accent: color-mix(in oklab, var(--entry-accent) 22%, var(--background));
+}
+.dark {
+  --quick-add-pending: color-mix(in oklab, var(--foreground) 14%, var(--background));
+  --quick-add-resolved: color-mix(in oklab, var(--foreground) 30%, var(--background));
+  --quick-add-resolved-accent: color-mix(in oklab, var(--entry-accent) 34%, var(--background));
 }
 
 /*

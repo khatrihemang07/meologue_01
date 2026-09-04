@@ -17,13 +17,15 @@ import { today } from "@meologue/core";
 import { CheckCircle2 } from "lucide-react";
 import { useState } from "react";
 import { DatePickerSheet, localDayKey } from "@/components/date-picker-sheet";
-import { TaskRow } from "@/components/todo/task-row";
+import { type TaskDetailActions, TaskRow } from "@/components/todo/task-row";
 import { Button } from "@/components/ui/button";
 import { groupTodayTasks, type TodayGrouping } from "@/lib/group-today-tasks";
 
 export interface TodayViewProps {
   /** Every active Task (TaskStore.list()'s result) — today() does its own filtering; this component never pre-narrows it. */
   tasks: Task[];
+  /** Passed straight through to every row this view renders — see `TaskDetailActions`'s own doc comment (task-row.tsx). */
+  detailActions: TaskDetailActions;
   /** `dateString` rides along so todo-page.tsx's own `handleComplete` can decide between `completeTask` and `advanceRecurringTask` — this component has no TaskStore access of its own to decide with. */
   onComplete: (id: string, content: string, dateString: string | null) => void;
   /** Shift+Click on a recurring Task's checkbox, or its touch-reachable button (task-row.tsx's own doc comments) — "Complete and archive recurring task," ending the series. */
@@ -47,6 +49,7 @@ export interface TodayViewProps {
 
 export function TodayView({
   tasks,
+  detailActions,
   onComplete,
   onCompleteForever,
   onRequestDelete,
@@ -143,6 +146,8 @@ export function TodayView({
               <TaskRow
                 key={task.id}
                 task={task}
+                detailActions={detailActions}
+                commentCount={detailActions.commentCountFor(task.id)}
                 onComplete={() => onComplete(task.id, task.content, task.dateString)}
                 onCompleteForever={() => onCompleteForever(task.id, task.content)}
                 onRequestDelete={() => onRequestDelete(task.id)}
@@ -187,6 +192,8 @@ export function TodayView({
                   <TaskRow
                     key={task.id}
                     task={task}
+                    detailActions={detailActions}
+                    commentCount={detailActions.commentCountFor(task.id)}
                     onComplete={() => onComplete(task.id, task.content, task.dateString)}
                     onCompleteForever={() => onCompleteForever(task.id, task.content)}
                     onRequestDelete={() => onRequestDelete(task.id)}

@@ -1,10 +1,26 @@
-import type { EntryStore, TaskStore } from "@meologue/core";
+import type {
+  CommentStore,
+  EntryStore,
+  EventStore,
+  LabelStore,
+  ProjectStore,
+  TaskStore,
+} from "@meologue/core";
+import { sync } from "@meologue/core";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import { useEffect } from "react";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { useEntryStore as UseEntryStore } from "./entry-store-layout";
+import {
+  deferCommentStoreUntilOpen,
+  deferEventStoreUntilOpen,
+  deferLabelStoreUntilOpen,
+  deferProjectStoreUntilOpen,
+  deferTaskStoreUntilOpen,
+  deferUntilOpen,
+  type useEntryStore as UseEntryStore,
+} from "./entry-store-layout";
 
 const { createDriver } = vi.hoisted(() => ({ createDriver: vi.fn() }));
 vi.mock("@/platform/sqlite-driver", () => ({ createDriver }));
@@ -35,6 +51,8 @@ function createFakeStore(): EntryStore {
     pending: vi.fn(async () => []),
     getCursor: vi.fn(async () => 0),
     setCursor: vi.fn(async () => {}),
+    // Issue #186 / ADR 0057.
+    catchUpRowShapeEpoch: vi.fn(async () => {}),
     search: vi.fn(async () => []),
     edit: vi.fn(async () => {}),
     remove: vi.fn(async () => {}),
@@ -66,10 +84,13 @@ function createFakeTaskStore(): TaskStore {
     uncomplete: vi.fn(async () => {}),
     rename: vi.fn(async () => {}),
     reorder: vi.fn(async () => {}),
+    reorderToday: vi.fn(async () => {}),
     remove: vi.fn(async () => {}),
     pending: vi.fn(async () => []),
     getCursor: vi.fn(async () => 0),
     setCursor: vi.fn(async () => {}),
+    // Issue #186 / ADR 0057.
+    catchUpRowShapeEpoch: vi.fn(async () => {}),
     search: vi.fn(async () => []),
     // Issue #169's four setters, and issue #170's setLabelIds plus its
     // three recurrence methods — this fake exercises none of them (this
@@ -79,7 +100,6 @@ function createFakeTaskStore(): TaskStore {
     // all seventeen.
     setDate: vi.fn(async () => {}),
     setDeadline: vi.fn(async () => {}),
-    setDuration: vi.fn(async () => {}),
     setPriority: vi.fn(async () => {}),
     setLabelIds: vi.fn(async () => {}),
     advanceRecurring: vi.fn(async () => {}),
@@ -90,6 +110,7 @@ function createFakeTaskStore(): TaskStore {
     setProject: vi.fn(async () => {}),
     setSection: vi.fn(async () => {}),
     setParent: vi.fn(async () => {}),
+    setDescription: vi.fn(async () => {}),
   };
 }
 
@@ -261,7 +282,27 @@ describe("EntryStoreLayout", () => {
     createDriver.mockResolvedValue({});
     const store = createFakeStore();
     const taskStore = createFakeTaskStore();
-    openMock.mockResolvedValue({ store, taskStore, deviceId: "device-a" });
+    // Issue #182: `runTasksBackfillOnce` now also takes the three stores
+    // added alongside it (Project, Label, Comment) — bare casts suffice
+    // here, mirroring use-history.test.tsx/use-tasks.test.tsx's own
+    // reasoning: this test only checks they were threaded through by
+    // reference, never that anything on them was actually called.
+    const projectStore = {} as ProjectStore;
+    const labelStore = {} as LabelStore;
+    const commentStore = {} as CommentStore;
+    // Issue #184: a fourth store `runTasksBackfillOnce` now threads
+    // through alongside it — the identical "bare cast, only checked by
+    // reference" reasoning this test's own comment above already states.
+    const eventStore = {} as EventStore;
+    openMock.mockResolvedValue({
+      store,
+      taskStore,
+      projectStore,
+      labelStore,
+      commentStore,
+      eventStore,
+      deviceId: "device-a",
+    });
 
     await renderLayout();
 
@@ -269,6 +310,10 @@ describe("EntryStoreLayout", () => {
     expect(runTasksBackfillOnceMock).toHaveBeenCalledWith(
       store,
       taskStore,
+      projectStore,
+      labelStore,
+      commentStore,
+      eventStore,
       "device-a",
       expect.any(Function),
     );
@@ -353,5 +398,138 @@ describe("EntryStoreLayout", () => {
     await waitFor(() => expect(store.list).toHaveBeenCalled());
 
     expect(mountEvents).toEqual(["mount"]);
+  });
+
+  // Issue #186 / ADR 0057. `tsc -b` already catches a method left off one
+  // of this file's own `*_STORE_METHODS` registries — that is a compile
+  // error, not this test's job to repeat. What nothing here proved before
+  // this ticket is the other half `defer-store.ts`'s own doc comment
+  // names: that a method actually *listed* in a registry is genuinely
+  // forwarded at runtime, called through the facade before the real store
+  // has opened — the exact path every other test in this file, and every
+  // other store-consuming test in this codebase, avoids by construction
+  // (a real caller always waits for `data` first). `sync()` calls
+  // `catchUpRowShapeEpoch`/`catchUpProjectRowShapeEpoch`/
+  // `catchUpSectionRowShapeEpoch` on every store handle it's given before
+  // anything else in its loop (`sync-engine.ts`'s own doc comment on the
+  // catch-up it runs first), which makes it exactly the right probe: a
+  // registry missing any of the three would surface here as `undefined is
+  // not a function` on the very first call, the identical failure a
+  // Device on the deferred path hit for real (reported alongside this
+  // fix) while every vitest suite stayed green.
+  it("forwards catchUpRowShapeEpoch and its Project/Section siblings through every deferred facade before the store opens", async () => {
+    let resolveOpen: (data: {
+      store: EntryStore;
+      taskStore: TaskStore;
+      projectStore: ProjectStore;
+      labelStore: LabelStore;
+      commentStore: CommentStore;
+      eventStore: EventStore;
+      deviceId: string;
+    }) => void = () => {};
+    const openPromise = new Promise<{
+      store: EntryStore;
+      taskStore: TaskStore;
+      projectStore: ProjectStore;
+      labelStore: LabelStore;
+      commentStore: CommentStore;
+      eventStore: EventStore;
+      deviceId: string;
+    }>((resolve) => {
+      resolveOpen = resolve;
+    });
+
+    // The real facades EntryStoreLayout itself builds — through the same
+    // exported helpers, over the same not-yet-resolved promise, rather
+    // than a second hand-rolled stand-in that could drift from what
+    // production actually constructs.
+    const store = deferUntilOpen(openPromise);
+    const taskStore = deferTaskStoreUntilOpen(openPromise);
+    const projectStore = deferProjectStoreUntilOpen(openPromise);
+    const labelStore = deferLabelStoreUntilOpen(openPromise);
+    const commentStore = deferCommentStoreUntilOpen(openPromise);
+    const eventStore = deferEventStoreUntilOpen(openPromise);
+
+    // `sync()` starts here, against the *pending* facades — before
+    // `resolveOpen` below ever runs. Only the methods sync()'s own
+    // catch-up-then-loop actually calls need a real implementation; every
+    // other method is never reached by this test, so it's cast rather
+    // than fully implemented, the same bare-cast convention
+    // sync-runner.test.ts's own `fakeProjectStore` already uses for a
+    // store `sync()` never touches beyond what's stubbed here.
+    const syncPromise = sync({
+      store,
+      taskStore,
+      projectStore,
+      labelStore,
+      commentStore,
+      eventStore,
+      transport: async () => ({
+        entries: [],
+        cursor: 0,
+        tasks: [],
+        task_cursor: 0,
+        projects: [],
+        project_cursor: 0,
+        sections: [],
+        section_cursor: 0,
+        labels: [],
+        label_cursor: 0,
+        comments: [],
+        comment_cursor: 0,
+        events: [],
+        event_cursor: 0,
+      }),
+      deviceId: "device-a",
+    });
+
+    resolveOpen({
+      store: {
+        pending: vi.fn(async () => []),
+        getCursor: vi.fn(async () => 0),
+        setCursor: vi.fn(async () => {}),
+        catchUpRowShapeEpoch: vi.fn(async () => {}),
+      } as unknown as EntryStore,
+      taskStore: {
+        pending: vi.fn(async () => []),
+        getCursor: vi.fn(async () => 0),
+        setCursor: vi.fn(async () => {}),
+        catchUpRowShapeEpoch: vi.fn(async () => {}),
+      } as unknown as TaskStore,
+      projectStore: {
+        pendingProjects: vi.fn(async () => []),
+        getProjectCursor: vi.fn(async () => 0),
+        setProjectCursor: vi.fn(async () => {}),
+        catchUpProjectRowShapeEpoch: vi.fn(async () => {}),
+        pendingSections: vi.fn(async () => []),
+        getSectionCursor: vi.fn(async () => 0),
+        setSectionCursor: vi.fn(async () => {}),
+        catchUpSectionRowShapeEpoch: vi.fn(async () => {}),
+      } as unknown as ProjectStore,
+      labelStore: {
+        pending: vi.fn(async () => []),
+        getCursor: vi.fn(async () => 0),
+        setCursor: vi.fn(async () => {}),
+        catchUpRowShapeEpoch: vi.fn(async () => {}),
+      } as unknown as LabelStore,
+      commentStore: {
+        pending: vi.fn(async () => []),
+        getCursor: vi.fn(async () => 0),
+        setCursor: vi.fn(async () => {}),
+        catchUpRowShapeEpoch: vi.fn(async () => {}),
+      } as unknown as CommentStore,
+      eventStore: {
+        pending: vi.fn(async () => []),
+        getCursor: vi.fn(async () => 0),
+        setCursor: vi.fn(async () => {}),
+        catchUpRowShapeEpoch: vi.fn(async () => {}),
+      } as unknown as EventStore,
+      deviceId: "device-a",
+    });
+
+    // Resolves — not "undefined is not a function" — proving every one of
+    // the six facades genuinely forwards its own catch-up method(s), not
+    // merely that a registry object happens to type-check.
+    await expect(syncPromise).resolves.toBeUndefined();
   });
 });

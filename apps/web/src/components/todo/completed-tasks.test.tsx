@@ -10,17 +10,17 @@ function task(overrides: Partial<Task> = {}): Task {
     content: "buy milk",
     completedAt: "2026-01-01T00:00:00.000Z",
     orderKey: "V",
+    dayOrder: "V",
     createdAt: "2026-01-01T00:00:00.000Z",
     seq: 1,
     syncedAt: "2026-01-01T00:00:00.000Z",
     deletedAt: null,
-    // Undated, no deadline, no duration, priority 1 ("no priority") — none
+    // Undated, no deadline, priority 1 ("no priority") — none
     // of these tests exercise scheduling, so the fixture matches
     // packages/core/src/test-support/task-fixture.ts's own default rather
     // than inventing a second convention for "nothing set" here.
     date: null,
     deadline: null,
-    duration: null,
     priority: 1,
     // No Labels, doesn't repeat — the same "concrete value, not a gap"
     // default packages/core/src/test-support/task-fixture.ts's own
@@ -33,6 +33,7 @@ function task(overrides: Partial<Task> = {}): Task {
     projectId: null,
     sectionId: null,
     parentId: null,
+    description: null,
     ...overrides,
   };
 }

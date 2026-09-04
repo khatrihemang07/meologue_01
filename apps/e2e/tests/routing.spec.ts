@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 import { openDestination, sendEntry, uniqueEntryBody } from "./helpers";
 
 // Client-side routing (ticket 25) — real paths, not hash routing, which

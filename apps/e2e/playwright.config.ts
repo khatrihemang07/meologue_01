@@ -15,6 +15,21 @@ const repoRoot = path.resolve(import.meta.dirname, "..", "..");
 export default defineConfig({
   testDir: "./tests",
   fullyParallel: false,
+  // Issue #190: `fullyParallel: false` only keeps ONE file's own tests from
+  // running concurrently with each other — nothing above previously stopped
+  // Playwright's default worker count (half the machine's CPU cores) from
+  // handing two DIFFERENT spec files to two different worker processes at
+  // once, both hitting server A's one shared, stateful database at the same
+  // time. Every spec in this suite is already written on the assumption
+  // that it runs sequentially against one shared Server (todo.spec.ts's own
+  // header comment predates this line), and `tests/fixtures.ts`'s own
+  // `resetTasks` fixture depends on "before every test" being a
+  // well-defined moment — neither is true unless there is only one worker.
+  // The cost is real (the suite no longer gets any file-level parallelism),
+  // but a suite that was quietly racing two Node processes against the same
+  // Postgres database was never the sequential suite every spec's own
+  // comments already assumed it to be.
+  workers: 1,
   retries: 0,
   reporter: [["list"]],
   // Issue #112: the per-test default (30s) is tight once a test's own body

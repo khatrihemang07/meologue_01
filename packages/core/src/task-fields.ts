@@ -2,7 +2,7 @@ import type { Task } from "./task-types";
 
 /**
  * Validation — and defaulting — for Task's own fields: the date-shaped
- * ones (issue #169: `date`/`deadline`/`duration`/`priority`) and, since
+ * ones (issue #169: `date`/`deadline`/`priority`) and, since
  * issue #171, the structural ones (`projectId`/`sectionId`/`parentId`,
  * plus the nesting-depth rule that spans rows). The one place these
  * cross-field and cross-row rules live, called from every TaskStore
@@ -24,7 +24,6 @@ const DEADLINE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 // mistake has a `Z` on it and is rejected here rather than silently stored
 // as a "floating" time that was actually a UTC instant.
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2})?$/;
-const MAX_DURATION_MINUTES = 24 * 60;
 
 /**
  * True when `date` carries a time-of-day component (`YYYY-MM-DDTHH:MM`),
@@ -67,41 +66,6 @@ export function assertValidDeadline(deadline: string | null): void {
 }
 
 /**
- * Throws unless `duration` is `null`, or a number no greater than 1440
- * minutes (24 hours) paired with a `date` that carries a time. `date` is
- * the Task's *current* date, not a value this function can derive on its
- * own — TaskStore.setDuration reads the Task first and passes its date
- * through, which is also why setDate does not need a mirror-image check
- * here: changing `date` never touches `duration`'s stored value, so an
- * existing duration surviving a date edit that drops the time is a state
- * this function would refuse if re-asserted, not one the store lets a
- * caller reach via setDuration itself.
- *
- * `date`'s parameter type admits `undefined` alongside `null` even though
- * `Task.date` itself is required-and-nullable (../task-types.ts): this is
- * also called with a value read off data arriving over Sync, where a field
- * the type promises can still be absent in practice. `undefined` is
- * treated identically to `null` (see hasTime above) — "absent" and
- * "explicitly none" both mean the Task has no time to hang a duration on
- * — never as "unknown, so skip the check", which would let exactly the
- * malformed input this guard exists for through.
- */
-export function assertValidDuration(
-  duration: number | null,
-  date: string | null | undefined,
-): void {
-  if (duration === null) {
-    return;
-  }
-  if (!hasTime(date)) {
-    throw new Error("duration requires a date that carries a time");
-  }
-  if (duration > MAX_DURATION_MINUTES) {
-    throw new Error(`duration cannot exceed ${MAX_DURATION_MINUTES} minutes (24 hours)`);
-  }
-}
-
-/**
  * Throws unless `priority` is one of the four stored levels (1-4). Task's
  * own doc comment on `priority` says why the field isn't nullable — "no
  * priority" is level 1, not an absence — and this is what keeps that true
@@ -116,10 +80,10 @@ export function assertValidPriority(priority: number): void {
 }
 
 /**
- * Fills in Task's four #169 fields where an incoming object omits them —
- * `date`/`deadline`/`duration` to `null`, `priority` to 1.
+ * Fills in Task's three #169 fields where an incoming object omits them —
+ * `date`/`deadline` to `null`, `priority` to 1.
  *
- * All four are **required** on `Task` (../task-types.ts explains why: the
+ * All three are **required** on `Task` (../task-types.ts explains why: the
  * same rule ../types.ts states for `Entry.deletedAt`, so every caller says
  * explicitly rather than letting an omission default silently). So this is
  * not a licence for local callers to stay vague — the type already refuses
@@ -128,7 +92,7 @@ export function assertValidPriority(priority: number): void {
  * arriving over Sync from a Device on an older build, whose JSON simply
  * has no such key. Every TaskStore.upsert() calls this before writing, so
  * every *reader* — list(), get(), search(), and task-views.ts's
- * today()/compareForToday() — can treat the four fields as genuinely
+ * today()/compareForToday() — can treat the three fields as genuinely
  * present rather than each re-deriving the same defaulting.
  */
 export function withDefaultSchedulingFields(t: Task): Task {
@@ -136,7 +100,6 @@ export function withDefaultSchedulingFields(t: Task): Task {
     ...t,
     date: t.date ?? null,
     deadline: t.deadline ?? null,
-    duration: t.duration ?? null,
     priority: t.priority ?? 1,
   };
 }
@@ -147,7 +110,7 @@ export function withDefaultSchedulingFields(t: Task): Task {
  * withDefaultSchedulingFields above, on purpose, mirroring
  * ../label-fields.ts's withDefaultLabelIds rather than being folded into
  * the #169 defaulter: `dateString` doesn't share a ticket, a module, or a
- * reason to default with `date`/`deadline`/`duration`/`priority` — it
+ * reason to default with `date`/`deadline`/`priority` — it
  * defaults to `null` for "doesn't repeat," not for a scheduling rule, and
  * the two `?`-optional fields on Task (this one and `labelIds`) each got
  * `?`-optional for a different reason of their own (see this field's own
@@ -168,7 +131,7 @@ export function withDefaultDateString(t: Task): Task {
  * before this field existed, never a licence for a local caller to stay
  * vague. `null` for all three means Inbox, no Section, no parent — the
  * same "nothing chosen yet" state a Task created directly in Todo starts
- * in for `date`/`deadline`/`duration` (withDefaultSchedulingFields above).
+ * in for `date`/`deadline` (withDefaultSchedulingFields above).
  */
 export function withDefaultStructureFields(t: Task): Task {
   return {
@@ -177,6 +140,36 @@ export function withDefaultStructureFields(t: Task): Task {
     sectionId: t.sectionId ?? null,
     parentId: t.parentId ?? null,
   };
+}
+
+/**
+ * Fills in `description` where an incoming Task omits it (issue #180) —
+ * the fourth such `?`-optional-in-practice defaulter, mirroring
+ * withDefaultDateString/withDefaultStructureFields above and
+ * ../label-fields.ts's withDefaultLabelIds for the identical reason:
+ * `description` is **required** on `Task` (../task-types.ts's own doc
+ * comment), so this is purely the safety net for a Task literal or a
+ * Sync payload written before this field existed, never a licence for a
+ * local caller to stay vague. `null` means "no Description yet," the
+ * same state a Task created directly in Todo starts in.
+ */
+export function withDefaultDescription(t: Task): Task {
+  return { ...t, description: t.description ?? null };
+}
+
+/**
+ * Fills in `dayOrder` where an incoming Task omits it (issue #182) — the
+ * fifth such `?`-optional-in-practice defaulter, mirroring
+ * withDefaultDescription above for the identical reason: `dayOrder` is
+ * **required** on `Task` (../task-types.ts's own doc comment), so this is
+ * purely the safety net for a Task literal or a Sync payload written
+ * before this field existed. Falls back to the Task's own `orderKey`,
+ * not `null` — `dayOrder` isn't nullable, and "wherever its Project order
+ * already put it" is the identical bootstrap mapping.ts's
+ * fromWireTaskOutput uses for a Task arriving fresh over Sync.
+ */
+export function withDefaultDayOrder(t: Task): Task {
+  return { ...t, dayOrder: t.dayOrder ?? t.orderKey };
 }
 
 /**
@@ -197,8 +190,7 @@ export const MAX_TASK_NESTING_DEPTH = 4;
  * this function only judges the count once it is known; walking a Task's
  * `parentId` chain to compute it needs an async store lookup per hop, so
  * that walk lives in each TaskStore implementation's own setParent()
- * (mirroring assertValidDuration's own split: this module holds the pure
- * rule, the store holds the read that feeds it).
+ * (the pure rule lives here; the store holds the read that feeds it).
  */
 export function assertValidNestingDepth(parentDepth: number): void {
   if (parentDepth >= MAX_TASK_NESTING_DEPTH) {

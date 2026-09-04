@@ -1,6 +1,7 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { AppErrorBoundary } from "@/components/app-error-boundary";
 import { SyncLoop } from "@/hooks/use-sync-loop";
 import { queryClient } from "@/lib/query-client";
 import { refreshCapabilities, useSettingsStore } from "@/lib/settings";
@@ -71,7 +72,13 @@ createRoot(rootElement).render(
           running while the user is on Settings — a sibling route outside
           App's EntryStoreLayout (ADR 0008/0009). See use-sync-loop.ts. */}
       <SyncLoop />
-      <App />
+      {/* Issue #177: the one place an uncaught render/effect error is
+          caught at all — see app-error-boundary.tsx's own module comment
+          for why it wraps App alone, not SyncLoop or the query client
+          above it. */}
+      <AppErrorBoundary>
+        <App />
+      </AppErrorBoundary>
     </QueryClientProvider>
   </StrictMode>,
 );

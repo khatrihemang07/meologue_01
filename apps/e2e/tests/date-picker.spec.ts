@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 import { advanceDateByDays, installDateOffset, sendEntry, uniqueEntryBody } from "./helpers";
 
 // `.first()` on every getByText below is deliberate, not defensive noise: an

@@ -4,17 +4,16 @@ import {
   matchArithmeticDate,
   matchExplicitTime,
   matchFuzzyTime,
+  matchRecurrencePhrase,
   matchRecurrenceWord,
   matchRelativeDate,
   matchWeekday,
   matchWeekdayArithmeticCombo,
 } from "./date-rules";
 import { englishQuickAddLanguage } from "./en";
-import type { QuickAddLanguage } from "./language";
 import {
   matchDeadline,
   matchDescription,
-  matchDuration,
   matchLabel,
   matchPriority,
   matchProject,
@@ -38,10 +37,11 @@ import type { QuickAddOptions, QuickAddResult, QuickAddSpan, QuickAddToken } fro
  * sigil-family first (unconditionally — see ./types.ts's
  * `QuickAddTokenKind` doc comment for why those carry no false-positive
  * risk to arbitrate away), then, if `smartDates`, the eager family with
- * its own compound-before-simple ordering (`monday in 2 weeks` before
- * plain `monday` and plain `in 2 weeks`, so the longer, more specific
- * match wins the words it needs rather than being shadowed by two
- * shorter ones that fire first). A numeric `priority` field on each rule
+ * its own compound-before-simple ordering (`every monday` before plain
+ * `monday`; `monday in 2 weeks` before plain `monday` and plain `in 2
+ * weeks`; so the longer, more specific match wins the words it needs
+ * rather than being shadowed by two shorter ones that fire first). A
+ * numeric `priority` field on each rule
  * would say the identical thing with one more layer of indirection; the
  * order candidates are pushed in *is* the priority, and reading this
  * function top to bottom is reading the priority order directly.
@@ -53,7 +53,7 @@ export function parseQuickAdd(input: string, options: QuickAddOptions): QuickAdd
   const { now } = options;
   const dateCtx: DateRuleContext = { language, now };
 
-  const candidates = collectCandidates(input, language, dateCtx, smartDates);
+  const candidates = collectCandidates(input, dateCtx, smartDates);
   const tokens = resolveOverlaps(candidates, demoted);
 
   return buildResult(input, tokens, now);
@@ -85,7 +85,6 @@ export function demoteQuickAddToken(
 // function's own call from parseQuickAdd.
 function collectCandidates(
   input: string,
-  language: QuickAddLanguage,
   dateCtx: DateRuleContext,
   smartDates: boolean,
 ): QuickAddToken[] {
@@ -97,11 +96,20 @@ function collectCandidates(
     ...matchLabel(input),
     ...matchPriority(input),
     ...matchDeadline(input, dateCtx),
-    ...matchDuration(input, language),
     ...matchReminder(input, dateCtx),
   ];
   if (smartDates) {
     candidates.push(
+      // A recurrence phrase is pushed first, ahead of every other eager
+      // rule: "every monday" or "every day at 5pm" is strictly more
+      // specific than the plain weekday/time candidates the same words
+      // would otherwise also match ("monday", "5pm"), and this list's
+      // own push order is what lets the compound match win those words
+      // rather than being shadowed by shorter ones that fire first — the
+      // identical reasoning matchWeekdayArithmeticCombo's own doc
+      // comment gives for going before plain matchWeekday/
+      // matchArithmeticDate.
+      ...matchRecurrencePhrase(input),
       ...matchWeekdayArithmeticCombo(input, dateCtx),
       ...matchAbsoluteDate(input, dateCtx),
       ...matchRelativeDate(input, dateCtx),
@@ -153,7 +161,6 @@ function buildResult(input: string, tokens: QuickAddToken[], now: string): Quick
   let date: string | null = null;
   let time: string | null = null;
   let deadline: string | null = null;
-  let duration: number | null = null;
   let priority = 1;
   let projectName: string | null = null;
   let sectionName: string | null = null;
@@ -176,9 +183,6 @@ function buildResult(input: string, tokens: QuickAddToken[], now: string): Quick
         break;
       case "deadline":
         deadline = token.deadline;
-        break;
-      case "duration":
-        duration = token.minutes;
         break;
       case "priority":
         priority = token.priority;
@@ -214,7 +218,6 @@ function buildResult(input: string, tokens: QuickAddToken[], now: string): Quick
     content: buildContent(input, tokens),
     date: mergeDateAndTime(date, time, now),
     deadline,
-    duration,
     priority,
     projectName,
     sectionName,
