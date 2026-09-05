@@ -110,9 +110,38 @@ failing describe an ongoing attempt against a configured Server.
 ### Export
 
 A zip a Device produces on request, holding a plain-text file per day plus a lossless
-`manifest.json`, so a user can read, back up, or move their History outside the app. An Export
-always covers the whole History, never a Search — it is a backup, and a backup that quietly
-omits things is worse than none.
+`manifest.json`, so a user can read or move their History outside the app. An Export always
+covers the whole History, never a Search — an artifact that quietly omits things is worse than
+none. It is the *readable* one of the two things a Device can produce; the lossless one a Device
+can read back is a Backup.
+
+### Backup
+
+Everything a Device holds, written out as SQL so it can be read back. Where an Export answers
+"can I read this", a Backup answers "is my data safe": it covers every kind of row a Device
+stores rather than the ones that happen to be readable as prose, it keeps rows the user has
+deleted, and unlike an Export it is something the app itself can consume again — through a
+Restore or a Merge.
+
+A Backup is a whole Device, not a selection. It carries that Device's settings alongside its
+rows, because a Device restored without them is not the Device that was backed up.
+
+### Restore
+
+Replacing everything a Device holds with a Backup's contents. The Device becomes the Backup:
+rows it had and the Backup does not are gone. It keeps its own identity — a Restore does not
+make this Device claim to be the one the Backup came from — and it asks before it acts, because
+this is the one operation in the app that destroys History on purpose.
+
+### Merge
+
+Folding a Backup's rows into a Device without discarding what the Device already holds. Where a
+Restore replaces, a Merge adds and updates: a row only the Backup has arrives, a row only the
+Device has stays, and where both hold the same row the one changed more recently wins. A row
+whose content is identical on both sides is left exactly as it is.
+
+A Merge carries rows and nothing else. Settings belong to a Device, not to its History, so a
+Merge never touches them — that is a Restore's business.
 
 ### Cursor
 
