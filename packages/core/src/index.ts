@@ -1,4 +1,4 @@
-export type { BackupOptions, BackupResult } from "./backup/backup-zip";
+export type { BackupKind, BackupOptions, BackupResult } from "./backup/backup-zip";
 export { backupFileName, createBackup } from "./backup/backup-zip";
 export {
   backupTableNames,
@@ -20,7 +20,13 @@ export type {
   ParsedTable,
 } from "./backup/parse";
 export { parseBackupDatabase } from "./backup/parse";
-export type { RestoreOutcome, RestoreResult } from "./backup/restore";
+export type {
+  RestoreOptions,
+  RestoreOutcome,
+  RestoreResult,
+  SafetyBackupOutcome,
+  TakeSafetyBackup,
+} from "./backup/restore";
 export { restoreFromBackup } from "./backup/restore";
 export type { UnzipBackupResult, UnzippedBackup } from "./backup/restore-zip";
 export { unzipBackup } from "./backup/restore-zip";

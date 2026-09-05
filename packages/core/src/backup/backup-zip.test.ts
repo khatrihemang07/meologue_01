@@ -22,6 +22,21 @@ describe("backupFileName", () => {
     const second = backupFileName(new Date("2026-08-16T06:12:04.000Z"), OFFSET_IST);
     expect(first).not.toBe(second);
   });
+
+  // Issue #204: Restore's own safety Backup needs a name that reads as
+  // what it is, distinct from a user-initiated Backup at a glance in a
+  // Downloads folder — see this function's own doc comment.
+  it("names a safety Backup with its own, longer prefix, same date/time shape", () => {
+    expect(backupFileName(new Date("2026-08-16T06:12:03.000Z"), OFFSET_IST, "safety-backup")).toBe(
+      "meologue-safety-backup-20260816-114203.zip",
+    );
+  });
+
+  it("defaults to the ordinary Backup prefix when no kind is given", () => {
+    expect(backupFileName(new Date("2026-08-16T06:12:03.000Z"), OFFSET_IST, "backup")).toBe(
+      backupFileName(new Date("2026-08-16T06:12:03.000Z"), OFFSET_IST),
+    );
+  });
 });
 
 describe("createBackup", () => {
@@ -38,6 +53,32 @@ describe("createBackup", () => {
     expect(fileName).toBe("meologue-backup-20260816-114500.zip");
     const unzipped = unzipSync(bytes);
     expect(Object.keys(unzipped).sort()).toEqual(["database.sql", "meta.json", "settings.json"]);
+  });
+
+  // Issue #204: Restore's own `takeSafetyBackup` calls this same function
+  // with `kind: "safety-backup"` — it's the identical artifact, just named
+  // to say what it's for (see `backupFileName`'s own doc comment).
+  it('names itself a safety Backup when kind: "safety-backup" is given, the zip contents unchanged', async () => {
+    const driver = new NodeSqliteDriver();
+    const { deviceId } = await open(driver);
+
+    const { fileName, bytes } = await createBackup(
+      driver,
+      {},
+      {
+        deviceId,
+        now: new Date("2026-08-16T06:15:00.000Z"),
+        utcOffsetMinutes: OFFSET_IST,
+        kind: "safety-backup",
+      },
+    );
+
+    expect(fileName).toBe("meologue-safety-backup-20260816-114500.zip");
+    expect(Object.keys(unzipSync(bytes)).sort()).toEqual([
+      "database.sql",
+      "meta.json",
+      "settings.json",
+    ]);
   });
 
   it("carries the given settings verbatim, with no validation and no reshaping", async () => {
