@@ -12,6 +12,11 @@ import type {
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  FetchServerBackupResult,
+  RebuildMismatchedEmbeddingsResult,
+  RestoreServerBackupResult,
+} from "@/lib/server-backup-transport";
 import { useSettingsStore } from "@/lib/settings";
 import type { LoadFileResult } from "@/platform/load-file";
 import type { SaveFileOutcome } from "@/platform/save-file";
@@ -70,12 +75,21 @@ const {
   // doc comment: a Server Backup is an opaque pg_dump archive this Device
   // only relays), so it's mocked as its own module rather than folded into
   // the @meologue/core mock above.
-  fetchServerBackupMock: vi.fn(async () => ({ ok: true, bytes: new Uint8Array([9, 9, 9]) })),
-  restoreServerBackupMock: vi.fn(async () => ({
-    ok: true,
-    report: { mismatched_embedding_count: 0 },
-  })),
-  rebuildMismatchedEmbeddingsMock: vi.fn(async () => ({ ok: true, report: { rebuilt_count: 0 } })),
+  fetchServerBackupMock: vi.fn(
+    async (): Promise<FetchServerBackupResult> => ({ ok: true, bytes: new Uint8Array([9, 9, 9]) }),
+  ),
+  restoreServerBackupMock: vi.fn(
+    async (): Promise<RestoreServerBackupResult> => ({
+      ok: true,
+      report: { mismatched_embedding_count: 0 },
+    }),
+  ),
+  rebuildMismatchedEmbeddingsMock: vi.fn(
+    async (): Promise<RebuildMismatchedEmbeddingsResult> => ({
+      ok: true,
+      report: { rebuilt_count: 0 },
+    }),
+  ),
 }));
 
 vi.mock("@/platform/save-file", () => ({ saveFile: saveFileMock }));
@@ -608,6 +622,12 @@ describe("DataSection", () => {
 
       await waitFor(() => expect(restoreFromBackupMock).toHaveBeenCalledTimes(1));
       expect(useSettingsStore.getState().serverUrl).toBe("https://from-backup.example");
+      // Drains handleConfirmRestore's own delayed reload before this test
+      // ends — left pending, it fires 1200ms later against whatever
+      // window.location happens to be by then (a later test's own, or the
+      // real one once this describe's afterEach restores it), which is
+      // exactly the stray-timer noise this waits out instead.
+      await waitFor(() => expect(reloadMock).toHaveBeenCalledTimes(1), { timeout: 3000 });
     });
 
     it("shows an error toast and applies no settings when restoreFromBackup refuses the file", async () => {
@@ -634,6 +654,235 @@ describe("DataSection", () => {
         ),
       );
       expect(localStorage.getItem("meologue.theme")).not.toBe("dark");
+    });
+  });
+
+  // Issue #198: the Server's own Backup/Restore, rendered by DataSection as
+  // server-data-group.tsx's own ServerDataGroup. Visible only once a
+  // Server URL is set (ADR 0011) — that gate is this describe block's own
+  // first concern, before either flow's wiring.
+  describe("ServerDataGroup", () => {
+    it("shows neither the server Backup nor Restore button when no Server URL is set", () => {
+      render(<DataSection opened={openedStore()} />);
+
+      expect(screen.queryByRole("button", { name: "Back up server" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Restore server…" })).not.toBeInTheDocument();
+    });
+
+    it("shows both once a Server URL is set", () => {
+      useSettingsStore.setState({ serverUrl: "https://server.example" });
+
+      render(<DataSection opened={openedStore()} />);
+
+      expect(screen.getByRole("button", { name: "Back up server" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Restore server…" })).toBeInTheDocument();
+    });
+
+    describe("with a Server URL set", () => {
+      beforeEach(() => {
+        useSettingsStore.setState({ serverUrl: "https://server.example" });
+      });
+
+      describe("Backup", () => {
+        it("fetches the server's own archive, saves it, and shows a success toast", async () => {
+          const successToast = vi.spyOn(toast, "success");
+
+          render(<DataSection opened={openedStore()} />);
+          fireEvent.click(screen.getByRole("button", { name: "Back up server" }));
+
+          await waitFor(() => expect(fetchServerBackupMock).toHaveBeenCalledTimes(1));
+          await waitFor(() =>
+            expect(saveFileMock).toHaveBeenCalledWith(
+              "meologue-server-backup.dump",
+              expect.any(Uint8Array),
+            ),
+          );
+          await waitFor(() =>
+            expect(successToast).toHaveBeenCalledWith(
+              expect.stringContaining("meologue-server-backup.dump"),
+            ),
+          );
+        });
+
+        it("raises no toast at all when the user cancels the save", async () => {
+          saveFileMock.mockResolvedValue("cancelled");
+          const successToast = vi.spyOn(toast, "success");
+          const errorToast = vi.spyOn(toast, "error");
+
+          render(<DataSection opened={openedStore()} />);
+          fireEvent.click(screen.getByRole("button", { name: "Back up server" }));
+
+          await waitFor(() => expect(saveFileMock).toHaveBeenCalledTimes(1));
+          expect(successToast).not.toHaveBeenCalled();
+          expect(errorToast).not.toHaveBeenCalled();
+        });
+
+        it("shows an error toast when the server can't be reached", async () => {
+          fetchServerBackupMock.mockResolvedValue({ ok: false, reason: "unreachable" });
+          const errorToast = vi.spyOn(toast, "error");
+
+          render(<DataSection opened={openedStore()} />);
+          fireEvent.click(screen.getByRole("button", { name: "Back up server" }));
+
+          await waitFor(() =>
+            expect(errorToast).toHaveBeenCalledWith(
+              "Couldn't reach the server. Check that it's running and try again.",
+            ),
+          );
+          expect(saveFileMock).not.toHaveBeenCalled();
+        });
+      });
+
+      describe("Restore", () => {
+        it("does nothing at all when the user cancels the file picker", async () => {
+          loadFileMock.mockResolvedValue({ outcome: "cancelled" });
+
+          render(<DataSection opened={openedStore()} />);
+          fireEvent.click(screen.getByRole("button", { name: "Restore server…" }));
+
+          await waitFor(() => expect(loadFileMock).toHaveBeenCalledTimes(1));
+          expect(screen.queryByText("Restore the server from a Backup?")).not.toBeInTheDocument();
+        });
+
+        async function openServerConfirmDialog() {
+          loadFileMock.mockResolvedValue({
+            outcome: "loaded",
+            fileName: "meologue-server-backup.dump",
+            bytes: new Uint8Array([9, 9, 9]),
+          });
+
+          render(<DataSection opened={openedStore()} />);
+          fireEvent.click(screen.getByRole("button", { name: "Restore server…" }));
+
+          await screen.findByText("Restore the server from a Backup?");
+        }
+
+        it("opens a confirmation dialog after picking a file, with the destructive button disabled until RESTORE SERVER is typed", async () => {
+          await openServerConfirmDialog();
+
+          const confirmButton = screen.getByRole("button", { name: "Restore" });
+          expect(confirmButton).toBeDisabled();
+
+          fireEvent.change(screen.getByLabelText("Type RESTORE SERVER to confirm"), {
+            target: { value: "RESTORE" },
+          });
+          expect(confirmButton).toBeDisabled();
+
+          fireEvent.change(screen.getByLabelText("Type RESTORE SERVER to confirm"), {
+            target: { value: "RESTORE SERVER" },
+          });
+          expect(confirmButton).toBeEnabled();
+        });
+
+        it("closes the dialog without calling restoreServerBackup when Cancel is clicked", async () => {
+          await openServerConfirmDialog();
+
+          fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+          await waitFor(() =>
+            expect(screen.queryByText("Restore the server from a Backup?")).not.toBeInTheDocument(),
+          );
+          expect(restoreServerBackupMock).not.toHaveBeenCalled();
+        });
+
+        async function confirmServerRestore() {
+          fireEvent.change(screen.getByLabelText("Type RESTORE SERVER to confirm"), {
+            target: { value: "RESTORE SERVER" },
+          });
+          fireEvent.click(screen.getByRole("button", { name: "Restore" }));
+        }
+
+        it("calls restoreServerBackup with the picked bytes and shows a plain success toast when nothing is mismatched", async () => {
+          restoreServerBackupMock.mockResolvedValue({
+            ok: true,
+            report: { mismatched_embedding_count: 0 },
+          });
+          const successToast = vi.spyOn(toast, "success");
+          await openServerConfirmDialog();
+
+          await confirmServerRestore();
+
+          await waitFor(() => expect(restoreServerBackupMock).toHaveBeenCalledTimes(1));
+          expect(restoreServerBackupMock).toHaveBeenCalledWith(new Uint8Array([9, 9, 9]));
+          await waitFor(() => expect(successToast).toHaveBeenCalledWith("Server restored."));
+          expect(screen.queryByRole("button", { name: /^Rebuild/ })).not.toBeInTheDocument();
+        });
+
+        it("reports a nonzero embedding mismatch and offers to rebuild", async () => {
+          restoreServerBackupMock.mockResolvedValue({
+            ok: true,
+            report: { mismatched_embedding_count: 3 },
+          });
+          const successToast = vi.spyOn(toast, "success");
+          await openServerConfirmDialog();
+
+          await confirmServerRestore();
+
+          await waitFor(() =>
+            expect(successToast).toHaveBeenCalledWith(
+              "Server restored. 3 Entries carry an embedding from a different model.",
+            ),
+          );
+          expect(await screen.findByRole("button", { name: "Rebuild 3" })).toBeInTheDocument();
+          expect(screen.getByRole("button", { name: "Leave them" })).toBeInTheDocument();
+        });
+
+        it("rebuilds the mismatched embeddings and clears the follow-up once done", async () => {
+          restoreServerBackupMock.mockResolvedValue({
+            ok: true,
+            report: { mismatched_embedding_count: 3 },
+          });
+          rebuildMismatchedEmbeddingsMock.mockResolvedValue({
+            ok: true,
+            report: { rebuilt_count: 3 },
+          });
+          const successToast = vi.spyOn(toast, "success");
+          await openServerConfirmDialog();
+          await confirmServerRestore();
+          await screen.findByRole("button", { name: "Rebuild 3" });
+
+          fireEvent.click(screen.getByRole("button", { name: "Rebuild 3" }));
+
+          await waitFor(() => expect(rebuildMismatchedEmbeddingsMock).toHaveBeenCalledTimes(1));
+          await waitFor(() =>
+            expect(successToast).toHaveBeenCalledWith("3 Entries queued for re-embedding."),
+          );
+          expect(screen.queryByRole("button", { name: "Rebuild 3" })).not.toBeInTheDocument();
+        });
+
+        it("leaves the mismatched embeddings alone without calling rebuild", async () => {
+          restoreServerBackupMock.mockResolvedValue({
+            ok: true,
+            report: { mismatched_embedding_count: 3 },
+          });
+          await openServerConfirmDialog();
+          await confirmServerRestore();
+          await screen.findByRole("button", { name: "Leave them" });
+
+          fireEvent.click(screen.getByRole("button", { name: "Leave them" }));
+
+          expect(rebuildMismatchedEmbeddingsMock).not.toHaveBeenCalled();
+          expect(screen.queryByRole("button", { name: "Rebuild 3" })).not.toBeInTheDocument();
+        });
+
+        it("shows an error toast and applies nothing when restoreServerBackup fails", async () => {
+          restoreServerBackupMock.mockResolvedValue({
+            ok: false,
+            reason: "http-error",
+            status: 500,
+            message: "pg_restore failed: archive is corrupt",
+          });
+          const errorToast = vi.spyOn(toast, "error");
+          await openServerConfirmDialog();
+
+          await confirmServerRestore();
+
+          await waitFor(() =>
+            expect(errorToast).toHaveBeenCalledWith("pg_restore failed: archive is corrupt"),
+          );
+          expect(screen.getByText("Restore the server from a Backup?")).toBeInTheDocument();
+        });
+      });
     });
   });
 });
