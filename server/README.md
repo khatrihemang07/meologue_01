@@ -79,14 +79,14 @@ are no longer read-once-at-startup-and-fixed. A Server also holds a settings row
 Postgres, readable and writable over `GET`/`PATCH /v1/config`, and **a stored value wins over the
 environment; the environment only seeds a field nothing has been stored for.** Clearing a field
 (a `PATCH` with an empty string) means "fall back to the environment," not "off" — see
-`docs/adr/0059-*` for why this deliberately departs from ADR 0011/0021's "empty means off," and
+`docs/adr/0060-*` for why this deliberately departs from ADR 0011/0021's "empty means off," and
 `src/settings.rs::resolve` for the precedence itself, a pure function with its own unit tests.
 
 Two more variables arrive with this:
 
 | Var | Behaviour |
 |---|---|
-| `MEOLOGUE_MODE` | `production` or `sandbox`, defaulting to `production`. Names this instance — in its startup banner today, in a UI banner or log prefix later — and decides nothing else: it does **not** affect precedence. See `docs/adr/0062-*`. |
+| `MEOLOGUE_MODE` | `production` or `sandbox`, defaulting to `production`. Names this instance — in its startup banner today, in a UI banner or log prefix later — and decides nothing else: it does **not** affect precedence. See `docs/adr/0061-*`. |
 | `MEOLOGUE_CONFIG_LOCK` | Any non-empty value makes this Server ignore its stored settings entirely and read only the environment, as if `server_settings` held nothing. Not something to copy into your own `.env` — the e2e scripts set it so the persistent e2e databases can't poison a suite run with a stored value left over from a previous one. |
 
 `GET /v1/config` reports each field's resolved value **and where it came from** (`stored`, `env`,
@@ -114,7 +114,7 @@ cost the ability to check what is actually configured and buy no real confidenti
   on protocol version — see `docs/adr/0010-*`.
 - `POST /v1/sync` — see `docs/adr/0002-*` and `docs/adr/0004-*` for the design.
 - `GET`/`PATCH /v1/config` — this Server's own settings, layered over the environment. See
-  "Server settings" above and `docs/adr/0059-*`.
+  "Server settings" above and `docs/adr/0060-*`.
 - `GET /v1/metrics` — Prometheus-format request counts, latencies, statuses, and Sync-specific
   counters (Entries pushed/pulled, protocol mismatches). Unauthenticated, like the rest of `/v1`
   (ADR 0003) — nothing scrapes it yet, this is emit-now-scrape-later.

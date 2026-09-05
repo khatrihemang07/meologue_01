@@ -1,6 +1,6 @@
 //! A Server holds settings of its own, stored in Postgres and layered over
-//! the environment — see ADR 0059 for why the layering exists at all and
-//! why a stored value wins over an environment one, and ADR 0062 for why
+//! the environment — see ADR 0060 for why the layering exists at all and
+//! why a stored value wins over an environment one, and ADR 0061 for why
 //! naming an instance (`MEOLOGUE_MODE`) is a separate, unrelated fact from
 //! locking one (`MEOLOGUE_CONFIG_LOCK`). CONTEXT.md's Server entry is the
 //! domain concept this module gives a settings store to; ADR 0008 already
@@ -22,6 +22,8 @@
 //! `lib.rs` registers unconditionally as `GET`/`PATCH /v1/config`).
 
 use std::env;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -33,14 +35,15 @@ use utoipa::ToSchema;
 
 use crate::llm;
 use crate::period;
-use crate::{ConfigLocked, ServerMode};
+use crate::reflect::ReflectState;
+use crate::{ConfigLocked, DigestsEnabled, ServerMode};
 
 // -- MEOLOGUE_MODE: an instance names itself --------------------------------
 
 /// Which instance this process is — issue #200. This does **not** decide
 /// precedence anywhere in `resolve` below; a Server names itself the same
 /// way a person introduces themselves by name, with no authority granted
-/// by the name itself. See ADR 0062 for why this is a separate fact from
+/// by the name itself. See ADR 0061 for why this is a separate fact from
 /// `MEOLOGUE_CONFIG_LOCK` (`config_locked` below) even though the scripts
 /// that set the two often set them together.
 ///
@@ -221,6 +224,16 @@ pub struct ResolvedSettings {
     pub embed_model: ResolvedField,
     pub embed_api_key: ResolvedField,
     pub tz: ResolvedField,
+    /// Issue #201's tri-state toggles, resolved the same `locked`-aware way
+    /// as every field above — `None` (a locked Server, or nothing stored)
+    /// means "unset," which `RuntimeFlags` and `HealthCapabilities` both
+    /// read as "on, if otherwise configured." Unlike the seven fields
+    /// above, there is no environment layer for a toggle to fall back to —
+    /// nothing named `MEOLOGUE_REFLECT_ENABLED` exists — so `resolve_toggle`
+    /// only ever has `stored` and `locked` to consult, never a `Source`.
+    pub reflect_enabled: Option<bool>,
+    pub digest_enabled: Option<bool>,
+    pub embeddings_enabled: Option<bool>,
 }
 
 impl ResolvedSettings {
@@ -260,7 +273,7 @@ impl ResolvedSettings {
 /// the same six variables that could drift apart.
 ///
 /// **A stored value wins, and the environment seeds when nothing is
-/// stored.** This is ADR 0059's deliberate departure from ADR 0011/0021's
+/// stored.** This is ADR 0060's deliberate departure from ADR 0011/0021's
 /// "empty means off": clearing a field here means "fall back to the
 /// environment," not "off" — `Source::Unset` is what "off" actually looks
 /// like, and it is only reached when *neither* layer has a value.
@@ -293,7 +306,105 @@ pub fn resolve(
         embed_model: resolve_field(stored.embed_model.as_ref(), env.embed_model.as_ref(), locked),
         embed_api_key: resolve_field(stored.embed_api_key.as_ref(), env.embed_api_key.as_ref(), locked),
         tz: resolve_field(stored.tz.as_ref(), env_tz.as_ref(), locked),
+        reflect_enabled: resolve_toggle(stored.reflect_enabled, locked),
+        digest_enabled: resolve_toggle(stored.digest_enabled, locked),
+        embeddings_enabled: resolve_toggle(stored.embeddings_enabled, locked),
     }
+}
+
+/// The toggle half of `resolve`'s own precedence rule, split out because a
+/// toggle has no environment layer to fall back to — a locked Server simply
+/// reads every toggle as unset, exactly as it reads every string field as
+/// unset once nothing stored survives the lock.
+fn resolve_toggle(stored: Option<bool>, locked: bool) -> Option<bool> {
+    if locked { None } else { stored }
+}
+
+// -- Runtime feature flags: an in-memory cache of the stored toggles --------
+
+/// Issue #201: whether Reflection, Digest and the embedding worker are
+/// switched on right now — held **in memory**, seeded once at startup from
+/// the stored row (`RuntimeFlags::seed`) and mutated only by a successful
+/// config write (`RuntimeFlags::apply`, called from `patch_config_handler`).
+/// The `server_settings` row stays the durable record; this is its
+/// in-process cache, re-derived at boot and re-derived again on every
+/// write — never read per-tick from Postgres, which is exactly what lets
+/// the embedding and digest workers check a flag on every tick and every
+/// sync hint without adding a database round trip to either.
+///
+/// `Clone` shares the same three atomics (each field is an `Arc`), not a
+/// snapshot — `AppState::flags`, `ReflectState::flags` and the
+/// `RuntimeFlags` handed to `embedding::run`/`digest::run` are all clones
+/// of the one instance `main.rs` builds at startup, so a `PATCH` mutating
+/// any one of them is visible everywhere else in the same process
+/// immediately, with no channel or callback needed to propagate it.
+#[derive(Debug, Clone)]
+pub struct RuntimeFlags {
+    reflect: Arc<AtomicBool>,
+    digest: Arc<AtomicBool>,
+    embeddings: Arc<AtomicBool>,
+}
+
+impl RuntimeFlags {
+    /// Builds a fresh set of flags from a `resolve`d settings — `main.rs`
+    /// calls this once, right after `settings::resolve`, using its
+    /// `reflect_enabled`/`digest_enabled`/`embeddings_enabled` output
+    /// (already `locked`-aware) rather than the raw `StoredSettings` row.
+    pub fn seed(resolved: &ResolvedSettings) -> Self {
+        Self {
+            reflect: Arc::new(AtomicBool::new(enabled(resolved.reflect_enabled))),
+            digest: Arc::new(AtomicBool::new(enabled(resolved.digest_enabled))),
+            embeddings: Arc::new(AtomicBool::new(enabled(resolved.embeddings_enabled))),
+        }
+    }
+
+    /// Every flag on — the default the narrower `router_with_settings`
+    /// (and everything built on it) passes, the same way those
+    /// constructors already default every other optional collaborator
+    /// (`embed_tx: None`, `reflect: None`, ...) to whatever leaves existing
+    /// behaviour unchanged. A test suite written before this ticket, and
+    /// every production Server before a feature is ever switched off, must
+    /// see every capability behave exactly as if this module didn't exist.
+    pub fn all_on() -> Self {
+        Self {
+            reflect: Arc::new(AtomicBool::new(true)),
+            digest: Arc::new(AtomicBool::new(true)),
+            embeddings: Arc::new(AtomicBool::new(true)),
+        }
+    }
+
+    /// Re-derives every flag from a freshly `resolve`d settings — called
+    /// from `patch_config_handler` immediately after a write lands, so a
+    /// toggle flip takes effect for the next embedding-worker tick, the
+    /// next Digest sweep and the next `/v1/reflect` request with no
+    /// restart. Takes the same `resolve`d shape `seed` does, not the raw
+    /// `StoredSettings` row, so a `PATCH` made while locked re-derives to
+    /// exactly what `seed` would have produced at boot under that same
+    /// lock — see `resolve_toggle`'s own doc comment.
+    pub fn apply(&self, resolved: &ResolvedSettings) {
+        self.reflect.store(enabled(resolved.reflect_enabled), Ordering::Relaxed);
+        self.digest.store(enabled(resolved.digest_enabled), Ordering::Relaxed);
+        self.embeddings.store(enabled(resolved.embeddings_enabled), Ordering::Relaxed);
+    }
+
+    pub fn reflect_enabled(&self) -> bool {
+        self.reflect.load(Ordering::Relaxed)
+    }
+
+    pub fn digest_enabled(&self) -> bool {
+        self.digest.load(Ordering::Relaxed)
+    }
+
+    pub fn embeddings_enabled(&self) -> bool {
+        self.embeddings.load(Ordering::Relaxed)
+    }
+}
+
+/// `None` (unset) and `Some(true)` (explicitly on) both mean enabled; only
+/// `Some(false)` means off. This is the one place "unset behaves like on"
+/// actually turns into a plain bool a worker or handler can branch on.
+fn enabled(toggle: Option<bool>) -> bool {
+    toggle != Some(false)
 }
 
 // -- Writing: PATCH /v1/config's body and its effect on the stored row ------
@@ -324,6 +435,51 @@ pub struct ConfigPatch {
     pub embed_api_key: Option<String>,
     #[serde(default)]
     pub tz: Option<String>,
+    /// Issue #201's tri-state toggles. `TogglePatch`, not `Option<bool>` —
+    /// a bare `Option<bool>` can express only two of the three states a
+    /// `PATCH` needs to write (there is no JSON value that means "clear",
+    /// distinct from both `true`/`false` and from the key being absent
+    /// entirely) — see `TogglePatch`'s own doc comment for the wire shape
+    /// this gives instead. `#[serde(default)]` gives the field-absent case
+    /// its usual meaning here too: `None` is untouched.
+    #[serde(default)]
+    pub reflect_enabled: Option<TogglePatch>,
+    #[serde(default)]
+    pub digest_enabled: Option<TogglePatch>,
+    #[serde(default)]
+    pub embeddings_enabled: Option<TogglePatch>,
+}
+
+/// The wire value one tri-state toggle field of a `PATCH /v1/config` body
+/// carries when the caller actually names it. Deliberately not
+/// `Option<Option<bool>>` with a `null`-means-clear convention: that shape
+/// only works via `serde_with`'s `double_option` (not a dependency this
+/// crate otherwise needs) or a hand-rolled deserializer, for a JSON
+/// contract ("send literal `null` to mean something other than absent")
+/// that reads as a trick rather than a fact about the domain. A named
+/// three-variant enum says the same thing in the wire schema itself — a
+/// client reads `"unset" | "on" | "off"` directly off the generated
+/// TypeScript type, rather than inferring a `null`-vs-absent convention
+/// from a doc comment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TogglePatch {
+    /// Clear this toggle back to `NULL` — "defer to whatever the resolved
+    /// configuration would otherwise make available," matching every
+    /// string field's own clear-to-`NULL` meaning (`normalize_written`).
+    Unset,
+    On,
+    Off,
+}
+
+impl TogglePatch {
+    fn to_stored(self) -> Option<bool> {
+        match self {
+            TogglePatch::Unset => None,
+            TogglePatch::On => Some(true),
+            TogglePatch::Off => Some(false),
+        }
+    }
 }
 
 /// `""` becomes `None` (clear to `NULL`); any other string is stored as-is.
@@ -369,6 +525,15 @@ pub async fn apply_patch(pool: &PgPool, patch: &ConfigPatch) -> sqlx::Result<Sto
     }
     if let Some(value) = &patch.tz {
         current.tz = normalize_written(value);
+    }
+    if let Some(toggle) = patch.reflect_enabled {
+        current.reflect_enabled = toggle.to_stored();
+    }
+    if let Some(toggle) = patch.digest_enabled {
+        current.digest_enabled = toggle.to_stored();
+    }
+    if let Some(toggle) = patch.embeddings_enabled {
+        current.embeddings_enabled = toggle.to_stored();
     }
 
     upsert(pool, &current).await?;
@@ -446,6 +611,98 @@ pub struct ConfigResponse {
     pub embed_model: ResolvedField,
     pub embed_api_key: ResolvedField,
     pub tz: ResolvedField,
+    pub reflect: FeatureConfig,
+    pub digest: FeatureConfig,
+    pub embeddings: FeatureConfig,
+}
+
+/// One of the three tri-state toggles, reported from four different angles
+/// — issue #201's own acceptance criterion is "reported with both what is
+/// configured and what is effective," and a UI honestly rendering a
+/// restart-required gap needs a fourth.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+pub struct FeatureConfig {
+    /// The raw stored toggle, ignoring `locked` — `None` (unset), `Some(true)`
+    /// (forced on) or `Some(false)` (forced off). What a `PATCH` changes,
+    /// and what a Clear affordance targets; deliberately *not*
+    /// `resolve`'s `locked`-aware value, because a UI rendering "what is
+    /// stored" while locked should still show the truth of what a future
+    /// unlock will pick back up, not `None` for every toggle regardless of
+    /// what is actually in the row.
+    pub stored: Option<bool>,
+    /// Whether the **live, currently-resolved** chat/embed configuration
+    /// (this same request's own `resolve` call, `locked`-aware) would let
+    /// this feature run at all if its toggle were on — independent of the
+    /// toggle itself. Reflection and Digest read `LlmConfig::reflect_config`/
+    /// `digest_worker_config`; Embeddings reads `embed_worker_config`.
+    pub configured: bool,
+    /// Whether this Server's router or worker actually started this
+    /// capability **at boot** — a frozen fact from the moment `main.rs`
+    /// built this process's `Router`, read off exactly what decided route
+    /// registration then (`AppState::reflect`/`digests_enabled`, and
+    /// Reflection's own `embed_client` for Embeddings), never recomputed
+    /// from the live configuration above. `configured && !boot_active` is
+    /// "restart required" — a value just written that has nothing running
+    /// yet to receive it.
+    pub boot_active: bool,
+    /// Whether this capability is doing real work **right now**:
+    /// `boot_active && the in-memory RuntimeFlags say on`. This is exactly
+    /// what `GET /v1/health`'s matching capability reports — the two are
+    /// computed from the same `RuntimeFlags` instance for exactly that
+    /// reason, so a UI reading both can never see them disagree.
+    pub effective: bool,
+}
+
+fn feature_config(stored: Option<bool>, configured: bool, boot_active: bool, flag_enabled: bool) -> FeatureConfig {
+    FeatureConfig {
+        stored,
+        configured,
+        boot_active,
+        effective: boot_active && flag_enabled,
+    }
+}
+
+/// Reads process environment and calls `resolve` — the one place either of
+/// those two things happens per request, shared by `build_response` (which
+/// only needs the resolved *values*) and `patch_config_handler` (which also
+/// hands this same resolution to `RuntimeFlags::apply`, so the toggles a
+/// `PATCH` just wrote take effect against the identical precedence
+/// `GET /v1/config` would report immediately afterward).
+fn resolve_now(stored: &StoredSettings, locked: bool) -> ResolvedSettings {
+    let env = llm::LlmConfig::from_env();
+    let env_tz = env::var("MEOLOGUE_TZ").ok();
+    resolve(&env, env_tz.as_deref(), stored, locked)
+}
+
+/// `boot_active` per feature — `AppState`'s own three facts about what
+/// this process actually registered/spawned at startup, gathered into one
+/// small struct so `get_config_handler`/`patch_config_handler` can extract
+/// it in one line instead of three separate ones. Named for what it reads,
+/// not built as its own `FromRef`: unlike `ConfigLocked`/`ServerMode`, this
+/// is assembled from state `health::health_handler` already extracts on
+/// its own terms (`Option<ReflectState>`, `DigestsEnabled`), so there is no
+/// reason for a fourth `AppState` field to carry a fact the other two
+/// already establish.
+struct BootActive {
+    reflect: bool,
+    digest: bool,
+    embeddings: bool,
+}
+
+impl BootActive {
+    fn from_state(reflect: &Option<ReflectState>, digests_enabled: bool) -> Self {
+        Self {
+            reflect: reflect.is_some(),
+            digest: digests_enabled,
+            // Mirrors `health::health_handler`'s own `embeddings` reasoning
+            // exactly: Reflection's own embed client is what actually
+            // resolved at boot (`LlmConfig::reflect_config`), so that is
+            // the ground truth for whether the embedding worker's
+            // capability is live in this process, not a second,
+            // independently-derived fact that could drift from the first.
+            embeddings: reflect.as_ref().is_some_and(|state| state.embed_client.is_some()),
+        }
+    }
 }
 
 fn build_response(
@@ -453,21 +710,40 @@ fn build_response(
     locked: bool,
     mode: InstanceMode,
     unembedded_entries: i64,
+    boot: &BootActive,
+    flags: &RuntimeFlags,
 ) -> ConfigResponse {
-    let env = llm::LlmConfig::from_env();
-    let env_tz = env::var("MEOLOGUE_TZ").ok();
-    let resolved = resolve(&env, env_tz.as_deref(), stored, locked);
+    let resolved = resolve_now(stored, locked);
+    let live = resolved.llm_config();
     ConfigResponse {
         mode,
         locked,
         unembedded_entries,
-        chat_base_url: resolved.chat_base_url,
-        chat_model: resolved.chat_model,
-        chat_api_key: resolved.chat_api_key,
-        embed_base_url: resolved.embed_base_url,
-        embed_model: resolved.embed_model,
-        embed_api_key: resolved.embed_api_key,
-        tz: resolved.tz,
+        chat_base_url: resolved.chat_base_url.clone(),
+        chat_model: resolved.chat_model.clone(),
+        chat_api_key: resolved.chat_api_key.clone(),
+        embed_base_url: resolved.embed_base_url.clone(),
+        embed_model: resolved.embed_model.clone(),
+        embed_api_key: resolved.embed_api_key.clone(),
+        tz: resolved.tz.clone(),
+        reflect: feature_config(
+            stored.reflect_enabled,
+            live.reflect_config().is_some(),
+            boot.reflect,
+            flags.reflect_enabled(),
+        ),
+        digest: feature_config(
+            stored.digest_enabled,
+            live.digest_worker_config().is_some(),
+            boot.digest,
+            flags.digest_enabled(),
+        ),
+        embeddings: feature_config(
+            stored.embeddings_enabled,
+            live.embed_worker_config().is_some(),
+            boot.embeddings,
+            flags.embeddings_enabled(),
+        ),
     }
 }
 
@@ -483,7 +759,7 @@ fn build_response(
 /// that anything able to open a TCP connection to it can read and write
 /// every Entry. Withholding a key that a reachable caller can already read
 /// straight out of the process environment buys nothing and costs the
-/// ability to check what is actually set — see ADR 0059's own Decision
+/// ability to check what is actually set — see ADR 0060's own Decision
 /// section for the fuller version of this argument. Don't "fix" this.
 #[utoipa::path(
     get,
@@ -496,6 +772,9 @@ pub async fn get_config_handler(
     State(pool): State<PgPool>,
     State(ConfigLocked(locked)): State<ConfigLocked>,
     State(ServerMode(mode)): State<ServerMode>,
+    State(reflect): State<Option<ReflectState>>,
+    State(DigestsEnabled(digests_enabled)): State<DigestsEnabled>,
+    State(flags): State<RuntimeFlags>,
 ) -> Result<Json<ConfigResponse>, StatusCode> {
     let stored = load_stored(&pool).await.map_err(|err| {
         tracing::error!(error = ?err, "failed to load stored settings");
@@ -505,7 +784,15 @@ pub async fn get_config_handler(
         tracing::error!(error = ?err, "failed to count unembedded entries");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
-    Ok(Json(build_response(&stored, locked, mode, unembedded_entries)))
+    let boot = BootActive::from_state(&reflect, digests_enabled);
+    Ok(Json(build_response(
+        &stored,
+        locked,
+        mode,
+        unembedded_entries,
+        &boot,
+        &flags,
+    )))
 }
 
 /// Applies a `ConfigPatch` and reports the settings row exactly as
@@ -527,22 +814,41 @@ pub async fn patch_config_handler(
     State(pool): State<PgPool>,
     State(ConfigLocked(locked)): State<ConfigLocked>,
     State(ServerMode(mode)): State<ServerMode>,
+    State(reflect): State<Option<ReflectState>>,
+    State(DigestsEnabled(digests_enabled)): State<DigestsEnabled>,
+    State(flags): State<RuntimeFlags>,
     Json(patch): Json<ConfigPatch>,
 ) -> Result<Json<ConfigResponse>, StatusCode> {
     let stored = apply_patch(&pool, &patch).await.map_err(|err| {
         tracing::error!(error = ?err, "failed to write stored settings");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
+    // Issue #201: the toggles this write just landed take effect
+    // immediately, without a restart — `flags` shares its three atomics
+    // with `AppState`, `ReflectState` and both background workers
+    // (`RuntimeFlags`'s own doc comment), so this one `apply` call is what
+    // every one of them sees on their very next check.
+    flags.apply(&resolve_now(&stored, locked));
     let unembedded_entries = count_unembedded(&pool).await.map_err(|err| {
         tracing::error!(error = ?err, "failed to count unembedded entries");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
-    Ok(Json(build_response(&stored, locked, mode, unembedded_entries)))
+    let boot = BootActive::from_state(&reflect, digests_enabled);
+    Ok(Json(build_response(
+        &stored,
+        locked,
+        mode,
+        unembedded_entries,
+        &boot,
+        &flags,
+    )))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{InstanceMode, ResolvedField, Source, StoredSettings, parse_mode, resolve};
+    use super::{
+        InstanceMode, ResolvedField, RuntimeFlags, Source, StoredSettings, parse_mode, resolve,
+    };
     use crate::llm::LlmConfig;
 
     // -- resolve (issue #200's own TDD seam) ---------------------------------
@@ -622,7 +928,7 @@ mod tests {
 
     #[test]
     fn clearing_a_stored_field_falls_back_to_the_environment_not_off() {
-        // ADR 0059's whole point: a stored NULL means "defer to the
+        // ADR 0060's whole point: a stored NULL means "defer to the
         // environment," never "force this feature off" the way ADR
         // 0011/0021 already use an unset value elsewhere. A Server with a
         // configured environment and a *cleared* stored value must resolve
@@ -710,5 +1016,82 @@ mod tests {
     #[test]
     fn an_unrecognised_mode_warns_and_falls_back_to_production() {
         assert_eq!(parse_mode(Some("staging")), InstanceMode::Production);
+    }
+
+    // -- resolve's toggle half (issue #201) -----------------------------------
+
+    fn stored_reflect_enabled(value: Option<bool>) -> StoredSettings {
+        StoredSettings {
+            reflect_enabled: value,
+            ..StoredSettings::default()
+        }
+    }
+
+    #[test]
+    fn an_unset_toggle_resolves_to_none_meaning_defer_to_configuration() {
+        let resolved = resolve(&env(None), None, &stored_reflect_enabled(None), false);
+        assert_eq!(resolved.reflect_enabled, None);
+    }
+
+    #[test]
+    fn a_stored_toggle_survives_resolution_when_unlocked() {
+        let on = resolve(&env(None), None, &stored_reflect_enabled(Some(true)), false);
+        let off = resolve(&env(None), None, &stored_reflect_enabled(Some(false)), false);
+        assert_eq!(on.reflect_enabled, Some(true));
+        assert_eq!(off.reflect_enabled, Some(false));
+    }
+
+    #[test]
+    fn a_locked_server_reads_every_toggle_as_unset_regardless_of_what_is_stored() {
+        // Mirrors `a_locked_server_ignores_a_stored_value_even_when_one_exists`
+        // above, for the toggle half: a toggle has no environment layer to
+        // fall back to, so `locked` collapsing it to `None` (not to
+        // `Some(false)`) is what keeps a locked Server's toggles reading as
+        // "on if otherwise configured" — the same default an unset toggle
+        // already has — rather than silently forcing every feature off.
+        let resolved = resolve(&env(None), None, &stored_reflect_enabled(Some(false)), true);
+        assert_eq!(resolved.reflect_enabled, None);
+    }
+
+    // -- RuntimeFlags (issue #201) --------------------------------------------
+
+    #[test]
+    fn all_on_reports_every_flag_enabled() {
+        let flags = RuntimeFlags::all_on();
+        assert!(flags.reflect_enabled());
+        assert!(flags.digest_enabled());
+        assert!(flags.embeddings_enabled());
+    }
+
+    #[test]
+    fn seed_reads_an_explicit_off_as_disabled() {
+        let mut resolved = resolve(&env(None), None, &StoredSettings::default(), false);
+        resolved.reflect_enabled = Some(false);
+        resolved.digest_enabled = Some(true);
+        resolved.embeddings_enabled = None;
+
+        let flags = RuntimeFlags::seed(&resolved);
+
+        assert!(!flags.reflect_enabled(), "Some(false) must disable");
+        assert!(flags.digest_enabled(), "Some(true) must enable");
+        assert!(flags.embeddings_enabled(), "None must default to enabled");
+    }
+
+    #[test]
+    fn apply_mutates_the_same_flags_a_prior_clone_still_holds() {
+        // The property `RuntimeFlags::apply`'s own doc comment promises:
+        // every clone shares the same atomics, so a write through one
+        // handle is visible through every other handle taken before it —
+        // exactly what lets `AppState`, `ReflectState` and both workers
+        // observe a `PATCH` with no restart and no channel between them.
+        let flags = RuntimeFlags::all_on();
+        let held_elsewhere = flags.clone();
+        assert!(held_elsewhere.reflect_enabled());
+
+        let mut resolved = resolve(&env(None), None, &StoredSettings::default(), false);
+        resolved.reflect_enabled = Some(false);
+        flags.apply(&resolved);
+
+        assert!(!held_elsewhere.reflect_enabled());
     }
 }

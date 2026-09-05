@@ -10,6 +10,7 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use meologue_server::embedding;
 use meologue_server::llm::{ChatMessage, ChatReply, LlmClient};
+use meologue_server::settings::RuntimeFlags;
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use tokio::sync::mpsc;
@@ -155,6 +156,7 @@ async fn an_entry_synced_in_ends_up_with_an_embedding_and_a_model_name(pool: PgP
         "fake-model-v1".to_string(),
         rx,
         TEST_SCAN_INTERVAL,
+        RuntimeFlags::all_on(),
     ));
 
     let device = Uuid::new_v4();
@@ -188,6 +190,7 @@ async fn sync_succeeds_even_when_the_embedding_client_always_errors(pool: PgPool
         "fake-model-v1".to_string(),
         rx,
         TEST_SCAN_INTERVAL,
+        RuntimeFlags::all_on(),
     ));
 
     let device = Uuid::new_v4();
@@ -233,6 +236,7 @@ async fn the_scan_picks_up_an_entry_never_sent_through_the_channel(pool: PgPool)
         "fake-model-v1".to_string(),
         rx,
         TEST_SCAN_INTERVAL,
+        RuntimeFlags::all_on(),
     ));
 
     let device = Uuid::new_v4();
@@ -255,6 +259,7 @@ async fn an_entry_that_fails_repeatedly_stops_being_retried_after_the_cap(pool: 
         "fake-model-v1".to_string(),
         rx,
         TEST_SCAN_INTERVAL,
+        RuntimeFlags::all_on(),
     ));
 
     let device = Uuid::new_v4();

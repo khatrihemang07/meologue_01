@@ -154,7 +154,7 @@ async fn an_empty_string_clears_a_stored_field_to_not_stored(pool: PgPool) {
     let (status, body) = patch_config(&pool, false, json!({ "chat_base_url": "" })).await;
 
     assert_eq!(status, StatusCode::OK);
-    // Cleared means "defer to the environment" (ADR 0059), not "off in some
+    // Cleared means "defer to the environment" (ADR 0060), not "off in some
     // third sense" — the load-bearing assertion is simply that this is no
     // longer Stored. Whether it lands on Env or Unset depends on whatever
     // this machine's own shell happens to export, which this test suite

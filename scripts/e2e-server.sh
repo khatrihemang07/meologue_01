@@ -52,7 +52,7 @@ export MEOLOGUE_EMBED_MODEL="${MEOLOGUE_EMBED_MODEL:-llm-stub-embed}"
 # developer's own is MEOLOGUE_TZ=Asia/Kolkata.
 export MEOLOGUE_TZ="${MEOLOGUE_TZ:-UTC}"
 # Issue #200: a Server now stores settings of its own in Postgres, and a
-# stored value wins over the environment (docs/adr/0059-*). This process
+# stored value wins over the environment (docs/adr/0060-*). This process
 # stays up for the whole suite, across every spec file Playwright runs
 # against it — so a `PATCH /v1/config` any one spec makes (a settings-page
 # spec, once one exists) would otherwise silently override the LLM stub

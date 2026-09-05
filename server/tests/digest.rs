@@ -10,6 +10,7 @@ use chrono_tz::Tz;
 use meologue_server::digest;
 use meologue_server::llm::{ChatMessage, ChatReply, LlmClient};
 use meologue_server::period::{self, Period};
+use meologue_server::settings::RuntimeFlags;
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -259,7 +260,14 @@ fn spawn_worker_with_context_window(
     tz: Tz,
     context_window: u32,
 ) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(digest::run(pool, client, tz, TEST_SCAN_INTERVAL, context_window))
+    tokio::spawn(digest::run(
+        pool,
+        client,
+        tz,
+        TEST_SCAN_INTERVAL,
+        context_window,
+        RuntimeFlags::all_on(),
+    ))
 }
 
 #[sqlx::test]

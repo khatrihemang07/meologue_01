@@ -1,5 +1,5 @@
 -- Issue #200: a Server holds settings of its own, layered over the
--- environment (ADR 0059, ADR 0062). One row for this Server's whole
+-- environment (ADR 0060, ADR 0061). One row for this Server's whole
 -- lifetime — `id` is pinned to 1 by the check constraint below, so a second
 -- `insert` can never create a second row; every write is an upsert against
 -- the same id instead.

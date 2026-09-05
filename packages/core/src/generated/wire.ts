@@ -23,7 +23,7 @@ export interface paths {
          *     that anything able to open a TCP connection to it can read and write
          *     every Entry. Withholding a key that a reachable caller can already read
          *     straight out of the process environment buys nothing and costs the
-         *     ability to check what is actually set — see ADR 0059's own Decision
+         *     ability to check what is actually set — see ADR 0060's own Decision
          *     section for the fuller version of this argument. Don't "fix" this.
          */
         get: operations["get_config_handler"];
@@ -113,11 +113,14 @@ export interface paths {
          *     Postgres is down still identifies itself. Unlike `/v1/sync`, this never
          *     rejects on protocol version: its whole job is letting the caller compare
          *     versions themselves. See ADR 0010.
-         * @description Reads `Option<ReflectState>` and `DigestsEnabled` off `AppState` (via
-         *     their own `FromRef` impls in `lib.rs`) rather than the whole `AppState`
-         *     — the same one-extractor-per-need shape `sync::sync_handler` and
+         * @description Reads `Option<ReflectState>`, `DigestsEnabled` and (issue #201)
+         *     `RuntimeFlags` off `AppState` (via their own `FromRef` impls in
+         *     `lib.rs`) rather than the whole `AppState` — the same
+         *     one-extractor-per-need shape `sync::sync_handler` and
          *     `reflect::reflect_handler` already use, and precisely what keeps this
-         *     handler from ever touching `PgPool` and staying DB-free.
+         *     handler from ever touching `PgPool` and staying DB-free — see
+         *     `HealthCapabilities`'s own doc comment for why gaining a third
+         *     extractor here is *not* the ADR 0010 regression it might look like.
          */
         get: operations["health_handler"];
         put?: never;
@@ -303,9 +306,12 @@ export interface components {
             chat_api_key?: string | null;
             chat_base_url?: string | null;
             chat_model?: string | null;
+            digest_enabled?: null | components["schemas"]["TogglePatch"];
             embed_api_key?: string | null;
             embed_base_url?: string | null;
             embed_model?: string | null;
+            embeddings_enabled?: null | components["schemas"]["TogglePatch"];
+            reflect_enabled?: null | components["schemas"]["TogglePatch"];
             tz?: string | null;
         };
         /**
@@ -318,11 +324,14 @@ export interface components {
             chat_api_key: components["schemas"]["ResolvedField"];
             chat_base_url: components["schemas"]["ResolvedField"];
             chat_model: components["schemas"]["ResolvedField"];
+            digest: components["schemas"]["FeatureConfig"];
             embed_api_key: components["schemas"]["ResolvedField"];
             embed_base_url: components["schemas"]["ResolvedField"];
             embed_model: components["schemas"]["ResolvedField"];
+            embeddings: components["schemas"]["FeatureConfig"];
             locked: boolean;
             mode: components["schemas"]["InstanceMode"];
+            reflect: components["schemas"]["FeatureConfig"];
             tz: components["schemas"]["ResolvedField"];
             /**
              * Format: int64
@@ -550,6 +559,51 @@ export interface components {
             task_id?: string | null;
         };
         /**
+         * @description One of the three tri-state toggles, reported from four different angles
+         *     — issue #201's own acceptance criterion is "reported with both what is
+         *     configured and what is effective," and a UI honestly rendering a
+         *     restart-required gap needs a fourth.
+         */
+        FeatureConfig: {
+            /**
+             * @description Whether this Server's router or worker actually started this
+             *     capability **at boot** — a frozen fact from the moment `main.rs`
+             *     built this process's `Router`, read off exactly what decided route
+             *     registration then (`AppState::reflect`/`digests_enabled`, and
+             *     Reflection's own `embed_client` for Embeddings), never recomputed
+             *     from the live configuration above. `configured && !boot_active` is
+             *     "restart required" — a value just written that has nothing running
+             *     yet to receive it.
+             */
+            boot_active: boolean;
+            /**
+             * @description Whether the **live, currently-resolved** chat/embed configuration
+             *     (this same request's own `resolve` call, `locked`-aware) would let
+             *     this feature run at all if its toggle were on — independent of the
+             *     toggle itself. Reflection and Digest read `LlmConfig::reflect_config`/
+             *     `digest_worker_config`; Embeddings reads `embed_worker_config`.
+             */
+            configured: boolean;
+            /**
+             * @description Whether this capability is doing real work **right now**:
+             *     `boot_active && the in-memory RuntimeFlags say on`. This is exactly
+             *     what `GET /v1/health`'s matching capability reports — the two are
+             *     computed from the same `RuntimeFlags` instance for exactly that
+             *     reason, so a UI reading both can never see them disagree.
+             */
+            effective: boolean;
+            /**
+             * @description The raw stored toggle, ignoring `locked` — `None` (unset), `Some(true)`
+             *     (forced on) or `Some(false)` (forced off). What a `PATCH` changes,
+             *     and what a Clear affordance targets; deliberately *not*
+             *     `resolve`'s `locked`-aware value, because a UI rendering "what is
+             *     stored" while locked should still show the truth of what a future
+             *     unlock will pick back up, not `None` for every toggle regardless of
+             *     what is actually in the row.
+             */
+            stored?: boolean | null;
+        };
+        /**
          * @description Which Server-backed features this Server can actually serve right now,
          *     derived from the same configuration `main.rs` already used to decide
          *     whether `/v1/reflect`, `/v1/digests/*` and the embedding worker exist at
@@ -572,6 +626,21 @@ export interface components {
          *       embed config is resolvable, so a chat-only Server still reports
          *       `reflect: true` while `embeddings: false` — exactly the Server on
          *       which `reflect.rs`'s tool loop quietly omits `similar_entries`.
+         *
+         *       **Issue #201 amends all three of `reflect`/`digest`/`embeddings` to
+         *       read "configured AND switched on," not "configured" alone — see ADR
+         *       0063, whose headline this is.** ADR 0010 pinned this handler to
+         *       touching nothing but its own two constants — no state extraction, no
+         *       query — specifically so a Server whose Postgres is down still answers
+         *       correctly. ADR 0037 already relaxed "no state extraction" once, to
+         *       add the two `AppState` reads above; what stayed load-bearing through
+         *       that change, in writing, was narrower: this handler never touches
+         *       `PgPool`. That is still exactly what holds here. `RuntimeFlags` reads
+         *       three atomics with no pool anywhere in its type — Postgres is read
+         *       for these flags twice per configuration change (once at boot, once on
+         *       a `PATCH`), never per `/v1/health` request, so a Server whose
+         *       database dies after boot keeps answering this route with whatever
+         *       capability state it last knew, exactly as before this ticket.
          *     - `todo` — issue #172 / ADR 0051 — is **unconditionally `true`**, not
          *       read off any `LlmConfig`. Task Sync has no model behind it and no
          *       configuration that can disable it: any Server that answers
@@ -606,7 +675,7 @@ export interface components {
          * @description Which instance this process is — issue #200. This does **not** decide
          *     precedence anywhere in `resolve` below; a Server names itself the same
          *     way a person introduces themselves by name, with no authority granted
-         *     by the name itself. See ADR 0062 for why this is a separate fact from
+         *     by the name itself. See ADR 0061 for why this is a separate fact from
          *     `MEOLOGUE_CONFIG_LOCK` (`config_locked` below) even though the scripts
          *     that set the two often set them together.
          *
@@ -1252,6 +1321,21 @@ export interface components {
             /** Format: int64 */
             seq: number;
         };
+        /**
+         * @description The wire value one tri-state toggle field of a `PATCH /v1/config` body
+         *     carries when the caller actually names it. Deliberately not
+         *     `Option<Option<bool>>` with a `null`-means-clear convention: that shape
+         *     only works via `serde_with`'s `double_option` (not a dependency this
+         *     crate otherwise needs) or a hand-rolled deserializer, for a JSON
+         *     contract ("send literal `null` to mean something other than absent")
+         *     that reads as a trick rather than a fact about the domain. A named
+         *     three-variant enum says the same thing in the wire schema itself — a
+         *     client reads `"unset" | "on" | "off"` directly off the generated
+         *     TypeScript type, rather than inferring a `null`-vs-absent convention
+         *     from a doc comment.
+         * @enum {string}
+         */
+        TogglePatch: "unset" | "on" | "off";
     };
     responses: never;
     parameters: never;
@@ -1404,6 +1488,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Digest is configured but switched off (issue #201) — distinct from 404, which means this Server predates the feature entirely */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     health_handler: {
@@ -1451,6 +1542,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Reflection is configured but switched off right now (ADR 0062) — distinct from the 404 above, which means this Server has no Reflection at all */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     reflect_handler: {
@@ -1484,6 +1582,13 @@ export interface operations {
             };
             /** @description protocol_version is not one this server understands */
             426: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Reflection is configured but switched off (issue #201) — distinct from 404, which means this Server predates the feature entirely */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

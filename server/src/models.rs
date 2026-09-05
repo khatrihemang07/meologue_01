@@ -8,7 +8,9 @@
 //! carries and why.
 //!
 //! Gated on `ReflectState` being configured — the same on/off switch
-//! `/v1/reflect` itself uses (`lib.rs::router_with_digests`, `reflect.is_some()`).
+//! `/v1/reflect` itself uses (`lib.rs::router_with_digests`, `reflect.is_some()`)
+//! — and, since issue #201, on Reflection's runtime toggle as well, which
+//! answers 503 rather than 404 because the two say different things (ADR 0062).
 //! There is nothing for this endpoint to proxy without a configured chat
 //! wrapper to ask, and reusing Reflection's own gate keeps "the route
 //! exists" meaning the same thing it already means for the rest of
@@ -38,6 +40,9 @@ pub struct ModelsResponse {
         (status = 200, description = "The configured chat wrapper's own model list — \
             empty, not an error, when the wrapper cannot be reached", body = ModelsResponse),
         (status = 404, description = "Reflection (and so this route) is unconfigured"),
+        (status = 503, description = "Reflection is configured but switched off right now \
+            (ADR 0062) — distinct from the 404 above, which means this Server has no \
+            Reflection at all"),
     )
 )]
 pub async fn models_handler(
@@ -53,6 +58,15 @@ pub async fn models_handler(
         );
         return Err(StatusCode::NOT_FOUND);
     };
+
+    // Issue #201: the route stays registered when Reflection is switched off
+    // at runtime, so this is the live half of the same gate `reflect_handler`
+    // applies. Offering a model list for a Reflection that will answer 503 is
+    // an invitation to a request that cannot succeed — and the list is fetched
+    // from the wrapper, which is exactly the work the toggle exists to stop.
+    if !reflect.flags.reflect_enabled() {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
 
     let models = llm::list_models(&reflect.chat_base_url, reflect.chat_api_key.as_deref()).await;
     Ok(Json(ModelsResponse { models }))

@@ -10,6 +10,7 @@ use chrono::{DateTime, NaiveDate, Utc};
 use http_body_util::BodyExt;
 use meologue_server::llm::{ChatMessage, ChatReply, ChatStreamEvent, LlmClient, ModelInfo};
 use meologue_server::reflect::{ReflectState, claims_no_journal_access};
+use meologue_server::settings::RuntimeFlags;
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use tokio::sync::mpsc;
@@ -394,6 +395,7 @@ fn reflect_state(chat: Arc<FakeChatClient>) -> ReflectState {
         // pinned to today's real default.
         chat_model: DEFAULT_MODEL.to_string(),
         chat_streaming: false,
+        flags: RuntimeFlags::all_on(),
     }
 }
 
@@ -443,6 +445,7 @@ fn reflect_state_with_embedding(chat: Arc<FakeChatClient>) -> ReflectState {
         chat_api_key: None,
         chat_model: DEFAULT_MODEL.to_string(),
         chat_streaming: false,
+        flags: RuntimeFlags::all_on(),
     }
 }
 
@@ -636,6 +639,100 @@ async fn the_route_is_absent_when_chat_is_unconfigured(pool: PgPool) {
     // "not configured" body — so a client can tell "this Server predates
     // Reflection" apart from every other failure.
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// A `ResolvedSettings` naming only the toggles this file's tests need to
+/// force off — built through `settings::resolve` itself, the same way
+/// `tests/health.rs`'s own `resolved_with_reflect_off` is, rather than as a
+/// bare struct literal that would stop honestly exercising the precedence
+/// rule every real caller goes through.
+fn resolved_with_toggles(reflect_enabled: Option<bool>, embeddings_enabled: Option<bool>) -> meologue_server::settings::ResolvedSettings {
+    let env = meologue_server::llm::LlmConfig {
+        chat_base_url: None,
+        chat_model: None,
+        chat_api_key: None,
+        embed_base_url: None,
+        embed_model: None,
+        embed_api_key: None,
+    };
+    let stored = meologue_server::settings::StoredSettings {
+        reflect_enabled,
+        embeddings_enabled,
+        ..Default::default()
+    };
+    meologue_server::settings::resolve(&env, None, &stored, false)
+}
+
+/// Issue #201: configured but switched off is a different fact from
+/// unconfigured, and must read as a different status — 503, not the 404
+/// above. Built from `reflect_state_chat_only`, with `flags.reflect`
+/// forced off after construction (`RuntimeFlags` is a live, shared handle
+/// — see its own doc comment — so mutating the clone this fixture holds is
+/// exactly the same operation a real `PATCH` performs).
+#[sqlx::test]
+async fn the_route_is_configured_but_answers_503_while_its_flag_is_off(pool: PgPool) {
+    let chat = Arc::new(FakeChatClient::new(["unused"]));
+    let reflect = reflect_state_chat_only(chat);
+    reflect.flags.apply(&resolved_with_toggles(Some(false), None));
+
+    let (status, _) = post_reflect(
+        &pool,
+        Some(reflect),
+        json!({
+            "protocol_version": 6,
+            "question": "Anything?",
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+}
+
+/// Issue #201: `similar_entries` must not be offered — not merely fail
+/// silently if called — while embeddings are switched off, even though an
+/// embed client is genuinely configured here (`reflect_state_with_embedding`).
+/// This is the toggle half of the same guarantee issue #130 already gives
+/// when there is no embed client at all: the system prompt
+/// (`render_tool_guidance`) must never advertise a tool the model could
+/// call only to have it fail or be refused.
+#[sqlx::test]
+async fn similar_entries_is_omitted_while_embeddings_are_switched_off(pool: PgPool) {
+    // Repeated once — a zero-tool-call Answer fires issue #103's structural
+    // corrective turn, the same reasoning every other single-reply script
+    // in this file's newer tests already follows (see, e.g.,
+    // `a_summary_reaches_every_question_after_it_not_only_the_one_that_wrote_it`'s
+    // own `seed`/`compacting` fixtures).
+    let chat = Arc::new(FakeChatClient::new([
+        "no need to search by meaning here",
+        "no need to search by meaning here",
+    ]));
+    let reflect = reflect_state_with_embedding(chat.clone());
+    reflect.flags.apply(&resolved_with_toggles(None, Some(false)));
+
+    let (status, _) = post_reflect(
+        &pool,
+        Some(reflect),
+        json!({ "protocol_version": 6, "question": "What did I write about the move?" }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let system_message = &chat.last_call()[0];
+    assert_eq!(system_message.role, "system");
+    // Not a bare `contains("similar_entries")`: `SearchEntriesTool`'s own
+    // snippet legitimately names `similar_entries` in passing ("... try
+    // similar_entries instead" — `harness/tools/search_entries.rs`) as
+    // guidance for when it *would* be available, and that cross-reference
+    // is unrelated to whether the tool itself is actually offered. What
+    // must be absent is `similar_entries`'s own callable signature —
+    // `SimilarEntriesTool::snippet`'s distinctive
+    // `similar_entries(query, limit?, offset?)` — which only appears when
+    // the tool itself is in the offered set.
+    assert!(
+        !system_message.content.contains("similar_entries(query"),
+        "the system prompt must not offer similar_entries as a callable tool while embeddings are off:\n{}",
+        system_message.content
+    );
 }
 
 #[sqlx::test]
@@ -2021,6 +2118,7 @@ async fn an_embedding_failure_recovers_and_still_answers(pool: PgPool) {
         chat_api_key: None,
         chat_model: DEFAULT_MODEL.to_string(),
         chat_streaming: false,
+        flags: RuntimeFlags::all_on(),
     };
 
     let (status, body) = post_reflect(
@@ -3464,6 +3562,7 @@ async fn a_session_nearing_its_context_window_gets_compacted_between_turns(pool:
         chat_api_key: None,
         chat_model: DEFAULT_MODEL.to_string(),
         chat_streaming: false,
+        flags: RuntimeFlags::all_on(),
     };
     let (status, body) = post_reflect(
         &pool,
@@ -3482,6 +3581,7 @@ async fn a_session_nearing_its_context_window_gets_compacted_between_turns(pool:
         chat_api_key: None,
         chat_model: DEFAULT_MODEL.to_string(),
         chat_streaming: false,
+        flags: RuntimeFlags::all_on(),
     };
     let (status, _) = post_reflect(
         &pool,
@@ -3508,6 +3608,7 @@ async fn a_session_nearing_its_context_window_gets_compacted_between_turns(pool:
         chat_api_key: None,
         chat_model: DEFAULT_MODEL.to_string(),
         chat_streaming: false,
+        flags: RuntimeFlags::all_on(),
     };
     let (status, body) = post_reflect(
         &pool,
@@ -3533,6 +3634,7 @@ async fn a_session_nearing_its_context_window_gets_compacted_between_turns(pool:
         chat_api_key: None,
         chat_model: DEFAULT_MODEL.to_string(),
         chat_streaming: false,
+        flags: RuntimeFlags::all_on(),
     };
     let session = get_session(&pool, unused, id).await;
     let turns = session["turns"]
@@ -3569,6 +3671,7 @@ async fn a_summary_reaches_every_question_after_it_not_only_the_one_that_wrote_i
         chat_api_key: None,
         chat_model: DEFAULT_MODEL.to_string(),
         chat_streaming: false,
+        flags: RuntimeFlags::all_on(),
     };
     let (_, body) = post_reflect(
         &pool,
@@ -3591,6 +3694,7 @@ async fn a_summary_reaches_every_question_after_it_not_only_the_one_that_wrote_i
         chat_api_key: None,
         chat_model: DEFAULT_MODEL.to_string(),
         chat_streaming: false,
+        flags: RuntimeFlags::all_on(),
     };
     let (status, _) = post_reflect(
         &pool,
@@ -3617,6 +3721,7 @@ async fn a_summary_reaches_every_question_after_it_not_only_the_one_that_wrote_i
         chat_api_key: None,
         chat_model: DEFAULT_MODEL.to_string(),
         chat_streaming: false,
+        flags: RuntimeFlags::all_on(),
     };
     let (status, body) = post_reflect(
         &pool,

@@ -75,6 +75,15 @@ pub struct AppState {
     /// read once at startup for the same reason `settings_locked` is.
     /// Consumed through the `ServerMode` extractor below.
     pub mode: settings::InstanceMode,
+    /// Issue #201: whether Reflection, Digest and the embedding worker are
+    /// switched on right now, in memory — see `settings::RuntimeFlags`'s
+    /// own doc comment for why this is a live, shared handle rather than a
+    /// snapshot. `health::health_handler` reads it directly (its own
+    /// "one more state extractor," the headline of ADR 0061); `reflect.rs`
+    /// reads its own clone off `ReflectState::flags` instead of this field,
+    /// since every handler that already extracts `Option<ReflectState>`
+    /// gets the same atomics for free without a second extractor.
+    pub flags: settings::RuntimeFlags,
 }
 
 impl FromRef<AppState> for PgPool {
@@ -140,6 +149,15 @@ pub struct ServerMode(pub settings::InstanceMode);
 impl FromRef<AppState> for ServerMode {
     fn from_ref(state: &AppState) -> Self {
         ServerMode(state.mode)
+    }
+}
+
+/// No newtype needed here, unlike `ConfigLocked`/`ServerMode` — `RuntimeFlags`
+/// is already a distinctly-named type with no bare-primitive ambiguity for a
+/// second field of the same type to collide with.
+impl FromRef<AppState> for settings::RuntimeFlags {
+    fn from_ref(state: &AppState) -> Self {
+        state.flags.clone()
     }
 }
 
@@ -331,6 +349,12 @@ pub fn router_with_digests(
 /// how a Server *becomes* configured. Gating it the way `/v1/reflect` or
 /// `/v1/digests/*` are gated would make it impossible to configure a
 /// Server that has nothing configured yet.
+///
+/// Delegates to `router_with_flags` with `settings::RuntimeFlags::all_on()`
+/// — every capability behaves exactly as it did before issue #201, the
+/// same "default the narrower constructor to whatever leaves existing
+/// behaviour unchanged" shape every wider constructor in this chain
+/// already gives its own new collaborator.
 pub fn router_with_settings(
     pool: PgPool,
     static_dir: impl AsRef<Path>,
@@ -339,6 +363,47 @@ pub fn router_with_settings(
     digest: Option<digest::DigestState>,
     locked: bool,
     mode: settings::InstanceMode,
+) -> Router {
+    router_with_flags(
+        pool,
+        static_dir,
+        embed_tx,
+        reflect,
+        digest,
+        locked,
+        mode,
+        settings::RuntimeFlags::all_on(),
+    )
+}
+
+/// The true widest router constructor — everything `router_with_settings`
+/// wires, plus the in-memory feature flags (issue #201) that let Reflection,
+/// Digest and the embedding worker be switched off without a restart. Held
+/// on `AppState` (`health::health_handler`'s own extractor) and cloned onto
+/// `ReflectState` (`reflect_handler`'s 503 check and its tool-set gate) —
+/// see `settings::RuntimeFlags`'s own doc comment for why a clone shares
+/// the same atomics rather than taking a snapshot. `main.rs` calls this
+/// directly, passing the one `RuntimeFlags` it seeded from
+/// `settings::resolve`'s output and also handed to `embedding::run`/
+/// `digest::run`; `router_with_settings` is the narrower, all-on default
+/// the rest of the test suite is written against.
+// This is the end of a deliberate chain (`router` -> `router_with_embedding`
+// -> `router_with_reflection` -> `router_with_digests` -> `router_with_settings`
+// -> here), each constructor a thin, backward-compatible wrapper around the
+// next — see every one of their own doc comments. Bundling the eight
+// parameters into a struct would remove the one property that chain exists
+// for: every narrower constructor stays a plain, stable function signature
+// nothing in the test suite has to update when a new capability arrives.
+#[allow(clippy::too_many_arguments)]
+pub fn router_with_flags(
+    pool: PgPool,
+    static_dir: impl AsRef<Path>,
+    embed_tx: Option<Sender<Uuid>>,
+    reflect: Option<ReflectState>,
+    digest: Option<digest::DigestState>,
+    locked: bool,
+    mode: settings::InstanceMode,
+    flags: settings::RuntimeFlags,
 ) -> Router {
     let digests_enabled = digest.is_some();
     // Installs the global metrics recorder (if not already installed) before
@@ -463,6 +528,7 @@ pub fn router_with_settings(
             digests_enabled,
             settings_locked: locked,
             mode,
+            flags,
         })
         .fallback_service(app_shell)
         .layer(axum::middleware::from_fn(metrics::track_metrics))

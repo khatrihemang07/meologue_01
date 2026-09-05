@@ -113,6 +113,17 @@ async fn main() -> anyhow::Result<()> {
 
     let llm_config = resolved_settings.llm_config();
 
+    // Issue #201: seeded once, here, from the same `resolved_settings` the
+    // chat/embed/timezone values above just came from — `RuntimeFlags::seed`
+    // reads its `locked`-aware `reflect_enabled`/`digest_enabled`/
+    // `embeddings_enabled` output, not the raw `stored_settings` row, so a
+    // locked Server starts with every flag on regardless of what happens
+    // to be stored. Cloned (cheaply — three `Arc`s) into `ReflectState`
+    // below, into both background workers, and into the Router itself, so
+    // every one of those reads the identical atomics a later `PATCH` will
+    // mutate — see `settings::RuntimeFlags`'s own doc comment.
+    let flags = settings::RuntimeFlags::seed(&resolved_settings);
+
     // Issue #97 / #136: how much room the configured chat model has,
     // resolved once here rather than once per feature — `resolve_context_window`
     // is cheap to call even when chat isn't configured at all (it
@@ -135,7 +146,14 @@ async fn main() -> anyhow::Result<()> {
     let embed_tx = match llm_config.embed_worker_config() {
         Some((client, model_name)) => {
             let (tx, rx) = tokio::sync::mpsc::channel(256);
-            tokio::spawn(embedding::run(pool.clone(), client, model_name, rx, embedding::SCAN_INTERVAL));
+            tokio::spawn(embedding::run(
+                pool.clone(),
+                client,
+                model_name,
+                rx,
+                embedding::SCAN_INTERVAL,
+                flags.clone(),
+            ));
             Some(tx)
         }
         None => None,
@@ -183,6 +201,7 @@ async fn main() -> anyhow::Result<()> {
             digest_tz,
             digest::SCAN_INTERVAL,
             context_window,
+            flags.clone(),
         ));
     }
 
@@ -235,13 +254,14 @@ async fn main() -> anyhow::Result<()> {
                 chat_api_key: llm_config.chat_api_key.clone(),
                 chat_model,
                 chat_streaming,
+                flags: flags.clone(),
             })
         }
         None => None,
     };
 
     let static_dir = env::var("STATIC_DIR").unwrap_or_else(|_| DEFAULT_STATIC_DIR.to_string());
-    let app = meologue_server::router_with_settings(
+    let app = meologue_server::router_with_flags(
         pool,
         static_dir,
         embed_tx,
@@ -249,6 +269,7 @@ async fn main() -> anyhow::Result<()> {
         digest_state,
         settings_locked,
         mode,
+        flags,
     );
 
     let port: u16 = env::var("PORT")
