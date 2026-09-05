@@ -1,4 +1,4 @@
-import type { EntryStore, ProjectStore, SqliteDriver, TaskStore } from "@meologue/core";
+import type { BackupKind, EntryStore, ProjectStore, SqliteDriver, TaskStore } from "@meologue/core";
 import { exportEntriesToZip } from "@meologue/core";
 import { Suspense, useState } from "react";
 import { toast } from "sonner";
@@ -37,6 +37,90 @@ export interface ExportStoreHandle {
   projectStore: ProjectStore;
   deviceId: string;
   driver: SqliteDriver;
+}
+
+/**
+ * Which of the three things a Backup attempt can end in — `saveBackupFile`
+ * below reports this rather than acting on it, because its two callers
+ * (issue #206's own point: this shape used to be hand-repeated twice)
+ * disagree about what to do with each one. `"failed"`'s `reason` is
+ * already worded for the `BackupKind` that was passed in — see
+ * `saveBackupFile`'s own doc comment — so a caller can hand it straight to
+ * a toast or an `{ok: false}` without reformatting it; `error` rides along
+ * unformatted purely so a caller that wants `console.error`'s stack trace
+ * still has the real thrown value, not a string that already discarded it.
+ */
+type SaveBackupOutcome =
+  | { status: "saved"; fileName: string }
+  | { status: "cancelled" }
+  | { status: "failed"; reason: string; error: unknown };
+
+/**
+ * The one pair of calls a Backup always needs — `createBackup` then
+ * `saveFile` — shared by the Backup button's own `handleBackup` below and
+ * by Restore's safety Backup (`takeSafetyBackup` inside
+ * `handleConfirmRestore`, issue #204): both need the identical dump-and-
+ * save, and disagree only about what a cancelled save panel or a thrown
+ * error should mean to their caller, which is exactly what
+ * `SaveBackupOutcome` lets each of them decide for itself instead of this
+ * function deciding for them.
+ *
+ * `readAllDeviceSettings()` (lib/settings.ts) is the one place
+ * `packages/core` gets `localStorage`'s contents from: that package has no
+ * `localStorage` of its own (ADR 0008), so this collects the `meologue.*`
+ * keys fresh on every call rather than accepting them as a parameter —
+ * neither caller has a reason to read them for any other purpose.
+ *
+ * `await import("@meologue/core")` rather than a top-level import of
+ * `createBackup`: the bundle-budget regression this exact UI failed on
+ * once already (28,393 gzip bytes against a 17,600 ceiling,
+ * apps/web/scripts/check-bundle-size.mjs) came from a static import of
+ * `createBackup`/`unzipBackup`/`restoreFromBackup` dragging dump.ts,
+ * parse.ts, restore.ts, restore-zip.ts and row-diff.ts — none of them used
+ * by anything else this route touches — into the Settings chunk Vite
+ * fetches on every visit. Both callers already reach `@meologue/core`
+ * through their own dynamic `import(...)` for the same reason
+ * (`unzipBackup`/`restoreFromBackup`), so doing it again in here costs
+ * nothing beyond what those attempts already pay for; keeping it here
+ * rather than hoisting it to a static import at the top of this file is
+ * what keeps that property intact now that both callers go through one
+ * function instead of two copies of the same code.
+ *
+ * The `try`/`catch` lives in here, not in the callers, so that `"failed"`
+ * is a value both callers can react to like `"saved"` and `"cancelled"`
+ * rather than a thrown exception one of them has to catch and the other
+ * has to remember to catch identically.
+ */
+async function saveBackupFile(
+  driver: SqliteDriver,
+  deviceId: string,
+  kind: BackupKind,
+): Promise<SaveBackupOutcome> {
+  try {
+    const { createBackup } = await import("@meologue/core");
+    const now = new Date();
+    const { fileName, bytes } = await createBackup(driver, readAllDeviceSettings(), {
+      deviceId,
+      now,
+      utcOffsetMinutes: -now.getTimezoneOffset(),
+      kind,
+    });
+    const saveOutcome = await saveFile(fileName, bytes);
+    if (saveOutcome === "cancelled") {
+      return { status: "cancelled" };
+    }
+    return { status: "saved", fileName };
+  } catch (error) {
+    const reason =
+      kind === "safety-backup"
+        ? error instanceof Error
+          ? `The safety Backup failed: ${error.message}`
+          : "The safety Backup failed."
+        : error instanceof Error
+          ? error.message
+          : "Backup failed.";
+    return { status: "failed", reason, error };
+  }
 }
 
 /**
@@ -160,49 +244,30 @@ export function DataSection({ opened }: { opened: ExportStoreHandle | undefined 
   // A Backup (issue #195, CONTEXT.md's Backup entry) is a second, separate
   // artifact from Export just above — a lossless SQL dump of this Device's
   // whole database plus its settings, answering "is my data safe" rather
-  // than Export's "can I read this." `readAllDeviceSettings()`
-  // (lib/settings.ts) is the one place `packages/core` gets
-  // `localStorage`'s contents from: that package has no `localStorage` of
-  // its own (ADR 0008), so Settings collects the `meologue.*` keys and
-  // hands them over the same way it already hands over `deviceId` below.
-  //
-  // `await import("@meologue/core")` rather than a top-level import of
-  // `createBackup`: the bundle-budget regression this exact UI failed on
-  // once already (28,393 gzip bytes against a 17,600 ceiling,
-  // apps/web/scripts/check-bundle-size.mjs) came from a static import of
-  // `createBackup`/`unzipBackup`/`restoreFromBackup` dragging dump.ts,
-  // parse.ts, restore.ts, restore-zip.ts and row-diff.ts — none of them
-  // used by anything else this route touches — into the Settings chunk
-  // Vite fetches on every visit. None of those five modules are reachable
-  // from this file's own static imports any more, so Rollup places them in
-  // a chunk fetched only when a reader actually clicks Backup or Restore,
-  // never on Settings' own cold start. No progress UI, same reasoning as
-  // handleExport just above: at personal-log scale a Backup is fast enough
-  // that a toast is the whole story.
+  // than Export's "can I read this." The dump-and-save itself is
+  // `saveBackupFile` above, shared with Restore's safety Backup (issue
+  // #204's `takeSafetyBackup`, below); this function only owns turning its
+  // outcome into the Backup button's own reactions. No progress UI, same
+  // reasoning as handleExport just above: at personal-log scale a Backup
+  // is fast enough that a toast is the whole story.
   async function handleBackup() {
     if (!opened) {
       return;
     }
-    try {
-      const { createBackup } = await import("@meologue/core");
-      const { fileName, bytes } = await createBackup(opened.driver, readAllDeviceSettings(), {
-        deviceId: opened.deviceId,
-        now: new Date(),
-        utcOffsetMinutes: -new Date().getTimezoneOffset(),
-      });
-      const outcome = await saveFile(fileName, bytes);
-      if (outcome === "cancelled") {
-        // Same defect fix handleExport's own comment above already covers
-        // (ticket 47, docs/adr/0016): a false "Backed up" toast here would
-        // claim a copy of this Device's whole database exists when it
-        // doesn't.
-        return;
-      }
-      toast.success(`Backed up this Device to ${fileName}.`);
-    } catch (error) {
-      console.error("meologue: backup failed", error);
-      toast.error(error instanceof Error ? error.message : "Backup failed.");
+    const outcome = await saveBackupFile(opened.driver, opened.deviceId, "backup");
+    if (outcome.status === "cancelled") {
+      // Same defect fix handleExport's own comment above already covers
+      // (ticket 47, docs/adr/0016): a false "Backed up" toast here would
+      // claim a copy of this Device's whole database exists when it
+      // doesn't.
+      return;
     }
+    if (outcome.status === "failed") {
+      console.error("meologue: backup failed", outcome.error);
+      toast.error(outcome.reason);
+      return;
+    }
+    toast.success(`Backed up this Device to ${outcome.fileName}.`);
   }
 
   // The word a reader must type verbatim before Restore's own destructive
@@ -299,17 +364,16 @@ export function DataSection({ opened }: { opened: ExportStoreHandle | undefined 
   //
   // `takeSafetyBackup` (issue #204) is the callback restoreFromBackup
   // awaits, and refuses to write anything without, before it touches the
-  // database: `createBackup` + `saveFile` — the exact same pair
-  // handleBackup above already calls for the Backup button — with
-  // `kind: "safety-backup"` so the file it produces reads as what it is
-  // in a Downloads folder, distinct from a Backup the reader took on
-  // purpose (backup-zip.ts's own `backupFileName` doc comment). Both are
-  // reached through the identical `await import("@meologue/core")` this
-  // function already needs for `restoreFromBackup` itself — the dynamic
-  // import handleBackup's own comment explains is what keeps this whole
-  // module family out of Settings' cold-start chunk — so pulling in
-  // `createBackup` here costs nothing beyond what a Restore attempt
-  // already pays for.
+  // database: `saveBackupFile` (above) with `kind: "safety-backup"` so the
+  // file it produces reads as what it is in a Downloads folder, distinct
+  // from a Backup the reader took on purpose (backup-zip.ts's own
+  // `backupFileName` doc comment) — the exact same helper handleBackup
+  // above calls for the Backup button, just translating its outcome into
+  // the `{ok, reason}` shape restoreFromBackup's own contract expects
+  // instead of a toast: a cancelled save panel here means Restore's whole
+  // precondition failed, not "nothing happened," so it has to be reported
+  // rather than swallowed the way handleBackup's own cancel silently
+  // returns.
   async function handleConfirmRestore() {
     if (!opened || restorePreview === null) {
       return;
@@ -322,35 +386,21 @@ export function DataSection({ opened }: { opened: ExportStoreHandle | undefined 
     setRestoring(true);
     setRestoreProgress("Starting…");
     try {
-      const { restoreFromBackup, createBackup } = await import("@meologue/core");
+      const { restoreFromBackup } = await import("@meologue/core");
 
       async function takeSafetyBackup() {
-        try {
-          const now = new Date();
-          const { fileName, bytes } = await createBackup(store.driver, readAllDeviceSettings(), {
-            deviceId: store.deviceId,
-            now,
-            utcOffsetMinutes: -now.getTimezoneOffset(),
-            kind: "safety-backup",
-          });
-          const saveOutcome = await saveFile(fileName, bytes);
-          if (saveOutcome === "cancelled") {
-            return {
-              ok: false as const,
-              reason:
-                "The safety Backup's save panel was cancelled, so nothing was restored. Restore needs somewhere to save it first.",
-            };
-          }
-          return { ok: true as const, fileName };
-        } catch (error) {
+        const saveOutcome = await saveBackupFile(store.driver, store.deviceId, "safety-backup");
+        if (saveOutcome.status === "cancelled") {
           return {
             ok: false as const,
             reason:
-              error instanceof Error
-                ? `The safety Backup failed: ${error.message}`
-                : "The safety Backup failed.",
+              "The safety Backup's save panel was cancelled, so nothing was restored. Restore needs somewhere to save it first.",
           };
         }
+        if (saveOutcome.status === "failed") {
+          return { ok: false as const, reason: saveOutcome.reason };
+        }
+        return { ok: true as const, fileName: saveOutcome.fileName };
       }
 
       const outcome = await restoreFromBackup({
