@@ -1,20 +1,103 @@
-import type { Entry, EntryStore, Project, ProjectStore, Task, TaskStore } from "@meologue/core";
+import type {
+  Entry,
+  EntryStore,
+  Project,
+  ProjectStore,
+  RestoreOutcome,
+  SqliteDriver,
+  Task,
+  TaskStore,
+  UnzipBackupResult,
+} from "@meologue/core";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useSettingsStore } from "@/lib/settings";
+import type { LoadFileResult } from "@/platform/load-file";
 import type { SaveFileOutcome } from "@/platform/save-file";
 import { DataSection } from "./data-section";
 
-const { saveFileMock } = vi.hoisted(() => ({
+const {
+  saveFileMock,
+  loadFileMock,
+  createBackupMock,
+  unzipBackupMock,
+  restoreFromBackupMock,
+  fetchServerBackupMock,
+  restoreServerBackupMock,
+  rebuildMismatchedEmbeddingsMock,
+} = vi.hoisted(() => ({
   // Resolves "saved" by default (ticket 47's defect fix — see
   // save-file.web.ts's SaveFileOutcome doc comment and docs/adr/0016); the
   // "cancellation" and "failure" tests below override this per test.
   saveFileMock: vi.fn(
     async (_fileName: string, _bytes: Uint8Array): Promise<SaveFileOutcome> => "saved",
   ),
+  // Issue #197's file-picking seam — resolves "cancelled" by default, the
+  // same "quiet unless a test says otherwise" posture saveFileMock takes.
+  loadFileMock: vi.fn(async (): Promise<LoadFileResult> => ({ outcome: "cancelled" })),
+  // Stand-ins for @meologue/core's own createBackup/unzipBackup/
+  // restoreFromBackup — data-section.tsx reaches all three through a
+  // dynamic `import("@meologue/core")` inside its click handlers (the
+  // bundle-budget fix this file's own doc comment explains), which
+  // `vi.mock` below intercepts identically to a static import. Standing
+  // these in means these tests exercise exactly this page's own wiring —
+  // which arguments it passes, what it does with the outcome — not
+  // dump.ts/parse.ts/restore.ts's own logic, which each already has its
+  // own test file against a real driver.
+  createBackupMock: vi.fn(async () => ({
+    fileName: "meologue-backup-20260816-114500.zip",
+    bytes: new Uint8Array([1, 2, 3]),
+  })),
+  unzipBackupMock: vi.fn(
+    (_bytes: Uint8Array): UnzipBackupResult => ({
+      ok: true,
+      backup: {
+        databaseSql: "",
+        settingsJson: "{}",
+        metaJson: JSON.stringify({ taken_at: "2026-08-16T11:45:00.000Z" }),
+      },
+    }),
+  ),
+  restoreFromBackupMock: vi.fn(
+    async (): Promise<RestoreOutcome> => ({
+      ok: true,
+      result: { inserted: 0, updated: 0, unchanged: 0, skippedTables: [], skippedColumns: [] },
+    }),
+  ),
+  // Server Backup/Restore (issue #198) go through server-backup-transport.ts
+  // directly rather than through @meologue/core at all (that module's own
+  // doc comment: a Server Backup is an opaque pg_dump archive this Device
+  // only relays), so it's mocked as its own module rather than folded into
+  // the @meologue/core mock above.
+  fetchServerBackupMock: vi.fn(async () => ({ ok: true, bytes: new Uint8Array([9, 9, 9]) })),
+  restoreServerBackupMock: vi.fn(async () => ({
+    ok: true,
+    report: { mismatched_embedding_count: 0 },
+  })),
+  rebuildMismatchedEmbeddingsMock: vi.fn(async () => ({ ok: true, report: { rebuilt_count: 0 } })),
 }));
 
 vi.mock("@/platform/save-file", () => ({ saveFile: saveFileMock }));
+vi.mock("@/platform/load-file", () => ({ loadFile: loadFileMock }));
+vi.mock("@/lib/server-backup-transport", () => ({
+  fetchServerBackup: fetchServerBackupMock,
+  restoreServerBackup: restoreServerBackupMock,
+  rebuildMismatchedEmbeddings: rebuildMismatchedEmbeddingsMock,
+}));
+
+// `createBackup`, `unzipBackup` and `restoreFromBackup` are stood in for —
+// every other @meologue/core export this file touches (the Entry/Task/
+// Project types) stays the real thing, via `importOriginal`.
+vi.mock("@meologue/core", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@meologue/core")>();
+  return {
+    ...actual,
+    createBackup: createBackupMock,
+    unzipBackup: unzipBackupMock,
+    restoreFromBackup: restoreFromBackupMock,
+  };
+});
 
 function createFakeStore(entries: Entry[] = []): EntryStore {
   return {
@@ -113,6 +196,27 @@ function createFakeProjectStore(projects: Project[] = []): ProjectStore {
   };
 }
 
+// A minimal double satisfying SqliteDriver's own one-method shape
+// (../../../packages/core/src/sqlite/driver.ts) — createBackup/
+// restoreFromBackup are both mocked in this file, so nothing here ever
+// calls `execute`; this only has to be an object the Backup/Restore tests
+// below can compare by identity against ("calls createBackup with this
+// Device's own driver").
+const fakeDriver: SqliteDriver = { execute: vi.fn() };
+
+/** The full `ExportStoreHandle` shape, with per-store overrides — every test below that needs an opened store builds it from here rather than repeating all five fields, so `driver` (issue #195) has exactly one place to default from. */
+function openedStore(
+  overrides: Partial<{ store: EntryStore; taskStore: TaskStore; projectStore: ProjectStore }> = {},
+) {
+  return {
+    store: overrides.store ?? createFakeStore(),
+    taskStore: overrides.taskStore ?? createFakeTaskStore(),
+    projectStore: overrides.projectStore ?? createFakeProjectStore(),
+    deviceId: "device-a",
+    driver: fakeDriver,
+  };
+}
+
 // Issue #202: DataSection takes the opened store handle as a prop rather
 // than reading `entryStoreQueryOptions` itself (settings-page.tsx is the
 // one place that does, and passes the result down) — so, unlike before this
@@ -123,10 +227,42 @@ describe("DataSection", () => {
   beforeEach(() => {
     saveFileMock.mockReset();
     saveFileMock.mockResolvedValue("saved");
+    loadFileMock.mockReset();
+    loadFileMock.mockResolvedValue({ outcome: "cancelled" });
+    createBackupMock.mockReset();
+    createBackupMock.mockResolvedValue({
+      fileName: "meologue-backup-20260816-114500.zip",
+      bytes: new Uint8Array([1, 2, 3]),
+    });
+    unzipBackupMock.mockReset();
+    unzipBackupMock.mockReturnValue({
+      ok: true,
+      backup: {
+        databaseSql: "",
+        settingsJson: "{}",
+        metaJson: JSON.stringify({ taken_at: "2026-08-16T11:45:00.000Z" }),
+      },
+    });
+    restoreFromBackupMock.mockReset();
+    restoreFromBackupMock.mockResolvedValue({
+      ok: true,
+      result: { inserted: 0, updated: 0, unchanged: 0, skippedTables: [], skippedColumns: [] },
+    });
+    fetchServerBackupMock.mockReset();
+    fetchServerBackupMock.mockResolvedValue({ ok: true, bytes: new Uint8Array([9, 9, 9]) });
+    restoreServerBackupMock.mockReset();
+    restoreServerBackupMock.mockResolvedValue({
+      ok: true,
+      report: { mismatched_embedding_count: 0 },
+    });
+    rebuildMismatchedEmbeddingsMock.mockReset();
+    rebuildMismatchedEmbeddingsMock.mockResolvedValue({ ok: true, report: { rebuilt_count: 0 } });
+    useSettingsStore.setState({ serverUrl: "" });
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+    useSettingsStore.setState({ serverUrl: "" });
   });
 
   it("is disabled while the store has not resolved", () => {
@@ -136,16 +272,7 @@ describe("DataSection", () => {
   });
 
   it("is enabled once the store resolves", () => {
-    render(
-      <DataSection
-        opened={{
-          store: createFakeStore(),
-          taskStore: createFakeTaskStore(),
-          projectStore: createFakeProjectStore(),
-          deviceId: "device-a",
-        }}
-      />,
-    );
+    render(<DataSection opened={openedStore()} />);
 
     expect(screen.getByRole("button", { name: "Export as zip" })).toBeEnabled();
   });
@@ -171,7 +298,7 @@ describe("DataSection", () => {
     const projectStore = createFakeProjectStore();
     const successToast = vi.spyOn(toast, "success");
 
-    render(<DataSection opened={{ store, taskStore, projectStore, deviceId: "device-a" }} />);
+    render(<DataSection opened={openedStore({ store, taskStore, projectStore })} />);
     fireEvent.click(screen.getByRole("button", { name: "Export as zip" }));
 
     await waitFor(() => expect(saveFileMock).toHaveBeenCalledTimes(1));
@@ -202,16 +329,7 @@ describe("DataSection", () => {
     const successToast = vi.spyOn(toast, "success");
     const errorToast = vi.spyOn(toast, "error");
 
-    render(
-      <DataSection
-        opened={{
-          store,
-          taskStore: createFakeTaskStore(),
-          projectStore: createFakeProjectStore(),
-          deviceId: "device-a",
-        }}
-      />,
-    );
+    render(<DataSection opened={openedStore({ store })} />);
     fireEvent.click(screen.getByRole("button", { name: "Export as zip" }));
 
     await waitFor(() => expect(saveFileMock).toHaveBeenCalledTimes(1));
@@ -224,16 +342,7 @@ describe("DataSection", () => {
     saveFileMock.mockRejectedValue(new Error("Export isn't supported on Android yet."));
     const errorToast = vi.spyOn(toast, "error");
 
-    render(
-      <DataSection
-        opened={{
-          store,
-          taskStore: createFakeTaskStore(),
-          projectStore: createFakeProjectStore(),
-          deviceId: "device-a",
-        }}
-      />,
-    );
+    render(<DataSection opened={openedStore({ store })} />);
     fireEvent.click(screen.getByRole("button", { name: "Export as zip" }));
 
     await waitFor(() =>
