@@ -42,15 +42,15 @@ export interface ExportStoreHandle {
 /**
  * What this Device can do with its own copy of the user's History — Export
  * it (a readable zip, day files plus a manifest), Back it up (a lossless
- * SQL dump, issue #195), or Restore it from a Backup (the destructive
- * replace, issue #197) — the fifth and last of five topic sections
- * `settings-page.tsx` composes (issue #202). `CONTEXT.md`'s Export/Backup/
- * Restore/Merge entries are the vocabulary this whole section is written
- * against: Export is the readable one, a Backup is the lossless one a
- * Device can read back, Restore replaces this Device with a Backup's
- * contents outright, and Merge (folding a Backup's rows in without
- * discarding what's already here) is issue #199 — not built by this
- * ticket, and nothing below should be mistaken for it.
+ * SQL dump, issue #195), Restore it from a Backup (the destructive
+ * replace, issue #197), or Merge one in (the additive fold, issue #199) —
+ * the fifth and last of five topic sections `settings-page.tsx` composes
+ * (issue #202). `CONTEXT.md`'s Export/Backup/Restore/Merge entries are the
+ * vocabulary this whole section is written against: Export is the
+ * readable one, a Backup is the lossless one a Device can read back,
+ * Restore replaces this Device with a Backup's contents outright, and
+ * Merge folds a Backup's rows into this Device without discarding what it
+ * already holds.
  *
  * The one topic section that isn't fully self-contained: every other
  * section reads and writes `useSettingsStore` directly, but Export/Backup/
@@ -102,6 +102,14 @@ export function DataSection({ opened }: { opened: ExportStoreHandle | undefined 
   // animation intact, rather than re-triggering a Suspense fallback every
   // time.
   const [restoreDialogSummoned, setRestoreDialogSummoned] = useState(false);
+
+  // Issue #199: Merge is additive, not destructive (CONTEXT.md's Merge
+  // entry — "adds and updates" rather than Restore's "replaces"), so it
+  // needs no preview state and no typed-confirmation dialog of its own;
+  // `merging` alone is enough to disable the button while it runs, the
+  // same posture handleServerBackup's own `backingUp` already takes for a
+  // comparably fast, personal-log-scale operation.
+  const [merging, setMerging] = useState(false);
 
   // Always every Entry (store.list()), every Task (taskStore.list() +
   // listCompleted()) and every Project (projectStore.listProjects()),
@@ -330,6 +338,66 @@ export function DataSection({ opened }: { opened: ExportStoreHandle | undefined 
     }
   }
 
+  // Merge (issue #199, CONTEXT.md's Merge entry): folds another Device's
+  // Backup into this one without discarding what this Device already
+  // holds — a row only the Backup has arrives, a row only this Device has
+  // stays, and where both hold a row the more recently changed one wins.
+  // Additive rather than destructive, so a plain confirm() is the right
+  // gate — not DestructiveConfirmDialog's typed word, which exists for the
+  // one action on this page that destroys History on purpose (Restore,
+  // just below). Both @meologue/core calls are reached through a dynamic
+  // `import(...)`, mirroring handlePickRestoreFile/handleConfirmRestore's
+  // own reasoning above: nothing else on this route needs
+  // mergeBackupIntoDevice, so it stays out of the Settings chunk Vite
+  // fetches on every visit.
+  async function handleMerge() {
+    if (!opened) {
+      return;
+    }
+    const picked = await loadFile();
+    if (picked.outcome === "cancelled") {
+      // Same silent-on-cancel posture every other file-picking flow on
+      // this page already takes (ticket 47, docs/adr/0016).
+      return;
+    }
+    const { unzipBackup } = await import("@meologue/core");
+    const unzipped = unzipBackup(picked.bytes);
+    if (!unzipped.ok) {
+      toast.error(unzipped.reason);
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "Merge this Backup into this Device? A row only the Backup has will be added, a row only this Device has stays as it is, and where both hold the same row the more recently changed one wins. Settings are not applied.",
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setMerging(true);
+    try {
+      const { mergeBackupIntoDevice } = await import("@meologue/core");
+      const outcome = await mergeBackupIntoDevice(opened.driver, unzipped.backup.databaseSql);
+      if (!outcome.ok) {
+        toast.error(outcome.reason);
+        return;
+      }
+      const { inserted, updated, unchanged } = outcome.result;
+      toast.success(`Merged: ${inserted} inserted, ${updated} updated, ${unchanged} unchanged.`);
+      // Merge writes straight to the database below every store's own
+      // abstraction, the same as Restore just above — a reload is the
+      // identical honest reset handleConfirmRestore's own doc comment
+      // already explains, rather than leaving React Query's cached reads
+      // and this route's own in-memory state believing nothing changed.
+      window.setTimeout(() => window.location.reload(), 1200);
+    } catch (error) {
+      console.error("meologue: merge failed", error);
+      toast.error(error instanceof Error ? error.message : "Merge failed.");
+    } finally {
+      setMerging(false);
+    }
+  }
+
   return (
     <section aria-labelledby="data-heading" className="flex flex-col gap-4">
       <h2 id="data-heading" className="font-semibold text-sm">
@@ -358,6 +426,24 @@ export function DataSection({ opened }: { opened: ExportStoreHandle | undefined 
           <div>
             <Button type="button" size="touch" onClick={handleBackup} disabled={!opened}>
               Back up this Device
+            </Button>
+          </div>
+        </SettingsSection>
+
+        {/*
+          Issue #199. Merge sits between Backup and Restore: it reads the
+          same kind of file Restore does, but folds it in rather than
+          replacing anything (CONTEXT.md's Merge entry) — a row only the
+          Backup has arrives, a row only this Device has is left alone,
+          and where both hold a row the more recently changed one wins.
+        */}
+        <SettingsSection
+          label="Merge"
+          hint="Folds another Device's Backup into this one. A row only the Backup has is added, a row only this Device has is left alone, and where both hold a row the more recently changed one wins. Settings are never applied by Merge — that's Restore's business."
+        >
+          <div>
+            <Button type="button" size="touch" onClick={handleMerge} disabled={!opened || merging}>
+              Merge a Backup…
             </Button>
           </div>
         </SettingsSection>
