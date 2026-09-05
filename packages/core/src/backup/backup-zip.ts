@@ -4,12 +4,26 @@ import type { SqliteDriver } from "../sqlite/driver";
 import { dumpDatabase } from "./dump";
 import { buildBackupMeta } from "./meta";
 
+/**
+ * Which of two reasons a Backup is being taken for — the ordinary,
+ * user-initiated kind (the Backup button, issue #195) or the automatic one
+ * Restore takes of its own accord immediately before it writes anything
+ * (issue #204, ../backup/restore.ts's own `takeSafetyBackup`). Both are
+ * the identical artifact — `createBackup` runs exactly the same either way
+ * — so this is a naming choice, not a second code path: see
+ * `backupFileName` below for why the distinction has to be visible in the
+ * file name itself, not just in this type.
+ */
+export type BackupKind = "backup" | "safety-backup";
+
 export interface BackupOptions {
   deviceId: string;
   /** See ../export/export-zip.ts's `ExportOptions.now` doc comment — the identical reasoning applies verbatim: injected rather than read via `new Date()` in here, so "two Backups a second apart get two distinct filenames" is testable without a real clock. */
   now: Date;
   /** See ../export/export-zip.ts's `ExportOptions.utcOffsetMinutes` doc comment — the identical reasoning applies verbatim: this package has no DOM and no host-timezone API, so the caller supplies the offset explicitly. */
   utcOffsetMinutes: number;
+  /** Defaults to `"backup"` — see `BackupKind`'s own doc comment above. Only Restore's `takeSafetyBackup` (../backup/restore.ts) ever passes `"safety-backup"`. */
+  kind?: BackupKind;
 }
 
 export interface BackupResult {
@@ -17,10 +31,32 @@ export interface BackupResult {
   bytes: Uint8Array;
 }
 
-/** meologue-backup-<YYYYMMDD>-<HHMMSS>.zip, in the Device's local time (see BackupOptions) — built with ../export/offset.ts's `toLocalParts`, reused rather than reimplemented, the same function ../export/export-zip.ts's `exportFileName` already calls. `meologue-backup-`, not `meologue-export-`: the two artifacts sit beside each other in a Downloads folder, and the prefix is the only thing that tells them apart at a glance. */
-export function backupFileName(now: Date, offsetMinutes: number): string {
+/**
+ * meologue-backup-<YYYYMMDD>-<HHMMSS>.zip, in the Device's local time (see
+ * BackupOptions) — built with ../export/offset.ts's `toLocalParts`, reused
+ * rather than reimplemented, the same function ../export/export-zip.ts's
+ * `exportFileName` already calls. `meologue-backup-`, not
+ * `meologue-export-`: the two artifacts sit beside each other in a
+ * Downloads folder, and the prefix is the only thing that tells them apart
+ * at a glance.
+ *
+ * `kind: "safety-backup"` (issue #204) gets its own, longer prefix —
+ * `meologue-safety-backup-` — for the identical reason: a reader digging
+ * through a Downloads folder after a Restore went wrong needs to be able
+ * to tell "a Backup I made on purpose" apart from "a Backup Restore made
+ * for me a moment before it started" at a glance, without opening either
+ * one. Sharing this one function rather than a second, copy-pasted
+ * timestamp formatter is what keeps the two names from ever drifting out
+ * of the exact same `<date>-<time>` shape.
+ */
+export function backupFileName(
+  now: Date,
+  offsetMinutes: number,
+  kind: BackupKind = "backup",
+): string {
   const { date, time } = toLocalParts(now.toISOString(), offsetMinutes);
-  return `meologue-backup-${date.replaceAll("-", "")}-${time.replaceAll(":", "")}.zip`;
+  const prefix = kind === "safety-backup" ? "meologue-safety-backup-" : "meologue-backup-";
+  return `${prefix}${date.replaceAll("-", "")}-${time.replaceAll(":", "")}.zip`;
 }
 
 /**
@@ -77,7 +113,7 @@ export async function createBackup(
   };
 
   return {
-    fileName: backupFileName(options.now, options.utcOffsetMinutes),
+    fileName: backupFileName(options.now, options.utcOffsetMinutes, options.kind),
     bytes: zipSync(zipInput),
   };
 }

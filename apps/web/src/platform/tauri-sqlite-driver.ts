@@ -24,8 +24,21 @@ export type TauriDatabaseLoader = (path: string) => Promise<TauriDatabase>;
  *
  * The plugin runs statements through a connection pool with no transaction
  * API — `BEGIN` and the statement after it may not reach the same
- * connection. Nothing here needs a transaction (see ADR 0007's
- * no-transaction reasoning), so this driver doesn't attempt one.
+ * connection, so a `BEGIN`/`COMMIT`/`ROLLBACK` a caller issues passes
+ * through `execute` below like any other statement, with no guarantee it
+ * does anything at all. `migrate()` (../../../packages/core/src/sqlite/
+ * migrator.ts) never issues one — ADR 0007's no-transaction posture makes
+ * every migration statement individually idempotent instead — so this was
+ * harmless until Restore (#197, ../../../packages/core/src/backup/
+ * restore.ts's `restoreFromBackup`) started relying on one for real.
+ *
+ * Issue #204 doesn't fix that here — this driver still cannot offer a
+ * transaction, and nothing in this file changed to accommodate it — it
+ * mitigates the gap one layer up instead: `restoreFromBackup` now takes
+ * and durably saves a safety Backup before it writes anything, so an apply
+ * interrupted partway on exactly this driver's pooled connections is
+ * recoverable, even though it was never atomic and still isn't. See that
+ * function's own doc comment for the full reasoning.
  */
 export class TauriSqliteDriver implements SqliteDriver {
   private readonly load: TauriDatabaseLoader;

@@ -39,6 +39,19 @@ import { rowContentUnchanged } from "./row-diff";
  * 6. **Rebuild the FTS5 indexes before reporting done** — see this file's
  *    own `restoreFromBackup` for why that runs after the transaction
  *    commits, not inside it.
+ * 7. **Save a safety Backup before writing anything at all** (issue #204).
+ *    `BEGIN`/`COMMIT`/`ROLLBACK` (below) is a real guarantee only on a
+ *    single-connection driver — not on macOS's pooled `TauriSqliteDriver`
+ *    (apps/web/src/platform/tauri-sqlite-driver.ts) — so an apply
+ *    interrupted partway there can leave a Device holding neither its old
+ *    contents nor the Backup's, which is the exact failure a Backup exists
+ *    to prevent. `restoreFromBackup`'s `takeSafetyBackup` parameter is the
+ *    guard: Core awaits it and refuses to call `BEGIN` — writes nothing —
+ *    if it fails, so an interrupted Restore is always recoverable by
+ *    reapplying the safety Backup it made of its own accord a moment
+ *    before. See `restoreFromBackup`'s own doc comment for the full
+ *    reasoning, including why this mitigates the gap rather than closing
+ *    it.
  *
  * `database.sql`'s text is never handed to `driver.execute` directly —
  * ./parse.ts turns it into typed rows first, and every write below goes
@@ -64,9 +77,48 @@ export interface RestoreResult {
   skippedTables: string[];
   /** Every `table.column` the file named that this build's own schema doesn't have, for a table it does otherwise recognise. */
   skippedColumns: string[];
+  /** The safety Backup `takeSafetyBackup` (below) produced before this Restore wrote anything — named here too, not just in a toast, so anything downstream of a successful Restore can still point back at "and here's the copy of what this Device held before." */
+  safetyBackupFileName: string;
 }
 
 export type RestoreOutcome = { ok: true; result: RestoreResult } | { ok: false; reason: string };
+
+/**
+ * What `takeSafetyBackup` (below) reports back — deliberately the same
+ * two-case shape `RestoreOutcome` itself uses, rather than a boolean plus a
+ * nullable string, so a caller building one out of `createBackup` +
+ * `saveFile` (apps/web/src/components/settings/data-section.tsx) can
+ * pattern-match it the same way this file's own callers already do.
+ * `fileName` is required on the `ok: true` case, not optional: the whole
+ * point of taking a safety Backup is to be able to name it in an error
+ * message if the Restore that follows fails, so a caller that can't report
+ * where it saved one hasn't actually satisfied this contract.
+ */
+export type SafetyBackupOutcome = { ok: true; fileName: string } | { ok: false; reason: string };
+
+/**
+ * Produces and durably saves a safety Backup of `driver`'s own database,
+ * *before* `restoreFromBackup` writes anything (issue #204's `#7` in this
+ * file's own header comment). `packages/core` is platform-free — no DOM,
+ * no Node built-ins (see ../backup/backup-zip.ts's own header comment for
+ * the identical posture applied to an ordinary Backup) — so it cannot
+ * write a file to disk itself; this callback is the seam a caller supplies
+ * to do that, exactly the way `restoreFromBackup`'s own `onProgress`
+ * parameter is a seam rather than a `console.log` call. Unlike
+ * `onProgress`, this one isn't optional: a Restore with nowhere to fall
+ * back to if it's interrupted is precisely the situation issue #204 exists
+ * to close, so `restoreFromBackup` has no "skip the safety Backup" mode to
+ * accidentally leave enabled.
+ */
+export type TakeSafetyBackup = () => Promise<SafetyBackupOutcome>;
+
+export interface RestoreOptions {
+  driver: SqliteDriver;
+  databaseSql: string;
+  /** Awaited before a single mutating statement reaches `driver` — see `SafetyBackupOutcome`'s own doc comment and reason 7 in this file's header comment. */
+  takeSafetyBackup: TakeSafetyBackup;
+  onProgress?: (message: string) => void;
+}
 
 /**
  * Tables a Backup's `database.sql` carries (`dump.ts`'s own header comment:
@@ -222,6 +274,18 @@ async function resetCursorsAndEpochs(driver: SqliteDriver): Promise<void> {
  * its contents with the Backup's (this file's own header comment has the
  * full reasoning for every guard below).
  *
+ * `options.takeSafetyBackup` runs first — before `parseBackupDatabase`'s
+ * own structural check has even finished mattering, and, more to the
+ * point, before a single `BEGIN` or mutating statement reaches `driver`.
+ * If it throws, or resolves `{ ok: false }`, this function returns
+ * `{ ok: false, reason }` of its own having called `driver.execute` for
+ * nothing but the read-only parse above — no `BEGIN`, no write, nothing to
+ * roll back. That ordering is enforced here, structurally, rather than
+ * documented as something a caller has to remember to do first: a caller
+ * that merely promised to call `createBackup` before `restoreFromBackup`
+ * would be exactly the convention-not-structure hazard every other guard
+ * in this file's own header comment exists to close instead (issue #204).
+ *
  * Wrapped in `BEGIN`/`COMMIT`, with `ROLLBACK` on failure: a Restore that
  * dies halfway must not leave a half-replaced database (issue #197's own
  * framing). This is a real, if imperfect, safety net rather than a
@@ -241,9 +305,21 @@ async function resetCursorsAndEpochs(driver: SqliteDriver): Promise<void> {
  * guarantee on the single-connection Node driver this package's own tests
  * run against, and on any other single-connection driver a future platform
  * adds, but — on the record, not silently — not a proven one on macOS's
- * pooled Tauri driver today. Narrowing that gap is future work belonging
- * to whoever next revisits `TauriSqliteDriver` itself, not something this
- * ticket's own scope stretches to cover.
+ * pooled Tauri driver today.
+ *
+ * **This is exactly the gap `takeSafetyBackup` mitigates, not closes**
+ * (issue #204). It does not make `TauriSqliteDriver` transactional —
+ * nothing short of `migrate()`'s per-statement-idempotent rewrite would —
+ * and an apply interrupted partway on that driver can still leave rows
+ * from both the old database and the new one sitting side by side. What
+ * changes is that this is no longer unrecoverable: a faithful copy of the
+ * pre-Restore database now always exists, durably saved, before that
+ * partial state could ever be written. If the apply below then throws,
+ * the error it propagates names the safety Backup's own file name (the
+ * `catch` block just below) — "your data is safe, here's where" is the
+ * entire point of having taken one. Narrowing macOS's transaction gap
+ * itself, rather than working around it, is still future work belonging
+ * to whoever next revisits `TauriSqliteDriver`.
  *
  * The FTS5 rebuild deliberately runs *after* `COMMIT`, not inside the same
  * transaction: `SqliteEntryStore`/`SqliteTaskStore`'s own `indexForSearch`
@@ -255,14 +331,26 @@ async function resetCursorsAndEpochs(driver: SqliteDriver): Promise<void> {
  * already committed is no less correct than one squeezed inside the same
  * transaction would be.
  */
-export async function restoreFromBackup(
-  driver: SqliteDriver,
-  databaseSql: string,
-  onProgress?: (message: string) => void,
-): Promise<RestoreOutcome> {
+export async function restoreFromBackup(options: RestoreOptions): Promise<RestoreOutcome> {
+  const { driver, databaseSql, takeSafetyBackup, onProgress } = options;
+
   const parsed = await parseBackupDatabase(databaseSql, driver);
   if (!parsed.ok) {
     return parsed;
+  }
+
+  onProgress?.("Saving a safety Backup…");
+  const safetyBackup = await takeSafetyBackup().catch(
+    (error: unknown): SafetyBackupOutcome => ({
+      ok: false,
+      reason: error instanceof Error ? error.message : String(error),
+    }),
+  );
+  if (!safetyBackup.ok) {
+    return {
+      ok: false,
+      reason: `Safety Backup failed, so nothing was restored: ${safetyBackup.reason}`,
+    };
   }
 
   const counts: RestoreCounts = { inserted: 0, updated: 0, unchanged: 0 };
@@ -285,7 +373,17 @@ export async function restoreFromBackup(
       // left to roll back on it, and the original `error` below is the one
       // worth surfacing.
     });
-    throw error;
+    // Names the safety Backup rather than just the failure — an
+    // unrecoverable half-state is only recoverable in practice if the
+    // person looking at this message knows a copy exists and what it's
+    // called (issue #204). `{ cause: error }` keeps the original failure
+    // reachable for anything that logs it, without pushing it into the
+    // message a reader actually sees.
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Restore failed partway through: ${message} A safety Backup taken immediately before this Restore began was saved to ${safetyBackup.fileName} — restoring that file returns this Device to exactly the state it was in before this Restore started.`,
+      { cause: error },
+    );
   }
 
   onProgress?.("Rebuilding search…");
@@ -304,6 +402,7 @@ export async function restoreFromBackup(
       ...counts,
       skippedTables: parsed.skippedTables,
       skippedColumns: parsed.skippedColumns,
+      safetyBackupFileName: safetyBackup.fileName,
     },
   };
 }

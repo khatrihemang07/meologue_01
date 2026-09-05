@@ -133,6 +133,11 @@ rows it had and the Backup does not are gone. It keeps its own identity — a Re
 make this Device claim to be the one the Backup came from — and it asks before it acts, because
 this is the one operation in the app that destroys History on purpose.
 
+Before it replaces anything, Restore takes a safety Backup of the Device's own current contents
+and refuses to proceed at all if that safety Backup can't be saved. That's what makes a Restore
+interrupted partway recoverable: the safety Backup is a Backup like any other, restorable the
+same way, and returns the Device to exactly how it was the moment before.
+
 ### Merge
 
 Folding a Backup's rows into a Device without discarding what the Device already holds. Where a

@@ -109,10 +109,23 @@ test("ask a Question, reload, find it in Sessions, search for it, delete it", as
 // 0028's Ticket 2), so a deleted Entry can't come back through
 // Reflection's own door even though CONTEXT.md's Grounding disclosure is
 // otherwise the one place History gets re-displayed outside `/` (issue #75
-// deleted `/history`, the collection's other former display). Every Entry
-// here gets the same fixed embedding (llm-stub.ts's constant vector), so
-// which of the two survives retrieval is entirely down to that guard, not
-// wording or similarity.
+// deleted `/history`, the collection's other former display). The
+// deleted Entry's absence below is entirely down to that guard: it's
+// excluded outright, not merely outranked, so no amount of ranking noise
+// can put it back.
+//
+// The kept Entry's presence is a separate story, and used to be flaky
+// (issue #205): every Entry here gets the same fixed embedding
+// (llm-stub.ts's constant vector), so `retrieve_nearest` sees the whole
+// corpus tied at distance 0 — and `scripts/e2e.sh` recreates the e2e
+// databases per *run*, not per *spec*, so by the time this spec runs
+// after others that corpus can be dozens of unrelated Entries deep.
+// `retrieve_nearest`'s `order by embedding <=> $1::vector, created_at
+// desc, id` (see its own doc comment) is what makes that tie resolve
+// deterministically rather than in arbitrary heap order: the kept Entry,
+// sent most recently among an all-tied corpus, sorts first and so always
+// lands inside the bounded window `similar_entries.rs` shows, regardless
+// of how many other specs ran first.
 test("a deleted Entry does not come back through Reflection's Grounding", async ({ page }) => {
   const marker = randomUUID().slice(0, 8);
   const keptBody = uniqueEntryBody(`grounding-kept-${marker}`);

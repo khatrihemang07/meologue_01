@@ -97,9 +97,19 @@ too. Anyone adding to this section should expect the budget to be what pushes ba
 `BEGIN`/`COMMIT`/`ROLLBACK` around Restore is a real guarantee on a single-connection driver and
 **not** on macOS: `@tauri-apps/plugin-sql` pools connections with no transaction API, so `BEGIN`
 and the next statement may not reach the same connection (the same reason `migrate()` makes each
-statement idempotent instead). Tracked as issue #204, with a note that an automatic safety Backup
-taken immediately before a Restore would make this recoverable on every platform without needing a
-transaction the driver cannot give.
+statement idempotent instead). Issue #204 answers the resulting gap the way this ADR already
+anticipated above, not by chasing a transaction the driver cannot give: **Restore now takes and
+durably saves a safety Backup of the Device's own current contents before it writes anything at
+all**, and refuses to write anything — returns a failure, `BEGIN` never called — if that safety
+Backup can't be produced. This mitigates the gap; it does not close it. macOS's pooled driver is
+exactly as non-transactional after issue #204 as before it — an apply interrupted partway there can
+still leave rows from the old database and the new one side by side. What changes is that this is
+no longer unrecoverable: a faithful copy of the pre-Restore database now always exists, durably
+saved, before that partial state could ever be written, and a Restore that then fails names the
+safety Backup's own file name in the error it surfaces, so "your data is safe, here's where" is
+never left implicit. Narrowing macOS's transaction gap itself — the `migrate()`-style,
+per-statement-idempotent rewrite this ADR's own Context section already judged too large for
+Restore's scope — remains open.
 
 `pg_dump`/`pg_restore` on the host is now a prerequisite for the Server's own backup, documented in
 the server README. There is no server Dockerfile — the Rust server runs on the host — so this is a

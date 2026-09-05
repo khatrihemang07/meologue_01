@@ -1993,6 +1993,22 @@ fn build_tree_payloads(
 /// function no longer has an opinion about what counts as relevant; the
 /// model does, once it actually sees the Question and a candidate Entry
 /// side by side in whichever tool result surfaced it.
+///
+/// The `order by` carries two tiebreaks after `<=>`, not one, and neither
+/// is decorative (issue #205). `<=>` alone is not a total order: two rows
+/// can tie on cosine distance exactly, and with `llm-stub.ts`'s fixed
+/// embedding every row ties at distance 0 — Postgres is then free to
+/// return them in whatever heap/index order it likes, which can (and, in
+/// the e2e suite, did) change from call to call. That is not only a test
+/// artifact: `similar_entries.rs` pages this result with `offset` across
+/// *separate* calls, each re-running this query from scratch, so a
+/// non-total order can silently repeat or skip a row between one page and
+/// the next any time real embeddings tie too (near-duplicate Entries,
+/// re-embeds after a model change). `created_at desc` breaks most ties
+/// meaningfully — the more recent of two equally-similar Entries surfaces
+/// first — and `id` is the final, guaranteed-unique tiebreak that makes
+/// the whole ordering deterministic and stable across repeated calls no
+/// matter how many rows still tie after that.
 pub async fn retrieve_nearest(
     pool: &PgPool,
     query_vector: &[f32],
@@ -2012,7 +2028,7 @@ pub async fn retrieve_nearest(
         "select id, body, created_at from entries
          where embedding is not null
            and deleted_at is null
-         order by embedding <=> $1::vector
+         order by embedding <=> $1::vector, created_at desc, id
          limit $2",
     )
     .bind(vector_literal(query_vector))
@@ -2042,6 +2058,15 @@ pub async fn retrieve_nearest(
 /// and must not surface as Grounding just because the date matches.
 /// `pub` for the same reason as `retrieve_nearest` above — issue #90's
 /// eval harness measures this arm directly. No behaviour changed.
+///
+/// `, id` after `created_at desc` is the same total-order fix as
+/// `retrieve_nearest` above (issue #205), for the same reason: `created_at`
+/// alone is not guaranteed unique — a batch import, or two Entries synced
+/// from different Devices in the same instant, can share a timestamp — and
+/// `entries_in_range.rs` pages this result across separate calls the same
+/// way `similar_entries.rs` pages `retrieve_nearest`'s, so an unbroken tie
+/// there is the same latent repeat-or-skip bug, not just a display
+/// annoyance.
 pub async fn retrieve_range(
     pool: &PgPool,
     from: DateTime<Utc>,
@@ -2052,7 +2077,7 @@ pub async fn retrieve_range(
         "select id, body, created_at from entries
          where created_at >= $1 and created_at < $2
            and deleted_at is null
-         order by created_at desc
+         order by created_at desc, id
          limit $3",
     )
     .bind(from)
@@ -2101,7 +2126,11 @@ const TRIGRAM_MATCH_THRESHOLD: f32 = 0.3;
 /// Postgres's own query parser instead of hand escaping), ranked by
 /// `ts_rank_cd` (its "cover density" variant rewards a body where the
 /// query's words appear close together, which plain `ts_rank` ignores),
-/// most-relevant first, then most-recent first as a stable tiebreak. But
+/// most-relevant first, then most-recent first, then `id` as the final
+/// guaranteed-unique tiebreak (issue #205 — see `retrieve_nearest`'s own
+/// doc comment for why `created_at` alone isn't enough: `search_entries.rs`
+/// pages this the same offset-across-separate-calls way `similar_entries.rs`
+/// pages `retrieve_nearest`'s). But
 /// `websearch_to_tsquery` **ANDs every term of the query together**, which
 /// is exactly right for a tight phrase and useless for an actual question:
 /// measured against this crate's own seeded Sandbox corpus (119 Entries,
@@ -2209,7 +2238,7 @@ pub async fn search_words(
         "select id, body, created_at from entries
          where deleted_at is null
            and body_tsv @@ websearch_to_tsquery('english', $1)
-         order by ts_rank_cd(body_tsv, websearch_to_tsquery('english', $1)) desc, created_at desc
+         order by ts_rank_cd(body_tsv, websearch_to_tsquery('english', $1)) desc, created_at desc, id
          limit $2",
     )
     .bind(query)
@@ -2230,7 +2259,7 @@ pub async fn search_words(
         "select id, body, created_at from entries
          where deleted_at is null
            and body_tsv @@ to_tsquery('english', array_to_string(tsvector_to_array(to_tsvector('english', $1)), ' | '))
-         order by ts_rank_cd(body_tsv, to_tsquery('english', array_to_string(tsvector_to_array(to_tsvector('english', $1)), ' | '))) desc, created_at desc
+         order by ts_rank_cd(body_tsv, to_tsquery('english', array_to_string(tsvector_to_array(to_tsvector('english', $1)), ' | '))) desc, created_at desc, id
          limit $2",
     )
     .bind(query)
@@ -2253,7 +2282,7 @@ pub async fn search_words(
          where deleted_at is null
            and to_tsvector('english', $1) != ''::tsvector
            and word_similarity($1, body) >= $2
-         order by word_similarity($1, body) desc, created_at desc
+         order by word_similarity($1, body) desc, created_at desc, id
          limit $3",
     )
     .bind(query)
@@ -2381,8 +2410,8 @@ mod tests {
 
     use super::{
         NonEmptyAnswer, TITLE_MAX_CHARS, claims_no_journal_access, derive_title,
-        extract_json_object, is_empty_final_reply, local_date_range_to_utc, search_words,
-        strip_code_fences,
+        extract_json_object, is_empty_final_reply, local_date_range_to_utc, retrieve_nearest,
+        search_words, strip_code_fences,
     };
 
     #[test]
@@ -2590,6 +2619,178 @@ mod tests {
     fn empty_or_whitespace_input_degrades_to_a_placeholder_title() {
         assert_eq!(derive_title(""), "Untitled Session");
         assert_eq!(derive_title("   \n\t  "), "Untitled Session");
+    }
+
+    // -------------------------------------------------------------------
+    // Issue #205 — retrieve_nearest's total order under tied distances
+    // -------------------------------------------------------------------
+
+    /// Same shape as `search_words`'s own `insert_entry` helper further
+    /// down, plus the fixed embedding every row in this section shares —
+    /// `[0.1; 640]` is `apps/e2e/llm-stub.ts::STUB_EMBEDDING`, chosen here
+    /// for the same reason it's chosen there: every row then ties `<=>`
+    /// against itself and against the query vector at distance 0, which is
+    /// exactly the all-tied corpus issue #205's bug needed.
+    async fn insert_embedded_entry_with_id(
+        pool: &PgPool,
+        id: Uuid,
+        body: &str,
+        created_at: DateTime<Utc>,
+    ) {
+        sqlx::query(
+            "insert into entries (id, device_id, body, created_at, embedding, embedding_model)
+             values ($1, $2, $3, $4, $5::vector, 'test-model')",
+        )
+        .bind(id)
+        .bind(Uuid::new_v4())
+        .bind(body)
+        .bind(created_at)
+        .bind(crate::embedding::vector_literal(&[0.1_f32; 640]))
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    fn tie_day(y: i32, m: u32, d: u32) -> DateTime<Utc> {
+        NaiveDate::from_ymd_opt(y, m, d)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc()
+    }
+
+    /// The bug itself: `order by embedding <=> $1::vector` alone is not a
+    /// total order, so once every row ties at distance 0 (as they all do
+    /// here, and as they always do in the e2e suite against
+    /// `llm-stub.ts`'s constant embedding), Postgres was free to return
+    /// them in arbitrary heap/index order — which is what let a kept Entry
+    /// drop out of `similar_entries`'s bounded window as an unrelated
+    /// corpus grew around it (issue #205). `order by embedding <=>
+    /// $1::vector, created_at desc, id` pins that down completely: most
+    /// recent first among ties, then `id` — the one column guaranteed
+    /// unique — breaking whatever's left. Two entries share the exact same
+    /// `created_at` below specifically to exercise that last rung, not
+    /// just the `created_at` one.
+    #[sqlx::test]
+    async fn tied_rows_sort_most_recent_first_then_by_id(pool: PgPool) {
+        let query_vector = vec![0.1_f32; 640];
+
+        let newer_id = Uuid::new_v4();
+        let older_id = Uuid::new_v4();
+        insert_embedded_entry_with_id(&pool, newer_id, "newer", tie_day(2026, 3, 12)).await;
+        insert_embedded_entry_with_id(&pool, older_id, "older", tie_day(2026, 3, 10)).await;
+
+        // Two more sharing one `created_at` exactly, so only `id` can
+        // order them relative to each other — sorted here ourselves so the
+        // assertion below doesn't depend on `Uuid::new_v4()`'s own output
+        // order.
+        let mut tied = [Uuid::new_v4(), Uuid::new_v4()];
+        tied.sort();
+        let [tied_a, tied_b] = tied;
+        insert_embedded_entry_with_id(&pool, tied_b, "tied-b", tie_day(2026, 3, 11)).await;
+        insert_embedded_entry_with_id(&pool, tied_a, "tied-a", tie_day(2026, 3, 11)).await;
+
+        let rows = retrieve_nearest(&pool, &query_vector, 10).await.unwrap();
+        let ids: Vec<Uuid> = rows.iter().map(|entry| entry.id).collect();
+
+        assert_eq!(
+            ids,
+            vec![newer_id, tied_a, tied_b, older_id],
+            "expected created_at desc, with the created_at tie broken by id ascending: {ids:?}"
+        );
+    }
+
+    /// The same corpus, queried twice independently. `similar_entries.rs`
+    /// pages by re-running `retrieve_nearest` from scratch on every call
+    /// (see that module's own doc comment) and slicing the result in
+    /// memory at an offset — safe only if separate calls agree on the
+    /// order. Before the `created_at desc, id` tiebreak, an all-tied
+    /// corpus had no reason to: this is the "stable across repeated calls"
+    /// half of issue #205's acceptance criteria.
+    #[sqlx::test]
+    async fn tied_rows_sort_the_same_way_on_a_second_independent_call(pool: PgPool) {
+        let query_vector = vec![0.1_f32; 640];
+
+        for i in 0..10 {
+            insert_embedded_entry_with_id(
+                &pool,
+                Uuid::new_v4(),
+                &format!("entry {i}"),
+                tie_day(2026, 3, 1 + i as u32),
+            )
+            .await;
+        }
+
+        let first_call = retrieve_nearest(&pool, &query_vector, 10).await.unwrap();
+        let second_call = retrieve_nearest(&pool, &query_vector, 10).await.unwrap();
+
+        let first_ids: Vec<Uuid> = first_call.iter().map(|entry| entry.id).collect();
+        let second_ids: Vec<Uuid> = second_call.iter().map(|entry| entry.id).collect();
+        assert_eq!(
+            first_ids, second_ids,
+            "the order must be stable across independent calls against the same tied corpus"
+        );
+    }
+
+    /// Issue #205's production half, not just the test-suite one:
+    /// `similar_entries.rs`'s `offset` pagination calls `retrieve_nearest`
+    /// fresh for every page, so two pages over an all-tied corpus only
+    /// partition it cleanly — no row repeated, none skipped — because the
+    /// order is now total. Modelled directly on `retrieve_nearest` rather
+    /// than through `SimilarEntriesTool`, since the tool always requests
+    /// `i64::MAX` and slices in memory (its own tests already cover that
+    /// slicing); what's under test here is that the two `limit`-bounded
+    /// database calls a caller would actually make agree with each other.
+    #[sqlx::test]
+    async fn a_limited_call_and_a_full_call_over_tied_rows_partition_with_no_repeat_or_skip(
+        pool: PgPool,
+    ) {
+        let query_vector = vec![0.1_f32; 640];
+
+        let mut all_ids: Vec<Uuid> = Vec::new();
+        for i in 0..25 {
+            let id = Uuid::new_v4();
+            all_ids.push(id);
+            insert_embedded_entry_with_id(&pool, id, &format!("entry {i}"), tie_day(2026, 3, 15))
+                .await;
+        }
+
+        // The "first page" a caller like `SimilarEntriesTool` would see —
+        // capped, the way its own default page size caps it.
+        let first_page = retrieve_nearest(&pool, &query_vector, 20).await.unwrap();
+        assert_eq!(first_page.len(), 20);
+
+        // The full, unbounded set a second call (any later offset) would
+        // slice against — must reproduce the first page's order exactly as
+        // its own first 20, or slicing at offset 20 for "page two" would
+        // either repeat or skip a row relative to what page one showed.
+        let full_set = retrieve_nearest(&pool, &query_vector, i64::MAX).await.unwrap();
+        assert_eq!(full_set.len(), 25);
+
+        let first_page_ids: Vec<Uuid> = first_page.iter().map(|entry| entry.id).collect();
+        let full_set_prefix_ids: Vec<Uuid> =
+            full_set.iter().take(20).map(|entry| entry.id).collect();
+        assert_eq!(
+            first_page_ids, full_set_prefix_ids,
+            "page one and the full set's own first 20 must agree row-for-row: {first_page_ids:?} \
+             vs {full_set_prefix_ids:?}"
+        );
+
+        let second_page_ids: Vec<Uuid> = full_set.iter().skip(20).map(|entry| entry.id).collect();
+        assert_eq!(second_page_ids.len(), 5, "the remaining 5 tied rows");
+
+        let mut seen: Vec<Uuid> = first_page_ids
+            .iter()
+            .chain(second_page_ids.iter())
+            .copied()
+            .collect();
+        seen.sort();
+        let mut expected = all_ids.clone();
+        expected.sort();
+        assert_eq!(
+            seen, expected,
+            "the two pages together must cover every tied row exactly once — no repeat, no skip"
+        );
     }
 
     // -------------------------------------------------------------------

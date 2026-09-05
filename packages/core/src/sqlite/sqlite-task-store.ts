@@ -217,13 +217,16 @@ export class SqliteTaskStore implements TaskStore {
   // "now," threaded through by the caller, and reusing it is exactly
   // what this ticket's own brief means by preferring an already-threaded
   // timestamp over a second, independent clock read that could disagree
-  // with it by however long the write takes.
+  // with it by however long the write takes. Passed as updateIfLive's
+  // third argument, not folded into `patch`, so that choice is visible
+  // here rather than resting on `patch.updatedAt` happening to equal
+  // `patch.completedAt`.
   async complete(id: string, completedAt: string): Promise<void> {
     const current = await this.get(id);
     if (current === undefined) {
       return;
     }
-    await this.updateIfLive(id, { completedAt, updatedAt: completedAt, seq: null, syncedAt: null });
+    await this.updateIfLive(id, { completedAt }, completedAt);
     await this.completeChildren(id, completedAt);
   }
 
@@ -241,12 +244,7 @@ export class SqliteTaskStore implements TaskStore {
   }
 
   async uncomplete(id: string): Promise<void> {
-    await this.updateIfLive(id, {
-      completedAt: null,
-      updatedAt: this.now(),
-      seq: null,
-      syncedAt: null,
-    });
+    await this.updateIfLive(id, { completedAt: null });
   }
 
   /**
@@ -258,7 +256,7 @@ export class SqliteTaskStore implements TaskStore {
    * can never resurrect a Task someone else deleted.
    */
   async rename(id: string, content: string): Promise<void> {
-    await this.updateIfLive(id, { content, updatedAt: this.now(), seq: null, syncedAt: null });
+    await this.updateIfLive(id, { content });
     // reindexFromCurrentState (not indexForSearch(patch) directly) re-reads
     // whatever the database now actually holds, so this is correct
     // whether the UPDATE above matched a row or was blocked by the
@@ -275,7 +273,7 @@ export class SqliteTaskStore implements TaskStore {
    * concurrent offline drags). No-op against a tombstone.
    */
   async reorder(id: string, orderKey: string): Promise<void> {
-    await this.updateIfLive(id, { orderKey, updatedAt: this.now(), seq: null, syncedAt: null });
+    await this.updateIfLive(id, { orderKey });
   }
 
   /**
@@ -286,22 +284,22 @@ export class SqliteTaskStore implements TaskStore {
    * No-op against a tombstone.
    */
   async reorderToday(id: string, dayOrder: string): Promise<void> {
-    await this.updateIfLive(id, { dayOrder, updatedAt: this.now(), seq: null, syncedAt: null });
+    await this.updateIfLive(id, { dayOrder });
   }
 
   async setDate(id: string, date: string | null): Promise<void> {
     assertValidDate(date);
-    await this.updateIfLive(id, { date, updatedAt: this.now(), seq: null, syncedAt: null });
+    await this.updateIfLive(id, { date });
   }
 
   async setDeadline(id: string, deadline: string | null): Promise<void> {
     assertValidDeadline(deadline);
-    await this.updateIfLive(id, { deadline, updatedAt: this.now(), seq: null, syncedAt: null });
+    await this.updateIfLive(id, { deadline });
   }
 
   async setPriority(id: string, priority: number): Promise<void> {
     assertValidPriority(priority);
-    await this.updateIfLive(id, { priority, updatedAt: this.now(), seq: null, syncedAt: null });
+    await this.updateIfLive(id, { priority });
   }
 
   // Replaces `labelIds` wholesale — see TaskStore.setLabelIds's own doc
@@ -310,29 +308,23 @@ export class SqliteTaskStore implements TaskStore {
   // Label that's been removed is an accepted, transient state (this
   // file's own header comment, and ../label-store.ts's remove()).
   async setLabelIds(id: string, labelIds: string[]): Promise<void> {
-    await this.updateIfLive(id, { labelIds, updatedAt: this.now(), seq: null, syncedAt: null });
+    await this.updateIfLive(id, { labelIds });
   }
 
   // See TaskStore.setDescription's own doc comment. No validation beyond
   // the string shape itself — a Description is free-form Markdown.
   async setDescription(id: string, description: string | null): Promise<void> {
-    await this.updateIfLive(id, { description, updatedAt: this.now(), seq: null, syncedAt: null });
+    await this.updateIfLive(id, { description });
   }
 
   // See TaskStore.setProject's own doc comment for why `sectionId` is
   // cleared unconditionally alongside `projectId`.
   async setProject(id: string, projectId: string | null): Promise<void> {
-    await this.updateIfLive(id, {
-      projectId,
-      sectionId: null,
-      updatedAt: this.now(),
-      seq: null,
-      syncedAt: null,
-    });
+    await this.updateIfLive(id, { projectId, sectionId: null });
   }
 
   async setSection(id: string, sectionId: string | null): Promise<void> {
-    await this.updateIfLive(id, { sectionId, updatedAt: this.now(), seq: null, syncedAt: null });
+    await this.updateIfLive(id, { sectionId });
   }
 
   // See TaskStore.setParent's own doc comment for the three shapes this
@@ -379,7 +371,7 @@ export class SqliteTaskStore implements TaskStore {
       }
       assertValidNestingDepth(depth);
     }
-    await this.updateIfLive(id, { parentId, updatedAt: this.now(), seq: null, syncedAt: null });
+    await this.updateIfLive(id, { parentId });
   }
 
   // See TaskStore.advanceRecurring's own doc comment for the full
@@ -418,13 +410,7 @@ export class SqliteTaskStore implements TaskStore {
       // own doc comment). `updatedAt` reuses `completedAt` for the
       // identical reason complete()'s own comment gives: it already is
       // this call's "now."
-      await this.updateIfLive(id, {
-        completedAt,
-        dateString: null,
-        updatedAt: completedAt,
-        seq: null,
-        syncedAt: null,
-      });
+      await this.updateIfLive(id, { completedAt, dateString: null }, completedAt);
       await this.completeChildren(id, completedAt);
       return;
     }
@@ -435,12 +421,7 @@ export class SqliteTaskStore implements TaskStore {
     // call), not a second `this.now()` read — the row genuinely changed
     // at that moment, whether or not `completedAt` itself lands on a
     // column.
-    await this.updateIfLive(id, {
-      date: outcome.date,
-      updatedAt: completedAt,
-      seq: null,
-      syncedAt: null,
-    });
+    await this.updateIfLive(id, { date: outcome.date }, completedAt);
   }
 
   // See TaskStore.completeForever's own doc comment for the full
@@ -451,13 +432,7 @@ export class SqliteTaskStore implements TaskStore {
     if (current === undefined) {
       return;
     }
-    await this.updateIfLive(id, {
-      completedAt,
-      dateString: null,
-      updatedAt: completedAt,
-      seq: null,
-      syncedAt: null,
-    });
+    await this.updateIfLive(id, { completedAt, dateString: null }, completedAt);
     await this.completeChildren(id, completedAt);
   }
 
@@ -475,14 +450,10 @@ export class SqliteTaskStore implements TaskStore {
     const nextDate = hasTime(current.date) ? `${tomorrow}T${current.date.slice(11, 16)}` : tomorrow;
     // `today` is a floating calendar day, not a real-world instant (this
     // method's own doc comment) — the wrong shape for `updatedAt`, unlike
-    // `completedAt` above, so this reads the injected clock instead of
-    // reusing a parameter.
-    await this.updateIfLive(id, {
-      date: nextDate,
-      updatedAt: this.now(),
-      seq: null,
-      syncedAt: null,
-    });
+    // `completedAt` above, so this leaves updateIfLive's third argument
+    // unset and gets its default `this.now()` read instead of passing
+    // `today` through.
+    await this.updateIfLive(id, { date: nextDate });
   }
 
   /**
@@ -674,10 +645,29 @@ export class SqliteTaskStore implements TaskStore {
   // no-op — the structural guard ADR 0028 established for edit/remove
   // (checked on the write itself, not as policy code ahead of it),
   // applied to every one of a Task's local mutations.
-  private async updateIfLive(id: string, patch: Partial<Task>): Promise<void> {
+  //
+  // `updatedAt`/`seq`/`syncedAt` are set here, once, rather than by every
+  // caller: "this row changed locally" always means the same three
+  // things — timestamped, and pending push (`pending()` above is exactly
+  // `seq IS NULL`) — so `patch`'s own type omits all three. That isn't
+  // documentation, it's the fix: a setter can no longer type its way
+  // around setting them, because there's nowhere left in `patch` to put
+  // them, correctly or otherwise. `updatedAt` defaults to a fresh
+  // `this.now()` read, right for every caller except the three
+  // (complete/advanceRecurring/completeForever) that already have their
+  // own instant threaded through as `completedAt` — those pass it as this
+  // method's third argument instead of letting it default, which is what
+  // makes "this setter stamps the caller's own time, not the clock" a
+  // fact the signature states rather than a convention a reader has to
+  // already know to look for.
+  private async updateIfLive(
+    id: string,
+    patch: Omit<Partial<Task>, "updatedAt" | "seq" | "syncedAt">,
+    updatedAt: string = this.now(),
+  ): Promise<void> {
     await this.db
       .update(tasks)
-      .set(patch)
+      .set({ ...patch, updatedAt, seq: null, syncedAt: null })
       .where(and(eq(tasks.id, id), isNull(tasks.deletedAt)));
   }
 
