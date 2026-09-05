@@ -4,6 +4,36 @@
  */
 
 export interface paths {
+    "/v1/backup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Streams this Server's entire Postgres database — Entries, Tasks,
+         *     Sessions, Digests, and every `entries.embedding` (`vector(640)`,
+         *     `server/migrations/0002_add_entry_embeddings.sql`) among them — as a
+         *     single `pg_dump` custom-format archive. Shells out to `pg_dump` against
+         *     `AppState::database_url` (never `docker exec`, per this module's own
+         *     header comment) so this works identically for a local container, a
+         *     Sandbox instance on a different port, or a remote/managed Postgres this
+         *     Server merely has a connection string for.
+         * @description `--format=custom` (rather than plain SQL) is what `restore_handler`
+         *     expects on the other end — `pg_restore` needs its own archive format to
+         *     support `--clean --if-exists`, and it compresses the embeddings, which
+         *     otherwise dominate the dump's size.
+         */
+        get: operations["backup_handler"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/config": {
         parameters: {
             query?: never;
@@ -189,6 +219,72 @@ export interface paths {
          *     hanging or dropping the connection silently.
          */
         post: operations["reflect_handler"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Wipes this Server's database and replaces it with a `pg_dump` archive —
+         *     **deliberately unauthenticated**, exactly like every other `/v1` route
+         *     (ADR 0003: trust is network-level, not per-request). This is stated
+         *     plainly here because it is the sharpest edge that decision has: a
+         *     request to this path from anywhere the network lets it reach is a
+         *     wipe-and-replace of every Entry, Task, Session and Digest this Server
+         *     holds, with no confirmation, no credential, and no undo — its entire
+         *     perimeter is the network itself (ADR 0017's Tailscale Serve, never
+         *     Funnel). That was decided with this exposure understood, not
+         *     overlooked: adding auth here alone, while every read stays open per
+         *     ADR 0003, would protect the one route that already has an off-network
+         *     safeguard (nobody untrusted can reach it at all) while leaving every
+         *     Entry readable to the same untrusted caller regardless. If ADR 0003
+         *     itself is ever revisited, this handler is revisited with it — not
+         *     before.
+         * @description Applies via `pg_restore --clean --if-exists`, which drops each object
+         *     the archive describes before recreating it (`--if-exists` so a
+         *     not-yet-created object — a fresh database — doesn't fail the drop) —
+         *     this is the "wipe" half; "replace" is `pg_restore` recreating every
+         *     table, index and row from the archive that follows. Reports how many
+         *     restored rows carry an `embedding_model` different from what this
+         *     Server is configured with (`count_mismatched_embeddings`) so the caller
+         *     can decide whether to rebuild them (`POST /v1/restore/rebuild-embeddings`)
+         *     or leave them — see `RestoreReport`.
+         */
+        post: operations["restore_handler"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/restore/rebuild-embeddings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * The "rebuild" action offered alongside `RestoreReport` — never called
+         *     automatically, only when a caller chooses it over "leave". Nulls
+         *     `embedding` for every row `count_mismatched_embeddings` would still
+         *     count, so the background worker (ADR 0022) picks them back up on its
+         *     own schedule; see `rebuild_mismatched_embeddings`'s own doc comment for
+         *     why this writes no embedding itself.
+         */
+        post: operations["rebuild_mismatched_embeddings_handler"];
         delete?: never;
         options?: never;
         head?: never;
@@ -834,6 +930,15 @@ export interface components {
             /** Format: date-time */
             updated_at: string;
         };
+        /**
+         * @description `POST /v1/restore/rebuild-embeddings`'s response — how many rows this
+         *     call actually nulled out, so a client that calls it can say "N Entries
+         *     queued for re-embedding" rather than a bare acknowledgement.
+         */
+        RebuildReport: {
+            /** Format: int64 */
+            rebuilt_count: number;
+        };
         ReflectRequest: {
             /**
              * @description Issue #98: the model this Question should run on, or `None` to mean
@@ -958,6 +1063,20 @@ export interface components {
         ResolvedField: {
             source: components["schemas"]["Source"];
             value?: string | null;
+        };
+        /**
+         * @description `POST /v1/restore`'s response: how many `entries` rows carry an
+         *     `embedding_model` different from the one this Server is configured
+         *     with, right after the dump that was just applied landed. `entries` gets
+         *     its `embedding_model` in the same `UPDATE` that writes `embedding`
+         *     (`embedding::store_embedding`), so this is a pure read of what the
+         *     restored dump actually contained — no separate metadata field for "what
+         *     model produced these embeddings" exists or is needed (see
+         *     `count_mismatched_embeddings`'s own doc comment).
+         */
+        RestoreReport: {
+            /** Format: int64 */
+            mismatched_embedding_count: number;
         };
         /**
          * @description The Section-shaped sibling of `TaskInput` — `project_id` is a plain
@@ -1477,6 +1596,33 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    backup_handler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A pg_dump custom-format archive of the whole database */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": number[];
+                };
+            };
+            /** @description pg_dump is missing, too old, or failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     get_config_handler: {
         parameters: {
             query?: never;
@@ -1721,6 +1867,65 @@ export interface operations {
             };
             /** @description Reflection is configured but switched off (issue #201) — distinct from 404, which means this Server predates the feature entirely */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    restore_handler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description A pg_dump custom-format archive, as produced by GET /v1/backup */
+        requestBody?: {
+            content: {
+                "application/octet-stream": unknown;
+            };
+        };
+        responses: {
+            /** @description Restore applied; reports the embedding-model mismatch count */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestoreReport"];
+                };
+            };
+            /** @description pg_restore is missing, too old, or the archive failed to apply */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    rebuild_mismatched_embeddings_handler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Mismatched rows' embeddings were cleared for the background worker to refill */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RebuildReport"];
+                };
+            };
+            /** @description The database query failed */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

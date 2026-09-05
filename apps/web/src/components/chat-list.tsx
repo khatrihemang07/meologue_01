@@ -102,7 +102,7 @@ const DESTINATIONS = [
     label: "Settings",
     Icon: SettingsIcon,
     end: false,
-    summary: "Theme, Server URL, Export",
+    summary: "Theme, Server URL, Export, Backup, Restore",
     requiresSync: false,
     capability: undefined,
   },

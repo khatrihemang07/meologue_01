@@ -6,6 +6,7 @@
       "@/platform/back-button": ["./src/platform/back-button.web.ts"],
       "@/platform/sqlite-driver": ["./src/platform/sqlite-driver.web.ts"],
       "@/platform/save-file": ["./src/platform/save-file.web.ts"],
+      "@/platform/load-file": ["./src/platform/load-file.web.ts"],
       "@/platform/register-service-worker": ["./src/platform/register-service-worker.web.ts"],
       "@/*": ["./src/*"]
     },

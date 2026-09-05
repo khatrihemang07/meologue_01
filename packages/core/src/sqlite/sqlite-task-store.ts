@@ -741,6 +741,34 @@ export class SqliteTaskStore implements TaskStore {
     }
   }
 
+  /**
+   * Re-derives `tasks_fts` and `task_descriptions_fts` from scratch against
+   * whatever `tasks` currently holds — mirrors SqliteEntryStore's identical
+   * `rebuildSearchIndex` (see its own header comment for the full
+   * reasoning: used by Restore, issue #197, wipes both FTS5 tables first
+   * because a hard-deleted Task's stale index rows would otherwise never
+   * be visited by this method's own loop, and reinserts through
+   * `indexForSearch` itself rather than a second bulk-insert path).
+   */
+  async rebuildSearchIndex(onProgress?: (done: number, total: number) => void): Promise<void> {
+    await this.driver.execute("DELETE FROM tasks_fts", [], "run");
+    await this.driver.execute("DELETE FROM task_descriptions_fts", [], "run");
+    const rows = await this.db
+      .select({
+        id: tasks.id,
+        content: tasks.content,
+        description: tasks.description,
+        deletedAt: tasks.deletedAt,
+      })
+      .from(tasks);
+    for (let index = 0; index < rows.length; index += 1) {
+      await this.indexForSearch(
+        rows[index] as Pick<Task, "id" | "content" | "description" | "deletedAt">,
+      );
+      onProgress?.(index + 1, rows.length);
+    }
+  }
+
   private async getKv(key: string): Promise<string | undefined> {
     const rows = await this.db.select({ value: kv.value }).from(kv).where(eq(kv.key, key)).limit(1);
     return rows[0]?.value;

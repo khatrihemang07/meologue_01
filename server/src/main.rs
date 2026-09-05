@@ -261,12 +261,18 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let static_dir = env::var("STATIC_DIR").unwrap_or_else(|_| DEFAULT_STATIC_DIR.to_string());
-    let app = meologue_server::router_with_flags(
+    // Calls the true widest constructor directly (issue #198 + #200/#201
+    // combined) — see `router_with_everything`'s own doc comment for why
+    // neither the backup fields nor the settings/flags fields get folded
+    // into a narrower call here.
+    let app = meologue_server::router_with_everything(
         pool,
         static_dir,
         embed_tx,
         reflect,
         digest_state,
+        database_url,
+        llm_config.embed_model.clone(),
         settings_locked,
         mode,
         flags,

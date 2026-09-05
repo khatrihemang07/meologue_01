@@ -179,6 +179,22 @@ const CHUNK_BUDGET_KEY_PREFIX = "src/";
  * single byte having been added.
  */
 const CHUNK_BUDGETS = {
+  // Not a route — `DestructiveConfirmDialog` (components/settings/
+  // destructive-confirm-dialog.tsx), lazy-loaded from both
+  // data-section.tsx's Device Restore and server-data-group.tsx's Server
+  // Restore (issues #195/#197/#198) rather than statically imported into
+  // settings-page.tsx's own chunk. A static import there made that route
+  // fail its own budget at 26,358 gzip bytes against a 17,600 ceiling —
+  // Radix's `Dialog` primitive this component pulls in, unused by
+  // Settings' other four topic sections, is ~11,800 of those bytes on its
+  // own — the identical "keep it out of the eager chunk" reasoning
+  // check-bundle-size.mjs's own header comment already gives for a route
+  // whose dependency belongs behind a lazy boundary instead. Measured
+  // 13,176 bytes gzip (own chunk + 2 shared) immediately after landing.
+  "src/components/settings/destructive-confirm-dialog.tsx": {
+    ceilingBytes: 17_200,
+    baselineBytes: 13_176,
+  },
   // ComposerPage carries ProseMirror plus the markdown-blocks/WYSIWYG
   // composer (issues #148-#166) — much the largest route in the app, and
   // expected to stay that way. Measured 128,032 bytes gzip across its own

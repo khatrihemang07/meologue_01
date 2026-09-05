@@ -52,4 +52,11 @@ export type WireResolvedField = components["schemas"]["ResolvedField"];
 export type WireFeatureConfig = components["schemas"]["FeatureConfig"];
 export type WireSource = components["schemas"]["Source"];
 export type WireTogglePatch = components["schemas"]["TogglePatch"];
+// Issue #198's own web-side follow-up: `GET /v1/backup` streams raw bytes
+// (no schema to alias — apps/web's server-backup-transport.ts reads the
+// response body directly), but `POST /v1/restore` and its rebuild
+// follow-up both answer in JSON, so those two get the same hand-picked
+// alias treatment every other JSON response on this page already does.
+export type WireRestoreReport = components["schemas"]["RestoreReport"];
+export type WireRebuildReport = components["schemas"]["RebuildReport"];
 export type WireInstanceMode = components["schemas"]["InstanceMode"];

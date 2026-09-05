@@ -1,5 +1,6 @@
 use utoipa::OpenApi;
 
+use crate::backup::{RebuildReport, RestoreReport};
 use crate::digest::{Digest, DigestResponse};
 use crate::health::{HealthCapabilities, HealthResponse};
 use crate::llm::ModelInfo;
@@ -26,12 +27,17 @@ use crate::sync::{
         crate::digest::digest_at_handler,
         crate::digest::regenerate_digest_handler,
         crate::models::models_handler,
+        crate::backup::backup_handler,
+        crate::backup::restore_handler,
+        crate::backup::rebuild_mismatched_embeddings_handler,
         crate::settings::get_config_handler,
         crate::settings::patch_config_handler,
     ),
     components(schemas(
         HealthResponse,
         HealthCapabilities,
+        RestoreReport,
+        RebuildReport,
         SyncRequest,
         SyncResponse,
         EntryInput,
