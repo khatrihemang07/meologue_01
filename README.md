@@ -58,6 +58,11 @@ Configuring an endpoint only points at it — for a local model (e.g. Ollama) it
 running, or Reflection fails with a connection-refused error. Start it with
 `brew services start ollama` (or `ollama serve`) before using Reflection.
 
+The Server can back up and restore its own Postgres database (Entries, Tasks, Sessions, Digests
+and embeddings), which needs `pg_dump`/`pg_restore` installed on whatever host runs the Server —
+see [the Server's own section](server/README.md#backup-and-restore) for the exact tools to
+install.
+
 ### Install a build
 
 The shortest path to a running app is a Production build from

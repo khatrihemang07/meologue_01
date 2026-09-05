@@ -81,6 +81,29 @@ Entry text outside the tailnet, and why that's deliberate rather than accidental
 - `GET /v1/metrics` — Prometheus-format request counts, latencies, statuses, and Sync-specific
   counters (Entries pushed/pulled, protocol mismatches). Unauthenticated, like the rest of `/v1`
   (ADR 0003) — nothing scrapes it yet, this is emit-now-scrape-later.
+- `GET /v1/backup`, `POST /v1/restore`, `POST /v1/restore/rebuild-embeddings` — see "Backup and
+  restore" below.
+
+## Backup and restore
+
+`GET /v1/backup` streams a `pg_dump` archive of the whole database — Entries, Tasks, Sessions,
+Digests and every `entries.embedding`. `POST /v1/restore` applies one, wiping and replacing this
+Server's database with its contents, and reports how many restored rows carry an
+`embedding_model` different from this Server's own `MEOLOGUE_EMBED_MODEL`; `POST
+/v1/restore/rebuild-embeddings` clears exactly those rows' embeddings so the background worker
+(ADR 0022) refills them under the configured model.
+
+**Both routes shell out to `pg_dump`/`pg_restore` on this host, against the same `DATABASE_URL`
+the server already connects with** — never `docker exec`, so this works identically for a local
+container, the Sandbox instance, or a remote/managed Postgres. That means **`pg_dump` and
+`pg_restore` must be installed on whatever host runs this server**, at a major version equal to or
+newer than the Postgres it's talking to (`docker-compose.yml` currently runs
+`pgvector/pgvector:pg18`). On macOS: `brew install postgresql@18`; on Debian/Ubuntu:
+`apt-get install postgresql-client-18`. A missing or too-old tool fails the request with a message
+naming exactly what to install, rather than an opaque error.
+
+**`POST /v1/restore` is deliberately unauthenticated, like every other `/v1` route (ADR 0003)** —
+see that route's own doc comment in `src/backup.rs` for the exposure this accepts and why.
 
 ## Logs
 
