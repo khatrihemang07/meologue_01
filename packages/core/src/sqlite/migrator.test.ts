@@ -77,6 +77,7 @@ describe("migrate", () => {
       [14],
       [15],
       [16],
+      [17],
     ]);
   });
 
@@ -113,8 +114,14 @@ describe("migrate", () => {
   it("re-running the search index migration's own statements does not duplicate rows", async () => {
     const driver = new NodeSqliteDriver();
     await migrate(driver);
+    // 8 positional values, not 7: `updated_at` (migration 17, issue #196)
+    // is appended at the *end* of the real, physical column order by its
+    // own `ALTER TABLE ADD COLUMN` — unlike schema.ts's declared order
+    // (which lists it beside `created_at` for readability), a positional
+    // `INSERT ... VALUES` has to match the table's actual on-disk column
+    // order, and `ADD COLUMN` always appends.
     await driver.execute(
-      "INSERT INTO entries VALUES ('a', 'device-1', 'a recurring task', '2026-01-01T00:00:00.000Z', null, null, null)",
+      "INSERT INTO entries VALUES ('a', 'device-1', 'a recurring task', '2026-01-01T00:00:00.000Z', null, null, null, null)",
       [],
       "run",
     );
@@ -255,12 +262,14 @@ describe("migrate", () => {
       [14],
       [15],
       [16],
+      [17],
     ]);
 
     // The store isn't just "didn't throw" — it's actually usable: a write
-    // that touches the new column succeeds.
+    // that touches the new column succeeds. 8 positional values — see the
+    // identical comment on the search-index test above for why.
     await driver.execute(
-      "INSERT INTO entries VALUES ('a', 'device-1', 'hello', '2026-01-01T00:00:00.000Z', null, null, null)",
+      "INSERT INTO entries VALUES ('a', 'device-1', 'hello', '2026-01-01T00:00:00.000Z', null, null, null, null)",
       [],
       "run",
     );
@@ -300,6 +309,7 @@ describe("migrate", () => {
       [14],
       [15],
       [16],
+      [17],
     ]);
 
     // The store isn't just "didn't throw" — `duration` is actually gone,
