@@ -82,6 +82,18 @@ export function commentStoreContract(
       await expect(store.edit("a", "")).rejects.toThrow();
       await expect(store.edit("a", "   ")).rejects.toThrow();
     });
+
+    // Issue #196: every setter that clears seq/syncedAt also stamps
+    // updatedAt with a fresh value.
+    it("stamps updatedAt with a fresh value", async () => {
+      const original = comment({ id: "a", text: "original", seq: 5 });
+      await store.upsert([original]);
+
+      await store.edit("a", "changed");
+
+      const [found] = await store.list();
+      expect(found?.updatedAt as string > original.updatedAt).toBe(true);
+    });
   });
 
   describe("remove() — tombstone, not hard delete", () => {

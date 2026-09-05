@@ -94,6 +94,21 @@ export function projectStoreContract(
         await expect(projectStore.renameProject("a", "")).rejects.toThrow();
         await expect(projectStore.renameProject("a", "   ")).rejects.toThrow();
       });
+
+      // Issue #196: every setter that clears seq/syncedAt also stamps
+      // updatedAt — checked here via a fresh value (the fixture's own
+      // default is a fixed 2026-01-01 timestamp, always older than
+      // whatever the real clock says "now" is while this test runs).
+      it("stamps updatedAt with a fresh value", async () => {
+        const original = project({ id: "a", seq: 5 });
+        await projectStore.upsertProjects([original]);
+
+        await projectStore.renameProject("a", "changed");
+
+        const found = await projectStore.getProject("a");
+        expect(found?.updatedAt).not.toBe(original.updatedAt);
+        expect(found?.updatedAt as string > original.updatedAt).toBe(true);
+      });
     });
 
     describe("setProjectColour()", () => {
@@ -404,6 +419,17 @@ export function projectStoreContract(
       expect(await projectStore.getSection("a")).toMatchObject({ name: "changed", seq: null });
 
       await expect(projectStore.renameSection("a", "")).rejects.toThrow();
+    });
+
+    // Issue #196 — see the identical Project-level test above.
+    it("renameSection() stamps updatedAt with a fresh value", async () => {
+      const original = section({ id: "a", projectId: "project-1", seq: 5 });
+      await projectStore.addSection(original);
+
+      await projectStore.renameSection("a", "changed");
+
+      const found = await projectStore.getSection("a");
+      expect(found?.updatedAt as string > original.updatedAt).toBe(true);
     });
 
     it("setSectionDescription() changes description and clears seq, and null clears it back", async () => {
