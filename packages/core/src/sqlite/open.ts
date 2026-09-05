@@ -42,6 +42,23 @@ export interface OpenedSqliteStore {
   /** Filters (issue #185) — a seventh field, following the identical additive rule this interface's own header comment states. */
   filterStore: SqliteFilterStore;
   deviceId: string;
+  /**
+   * The driver this whole database was opened against (issue #195) — an
+   * eighth additive field, following the identical rule this interface's
+   * own header comment states, but for a different reason than the seven
+   * stores above: nothing here wraps a *table*, so there is no `BackupStore`
+   * to add. A Backup (`../backup/backup-zip.ts`'s `createBackup`) reads
+   * `sqlite_master` and `pragma table_info` directly — deliberately below
+   * every store's own abstraction, since its whole point is to see every
+   * table a migration has ever added, including ones no store class wraps
+   * (`kv`, `meologue_migrations`) — so it needs the raw `SqliteDriver`
+   * itself, not a store built on top of it. Exposing the one already
+   * constructed here, rather than having a caller build or reach for a
+   * second one, is what keeps "one driver per open database" true the same
+   * way `deviceId` above is resolved once and shared rather than re-derived
+   * per store.
+   */
+  driver: SqliteDriver;
 }
 
 /**
@@ -86,5 +103,6 @@ export async function open(driver: SqliteDriver): Promise<OpenedSqliteStore> {
     eventStore,
     filterStore,
     deviceId,
+    driver,
   };
 }

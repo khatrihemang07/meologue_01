@@ -1,4 +1,12 @@
-import type { Entry, EntryStore, Project, ProjectStore, Task, TaskStore } from "@meologue/core";
+import type {
+  Entry,
+  EntryStore,
+  Project,
+  ProjectStore,
+  SqliteDriver,
+  Task,
+  TaskStore,
+} from "@meologue/core";
 import { PROTOCOL_VERSION } from "@meologue/core";
 import { QueryClient, QueryClientProvider, queryOptions } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -11,15 +19,24 @@ import { useSyncStatusStore } from "@/lib/sync-status";
 import type { SaveFileOutcome } from "@/platform/save-file";
 import { SettingsPage } from "./settings-page";
 
-const { openEntryStoreMock, saveFileMock } = vi.hoisted(() => ({
+const { openEntryStoreMock, saveFileMock, createBackupMock } = vi.hoisted(() => ({
   openEntryStoreMock: vi.fn(),
   // Resolves "saved" by default (ticket 47's defect fix — see
   // save-file.web.ts's SaveFileOutcome doc comment and docs/adr/0016); the
-  // "Export" describe block below overrides this per test to also cover
-  // "cancelled".
+  // "Export" and "Backup" describe blocks below override this per test to
+  // also cover "cancelled".
   saveFileMock: vi.fn(
     async (_fileName: string, _bytes: Uint8Array): Promise<SaveFileOutcome> => "saved",
   ),
+  // Issue #195 — a stand-in for @meologue/core's own createBackup, so the
+  // "Backup" describe block below tests exactly this page's own wiring
+  // (which arguments it passes, what it does with the outcome) rather than
+  // re-proving dumpDatabase/buildBackupMeta's own logic, which
+  // backup-zip.test.ts already covers against a real driver.
+  createBackupMock: vi.fn(async () => ({
+    fileName: "meologue-backup-20260816-114500.zip",
+    bytes: new Uint8Array([1, 2, 3]),
+  })),
 }));
 
 // A stand-in for entry-store-layout.tsx's real entryStoreQueryOptions (which
@@ -38,6 +55,14 @@ vi.mock("@/pages/entry-store-layout", () => ({
 }));
 
 vi.mock("@/platform/save-file", () => ({ saveFile: saveFileMock }));
+
+// Only `createBackup` is stood in for — every other @meologue/core export
+// this file touches (PROTOCOL_VERSION, the Entry/Task/Project types) stays
+// the real thing, via `importOriginal`.
+vi.mock("@meologue/core", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@meologue/core")>();
+  return { ...actual, createBackup: createBackupMock };
+});
 
 function createFakeStore(entries: Entry[] = []): EntryStore {
   return {
@@ -194,6 +219,11 @@ describe("SettingsPage", () => {
     openEntryStoreMock.mockReturnValue(new Promise(() => {}));
     saveFileMock.mockReset();
     saveFileMock.mockResolvedValue("saved");
+    createBackupMock.mockReset();
+    createBackupMock.mockResolvedValue({
+      fileName: "meologue-backup-20260816-114500.zip",
+      bytes: new Uint8Array([1, 2, 3]),
+    });
   });
 
   afterEach(() => {
@@ -855,6 +885,130 @@ describe("SettingsPage", () => {
 
       await waitFor(() =>
         expect(errorToast).toHaveBeenCalledWith("Export isn't supported on Android yet."),
+      );
+    });
+  });
+
+  // Issue #195: a Backup is a second, separate artifact from Export above —
+  // this page's own wiring around @meologue/core's createBackup, not that
+  // function's own logic (backup-zip.test.ts covers dumpDatabase/
+  // buildBackupMeta against a real driver).
+  describe("Backup", () => {
+    // A minimal double satisfying SqliteDriver's own one-method shape
+    // (../../../packages/core/src/sqlite/driver.ts) — createBackup itself
+    // is mocked in this file, so nothing here ever calls `execute`; this
+    // only has to be an object handleBackup can pass through unmodified for
+    // the "calls createBackup with this Device's own driver" assertion
+    // below to compare by identity against.
+    const fakeDriver: SqliteDriver = { execute: vi.fn() };
+
+    it("is disabled while the store has not resolved", () => {
+      renderPage();
+
+      expect(screen.getByRole("button", { name: "Back up this Device" })).toBeDisabled();
+    });
+
+    it("is enabled once the store resolves", async () => {
+      openEntryStoreMock.mockResolvedValue({
+        store: createFakeStore(),
+        taskStore: createFakeTaskStore(),
+        projectStore: createFakeProjectStore(),
+        deviceId: "device-a",
+        driver: fakeDriver,
+      });
+
+      renderPage();
+
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Back up this Device" })).toBeEnabled(),
+      );
+    });
+
+    it("calls createBackup with this Device's driver, id and every meologue.* setting, saves the zip, and shows a success toast", async () => {
+      localStorage.setItem("meologue.theme", "dark");
+      localStorage.setItem("meologue.server-url", "https://phone.example");
+      // Not a meologue.* key — proves readAllDeviceSettings (settings.ts)
+      // filters by prefix rather than carrying everything localStorage
+      // happens to hold.
+      localStorage.setItem("unrelated-key", "should not travel");
+      openEntryStoreMock.mockResolvedValue({
+        store: createFakeStore(),
+        taskStore: createFakeTaskStore(),
+        projectStore: createFakeProjectStore(),
+        deviceId: "device-a",
+        driver: fakeDriver,
+      });
+      const successToast = vi.spyOn(toast, "success");
+
+      renderPage();
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Back up this Device" })).toBeEnabled(),
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Back up this Device" }));
+
+      await waitFor(() => expect(saveFileMock).toHaveBeenCalledTimes(1));
+      expect(createBackupMock).toHaveBeenCalledWith(
+        fakeDriver,
+        {
+          "meologue.theme": "dark",
+          "meologue.server-url": "https://phone.example",
+        },
+        expect.objectContaining({ deviceId: "device-a" }),
+      );
+      const call = saveFileMock.mock.calls[0];
+      expect(call).toBeDefined();
+      const [fileName] = call ?? ["", new Uint8Array()];
+      expect(fileName).toMatch(/^meologue-backup-\d{8}-\d{6}\.zip$/);
+      expect(successToast).toHaveBeenCalledWith(expect.stringContaining(fileName));
+    });
+
+    // Mirrors Export's own "cancelled" case above (ticket 47's defect fix,
+    // docs/adr/0016) — a cancelled save panel / share sheet must raise
+    // neither toast, since nothing was actually written anywhere.
+    it("raises no toast at all when the user cancels the save", async () => {
+      openEntryStoreMock.mockResolvedValue({
+        store: createFakeStore(),
+        taskStore: createFakeTaskStore(),
+        projectStore: createFakeProjectStore(),
+        deviceId: "device-a",
+        driver: fakeDriver,
+      });
+      saveFileMock.mockResolvedValue("cancelled");
+      const successToast = vi.spyOn(toast, "success");
+      const errorToast = vi.spyOn(toast, "error");
+
+      renderPage();
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Back up this Device" })).toBeEnabled(),
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Back up this Device" }));
+
+      await waitFor(() => expect(saveFileMock).toHaveBeenCalledTimes(1));
+      expect(successToast).not.toHaveBeenCalled();
+      expect(errorToast).not.toHaveBeenCalled();
+    });
+
+    it("shows an error toast carrying the real error when creating the Backup fails", async () => {
+      openEntryStoreMock.mockResolvedValue({
+        store: createFakeStore(),
+        taskStore: createFakeTaskStore(),
+        projectStore: createFakeProjectStore(),
+        deviceId: "device-a",
+        driver: fakeDriver,
+      });
+      createBackupMock.mockRejectedValue(
+        new Error("backup: cannot dump a non-finite number (NaN)"),
+      );
+      const errorToast = vi.spyOn(toast, "error");
+
+      renderPage();
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Back up this Device" })).toBeEnabled(),
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Back up this Device" }));
+
+      await waitFor(() =>
+        expect(errorToast).toHaveBeenCalledWith("backup: cannot dump a non-finite number (NaN)"),
       );
     });
   });

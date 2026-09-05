@@ -1,3 +1,8 @@
+export type { BackupOptions, BackupResult } from "./backup/backup-zip";
+export { backupFileName, createBackup } from "./backup/backup-zip";
+export { backupTableNames, dumpDatabase, escapeSqlValue } from "./backup/dump";
+export type { BackupMeta, BuildBackupMetaOptions } from "./backup/meta";
+export { BACKUP_SCHEMA_VERSION, buildBackupMeta } from "./backup/meta";
 export type { CommentStore } from "./comment-store";
 export type { Comment } from "./comment-types";
 export type { EventStore } from "./event-store";

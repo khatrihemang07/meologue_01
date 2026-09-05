@@ -49,6 +49,52 @@ const SMART_DATES_ENABLED_KEY = "meologue.smart-dates-enabled";
 const HIDDEN_DESTINATIONS_KEY = "meologue.hidden-destinations";
 const CAPABILITIES_KEY = "meologue.capabilities";
 
+/** The prefix every key this file writes shares — see `readAllDeviceSettings` below. */
+const DEVICE_SETTINGS_PREFIX = "meologue.";
+
+/**
+ * Every `meologue.*` key currently sitting in `localStorage`, verbatim, as a
+ * plain `Record<string, string>` (issue #195) — the exact payload
+ * `settings-page.tsx`'s Backup button hands to `@meologue/core`'s
+ * `createBackup` for its `settings` parameter. `packages/core` has no
+ * `localStorage` of its own to read these from (ADR 0008 keeps device
+ * settings outside the Entry store entirely, precisely so they can be read
+ * and fixed even when that store won't open), so this is the one function
+ * that turns "device settings" into a plain object a Backup can carry.
+ *
+ * Walks `localStorage.length`/`.key(i)` rather than naming `THEME_KEY`,
+ * `SERVER_URL_KEY` and the rest one by one — the identical reason
+ * `@meologue/core`'s `dump.ts` reads `sqlite_master` instead of a hardcoded
+ * table list: a tenth setting added to this file by some future ticket
+ * lands in a Backup automatically, with no edit to this function, rather
+ * than silently missing from a hand-maintained list the way an easy-to-forget
+ * addition here would risk.
+ *
+ * Wrapped in try/catch and degrading to `{}`, the same posture every other
+ * `localStorage` access in this file already takes (this file's own header
+ * comment) — a Backup a reader can't take at all because storage refused an
+ * *enumeration* call would be a worse failure than one that ships with no
+ * settings carried alongside it.
+ */
+export function readAllDeviceSettings(): Record<string, string> {
+  try {
+    const settings: Record<string, string> = {};
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      if (key === null || !key.startsWith(DEVICE_SETTINGS_PREFIX)) {
+        continue;
+      }
+      const value = localStorage.getItem(key);
+      if (value !== null) {
+        settings[key] = value;
+      }
+    }
+    return settings;
+  } catch {
+    return {};
+  }
+}
+
 /**
  * How wide the chat list pane is beside an open destination (ADR 0036), in
  * CSS pixels. A per-Device view preference, not synced state: a reader who

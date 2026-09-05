@@ -1,7 +1,14 @@
 import type { SqliteDriver } from "./driver";
 import { MIGRATIONS } from "./migrations";
 
-const LEDGER_TABLE = "meologue_migrations";
+/**
+ * Exported so ../backup/meta.ts can read this Device's highest applied
+ * migration version straight off the same ledger this file itself
+ * maintains, rather than a Backup carrying a second, hand-typed copy of
+ * this table's name that could silently drift from this one if the ledger
+ * were ever renamed.
+ */
+export const LEDGER_TABLE = "meologue_migrations";
 const STATEMENT_BREAKPOINT = "--> statement-breakpoint";
 
 // SQLite's own error text when a statement re-adds a column that's already

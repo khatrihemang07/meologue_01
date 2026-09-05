@@ -1,4 +1,4 @@
-import { exportEntriesToZip, PROTOCOL_VERSION } from "@meologue/core";
+import { createBackup, exportEntriesToZip, PROTOCOL_VERSION } from "@meologue/core";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -15,6 +15,7 @@ import {
   HIDEABLE_DESTINATIONS,
   type HideableDestinationId,
   normaliseServerUrl,
+  readAllDeviceSettings,
   refreshCapabilities,
   TEXT_SIZES,
   type TextSizeId,
@@ -489,6 +490,47 @@ export function SettingsPage() {
     }
   }
 
+  // A Backup (issue #195, CONTEXT.md's Backup entry) is a second, separate
+  // artifact from Export just above — a lossless SQL dump of this Device's
+  // whole database plus its settings, answering "is my data safe" rather
+  // than Export's "can I read this." `opened.driver` is the raw
+  // `SqliteDriver` `entry-store-layout.tsx`'s `open()` already constructed
+  // (../../../packages/core/src/sqlite/open.ts's own `OpenedSqliteStore.
+  // driver` doc comment) — `createBackup` reads `sqlite_master` directly,
+  // below every store's own abstraction, so it needs that driver itself,
+  // not a store built on top of it. `readAllDeviceSettings()` (settings.ts)
+  // is the one place `packages/core` gets `localStorage`'s contents from:
+  // that package has no `localStorage` of its own to read (ADR 0008), so
+  // Settings collects the `meologue.*` keys and hands them over the same
+  // way it hands over `deviceId` below. No progress UI, same reasoning as
+  // handleExport just above: at personal-log scale a Backup is fast enough
+  // that a toast is the whole story.
+  async function handleBackup() {
+    if (!opened) {
+      return;
+    }
+    try {
+      const { fileName, bytes } = await createBackup(opened.driver, readAllDeviceSettings(), {
+        deviceId: opened.deviceId,
+        now: new Date(),
+        utcOffsetMinutes: -new Date().getTimezoneOffset(),
+      });
+      const outcome = await saveFile(fileName, bytes);
+      if (outcome === "cancelled") {
+        // The user backed out of the save panel / share sheet — nothing was
+        // written anywhere. Same defect fix Export's own handleExport
+        // already applies (its own comment above, ticket 47, docs/adr/0016):
+        // a false "Backed up" toast here would claim a copy of this
+        // Device's whole database exists when it doesn't.
+        return;
+      }
+      toast.success(`Backed up this Device to ${fileName}.`);
+    } catch (error) {
+      console.error("meologue: backup failed", error);
+      toast.error(error instanceof Error ? error.message : "Backup failed.");
+    }
+  }
+
   const status = check?.url === serverUrl ? check.result : null;
 
   return (
@@ -727,6 +769,26 @@ export function SettingsPage() {
         <div>
           <Button type="button" size="touch" onClick={handleExport} disabled={!opened}>
             Export as zip
+          </Button>
+        </div>
+      </SettingsSection>
+
+      {/*
+        Issue #195. Sits beside Export, not inside it — a Backup and an
+        Export are two different artifacts (CONTEXT.md's Backup entry): an
+        Export is a readable zip of day files an Export's own hint text
+        above doesn't need repeating here, and a Backup is a lossless SQL
+        dump of this Device's whole database, settings included, meant to
+        be restored rather than read. Restore itself is a separate ticket
+        (#197) — this button only produces the file.
+      */}
+      <SettingsSection
+        label="Backup"
+        hint="A lossless copy of everything on this Device — every Entry, Task, Project, Section, Label, Filter, Comment and Event, tombstones included, plus your settings. Meant to be restored, not read — see Export above for a plain-text copy you can open directly."
+      >
+        <div>
+          <Button type="button" size="touch" onClick={handleBackup} disabled={!opened}>
+            Back up this Device
           </Button>
         </div>
       </SettingsSection>
