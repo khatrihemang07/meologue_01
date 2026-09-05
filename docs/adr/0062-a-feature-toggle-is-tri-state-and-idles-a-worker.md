@@ -66,10 +66,19 @@ the already-running process does:
 Server and a paused feature indistinguishable. 503 says "this Server has it and is not doing it
 right now", which is true.
 
-**Reading past Sessions is deliberately unaffected.** `/v1/sessions*` keeps answering while
-Reflection is off. Listing and opening a Conversation is a plain SQL read with nothing model-backed
-about it, and a switch whose purpose is to stop spending CPU has no business hiding Conversations
-that already exist.
+**But only the routes that would actually spend the model.** The line is the same one drawn for
+Sessions below: a toggle refuses *work*, it does not withhold *data already written*. So
+`POST /v1/digests/{period}/{date}/regenerate` answers 503 while Digest is off, because regenerating
+is precisely the on-demand chat call an operator is refusing — while `GET /v1/digests/{period}` and
+`GET /v1/digests/{period}/{date}` keep answering 200, because a Digest that already exists is
+stored prose and reading it costs nothing. Likewise `/v1/reflect` and `/v1/models` refuse, the
+former because it would call the model and the latter because it would ask the wrapper for a list
+whose only purpose is to start such a call.
+
+**Reading past Sessions is deliberately unaffected**, and reading past Digests with it.
+`/v1/sessions*` keeps answering while Reflection is off. Listing and opening a Conversation is a
+plain SQL read with nothing model-backed about it, and a switch whose purpose is to stop spending
+CPU has no business hiding Conversations that already exist.
 
 **On-to-off is live; unconfigured-to-configured is not.** Because routes are still registered at
 boot, configuring a feature on a Server that started without it cannot take effect until a restart.
