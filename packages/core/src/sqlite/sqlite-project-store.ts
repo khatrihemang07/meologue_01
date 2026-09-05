@@ -97,7 +97,12 @@ export class SqliteProjectStore implements ProjectStore {
 
   async setProjectColour(id: string, colour: string): Promise<void> {
     assertValidProjectColour(colour);
-    await this.updateProjectIfLive(id, { colour, updatedAt: this.now(), seq: null, syncedAt: null });
+    await this.updateProjectIfLive(id, {
+      colour,
+      updatedAt: this.now(),
+      seq: null,
+      syncedAt: null,
+    });
   }
 
   async setProjectDescription(id: string, description: string | null): Promise<void> {
@@ -174,11 +179,21 @@ export class SqliteProjectStore implements ProjectStore {
         cursor = next;
       }
     }
-    await this.updateProjectIfLive(id, { parentId, updatedAt: this.now(), seq: null, syncedAt: null });
+    await this.updateProjectIfLive(id, {
+      parentId,
+      updatedAt: this.now(),
+      seq: null,
+      syncedAt: null,
+    });
   }
 
   async reorderProject(id: string, orderKey: string): Promise<void> {
-    await this.updateProjectIfLive(id, { orderKey, updatedAt: this.now(), seq: null, syncedAt: null });
+    await this.updateProjectIfLive(id, {
+      orderKey,
+      updatedAt: this.now(),
+      seq: null,
+      syncedAt: null,
+    });
   }
 
   // Tombstones a Project — never a hard delete (ADR 0028's rule).
@@ -299,7 +314,12 @@ export class SqliteProjectStore implements ProjectStore {
   }
 
   async reorderSection(id: string, orderKey: string): Promise<void> {
-    await this.updateSectionIfLive(id, { orderKey, updatedAt: this.now(), seq: null, syncedAt: null });
+    await this.updateSectionIfLive(id, {
+      orderKey,
+      updatedAt: this.now(),
+      seq: null,
+      syncedAt: null,
+    });
   }
 
   // See ProjectStore.deleteSection's own doc comment: tombstones every
@@ -359,7 +379,12 @@ export class SqliteProjectStore implements ProjectStore {
         }
       }
     }
-    await this.updateSectionIfLive(id, { archived: true, updatedAt: now, seq: null, syncedAt: null });
+    await this.updateSectionIfLive(id, {
+      archived: true,
+      updatedAt: now,
+      seq: null,
+      syncedAt: null,
+    });
   }
 
   async unarchiveSection(id: string): Promise<void> {

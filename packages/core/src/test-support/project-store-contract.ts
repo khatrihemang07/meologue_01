@@ -107,7 +107,7 @@ export function projectStoreContract(
 
         const found = await projectStore.getProject("a");
         expect(found?.updatedAt).not.toBe(original.updatedAt);
-        expect(found?.updatedAt as string > original.updatedAt).toBe(true);
+        expect((found?.updatedAt as string) > original.updatedAt).toBe(true);
       });
     });
 
@@ -429,7 +429,7 @@ export function projectStoreContract(
       await projectStore.renameSection("a", "changed");
 
       const found = await projectStore.getSection("a");
-      expect(found?.updatedAt as string > original.updatedAt).toBe(true);
+      expect((found?.updatedAt as string) > original.updatedAt).toBe(true);
     });
 
     it("setSectionDescription() changes description and clears seq, and null clears it back", async () => {

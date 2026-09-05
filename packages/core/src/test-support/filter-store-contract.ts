@@ -77,7 +77,7 @@ export function filterStoreContract(createStore: () => FilterStore | Promise<Fil
       await store.rename("a", "changed");
 
       const [found] = await store.list();
-      expect(found?.updatedAt as string > original.updatedAt).toBe(true);
+      expect((found?.updatedAt as string) > original.updatedAt).toBe(true);
     });
   });
 

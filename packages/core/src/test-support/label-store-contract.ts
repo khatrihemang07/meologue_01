@@ -75,7 +75,7 @@ export function labelStoreContract(createStore: () => LabelStore | Promise<Label
       await store.rename("a", "changed");
 
       const [found] = await store.list();
-      expect(found?.updatedAt as string > original.updatedAt).toBe(true);
+      expect((found?.updatedAt as string) > original.updatedAt).toBe(true);
     });
   });
 

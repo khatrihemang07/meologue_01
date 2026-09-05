@@ -78,7 +78,12 @@ export class InMemoryProjectStore implements ProjectStore {
   }
 
   async archiveProject(id: string): Promise<void> {
-    this.applyProjectIfLive(id, { archived: true, updatedAt: this.now(), seq: null, syncedAt: null });
+    this.applyProjectIfLive(id, {
+      archived: true,
+      updatedAt: this.now(),
+      seq: null,
+      syncedAt: null,
+    });
   }
 
   async unarchiveProject(id: string): Promise<void> {

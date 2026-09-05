@@ -477,7 +477,12 @@ export class SqliteTaskStore implements TaskStore {
     // method's own doc comment) — the wrong shape for `updatedAt`, unlike
     // `completedAt` above, so this reads the injected clock instead of
     // reusing a parameter.
-    await this.updateIfLive(id, { date: nextDate, updatedAt: this.now(), seq: null, syncedAt: null });
+    await this.updateIfLive(id, {
+      date: nextDate,
+      updatedAt: this.now(),
+      seq: null,
+      syncedAt: null,
+    });
   }
 
   /**
