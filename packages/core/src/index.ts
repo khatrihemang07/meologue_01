@@ -8,6 +8,8 @@ export {
   quoteIdent,
   tableColumns,
 } from "./backup/dump";
+export type { MergeOutcome, MergeResult } from "./backup/merge";
+export { mergeBackupIntoDevice } from "./backup/merge";
 export type { BackupMeta, BuildBackupMetaOptions } from "./backup/meta";
 export { BACKUP_SCHEMA_VERSION, buildBackupMeta } from "./backup/meta";
 export type {
