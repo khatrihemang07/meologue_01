@@ -207,8 +207,15 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let static_dir = env::var("STATIC_DIR").unwrap_or_else(|_| DEFAULT_STATIC_DIR.to_string());
-    let app =
-        meologue_server::router_with_digests(pool, static_dir, embed_tx, reflect, digest_state);
+    let app = meologue_server::router_with_backup(
+        pool,
+        static_dir,
+        embed_tx,
+        reflect,
+        digest_state,
+        database_url,
+        llm_config.embed_model.clone(),
+    );
 
     let port: u16 = env::var("PORT")
         .ok()

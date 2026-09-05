@@ -1,3 +1,4 @@
+pub mod backup;
 pub mod digest;
 pub mod embedding;
 pub mod harness;
@@ -61,6 +62,23 @@ pub struct AppState {
     /// capability without reaching into `Option<DigestState>` for a bool
     /// it doesn't otherwise need.
     pub digests_enabled: bool,
+    /// Issue #198: the exact `DATABASE_URL` `main.rs` connected `pool`
+    /// with — kept alongside `pool` rather than re-derived from it, because
+    /// `sqlx::PgConnectOptions` never hands the password back out once
+    /// parsed. `backup::backup_handler`/`restore_handler` shell out to
+    /// `pg_dump`/`pg_restore` against this same connection string (never
+    /// `docker exec`), so a Sandbox instance, a remote host or a renamed
+    /// container all work identically — see `backup.rs`'s module comment.
+    pub database_url: String,
+    /// Issue #198: the embedding model this Server is configured with
+    /// (`llm::LlmConfig::embed_model`), independent of whether the
+    /// embedding worker actually resolved a client for it — this is the
+    /// name `backup::restore_handler` compares every `entries.embedding_model`
+    /// against to report how many rows a Restore brought in from a
+    /// different model. `None` when no embedding model is configured at
+    /// all, in which case every non-null `embedding_model` counts as a
+    /// mismatch (see `backup::count_mismatched_embeddings`).
+    pub embed_model: Option<String>,
 }
 
 impl FromRef<AppState> for PgPool {
@@ -99,6 +117,32 @@ pub struct DigestsEnabled(pub bool);
 impl FromRef<AppState> for DigestsEnabled {
     fn from_ref(state: &AppState) -> Self {
         DigestsEnabled(state.digests_enabled)
+    }
+}
+
+/// A newtype around `AppState::database_url`, for the same reason
+/// `DigestsEnabled` wraps its `bool` rather than letting handlers extract a
+/// bare `String` — `AppState` has exactly one `String` field today, but a
+/// plain `impl FromRef<AppState> for String` would give every future one
+/// the same ambiguous claim on it.
+#[derive(Debug, Clone)]
+pub struct DatabaseUrl(pub String);
+
+impl FromRef<AppState> for DatabaseUrl {
+    fn from_ref(state: &AppState) -> Self {
+        DatabaseUrl(state.database_url.clone())
+    }
+}
+
+/// A newtype around `AppState::embed_model`, mirroring `DatabaseUrl` just
+/// above for the same reason — `Option<String>` is exactly as ambiguous a
+/// extractor target as a bare `String` would be.
+#[derive(Debug, Clone)]
+pub struct ConfiguredEmbedModel(pub Option<String>);
+
+impl FromRef<AppState> for ConfiguredEmbedModel {
+    fn from_ref(state: &AppState) -> Self {
+        ConfiguredEmbedModel(state.embed_model.clone())
     }
 }
 
@@ -255,6 +299,37 @@ pub fn router_with_digests(
     reflect: Option<ReflectState>,
     digest: Option<digest::DigestState>,
 ) -> Router {
+    // Issue #198's two new fields have no "off" state to default to the
+    // way `reflect`/`digest` do — `/v1/backup` and `/v1/restore` are always
+    // registered, unconditionally, below. An empty `database_url` and a
+    // `None` `embed_model` are harmless defaults for every caller of this
+    // narrower constructor: none of the existing test files that call it
+    // directly ever exercise `/v1/backup` or `/v1/restore`, and the one
+    // that does (`server/tests/backup.rs`) calls `router_with_backup`
+    // instead, exactly the way `router_with_reflection`'s callers that
+    // needed Digests moved to `router_with_digests`.
+    router_with_backup(pool, static_dir, embed_tx, reflect, digest, String::new(), None)
+}
+
+/// The widest router constructor — everything `router_with_digests` wires,
+/// plus `/v1/backup`, `/v1/restore` and `/v1/restore/rebuild-embeddings`
+/// (issue #198), registered unconditionally rather than gated on any
+/// `Option` the way Reflection and Digest are: backing up and restoring
+/// Postgres needs nothing but the database connection every Server already
+/// has, so there is no "unconfigured" state for these routes to 404 under.
+/// `main.rs` calls this directly, the same way it calls
+/// `router_with_digests` today; `router_with_digests` becomes the narrower,
+/// `database_url: String::new(), embed_model: None` convenience the rest
+/// of the test suite is written against.
+pub fn router_with_backup(
+    pool: PgPool,
+    static_dir: impl AsRef<Path>,
+    embed_tx: Option<Sender<Uuid>>,
+    reflect: Option<ReflectState>,
+    digest: Option<digest::DigestState>,
+    database_url: String,
+    embed_model: Option<String>,
+) -> Router {
     let digests_enabled = digest.is_some();
     // Installs the global metrics recorder (if not already installed) before
     // any request can reach `track_metrics` — see src/metrics.rs.
@@ -298,7 +373,15 @@ pub fn router_with_digests(
     let mut api_router = Router::new()
         .route("/v1/health", get(health::health_handler))
         .route("/v1/sync", post(sync::sync_handler))
-        .route("/v1/metrics", get(metrics::metrics_handler));
+        .route("/v1/metrics", get(metrics::metrics_handler))
+        // Issue #198 — see this function's own doc comment for why these
+        // three are unconditional rather than gated like Reflection/Digest.
+        .route("/v1/backup", get(backup::backup_handler))
+        .route("/v1/restore", post(backup::restore_handler))
+        .route(
+            "/v1/restore/rebuild-embeddings",
+            post(backup::rebuild_mismatched_embeddings_handler),
+        );
 
     if reflect.is_some() {
         // `/v1/sessions/{id}` and `/v1/sessions` are gated on the same
@@ -369,6 +452,8 @@ pub fn router_with_digests(
             reflect,
             digest,
             digests_enabled,
+            database_url,
+            embed_model,
         })
         .fallback_service(app_shell)
         .layer(axum::middleware::from_fn(metrics::track_metrics))
