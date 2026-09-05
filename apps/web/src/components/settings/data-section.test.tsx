@@ -4,6 +4,7 @@ import type {
   MergeOutcome,
   Project,
   ProjectStore,
+  RestoreOptions,
   RestoreOutcome,
   SqliteDriver,
   Task,
@@ -67,9 +68,16 @@ const {
     }),
   ),
   restoreFromBackupMock: vi.fn(
-    async (): Promise<RestoreOutcome> => ({
+    async (_options: RestoreOptions): Promise<RestoreOutcome> => ({
       ok: true,
-      result: { inserted: 0, updated: 0, unchanged: 0, skippedTables: [], skippedColumns: [] },
+      result: {
+        inserted: 0,
+        updated: 0,
+        unchanged: 0,
+        skippedTables: [],
+        skippedColumns: [],
+        safetyBackupFileName: "meologue-safety-backup-20260816-114500.zip",
+      },
     }),
   ),
   // Issue #199's own dynamic import, mirroring the other three above.
@@ -276,7 +284,14 @@ describe("DataSection", () => {
     restoreFromBackupMock.mockReset();
     restoreFromBackupMock.mockResolvedValue({
       ok: true,
-      result: { inserted: 0, updated: 0, unchanged: 0, skippedTables: [], skippedColumns: [] },
+      result: {
+        inserted: 0,
+        updated: 0,
+        unchanged: 0,
+        skippedTables: [],
+        skippedColumns: [],
+        safetyBackupFileName: "meologue-safety-backup-20260816-114500.zip",
+      },
     });
     mergeBackupIntoDeviceMock.mockReset();
     mergeBackupIntoDeviceMock.mockResolvedValue({
@@ -749,7 +764,14 @@ describe("DataSection", () => {
       });
       restoreFromBackupMock.mockResolvedValue({
         ok: true,
-        result: { inserted: 2, updated: 1, unchanged: 5, skippedTables: [], skippedColumns: [] },
+        result: {
+          inserted: 2,
+          updated: 1,
+          unchanged: 5,
+          skippedTables: [],
+          skippedColumns: [],
+          safetyBackupFileName: "meologue-safety-backup-20260816-090000.zip",
+        },
       });
       const successToast = vi.spyOn(toast, "success");
       await openConfirmDialog();
@@ -757,11 +779,12 @@ describe("DataSection", () => {
       await confirmRestore();
 
       await waitFor(() => expect(restoreFromBackupMock).toHaveBeenCalledTimes(1));
-      expect(restoreFromBackupMock).toHaveBeenCalledWith(
-        fakeDriver,
-        "CREATE TABLE `kv` (`key` text PRIMARY KEY NOT NULL, `value` text NOT NULL);",
-        expect.any(Function),
-      );
+      expect(restoreFromBackupMock).toHaveBeenCalledWith({
+        driver: fakeDriver,
+        databaseSql: "CREATE TABLE `kv` (`key` text PRIMARY KEY NOT NULL, `value` text NOT NULL);",
+        takeSafetyBackup: expect.any(Function),
+        onProgress: expect.any(Function),
+      });
       // The theme travelled (ADR 0008's reversal) — the Server URL did not,
       // even though settings.json carried one: the default choice is to
       // keep this Device's current address (ADR 0011), never apply one
@@ -773,10 +796,92 @@ describe("DataSection", () => {
           expect.stringContaining("2 inserted, 1 updated, 5 unchanged"),
         ),
       );
+      // Names the safety Backup too (issue #204) — the whole point of
+      // having taken one is that a reader can find it again.
+      await waitFor(() =>
+        expect(successToast).toHaveBeenCalledWith(
+          expect.stringContaining("meologue-safety-backup-20260816-090000.zip"),
+        ),
+      );
       // Reloads a moment later, once the success toast above has had a
       // chance to be read (data-section.tsx's own handleConfirmRestore doc
       // comment) — 3000ms of real time comfortably covers that delay.
       await waitFor(() => expect(reloadMock).toHaveBeenCalledTimes(1), { timeout: 3000 });
+    });
+
+    // Issue #204: restoreFromBackup refuses to write anything until this
+    // callback resolves — this test proves data-section.tsx's own
+    // `takeSafetyBackup` actually does what the ADR 0064 amendment and the
+    // confirmation dialog's own copy both promise, by having
+    // restoreFromBackupMock call it the same way the real function does
+    // (before reporting an outcome) rather than ignoring it the way every
+    // other test in this file's default mock does.
+    it("gives restoreFromBackup a takeSafetyBackup that saves a safety Backup — via createBackup(kind: safety-backup) + saveFile — before Restore can succeed", async () => {
+      restoreFromBackupMock.mockImplementation(async (options: RestoreOptions) => {
+        const safetyOutcome = await options.takeSafetyBackup();
+        expect(safetyOutcome.ok).toBe(true);
+        return {
+          ok: true,
+          result: {
+            inserted: 0,
+            updated: 0,
+            unchanged: 0,
+            skippedTables: [],
+            skippedColumns: [],
+            safetyBackupFileName: safetyOutcome.ok ? safetyOutcome.fileName : "",
+          },
+        };
+      });
+      await openConfirmDialog();
+
+      await confirmRestore();
+
+      await waitFor(() => expect(restoreFromBackupMock).toHaveBeenCalledTimes(1));
+      expect(createBackupMock).toHaveBeenCalledWith(
+        fakeDriver,
+        expect.any(Object),
+        expect.objectContaining({ kind: "safety-backup" }),
+      );
+      // The actual `meologue-safety-backup-...` naming is `backup-zip.ts`'s
+      // own responsibility (backup-zip.test.ts covers it against a real
+      // clock); createBackupMock here just hands back its fixed stub
+      // filename — this only proves saveFile was actually called with
+      // whatever createBackup resolved to.
+      expect(saveFileMock).toHaveBeenCalledWith(
+        "meologue-backup-20260816-114500.zip",
+        expect.any(Uint8Array),
+      );
+      await waitFor(() => expect(reloadMock).toHaveBeenCalledTimes(1), { timeout: 3000 });
+    });
+
+    it("reports the safety Backup's own failure as the Restore's failure, writing no settings and calling createBackup exactly once more than it calls saveFile", async () => {
+      createBackupMock.mockResolvedValueOnce({
+        fileName: "meologue-safety-backup-20260816-090000.zip",
+        bytes: new Uint8Array([1, 2, 3]),
+      });
+      saveFileMock.mockResolvedValueOnce("cancelled");
+      restoreFromBackupMock.mockImplementation(async (options: RestoreOptions) => {
+        const safetyOutcome = await options.takeSafetyBackup();
+        if (!safetyOutcome.ok) {
+          return {
+            ok: false,
+            reason: `Safety Backup failed, so nothing was restored: ${safetyOutcome.reason}`,
+          };
+        }
+        throw new Error("should not reach the apply — the safety Backup was cancelled");
+      });
+      const errorToast = vi.spyOn(toast, "error");
+      await openConfirmDialog();
+
+      await confirmRestore();
+
+      await waitFor(() =>
+        expect(errorToast).toHaveBeenCalledWith(
+          expect.stringContaining("Safety Backup failed, so nothing was restored"),
+        ),
+      );
+      expect(localStorage.getItem("meologue.theme")).toBeNull();
+      expect(reloadMock).not.toHaveBeenCalled();
     });
 
     it("applies the incoming Server URL only when the reader explicitly chooses to accept it", async () => {

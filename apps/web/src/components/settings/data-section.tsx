@@ -296,19 +296,69 @@ export function DataSection({ opened }: { opened: ExportStoreHandle | undefined 
   // disk now" reset app-error-boundary.tsx's own Reload button already
   // uses for a comparable "too much has changed to patch in place"
   // situation.
+  //
+  // `takeSafetyBackup` (issue #204) is the callback restoreFromBackup
+  // awaits, and refuses to write anything without, before it touches the
+  // database: `createBackup` + `saveFile` — the exact same pair
+  // handleBackup above already calls for the Backup button — with
+  // `kind: "safety-backup"` so the file it produces reads as what it is
+  // in a Downloads folder, distinct from a Backup the reader took on
+  // purpose (backup-zip.ts's own `backupFileName` doc comment). Both are
+  // reached through the identical `await import("@meologue/core")` this
+  // function already needs for `restoreFromBackup` itself — the dynamic
+  // import handleBackup's own comment explains is what keeps this whole
+  // module family out of Settings' cold-start chunk — so pulling in
+  // `createBackup` here costs nothing beyond what a Restore attempt
+  // already pays for.
   async function handleConfirmRestore() {
     if (!opened || restorePreview === null) {
       return;
     }
+    // Reassigned into a variable of its own, narrowed type intact, so the
+    // `takeSafetyBackup` closure below — a nested function, its own scope
+    // — can see `opened` as definitely present rather than needing a
+    // second, redundant null check TypeScript can't otherwise eliminate.
+    const store = opened;
     setRestoring(true);
     setRestoreProgress("Starting…");
     try {
-      const { restoreFromBackup } = await import("@meologue/core");
-      const outcome = await restoreFromBackup(
-        opened.driver,
-        restorePreview.databaseSql,
-        (message) => setRestoreProgress(message),
-      );
+      const { restoreFromBackup, createBackup } = await import("@meologue/core");
+
+      async function takeSafetyBackup() {
+        try {
+          const now = new Date();
+          const { fileName, bytes } = await createBackup(store.driver, readAllDeviceSettings(), {
+            deviceId: store.deviceId,
+            now,
+            utcOffsetMinutes: -now.getTimezoneOffset(),
+            kind: "safety-backup",
+          });
+          const saveOutcome = await saveFile(fileName, bytes);
+          if (saveOutcome === "cancelled") {
+            return {
+              ok: false as const,
+              reason:
+                "The safety Backup's save panel was cancelled, so nothing was restored. Restore needs somewhere to save it first.",
+            };
+          }
+          return { ok: true as const, fileName };
+        } catch (error) {
+          return {
+            ok: false as const,
+            reason:
+              error instanceof Error
+                ? `The safety Backup failed: ${error.message}`
+                : "The safety Backup failed.",
+          };
+        }
+      }
+
+      const outcome = await restoreFromBackup({
+        driver: store.driver,
+        databaseSql: restorePreview.databaseSql,
+        takeSafetyBackup,
+        onProgress: (message) => setRestoreProgress(message),
+      });
       if (!outcome.ok) {
         toast.error(outcome.reason);
         return;
@@ -319,14 +369,15 @@ export function DataSection({ opened }: { opened: ExportStoreHandle | undefined 
         useSettingsStore.getState().setServerUrl(restorePreview.incomingServerUrl);
       }
 
-      const { inserted, updated, unchanged, skippedTables, skippedColumns } = outcome.result;
+      const { inserted, updated, unchanged, skippedTables, skippedColumns, safetyBackupFileName } =
+        outcome.result;
       const skippedCount = skippedTables.length + skippedColumns.length;
       toast.success(
         `Restored: ${inserted} inserted, ${updated} updated, ${unchanged} unchanged.${
           skippedCount > 0
             ? ` ${skippedCount} field(s) from a different build's Backup were skipped.`
             : ""
-        }`,
+        } A safety Backup of what was here before was saved to ${safetyBackupFileName}.`,
       );
       setRestorePreview(null);
       window.setTimeout(() => window.location.reload(), 1200);
@@ -490,7 +541,10 @@ export function DataSection({ opened }: { opened: ExportStoreHandle | undefined 
               <>
                 Taken {formatTakenAt(restorePreview?.takenAt ?? null)}. Every Entry, Task, Project,
                 Section, Label, Filter, Comment and Event on this Device is replaced with what's in
-                the Backup. Anything created here since then that hasn't Synced yet will be lost.
+                the Backup. Anything created here since then that hasn't Synced yet will be lost. A
+                safety Backup of what's currently on this Device will be saved first, before
+                anything is replaced — so this is recoverable even if the Restore itself is
+                interrupted partway through.
               </>
             }
             extra={
