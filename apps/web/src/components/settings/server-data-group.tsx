@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { toast } from "sonner";
-import { DestructiveConfirmDialog } from "@/components/settings/destructive-confirm-dialog";
 import { DeviceGroup } from "@/components/settings/device-group";
+import { LazyDestructiveConfirmDialog as DestructiveConfirmDialog } from "@/components/settings/lazy-destructive-confirm-dialog";
 import { SettingsSection } from "@/components/settings/settings-section";
 import { Button } from "@/components/ui/button";
 import {
@@ -45,6 +45,11 @@ export function ServerDataGroup() {
   const [restoring, setRestoring] = useState(false);
   const [mismatchCount, setMismatchCount] = useState<number | null>(null);
   const [rebuilding, setRebuilding] = useState(false);
+  // Turns true, and stays true, the first time a reader picks a file to
+  // restore — see lazy-destructive-confirm-dialog.ts's own doc comment for
+  // why the dialog isn't simply mounted with `open={false}` from the
+  // start.
+  const [restoreDialogSummoned, setRestoreDialogSummoned] = useState(false);
 
   // No progress UI beyond `backingUp` disabling the button — matching
   // `data-section.tsx`'s own Device Backup, a personal-log-scale database
@@ -103,6 +108,7 @@ export function ServerDataGroup() {
     }
     setPendingRestoreBytes(picked.bytes);
     setConfirmText("");
+    setRestoreDialogSummoned(true);
   }
 
   // The confirmation dialog's own destructive action. Unlike Device
@@ -232,22 +238,26 @@ export function ServerDataGroup() {
         </div>
       </SettingsSection>
 
-      <DestructiveConfirmDialog
-        open={pendingRestoreBytes !== null}
-        onOpenChange={(nextOpen) => {
-          if (!nextOpen) {
-            setPendingRestoreBytes(null);
-          }
-        }}
-        title="Restore the server from a Backup?"
-        description="Every Entry, Task, Project, Session and Digest the server holds is replaced with what's in the Backup — for every Device that syncs with it, not just this one. Anything written since the Backup was taken and not itself backed up separately will be lost."
-        confirmWord={RESTORE_CONFIRM_WORD}
-        confirmText={confirmText}
-        onConfirmTextChange={setConfirmText}
-        busy={restoring}
-        progress="Restoring…"
-        onConfirm={handleConfirmServerRestore}
-      />
+      {restoreDialogSummoned && (
+        <Suspense fallback={null}>
+          <DestructiveConfirmDialog
+            open={pendingRestoreBytes !== null}
+            onOpenChange={(nextOpen) => {
+              if (!nextOpen) {
+                setPendingRestoreBytes(null);
+              }
+            }}
+            title="Restore the server from a Backup?"
+            description="Every Entry, Task, Project, Session and Digest the server holds is replaced with what's in the Backup — for every Device that syncs with it, not just this one. Anything written since the Backup was taken and not itself backed up separately will be lost."
+            confirmWord={RESTORE_CONFIRM_WORD}
+            confirmText={confirmText}
+            onConfirmTextChange={setConfirmText}
+            busy={restoring}
+            progress="Restoring…"
+            onConfirm={handleConfirmServerRestore}
+          />
+        </Suspense>
+      )}
     </DeviceGroup>
   );
 }

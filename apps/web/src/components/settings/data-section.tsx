@@ -1,9 +1,9 @@
 import type { EntryStore, ProjectStore, SqliteDriver, TaskStore } from "@meologue/core";
 import { exportEntriesToZip } from "@meologue/core";
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { toast } from "sonner";
-import { DestructiveConfirmDialog } from "@/components/settings/destructive-confirm-dialog";
 import { DeviceGroup } from "@/components/settings/device-group";
+import { LazyDestructiveConfirmDialog as DestructiveConfirmDialog } from "@/components/settings/lazy-destructive-confirm-dialog";
 import { ServerDataGroup } from "@/components/settings/server-data-group";
 import { SettingsSection } from "@/components/settings/settings-section";
 import { SwitchRow } from "@/components/settings/switch-row";
@@ -93,6 +93,15 @@ export function DataSection({ opened }: { opened: ExportStoreHandle | undefined 
   const [useIncomingServerUrl, setUseIncomingServerUrl] = useState(false);
   const [restoring, setRestoring] = useState(false);
   const [restoreProgress, setRestoreProgress] = useState("");
+  // Turns true, and stays true, the first time a reader picks a valid
+  // Backup — see this file's own `DestructiveConfirmDialog` lazy() comment
+  // above for why the dialog isn't simply mounted with `open={false}` from
+  // the start. Never reset back to `false`: once the chunk is loaded for
+  // one Restore attempt, later attempts in the same session should open
+  // and close it instantly, with the dialog's own `data-closed` exit
+  // animation intact, rather than re-triggering a Suspense fallback every
+  // time.
+  const [restoreDialogSummoned, setRestoreDialogSummoned] = useState(false);
 
   // Always every Entry (store.list()), every Task (taskStore.list() +
   // listCompleted()) and every Project (projectStore.listProjects()),
@@ -258,6 +267,7 @@ export function DataSection({ opened }: { opened: ExportStoreHandle | undefined 
     });
     setRestoreConfirmText("");
     setUseIncomingServerUrl(false);
+    setRestoreDialogSummoned(true);
   }
 
   // The confirmation dialog's own destructive action — everything issue
@@ -380,45 +390,49 @@ export function DataSection({ opened }: { opened: ExportStoreHandle | undefined 
 
       <ServerDataGroup />
 
-      <DestructiveConfirmDialog
-        open={restorePreview !== null}
-        onOpenChange={(nextOpen) => {
-          if (!nextOpen) {
-            setRestorePreview(null);
-          }
-        }}
-        title="Restore this Device from a Backup?"
-        description={
-          <>
-            Taken {formatTakenAt(restorePreview?.takenAt ?? null)}. Every Entry, Task, Project,
-            Section, Label, Filter, Comment and Event on this Device is replaced with what's in the
-            Backup. Anything created here since then that hasn't Synced yet will be lost.
-          </>
-        }
-        extra={
-          <div className="flex flex-col gap-2">
-            <SwitchRow
-              label="Server URL"
-              checked={useIncomingServerUrl}
-              onToggle={() => setUseIncomingServerUrl((current) => !current)}
-              onLabel="Use Backup's"
-              offLabel="Keep current"
-              ariaLabel="Use the Backup's Server URL"
-            />
-            <p className="text-muted-foreground text-xs">
-              The Backup's own Server URL is {restorePreview?.incomingServerUrl || "(none)"} —
-              shown, never applied without a choice (ADR 0011: an unreachable Server URL turns Sync
-              off silently).
-            </p>
-          </div>
-        }
-        confirmWord={RESTORE_CONFIRM_WORD}
-        confirmText={restoreConfirmText}
-        onConfirmTextChange={setRestoreConfirmText}
-        busy={restoring}
-        progress={restoreProgress}
-        onConfirm={handleConfirmRestore}
-      />
+      {restoreDialogSummoned && (
+        <Suspense fallback={null}>
+          <DestructiveConfirmDialog
+            open={restorePreview !== null}
+            onOpenChange={(nextOpen) => {
+              if (!nextOpen) {
+                setRestorePreview(null);
+              }
+            }}
+            title="Restore this Device from a Backup?"
+            description={
+              <>
+                Taken {formatTakenAt(restorePreview?.takenAt ?? null)}. Every Entry, Task, Project,
+                Section, Label, Filter, Comment and Event on this Device is replaced with what's in
+                the Backup. Anything created here since then that hasn't Synced yet will be lost.
+              </>
+            }
+            extra={
+              <div className="flex flex-col gap-2">
+                <SwitchRow
+                  label="Server URL"
+                  checked={useIncomingServerUrl}
+                  onToggle={() => setUseIncomingServerUrl((current) => !current)}
+                  onLabel="Use Backup's"
+                  offLabel="Keep current"
+                  ariaLabel="Use the Backup's Server URL"
+                />
+                <p className="text-muted-foreground text-xs">
+                  The Backup's own Server URL is {restorePreview?.incomingServerUrl || "(none)"} —
+                  shown, never applied without a choice (ADR 0011: an unreachable Server URL turns
+                  Sync off silently).
+                </p>
+              </div>
+            }
+            confirmWord={RESTORE_CONFIRM_WORD}
+            confirmText={restoreConfirmText}
+            onConfirmTextChange={setRestoreConfirmText}
+            busy={restoring}
+            progress={restoreProgress}
+            onConfirm={handleConfirmRestore}
+          />
+        </Suspense>
+      )}
     </section>
   );
 }
