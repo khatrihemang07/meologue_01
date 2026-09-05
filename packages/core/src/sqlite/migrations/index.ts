@@ -12,6 +12,7 @@ import taskDayOrder from "./0010_task_day_order.sql?raw";
 import tasksFtsTrigram from "./0011_tasks_fts_trigram.sql?raw";
 import eventsTable from "./0012_events_table.sql?raw";
 import filtersTable from "./0013_filters_table.sql?raw";
+import updatedAt from "./0014_updated_at.sql?raw";
 import entriesSearchIndex from "./entries_search_index.sql?raw";
 import tasksSearchIndex from "./tasks_search_index.sql?raw";
 
@@ -229,6 +230,49 @@ export interface Migration {
  * this file is. Unlike `events`, `filters` does carry `deleted_at` — a
  * Filter can be removed the same tombstoned way a Label or Project can
  * (../filter-store.ts's own `remove()`).
+ *
+ * `0014_updated_at` (version 17, issue #196) adds `updated_at` to the
+ * seven mutable client tables — `entries`, `tasks`, `projects`,
+ * `sections`, `labels`, `filters`, `comments` — a last-changed timestamp
+ * for Merge (a later ticket, issue #199) to read. `events` is excluded:
+ * it is append-only, `on conflict do nothing` server-side, with no edit
+ * path that could ever write it (../../event-types.ts's own header
+ * comment). Fourteen statements, one `ALTER TABLE ... ADD COLUMN`/`UPDATE
+ * ... WHERE updated_at IS NULL` pair per table, each leaning on the
+ * identical `duplicate column name` swallow (../migrator.ts) every
+ * `ADD COLUMN` migration since migration 3 already relies on, followed by
+ * the identical guarded-backfill-needs-no-transaction shape migration 13
+ * (`0010_task_day_order.sql`) already established for a column with no
+ * SQL-level `NOT NULL` of its own.
+ *
+ * **Backfilled to `created_at`, not to whenever this migration happens to
+ * run — deliberately.** `created_at` is stable and identical on every
+ * Device holding the same pre-existing row (`server/src/sync.rs`'s own
+ * `insert_*` functions never put `created_at` in any `set` list, for any
+ * of these six streams), so two Devices that already share a row before
+ * this migration ships end up with the exact same backfilled
+ * `updated_at` — a tie, which is the property Merge (issue #199) needs:
+ * neither Device's copy looks like the "winner" of an edit that never
+ * happened. Backfilling to migration-run-time instead would make
+ * whichever Device happened to migrate later look like it touched every
+ * pre-existing row last, a spurious edit this ticket must not invent.
+ *
+ * ADR 0028's own Alternatives section rejected a client-supplied
+ * `updated_at` for *ordering Sync's own conflicts* and recorded, as a
+ * named consequence, "no `updated_at` column is needed anywhere." This
+ * migration revisits that specific consequence, deliberately, not by
+ * oversight — a superseding ADR is forthcoming. What is unchanged is the
+ * rest of that ADR's Decision: Sync still resolves a conflict by Server
+ * arrival order alone (the reassigned `seq`), and nothing added by this
+ * migration is ever compared for that purpose. `updated_at` exists solely
+ * for Merge, a separate, later mechanism (issue #199), to read.
+ *
+ * `filters` gets this column too, but purely locally — see
+ * ../schema.ts's own `filters.updatedAt` doc comment and
+ * `server/migrations`'s own absence of a matching migration: `filters`
+ * has no server table and no Sync stream at all
+ * (../../filter-store.ts's own header comment), so nothing here needs a
+ * wire counterpart for it.
  */
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, sql: initial },
@@ -247,4 +291,5 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 14, sql: tasksFtsTrigram },
   { version: 15, sql: eventsTable },
   { version: 16, sql: filtersTable },
+  { version: 17, sql: updatedAt },
 ];

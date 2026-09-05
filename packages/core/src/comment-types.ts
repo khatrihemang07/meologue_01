@@ -50,6 +50,8 @@ export type Comment = {
    */
   text: string;
   createdAt: string;
+  /** Issue #196 — see Task.updatedAt's own doc comment (../task-types.ts) for the mechanism and reasoning, applied here unchanged. */
+  updatedAt: string;
   seq: number | null;
   syncedAt: string | null;
   /** Tombstone (ADR 0028's rule, applied to Comments). */

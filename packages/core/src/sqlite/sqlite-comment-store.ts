@@ -17,9 +17,13 @@ import { comments, kv } from "./schema";
  */
 export class SqliteCommentStore implements CommentStore {
   private readonly db: ReturnType<typeof drizzle>;
+  // Issue #196 — see SqliteEntryStore's own identical field for the
+  // mechanism and why it's injectable.
+  private readonly now: () => string;
 
-  constructor(driver: SqliteDriver) {
+  constructor(driver: SqliteDriver, now: () => string = () => new Date().toISOString()) {
     this.db = drizzle((sqlText, params, method) => driver.execute(sqlText, params, method));
+    this.now = now;
   }
 
   async list(): Promise<Comment[]> {
@@ -69,6 +73,7 @@ export class SqliteCommentStore implements CommentStore {
           taskId: sql`excluded.task_id`,
           text: sql`excluded.text`,
           createdAt: sql`excluded.created_at`,
+          updatedAt: sql`excluded.updated_at`,
           seq: sql`excluded.seq`,
           syncedAt: sql`excluded.synced_at`,
           deletedAt: sql`excluded.deleted_at`,
@@ -78,7 +83,7 @@ export class SqliteCommentStore implements CommentStore {
 
   async edit(id: string, text: string): Promise<void> {
     assertValidCommentText(text);
-    await this.updateIfLive(id, { text, seq: null, syncedAt: null });
+    await this.updateIfLive(id, { text, updatedAt: this.now(), seq: null, syncedAt: null });
   }
 
   /**
@@ -86,11 +91,14 @@ export class SqliteCommentStore implements CommentStore {
    * `text` for the identical reason SqliteLabelStore.remove() blanks
    * `name`: a tombstone that still carried its old words would assert
    * "removed" and "still says X" about the same row at once.
+   * `deletedAt`/`updatedAt` (issue #196) share one clock read — see
+   * SqliteEntryStore.remove's identical comment for why.
    */
   async remove(id: string): Promise<void> {
+    const deletedAt = this.now();
     await this.db
       .update(comments)
-      .set({ deletedAt: new Date().toISOString(), text: "", seq: null, syncedAt: null })
+      .set({ deletedAt, text: "", updatedAt: deletedAt, seq: null, syncedAt: null })
       .where(eq(comments.id, id));
   }
 

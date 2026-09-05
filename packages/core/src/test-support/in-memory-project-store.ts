@@ -35,9 +35,13 @@ export class InMemoryProjectStore implements ProjectStore {
   // watermarks, mirroring projectCursor/sectionCursor's own split.
   private projectRowShapeEpoch = 0;
   private sectionRowShapeEpoch = 0;
+  // Issue #196 — mirrors SqliteProjectStore's own identical field, shared
+  // by both halves of this store.
+  private readonly now: () => string;
 
-  constructor(taskStore: TaskStore) {
+  constructor(taskStore: TaskStore, now: () => string = () => new Date().toISOString()) {
     this.taskStore = taskStore;
+    this.now = now;
   }
 
   async listProjects(): Promise<Project[]> {
@@ -57,28 +61,33 @@ export class InMemoryProjectStore implements ProjectStore {
 
   async renameProject(id: string, name: string): Promise<void> {
     assertValidProjectName(name);
-    this.applyProjectIfLive(id, { name, seq: null, syncedAt: null });
+    this.applyProjectIfLive(id, { name, updatedAt: this.now(), seq: null, syncedAt: null });
   }
 
   async setProjectColour(id: string, colour: string): Promise<void> {
     assertValidProjectColour(colour);
-    this.applyProjectIfLive(id, { colour, seq: null, syncedAt: null });
+    this.applyProjectIfLive(id, { colour, updatedAt: this.now(), seq: null, syncedAt: null });
   }
 
   async setProjectDescription(id: string, description: string | null): Promise<void> {
-    this.applyProjectIfLive(id, { description, seq: null, syncedAt: null });
+    this.applyProjectIfLive(id, { description, updatedAt: this.now(), seq: null, syncedAt: null });
   }
 
   async setProjectFavourite(id: string, favourite: boolean): Promise<void> {
-    this.applyProjectIfLive(id, { favourite, seq: null, syncedAt: null });
+    this.applyProjectIfLive(id, { favourite, updatedAt: this.now(), seq: null, syncedAt: null });
   }
 
   async archiveProject(id: string): Promise<void> {
-    this.applyProjectIfLive(id, { archived: true, seq: null, syncedAt: null });
+    this.applyProjectIfLive(id, { archived: true, updatedAt: this.now(), seq: null, syncedAt: null });
   }
 
   async unarchiveProject(id: string): Promise<void> {
-    this.applyProjectIfLive(id, { archived: false, seq: null, syncedAt: null });
+    this.applyProjectIfLive(id, {
+      archived: false,
+      updatedAt: this.now(),
+      seq: null,
+      syncedAt: null,
+    });
   }
 
   // Mirrors TaskStore.setParent's own cycle/self-parent guard shape
@@ -120,11 +129,11 @@ export class InMemoryProjectStore implements ProjectStore {
         cursor = next;
       }
     }
-    this.applyProjectIfLive(id, { parentId, seq: null, syncedAt: null });
+    this.applyProjectIfLive(id, { parentId, updatedAt: this.now(), seq: null, syncedAt: null });
   }
 
   async reorderProject(id: string, orderKey: string): Promise<void> {
-    this.applyProjectIfLive(id, { orderKey, seq: null, syncedAt: null });
+    this.applyProjectIfLive(id, { orderKey, updatedAt: this.now(), seq: null, syncedAt: null });
   }
 
   async removeProject(id: string): Promise<void> {
@@ -132,10 +141,12 @@ export class InMemoryProjectStore implements ProjectStore {
     if (existing === undefined) {
       return;
     }
+    const deletedAt = this.now();
     this.projects.set(id, {
       ...existing,
-      deletedAt: new Date().toISOString(),
+      deletedAt,
       name: "",
+      updatedAt: deletedAt,
       seq: null,
       syncedAt: null,
     });
@@ -197,15 +208,15 @@ export class InMemoryProjectStore implements ProjectStore {
 
   async renameSection(id: string, name: string): Promise<void> {
     assertValidSectionName(name);
-    this.applySectionIfLive(id, { name, seq: null, syncedAt: null });
+    this.applySectionIfLive(id, { name, updatedAt: this.now(), seq: null, syncedAt: null });
   }
 
   async setSectionDescription(id: string, description: string | null): Promise<void> {
-    this.applySectionIfLive(id, { description, seq: null, syncedAt: null });
+    this.applySectionIfLive(id, { description, updatedAt: this.now(), seq: null, syncedAt: null });
   }
 
   async reorderSection(id: string, orderKey: string): Promise<void> {
-    this.applySectionIfLive(id, { orderKey, seq: null, syncedAt: null });
+    this.applySectionIfLive(id, { orderKey, updatedAt: this.now(), seq: null, syncedAt: null });
   }
 
   // See ProjectStore.deleteSection's own doc comment: tombstones every
@@ -224,10 +235,12 @@ export class InMemoryProjectStore implements ProjectStore {
       }
       await this.taskStore.remove(t.id);
     }
+    const deletedAt = this.now();
     this.sections.set(id, {
       ...section,
-      deletedAt: new Date().toISOString(),
+      deletedAt,
       name: "",
+      updatedAt: deletedAt,
       seq: null,
       syncedAt: null,
     });
@@ -244,7 +257,10 @@ export class InMemoryProjectStore implements ProjectStore {
     if (section === undefined || section.deletedAt !== null) {
       return;
     }
-    const now = new Date().toISOString();
+    // Issue #196: one clock read, reused for the cascade's own
+    // completions and this Section's own `updatedAt` — mirrors
+    // SqliteProjectStore.archiveSection's identical comment.
+    const now = this.now();
     const topLevel = await this.taskStore.listInSection(id);
     for (const t of topLevel) {
       const subtree = [t, ...(await this.taskStore.listDescendants(t.id))];
@@ -254,11 +270,16 @@ export class InMemoryProjectStore implements ProjectStore {
         }
       }
     }
-    this.applySectionIfLive(id, { archived: true, seq: null, syncedAt: null });
+    this.applySectionIfLive(id, { archived: true, updatedAt: now, seq: null, syncedAt: null });
   }
 
   async unarchiveSection(id: string): Promise<void> {
-    this.applySectionIfLive(id, { archived: false, seq: null, syncedAt: null });
+    this.applySectionIfLive(id, {
+      archived: false,
+      updatedAt: this.now(),
+      seq: null,
+      syncedAt: null,
+    });
   }
 
   async pendingSections(): Promise<Section[]> {

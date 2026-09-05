@@ -21,9 +21,13 @@ import { filters, kv } from "./schema";
  */
 export class SqliteFilterStore implements FilterStore {
   private readonly db: ReturnType<typeof drizzle>;
+  // Issue #196 — see SqliteEntryStore's own identical field for the
+  // mechanism and why it's injectable.
+  private readonly now: () => string;
 
-  constructor(driver: SqliteDriver) {
+  constructor(driver: SqliteDriver, now: () => string = () => new Date().toISOString()) {
     this.db = drizzle((sqlText, params, method) => driver.execute(sqlText, params, method));
+    this.now = now;
   }
 
   async list(): Promise<Filter[]> {
@@ -63,6 +67,7 @@ export class SqliteFilterStore implements FilterStore {
           colour: sql`excluded.colour`,
           query: sql`excluded.query`,
           createdAt: sql`excluded.created_at`,
+          updatedAt: sql`excluded.updated_at`,
           seq: sql`excluded.seq`,
           syncedAt: sql`excluded.synced_at`,
           deletedAt: sql`excluded.deleted_at`,
@@ -72,17 +77,17 @@ export class SqliteFilterStore implements FilterStore {
 
   async rename(id: string, name: string): Promise<void> {
     assertValidFilterName(name);
-    await this.updateIfLive(id, { name, seq: null, syncedAt: null });
+    await this.updateIfLive(id, { name, updatedAt: this.now(), seq: null, syncedAt: null });
   }
 
   async setColour(id: string, colour: string): Promise<void> {
     assertValidFilterColour(colour);
-    await this.updateIfLive(id, { colour, seq: null, syncedAt: null });
+    await this.updateIfLive(id, { colour, updatedAt: this.now(), seq: null, syncedAt: null });
   }
 
   async setQuery(id: string, query: string): Promise<void> {
     assertValidFilterQuery(query);
-    await this.updateIfLive(id, { query, seq: null, syncedAt: null });
+    await this.updateIfLive(id, { query, updatedAt: this.now(), seq: null, syncedAt: null });
   }
 
   /**
@@ -90,11 +95,14 @@ export class SqliteFilterStore implements FilterStore {
    * `name` for the identical reason SqliteLabelStore.remove() blanks
    * `name`: a tombstone that still carried its old name would assert
    * "removed" and "still called X" about the same row at once.
+   * `deletedAt`/`updatedAt` (issue #196) share one clock read — see
+   * SqliteEntryStore.remove's identical comment for why.
    */
   async remove(id: string): Promise<void> {
+    const deletedAt = this.now();
     await this.db
       .update(filters)
-      .set({ deletedAt: new Date().toISOString(), name: "", seq: null, syncedAt: null })
+      .set({ deletedAt, name: "", updatedAt: deletedAt, seq: null, syncedAt: null })
       .where(eq(filters.id, id));
   }
 

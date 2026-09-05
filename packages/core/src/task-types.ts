@@ -59,6 +59,21 @@ export type Task = {
    */
   dayOrder: string;
   createdAt: string;
+  /**
+   * Issue #196: when this Task's row was last actually changed — every
+   * setter below that clears `seq`/`syncedAt` to mark itself pending also
+   * stamps this (see, e.g., TaskStore.rename's own doc comment).
+   * Backfilled to `createdAt` for a pre-#196 row
+   * (../sqlite/migrations/0014_updated_at.sql), deliberately: `created_at`
+   * is stable and identical on every Device holding the same row
+   * (`server/src/sync.rs`'s `insert_tasks` never reassigns it), so two
+   * Devices sharing a pre-existing history converge on the same backfilled
+   * value instead of a race between whichever Device migrated last. Exists
+   * for Merge (issue #199) to read; Sync's own conflict rule is unchanged
+   * (ADR 0028: row-level last-writer-wins by Server arrival order) and
+   * does not consult this field.
+   */
+  updatedAt: string;
   seq: number | null;
   syncedAt: string | null;
   /** Tombstone (ADR 0028's rule, applied to Tasks). */
