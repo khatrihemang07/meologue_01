@@ -225,6 +225,11 @@ function openedStore(
 // own "Export" describe block, assertions unchanged.
 describe("DataSection", () => {
   beforeEach(() => {
+    // Backup/Restore round-trip through the real localStorage
+    // (readAllDeviceSettings/applyDeviceSettings, lib/settings.ts, are
+    // never mocked) — cleared per test so one test's meologue.* writes
+    // never leak into the next.
+    localStorage.clear();
     saveFileMock.mockReset();
     saveFileMock.mockResolvedValue("saved");
     loadFileMock.mockReset();
@@ -348,5 +353,287 @@ describe("DataSection", () => {
     await waitFor(() =>
       expect(errorToast).toHaveBeenCalledWith("Export isn't supported on Android yet."),
     );
+  });
+
+  // Issue #195: a Backup is a second, separate artifact from Export above —
+  // this page's own wiring around @meologue/core's createBackup (reached
+  // via a dynamic import, data-section.tsx's own doc comment on why), not
+  // that function's own logic (backup-zip.test.ts covers dumpDatabase/
+  // buildBackupMeta against a real driver).
+  describe("Backup", () => {
+    it("is disabled while the store has not resolved", () => {
+      render(<DataSection opened={undefined} />);
+
+      expect(screen.getByRole("button", { name: "Back up this Device" })).toBeDisabled();
+    });
+
+    it("is enabled once the store resolves", () => {
+      render(<DataSection opened={openedStore()} />);
+
+      expect(screen.getByRole("button", { name: "Back up this Device" })).toBeEnabled();
+    });
+
+    it("calls createBackup with this Device's driver, id and every meologue.* setting, saves the zip, and shows a success toast", async () => {
+      localStorage.setItem("meologue.theme", "dark");
+      localStorage.setItem("meologue.server-url", "https://phone.example");
+      // Not a meologue.* key — proves readAllDeviceSettings (settings.ts)
+      // filters by prefix rather than carrying everything localStorage
+      // happens to hold.
+      localStorage.setItem("unrelated-key", "should not travel");
+      const successToast = vi.spyOn(toast, "success");
+
+      render(<DataSection opened={openedStore()} />);
+      fireEvent.click(screen.getByRole("button", { name: "Back up this Device" }));
+
+      await waitFor(() => expect(saveFileMock).toHaveBeenCalledTimes(1));
+      expect(createBackupMock).toHaveBeenCalledWith(
+        fakeDriver,
+        {
+          "meologue.theme": "dark",
+          "meologue.server-url": "https://phone.example",
+        },
+        expect.objectContaining({ deviceId: "device-a" }),
+      );
+      const call = saveFileMock.mock.calls[0];
+      expect(call).toBeDefined();
+      const [fileName] = call ?? ["", new Uint8Array()];
+      expect(fileName).toMatch(/^meologue-backup-\d{8}-\d{6}\.zip$/);
+      expect(successToast).toHaveBeenCalledWith(expect.stringContaining(fileName));
+    });
+
+    // Mirrors Export's own "cancelled" case above (ticket 47's defect fix,
+    // docs/adr/0016) — a cancelled save panel / share sheet must raise
+    // neither toast, since nothing was actually written anywhere.
+    it("raises no toast at all when the user cancels the save", async () => {
+      saveFileMock.mockResolvedValue("cancelled");
+      const successToast = vi.spyOn(toast, "success");
+      const errorToast = vi.spyOn(toast, "error");
+
+      render(<DataSection opened={openedStore()} />);
+      fireEvent.click(screen.getByRole("button", { name: "Back up this Device" }));
+
+      await waitFor(() => expect(saveFileMock).toHaveBeenCalledTimes(1));
+      expect(successToast).not.toHaveBeenCalled();
+      expect(errorToast).not.toHaveBeenCalled();
+    });
+
+    it("shows an error toast carrying the real error when creating the Backup fails", async () => {
+      createBackupMock.mockRejectedValue(new Error("Backup isn't supported on Android yet."));
+      const errorToast = vi.spyOn(toast, "error");
+
+      render(<DataSection opened={openedStore()} />);
+      fireEvent.click(screen.getByRole("button", { name: "Back up this Device" }));
+
+      await waitFor(() =>
+        expect(errorToast).toHaveBeenCalledWith("Backup isn't supported on Android yet."),
+      );
+    });
+  });
+
+  // Issue #197: Restore is the destructive counterpart to Backup just
+  // above — this page's own wiring around @meologue/core's loadFile/
+  // unzipBackup/restoreFromBackup (all reached via a dynamic import, same
+  // reasoning as Backup's own), not any of those three's own logic (each
+  // has its own test file already covering that).
+  describe("Restore", () => {
+    // A successful Restore reloads the page (data-section.tsx's own
+    // handleConfirmRestore doc comment) — stubbed here so jsdom's real
+    // "not implemented: navigation" warning never fires and the reload
+    // itself is something a test can assert on.
+    let reloadMock: ReturnType<typeof vi.fn>;
+    let originalLocation: Location;
+
+    beforeEach(() => {
+      reloadMock = vi.fn();
+      originalLocation = window.location;
+      Object.defineProperty(window, "location", {
+        configurable: true,
+        value: { ...originalLocation, reload: reloadMock },
+      });
+    });
+
+    afterEach(() => {
+      Object.defineProperty(window, "location", {
+        configurable: true,
+        value: originalLocation,
+      });
+    });
+
+    it("is disabled while the store has not resolved", () => {
+      render(<DataSection opened={undefined} />);
+
+      expect(screen.getByRole("button", { name: "Restore from a Backup…" })).toBeDisabled();
+    });
+
+    it("is enabled once the store resolves", () => {
+      render(<DataSection opened={openedStore()} />);
+
+      expect(screen.getByRole("button", { name: "Restore from a Backup…" })).toBeEnabled();
+    });
+
+    it("does nothing at all when the user cancels the file picker", async () => {
+      loadFileMock.mockResolvedValue({ outcome: "cancelled" });
+
+      render(<DataSection opened={openedStore()} />);
+      fireEvent.click(screen.getByRole("button", { name: "Restore from a Backup…" }));
+
+      await waitFor(() => expect(loadFileMock).toHaveBeenCalledTimes(1));
+      expect(unzipBackupMock).not.toHaveBeenCalled();
+      expect(screen.queryByText("Restore this Device from a Backup?")).not.toBeInTheDocument();
+    });
+
+    it("shows an error toast and never opens the confirmation dialog when the picked file isn't a valid Backup", async () => {
+      loadFileMock.mockResolvedValue({
+        outcome: "loaded",
+        fileName: "not-a-backup.zip",
+        bytes: new Uint8Array([1, 2, 3]),
+      });
+      unzipBackupMock.mockReturnValue({ ok: false, reason: "That file isn't a zip." });
+      const errorToast = vi.spyOn(toast, "error");
+
+      render(<DataSection opened={openedStore()} />);
+      fireEvent.click(screen.getByRole("button", { name: "Restore from a Backup…" }));
+
+      await waitFor(() => expect(errorToast).toHaveBeenCalledWith("That file isn't a zip."));
+      expect(screen.queryByText("Restore this Device from a Backup?")).not.toBeInTheDocument();
+      expect(restoreFromBackupMock).not.toHaveBeenCalled();
+    });
+
+    async function openConfirmDialog() {
+      loadFileMock.mockResolvedValue({
+        outcome: "loaded",
+        fileName: "meologue-backup-20260816-114500.zip",
+        bytes: new Uint8Array([1, 2, 3]),
+      });
+
+      render(<DataSection opened={openedStore()} />);
+      fireEvent.click(screen.getByRole("button", { name: "Restore from a Backup…" }));
+
+      await screen.findByText("Restore this Device from a Backup?");
+    }
+
+    it("opens a confirmation dialog after picking a valid Backup, with the destructive button disabled until RESTORE is typed", async () => {
+      await openConfirmDialog();
+
+      const confirmButton = screen.getByRole("button", { name: "Restore" });
+      expect(confirmButton).toBeDisabled();
+
+      fireEvent.change(screen.getByLabelText("Type RESTORE to confirm"), {
+        target: { value: "restore" },
+      });
+      expect(confirmButton).toBeDisabled();
+
+      fireEvent.change(screen.getByLabelText("Type RESTORE to confirm"), {
+        target: { value: "RESTORE" },
+      });
+      expect(confirmButton).toBeEnabled();
+    });
+
+    it("closes the dialog without calling restoreFromBackup when Cancel is clicked", async () => {
+      await openConfirmDialog();
+
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+      await waitFor(() =>
+        expect(screen.queryByText("Restore this Device from a Backup?")).not.toBeInTheDocument(),
+      );
+      expect(restoreFromBackupMock).not.toHaveBeenCalled();
+    });
+
+    async function confirmRestore() {
+      fireEvent.change(screen.getByLabelText("Type RESTORE to confirm"), {
+        target: { value: "RESTORE" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Restore" }));
+    }
+
+    it("calls restoreFromBackup with this Device's own driver and database.sql, applies settings.json silently, and reports the outcome", async () => {
+      unzipBackupMock.mockReturnValue({
+        ok: true,
+        backup: {
+          databaseSql:
+            "CREATE TABLE `kv` (`key` text PRIMARY KEY NOT NULL, `value` text NOT NULL);",
+          settingsJson: JSON.stringify({
+            "meologue.theme": "dark",
+            "meologue.server-url": "https://from-backup.example",
+          }),
+          metaJson: JSON.stringify({ taken_at: "2026-08-16T11:45:00.000Z" }),
+        },
+      });
+      restoreFromBackupMock.mockResolvedValue({
+        ok: true,
+        result: { inserted: 2, updated: 1, unchanged: 5, skippedTables: [], skippedColumns: [] },
+      });
+      const successToast = vi.spyOn(toast, "success");
+      await openConfirmDialog();
+
+      await confirmRestore();
+
+      await waitFor(() => expect(restoreFromBackupMock).toHaveBeenCalledTimes(1));
+      expect(restoreFromBackupMock).toHaveBeenCalledWith(
+        fakeDriver,
+        "CREATE TABLE `kv` (`key` text PRIMARY KEY NOT NULL, `value` text NOT NULL);",
+        expect.any(Function),
+      );
+      // The theme travelled (ADR 0008's reversal) — the Server URL did not,
+      // even though settings.json carried one: the default choice is to
+      // keep this Device's current address (ADR 0011), never apply one
+      // silently.
+      expect(localStorage.getItem("meologue.theme")).toBe("dark");
+      expect(localStorage.getItem("meologue.server-url")).not.toBe("https://from-backup.example");
+      await waitFor(() =>
+        expect(successToast).toHaveBeenCalledWith(
+          expect.stringContaining("2 inserted, 1 updated, 5 unchanged"),
+        ),
+      );
+      // Reloads a moment later, once the success toast above has had a
+      // chance to be read (data-section.tsx's own handleConfirmRestore doc
+      // comment) — 3000ms of real time comfortably covers that delay.
+      await waitFor(() => expect(reloadMock).toHaveBeenCalledTimes(1), { timeout: 3000 });
+    });
+
+    it("applies the incoming Server URL only when the reader explicitly chooses to accept it", async () => {
+      unzipBackupMock.mockReturnValue({
+        ok: true,
+        backup: {
+          databaseSql: "",
+          settingsJson: JSON.stringify({ "meologue.server-url": "https://from-backup.example" }),
+          metaJson: JSON.stringify({ taken_at: "2026-08-16T11:45:00.000Z" }),
+        },
+      });
+      await openConfirmDialog();
+
+      fireEvent.click(screen.getByRole("switch", { name: "Use the Backup's Server URL" }));
+      await confirmRestore();
+
+      await waitFor(() => expect(restoreFromBackupMock).toHaveBeenCalledTimes(1));
+      expect(useSettingsStore.getState().serverUrl).toBe("https://from-backup.example");
+    });
+
+    it("shows an error toast and applies no settings when restoreFromBackup refuses the file", async () => {
+      unzipBackupMock.mockReturnValue({
+        ok: true,
+        backup: {
+          databaseSql: "garbage",
+          settingsJson: JSON.stringify({ "meologue.theme": "dark" }),
+          metaJson: JSON.stringify({ taken_at: "2026-08-16T11:45:00.000Z" }),
+        },
+      });
+      restoreFromBackupMock.mockResolvedValue({
+        ok: false,
+        reason: "database.sql is not a Backup this build can read: unrecognised statement",
+      });
+      const errorToast = vi.spyOn(toast, "error");
+      await openConfirmDialog();
+
+      await confirmRestore();
+
+      await waitFor(() =>
+        expect(errorToast).toHaveBeenCalledWith(
+          "database.sql is not a Backup this build can read: unrecognised statement",
+        ),
+      );
+      expect(localStorage.getItem("meologue.theme")).not.toBe("dark");
+    });
   });
 });
