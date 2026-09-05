@@ -92,6 +92,7 @@ use crate::harness::tools::{
 };
 use crate::harness::types::{AssistantMessage, ContentBlock, Message, StopReason};
 use crate::llm::{ChatMessage, LlmClient};
+use crate::settings::RuntimeFlags;
 use crate::sessions::{
     self, EntryType, MessagePayload, ModelChangePayload, RecordKind, SessionTurnRow,
 };
@@ -347,6 +348,16 @@ pub struct ReflectState {
     /// asked with no `model` making zero extra network calls, exactly as
     /// it did before this ticket.
     pub chat_streaming: bool,
+    /// Issue #201: the in-memory feature flags, cloned from the same
+    /// `RuntimeFlags` `AppState`/`health::health_handler` hold — reading
+    /// `flags.reflect_enabled()` is what lets `reflect_handler` answer 503
+    /// while the route stays registered, and `flags.embeddings_enabled()`
+    /// is what the tool-set construction below checks alongside
+    /// `embed_client.is_some()` before offering `similar_entries`. A field
+    /// here rather than a second extractor on `reflect_handler`: every
+    /// caller that already extracts `Option<ReflectState>` gets the same
+    /// atomics for free.
+    pub flags: RuntimeFlags,
 }
 
 /// The one way `resolve_session` (issue #96's own synchronous preflight,
@@ -416,6 +427,8 @@ impl From<anyhow::Error> for ReflectError {
             agent_end — see this handler's own doc comment", content_type = "text/event-stream", body = String),
         (status = 404, description = "Reflection is unconfigured on this Server"),
         (status = 426, description = "protocol_version is not one this server understands"),
+        (status = 503, description = "Reflection is configured but switched off (issue #201) — \
+            distinct from 404, which means this Server predates the feature entirely"),
     )
 )]
 pub async fn reflect_handler(
@@ -437,6 +450,17 @@ pub async fn reflect_handler(
         );
         return StatusCode::NOT_FOUND.into_response();
     };
+
+    // Issue #201: on-to-off is live, unlike unconfigured-to-configured
+    // above — the route stays registered (it was configured at boot), but
+    // the toggle says this Server should not spend a chat call right now.
+    // 503, not 404: a client transport reading 404 would conclude this
+    // Server predates Reflection entirely, which is a different fact from
+    // "has it and is not doing it right now" — see this handler's own
+    // `#[utoipa::path]` doc.
+    if !reflect.flags.reflect_enabled() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
 
     // Resolved synchronously, before any SSE frame is ever sent — a
     // database error minting/loading the Session is what stays a genuine
@@ -1316,7 +1340,14 @@ async fn run_reflect_stream_inner(
         Arc::new(SearchEntriesTool::new(pool.clone(), offset_minutes)),
         Arc::new(ReadDigestTool::new(pool.clone())),
     ];
-    if let Some(embed_client) = reflect.embed_client.clone() {
+    // Issue #201: `similar_entries` needs both an embed client actually
+    // configured *and* the embeddings toggle on — `render_tool_guidance`
+    // must never advertise a tool the model could call only to have it
+    // fail, the same reasoning issue #130 already gave for leaving it out
+    // entirely when `embed_client` is `None`.
+    if reflect.flags.embeddings_enabled()
+        && let Some(embed_client) = reflect.embed_client.clone()
+    {
         tools.insert(
             2,
             Arc::new(SimilarEntriesTool::new(pool.clone(), embed_client, offset_minutes)),

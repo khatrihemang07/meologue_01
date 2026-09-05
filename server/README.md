@@ -72,12 +72,49 @@ Embeddings are expected to stay on a local, tailnet-only model (e.g. Ollama) —
 why pointing `MEOLOGUE_CHAT_BASE_URL` at a hosted provider is the one config choice that sends
 Entry text outside the tailnet, and why that's deliberate rather than accidental.
 
+## Server settings: a stored overlay on the environment
+
+Since issue #200, the six `MEOLOGUE_CHAT_*`/`MEOLOGUE_EMBED_*` variables above and `MEOLOGUE_TZ`
+are no longer read-once-at-startup-and-fixed. A Server also holds a settings row of its own in
+Postgres, readable and writable over `GET`/`PATCH /v1/config`, and **a stored value wins over the
+environment; the environment only seeds a field nothing has been stored for.** Clearing a field
+(a `PATCH` with an empty string) means "fall back to the environment," not "off" — see
+`docs/adr/0060-*` for why this deliberately departs from ADR 0011/0021's "empty means off," and
+`src/settings.rs::resolve` for the precedence itself, a pure function with its own unit tests.
+
+Two more variables arrive with this:
+
+| Var | Behaviour |
+|---|---|
+| `MEOLOGUE_MODE` | `production` or `sandbox`, defaulting to `production`. Names this instance — in its startup banner today, in a UI banner or log prefix later — and decides nothing else: it does **not** affect precedence. See `docs/adr/0061-*`. |
+| `MEOLOGUE_CONFIG_LOCK` | Any non-empty value makes this Server ignore its stored settings entirely and read only the environment, as if `server_settings` held nothing. Not something to copy into your own `.env` — the e2e scripts set it so the persistent e2e databases can't poison a suite run with a stored value left over from a previous one. |
+
+`GET /v1/config` reports each field's resolved value **and where it came from** (`stored`, `env`,
+or `unset`) — without the source, a UI can't tell a value it may Clear from one it can only
+override. It also reports the instance's `mode`, whether it is `locked`, and
+`unembedded_entries` (`select count(*) from entries where embedding is null and deleted_at is
+null` — the same predicate the embedding worker's own scan uses, served by the
+`entries_unembedded_active` partial index migration `0018` adds specifically to match it).
+`PATCH /v1/config` accepts any subset of the seven overridable string fields; a field absent from
+the body is left untouched, an empty string clears it back to `NULL`.
+
+Both routes are registered unconditionally — a Server with no chat model, no embed model and no
+Digest worker still answers `GET /v1/config`, because that endpoint is how such a Server becomes
+configured in the first place.
+
+**API keys come back in full on `GET /v1/config`, not write-only.** Per ADR 0003 this Server has
+no authentication at all; a caller able to reach `/v1/config` to change a key can already read
+that same key straight out of the process environment or `server/.env`. Withholding it here would
+cost the ability to check what is actually configured and buy no real confidentiality.
+
 ## Endpoints
 
 - `GET /v1/health` — a service marker and protocol version, so a Device can tell this is a
   meologue Server before trusting it with Entries. Never touches the database and never rejects
   on protocol version — see `docs/adr/0010-*`.
 - `POST /v1/sync` — see `docs/adr/0002-*` and `docs/adr/0004-*` for the design.
+- `GET`/`PATCH /v1/config` — this Server's own settings, layered over the environment. See
+  "Server settings" above and `docs/adr/0060-*`.
 - `GET /v1/metrics` — Prometheus-format request counts, latencies, statuses, and Sync-specific
   counters (Entries pushed/pulled, protocol mismatches). Unauthenticated, like the rest of `/v1`
   (ADR 0003) — nothing scrapes it yet, this is emit-now-scrape-later.

@@ -70,6 +70,7 @@ use uuid::Uuid;
 use crate::llm::{ChatMessage, LlmClient};
 use crate::period::{self, Period};
 use crate::reflect::strip_code_fences;
+use crate::settings::RuntimeFlags;
 
 /// How often the worker re-scans for Periods that completed since the last
 /// pass. 5 minutes, much coarser than the embedding worker's 30 seconds
@@ -626,12 +627,21 @@ pub struct DigestState {
 /// 0027 chose over a time rule (a cron firing at each Period's own
 /// boundary), because a state rule catches up on the next tick after any
 /// downtime instead of losing the Period the cron would have fired for.
+/// Issue #201: `flags` gates the whole `for period in Period::ALL` sweep
+/// below — the worker still ticks every `scan_interval` while its flag is
+/// off (there is no reason to stop the timer itself), it simply skips
+/// asking `digests`/`entries` anything on a tick where the flag says not
+/// to. Checked once per tick, not once per Period type, since a
+/// mid-sweep flip is rare enough that letting an in-flight tick finish
+/// (or not start at all) either way costs nothing worth branching inside
+/// the loop for.
 pub async fn run(
     pool: PgPool,
     client: Arc<dyn LlmClient + Send + Sync>,
     tz: Tz,
     scan_interval: Duration,
     context_window: u32,
+    flags: RuntimeFlags,
 ) {
     let mut attempts: HashMap<(Period, NaiveDate), u8> = HashMap::new();
     let mut interval = tokio::time::interval(scan_interval);
@@ -642,6 +652,10 @@ pub async fn run(
 
     loop {
         interval.tick().await;
+
+        if !flags.digest_enabled() {
+            continue;
+        }
 
         // `MAX_DIGESTS_PER_TICK` applies separately to each Period type,
         // not as one budget shared across all three — a backlog on, say,
@@ -1759,11 +1773,14 @@ async fn select_next_digest_date(
         (status = 200, description = "The Digest at this exact date, now holding the newly written revision (or `{\"digest\": null}` if the Period held no Entries to write from)", body = DigestResponse),
         (status = 400, description = "`period` is unrecognised, or `date` is not a valid YYYY-MM-DD date"),
         (status = 500, description = "the chat call, or the insert, failed"),
+        (status = 503, description = "Digest is configured but switched off (issue #201) — \
+            distinct from 404, which means this Server predates the feature entirely"),
     )
 )]
 pub async fn regenerate_digest_handler(
     State(pool): State<PgPool>,
     State(digest): State<Option<DigestState>>,
+    State(flags): State<RuntimeFlags>,
     Path((period, date)): Path<(String, String)>,
 ) -> Result<Json<DigestResponse>, StatusCode> {
     let period = Period::parse(&period).ok_or(StatusCode::BAD_REQUEST)?;
@@ -1777,6 +1794,18 @@ pub async fn regenerate_digest_handler(
         );
         return Err(StatusCode::NOT_FOUND);
     };
+
+    // Issue #201: unlike the two reads beside this route
+    // (`latest_digest_handler`/`digest_at_handler`, deliberately left
+    // unaffected by this toggle — reading a Digest that already exists is
+    // no different from reading a past Session while Reflection is off),
+    // *writing* a new one is exactly the on-demand chat call the toggle
+    // exists to let an operator refuse. 503, not 404 — the route is
+    // registered (Digest was configured at boot); it is simply not doing
+    // this particular kind of work right now.
+    if !flags.digest_enabled() {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
 
     match run_regenerate(
         &pool,

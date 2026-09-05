@@ -13,6 +13,7 @@ use tokio::time::MissedTickBehavior;
 use uuid::Uuid;
 
 use crate::llm::LlmClient;
+use crate::settings::RuntimeFlags;
 
 /// How many unembedded Entries one scan pass pulls. Small enough that a
 /// pass never holds the pool for long; large enough that a first-sync
@@ -37,12 +38,25 @@ pub const MAX_ATTEMPTS: u8 = 5;
 /// optional rather than load-bearing. `scan_interval` is a parameter
 /// (rather than always `SCAN_INTERVAL`) so tests can drive the scan on a
 /// much shorter cadence without waiting 30 real seconds.
+///
+/// Issue #201: `flags` is checked on **both** arms of the `select!` below,
+/// not once per loop iteration — a flag flipped off mid-run must stop new
+/// work starting from either source, not just the one that happened to be
+/// checked first. The hint arm still *drains* its channel (`rx.recv()` has
+/// already taken the id out by the time the flag is checked) and simply
+/// drops it without embedding — the periodic scan re-finds that Entry once
+/// the flag is back on, the exact same degradation ADR 0022 already
+/// accepts for a full or dropped channel. The tick arm skips the scan
+/// query itself, not merely the embedding call after it, so a Server with
+/// embeddings switched off spends nothing on this worker beyond waking up
+/// and checking one atomic.
 pub async fn run(
     pool: PgPool,
     client: Arc<dyn LlmClient + Send + Sync>,
     model_name: String,
     mut rx: Receiver<Uuid>,
     scan_interval: Duration,
+    flags: RuntimeFlags,
 ) {
     let mut attempts: HashMap<Uuid, u8> = HashMap::new();
     let mut interval = tokio::time::interval(scan_interval);
@@ -54,9 +68,14 @@ pub async fn run(
     loop {
         tokio::select! {
             Some(id) = rx.recv() => {
-                embed_one(&pool, client.as_ref(), &model_name, id, &mut attempts).await;
+                if flags.embeddings_enabled() {
+                    embed_one(&pool, client.as_ref(), &model_name, id, &mut attempts).await;
+                }
             }
             _ = interval.tick() => {
+                if !flags.embeddings_enabled() {
+                    continue;
+                }
                 match select_unembedded(&pool, SCAN_BATCH_SIZE).await {
                     Ok(ids) => {
                         for id in ids {

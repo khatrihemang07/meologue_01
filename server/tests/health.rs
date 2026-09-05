@@ -10,6 +10,7 @@ use chrono_tz::Tz;
 use meologue_server::digest::DigestState;
 use meologue_server::llm::{ChatMessage, ChatReply, LlmClient};
 use meologue_server::reflect::ReflectState;
+use meologue_server::settings::{InstanceMode, RuntimeFlags};
 use meologue_server::sync::PROTOCOL_VERSION;
 use serde_json::Value;
 use sqlx::PgPool;
@@ -77,6 +78,7 @@ fn chat_only_reflect_state() -> ReflectState {
         chat_api_key: None,
         chat_model: "codex-terra".to_string(),
         chat_streaming: false,
+        flags: meologue_server::settings::RuntimeFlags::all_on(),
     }
 }
 
@@ -141,6 +143,27 @@ async fn get_capabilities(
     json["capabilities"].clone()
 }
 
+/// A `ResolvedSettings` with only `reflect_enabled` forced off — built
+/// through `settings::resolve` itself (an empty `LlmConfig`, no env
+/// timezone, a `StoredSettings` naming only this one toggle) rather than
+/// as a bare struct literal, so this fixture stays honest about the same
+/// precedence rule every other caller of `resolve` goes through.
+fn resolved_with_reflect_off() -> meologue_server::settings::ResolvedSettings {
+    let env = meologue_server::llm::LlmConfig {
+        chat_base_url: None,
+        chat_model: None,
+        chat_api_key: None,
+        embed_base_url: None,
+        embed_model: None,
+        embed_api_key: None,
+    };
+    let stored = meologue_server::settings::StoredSettings {
+        reflect_enabled: Some(false),
+        ..Default::default()
+    };
+    meologue_server::settings::resolve(&env, None, &stored, false)
+}
+
 #[tokio::test]
 async fn it_answers_with_no_database_available() {
     let pool = unreachable_pool();
@@ -150,6 +173,53 @@ async fn it_answers_with_no_database_available() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["protocol_version"], PROTOCOL_VERSION);
     assert!(body["service"].is_string());
+}
+
+/// Issue #201's own pinning test, mirroring `it_answers_with_no_database_available`
+/// exactly but with a flag flipped off: ADR 0063's headline claim is that
+/// `health_handler` reads `RuntimeFlags`' three atomics and nothing else to
+/// compute effective capability, so a Server whose Postgres has died since
+/// boot must still answer 200 with the right capability `false` — the
+/// flag, not a query, is what decided it.
+#[tokio::test]
+async fn it_answers_with_no_database_available_and_a_flag_off() {
+    let pool = unreachable_pool();
+    let flags = RuntimeFlags::seed(&resolved_with_reflect_off());
+
+    let app = meologue_server::router_with_flags(
+        pool,
+        empty_static_dir(),
+        None,
+        Some(chat_and_embed_reflect_state()),
+        Some(unused_digest_state()),
+        false,
+        InstanceMode::Production,
+        flags,
+    );
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+
+    // Configured (reflect.is_some() is true, chat_and_embed_reflect_state)
+    // but switched off — effective must be false, and the whole response
+    // must still have arrived as a clean 200 against an unreachable pool.
+    assert_eq!(body["capabilities"]["reflect"], false);
+    // Untouched by the toggle above — proves the three flags are read
+    // independently, not as one bundled on/off switch.
+    assert_eq!(body["capabilities"]["digest"], true);
+    assert_eq!(body["capabilities"]["embeddings"], true);
+    assert_eq!(body["capabilities"]["todo"], true);
 }
 
 #[tokio::test]

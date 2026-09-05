@@ -57,6 +57,7 @@ fn reflect_state() -> ReflectState {
         // still never read by this route at all.
         chat_model: "codex-terra".to_string(),
         chat_streaming: false,
+        flags: meologue_server::settings::RuntimeFlags::all_on(),
     }
 }
 
@@ -613,6 +614,47 @@ async fn a_session_with_no_entries_is_absent_from_both_list_shapes(pool: PgPool)
 async fn the_list_route_is_absent_when_chat_is_unconfigured(pool: PgPool) {
     let (status, _) = list_sessions(&pool, None, None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// Issue #201's own explicit acceptance criterion: reading past Sessions
+/// is unaffected by the Reflection toggle. `list_sessions_handler` never
+/// extracts `Option<ReflectState>` at all — only `PgPool` — so there is no
+/// code path here for a flag to gate in the first place; this test pins
+/// that as a fact about behaviour, not just about the handler's own
+/// argument list, in case a future change ever gives it one.
+#[sqlx::test]
+async fn listing_sessions_still_answers_200_while_reflection_is_switched_off(pool: PgPool) {
+    let session_id = Uuid::new_v4();
+    insert_session(&pool, session_id, "Anything?").await;
+    // Issue #108: the unfiltered branch excludes a Session with no entries at
+    // all, so without a Turn this would list empty and the assertion below
+    // would prove nothing about the flag.
+    insert_turn(&pool, session_id, "Anything?", "Something.").await;
+
+    let reflect = reflect_state();
+    let resolved = meologue_server::settings::resolve(
+        &meologue_server::llm::LlmConfig {
+            chat_base_url: None,
+            chat_model: None,
+            chat_api_key: None,
+            embed_base_url: None,
+            embed_model: None,
+            embed_api_key: None,
+        },
+        None,
+        &meologue_server::settings::StoredSettings {
+            reflect_enabled: Some(false),
+            ..Default::default()
+        },
+        false,
+    );
+    reflect.flags.apply(&resolved);
+    assert!(!reflect.flags.reflect_enabled(), "the fixture itself must have the flag off");
+
+    let (status, body) = list_sessions(&pool, Some(reflect), None).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body.as_array().unwrap().len(), 1);
 }
 
 /// `DELETE /v1/sessions/{id}` (issue #63): `204`, the Session is gone from

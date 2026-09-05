@@ -194,6 +194,12 @@ run_instance() {
     export STATIC_DIR="$STATIC_DIR"
     export PORT="$SERVER_PORT"
     export BIND="$BIND"
+    # Issue #200: names this instance in its own startup banner, off
+    # $INSTANCE rather than hardcoded — this file is shared by every
+    # scripts/run-*.sh caller, so whichever one sourced it (today, only
+    # run-sandbox.sh) names itself correctly without this file needing to
+    # know which caller that is.
+    export MEOLOGUE_MODE="$INSTANCE"
     exec cargo run
   ) > >(_ri_prefix 'srv' "$_C_CYA") 2>&1 </dev/null &
   SRV_PID=$!
