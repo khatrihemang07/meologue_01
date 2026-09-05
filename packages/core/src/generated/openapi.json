@@ -355,7 +355,8 @@
           "device_id",
           "task_id",
           "text",
-          "created_at"
+          "created_at",
+          "updated_at"
         ],
         "properties": {
           "created_at": {
@@ -383,6 +384,11 @@
           },
           "text": {
             "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Issue #196 — see `EntryInput::updated_at`'s own doc comment."
           }
         }
       },
@@ -395,7 +401,8 @@
           "task_id",
           "text",
           "created_at",
-          "seq"
+          "seq",
+          "updated_at"
         ],
         "properties": {
           "created_at": {
@@ -427,6 +434,10 @@
           },
           "text": {
             "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       },
@@ -540,7 +551,8 @@
           "id",
           "device_id",
           "body",
-          "created_at"
+          "created_at",
+          "updated_at"
         ],
         "properties": {
           "body": {
@@ -565,6 +577,11 @@
           "id": {
             "type": "string",
             "format": "uuid"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Issue #196: when this Entry was last actually changed, on the\npushing Device's own clock — see `insert_entries`'s own doc\ncomment for exactly where this lands in its `set` list (and, just\nas importantly, where it does *not* land)."
           }
         }
       },
@@ -575,7 +592,8 @@
           "device_id",
           "body",
           "created_at",
-          "seq"
+          "seq",
+          "updated_at"
         ],
         "properties": {
           "body": {
@@ -604,6 +622,11 @@
           "seq": {
             "type": "integer",
             "format": "int64"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Issue #196 — see `EntryInput::updated_at`'s own doc comment."
           }
         }
       },
@@ -776,7 +799,8 @@
           "device_id",
           "name",
           "colour",
-          "created_at"
+          "created_at",
+          "updated_at"
         ],
         "properties": {
           "colour": {
@@ -803,6 +827,11 @@
           },
           "name": {
             "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Issue #196 — see `EntryInput::updated_at`'s own doc comment."
           }
         }
       },
@@ -815,7 +844,8 @@
           "name",
           "colour",
           "created_at",
-          "seq"
+          "seq",
+          "updated_at"
         ],
         "properties": {
           "colour": {
@@ -846,6 +876,10 @@
           "seq": {
             "type": "integer",
             "format": "int64"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       },
@@ -899,7 +933,8 @@
           "favourite",
           "archived",
           "order_key",
-          "created_at"
+          "created_at",
+          "updated_at"
         ],
         "properties": {
           "archived": {
@@ -949,6 +984,11 @@
               "null"
             ],
             "format": "uuid"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Issue #196 — see `EntryInput::updated_at`'s own doc comment."
           }
         }
       },
@@ -964,7 +1004,8 @@
           "archived",
           "order_key",
           "created_at",
-          "seq"
+          "seq",
+          "updated_at"
         ],
         "properties": {
           "archived": {
@@ -1017,6 +1058,10 @@
           "seq": {
             "type": "integer",
             "format": "int64"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       },
@@ -1118,7 +1163,8 @@
           "name",
           "order_key",
           "archived",
-          "created_at"
+          "created_at",
+          "updated_at"
         ],
         "properties": {
           "archived": {
@@ -1158,6 +1204,11 @@
           "project_id": {
             "type": "string",
             "format": "uuid"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Issue #196 — see `EntryInput::updated_at`'s own doc comment."
           }
         }
       },
@@ -1172,7 +1223,8 @@
           "order_key",
           "archived",
           "created_at",
-          "seq"
+          "seq",
+          "updated_at"
         ],
         "properties": {
           "archived": {
@@ -1216,6 +1268,10 @@
           "seq": {
             "type": "integer",
             "format": "int64"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       },
@@ -1585,7 +1641,8 @@
           "order_key",
           "created_at",
           "priority",
-          "label_ids"
+          "label_ids",
+          "updated_at"
         ],
         "properties": {
           "completed_at": {
@@ -1682,6 +1739,11 @@
               "null"
             ],
             "format": "uuid"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Issue #196 — see `EntryInput::updated_at`'s own doc comment. A\nsecond bump of `ROW_SHAPE_EPOCH.tasks` (to 2), for the identical\nreason `description` above earned the first one."
           }
         }
       },
@@ -1697,7 +1759,8 @@
           "created_at",
           "seq",
           "priority",
-          "label_ids"
+          "label_ids",
+          "updated_at"
         ],
         "properties": {
           "completed_at": {
@@ -1795,6 +1858,11 @@
           "seq": {
             "type": "integer",
             "format": "int64"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Issue #196 — see `EntryInput::updated_at`'s own doc comment."
           }
         }
       }

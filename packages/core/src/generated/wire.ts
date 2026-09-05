@@ -230,6 +230,11 @@ export interface components {
             /** Format: uuid */
             task_id: string;
             text: string;
+            /**
+             * Format: date-time
+             * @description Issue #196 — see `EntryInput::updated_at`'s own doc comment.
+             */
+            updated_at: string;
         };
         /** @description The Comment-shaped sibling of `TaskOutput` — adds only `seq`. */
         CommentOutput: {
@@ -246,6 +251,8 @@ export interface components {
             /** Format: uuid */
             task_id: string;
             text: string;
+            /** Format: date-time */
+            updated_at: string;
         };
         /**
          * @description The wire shape of one Digest — everything a client needs to render it
@@ -375,6 +382,14 @@ export interface components {
             device_id: string;
             /** Format: uuid */
             id: string;
+            /**
+             * Format: date-time
+             * @description Issue #196: when this Entry was last actually changed, on the
+             *     pushing Device's own clock — see `insert_entries`'s own doc
+             *     comment for exactly where this lands in its `set` list (and, just
+             *     as importantly, where it does *not* land).
+             */
+            updated_at: string;
         };
         EntryOutput: {
             body: string;
@@ -394,6 +409,11 @@ export interface components {
             id: string;
             /** Format: int64 */
             seq: number;
+            /**
+             * Format: date-time
+             * @description Issue #196 — see `EntryInput::updated_at`'s own doc comment.
+             */
+            updated_at: string;
         };
         /**
          * @description The Event-shaped sibling of `CommentInput` (issue #184 / ADR 0056) —
@@ -529,6 +549,11 @@ export interface components {
             /** Format: uuid */
             id: string;
             name: string;
+            /**
+             * Format: date-time
+             * @description Issue #196 — see `EntryInput::updated_at`'s own doc comment.
+             */
+            updated_at: string;
         };
         /** @description The Label-shaped sibling of `TaskOutput` — adds only `seq`. */
         LabelOutput: {
@@ -544,6 +569,8 @@ export interface components {
             name: string;
             /** Format: int64 */
             seq: number;
+            /** Format: date-time */
+            updated_at: string;
         };
         /**
          * @description One Model the configured wrapper can serve — the subset of
@@ -604,6 +631,11 @@ export interface components {
             order_key: string;
             /** Format: uuid */
             parent_id?: string | null;
+            /**
+             * Format: date-time
+             * @description Issue #196 — see `EntryInput::updated_at`'s own doc comment.
+             */
+            updated_at: string;
         };
         /** @description The Project-shaped sibling of `TaskOutput` — adds only `seq`. */
         ProjectOutput: {
@@ -625,6 +657,8 @@ export interface components {
             parent_id?: string | null;
             /** Format: int64 */
             seq: number;
+            /** Format: date-time */
+            updated_at: string;
         };
         ReflectRequest: {
             /**
@@ -770,6 +804,11 @@ export interface components {
             order_key: string;
             /** Format: uuid */
             project_id: string;
+            /**
+             * Format: date-time
+             * @description Issue #196 — see `EntryInput::updated_at`'s own doc comment.
+             */
+            updated_at: string;
         };
         /** @description The Section-shaped sibling of `TaskOutput` — adds only `seq`. */
         SectionOutput: {
@@ -789,6 +828,8 @@ export interface components {
             project_id: string;
             /** Format: int64 */
             seq: number;
+            /** Format: date-time */
+            updated_at: string;
         };
         SessionResponse: {
             /** Format: date-time */
@@ -1175,6 +1216,13 @@ export interface components {
             project_id?: string | null;
             /** Format: uuid */
             section_id?: string | null;
+            /**
+             * Format: date-time
+             * @description Issue #196 — see `EntryInput::updated_at`'s own doc comment. A
+             *     second bump of `ROW_SHAPE_EPOCH.tasks` (to 2), for the identical
+             *     reason `description` above earned the first one.
+             */
+            updated_at: string;
         };
         /**
          * @description The Task-shaped sibling of `EntryOutput` — see `TaskInput`'s own doc
@@ -1211,6 +1259,11 @@ export interface components {
             section_id?: string | null;
             /** Format: int64 */
             seq: number;
+            /**
+             * Format: date-time
+             * @description Issue #196 — see `EntryInput::updated_at`'s own doc comment.
+             */
+            updated_at: string;
         };
     };
     responses: never;

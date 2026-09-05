@@ -26,6 +26,9 @@ function wireEntryOutput(overrides: Partial<WireEntryOutput> = {}): WireEntryOut
     device_id: DEVICE_ID,
     body: "hello meologue",
     created_at: "2026-01-01T00:00:00.000Z",
+    // Issue #196 — a freshly-created row's own updated_at starts equal
+    // to created_at.
+    updated_at: "2026-01-01T00:00:00.000Z",
     seq: 1,
     ...overrides,
   };
@@ -41,6 +44,8 @@ function wireTaskOutput(overrides: Partial<WireTaskOutput> = {}): WireTaskOutput
     order_key: "V",
     day_order: "V",
     created_at: "2026-01-01T00:00:00.000Z",
+    // Issue #196 — see wireEntryOutput's own identical comment above.
+    updated_at: "2026-01-01T00:00:00.000Z",
     seq: 1,
     deleted_at: null,
     date: null,
@@ -146,6 +151,7 @@ describe("sync engine", () => {
             body: "hello meologue",
             created_at: "2026-01-01T00:00:00.000Z",
             deleted_at: null,
+            updated_at: "2026-01-01T00:00:00.000Z",
           },
         ],
         since_task_seq: 0,
@@ -209,6 +215,7 @@ describe("sync engine", () => {
           section_id: null,
           parent_id: null,
           description: null,
+          updated_at: "2026-01-01T00:00:00.000Z",
         },
       ]);
       return {
@@ -254,6 +261,12 @@ describe("sync engine", () => {
 
   it("advances the Entry Cursor to the last sequence received and never regresses it", async () => {
     const stores = newStores();
+    // Issue #196 / ADR 0057: this Device is already caught up on the
+    // current row-shape epoch, mirroring "advances the Task Cursor..."
+    // below — otherwise the first sync() call's own one-time catch-up
+    // reset (now that entries gained updated_at) would zero this Cursor
+    // before either transport below ever runs.
+    await stores.store.catchUpRowShapeEpoch(ROW_SHAPE_EPOCH.entries);
     await stores.store.setCursor(10);
 
     const staleTransport = vi.fn(async () => ({ ...emptyResponse, cursor: 5 }));
@@ -292,6 +305,15 @@ describe("sync engine", () => {
   // to why there are four more Cursors rather than one shared number).
   it("advances the Project, Section, Label, Comment and Event Cursors independently and never regresses any of them", async () => {
     const stores = newStores();
+    // Issue #196 / ADR 0057: Projects, Sections, Labels and Comments each
+    // gained updated_at, bumping their own ROW_SHAPE_EPOCH — catch each up
+    // first, mirroring "advances the Task Cursor..." above, so this test
+    // exercises only the never-regresses guarantee. Events gained no
+    // field (this map's own doc comment), so it needs no catch-up call.
+    await stores.projectStore.catchUpProjectRowShapeEpoch(ROW_SHAPE_EPOCH.projects);
+    await stores.projectStore.catchUpSectionRowShapeEpoch(ROW_SHAPE_EPOCH.sections);
+    await stores.labelStore.catchUpRowShapeEpoch(ROW_SHAPE_EPOCH.labels);
+    await stores.commentStore.catchUpRowShapeEpoch(ROW_SHAPE_EPOCH.comments);
     await stores.projectStore.setProjectCursor(10);
     await stores.projectStore.setSectionCursor(20);
     await stores.labelStore.setCursor(30);
@@ -562,6 +584,11 @@ describe("sync engine", () => {
   it("leaves pending Entries and pending Tasks pending, and both Cursors unchanged, when sync fails", async () => {
     const stores = newStores();
     await stores.store.upsert([entry({ id: "local-1", seq: null })]);
+    // Issue #196 / ADR 0057: already caught up, mirroring the Task
+    // Cursor's own identical guard below — otherwise the one-time catch-up
+    // reset (entries also gained updated_at) would zero this Cursor before
+    // the network call even runs, which this test isn't testing for.
+    await stores.store.catchUpRowShapeEpoch(ROW_SHAPE_EPOCH.entries);
     await stores.store.setCursor(3);
     await stores.taskStore.upsert([task({ id: "local-task-1", seq: null })]);
     // Issue #186 / ADR 0057: already caught up, so the Task Cursor below

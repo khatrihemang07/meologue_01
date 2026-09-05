@@ -28,6 +28,9 @@ export function toWireEntryInput(entry: Entry): WireEntryInput {
     body: entry.body,
     created_at: entry.createdAt,
     deleted_at: entry.deletedAt,
+    // Issue #196 — carried straight through, no reshaping, mirroring
+    // every other field above it.
+    updated_at: entry.updatedAt,
   };
 }
 
@@ -37,6 +40,19 @@ export function fromWireEntryOutput(output: WireEntryOutput, syncedAt: string): 
     deviceId: output.device_id,
     body: output.body,
     createdAt: output.created_at,
+    // Issue #196: `?? output.created_at`, never `?? syncedAt`/`"now"`. An
+    // older Server (pre-#196) simply omits this key from its response —
+    // the generated wire type says it's required, but that's a claim
+    // about *this* Server's build, not a guarantee at runtime against
+    // one still running an older release. Falling back to `created_at`
+    // is the one answer that stays honest either way: a row this Device
+    // has never seen a real `updated_at` for reads as "last changed when
+    // it was captured," never as "just now" — the latter would make
+    // every row pulled from an old Server look freshly edited the
+    // instant this Device upgrades, which is exactly the kind of
+    // invented history CONTEXT.md's Digest/History entries already
+    // refuse elsewhere.
+    updatedAt: output.updated_at ?? output.created_at,
     seq: output.seq,
     syncedAt,
     // `deleted_at` is optional on the wire type (absent and null both mean
@@ -80,6 +96,8 @@ export function toWireTaskInput(task: Task): WireTaskInput {
     section_id: task.sectionId,
     parent_id: task.parentId,
     description: task.description,
+    // Issue #196 — see toWireEntryInput's own identical field.
+    updated_at: task.updatedAt,
   };
 }
 
@@ -147,6 +165,9 @@ export function fromWireTaskOutput(
     orderKey: output.order_key,
     dayOrder: output.day_order,
     createdAt: output.created_at,
+    // Issue #196 — see fromWireEntryOutput's own identical comment for
+    // why this falls back to `created_at`, never "now".
+    updatedAt: output.updated_at ?? output.created_at,
     seq: output.seq,
     syncedAt,
     deletedAt: output.deleted_at ?? null,
@@ -182,6 +203,8 @@ export function toWireProjectInput(project: Project): WireProjectInput {
     order_key: project.orderKey,
     created_at: project.createdAt,
     deleted_at: project.deletedAt,
+    // Issue #196 — see toWireEntryInput's own identical field.
+    updated_at: project.updatedAt,
   };
 }
 
@@ -197,6 +220,8 @@ export function fromWireProjectOutput(output: WireProjectOutput, syncedAt: strin
     description: output.description ?? null,
     orderKey: output.order_key,
     createdAt: output.created_at,
+    // Issue #196 — see fromWireEntryOutput's own identical comment.
+    updatedAt: output.updated_at ?? output.created_at,
     seq: output.seq,
     syncedAt,
     deletedAt: output.deleted_at ?? null,
@@ -215,6 +240,7 @@ export function toWireSectionInput(section: Section): WireSectionInput {
     archived: section.archived,
     created_at: section.createdAt,
     deleted_at: section.deletedAt,
+    updated_at: section.updatedAt,
   };
 }
 
@@ -228,6 +254,7 @@ export function fromWireSectionOutput(output: WireSectionOutput, syncedAt: strin
     orderKey: output.order_key,
     archived: output.archived,
     createdAt: output.created_at,
+    updatedAt: output.updated_at ?? output.created_at,
     seq: output.seq,
     syncedAt,
     deletedAt: output.deleted_at ?? null,
@@ -243,6 +270,7 @@ export function toWireLabelInput(label: Label): WireLabelInput {
     colour: label.colour,
     created_at: label.createdAt,
     deleted_at: label.deletedAt,
+    updated_at: label.updatedAt,
   };
 }
 
@@ -253,6 +281,7 @@ export function fromWireLabelOutput(output: WireLabelOutput, syncedAt: string): 
     name: output.name,
     colour: output.colour,
     createdAt: output.created_at,
+    updatedAt: output.updated_at ?? output.created_at,
     seq: output.seq,
     syncedAt,
     deletedAt: output.deleted_at ?? null,
@@ -268,6 +297,7 @@ export function toWireCommentInput(comment: Comment): WireCommentInput {
     text: comment.text,
     created_at: comment.createdAt,
     deleted_at: comment.deletedAt,
+    updated_at: comment.updatedAt,
   };
 }
 
@@ -278,6 +308,7 @@ export function fromWireCommentOutput(output: WireCommentOutput, syncedAt: strin
     taskId: output.task_id,
     text: output.text,
     createdAt: output.created_at,
+    updatedAt: output.updated_at ?? output.created_at,
     seq: output.seq,
     syncedAt,
     deletedAt: output.deleted_at ?? null,
