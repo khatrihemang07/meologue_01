@@ -175,6 +175,7 @@ export function useProjects(
     if (trimmed === "") {
       return;
     }
+    const capturedAt = new Date().toISOString();
     addProjectMutation.mutate({
       id: mintId(),
       deviceId,
@@ -193,7 +194,9 @@ export function useProjects(
       // reads as sorted-after in the flat list ProjectsView renders even
       // though the flat list is what the reader actually sees.
       orderKey: orderKeyAfter(projects),
-      createdAt: new Date().toISOString(),
+      createdAt: capturedAt,
+      // Issue #196: starts equal to createdAt, the same single clock read.
+      updatedAt: capturedAt,
       seq: null,
       syncedAt: null,
       deletedAt: null,
@@ -335,6 +338,7 @@ export function useProjects(
     const current =
       queryClient.getQueryData<Section[]>(sectionsQueryKey(projectId)) ??
       (await projectStore.listSections(projectId));
+    const capturedAt = new Date().toISOString();
     await addSectionMutation.mutateAsync({
       id: mintId(),
       deviceId,
@@ -343,7 +347,9 @@ export function useProjects(
       description: null,
       orderKey: orderKeyAfter(current),
       archived: false,
-      createdAt: new Date().toISOString(),
+      createdAt: capturedAt,
+      // Issue #196: starts equal to createdAt, the same single clock read.
+      updatedAt: capturedAt,
       seq: null,
       syncedAt: null,
       deletedAt: null,

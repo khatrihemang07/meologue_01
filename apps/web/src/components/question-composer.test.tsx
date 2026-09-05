@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useSettingsStore } from "@/lib/settings";
 import { QuestionComposer } from "./question-composer";
 
 function getTextarea() {
@@ -167,5 +168,68 @@ describe("QuestionComposer's model picker", () => {
 
     rerender(<QuestionComposer onAsk={vi.fn()} models={models} currentModel={undefined} />);
     expect(screen.getByLabelText("Model")).toHaveValue("");
+  });
+});
+
+// Issue #202: a Device-local default that pre-selects this picker for a
+// fresh Conversation, without making every ask sticky to it.
+describe("QuestionComposer's default Reflect model", () => {
+  const models = [
+    { id: "codex-terra", streaming: false, context_window: 272000 },
+    { id: "claude-sonnet", streaming: true, context_window: 200000 },
+  ];
+
+  afterEach(() => {
+    // Settings is a real, module-scoped Zustand store (settings.ts), not a
+    // mock — every test here has to leave it exactly as it found it, or a
+    // later test in this file (or `settings-page.test.tsx`'s own default
+    // state, if the suite ever shares a worker) inherits whichever value
+    // ran last.
+    useSettingsStore.setState({ defaultReflectModel: "" });
+  });
+
+  it("pre-selects the Device default on a fresh Conversation, with no currentModel yet", () => {
+    useSettingsStore.setState({ defaultReflectModel: "claude-sonnet" });
+
+    render(<QuestionComposer onAsk={vi.fn()} models={models} />);
+
+    expect(screen.getByLabelText("Model")).toHaveValue("claude-sonnet");
+  });
+
+  it("asks on the Device default when the picker is left untouched", () => {
+    useSettingsStore.setState({ defaultReflectModel: "claude-sonnet" });
+    const onAsk = vi.fn();
+    render(<QuestionComposer onAsk={onAsk} models={models} />);
+
+    fireEvent.change(getTextarea(), { target: { value: "hello" } });
+    fireEvent.click(screen.getByRole("button", { name: "Ask" }));
+
+    expect(onAsk).toHaveBeenCalledWith("hello", "claude-sonnet");
+  });
+
+  it("lets a Conversation's own currentModel win over the Device default", () => {
+    useSettingsStore.setState({ defaultReflectModel: "claude-sonnet" });
+
+    render(<QuestionComposer onAsk={vi.fn()} models={models} currentModel="codex-terra" />);
+
+    expect(screen.getByLabelText("Model")).toHaveValue("codex-terra");
+  });
+
+  it("still shows Server default with no Device default stored, exactly as before this ticket", () => {
+    render(<QuestionComposer onAsk={vi.fn()} models={models} />);
+
+    expect(screen.getByLabelText("Model")).toHaveValue("");
+  });
+
+  it("re-points a brand-new Conversation at the Device default, not at what the last one had picked", () => {
+    useSettingsStore.setState({ defaultReflectModel: "claude-sonnet" });
+    const { rerender } = render(
+      <QuestionComposer onAsk={vi.fn()} models={models} currentModel="codex-terra" />,
+    );
+    expect(screen.getByLabelText("Model")).toHaveValue("codex-terra");
+
+    rerender(<QuestionComposer onAsk={vi.fn()} models={models} currentModel={undefined} />);
+
+    expect(screen.getByLabelText("Model")).toHaveValue("claude-sonnet");
   });
 });

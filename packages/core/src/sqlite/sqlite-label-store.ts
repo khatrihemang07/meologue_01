@@ -20,13 +20,17 @@ import { kv, labels } from "./schema";
  */
 export class SqliteLabelStore implements LabelStore {
   private readonly db: ReturnType<typeof drizzle>;
+  // Issue #196 — see SqliteEntryStore's own identical field for the
+  // mechanism and why it's injectable.
+  private readonly now: () => string;
 
   // Unlike SqliteTaskStore, this store never drops to a raw
   // driver.execute() of its own (no FTS5 index, no search()) — so, unlike
   // that store, there's no need to keep the driver itself around as a
   // field, only to build `db` from it here.
-  constructor(driver: SqliteDriver) {
+  constructor(driver: SqliteDriver, now: () => string = () => new Date().toISOString()) {
     this.db = drizzle((sqlText, params, method) => driver.execute(sqlText, params, method));
+    this.now = now;
   }
 
   async list(): Promise<Label[]> {
@@ -70,6 +74,7 @@ export class SqliteLabelStore implements LabelStore {
           name: sql`excluded.name`,
           colour: sql`excluded.colour`,
           createdAt: sql`excluded.created_at`,
+          updatedAt: sql`excluded.updated_at`,
           seq: sql`excluded.seq`,
           syncedAt: sql`excluded.synced_at`,
           deletedAt: sql`excluded.deleted_at`,
@@ -79,12 +84,12 @@ export class SqliteLabelStore implements LabelStore {
 
   async rename(id: string, name: string): Promise<void> {
     assertValidLabelName(name);
-    await this.updateIfLive(id, { name, seq: null, syncedAt: null });
+    await this.updateIfLive(id, { name, updatedAt: this.now(), seq: null, syncedAt: null });
   }
 
   async setColour(id: string, colour: string): Promise<void> {
     assertValidLabelColour(colour);
-    await this.updateIfLive(id, { colour, seq: null, syncedAt: null });
+    await this.updateIfLive(id, { colour, updatedAt: this.now(), seq: null, syncedAt: null });
   }
 
   /**
@@ -92,11 +97,14 @@ export class SqliteLabelStore implements LabelStore {
    * `name` for the identical reason SqliteTaskStore.remove() blanks
    * `content`: a tombstone that still carried its old name would assert
    * "removed" and "still called X" about the same row at once.
+   * `deletedAt`/`updatedAt` (issue #196) share one clock read — see
+   * SqliteEntryStore.remove's identical comment for why.
    */
   async remove(id: string): Promise<void> {
+    const deletedAt = this.now();
     await this.db
       .update(labels)
-      .set({ deletedAt: new Date().toISOString(), name: "", seq: null, syncedAt: null })
+      .set({ deletedAt, name: "", updatedAt: deletedAt, seq: null, syncedAt: null })
       .where(eq(labels.id, id));
   }
 

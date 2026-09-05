@@ -51,6 +51,18 @@ export type Filter = {
    */
   query: string;
   createdAt: string;
+  /**
+   * Issue #196 — see Task.updatedAt's own doc comment (../task-types.ts)
+   * for the mechanism. **Client-only**, unlike every other entity's
+   * `updatedAt`: `filters` has no server table and no Sync stream at all
+   * (this type's own header comment, ./filter-store.ts's own header
+   * comment), so there is no `server/src/sync.rs` counterpart to carry
+   * this field and no Device but this one will ever see it. Still worth
+   * having now for the identical "free today, a real migration to
+   * retrofit later" reasoning this type's own header comment already
+   * gives for `seq`/`syncedAt`/`deletedAt`.
+   */
+  updatedAt: string;
   seq: number | null;
   syncedAt: string | null;
   /** Tombstone (ADR 0028's rule, applied to Filters, mirroring Label.deletedAt/Project.deletedAt). */

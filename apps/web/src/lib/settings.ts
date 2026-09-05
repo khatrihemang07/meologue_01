@@ -39,6 +39,7 @@ const TEXT_SIZE_KEY = "meologue.text-size";
 const COMPLETED_STYLE_KEY = "meologue.completed-style";
 const FORMAT_BAR_VISIBLE_KEY = "meologue.format-bar-visible";
 const SMART_DATES_ENABLED_KEY = "meologue.smart-dates-enabled";
+const DEFAULT_REFLECT_MODEL_KEY = "meologue.default-reflect-model";
 // Issue #134. Comma-joined slugs, e.g. "reflect,digest" — deliberately not
 // a JSON blob under one key: ADR 0008's stated reasoning for "no JSON blob"
 // is that a shared shape means a corrupt or unparseable value for one
@@ -431,6 +432,63 @@ function writeStoredSmartDatesEnabled(enabled: boolean): void {
   }
 }
 
+/**
+ * Issue #202: which model a fresh `/reflect` Conversation starts on, before
+ * the reader has touched `question-composer.tsx`'s own per-ask picker —
+ * a Device-local default, exactly like `formatBarVisible`/
+ * `smartDatesEnabled` above: it changes nothing about what the Server does
+ * with a Question, only which option this Device's picker starts on.
+ *
+ * The empty string is the same "no override" value the picker's own local
+ * state already uses for "Server default" (`question-composer.tsx`'s
+ * `selectedModel`), so `defaultReflectModel` and a fresh ask's own
+ * `selectedModel` share one meaning for "nothing chosen" rather than this
+ * setting inventing a second sentinel (`null`, `"default"`) the picker
+ * would have to translate. An opened Conversation that already has a Turn
+ * of its own overrides this outright — `currentModel` wins over the
+ * Device default the instant there is one, because the model a
+ * Conversation is actually already on is a stronger fact than what a new
+ * one would have started on.
+ *
+ * Not validated against a known model list on read, unlike `AccentId`/
+ * `TextSizeId`/`CompletedStyleId` above: the Server's own model list is
+ * fetched at runtime and can change between launches (`models-transport.ts`),
+ * so there is no fixed set this module could check a stored value against
+ * without a network call `readStoredDefaultReflectModel` — synchronous, at
+ * module load, like every other read here — has no way to make. A stored
+ * id the Server no longer offers behaves exactly like `currentModel` on an
+ * older Session pointing at a retired model already does: the picker shows
+ * whatever it shows for a value with no matching `<option>`, not a thrown
+ * error.
+ */
+export const DEFAULT_REFLECT_MODEL = "";
+
+function readStoredDefaultReflectModel(): string {
+  try {
+    return localStorage.getItem(DEFAULT_REFLECT_MODEL_KEY) ?? DEFAULT_REFLECT_MODEL;
+  } catch {
+    return DEFAULT_REFLECT_MODEL;
+  }
+}
+
+function writeStoredDefaultReflectModel(model: string): void {
+  try {
+    if (model === "") {
+      // No key at all rather than an empty string, mirroring
+      // `writeStoredHiddenDestinations`'s own reasoning: a reader who picks
+      // a default and then clears it back to "Server default" leaves no
+      // trace in storage, indistinguishable from a Device that never
+      // touched this setting.
+      localStorage.removeItem(DEFAULT_REFLECT_MODEL_KEY);
+    } else {
+      localStorage.setItem(DEFAULT_REFLECT_MODEL_KEY, model);
+    }
+  } catch {
+    // Refused write — the in-memory value below still applies for this
+    // session, same degradation every other setting here has.
+  }
+}
+
 function isHideableDestinationId(value: unknown): value is HideableDestinationId {
   return HIDEABLE_DESTINATIONS.some((destination) => destination.id === value);
 }
@@ -609,6 +667,8 @@ interface SettingsState {
   formatBarVisible: boolean;
   /** Issue #170: whether Todo's add field runs its quick-add parser's eager/natural-language family. See `DEFAULT_SMART_DATES_ENABLED`'s own doc comment above. */
   smartDatesEnabled: boolean;
+  /** Issue #202: which model a fresh Reflect Conversation starts on. See `DEFAULT_REFLECT_MODEL`'s own doc comment above. */
+  defaultReflectModel: string;
   serverUrl: string;
   listWidth: number;
   capabilities: ServerCapabilities | null;
@@ -640,6 +700,7 @@ interface SettingsState {
   setCompletedStyle: (style: CompletedStyleId) => void;
   setFormatBarVisible: (visible: boolean) => void;
   setSmartDatesEnabled: (enabled: boolean) => void;
+  setDefaultReflectModel: (model: string) => void;
   setServerUrl: (url: string) => void;
   setListWidth: (width: number) => void;
   setCapabilities: (capabilities: ServerCapabilities | null) => void;
@@ -662,6 +723,7 @@ export const useSettingsStore = create<SettingsState>()((set) => ({
   completedStyle: readStoredCompletedStyle(),
   formatBarVisible: readStoredFormatBarVisible(),
   smartDatesEnabled: readStoredSmartDatesEnabled(),
+  defaultReflectModel: readStoredDefaultReflectModel(),
   serverUrl: readStoredServerUrl(),
   listWidth: readStoredListWidth(),
   capabilities: readStoredCapabilities(),
@@ -690,6 +752,10 @@ export const useSettingsStore = create<SettingsState>()((set) => ({
   setSmartDatesEnabled: (smartDatesEnabled) => {
     writeStoredSmartDatesEnabled(smartDatesEnabled);
     set({ smartDatesEnabled });
+  },
+  setDefaultReflectModel: (defaultReflectModel) => {
+    writeStoredDefaultReflectModel(defaultReflectModel);
+    set({ defaultReflectModel });
   },
   setServerUrl: (url) => {
     const normalised = normaliseServerUrl(url);

@@ -38,3 +38,18 @@ export type WireDigest = components["schemas"]["Digest"];
 // client-side consumer).
 export type WireModelsResponse = components["schemas"]["ModelsResponse"];
 export type WireModelInfo = components["schemas"]["ModelInfo"];
+// Issue #203: `GET`/`PATCH /v1/config` (server/src/settings.rs — issue #200
+// built the route, #201 gave it three feature toggles, this ticket is its
+// first client-side caller). `WireFeatureConfig`/`WireResolvedField`/
+// `WireSource`/`WireTogglePatch` are the nested shapes `WireConfigResponse`/
+// `WireConfigPatch` are built from; exported on their own rather than left
+// inlined so `config-transport.ts` and the settings components can name
+// one field's shape (e.g. a single toggle) without reaching through the
+// whole response type.
+export type WireConfigResponse = components["schemas"]["ConfigResponse"];
+export type WireConfigPatch = components["schemas"]["ConfigPatch"];
+export type WireResolvedField = components["schemas"]["ResolvedField"];
+export type WireFeatureConfig = components["schemas"]["FeatureConfig"];
+export type WireSource = components["schemas"]["Source"];
+export type WireTogglePatch = components["schemas"]["TogglePatch"];
+export type WireInstanceMode = components["schemas"]["InstanceMode"];

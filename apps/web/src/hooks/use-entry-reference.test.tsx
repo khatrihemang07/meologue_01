@@ -9,7 +9,9 @@ function entry(overrides: Partial<Entry> = {}): Entry {
     id: "0192abcd-1234-7890-abcd-0123456789ab",
     deviceId: "device-a",
     body: "the target Entry's body",
+    // Issue #196: updatedAt starts equal to createdAt
     createdAt: "2026-08-18T10:00:00.000Z",
+    updatedAt: "2026-08-18T10:00:00.000Z",
     seq: 1,
     syncedAt: "now",
     deletedAt: null,

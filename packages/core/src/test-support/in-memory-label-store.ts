@@ -19,6 +19,12 @@ export class InMemoryLabelStore implements LabelStore {
   // Issue #186 / ADR 0057 — see EntryStore.catchUpRowShapeEpoch's own doc
   // comment (../store.ts) for what this tracks.
   private rowShapeEpoch = 0;
+  // Issue #196 — mirrors SqliteLabelStore's own identical field.
+  private readonly now: () => string;
+
+  constructor(now: () => string = () => new Date().toISOString()) {
+    this.now = now;
+  }
 
   async list(): Promise<Label[]> {
     return [...this.labels.values()]
@@ -42,12 +48,12 @@ export class InMemoryLabelStore implements LabelStore {
 
   async rename(id: string, name: string): Promise<void> {
     assertValidLabelName(name);
-    this.applyIfLive(id, { name, seq: null, syncedAt: null });
+    this.applyIfLive(id, { name, updatedAt: this.now(), seq: null, syncedAt: null });
   }
 
   async setColour(id: string, colour: string): Promise<void> {
     assertValidLabelColour(colour);
-    this.applyIfLive(id, { colour, seq: null, syncedAt: null });
+    this.applyIfLive(id, { colour, updatedAt: this.now(), seq: null, syncedAt: null });
   }
 
   async remove(id: string): Promise<void> {
@@ -55,10 +61,12 @@ export class InMemoryLabelStore implements LabelStore {
     if (existing === undefined) {
       return;
     }
+    const deletedAt = this.now();
     this.labels.set(id, {
       ...existing,
-      deletedAt: new Date().toISOString(),
+      deletedAt,
       name: "",
+      updatedAt: deletedAt,
       seq: null,
       syncedAt: null,
     });

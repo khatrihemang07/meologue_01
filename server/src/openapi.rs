@@ -7,6 +7,7 @@ use crate::llm::ModelInfo;
 use crate::models::ModelsResponse;
 use crate::reflect::{ReflectRequest, ReflectResponse};
 use crate::sessions::{SessionResponse, SessionRow, SessionTurnRow};
+use crate::settings::{ConfigPatch, ConfigResponse, InstanceMode, ResolvedField, Source};
 use crate::sync::{
     CommentInput, CommentOutput, EntryInput, EntryOutput, EventInput, EventOutput, LabelInput,
     LabelOutput, ProjectInput, ProjectOutput, SectionInput, SectionOutput, SyncRequest,
@@ -29,6 +30,8 @@ use crate::sync::{
         crate::backup::backup_handler,
         crate::backup::restore_handler,
         crate::backup::rebuild_mismatched_embeddings_handler,
+        crate::settings::get_config_handler,
+        crate::settings::patch_config_handler,
     ),
     components(schemas(
         HealthResponse,
@@ -60,6 +63,11 @@ use crate::sync::{
         Digest,
         ModelsResponse,
         ModelInfo,
+        ConfigResponse,
+        ConfigPatch,
+        ResolvedField,
+        Source,
+        InstanceMode,
     ))
 )]
 struct ApiDoc;

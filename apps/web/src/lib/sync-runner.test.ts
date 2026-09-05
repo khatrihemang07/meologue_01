@@ -368,7 +368,9 @@ describe("requestSync", () => {
         id: "1",
         deviceId: "device-a",
         body: "hello",
+        // Issue #196: updatedAt starts equal to createdAt
         createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
         seq: 1,
         syncedAt: "2026-01-01T00:00:00.000Z",
         deletedAt: null,

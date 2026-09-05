@@ -83,6 +83,38 @@
 //! never reassigned, never compared against server arrival time, because
 //! there is no LWW rule here to arbitrate: two Devices can never disagree
 //! about the same Event row, only both hold Events the other doesn't yet.
+//!
+//! Issue #194 closes a gap every stream above has shared since the day its
+//! own `is distinct from` guard was written: that guard (deliberately, per
+//! each `insert_*` function's own doc comment) does not reassign `seq`
+//! when a push changes nothing — but nothing about the *response* has ever
+//! told the pushing Device that. A Device whose Cursor has already moved
+//! past that row's own `seq` — because another Device's write already
+//! carried it forward, or because this Device's own earlier push already
+//! did — never sees the row come back in `entries`/`tasks`/etc., so it
+//! never learns its push actually landed, and `pending()` keeps re-pushing
+//! the identical, already-applied row on every poll, forever: a Cursor
+//! only answers "what has this Device already asked for," and a row that
+//! never re-enters the log has nothing to ask for again. `SyncResponse`
+//! now carries a second array per stream, `acknowledged_*`, alongside the
+//! Cursor-paged one — the server's own current row for **every** id the
+//! request pushed, whether or not anything about it actually changed.
+//! Selected from a `where id = any($1)` inside the same transaction each
+//! `insert_*` already holds, once per stream, immediately after that
+//! stream's own upsert loop and before it commits.
+//!
+//! Sending the full row rather than a bare `{id, seq}` pair is deliberate
+//! twice over: it clears `pending()` on a genuine no-op, and it means a
+//! Device whose write the delete-is-terminal guard *refused* — a stale
+//! edit against a row tombstoned elsewhere, `pushing_an_edit_to_an_
+//! already_deleted_*_is_a_no_op` in `server/tests/sync.rs` — learns the
+//! tombstone it was refused against, instead of quietly keeping a version
+//! of the row the server already rejected. `acknowledged_*` never advances
+//! any Cursor: it answers a different question than a Cursor was ever
+//! built to answer ("was my own push received," not "what haven't I asked
+//! for yet"), and the two must not be conflated. See `SyncResponse`'s own
+//! doc comment for the field-by-field detail, and `PROTOCOL_VERSION`'s own
+//! doc comment for why none of this needs a version bump.
 
 use axum::{Json, extract::State, http::StatusCode};
 use chrono::{DateTime, Utc};
@@ -189,6 +221,32 @@ use uuid::Uuid;
 /// its own doc comment for the mechanism (`EntryStore.catchUpRowShapeEpoch`,
 /// `packages/core/src/store.ts`) and ADR 0057 for the design this
 /// constant's own bumps have nothing to do with.
+///
+/// **Not bumped again by issue #194.** `SyncResponse` grows seven more
+/// fields, `acknowledged_entries` through `acknowledged_events` (that
+/// struct's own doc comment) — every one is new, additive, and `Vec<...>`,
+/// the identical shape `events`/`since_event_seq` took under issue #184's
+/// own non-bump above. No existing field's shape changes and no Device
+/// fails to parse anything it already receives; a build that predates this
+/// ticket simply never reads these seven keys and keeps relying on the
+/// Cursor-paged arrays alone, exactly as it always has. Skipping the bump
+/// here is the same rule already argued twice above, not a third
+/// exception invented for this ticket.
+/// **Not bumped by issue #196.** `EntryInput`/`EntryOutput` through
+/// `CommentInput`/`CommentOutput` each gain one new field, `updated_at` —
+/// exactly the case the note above this constant's own history already
+/// warns about, and exactly why it was written. This field is new,
+/// additive, and required rather than optional, but that distinction
+/// doesn't matter here: every `*Output` struct already deserializes
+/// client-side through `packages/core/src/wire.ts`'s generated types,
+/// regenerated alongside this change, so there is no old Device in the
+/// wild that speaks a build of this struct missing the field — the
+/// obligation this bump would otherwise exist to protect against. What
+/// *does* apply is the obligation this constant's own note names for any
+/// field added to an existing row shape: `packages/core/src/protocol.ts`'s
+/// `ROW_SHAPE_EPOCH` is bumped by one for each of `entries`, `tasks`,
+/// `projects`, `sections`, `labels`, `comments` (not `events`, which gains
+/// no field) — see that map's own doc comment.
 pub const PROTOCOL_VERSION: i32 = 6;
 
 /// The lowest protocol version this Server still accepts, alongside
@@ -288,6 +346,11 @@ pub struct EntryInput {
     /// `deleted_at`, and a delete is just an edit whose `deleted_at` happens
     /// to be set.
     pub deleted_at: Option<DateTime<Utc>>,
+    /// Issue #196: when this Entry was last actually changed, on the
+    /// pushing Device's own clock — see `insert_entries`'s own doc
+    /// comment for exactly where this lands in its `set` list (and, just
+    /// as importantly, where it does *not* land).
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Serialize, FromRow, ToSchema)]
@@ -302,6 +365,8 @@ pub struct EntryOutput {
     /// through sync exactly like any other change rather than being
     /// filtered out here.
     pub deleted_at: Option<DateTime<Utc>>,
+    /// Issue #196 — see `EntryInput::updated_at`'s own doc comment.
+    pub updated_at: DateTime<Utc>,
 }
 
 /// The Task-shaped sibling of `EntryInput` (ADR 0047's second root noun,
@@ -379,6 +444,10 @@ pub struct TaskInput {
     /// comment above for the obligation this places on the next field
     /// added to any row here.
     pub description: Option<String>,
+    /// Issue #196 — see `EntryInput::updated_at`'s own doc comment. A
+    /// second bump of `ROW_SHAPE_EPOCH.tasks` (to 2), for the identical
+    /// reason `description` above earned the first one.
+    pub updated_at: DateTime<Utc>,
 }
 
 /// The Task-shaped sibling of `EntryOutput` — see `TaskInput`'s own doc
@@ -405,6 +474,8 @@ pub struct TaskOutput {
     pub section_id: Option<Uuid>,
     pub parent_id: Option<Uuid>,
     pub description: Option<String>,
+    /// Issue #196 — see `EntryInput::updated_at`'s own doc comment.
+    pub updated_at: DateTime<Utc>,
 }
 
 /// The Project-shaped sibling of `TaskInput` (ADR 0047's second/third root
@@ -428,6 +499,8 @@ pub struct ProjectInput {
     pub created_at: DateTime<Utc>,
     /// Tombstone — see `EntryInput::deleted_at`'s own doc comment.
     pub deleted_at: Option<DateTime<Utc>>,
+    /// Issue #196 — see `EntryInput::updated_at`'s own doc comment.
+    pub updated_at: DateTime<Utc>,
 }
 
 /// The Project-shaped sibling of `TaskOutput` — adds only `seq`.
@@ -445,6 +518,7 @@ pub struct ProjectOutput {
     pub created_at: DateTime<Utc>,
     pub seq: i64,
     pub deleted_at: Option<DateTime<Utc>>,
+    pub updated_at: DateTime<Utc>,
 }
 
 /// The Section-shaped sibling of `TaskInput` — `project_id` is a plain
@@ -465,6 +539,8 @@ pub struct SectionInput {
     pub archived: bool,
     pub created_at: DateTime<Utc>,
     pub deleted_at: Option<DateTime<Utc>>,
+    /// Issue #196 — see `EntryInput::updated_at`'s own doc comment.
+    pub updated_at: DateTime<Utc>,
 }
 
 /// The Section-shaped sibling of `TaskOutput` — adds only `seq`.
@@ -480,6 +556,7 @@ pub struct SectionOutput {
     pub created_at: DateTime<Utc>,
     pub seq: i64,
     pub deleted_at: Option<DateTime<Utc>>,
+    pub updated_at: DateTime<Utc>,
 }
 
 /// The Label-shaped sibling of `TaskInput` — no `order_key`, mirroring
@@ -493,6 +570,8 @@ pub struct LabelInput {
     pub colour: String,
     pub created_at: DateTime<Utc>,
     pub deleted_at: Option<DateTime<Utc>>,
+    /// Issue #196 — see `EntryInput::updated_at`'s own doc comment.
+    pub updated_at: DateTime<Utc>,
 }
 
 /// The Label-shaped sibling of `TaskOutput` — adds only `seq`.
@@ -505,6 +584,7 @@ pub struct LabelOutput {
     pub created_at: DateTime<Utc>,
     pub seq: i64,
     pub deleted_at: Option<DateTime<Utc>>,
+    pub updated_at: DateTime<Utc>,
 }
 
 /// The Comment-shaped sibling of `TaskInput` — `task_id` is a plain
@@ -518,6 +598,8 @@ pub struct CommentInput {
     pub text: String,
     pub created_at: DateTime<Utc>,
     pub deleted_at: Option<DateTime<Utc>>,
+    /// Issue #196 — see `EntryInput::updated_at`'s own doc comment.
+    pub updated_at: DateTime<Utc>,
 }
 
 /// The Comment-shaped sibling of `TaskOutput` — adds only `seq`.
@@ -530,6 +612,7 @@ pub struct CommentOutput {
     pub created_at: DateTime<Utc>,
     pub seq: i64,
     pub deleted_at: Option<DateTime<Utc>>,
+    pub updated_at: DateTime<Utc>,
 }
 
 /// The Event-shaped sibling of `CommentInput` (issue #184 / ADR 0056) —
@@ -692,6 +775,72 @@ pub struct SyncResponse {
     /// field it doesn't recognise.
     pub events: Vec<EventOutput>,
     pub event_cursor: i64,
+
+    /// Issue #194: the server's own current row for every id the
+    /// request's own `entries` named, whether or not `insert_entries`'s
+    /// `is distinct from` guard actually changed anything — see this
+    /// module's own top-of-file doc comment for why a Cursor-paged array
+    /// alone leaves a no-op push invisible to the Device that sent it.
+    /// Selected via `where id = any($1)` inside the same transaction
+    /// `insert_entries` already holds, against exactly the ids that
+    /// request pushed — never a stream's whole backlog, and never gated
+    /// on whether anything in it changed. Empty whenever `entries` (the
+    /// request field) was empty: there is nothing to acknowledge if
+    /// nothing was pushed.
+    pub acknowledged_entries: Vec<EntryOutput>,
+    /// Issue #194: the Task-shaped sibling of `acknowledged_entries` —
+    /// mirrors it field for field, against `tasks`/`insert_tasks`
+    /// instead. Gated on `protocol_version >= 5`, exactly like `tasks`
+    /// itself (`run_sync`'s own doc comment): a v4 Device can never
+    /// populate the `tasks` request field to begin with, so there is
+    /// nothing here for it to acknowledge either.
+    pub acknowledged_tasks: Vec<TaskOutput>,
+    /// Issue #194: the Project-shaped sibling of `acknowledged_entries` —
+    /// mirrors `acknowledged_tasks` against `projects`/`insert_projects`,
+    /// gated on `protocol_version >= 6` exactly like `projects` itself.
+    pub acknowledged_projects: Vec<ProjectOutput>,
+    /// Issue #194: the Section-shaped sibling — mirrors
+    /// `acknowledged_tasks` against `sections`/`insert_sections`, gated
+    /// on `protocol_version >= 6` exactly like `sections` itself.
+    pub acknowledged_sections: Vec<SectionOutput>,
+    /// Issue #194: the Label-shaped sibling — mirrors `acknowledged_tasks`
+    /// against `labels`/`insert_labels`, gated on `protocol_version >= 6`
+    /// exactly like `labels` itself.
+    pub acknowledged_labels: Vec<LabelOutput>,
+    /// Issue #194: the Comment-shaped sibling — mirrors
+    /// `acknowledged_tasks` against `comments`/`insert_comments`, gated
+    /// on `protocol_version >= 6` exactly like `comments` itself.
+    pub acknowledged_comments: Vec<CommentOutput>,
+    /// Issue #194: the Event-shaped sibling of `acknowledged_entries` —
+    /// mirrors it against `events`/`insert_events`, **ungated**, exactly
+    /// like `events` itself (`PROTOCOL_VERSION`'s own doc comment: there
+    /// is no version number that separates a v6 Device that predates this
+    /// ticket from one that has it). Genuinely less interesting than
+    /// every `acknowledged_*` above in one respect — `insert_events`'s
+    /// own doc comment — an Event has no mutable column and no `is
+    /// distinct from` guard to make silent in the first place, so a
+    /// pushed Event that already exists on this table is always a
+    /// byte-identical replay, never a change the guard suppressed. It
+    /// still clears `pending()` on that replay for the identical reason
+    /// every other stream needs one: without it, a Device whose Event
+    /// Cursor has already moved past that row's own `seq` — the same
+    /// stale-Cursor shape every other stream's motivating bug takes —
+    /// would re-push it forever.
+    ///
+    /// **No `PROTOCOL_VERSION` bump for any `acknowledged_*` field
+    /// above** — see that constant's own doc comment for why: every one
+    /// is new, additive, and the response type an old Device already
+    /// deserializes tolerates an extra JSON key it doesn't declare, the
+    /// same "harmlessly ignored" tolerance every wire response in this
+    /// codebase already relies on for a field it doesn't recognise. A
+    /// Device built before issue #194 simply never reads these seven
+    /// keys and keeps relying on the Cursor-paged arrays alone, the same
+    /// way it always has — the bug this ticket fixes (a no-op push
+    /// re-pushed forever) isn't fixed for that Device until it upgrades,
+    /// which is the ordinary consequence of `PROTOCOL_VERSION` naming the
+    /// wire shape a *build* understands, not a promise that every bugfix
+    /// reaches every Device instantly.
+    pub acknowledged_events: Vec<EventOutput>,
 }
 
 #[utoipa::path(
@@ -778,8 +927,12 @@ async fn run_sync(
     embed_tx: &Option<Sender<Uuid>>,
     req: SyncRequest,
 ) -> anyhow::Result<SyncResponse> {
-    if !req.entries.is_empty() {
-        let inserted_ids = insert_entries(pool, &req.entries).await?;
+    // Issue #194: `acknowledged_entries` is `Vec::new()` whenever nothing
+    // was pushed — there is nothing to acknowledge, and calling
+    // `insert_entries` on an empty slice would be a redundant round trip
+    // for a `where id = any($1)` that could only ever match zero rows.
+    let acknowledged_entries = if !req.entries.is_empty() {
+        let (inserted_ids, acknowledged_entries) = insert_entries(pool, &req.entries).await?;
         if let Some(tx) = embed_tx {
             for id in inserted_ids {
                 // Never `.send().await`: a full or lagging embedding worker
@@ -791,71 +944,88 @@ async fn run_sync(
                 let _ = tx.try_send(id);
             }
         }
-    }
+        acknowledged_entries
+    } else {
+        Vec::new()
+    };
 
     let entries = fetch_entries_since(pool, req.since_seq).await?;
     let cursor = entries.last().map_or(req.since_seq, |e| e.seq);
 
     // See this function's own doc comment for why protocol 5 is the gate,
     // not merely `!req.tasks.is_empty()` — a v4 Device pushes nothing to
-    // gate on, but must still pull nothing back.
-    let (tasks, task_cursor) = if req.protocol_version >= 5 {
-        if !req.tasks.is_empty() {
-            insert_tasks(pool, &req.tasks).await?;
-        }
+    // gate on, but must still pull nothing back. `acknowledged_tasks` is
+    // gated identically to `tasks` itself (`SyncResponse::acknowledged_tasks`'s
+    // own doc comment) — a v4 Device's `tasks` is always empty by
+    // construction, so this gate costs it nothing it wasn't already owed.
+    let (tasks, task_cursor, acknowledged_tasks) = if req.protocol_version >= 5 {
+        let acknowledged_tasks = if !req.tasks.is_empty() {
+            insert_tasks(pool, &req.tasks).await?
+        } else {
+            Vec::new()
+        };
         let tasks = fetch_tasks_since(pool, req.since_task_seq).await?;
         let task_cursor = tasks.last().map_or(req.since_task_seq, |t| t.seq);
-        (tasks, task_cursor)
+        (tasks, task_cursor, acknowledged_tasks)
     } else {
-        (Vec::new(), req.since_task_seq)
+        (Vec::new(), req.since_task_seq, Vec::new())
     };
 
     // Issue #182: the identical protocol-6 gate, run four more times — see
     // this function's own doc comment for why the gate has to cover the
     // whole stream, push and pull alike, not merely "don't act on an empty
-    // push."
-    let (projects, project_cursor) = if req.protocol_version >= 6 {
-        if !req.projects.is_empty() {
-            insert_projects(pool, &req.projects).await?;
-        }
+    // push." Issue #194's `acknowledged_*` rides along inside the same
+    // gate for the identical reason `acknowledged_tasks` does above.
+    let (projects, project_cursor, acknowledged_projects) = if req.protocol_version >= 6 {
+        let acknowledged_projects = if !req.projects.is_empty() {
+            insert_projects(pool, &req.projects).await?
+        } else {
+            Vec::new()
+        };
         let projects = fetch_projects_since(pool, req.since_project_seq).await?;
         let project_cursor = projects.last().map_or(req.since_project_seq, |p| p.seq);
-        (projects, project_cursor)
+        (projects, project_cursor, acknowledged_projects)
     } else {
-        (Vec::new(), req.since_project_seq)
+        (Vec::new(), req.since_project_seq, Vec::new())
     };
 
-    let (sections, section_cursor) = if req.protocol_version >= 6 {
-        if !req.sections.is_empty() {
-            insert_sections(pool, &req.sections).await?;
-        }
+    let (sections, section_cursor, acknowledged_sections) = if req.protocol_version >= 6 {
+        let acknowledged_sections = if !req.sections.is_empty() {
+            insert_sections(pool, &req.sections).await?
+        } else {
+            Vec::new()
+        };
         let sections = fetch_sections_since(pool, req.since_section_seq).await?;
         let section_cursor = sections.last().map_or(req.since_section_seq, |s| s.seq);
-        (sections, section_cursor)
+        (sections, section_cursor, acknowledged_sections)
     } else {
-        (Vec::new(), req.since_section_seq)
+        (Vec::new(), req.since_section_seq, Vec::new())
     };
 
-    let (labels, label_cursor) = if req.protocol_version >= 6 {
-        if !req.labels.is_empty() {
-            insert_labels(pool, &req.labels).await?;
-        }
+    let (labels, label_cursor, acknowledged_labels) = if req.protocol_version >= 6 {
+        let acknowledged_labels = if !req.labels.is_empty() {
+            insert_labels(pool, &req.labels).await?
+        } else {
+            Vec::new()
+        };
         let labels = fetch_labels_since(pool, req.since_label_seq).await?;
         let label_cursor = labels.last().map_or(req.since_label_seq, |l| l.seq);
-        (labels, label_cursor)
+        (labels, label_cursor, acknowledged_labels)
     } else {
-        (Vec::new(), req.since_label_seq)
+        (Vec::new(), req.since_label_seq, Vec::new())
     };
 
-    let (comments, comment_cursor) = if req.protocol_version >= 6 {
-        if !req.comments.is_empty() {
-            insert_comments(pool, &req.comments).await?;
-        }
+    let (comments, comment_cursor, acknowledged_comments) = if req.protocol_version >= 6 {
+        let acknowledged_comments = if !req.comments.is_empty() {
+            insert_comments(pool, &req.comments).await?
+        } else {
+            Vec::new()
+        };
         let comments = fetch_comments_since(pool, req.since_comment_seq).await?;
         let comment_cursor = comments.last().map_or(req.since_comment_seq, |c| c.seq);
-        (comments, comment_cursor)
+        (comments, comment_cursor, acknowledged_comments)
     } else {
-        (Vec::new(), req.since_comment_seq)
+        (Vec::new(), req.since_comment_seq, Vec::new())
     };
 
     // Issue #184: no `protocol_version` gate — see `PROTOCOL_VERSION`'s
@@ -863,10 +1033,13 @@ async fn run_sync(
     // one would be meaningless here. Every Device that can reach this
     // handler at all (protocol_version already checked against the
     // MIN_PROTOCOL_VERSION..=PROTOCOL_VERSION range above) pushes and
-    // pulls Events unconditionally.
-    if !req.events.is_empty() {
-        insert_events(pool, &req.events).await?;
-    }
+    // pulls Events unconditionally — `acknowledged_events` (issue #194)
+    // follows the identical ungated shape.
+    let acknowledged_events = if !req.events.is_empty() {
+        insert_events(pool, &req.events).await?
+    } else {
+        Vec::new()
+    };
     let events = fetch_events_since(pool, req.since_event_seq).await?;
     let event_cursor = events.last().map_or(req.since_event_seq, |e| e.seq);
 
@@ -885,6 +1058,13 @@ async fn run_sync(
         comment_cursor,
         events,
         event_cursor,
+        acknowledged_entries,
+        acknowledged_tasks,
+        acknowledged_projects,
+        acknowledged_sections,
+        acknowledged_labels,
+        acknowledged_comments,
+        acknowledged_events,
     })
 }
 
@@ -901,23 +1081,36 @@ async fn acquire_insert_lock(conn: &mut PgConnection) -> sqlx::Result<()> {
 
 /// Inserts a new Entry, or applies an edit/delete to an existing one — see
 /// the module comment at the top of this file for why sync carries changes
-/// rather than immutable Entries. Returns the ids of every row this call
-/// actually *changed* (a fresh insert, an edit that altered the body, or a
-/// delete) — a replayed push that changes nothing returns no row from
-/// `returning id`, so it's excluded automatically rather than needing a
-/// separate existence check. The caller uses this to hint the embedding
-/// worker only about Entries whose content actually needs re-embedding
-/// (see `run_sync`); a no-op replay must not re-trigger that, which is
-/// exactly what the `is distinct from` guard below buys it.
+/// rather than immutable Entries. Returns two things, deliberately
+/// distinct even though both are computed from the same push:
+///
+/// - the ids of every row this call actually *changed* (a fresh insert, an
+///   edit that altered the body, or a delete) — a replayed push that
+///   changes nothing returns no row from `returning id`, so it's excluded
+///   automatically rather than needing a separate existence check. The
+///   caller uses this to hint the embedding worker only about Entries
+///   whose content actually needs re-embedding (see `run_sync`); a no-op
+///   replay must not re-trigger that, which is exactly what the `is
+///   distinct from` guard below buys it.
+/// - (issue #194) the server's own current row for **every** id this push
+///   named, changed or not — `acknowledged_entries` below, selected once
+///   this function's own upsert loop is done, inside the same transaction
+///   and before it commits. This is what lets a Device learn its push was
+///   received even when nothing about the row actually changed (this
+///   module's own top-of-file doc comment on why the Cursor-paged
+///   `entries` array alone can't tell it that), and, separately, what lets
+///   a Device whose edit the delete-is-terminal guard below refused learn
+///   the tombstone it was refused against.
 ///
 /// The upsert:
 ///
 /// ```sql
-/// insert into entries (id, device_id, body, created_at, deleted_at)
-/// values ($1, $2, $3, $4, $5)
+/// insert into entries (id, device_id, body, created_at, deleted_at, updated_at)
+/// values ($1, $2, $3, $4, $5, $6)
 /// on conflict (id) do update
 ///   set body       = excluded.body,
 ///       deleted_at = excluded.deleted_at,
+///       updated_at = excluded.updated_at,
 ///       embedding  = null,
 ///       seq        = nextval(pg_get_serial_sequence('entries', 'seq'))
 ///   where entries.deleted_at is null
@@ -925,6 +1118,28 @@ async fn acquire_insert_lock(conn: &mut PgConnection) -> sqlx::Result<()> {
 ///       or entries.deleted_at is distinct from excluded.deleted_at)
 /// returning id
 /// ```
+///
+/// **Issue #196: `updated_at` sits in the `set` list only, never in the
+/// `is distinct from` guard below.** ADR 0059's own Alternatives section
+/// names this exact trap and rejects it: putting a fresh, always-different
+/// timestamp into the guard would make it fire on *every* push, whether or
+/// not `body`/`deleted_at` actually changed, reassigning `seq` and
+/// broadcasting a content-identical replay to every Device that has ever
+/// synced this Entry — precisely the "free no-op" replay ADR 0028 designed
+/// this guard to keep cheap. Keeping `updated_at` out of the guard means a
+/// replay whose content is unchanged stays a true no-op even though its
+/// own `updated_at` differs from what's already stored: the `where` clause
+/// below still evaluates `entries.body`/`entries.deleted_at` alone, so the
+/// row is not rewritten and `updated_at` is left exactly as it was.
+///
+/// **Consequence worth naming, not hiding:** after an "edit" that lands on
+/// content identical to what the Server already has, the Server keeps its
+/// *older* `updated_at` while the pushing Device now holds a *newer* one
+/// locally — the guard didn't fire, so nothing here reconciled the two.
+/// That divergence is harmless: issue #194's acknowledgement
+/// (`acknowledged_entries` below) still clears this Device's own pending
+/// state regardless of whether the guard fired, which is the whole reason
+/// a no-op push doesn't loop forever (ADR 0059).
 ///
 /// Three things in that `where` clause are each load-bearing on their own:
 ///
@@ -967,18 +1182,22 @@ async fn acquire_insert_lock(conn: &mut PgConnection) -> sqlx::Result<()> {
 ///   Entry sitting in its original place in History's chronological order,
 ///   even though its `seq` (sync order, not display order — ADR 0002) just
 ///   jumped to the head of the log.
-async fn insert_entries(pool: &PgPool, entries: &[EntryInput]) -> anyhow::Result<Vec<Uuid>> {
+async fn insert_entries(
+    pool: &PgPool,
+    entries: &[EntryInput],
+) -> anyhow::Result<(Vec<Uuid>, Vec<EntryOutput>)> {
     let mut tx = pool.begin().await?;
     acquire_insert_lock(&mut tx).await?;
 
     let mut inserted_ids = Vec::with_capacity(entries.len());
     for entry in entries {
         let changed_id: Option<Uuid> = sqlx::query_scalar(
-            "insert into entries (id, device_id, body, created_at, deleted_at)
-             values ($1, $2, $3, $4, $5)
+            "insert into entries (id, device_id, body, created_at, deleted_at, updated_at)
+             values ($1, $2, $3, $4, $5, $6)
              on conflict (id) do update
                set body       = excluded.body,
                    deleted_at = excluded.deleted_at,
+                   updated_at = excluded.updated_at,
                    embedding  = null,
                    seq        = nextval(pg_get_serial_sequence('entries', 'seq'))
                where entries.deleted_at is null
@@ -991,6 +1210,7 @@ async fn insert_entries(pool: &PgPool, entries: &[EntryInput]) -> anyhow::Result
         .bind(&entry.body)
         .bind(entry.created_at)
         .bind(entry.deleted_at)
+        .bind(entry.updated_at)
         .fetch_optional(&mut *tx)
         .await?;
         if let Some(id) = changed_id {
@@ -998,8 +1218,25 @@ async fn insert_entries(pool: &PgPool, entries: &[EntryInput]) -> anyhow::Result
         }
     }
 
+    // Issue #194: the server's own current row for every id this push
+    // named — inside the same transaction as the upsert loop above, before
+    // it commits, so this reads the post-upsert state without a second
+    // round trip to the pool. `where id = any($1)` rather than one select
+    // per row: `entries` here is at most `SYNC_BATCH_SIZE` (the client
+    // chunks its own push to that bound — packages/core/src/sync-engine.ts),
+    // so this is one bounded query, not N.
+    let ids: Vec<Uuid> = entries.iter().map(|e| e.id).collect();
+    let acknowledged_entries = sqlx::query_as::<_, EntryOutput>(
+        "select id, device_id, body, created_at, seq, deleted_at, updated_at
+         from entries
+         where id = any($1)",
+    )
+    .bind(&ids)
+    .fetch_all(&mut *tx)
+    .await?;
+
     tx.commit().await?;
-    Ok(inserted_ids)
+    Ok((inserted_ids, acknowledged_entries))
 }
 
 /// `deleted_at` travels with every other column here and is filtered on by
@@ -1015,7 +1252,7 @@ async fn insert_entries(pool: &PgPool, entries: &[EntryInput]) -> anyhow::Result
 /// unfiltered.
 async fn fetch_entries_since(pool: &PgPool, since_seq: i64) -> anyhow::Result<Vec<EntryOutput>> {
     let entries = sqlx::query_as::<_, EntryOutput>(
-        "select id, device_id, body, created_at, seq, deleted_at
+        "select id, device_id, body, created_at, seq, deleted_at, updated_at
          from entries
          where seq > $1
          order by seq asc
@@ -1088,7 +1325,21 @@ async fn acquire_task_insert_lock(conn: &mut PgConnection) -> sqlx::Result<()> {
 /// Entries: a Task is identified by the Device that *created* it, not the
 /// one that most recently edited it, and `created_at` never moves on an
 /// edit.
-async fn insert_tasks(pool: &PgPool, tasks: &[TaskInput]) -> anyhow::Result<()> {
+///
+/// **Issue #196: `updated_at` is in the `set` list only, never in the
+/// `is distinct from` chain** — see `insert_entries`'s own doc comment for
+/// the full reasoning (ADR 0059) this reuses unchanged: a Task has
+/// thirteen mutable columns instead of an Entry's two, which only raises
+/// the stakes of getting this wrong, not the reasoning itself. A push
+/// that changes nothing about a Task's own thirteen compared columns
+/// stays the free no-op the guard already gave it, even though its own
+/// `updated_at` differs from what's already stored.
+///
+/// Returns the server's own current row for every id this push named
+/// (issue #194) — the Task-shaped sibling of `insert_entries`'s own
+/// `acknowledged_entries` return value; see that function's own doc
+/// comment for why the response needs this at all.
+async fn insert_tasks(pool: &PgPool, tasks: &[TaskInput]) -> anyhow::Result<Vec<TaskOutput>> {
     let mut tx = pool.begin().await?;
     acquire_task_insert_lock(&mut tx).await?;
 
@@ -1097,9 +1348,9 @@ async fn insert_tasks(pool: &PgPool, tasks: &[TaskInput]) -> anyhow::Result<()> 
             "insert into tasks (
                  id, device_id, content, completed_at, order_key, day_order, created_at,
                  deleted_at, date, deadline, priority, label_ids,
-                 date_string, project_id, section_id, parent_id, description
+                 date_string, project_id, section_id, parent_id, description, updated_at
              )
-             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
              on conflict (id) do update
                set content       = excluded.content,
                    completed_at  = excluded.completed_at,
@@ -1115,6 +1366,10 @@ async fn insert_tasks(pool: &PgPool, tasks: &[TaskInput]) -> anyhow::Result<()> 
                    section_id    = excluded.section_id,
                    parent_id     = excluded.parent_id,
                    description   = excluded.description,
+                   -- Issue #196: `set` only, never the `is distinct from`
+                   -- chain below — this function's own doc comment above
+                   -- has the full reasoning (ADR 0059).
+                   updated_at    = excluded.updated_at,
                    seq           = nextval(pg_get_serial_sequence('tasks', 'seq'))
                where tasks.deleted_at is null
                  and (tasks.content      is distinct from excluded.content
@@ -1149,12 +1404,28 @@ async fn insert_tasks(pool: &PgPool, tasks: &[TaskInput]) -> anyhow::Result<()> 
         .bind(task.section_id)
         .bind(task.parent_id)
         .bind(&task.description)
+        .bind(task.updated_at)
         .execute(&mut *tx)
         .await?;
     }
 
+    // Issue #194: see `insert_entries`'s own doc comment on the identical
+    // select for Entries — same reasoning, same "one bounded query, not
+    // N," run inside the same transaction as the upsert loop above.
+    let ids: Vec<Uuid> = tasks.iter().map(|t| t.id).collect();
+    let acknowledged_tasks = sqlx::query_as::<_, TaskOutput>(
+        "select id, device_id, content, completed_at, order_key, day_order, created_at, seq,
+                deleted_at, date, deadline, priority, label_ids,
+                date_string, project_id, section_id, parent_id, description, updated_at
+         from tasks
+         where id = any($1)",
+    )
+    .bind(&ids)
+    .fetch_all(&mut *tx)
+    .await?;
+
     tx.commit().await?;
-    Ok(())
+    Ok(acknowledged_tasks)
 }
 
 /// The Task-shaped sibling of `fetch_entries_since` — `deleted_at` travels
@@ -1170,7 +1441,7 @@ async fn fetch_tasks_since(pool: &PgPool, since_seq: i64) -> anyhow::Result<Vec<
     let tasks = sqlx::query_as::<_, TaskOutput>(
         "select id, device_id, content, completed_at, order_key, day_order, created_at, seq,
                 deleted_at, date, deadline, priority, label_ids,
-                date_string, project_id, section_id, parent_id, description
+                date_string, project_id, section_id, parent_id, description, updated_at
          from tasks
          where seq > $1
          order by seq asc
@@ -1203,7 +1474,14 @@ async fn acquire_project_insert_lock(conn: &mut PgConnection) -> sqlx::Result<()
 /// is reassigned from `projects`'s own `bigserial` on every real write.
 /// `device_id` and `created_at` are absent from the `set` list for the
 /// identical "identified by creator, never re-attributed" reason.
-async fn insert_projects(pool: &PgPool, projects: &[ProjectInput]) -> anyhow::Result<()> {
+///
+/// **Issue #196: `updated_at` is in the `set` list only, never in the
+/// `is distinct from` chain** — see `insert_entries`'s own doc comment for
+/// the full reasoning (ADR 0059).
+///
+/// Returns the server's own current row for every id this push named
+/// (issue #194) — see `insert_entries`'s own doc comment for why.
+async fn insert_projects(pool: &PgPool, projects: &[ProjectInput]) -> anyhow::Result<Vec<ProjectOutput>> {
     let mut tx = pool.begin().await?;
     acquire_project_insert_lock(&mut tx).await?;
 
@@ -1211,9 +1489,9 @@ async fn insert_projects(pool: &PgPool, projects: &[ProjectInput]) -> anyhow::Re
         sqlx::query(
             "insert into projects (
                  id, device_id, name, colour, favourite, archived, parent_id,
-                 description, order_key, created_at, deleted_at
+                 description, order_key, created_at, deleted_at, updated_at
              )
-             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
              on conflict (id) do update
                set name        = excluded.name,
                    colour      = excluded.colour,
@@ -1223,6 +1501,7 @@ async fn insert_projects(pool: &PgPool, projects: &[ProjectInput]) -> anyhow::Re
                    description = excluded.description,
                    order_key   = excluded.order_key,
                    deleted_at  = excluded.deleted_at,
+                   updated_at  = excluded.updated_at,
                    seq         = nextval(pg_get_serial_sequence('projects', 'seq'))
                where projects.deleted_at is null
                  and (projects.name        is distinct from excluded.name
@@ -1245,12 +1524,26 @@ async fn insert_projects(pool: &PgPool, projects: &[ProjectInput]) -> anyhow::Re
         .bind(&project.order_key)
         .bind(project.created_at)
         .bind(project.deleted_at)
+        .bind(project.updated_at)
         .execute(&mut *tx)
         .await?;
     }
 
+    // Issue #194: see `insert_entries`'s own doc comment on the identical
+    // select for Entries.
+    let ids: Vec<Uuid> = projects.iter().map(|p| p.id).collect();
+    let acknowledged_projects = sqlx::query_as::<_, ProjectOutput>(
+        "select id, device_id, name, colour, favourite, archived, parent_id,
+                description, order_key, created_at, seq, deleted_at, updated_at
+         from projects
+         where id = any($1)",
+    )
+    .bind(&ids)
+    .fetch_all(&mut *tx)
+    .await?;
+
     tx.commit().await?;
-    Ok(())
+    Ok(acknowledged_projects)
 }
 
 /// The Project-shaped sibling of `fetch_tasks_since` — `deleted_at`
@@ -1261,7 +1554,7 @@ async fn fetch_projects_since(
 ) -> anyhow::Result<Vec<ProjectOutput>> {
     let projects = sqlx::query_as::<_, ProjectOutput>(
         "select id, device_id, name, colour, favourite, archived, parent_id,
-                description, order_key, created_at, seq, deleted_at
+                description, order_key, created_at, seq, deleted_at, updated_at
          from projects
          where seq > $1
          order by seq asc
@@ -1286,8 +1579,15 @@ async fn acquire_section_insert_lock(conn: &mut PgConnection) -> sqlx::Result<()
 }
 
 /// Inserts a new Section, or applies an edit/delete to an existing one —
-/// mirrors `insert_projects` field for field, over `sections` instead.
-async fn insert_sections(pool: &PgPool, sections: &[SectionInput]) -> anyhow::Result<()> {
+/// mirrors `insert_projects` field for field, over `sections` instead,
+/// including its `acknowledged_sections` return value (issue #194 —
+/// `insert_entries`'s own doc comment). Issue #196's `updated_at` mirrors
+/// `insert_projects`'s own treatment too: `set` list only, never the
+/// `is distinct from` chain (ADR 0059, `insert_entries`'s own doc comment).
+async fn insert_sections(
+    pool: &PgPool,
+    sections: &[SectionInput],
+) -> anyhow::Result<Vec<SectionOutput>> {
     let mut tx = pool.begin().await?;
     acquire_section_insert_lock(&mut tx).await?;
 
@@ -1295,9 +1595,9 @@ async fn insert_sections(pool: &PgPool, sections: &[SectionInput]) -> anyhow::Re
         sqlx::query(
             "insert into sections (
                  id, device_id, project_id, name, description, order_key,
-                 archived, created_at, deleted_at
+                 archived, created_at, deleted_at, updated_at
              )
-             values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
              on conflict (id) do update
                set project_id  = excluded.project_id,
                    name        = excluded.name,
@@ -1305,6 +1605,7 @@ async fn insert_sections(pool: &PgPool, sections: &[SectionInput]) -> anyhow::Re
                    order_key   = excluded.order_key,
                    archived    = excluded.archived,
                    deleted_at  = excluded.deleted_at,
+                   updated_at  = excluded.updated_at,
                    seq         = nextval(pg_get_serial_sequence('sections', 'seq'))
                where sections.deleted_at is null
                  and (sections.project_id  is distinct from excluded.project_id
@@ -1323,12 +1624,26 @@ async fn insert_sections(pool: &PgPool, sections: &[SectionInput]) -> anyhow::Re
         .bind(section.archived)
         .bind(section.created_at)
         .bind(section.deleted_at)
+        .bind(section.updated_at)
         .execute(&mut *tx)
         .await?;
     }
 
+    // Issue #194: see `insert_entries`'s own doc comment on the identical
+    // select for Entries.
+    let ids: Vec<Uuid> = sections.iter().map(|s| s.id).collect();
+    let acknowledged_sections = sqlx::query_as::<_, SectionOutput>(
+        "select id, device_id, project_id, name, description, order_key,
+                archived, created_at, seq, deleted_at, updated_at
+         from sections
+         where id = any($1)",
+    )
+    .bind(&ids)
+    .fetch_all(&mut *tx)
+    .await?;
+
     tx.commit().await?;
-    Ok(())
+    Ok(acknowledged_sections)
 }
 
 /// The Section-shaped sibling of `fetch_projects_since`.
@@ -1338,7 +1653,7 @@ async fn fetch_sections_since(
 ) -> anyhow::Result<Vec<SectionOutput>> {
     let sections = sqlx::query_as::<_, SectionOutput>(
         "select id, device_id, project_id, name, description, order_key,
-                archived, created_at, seq, deleted_at
+                archived, created_at, seq, deleted_at, updated_at
          from sections
          where seq > $1
          order by seq asc
@@ -1364,19 +1679,23 @@ async fn acquire_label_insert_lock(conn: &mut PgConnection) -> sqlx::Result<()> 
 
 /// Inserts a new Label, or applies an edit/delete to an existing one —
 /// mirrors `insert_projects` field for field, over `labels` instead (no
-/// `order_key` — see `LabelInput`'s own doc comment).
-async fn insert_labels(pool: &PgPool, labels: &[LabelInput]) -> anyhow::Result<()> {
+/// `order_key` — see `LabelInput`'s own doc comment), including its
+/// `acknowledged_labels` return value (issue #194 — `insert_entries`'s own
+/// doc comment) and issue #196's `updated_at` treatment (`set` list only,
+/// never the `is distinct from` chain — ADR 0059).
+async fn insert_labels(pool: &PgPool, labels: &[LabelInput]) -> anyhow::Result<Vec<LabelOutput>> {
     let mut tx = pool.begin().await?;
     acquire_label_insert_lock(&mut tx).await?;
 
     for label in labels {
         sqlx::query(
-            "insert into labels (id, device_id, name, colour, created_at, deleted_at)
-             values ($1, $2, $3, $4, $5, $6)
+            "insert into labels (id, device_id, name, colour, created_at, deleted_at, updated_at)
+             values ($1, $2, $3, $4, $5, $6, $7)
              on conflict (id) do update
                set name       = excluded.name,
                    colour     = excluded.colour,
                    deleted_at = excluded.deleted_at,
+                   updated_at = excluded.updated_at,
                    seq        = nextval(pg_get_serial_sequence('labels', 'seq'))
                where labels.deleted_at is null
                  and (labels.name       is distinct from excluded.name
@@ -1389,18 +1708,31 @@ async fn insert_labels(pool: &PgPool, labels: &[LabelInput]) -> anyhow::Result<(
         .bind(&label.colour)
         .bind(label.created_at)
         .bind(label.deleted_at)
+        .bind(label.updated_at)
         .execute(&mut *tx)
         .await?;
     }
 
+    // Issue #194: see `insert_entries`'s own doc comment on the identical
+    // select for Entries.
+    let ids: Vec<Uuid> = labels.iter().map(|l| l.id).collect();
+    let acknowledged_labels = sqlx::query_as::<_, LabelOutput>(
+        "select id, device_id, name, colour, created_at, seq, deleted_at, updated_at
+         from labels
+         where id = any($1)",
+    )
+    .bind(&ids)
+    .fetch_all(&mut *tx)
+    .await?;
+
     tx.commit().await?;
-    Ok(())
+    Ok(acknowledged_labels)
 }
 
 /// The Label-shaped sibling of `fetch_projects_since`.
 async fn fetch_labels_since(pool: &PgPool, since_seq: i64) -> anyhow::Result<Vec<LabelOutput>> {
     let labels = sqlx::query_as::<_, LabelOutput>(
-        "select id, device_id, name, colour, created_at, seq, deleted_at
+        "select id, device_id, name, colour, created_at, seq, deleted_at, updated_at
          from labels
          where seq > $1
          order by seq asc
@@ -1430,17 +1762,26 @@ async fn acquire_comment_insert_lock(conn: &mut PgConnection) -> sqlx::Result<()
 /// `created_at` — mirroring `EntryInput`'s "identified by creator, never
 /// re-attributed" rule: a Comment's own Task never changes after it's
 /// written, the same way an Entry's own authorship doesn't.
-async fn insert_comments(pool: &PgPool, comments: &[CommentInput]) -> anyhow::Result<()> {
+///
+/// Returns the server's own current row for every id this push named
+/// (issue #194) — see `insert_entries`'s own doc comment for why. Issue
+/// #196's `updated_at` follows the identical treatment: `set` list only,
+/// never the `is distinct from` chain (ADR 0059).
+async fn insert_comments(
+    pool: &PgPool,
+    comments: &[CommentInput],
+) -> anyhow::Result<Vec<CommentOutput>> {
     let mut tx = pool.begin().await?;
     acquire_comment_insert_lock(&mut tx).await?;
 
     for comment in comments {
         sqlx::query(
-            "insert into comments (id, device_id, task_id, text, created_at, deleted_at)
-             values ($1, $2, $3, $4, $5, $6)
+            "insert into comments (id, device_id, task_id, text, created_at, deleted_at, updated_at)
+             values ($1, $2, $3, $4, $5, $6, $7)
              on conflict (id) do update
                set text       = excluded.text,
                    deleted_at = excluded.deleted_at,
+                   updated_at = excluded.updated_at,
                    seq        = nextval(pg_get_serial_sequence('comments', 'seq'))
                where comments.deleted_at is null
                  and (comments.text       is distinct from excluded.text
@@ -1452,12 +1793,25 @@ async fn insert_comments(pool: &PgPool, comments: &[CommentInput]) -> anyhow::Re
         .bind(&comment.text)
         .bind(comment.created_at)
         .bind(comment.deleted_at)
+        .bind(comment.updated_at)
         .execute(&mut *tx)
         .await?;
     }
 
+    // Issue #194: see `insert_entries`'s own doc comment on the identical
+    // select for Entries.
+    let ids: Vec<Uuid> = comments.iter().map(|c| c.id).collect();
+    let acknowledged_comments = sqlx::query_as::<_, CommentOutput>(
+        "select id, device_id, task_id, text, created_at, seq, deleted_at, updated_at
+         from comments
+         where id = any($1)",
+    )
+    .bind(&ids)
+    .fetch_all(&mut *tx)
+    .await?;
+
     tx.commit().await?;
-    Ok(())
+    Ok(acknowledged_comments)
 }
 
 /// The Comment-shaped sibling of `fetch_projects_since`.
@@ -1466,7 +1820,7 @@ async fn fetch_comments_since(
     since_seq: i64,
 ) -> anyhow::Result<Vec<CommentOutput>> {
     let comments = sqlx::query_as::<_, CommentOutput>(
-        "select id, device_id, task_id, text, created_at, seq, deleted_at
+        "select id, device_id, task_id, text, created_at, seq, deleted_at, updated_at
          from comments
          where seq > $1
          order by seq asc
@@ -1513,7 +1867,14 @@ async fn acquire_event_insert_lock(conn: &mut PgConnection) -> sqlx::Result<()> 
 /// critically, **no `seq` reassignment** — a replayed Event must not jump
 /// back to the head of the log and cost every Device a redundant re-pull
 /// of a row they already have.
-async fn insert_events(pool: &PgPool, events: &[EventInput]) -> anyhow::Result<()> {
+///
+/// Returns the server's own current row for every id this push named
+/// (issue #194, `SyncResponse::acknowledged_events`'s own doc comment) —
+/// an Event has no `is distinct from` guard to make silent in the first
+/// place, but a replayed push still needs to clear `pending()` on the
+/// Device that sent it, for the identical reason every other stream's
+/// `acknowledged_*` does.
+async fn insert_events(pool: &PgPool, events: &[EventInput]) -> anyhow::Result<Vec<EventOutput>> {
     let mut tx = pool.begin().await?;
     acquire_event_insert_lock(&mut tx).await?;
 
@@ -1538,8 +1899,21 @@ async fn insert_events(pool: &PgPool, events: &[EventInput]) -> anyhow::Result<(
         .await?;
     }
 
+    // Issue #194: see `insert_entries`'s own doc comment on the identical
+    // select for Entries.
+    let ids: Vec<Uuid> = events.iter().map(|e| e.id).collect();
+    let acknowledged_events = sqlx::query_as::<_, EventOutput>(
+        "select id, device_id, event_type, object_type, object_id, task_id, project_id,
+                occurred_at, extra, seq
+         from events
+         where id = any($1)",
+    )
+    .bind(&ids)
+    .fetch_all(&mut *tx)
+    .await?;
+
     tx.commit().await?;
-    Ok(())
+    Ok(acknowledged_events)
 }
 
 /// The Event-shaped sibling of `fetch_comments_since`.

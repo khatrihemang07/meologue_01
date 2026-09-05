@@ -408,6 +408,36 @@ export function deleteDigest(
 }
 
 /**
+ * Writes a stored `chat_model` straight into `server_settings`, bypassing
+ * `PATCH /v1/config` entirely — issue #203's own acceptance criterion asks
+ * for proof that a row landed this way (a leftover from an earlier local
+ * run, or from a developer poking at the Server with `psql` directly)
+ * cannot poison a suite run. Both e2e Servers boot with
+ * `MEOLOGUE_CONFIG_LOCK=1` (`scripts/e2e-server.sh`/`-b.sh`), and a locked
+ * Server ignores its stored row entirely (`settings::resolve`'s own doc
+ * comment) — so a spec seeding this way and then reading `GET /v1/config`
+ * back through Settings should see the *environment's* `chat_model`
+ * (`llm-stub-chat`), never this one.
+ *
+ * `id` is pinned to `1` by `server_settings`'s own check constraint
+ * (`migrations/0018_create_server_settings.sql`), so this is always an
+ * upsert against that one row, mirroring `settings::upsert`'s own
+ * `on conflict` — never a second row.
+ */
+export function seedServerSetting(chatModel: string, database: string): void {
+  runSql(
+    `insert into server_settings (id, chat_model) values (1, ${sqlLiteral(chatModel)}) ` +
+      "on conflict (id) do update set chat_model = excluded.chat_model;",
+    database,
+  );
+}
+
+/** Undoes `seedServerSetting`, so the row it wrote never outlives the one test that needs it. */
+export function clearServerSettings(database: string): void {
+  runSql("delete from server_settings;", database);
+}
+
+/**
  * Deletes every row from `tasks`, on both e2e databases — issue #190's
  * structural fix. `fixtures.ts`'s own autouse fixture calls this before
  * every single test, not merely at a spec-file boundary, so the guarantee

@@ -34,6 +34,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Reports this Server's settings: value and source per overridable field,
+         *     the instance's own `MEOLOGUE_MODE`, whether it is locked, and the Entry
+         *     embedding backlog. Registered unconditionally in `lib.rs`, before the
+         *     `/v1/{*rest}` catch-all and with no gate of its own — this is the one
+         *     route that must exist on an unconfigured Server, because it is how a
+         *     Server *becomes* configured (issue #200's own framing).
+         * @description **API keys are returned in full, not write-only.** Per ADR 0003 the
+         *     Server has no authentication at all, and it already warns at startup
+         *     that anything able to open a TCP connection to it can read and write
+         *     every Entry. Withholding a key that a reachable caller can already read
+         *     straight out of the process environment buys nothing and costs the
+         *     ability to check what is actually set — see ADR 0060's own Decision
+         *     section for the fuller version of this argument. Don't "fix" this.
+         */
+        get: operations["get_config_handler"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Applies a `ConfigPatch` and reports the settings row exactly as
+         *     `GET /v1/config` would immediately afterward. Writes unconditionally,
+         *     even while `locked` — `resolve`'s own doc comment is why: enforcing the
+         *     lock here as well would be enforcing it at a second call site, the
+         *     exact duplication issue #200's acceptance criteria ask this design to
+         *     avoid. A write made while locked is simply inert until the lock is
+         *     lifted, at which point it takes effect with no need to resubmit it.
+         */
+        patch: operations["patch_config_handler"];
+        trace?: never;
+    };
     "/v1/digests/{period}": {
         parameters: {
             query?: never;
@@ -103,11 +143,14 @@ export interface paths {
          *     Postgres is down still identifies itself. Unlike `/v1/sync`, this never
          *     rejects on protocol version: its whole job is letting the caller compare
          *     versions themselves. See ADR 0010.
-         * @description Reads `Option<ReflectState>` and `DigestsEnabled` off `AppState` (via
-         *     their own `FromRef` impls in `lib.rs`) rather than the whole `AppState`
-         *     — the same one-extractor-per-need shape `sync::sync_handler` and
+         * @description Reads `Option<ReflectState>`, `DigestsEnabled` and (issue #201)
+         *     `RuntimeFlags` off `AppState` (via their own `FromRef` impls in
+         *     `lib.rs`) rather than the whole `AppState` — the same
+         *     one-extractor-per-need shape `sync::sync_handler` and
          *     `reflect::reflect_handler` already use, and precisely what keeps this
-         *     handler from ever touching `PgPool` and staying DB-free.
+         *     handler from ever touching `PgPool` and staying DB-free — see
+         *     `HealthCapabilities`'s own doc comment for why gaining a third
+         *     extractor here is *not* the ADR 0010 regression it might look like.
          */
         get: operations["health_handler"];
         put?: never;
@@ -326,6 +369,11 @@ export interface components {
             /** Format: uuid */
             task_id: string;
             text: string;
+            /**
+             * Format: date-time
+             * @description Issue #196 — see `EntryInput::updated_at`'s own doc comment.
+             */
+            updated_at: string;
         };
         /** @description The Comment-shaped sibling of `TaskOutput` — adds only `seq`. */
         CommentOutput: {
@@ -342,6 +390,63 @@ export interface components {
             /** Format: uuid */
             task_id: string;
             text: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        /**
+         * @description `PATCH /v1/config`'s request body. Every field is `Option<String>` with
+         *     `#[serde(default)]`, which gives three distinct wire states without
+         *     needing a nested `Option<Option<_>>`: the key absent from the JSON body
+         *     deserializes to `None` (untouched — `apply_patch` leaves that column
+         *     exactly as it was), the key present with an empty string deserializes to
+         *     `Some(String::new())` (clear to `NULL` — `apply_patch` normalises this),
+         *     and the key present with any other string becomes the new stored value.
+         *     This mirrors the read side's own "empty means unset" convention
+         *     (`LlmConfig::from_env`'s `var()` helper) rather than inventing a second
+         *     one for writes.
+         */
+        ConfigPatch: {
+            chat_api_key?: string | null;
+            chat_base_url?: string | null;
+            chat_model?: string | null;
+            digest_enabled?: null | components["schemas"]["TogglePatch"];
+            embed_api_key?: string | null;
+            embed_base_url?: string | null;
+            embed_model?: string | null;
+            embeddings_enabled?: null | components["schemas"]["TogglePatch"];
+            reflect_enabled?: null | components["schemas"]["TogglePatch"];
+            tz?: string | null;
+        };
+        /**
+         * @description `GET /v1/config`'s response, and what `PATCH /v1/config` echoes back
+         *     once its write lands — the same shape either way, since a client asking
+         *     "what changed" is answered by the same report as a client asking "what
+         *     is it right now."
+         */
+        ConfigResponse: {
+            chat_api_key: components["schemas"]["ResolvedField"];
+            chat_base_url: components["schemas"]["ResolvedField"];
+            chat_model: components["schemas"]["ResolvedField"];
+            digest: components["schemas"]["FeatureConfig"];
+            embed_api_key: components["schemas"]["ResolvedField"];
+            embed_base_url: components["schemas"]["ResolvedField"];
+            embed_model: components["schemas"]["ResolvedField"];
+            embeddings: components["schemas"]["FeatureConfig"];
+            locked: boolean;
+            mode: components["schemas"]["InstanceMode"];
+            reflect: components["schemas"]["FeatureConfig"];
+            tz: components["schemas"]["ResolvedField"];
+            /**
+             * Format: int64
+             * @description `select count(*) from entries where embedding is null and deleted_at
+             *     is null` — see `count_unembedded`. Reported here rather than left
+             *     for a Device to ask the embedding worker directly (there is no such
+             *     route, and there should not be one just for this): Settings is
+             *     where a reader already comes to ask "what is this Server doing,"
+             *     and a backlog count answers "is embedding still catching up" without
+             *     a second endpoint.
+             */
+            unembedded_entries: number;
         };
         /**
          * @description The wire shape of one Digest — everything a client needs to render it
@@ -471,6 +576,14 @@ export interface components {
             device_id: string;
             /** Format: uuid */
             id: string;
+            /**
+             * Format: date-time
+             * @description Issue #196: when this Entry was last actually changed, on the
+             *     pushing Device's own clock — see `insert_entries`'s own doc
+             *     comment for exactly where this lands in its `set` list (and, just
+             *     as importantly, where it does *not* land).
+             */
+            updated_at: string;
         };
         EntryOutput: {
             body: string;
@@ -490,6 +603,11 @@ export interface components {
             id: string;
             /** Format: int64 */
             seq: number;
+            /**
+             * Format: date-time
+             * @description Issue #196 — see `EntryInput::updated_at`'s own doc comment.
+             */
+            updated_at: string;
         };
         /**
          * @description The Event-shaped sibling of `CommentInput` (issue #184 / ADR 0056) —
@@ -557,6 +675,51 @@ export interface components {
             task_id?: string | null;
         };
         /**
+         * @description One of the three tri-state toggles, reported from four different angles
+         *     — issue #201's own acceptance criterion is "reported with both what is
+         *     configured and what is effective," and a UI honestly rendering a
+         *     restart-required gap needs a fourth.
+         */
+        FeatureConfig: {
+            /**
+             * @description Whether this Server's router or worker actually started this
+             *     capability **at boot** — a frozen fact from the moment `main.rs`
+             *     built this process's `Router`, read off exactly what decided route
+             *     registration then (`AppState::reflect`/`digests_enabled`, and
+             *     Reflection's own `embed_client` for Embeddings), never recomputed
+             *     from the live configuration above. `configured && !boot_active` is
+             *     "restart required" — a value just written that has nothing running
+             *     yet to receive it.
+             */
+            boot_active: boolean;
+            /**
+             * @description Whether the **live, currently-resolved** chat/embed configuration
+             *     (this same request's own `resolve` call, `locked`-aware) would let
+             *     this feature run at all if its toggle were on — independent of the
+             *     toggle itself. Reflection and Digest read `LlmConfig::reflect_config`/
+             *     `digest_worker_config`; Embeddings reads `embed_worker_config`.
+             */
+            configured: boolean;
+            /**
+             * @description Whether this capability is doing real work **right now**:
+             *     `boot_active && the in-memory RuntimeFlags say on`. This is exactly
+             *     what `GET /v1/health`'s matching capability reports — the two are
+             *     computed from the same `RuntimeFlags` instance for exactly that
+             *     reason, so a UI reading both can never see them disagree.
+             */
+            effective: boolean;
+            /**
+             * @description The raw stored toggle, ignoring `locked` — `None` (unset), `Some(true)`
+             *     (forced on) or `Some(false)` (forced off). What a `PATCH` changes,
+             *     and what a Clear affordance targets; deliberately *not*
+             *     `resolve`'s `locked`-aware value, because a UI rendering "what is
+             *     stored" while locked should still show the truth of what a future
+             *     unlock will pick back up, not `None` for every toggle regardless of
+             *     what is actually in the row.
+             */
+            stored?: boolean | null;
+        };
+        /**
          * @description Which Server-backed features this Server can actually serve right now,
          *     derived from the same configuration `main.rs` already used to decide
          *     whether `/v1/reflect`, `/v1/digests/*` and the embedding worker exist at
@@ -579,6 +742,21 @@ export interface components {
          *       embed config is resolvable, so a chat-only Server still reports
          *       `reflect: true` while `embeddings: false` — exactly the Server on
          *       which `reflect.rs`'s tool loop quietly omits `similar_entries`.
+         *
+         *       **Issue #201 amends all three of `reflect`/`digest`/`embeddings` to
+         *       read "configured AND switched on," not "configured" alone — see ADR
+         *       0063, whose headline this is.** ADR 0010 pinned this handler to
+         *       touching nothing but its own two constants — no state extraction, no
+         *       query — specifically so a Server whose Postgres is down still answers
+         *       correctly. ADR 0037 already relaxed "no state extraction" once, to
+         *       add the two `AppState` reads above; what stayed load-bearing through
+         *       that change, in writing, was narrower: this handler never touches
+         *       `PgPool`. That is still exactly what holds here. `RuntimeFlags` reads
+         *       three atomics with no pool anywhere in its type — Postgres is read
+         *       for these flags twice per configuration change (once at boot, once on
+         *       a `PATCH`), never per `/v1/health` request, so a Server whose
+         *       database dies after boot keeps answering this route with whatever
+         *       capability state it last knew, exactly as before this ticket.
          *     - `todo` — issue #172 / ADR 0051 — is **unconditionally `true`**, not
          *       read off any `LlmConfig`. Task Sync has no model behind it and no
          *       configuration that can disable it: any Server that answers
@@ -610,6 +788,22 @@ export interface components {
             service: string;
         };
         /**
+         * @description Which instance this process is — issue #200. This does **not** decide
+         *     precedence anywhere in `resolve` below; a Server names itself the same
+         *     way a person introduces themselves by name, with no authority granted
+         *     by the name itself. See ADR 0061 for why this is a separate fact from
+         *     `MEOLOGUE_CONFIG_LOCK` (`config_locked` below) even though the scripts
+         *     that set the two often set them together.
+         *
+         *     Read once at startup (`instance_mode`) and threaded through `AppState`
+         *     the same way `period::server_timezone()`'s result is read once and
+         *     threaded through as `DigestState::tz` — a value this cheap to compute
+         *     still gets computed exactly once, because a Server's own identity must
+         *     not depend on when in its lifetime something happens to ask.
+         * @enum {string}
+         */
+        InstanceMode: "production" | "sandbox";
+        /**
          * @description The Label-shaped sibling of `TaskInput` — no `order_key`, mirroring
          *     `../../packages/core/src/label-types.ts`'s own Label (no manual order —
          *     see that type's own doc comment for why).
@@ -625,6 +819,11 @@ export interface components {
             /** Format: uuid */
             id: string;
             name: string;
+            /**
+             * Format: date-time
+             * @description Issue #196 — see `EntryInput::updated_at`'s own doc comment.
+             */
+            updated_at: string;
         };
         /** @description The Label-shaped sibling of `TaskOutput` — adds only `seq`. */
         LabelOutput: {
@@ -640,6 +839,8 @@ export interface components {
             name: string;
             /** Format: int64 */
             seq: number;
+            /** Format: date-time */
+            updated_at: string;
         };
         /**
          * @description One Model the configured wrapper can serve — the subset of
@@ -700,6 +901,11 @@ export interface components {
             order_key: string;
             /** Format: uuid */
             parent_id?: string | null;
+            /**
+             * Format: date-time
+             * @description Issue #196 — see `EntryInput::updated_at`'s own doc comment.
+             */
+            updated_at: string;
         };
         /** @description The Project-shaped sibling of `TaskOutput` — adds only `seq`. */
         ProjectOutput: {
@@ -721,6 +927,8 @@ export interface components {
             parent_id?: string | null;
             /** Format: int64 */
             seq: number;
+            /** Format: date-time */
+            updated_at: string;
         };
         /**
          * @description `POST /v1/restore/rebuild-embeddings`'s response — how many rows this
@@ -851,6 +1059,11 @@ export interface components {
              */
             tool_called: boolean;
         };
+        /** @description One field's resolved value, paired with where it came from. */
+        ResolvedField: {
+            source: components["schemas"]["Source"];
+            value?: string | null;
+        };
         /**
          * @description `POST /v1/restore`'s response: how many `entries` rows carry an
          *     `embedding_model` different from the one this Server is configured
@@ -889,6 +1102,11 @@ export interface components {
             order_key: string;
             /** Format: uuid */
             project_id: string;
+            /**
+             * Format: date-time
+             * @description Issue #196 — see `EntryInput::updated_at`'s own doc comment.
+             */
+            updated_at: string;
         };
         /** @description The Section-shaped sibling of `TaskOutput` — adds only `seq`. */
         SectionOutput: {
@@ -908,6 +1126,8 @@ export interface components {
             project_id: string;
             /** Format: int64 */
             seq: number;
+            /** Format: date-time */
+            updated_at: string;
         };
         SessionResponse: {
             /** Format: date-time */
@@ -997,6 +1217,15 @@ export interface components {
              */
             tool_called: boolean;
         };
+        /**
+         * @description Where one resolved field's value actually came from — the load-bearing
+         *     half of `GET /v1/config`'s contract (issue #200's own acceptance
+         *     criterion). Without this, a Device cannot tell a value it can Clear
+         *     (`Stored`) from one it can only override (`Env`), and cannot honestly
+         *     label a "(from environment)" hint.
+         * @enum {string}
+         */
+        Source: "stored" | "env" | "unset";
         SyncRequest: {
             comments?: components["schemas"]["CommentInput"][];
             /** Format: uuid */
@@ -1064,6 +1293,85 @@ export interface components {
             tasks?: components["schemas"]["TaskInput"][];
         };
         SyncResponse: {
+            /**
+             * @description Issue #194: the Comment-shaped sibling — mirrors
+             *     `acknowledged_tasks` against `comments`/`insert_comments`, gated
+             *     on `protocol_version >= 6` exactly like `comments` itself.
+             */
+            acknowledged_comments: components["schemas"]["CommentOutput"][];
+            /**
+             * @description Issue #194: the server's own current row for every id the
+             *     request's own `entries` named, whether or not `insert_entries`'s
+             *     `is distinct from` guard actually changed anything — see this
+             *     module's own top-of-file doc comment for why a Cursor-paged array
+             *     alone leaves a no-op push invisible to the Device that sent it.
+             *     Selected via `where id = any($1)` inside the same transaction
+             *     `insert_entries` already holds, against exactly the ids that
+             *     request pushed — never a stream's whole backlog, and never gated
+             *     on whether anything in it changed. Empty whenever `entries` (the
+             *     request field) was empty: there is nothing to acknowledge if
+             *     nothing was pushed.
+             */
+            acknowledged_entries: components["schemas"]["EntryOutput"][];
+            /**
+             * @description Issue #194: the Event-shaped sibling of `acknowledged_entries` —
+             *     mirrors it against `events`/`insert_events`, **ungated**, exactly
+             *     like `events` itself (`PROTOCOL_VERSION`'s own doc comment: there
+             *     is no version number that separates a v6 Device that predates this
+             *     ticket from one that has it). Genuinely less interesting than
+             *     every `acknowledged_*` above in one respect — `insert_events`'s
+             *     own doc comment — an Event has no mutable column and no `is
+             *     distinct from` guard to make silent in the first place, so a
+             *     pushed Event that already exists on this table is always a
+             *     byte-identical replay, never a change the guard suppressed. It
+             *     still clears `pending()` on that replay for the identical reason
+             *     every other stream needs one: without it, a Device whose Event
+             *     Cursor has already moved past that row's own `seq` — the same
+             *     stale-Cursor shape every other stream's motivating bug takes —
+             *     would re-push it forever.
+             *
+             *     **No `PROTOCOL_VERSION` bump for any `acknowledged_*` field
+             *     above** — see that constant's own doc comment for why: every one
+             *     is new, additive, and the response type an old Device already
+             *     deserializes tolerates an extra JSON key it doesn't declare, the
+             *     same "harmlessly ignored" tolerance every wire response in this
+             *     codebase already relies on for a field it doesn't recognise. A
+             *     Device built before issue #194 simply never reads these seven
+             *     keys and keeps relying on the Cursor-paged arrays alone, the same
+             *     way it always has — the bug this ticket fixes (a no-op push
+             *     re-pushed forever) isn't fixed for that Device until it upgrades,
+             *     which is the ordinary consequence of `PROTOCOL_VERSION` naming the
+             *     wire shape a *build* understands, not a promise that every bugfix
+             *     reaches every Device instantly.
+             */
+            acknowledged_events: components["schemas"]["EventOutput"][];
+            /**
+             * @description Issue #194: the Label-shaped sibling — mirrors `acknowledged_tasks`
+             *     against `labels`/`insert_labels`, gated on `protocol_version >= 6`
+             *     exactly like `labels` itself.
+             */
+            acknowledged_labels: components["schemas"]["LabelOutput"][];
+            /**
+             * @description Issue #194: the Project-shaped sibling of `acknowledged_entries` —
+             *     mirrors `acknowledged_tasks` against `projects`/`insert_projects`,
+             *     gated on `protocol_version >= 6` exactly like `projects` itself.
+             */
+            acknowledged_projects: components["schemas"]["ProjectOutput"][];
+            /**
+             * @description Issue #194: the Section-shaped sibling — mirrors
+             *     `acknowledged_tasks` against `sections`/`insert_sections`, gated
+             *     on `protocol_version >= 6` exactly like `sections` itself.
+             */
+            acknowledged_sections: components["schemas"]["SectionOutput"][];
+            /**
+             * @description Issue #194: the Task-shaped sibling of `acknowledged_entries` —
+             *     mirrors it field for field, against `tasks`/`insert_tasks`
+             *     instead. Gated on `protocol_version >= 5`, exactly like `tasks`
+             *     itself (`run_sync`'s own doc comment): a v4 Device can never
+             *     populate the `tasks` request field to begin with, so there is
+             *     nothing here for it to acknowledge either.
+             */
+            acknowledged_tasks: components["schemas"]["TaskOutput"][];
             /** Format: int64 */
             comment_cursor: number;
             comments: components["schemas"]["CommentOutput"][];
@@ -1215,6 +1523,13 @@ export interface components {
             project_id?: string | null;
             /** Format: uuid */
             section_id?: string | null;
+            /**
+             * Format: date-time
+             * @description Issue #196 — see `EntryInput::updated_at`'s own doc comment. A
+             *     second bump of `ROW_SHAPE_EPOCH.tasks` (to 2), for the identical
+             *     reason `description` above earned the first one.
+             */
+            updated_at: string;
         };
         /**
          * @description The Task-shaped sibling of `EntryOutput` — see `TaskInput`'s own doc
@@ -1251,7 +1566,27 @@ export interface components {
             section_id?: string | null;
             /** Format: int64 */
             seq: number;
+            /**
+             * Format: date-time
+             * @description Issue #196 — see `EntryInput::updated_at`'s own doc comment.
+             */
+            updated_at: string;
         };
+        /**
+         * @description The wire value one tri-state toggle field of a `PATCH /v1/config` body
+         *     carries when the caller actually names it. Deliberately not
+         *     `Option<Option<bool>>` with a `null`-means-clear convention: that shape
+         *     only works via `serde_with`'s `double_option` (not a dependency this
+         *     crate otherwise needs) or a hand-rolled deserializer, for a JSON
+         *     contract ("send literal `null` to mean something other than absent")
+         *     that reads as a trick rather than a fact about the domain. A named
+         *     three-variant enum says the same thing in the wire schema itself — a
+         *     client reads `"unset" | "on" | "off"` directly off the generated
+         *     TypeScript type, rather than inferring a `null`-vs-absent convention
+         *     from a doc comment.
+         * @enum {string}
+         */
+        TogglePatch: "unset" | "on" | "off";
     };
     responses: never;
     parameters: never;
@@ -1285,6 +1620,50 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    get_config_handler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description This Server's settings — value and source per field, instance mode, lock state, and the Entry embedding backlog */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigResponse"];
+                };
+            };
+        };
+    };
+    patch_config_handler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigPatch"];
+            };
+        };
+        responses: {
+            /** @description The settings row as it now stands, in the same shape GET /v1/config reports */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigResponse"];
+                };
             };
         };
     };
@@ -1387,6 +1766,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Digest is configured but switched off (issue #201) — distinct from 404, which means this Server predates the feature entirely */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     health_handler: {
@@ -1434,6 +1820,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Reflection is configured but switched off right now (ADR 0062) — distinct from the 404 above, which means this Server has no Reflection at all */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     reflect_handler: {
@@ -1467,6 +1860,13 @@ export interface operations {
             };
             /** @description protocol_version is not one this server understands */
             426: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Reflection is configured but switched off (issue #201) — distinct from 404, which means this Server predates the feature entirely */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

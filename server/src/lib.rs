@@ -10,6 +10,7 @@ pub mod openapi;
 pub mod period;
 pub mod reflect;
 pub mod sessions;
+pub mod settings;
 pub mod sync;
 
 use std::path::Path;
@@ -79,6 +80,28 @@ pub struct AppState {
     /// all, in which case every non-null `embedding_model` counts as a
     /// mismatch (see `backup::count_mismatched_embeddings`).
     pub embed_model: Option<String>,
+    /// Issue #200: whether `MEOLOGUE_CONFIG_LOCK` was set at startup —
+    /// read once (`settings::config_locked`) and threaded through here the
+    /// same way every other startup-time fact on this struct is, rather
+    /// than re-read from process environment inside a handler. Consumed by
+    /// `settings::get_config_handler`/`patch_config_handler` through the
+    /// `ConfigLocked` extractor below and handed to `settings::resolve` on
+    /// every call — the lock is enforced inside that function, not here;
+    /// this field only carries the raw fact to where `resolve` is called.
+    pub settings_locked: bool,
+    /// Issue #200: which instance this process is (`settings::instance_mode`),
+    /// read once at startup for the same reason `settings_locked` is.
+    /// Consumed through the `ServerMode` extractor below.
+    pub mode: settings::InstanceMode,
+    /// Issue #201: whether Reflection, Digest and the embedding worker are
+    /// switched on right now, in memory — see `settings::RuntimeFlags`'s
+    /// own doc comment for why this is a live, shared handle rather than a
+    /// snapshot. `health::health_handler` reads it directly (its own
+    /// "one more state extractor," the headline of ADR 0061); `reflect.rs`
+    /// reads its own clone off `ReflectState::flags` instead of this field,
+    /// since every handler that already extracts `Option<ReflectState>`
+    /// gets the same atomics for free without a second extractor.
+    pub flags: settings::RuntimeFlags,
 }
 
 impl FromRef<AppState> for PgPool {
@@ -143,6 +166,42 @@ pub struct ConfiguredEmbedModel(pub Option<String>);
 impl FromRef<AppState> for ConfiguredEmbedModel {
     fn from_ref(state: &AppState) -> Self {
         ConfiguredEmbedModel(state.embed_model.clone())
+    }
+}
+
+/// A newtype around `AppState::settings_locked`'s `bool`, for the same
+/// reason `DigestsEnabled` wraps its own bool rather than leaving a bare
+/// `impl FromRef<AppState> for bool` for every future one to fight over —
+/// see that type's own doc comment.
+#[derive(Debug, Clone, Copy)]
+pub struct ConfigLocked(pub bool);
+
+impl FromRef<AppState> for ConfigLocked {
+    fn from_ref(state: &AppState) -> Self {
+        ConfigLocked(state.settings_locked)
+    }
+}
+
+/// A newtype around `AppState::mode`'s `settings::InstanceMode`, mirroring
+/// `ConfigLocked` immediately above — `settings::get_config_handler` and
+/// `patch_config_handler` extract this rather than `settings::InstanceMode`
+/// directly, so a second, unrelated field of that same type added to
+/// `AppState` later cannot silently collide with this one's `FromRef`.
+#[derive(Debug, Clone, Copy)]
+pub struct ServerMode(pub settings::InstanceMode);
+
+impl FromRef<AppState> for ServerMode {
+    fn from_ref(state: &AppState) -> Self {
+        ServerMode(state.mode)
+    }
+}
+
+/// No newtype needed here, unlike `ConfigLocked`/`ServerMode` — `RuntimeFlags`
+/// is already a distinctly-named type with no bare-primitive ambiguity for a
+/// second field of the same type to collide with.
+impl FromRef<AppState> for settings::RuntimeFlags {
+    fn from_ref(state: &AppState) -> Self {
+        state.flags.clone()
     }
 }
 
@@ -270,28 +329,18 @@ pub fn router_with_reflection(
     router_with_digests(pool, static_dir, embed_tx, reflect, None)
 }
 
-/// The widest router constructor — everything `router_with_reflection`
-/// wires, plus the three Digest routes (issue #70's two reads, issue #132's
-/// regenerate) gated on `digest.is_some()` rather than on
-/// `reflect.is_some()`. Reflection and Digest are gated on the same chat
-/// config today (`llm::LlmConfig::digest_worker_config` and, since issue
-/// #130, `reflect_config` both require chat alone and nothing else), but
-/// they remain two separate switches rather than one: a Digest and a
-/// Reflection are different features that happen to share a dependency,
-/// not one feature with two names, and `main.rs` builds `digest` from the
-/// Digest worker's own startup outcome rather than piggybacking on
-/// `reflect`'s. `main.rs` calls this directly, passing the same
-/// `DigestState` it hands `digest::run`; `router_with_reflection` is the
-/// narrower, `digest: None` convenience the rest of the test suite is
-/// written against.
+/// Everything `router_with_reflection` wires, plus the three Digest routes
+/// (issue #70's two reads, issue #132's regenerate) gated on
+/// `digest.is_some()` rather than on `reflect.is_some()` — a Digest and a
+/// Reflection are different features that happen to share a chat-config
+/// dependency, not one feature with two names.
 ///
-/// `digest: Option<digest::DigestState>`, not a bare `bool`
-/// (issue #132 / ADR 0039) — `regenerate_digest_handler` needs the actual
-/// chat client and `Tz` to make its own inline chat call, not just a
-/// yes/no. `digests_enabled` is derived from `digest.is_some()` right
-/// below, once, so `AppState`'s own bool field (which `health_handler`
-/// reads) can never disagree with whether these routes are actually
-/// registered.
+/// Delegates to `router_with_everything` with every #198 (backup) and
+/// #200/#201 (settings/flags) default — the values every test file written
+/// against this signature before those issues implicitly assumed, since
+/// none of those concepts existed yet. Kept as the narrower entry point
+/// rather than folded away, so the several existing test files that build
+/// a Router through this exact signature keep compiling unchanged.
 pub fn router_with_digests(
     pool: PgPool,
     static_dir: impl AsRef<Path>,
@@ -299,28 +348,72 @@ pub fn router_with_digests(
     reflect: Option<ReflectState>,
     digest: Option<digest::DigestState>,
 ) -> Router {
-    // Issue #198's two new fields have no "off" state to default to the
-    // way `reflect`/`digest` do — `/v1/backup` and `/v1/restore` are always
-    // registered, unconditionally, below. An empty `database_url` and a
-    // `None` `embed_model` are harmless defaults for every caller of this
-    // narrower constructor: none of the existing test files that call it
-    // directly ever exercise `/v1/backup` or `/v1/restore`, and the one
-    // that does (`server/tests/backup.rs`) calls `router_with_backup`
-    // instead, exactly the way `router_with_reflection`'s callers that
-    // needed Digests moved to `router_with_digests`.
-    router_with_backup(pool, static_dir, embed_tx, reflect, digest, String::new(), None)
+    router_with_everything(
+        pool,
+        static_dir,
+        embed_tx,
+        reflect,
+        digest,
+        String::new(),
+        None,
+        false,
+        settings::InstanceMode::Production,
+        settings::RuntimeFlags::all_on(),
+    )
 }
 
-/// The widest router constructor — everything `router_with_digests` wires,
-/// plus `/v1/backup`, `/v1/restore` and `/v1/restore/rebuild-embeddings`
-/// (issue #198), registered unconditionally rather than gated on any
-/// `Option` the way Reflection and Digest are: backing up and restoring
-/// Postgres needs nothing but the database connection every Server already
-/// has, so there is no "unconfigured" state for these routes to 404 under.
-/// `main.rs` calls this directly, the same way it calls
-/// `router_with_digests` today; `router_with_digests` becomes the narrower,
-/// `database_url: String::new(), embed_model: None` convenience the rest
-/// of the test suite is written against.
+/// Everything `router_with_digests` wires, plus `GET`/`PATCH /v1/config`
+/// (issue #200) and the two facts those handlers report alongside a
+/// Device's settings: whether `MEOLOGUE_CONFIG_LOCK` was set (`locked`)
+/// and which instance this is (`mode`, `MEOLOGUE_MODE`).
+///
+/// `/v1/config` is registered unconditionally, in the same always-present
+/// block as `/v1/health`/`/v1/sync`/`/v1/metrics`, not inside either gated
+/// block — see issue #200's own framing: this is the one route that must
+/// exist on an unconfigured Server, because it is how a Server *becomes*
+/// configured.
+///
+/// Delegates to `router_with_everything` with #198's backup fields
+/// defaulted the same harmless way `router_with_digests` defaults them,
+/// and #201's flags defaulted to `RuntimeFlags::all_on()` — every
+/// capability behaves exactly as it did before issue #201. Kept as its own
+/// narrower entry point because `server/tests/settings.rs` builds a Router
+/// through this exact signature.
+pub fn router_with_settings(
+    pool: PgPool,
+    static_dir: impl AsRef<Path>,
+    embed_tx: Option<Sender<Uuid>>,
+    reflect: Option<ReflectState>,
+    digest: Option<digest::DigestState>,
+    locked: bool,
+    mode: settings::InstanceMode,
+) -> Router {
+    router_with_everything(
+        pool,
+        static_dir,
+        embed_tx,
+        reflect,
+        digest,
+        String::new(),
+        None,
+        locked,
+        mode,
+        settings::RuntimeFlags::all_on(),
+    )
+}
+
+/// Everything `router_with_digests` wires, plus `/v1/backup`, `/v1/restore`
+/// and `/v1/restore/rebuild-embeddings` (issue #198), registered
+/// unconditionally rather than gated on any `Option` the way Reflection
+/// and Digest are: backing up and restoring Postgres needs nothing but the
+/// database connection every Server already has, so there is no
+/// "unconfigured" state for these routes to 404 under.
+///
+/// Delegates to `router_with_everything` with #200/#201's settings/flags
+/// fields defaulted the same "not locked, production, every flag on" way
+/// `router_with_digests` does. Kept as its own narrower entry point
+/// because `server/tests/backup.rs` builds a Router through this exact
+/// signature.
 pub fn router_with_backup(
     pool: PgPool,
     static_dir: impl AsRef<Path>,
@@ -329,6 +422,88 @@ pub fn router_with_backup(
     digest: Option<digest::DigestState>,
     database_url: String,
     embed_model: Option<String>,
+) -> Router {
+    router_with_everything(
+        pool,
+        static_dir,
+        embed_tx,
+        reflect,
+        digest,
+        database_url,
+        embed_model,
+        false,
+        settings::InstanceMode::Production,
+        settings::RuntimeFlags::all_on(),
+    )
+}
+
+/// Everything `router_with_settings` wires, plus the in-memory feature
+/// flags (issue #201) that let Reflection, Digest and the embedding worker
+/// be switched off without a restart. Held on `AppState`
+/// (`health::health_handler`'s own extractor) and cloned onto
+/// `ReflectState` (`reflect_handler`'s 503 check and its tool-set gate) —
+/// see `settings::RuntimeFlags`'s own doc comment for why a clone shares
+/// the same atomics rather than taking a snapshot.
+///
+/// Delegates to `router_with_everything` with issue #198's backup fields
+/// defaulted the same harmless way every other narrower constructor here
+/// defaults them. Kept as its own narrower entry point because
+/// `server/tests/health.rs` builds a Router through this exact signature.
+pub fn router_with_flags(
+    pool: PgPool,
+    static_dir: impl AsRef<Path>,
+    embed_tx: Option<Sender<Uuid>>,
+    reflect: Option<ReflectState>,
+    digest: Option<digest::DigestState>,
+    locked: bool,
+    mode: settings::InstanceMode,
+    flags: settings::RuntimeFlags,
+) -> Router {
+    router_with_everything(
+        pool,
+        static_dir,
+        embed_tx,
+        reflect,
+        digest,
+        String::new(),
+        None,
+        locked,
+        mode,
+        flags,
+    )
+}
+
+/// The true widest router constructor, and the only one that actually
+/// builds the `Router` — every narrower constructor above is a thin,
+/// backward-compatible wrapper that defaults whichever of these ten
+/// parameters it doesn't itself carry and calls straight through to here.
+/// `main.rs` calls this directly, passing everything it resolved at
+/// startup: issue #198's `database_url`/`embed_model` (backup/restore)
+/// side by side with issue #200/#201's `locked`/`mode`/`flags`
+/// (settings/feature flags), neither folded into the other — a Server
+/// built before either feature existed had no default for the other to
+/// inherit from, so each narrower constructor above supplies its own
+/// harmless default for exactly the parameters it doesn't carry.
+// This is the end of a deliberate chain (`router` -> `router_with_embedding`
+// -> `router_with_reflection` -> `router_with_digests` -> `router_with_settings`
+// / `router_with_backup` / `router_with_flags` -> here), each constructor a
+// thin, backward-compatible wrapper around this one — see every one of
+// their own doc comments. Bundling the ten parameters into a struct would
+// remove the one property that chain exists for: every narrower
+// constructor stays a plain, stable function signature nothing in the test
+// suite has to update when a new capability arrives.
+#[allow(clippy::too_many_arguments)]
+pub fn router_with_everything(
+    pool: PgPool,
+    static_dir: impl AsRef<Path>,
+    embed_tx: Option<Sender<Uuid>>,
+    reflect: Option<ReflectState>,
+    digest: Option<digest::DigestState>,
+    database_url: String,
+    embed_model: Option<String>,
+    locked: bool,
+    mode: settings::InstanceMode,
+    flags: settings::RuntimeFlags,
 ) -> Router {
     let digests_enabled = digest.is_some();
     // Installs the global metrics recorder (if not already installed) before
@@ -381,6 +556,13 @@ pub fn router_with_backup(
         .route(
             "/v1/restore/rebuild-embeddings",
             post(backup::rebuild_mismatched_embeddings_handler),
+        )
+        // Issue #200: unconditional, like the three routes above it and
+        // unlike everything gated below — see this function's own doc
+        // comment for why `/v1/config` cannot be gated on anything.
+        .route(
+            "/v1/config",
+            get(settings::get_config_handler).patch(settings::patch_config_handler),
         );
 
     if reflect.is_some() {
@@ -454,6 +636,9 @@ pub fn router_with_backup(
             digests_enabled,
             database_url,
             embed_model,
+            settings_locked: locked,
+            mode,
+            flags,
         })
         .fallback_service(app_shell)
         .layer(axum::middleware::from_fn(metrics::track_metrics))

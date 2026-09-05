@@ -20,7 +20,9 @@ function label(overrides: Partial<Label> = {}): Label {
     deviceId: "device-a",
     name: "Family",
     colour: "#808080",
+    // Issue #196: updatedAt starts equal to createdAt
     createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
     seq: null,
     syncedAt: null,
     deletedAt: null,

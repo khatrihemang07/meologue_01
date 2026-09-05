@@ -30,10 +30,19 @@ import { kv, projects, sections } from "./schema";
 export class SqliteProjectStore implements ProjectStore {
   private readonly db: ReturnType<typeof drizzle>;
   private readonly taskStore: TaskStore;
+  // Issue #196 — see SqliteEntryStore's own identical field for the
+  // mechanism and why it's injectable. Shared by both halves of this
+  // store — Projects and Sections alike.
+  private readonly now: () => string;
 
-  constructor(driver: SqliteDriver, taskStore: TaskStore) {
+  constructor(
+    driver: SqliteDriver,
+    taskStore: TaskStore,
+    now: () => string = () => new Date().toISOString(),
+  ) {
     this.db = drizzle((sqlText, params, method) => driver.execute(sqlText, params, method));
     this.taskStore = taskStore;
+    this.now = now;
   }
 
   async listProjects(): Promise<Project[]> {
@@ -73,6 +82,7 @@ export class SqliteProjectStore implements ProjectStore {
           description: sql`excluded.description`,
           orderKey: sql`excluded.order_key`,
           createdAt: sql`excluded.created_at`,
+          updatedAt: sql`excluded.updated_at`,
           seq: sql`excluded.seq`,
           syncedAt: sql`excluded.synced_at`,
           deletedAt: sql`excluded.deleted_at`,
@@ -82,28 +92,53 @@ export class SqliteProjectStore implements ProjectStore {
 
   async renameProject(id: string, name: string): Promise<void> {
     assertValidProjectName(name);
-    await this.updateProjectIfLive(id, { name, seq: null, syncedAt: null });
+    await this.updateProjectIfLive(id, { name, updatedAt: this.now(), seq: null, syncedAt: null });
   }
 
   async setProjectColour(id: string, colour: string): Promise<void> {
     assertValidProjectColour(colour);
-    await this.updateProjectIfLive(id, { colour, seq: null, syncedAt: null });
+    await this.updateProjectIfLive(id, {
+      colour,
+      updatedAt: this.now(),
+      seq: null,
+      syncedAt: null,
+    });
   }
 
   async setProjectDescription(id: string, description: string | null): Promise<void> {
-    await this.updateProjectIfLive(id, { description, seq: null, syncedAt: null });
+    await this.updateProjectIfLive(id, {
+      description,
+      updatedAt: this.now(),
+      seq: null,
+      syncedAt: null,
+    });
   }
 
   async setProjectFavourite(id: string, favourite: boolean): Promise<void> {
-    await this.updateProjectIfLive(id, { favourite, seq: null, syncedAt: null });
+    await this.updateProjectIfLive(id, {
+      favourite,
+      updatedAt: this.now(),
+      seq: null,
+      syncedAt: null,
+    });
   }
 
   async archiveProject(id: string): Promise<void> {
-    await this.updateProjectIfLive(id, { archived: true, seq: null, syncedAt: null });
+    await this.updateProjectIfLive(id, {
+      archived: true,
+      updatedAt: this.now(),
+      seq: null,
+      syncedAt: null,
+    });
   }
 
   async unarchiveProject(id: string): Promise<void> {
-    await this.updateProjectIfLive(id, { archived: false, seq: null, syncedAt: null });
+    await this.updateProjectIfLive(id, {
+      archived: false,
+      updatedAt: this.now(),
+      seq: null,
+      syncedAt: null,
+    });
   }
 
   // Mirrors SqliteTaskStore.setParent's own cycle/self-parent guard shape,
@@ -144,22 +179,35 @@ export class SqliteProjectStore implements ProjectStore {
         cursor = next;
       }
     }
-    await this.updateProjectIfLive(id, { parentId, seq: null, syncedAt: null });
+    await this.updateProjectIfLive(id, {
+      parentId,
+      updatedAt: this.now(),
+      seq: null,
+      syncedAt: null,
+    });
   }
 
   async reorderProject(id: string, orderKey: string): Promise<void> {
-    await this.updateProjectIfLive(id, { orderKey, seq: null, syncedAt: null });
+    await this.updateProjectIfLive(id, {
+      orderKey,
+      updatedAt: this.now(),
+      seq: null,
+      syncedAt: null,
+    });
   }
 
   // Tombstones a Project — never a hard delete (ADR 0028's rule).
   // Deliberately touches nothing beyond this one row — see
   // ProjectStore.removeProject's own doc comment for why this doesn't
   // cascade to this Project's Tasks or Sections. Blanks `name`, mirroring
-  // every other tombstone in this codebase.
+  // every other tombstone in this codebase. `deletedAt`/`updatedAt`
+  // (issue #196) share one clock read — see SqliteEntryStore.remove's
+  // identical comment for why.
   async removeProject(id: string): Promise<void> {
+    const deletedAt = this.now();
     await this.db
       .update(projects)
-      .set({ deletedAt: new Date().toISOString(), name: "", seq: null, syncedAt: null })
+      .set({ deletedAt, name: "", updatedAt: deletedAt, seq: null, syncedAt: null })
       .where(eq(projects.id, id));
   }
 
@@ -243,6 +291,7 @@ export class SqliteProjectStore implements ProjectStore {
           orderKey: sql`excluded.order_key`,
           archived: sql`excluded.archived`,
           createdAt: sql`excluded.created_at`,
+          updatedAt: sql`excluded.updated_at`,
           seq: sql`excluded.seq`,
           syncedAt: sql`excluded.synced_at`,
           deletedAt: sql`excluded.deleted_at`,
@@ -252,15 +301,25 @@ export class SqliteProjectStore implements ProjectStore {
 
   async renameSection(id: string, name: string): Promise<void> {
     assertValidSectionName(name);
-    await this.updateSectionIfLive(id, { name, seq: null, syncedAt: null });
+    await this.updateSectionIfLive(id, { name, updatedAt: this.now(), seq: null, syncedAt: null });
   }
 
   async setSectionDescription(id: string, description: string | null): Promise<void> {
-    await this.updateSectionIfLive(id, { description, seq: null, syncedAt: null });
+    await this.updateSectionIfLive(id, {
+      description,
+      updatedAt: this.now(),
+      seq: null,
+      syncedAt: null,
+    });
   }
 
   async reorderSection(id: string, orderKey: string): Promise<void> {
-    await this.updateSectionIfLive(id, { orderKey, seq: null, syncedAt: null });
+    await this.updateSectionIfLive(id, {
+      orderKey,
+      updatedAt: this.now(),
+      seq: null,
+      syncedAt: null,
+    });
   }
 
   // See ProjectStore.deleteSection's own doc comment: tombstones every
@@ -285,9 +344,12 @@ export class SqliteProjectStore implements ProjectStore {
       }
       await this.taskStore.remove(t.id);
     }
+    // Issue #196: one clock read, reused for `deletedAt` and `updatedAt`
+    // — see SqliteEntryStore.remove's identical comment for why.
+    const deletedAt = this.now();
     await this.db
       .update(sections)
-      .set({ deletedAt: new Date().toISOString(), name: "", seq: null, syncedAt: null })
+      .set({ deletedAt, name: "", updatedAt: deletedAt, seq: null, syncedAt: null })
       .where(eq(sections.id, id));
   }
 
@@ -302,7 +364,12 @@ export class SqliteProjectStore implements ProjectStore {
     if (section === undefined) {
       return;
     }
-    const now = new Date().toISOString();
+    // Issue #196: read once via the injected clock (not a bare `new
+    // Date()` inline, now that one is threaded through) and reused for
+    // both every completed Task's own `completedAt`/`updatedAt` (via
+    // TaskStore.complete) and this Section's own `updatedAt` below — one
+    // real-world moment, one clock read, for the whole cascade.
+    const now = this.now();
     const topLevel = await this.taskStore.listInSection(id);
     for (const t of topLevel) {
       const subtree = [t, ...(await this.taskStore.listDescendants(t.id))];
@@ -312,11 +379,21 @@ export class SqliteProjectStore implements ProjectStore {
         }
       }
     }
-    await this.updateSectionIfLive(id, { archived: true, seq: null, syncedAt: null });
+    await this.updateSectionIfLive(id, {
+      archived: true,
+      updatedAt: now,
+      seq: null,
+      syncedAt: null,
+    });
   }
 
   async unarchiveSection(id: string): Promise<void> {
-    await this.updateSectionIfLive(id, { archived: false, seq: null, syncedAt: null });
+    await this.updateSectionIfLive(id, {
+      archived: false,
+      updatedAt: this.now(),
+      seq: null,
+      syncedAt: null,
+    });
   }
 
   async pendingSections(): Promise<Section[]> {

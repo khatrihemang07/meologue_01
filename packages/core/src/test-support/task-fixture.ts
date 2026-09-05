@@ -13,6 +13,7 @@ export function task(overrides: Partial<Task> = {}): Task {
     // its own yet (issue #182).
     dayOrder: "V",
     createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
     seq: null,
     syncedAt: null,
     deletedAt: null,

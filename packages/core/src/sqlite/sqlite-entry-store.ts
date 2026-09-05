@@ -15,9 +15,17 @@ import { CURSOR_KEY, DEVICE_ID_KEY, entries, kv, ROW_SHAPE_EPOCH_KEY } from "./s
 export class SqliteEntryStore implements EntryStore {
   private readonly db: ReturnType<typeof drizzle>;
   private readonly driver: SqliteDriver;
+  // Issue #196: the same injectable-clock shape sync-engine.ts's own
+  // `SyncEngineOptions.now` already uses for testability — a real caller
+  // never passes this, and gets `new Date().toISOString()`; a test that
+  // needs a deterministic `updatedAt` passes its own. Read once per
+  // stamp, not cached, so two mutations in the same test can still see
+  // two different times if the test's own `now` says so.
+  private readonly now: () => string;
 
-  constructor(driver: SqliteDriver) {
+  constructor(driver: SqliteDriver, now: () => string = () => new Date().toISOString()) {
     this.driver = driver;
+    this.now = now;
     this.db = drizzle((sqlText, params, method) => driver.execute(sqlText, params, method));
   }
 
@@ -95,6 +103,7 @@ export class SqliteEntryStore implements EntryStore {
           deviceId: sql`excluded.device_id`,
           body: sql`excluded.body`,
           createdAt: sql`excluded.created_at`,
+          updatedAt: sql`excluded.updated_at`,
           seq: sql`excluded.seq`,
           syncedAt: sql`excluded.synced_at`,
           deletedAt: sql`excluded.deleted_at`,
@@ -115,7 +124,7 @@ export class SqliteEntryStore implements EntryStore {
     // never match a real query, but excluding it explicitly keeps this
     // query correct even if that ever stopped being true.
     const result = await this.driver.execute(
-      `SELECT entries.id, entries.device_id, entries.body, entries.created_at, entries.seq, entries.synced_at, entries.deleted_at
+      `SELECT entries.id, entries.device_id, entries.body, entries.created_at, entries.updated_at, entries.seq, entries.synced_at, entries.deleted_at
        FROM entries_fts
        JOIN entries ON entries.id = entries_fts.id
        WHERE entries_fts MATCH ? AND entries.deleted_at IS NULL
@@ -145,11 +154,16 @@ export class SqliteEntryStore implements EntryStore {
    * pushes everything pending() returns, unmodified. No new sync code was
    * needed for edits because this one field reuses the exact mechanism
    * that already pushes new Entries.
+   *
+   * Also stamps `updatedAt` (issue #196) with this store's own injected
+   * clock — every setter that clears `seq`/`syncedAt` to mark itself
+   * pending does the same, so a missed one would leave a silently stale
+   * timestamp Merge (issue #199) would read as "never touched again."
    */
   async edit(id: string, body: string): Promise<void> {
     await this.db
       .update(entries)
-      .set({ body, seq: null, syncedAt: null })
+      .set({ body, updatedAt: this.now(), seq: null, syncedAt: null })
       .where(and(eq(entries.id, id), isNull(entries.deletedAt)));
     // The guard above is structural, on the write itself (ADR 0028: delete
     // is enforced this way, "not as policy code checked before it") — so
@@ -182,11 +196,19 @@ export class SqliteEntryStore implements EntryStore {
    * or because the tombstone push never actually landed — with a fresh
    * `seq`, and the Entry comes back permanently. Leaving the tombstone in
    * place, `seq` or no `seq`, is what keeps that window safe.
+   *
+   * `deletedAt` and `updatedAt` (issue #196) are stamped from the same
+   * single clock read, computed once into `deletedAt` and reused rather
+   * than a second call to `this.now()` — the tombstone's own timestamp
+   * and this row's own last-changed timestamp are the same real-world
+   * moment, and reading the clock twice could disagree by however long
+   * the two writes took, for no reason either field needs.
    */
   async remove(id: string): Promise<void> {
+    const deletedAt = this.now();
     await this.db
       .update(entries)
-      .set({ deletedAt: new Date().toISOString(), body: "", seq: null, syncedAt: null })
+      .set({ deletedAt, body: "", updatedAt: deletedAt, seq: null, syncedAt: null })
       .where(eq(entries.id, id));
     // See indexForSearch: reading the row back after the write, rather
     // than assuming what we just wrote, is what makes this correct
@@ -379,10 +401,11 @@ function toPrefixMatchQuery(text: string): string {
 // other query in this store; this one bypasses drizzle, so it needs its
 // own version of the same guard).
 function rowToEntry(row: unknown): Entry {
-  if (!Array.isArray(row) || row.length !== 7) {
-    throw new Error(`sqlite search expected a 7-column entries row, got ${JSON.stringify(row)}`);
+  if (!Array.isArray(row) || row.length !== 8) {
+    throw new Error(`sqlite search expected an 8-column entries row, got ${JSON.stringify(row)}`);
   }
-  const [id, deviceId, body, createdAt, seq, syncedAt, deletedAt] = row as [
+  const [id, deviceId, body, createdAt, updatedAt, seq, syncedAt, deletedAt] = row as [
+    string,
     string,
     string,
     string,
@@ -391,5 +414,5 @@ function rowToEntry(row: unknown): Entry {
     string | null,
     string | null,
   ];
-  return { id, deviceId, body, createdAt, seq, syncedAt, deletedAt };
+  return { id, deviceId, body, createdAt, updatedAt, seq, syncedAt, deletedAt };
 }
