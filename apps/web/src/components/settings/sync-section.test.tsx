@@ -136,7 +136,7 @@ describe("SyncSection", () => {
 
     expect(useSettingsStore.getState().serverUrl).toBe("");
 
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save server URL" }));
 
     expect(useSettingsStore.getState().serverUrl).toBe("https://phone.example:41207");
   });
@@ -147,7 +147,7 @@ describe("SyncSection", () => {
     fireEvent.change(screen.getByLabelText(/server url/i), {
       target: { value: "  https://phone.example:41207/  " },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save server URL" }));
 
     expect(screen.getByLabelText(/server url/i)).toHaveValue("https://phone.example:41207");
   });
@@ -179,7 +179,7 @@ describe("SyncSection", () => {
     fireEvent.change(screen.getByLabelText(/server url/i), {
       target: { value: "https://phone.example:41207" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save server URL" }));
 
     // Reading the stored value back instead of computing it would blank the
     // field here, telling the user the save took when nothing was written.
@@ -212,7 +212,7 @@ describe("SyncSection", () => {
       const errorToast = vi.spyOn(toast, "error");
 
       fireEvent.change(screen.getByLabelText(/server url/i), { target: { value: "" } });
-      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      fireEvent.click(screen.getByRole("button", { name: "Save server URL" }));
 
       await waitFor(() =>
         expect(screen.getByTestId("server-status")).toHaveTextContent(/no server/i),
@@ -286,7 +286,7 @@ describe("SyncSection", () => {
       fireEvent.change(screen.getByLabelText(/server url/i), {
         target: { value: "https://phone.example:41207" },
       });
-      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      fireEvent.click(screen.getByRole("button", { name: "Save server URL" }));
 
       await waitFor(() =>
         expect(successToast).toHaveBeenCalledWith(expect.stringMatching(/reachable/i)),
@@ -304,7 +304,7 @@ describe("SyncSection", () => {
       fireEvent.change(screen.getByLabelText(/server url/i), {
         target: { value: "https://phone.example:41207" },
       });
-      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      fireEvent.click(screen.getByRole("button", { name: "Save server URL" }));
 
       await waitFor(() => expect(errorToast).toHaveBeenCalledWith(expect.stringMatching(/503/)));
     });

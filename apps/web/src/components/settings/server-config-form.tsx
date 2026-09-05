@@ -258,7 +258,13 @@ export function ServerGroup({
   }
 
   return (
-    <div className="flex flex-col gap-4">
+    // `data-testid` rather than leaving tests to find this by its heading:
+    // every row inside is a Server setting, and a test asserting "the whole
+    // sub-group is read-only" needs to scope to exactly this boundary. A
+    // page-wide role query cannot — the toggle options are labelled "On" and
+    // "Off", and Playwright matches an accessible name by substring, so
+    // "On" also finds the completed-checklist row's "None".
+    <div data-testid="server-group" className="flex flex-col gap-4">
       <h3 className="px-1 text-muted-foreground text-xs">{heading}</h3>
       {body}
     </div>

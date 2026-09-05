@@ -338,8 +338,16 @@ test.describe("server settings (locked e2e Server)", () => {
     await expect(page.getByRole("button", { name: "Save server AI settings" })).toBeDisabled();
     await expect(page.getByRole("button", { name: "Save timezone" })).toBeDisabled();
     // The three feature toggles' own "On" option, one per row — every one
-    // of them read-only too, not just the text fields.
-    for (const button of await page.getByRole("button", { name: "On" }).all()) {
+    // of them read-only too, not just the text fields. Scoped to the server
+    // sub-groups and matched exactly: a page-wide `{ name: "On" }` matches
+    // by substring, so it also picks up the completed-checklist row's
+    // "None" (and 30-odd others), which are Device settings and correctly
+    // stay enabled while the Server is locked.
+    const serverToggles = page
+      .getByTestId("server-group")
+      .getByRole("button", { name: "On", exact: true });
+    await expect(serverToggles).toHaveCount(3);
+    for (const button of await serverToggles.all()) {
       await expect(button).toBeDisabled();
     }
   });

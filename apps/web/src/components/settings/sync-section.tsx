@@ -154,8 +154,16 @@ export function SyncSection() {
               onChange={(event) => setServerUrl(event.target.value)}
               className="h-11"
             />
+            {/*
+              "Save server URL", not a bare "Save": since issue #203 this
+              page carries three Save buttons — this one, "Save timezone"
+              just below in the same section's Server sub-group, and "Save
+              server AI settings" under AI. A screen-reader user tabbing
+              between them, and a test naming one of them, both need to know
+              which is which; three buttons all called "Save" tell neither.
+            */}
             <Button type="submit" size="touch">
-              Save
+              Save server URL
             </Button>
           </form>
           {status && (

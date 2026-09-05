@@ -59,7 +59,7 @@ test("saving a Server URL starts sync on the next tick, with no reload", async (
   );
 
   await page.getByLabel(/server url/i).fill(SERVER_A_URL);
-  await page.getByRole("button", { name: "Save" }).click();
+  await page.getByRole("button", { name: "Save server URL" }).click();
   await expect(page.getByTestId("server-status")).toContainText(/reachable/i);
 
   await expect.poll(() => syncRequests, { timeout: 10_000 }).toBeGreaterThan(0);
@@ -70,7 +70,7 @@ test("clearing a Server URL stops sync", async ({ page }) => {
   await openDestination(page, "Settings");
   await expect(page).toHaveURL("/settings");
   await page.getByLabel(/server url/i).fill(SERVER_A_URL);
-  await page.getByRole("button", { name: "Save" }).click();
+  await page.getByRole("button", { name: "Save server URL" }).click();
   await expect(page.getByTestId("server-status")).toContainText(/reachable/i);
 
   let syncRequests = 0;
@@ -81,7 +81,7 @@ test("clearing a Server URL stops sync", async ({ page }) => {
   await expect.poll(() => syncRequests, { timeout: 10_000 }).toBeGreaterThan(0);
 
   await page.getByLabel(/server url/i).fill("");
-  await page.getByRole("button", { name: "Save" }).click();
+  await page.getByRole("button", { name: "Save server URL" }).click();
   await expect(page.getByTestId("server-status")).toContainText(/no server/i);
 
   const requestsAtClear = syncRequests;
