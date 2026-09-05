@@ -8,7 +8,9 @@ function entry(overrides: Partial<Entry>): Entry {
     id: "1",
     deviceId: "device-a",
     body: "hello",
+    // Issue #196: updatedAt starts equal to createdAt
     createdAt: "now",
+    updatedAt: "now",
     seq: 1,
     syncedAt: "now",
     deletedAt: null,

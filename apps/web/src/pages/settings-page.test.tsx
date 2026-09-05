@@ -768,7 +768,9 @@ describe("SettingsPage", () => {
           id: "e1",
           deviceId: "device-a",
           body: "went for a walk",
+          // Issue #196: updatedAt starts equal to createdAt
           createdAt: "2026-08-16T06:00:00.000Z",
+          updatedAt: "2026-08-16T06:00:00.000Z",
           seq: 1,
           syncedAt: "2026-08-16T06:00:01.000Z",
           deletedAt: null,

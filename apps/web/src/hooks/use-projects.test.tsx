@@ -50,7 +50,9 @@ function project(overrides: Partial<Project> = {}): Project {
     parentId: null,
     description: null,
     orderKey: "A",
+    // Issue #196: updatedAt starts equal to createdAt
     createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
     seq: null,
     syncedAt: null,
     deletedAt: null,
@@ -68,6 +70,7 @@ function section(overrides: Partial<Section> = {}): Section {
     orderKey: "A",
     archived: false,
     createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
     seq: null,
     syncedAt: null,
     deletedAt: null,

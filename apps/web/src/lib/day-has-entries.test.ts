@@ -41,7 +41,9 @@ function entry(id: string, createdAt: string, deletedAt: string | null = null): 
     id,
     deviceId: "device-1",
     body: "captured",
+    // Issue #196: updatedAt starts equal to createdAt
     createdAt,
+    updatedAt: createdAt,
     seq: null,
     syncedAt: null,
     deletedAt,
