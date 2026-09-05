@@ -244,6 +244,42 @@ export class SqliteEntryStore implements EntryStore {
     );
   }
 
+  /**
+   * Re-derives `entries_fts` from scratch against whatever `entries`
+   * currently holds — used by Restore (../backup/restore.ts, issue #197)
+   * once a Backup's rows have replaced this Device's own, since a Restore
+   * that finishes fast and then returns nothing for every Search looks
+   * exactly like data loss (that ticket's own framing).
+   *
+   * Wipes `entries_fts` outright first, rather than trusting a per-id
+   * `indexForSearch` call for every surviving row to clean up after
+   * itself: Restore's own delete-extras step can remove an `entries` row
+   * entirely (a hard SQL DELETE, not a tombstone) for a row the Backup
+   * being restored never mentioned, and a row that no longer exists can
+   * never be visited by the loop below — its stale index entry would
+   * survive forever without this explicit wipe. Reinserts through
+   * `indexForSearch` itself, one row at a time, rather than a second,
+   * parallel bulk-insert written here — the identical "don't duplicate the
+   * one place this logic lives" reasoning `reindexFromCurrentState`'s own
+   * comment already gives for calling `indexForSearch` instead of
+   * reimplementing it.
+   *
+   * `onProgress` fires after every row — issue #197's own "surface
+   * progress" requirement for a rebuild that, at personal-log scale, is
+   * still fast but no longer instantaneous once every Entry needs its
+   * index row rebuilt in one pass.
+   */
+  async rebuildSearchIndex(onProgress?: (done: number, total: number) => void): Promise<void> {
+    await this.driver.execute("DELETE FROM entries_fts", [], "run");
+    const rows = await this.db
+      .select({ id: entries.id, body: entries.body, deletedAt: entries.deletedAt })
+      .from(entries);
+    for (let index = 0; index < rows.length; index += 1) {
+      await this.indexForSearch(rows[index] as Pick<Entry, "id" | "body" | "deletedAt">);
+      onProgress?.(index + 1, rows.length);
+    }
+  }
+
   // Tombstones awaiting push are included here, not filtered out: a
   // removed Entry has `seq IS NULL` exactly like a newly captured one
   // (ADR 0028's Decision — a delete goes out over the wire as the

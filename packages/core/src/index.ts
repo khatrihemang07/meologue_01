@@ -1,8 +1,28 @@
 export type { BackupOptions, BackupResult } from "./backup/backup-zip";
 export { backupFileName, createBackup } from "./backup/backup-zip";
-export { backupTableNames, dumpDatabase, escapeSqlValue } from "./backup/dump";
+export {
+  backupTableNames,
+  type ColumnInfo,
+  dumpDatabase,
+  escapeSqlValue,
+  quoteIdent,
+  tableColumns,
+} from "./backup/dump";
 export type { BackupMeta, BuildBackupMetaOptions } from "./backup/meta";
 export { BACKUP_SCHEMA_VERSION, buildBackupMeta } from "./backup/meta";
+export type {
+  ParseBackupFailure,
+  ParseBackupResult,
+  ParseBackupSuccess,
+  ParsedRow,
+  ParsedTable,
+} from "./backup/parse";
+export { parseBackupDatabase } from "./backup/parse";
+export type { RestoreOutcome, RestoreResult } from "./backup/restore";
+export { restoreFromBackup } from "./backup/restore";
+export type { UnzipBackupResult, UnzippedBackup } from "./backup/restore-zip";
+export { unzipBackup } from "./backup/restore-zip";
+export { rowContentUnchanged } from "./backup/row-diff";
 export type { CommentStore } from "./comment-store";
 export type { Comment } from "./comment-types";
 export type { EventStore } from "./event-store";

@@ -96,6 +96,49 @@ export function readAllDeviceSettings(): Record<string, string> {
 }
 
 /**
+ * Writes every `meologue.*` key `incoming` carries straight into
+ * `localStorage`, replacing whatever this Device already has for each one
+ * — the write side of `readAllDeviceSettings` above, and Restore's own way
+ * of applying a Backup's `settings.json` silently (issue #197). This is a
+ * deliberate reversal of ADR 0008's "Device settings must not travel with
+ * a data restore" rule; see the ADR that supersedes it (recorded alongside
+ * this ticket) for why theme, Accent, text size and hidden Destinations
+ * are worth carrying across a Restore even though a Server URL is not.
+ *
+ * `SERVER_URL_KEY` is skipped unconditionally, regardless of whether
+ * `incoming` carries one: ADR 0011 makes an unreachable Server URL mean
+ * "Sync is off" *silently*, with no error surfaced, so applying an
+ * incoming address without the user seeing and choosing it first could
+ * kill Sync with nothing on screen to explain why. settings-page.tsx's own
+ * Restore flow handles that one key separately — showing it and asking
+ * accept-or-keep — rather than ever writing it through this function.
+ *
+ * A key that doesn't start with `meologue.` is also skipped: `incoming`
+ * comes from a zip a user picked off disk, and while a real Backup's
+ * `settings.json` only ever holds what `readAllDeviceSettings` itself
+ * produced (`meologue.*` keys, and nothing else), refusing anything else
+ * here means a hand-edited or corrupted file can't be used to write an
+ * arbitrary `localStorage` key this app never intended a Backup to touch.
+ *
+ * Wrapped in try/catch per key, degrading to "skip this one key" rather
+ * than aborting the whole apply — the same posture every other
+ * `localStorage` write in this file already takes.
+ */
+export function applyDeviceSettings(incoming: Record<string, string>): void {
+  for (const [key, value] of Object.entries(incoming)) {
+    if (key === SERVER_URL_KEY || !key.startsWith(DEVICE_SETTINGS_PREFIX)) {
+      continue;
+    }
+    try {
+      localStorage.setItem(key, value);
+    } catch {
+      // Refused write for this one key (e.g. Safari private browsing) —
+      // continue applying the rest rather than aborting on the first one.
+    }
+  }
+}
+
+/**
  * How wide the chat list pane is beside an open destination (ADR 0036), in
  * CSS pixels. A per-Device view preference, not synced state: a reader who
  * drags the divider on a laptop should see no effect on a phone, the same

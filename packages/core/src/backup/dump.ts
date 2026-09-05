@@ -17,8 +17,19 @@ interface TableRow {
   sql: string | null;
 }
 
-/** Wraps an identifier in backticks, doubling any backtick already inside it — the same escaping SQLite itself uses, and the same quoting style every migration in ../sqlite/migrations already writes table and column names in (see 0000_initial.sql). */
-function quoteIdent(name: string): string {
+/**
+ * Wraps an identifier in backticks, doubling any backtick already inside it
+ * — the same escaping SQLite itself uses, and the same quoting style every
+ * migration in ../sqlite/migrations already writes table and column names
+ * in (see 0000_initial.sql). Exported for ./parse.ts and ./restore.ts
+ * (issue #197): both need to build a `CREATE TABLE`-quoted identifier back
+ * out of a plain table/column name string the same way this file already
+ * does, and a second, independently-written escaper is exactly the kind of
+ * thing that could quietly drift from this one — the identical reasoning
+ * `backupTableNames`'s own header comment gives for sharing "every table"
+ * between `dumpDatabase` and ../backup/meta.ts.
+ */
+export function quoteIdent(name: string): string {
   return `\`${name.replaceAll("`", "``")}\``;
 }
 
@@ -152,12 +163,28 @@ export async function backupTableNames(driver: SqliteDriver): Promise<string[]> 
   return (await listBackupTables(driver)).map((table) => table.name);
 }
 
-interface ColumnInfo {
+export interface ColumnInfo {
   name: string;
 }
 
-/** Every column `table` actually has, in on-disk order — `pragma table_info` orders by `cid`, the same order a bare `SELECT *` against this table would return, so building the explicit column list from this rather than trusting `SELECT *` is belt-and-braces, not a behaviour change: it's what lets the `INSERT` statement below name every column explicitly rather than depending on that ordering staying implicit. */
-async function tableColumns(driver: SqliteDriver, tableName: string): Promise<ColumnInfo[]> {
+/**
+ * Every column `table` actually has, in on-disk order — `pragma table_info`
+ * orders by `cid`, the same order a bare `SELECT *` against this table
+ * would return, so building the explicit column list from this rather than
+ * trusting `SELECT *` is belt-and-braces, not a behaviour change: it's what
+ * lets the `INSERT` statement below name every column explicitly rather
+ * than depending on that ordering staying implicit.
+ *
+ * Exported for ./parse.ts (issue #197): Restore's "structure is validated
+ * against the schema this build knows" rule (issue #197's own framing)
+ * means asking this Device's own already-migrated database what columns a
+ * table actually has right now, the same live-introspection technique this
+ * function already uses for dumping rather than a hand-maintained list —
+ * see `listBackupTables`'s own header comment for why reading
+ * `sqlite_master` beats naming tables here, the identical argument applied
+ * a second time to columns.
+ */
+export async function tableColumns(driver: SqliteDriver, tableName: string): Promise<ColumnInfo[]> {
   const result = await driver.execute(`PRAGMA table_info(${quoteIdent(tableName)})`, [], "all");
   return result.rows.map((row) => {
     const columns = row as unknown[];

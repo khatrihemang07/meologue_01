@@ -8,6 +8,8 @@
     "sql:default",
     "sql:allow-execute",
     "dialog:allow-save",
-    "fs:allow-write-file"
+    "fs:allow-write-file",
+    "dialog:allow-open",
+    "fs:allow-read-file"
   ]
 }

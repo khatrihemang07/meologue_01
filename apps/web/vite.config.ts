@@ -166,6 +166,10 @@ export default defineConfig(({ mode }) => {
           replacement: path.resolve(import.meta.dirname, `./src/platform/save-file.${target}.ts`),
         },
         {
+          find: "@/platform/load-file",
+          replacement: path.resolve(import.meta.dirname, `./src/platform/load-file.${target}.ts`),
+        },
+        {
           find: "@/platform/register-service-worker",
           replacement: path.resolve(
             import.meta.dirname,

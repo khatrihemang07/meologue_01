@@ -1,6 +1,13 @@
-import { createBackup, exportEntriesToZip, PROTOCOL_VERSION } from "@meologue/core";
+import {
+  createBackup,
+  exportEntriesToZip,
+  PROTOCOL_VERSION,
+  restoreFromBackup,
+  unzipBackup,
+} from "@meologue/core";
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { Dialog as DialogPrimitive } from "radix-ui";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { BackToChats } from "@/components/back-to-chats";
 import { Shell } from "@/components/shell";
@@ -10,6 +17,7 @@ import { checkServerUrl, type ServerCheckResult } from "@/lib/server-check";
 import {
   ACCENTS,
   type AccentId,
+  applyDeviceSettings,
   COMPLETED_STYLES,
   type CompletedStyleId,
   HIDEABLE_DESTINATIONS,
@@ -26,6 +34,7 @@ import { useSyncStatus } from "@/lib/sync-status";
 import { applyAccent, applyCompletedStyle, applyTextSize, applyTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import { entryStoreQueryOptions } from "@/pages/entry-store-layout";
+import { loadFile } from "@/platform/load-file";
 import { saveFile } from "@/platform/save-file";
 
 const THEME_OPTIONS: { value: Theme; label: string }[] = [
@@ -343,6 +352,31 @@ export function SettingsPage() {
   // brings the status back on its own, with no re-check.
   const [check, setCheck] = useState<{ url: string; result: ServerCheckResult } | null>(null);
 
+  // Issue #197: the Backup a user just picked, parsed enough to drive the
+  // confirmation dialog below — non-null is what makes that dialog open.
+  // `databaseSql` is carried through untouched (restoreFromBackup does its
+  // own, stricter parse against the live schema); `settings` and
+  // `incomingServerUrl` are read here only far enough to show the user what
+  // they're about to get, never applied before they confirm.
+  const [restorePreview, setRestorePreview] = useState<{
+    databaseSql: string;
+    settings: Record<string, string>;
+    incomingServerUrl: string;
+    takenAt: string | null;
+  } | null>(null);
+  // A typed confirmation, not a toast (issue #197's own explicit
+  // requirement) — Restore is the one operation that destroys History on
+  // purpose, so the destructive button below stays disabled until this
+  // matches RESTORE_CONFIRM_WORD exactly.
+  const [restoreConfirmText, setRestoreConfirmText] = useState("");
+  // Defaults to keeping this Device's current Server URL, never the
+  // incoming one — ADR 0011 makes an unreachable Server URL mean "Sync is
+  // off" *silently*, so the safer default is the one that can't turn Sync
+  // off without the user noticing.
+  const [useIncomingServerUrl, setUseIncomingServerUrl] = useState(false);
+  const [restoring, setRestoring] = useState(false);
+  const [restoreProgress, setRestoreProgress] = useState("");
+
   // Runs once, silently, against whatever is already saved — arriving at
   // the page tells the user where things stand without them pressing
   // anything. No toast here: only the Save action below gets one. Guarded
@@ -528,6 +562,134 @@ export function SettingsPage() {
     } catch (error) {
       console.error("meologue: backup failed", error);
       toast.error(error instanceof Error ? error.message : "Backup failed.");
+    }
+  }
+
+  // The word a reader must type verbatim before the destructive Restore
+  // button in the confirmation dialog below is enabled — issue #197's own
+  // "a typed confirmation, not a toast" requirement for the one operation
+  // that destroys History on purpose.
+  const RESTORE_CONFIRM_WORD = "RESTORE";
+
+  // Opens the confirmation dialog rather than restoring immediately —
+  // picking and unzipping the file is not itself destructive, so it needs
+  // no confirmation of its own; only handleConfirmRestore below writes
+  // anything. `unzipBackup`/JSON.parse failures here are reported and stop
+  // before the dialog ever opens, so a reader is never asked to confirm
+  // restoring a file this build can't even read the wrapper of.
+  async function handlePickRestoreFile() {
+    if (!opened) {
+      return;
+    }
+    const picked = await loadFile();
+    if (picked.outcome === "cancelled") {
+      // The user backed out of the file picker — nothing to report, the
+      // same silent-on-cancel posture handleExport/handleBackup already
+      // take for their own save-side pickers (ticket 47, docs/adr/0016).
+      return;
+    }
+    const unzipped = unzipBackup(picked.bytes);
+    if (!unzipped.ok) {
+      toast.error(unzipped.reason);
+      return;
+    }
+
+    // settings.json and meta.json are read only far enough to populate the
+    // confirmation dialog (the incoming Server URL, and when the Backup was
+    // taken) — parsed defensively, not validated against a schema: a
+    // Backup's own database.sql is the thing restoreFromBackup actually
+    // applies and structurally checks; these two files are shown, not
+    // written, until the user confirms.
+    let settings: Record<string, string> = {};
+    try {
+      const parsed: unknown = JSON.parse(unzipped.backup.settingsJson);
+      if (typeof parsed === "object" && parsed !== null) {
+        settings = parsed as Record<string, string>;
+      }
+    } catch {
+      // An unreadable settings.json still lets the data itself restore —
+      // the confirmation dialog just shows no incoming Server URL and
+      // applies no settings, rather than refusing the whole Restore over a
+      // file that fails to parse for a concern this page treats as
+      // secondary to the data.
+    }
+    let takenAt: string | null = null;
+    try {
+      const meta: unknown = JSON.parse(unzipped.backup.metaJson);
+      const takenAtValue =
+        typeof meta === "object" && meta !== null
+          ? (meta as Record<string, unknown>).taken_at
+          : undefined;
+      takenAt = typeof takenAtValue === "string" ? takenAtValue : null;
+    } catch {
+      takenAt = null;
+    }
+
+    setRestorePreview({
+      databaseSql: unzipped.backup.databaseSql,
+      settings,
+      incomingServerUrl:
+        typeof settings["meologue.server-url"] === "string" ? settings["meologue.server-url"] : "",
+      takenAt,
+    });
+    setRestoreConfirmText("");
+    setUseIncomingServerUrl(false);
+  }
+
+  // The confirmation dialog's own destructive action — everything this
+  // ticket's brief calls for happens here, in order: replace the database
+  // (restoreFromBackup, which does its own BEGIN/COMMIT/ROLLBACK and FTS5
+  // rebuild), then apply the Backup's settings silently (applyDeviceSettings
+  // — this overturns ADR 0008, see the ADR that supersedes it), then apply
+  // the incoming Server URL only if the reader explicitly chose to
+  // (useIncomingServerUrl; ADR 0011's "an unreachable Server URL means Sync
+  // is off, silently" is exactly why this is never applied by default).
+  //
+  // Reloads the page on success, after a moment for the success toast to be
+  // read: Restore replaces the database and settings out from under every
+  // already-rendered part of this app (React Query's cached reads, the
+  // Zustand settings store's own state, the Nav's lock checks) — a full
+  // reload is the same honest "start over from what's actually on disk now"
+  // reset app-error-boundary.tsx's own Reload button already uses for a
+  // comparable "too much has changed to patch in place" situation.
+  async function handleConfirmRestore() {
+    if (!opened || restorePreview === null) {
+      return;
+    }
+    setRestoring(true);
+    setRestoreProgress("Starting…");
+    try {
+      const outcome = await restoreFromBackup(
+        opened.driver,
+        restorePreview.databaseSql,
+        (message) => setRestoreProgress(message),
+      );
+      if (!outcome.ok) {
+        toast.error(outcome.reason);
+        return;
+      }
+
+      applyDeviceSettings(restorePreview.settings);
+      if (useIncomingServerUrl) {
+        useSettingsStore.getState().setServerUrl(restorePreview.incomingServerUrl);
+      }
+
+      const { inserted, updated, unchanged, skippedTables, skippedColumns } = outcome.result;
+      const skippedCount = skippedTables.length + skippedColumns.length;
+      toast.success(
+        `Restored: ${inserted} inserted, ${updated} updated, ${unchanged} unchanged.${
+          skippedCount > 0
+            ? ` ${skippedCount} field(s) from a different build's Backup were skipped.`
+            : ""
+        }`,
+      );
+      setRestorePreview(null);
+      window.setTimeout(() => window.location.reload(), 1200);
+    } catch (error) {
+      console.error("meologue: restore failed", error);
+      toast.error(error instanceof Error ? error.message : "Restore failed.");
+    } finally {
+      setRestoring(false);
     }
   }
 
@@ -779,8 +941,7 @@ export function SettingsPage() {
         Export is a readable zip of day files an Export's own hint text
         above doesn't need repeating here, and a Backup is a lossless SQL
         dump of this Device's whole database, settings included, meant to
-        be restored rather than read. Restore itself is a separate ticket
-        (#197) — this button only produces the file.
+        be restored rather than read.
       */}
       <SettingsSection
         label="Backup"
@@ -792,6 +953,225 @@ export function SettingsPage() {
           </Button>
         </div>
       </SettingsSection>
+
+      {/*
+        Issue #197. Restore is the honest, destructive counterpart to
+        Backup just above: "this Device becomes the Backup" rather than
+        "gains a copy of it." Deliberately its own section, not folded into
+        Backup's: the two do opposite things to the same artifact, and a
+        reader scanning this page should never mistake one button for the
+        other.
+      */}
+      <SettingsSection
+        label="Restore"
+        hint="Replaces everything on this Device with a Backup's contents. This is the one action on this page that destroys History on purpose — you'll be asked to confirm before anything is written."
+      >
+        <div>
+          <Button
+            type="button"
+            size="touch"
+            variant="destructive"
+            onClick={handlePickRestoreFile}
+            disabled={!opened || restoring}
+          >
+            Restore from a Backup…
+          </Button>
+        </div>
+      </SettingsSection>
+
+      <RestoreConfirmDialog
+        open={restorePreview !== null}
+        onOpenChange={(nextOpen) => {
+          // Ignore a dismiss attempt (Escape, outside click) while the
+          // write is actually in flight — closing the dialog mid-Restore
+          // would hide the one place its progress is shown, not stop the
+          // Restore itself, which is already running against the driver.
+          if (!nextOpen && restoring) {
+            return;
+          }
+          if (!nextOpen) {
+            setRestorePreview(null);
+          }
+        }}
+        takenAt={restorePreview?.takenAt ?? null}
+        currentServerUrl={storedServerUrl}
+        incomingServerUrl={restorePreview?.incomingServerUrl ?? ""}
+        useIncomingServerUrl={useIncomingServerUrl}
+        onUseIncomingServerUrlChange={setUseIncomingServerUrl}
+        confirmText={restoreConfirmText}
+        onConfirmTextChange={setRestoreConfirmText}
+        confirmWord={RESTORE_CONFIRM_WORD}
+        restoring={restoring}
+        progress={restoreProgress}
+        onConfirm={handleConfirmRestore}
+      />
     </Shell>
+  );
+}
+
+/**
+ * "Type <word> to confirm" — the one form of confirmation this page's own
+ * Restore button asks for (issue #197's own explicit requirement: "a typed
+ * confirmation, not a toast"). Deliberately case-sensitive, exact-match
+ * comparison in the caller (settings-page.tsx's `RESTORE_CONFIRM_WORD`
+ * check) rather than a case-insensitive one: a reader who types "restore"
+ * without looking closely at the required word hasn't actually read it,
+ * which is the entire point of asking for it typed rather than clicked.
+ */
+function formatTakenAt(takenAt: string | null): string {
+  if (takenAt === null) {
+    return "an unknown time";
+  }
+  const parsed = Date.parse(takenAt);
+  if (Number.isNaN(parsed)) {
+    return takenAt;
+  }
+  return new Date(parsed).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}
+
+/**
+ * Restore's own confirmation dialog (issue #197) — not `ConfirmDialog`
+ * (components/ui/alert-dialog.tsx): that component's three-string-plus-
+ * callback shape fits a plain "are you sure" (Entry delete, Session
+ * delete), but this dialog needs three things neither of those did — the
+ * Backup's own `taken_at` shown for context, an accept-or-keep choice over
+ * the incoming Server URL (ADR 0011), and a typed word gating the
+ * destructive button rather than a click alone. Built directly on the same
+ * Radix `Dialog` primitive `alert-dialog.tsx` itself is built on, with the
+ * identical `role="alertdialog"` reasoning that file's own header comment
+ * gives (Escape and an outside click both still dismiss it, matching this
+ * app's own resolution of that point against Radix's more restrictive
+ * `AlertDialog` primitive) — except the confirm button here is a plain
+ * `onClick`, not a `Dialog.Close`: this dialog stays open, showing
+ * `progress`, for the whole time `restoring` is true, rather than closing
+ * the instant the button is pressed the way `ConfirmDialog`'s always does.
+ */
+function RestoreConfirmDialog({
+  open,
+  onOpenChange,
+  takenAt,
+  currentServerUrl,
+  incomingServerUrl,
+  useIncomingServerUrl,
+  onUseIncomingServerUrlChange,
+  confirmText,
+  onConfirmTextChange,
+  confirmWord,
+  restoring,
+  progress,
+  onConfirm,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  takenAt: string | null;
+  currentServerUrl: string;
+  incomingServerUrl: string;
+  useIncomingServerUrl: boolean;
+  onUseIncomingServerUrlChange: (value: boolean) => void;
+  confirmText: string;
+  onConfirmTextChange: (value: string) => void;
+  confirmWord: string;
+  restoring: boolean;
+  progress: string;
+  onConfirm: () => void;
+}) {
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  const canConfirm = confirmText === confirmWord && !restoring;
+
+  return (
+    <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
+      <DialogPrimitive.Portal>
+        <DialogPrimitive.Overlay
+          className={cn(
+            "fixed inset-0 z-50 bg-black/50 duration-150 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
+          )}
+        />
+        <DialogPrimitive.Content
+          role="alertdialog"
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            cancelRef.current?.focus({ preventScroll: true });
+          }}
+          className={cn(
+            "fixed top-1/2 left-1/2 z-50 w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-popover p-4 text-popover-foreground shadow-lg outline-hidden duration-150 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          )}
+        >
+          <DialogPrimitive.Title className="text-sm font-medium text-foreground">
+            Restore this Device from a Backup?
+          </DialogPrimitive.Title>
+          <DialogPrimitive.Description className="mt-1.5 text-sm text-muted-foreground">
+            Taken {formatTakenAt(takenAt)}. Every Entry, Task, Project, Section, Label, Filter,
+            Comment and Event on this Device is replaced with what's in the Backup. Anything created
+            here since then that hasn't Synced yet will be lost.
+          </DialogPrimitive.Description>
+
+          <div className="mt-3 flex items-center justify-between gap-2">
+            <span className="text-sm">
+              Server URL:{" "}
+              {useIncomingServerUrl ? incomingServerUrl || "(none)" : currentServerUrl || "(none)"}
+            </span>
+            <Button
+              type="button"
+              size="sm"
+              variant={useIncomingServerUrl ? "default" : "outline"}
+              role="switch"
+              aria-checked={useIncomingServerUrl}
+              aria-label="Use the Backup's Server URL"
+              disabled={restoring}
+              onClick={() => onUseIncomingServerUrlChange(!useIncomingServerUrl)}
+            >
+              {useIncomingServerUrl ? "Use Backup's" : "Keep current"}
+            </Button>
+          </div>
+          <p className="mt-1 text-muted-foreground text-xs">
+            The Backup's own Server URL is {incomingServerUrl || "(none)"} — shown, never applied
+            without a choice (ADR 0011: an unreachable Server URL turns Sync off silently).
+          </p>
+
+          <label className="mt-3 block text-sm" htmlFor="restore-confirm-word">
+            Type {confirmWord} to confirm
+          </label>
+          <Input
+            id="restore-confirm-word"
+            value={confirmText}
+            onChange={(event) => onConfirmTextChange(event.target.value)}
+            disabled={restoring}
+            autoComplete="off"
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+          />
+
+          {restoring && (
+            <p aria-live="polite" className="mt-3 text-muted-foreground text-sm">
+              {progress}
+            </p>
+          )}
+
+          <div className="mt-4 flex justify-end gap-2">
+            <DialogPrimitive.Close asChild>
+              <Button
+                ref={cancelRef}
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={restoring}
+              >
+                Cancel
+              </Button>
+            </DialogPrimitive.Close>
+            <Button
+              type="button"
+              variant="destructive"
+              size="sm"
+              disabled={!canConfirm}
+              onClick={onConfirm}
+            >
+              Restore
+            </Button>
+          </div>
+        </DialogPrimitive.Content>
+      </DialogPrimitive.Portal>
+    </DialogPrimitive.Root>
   );
 }
