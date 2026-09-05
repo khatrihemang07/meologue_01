@@ -33,19 +33,19 @@ export type ServerSaveStatus =
 /**
  * The sentence a failed `ConfigResult` reads as — shared between a Save
  * failure (this file) and a load failure (`ServerGroup` below), so
- * "unreachable"/"unsupported"/"http-error" are described in exactly one
+ * "unreachable"/"not-supported"/"http-error" are described in exactly one
  * place regardless of which of the two ever produced them. Mirrors
  * `describeServerCheck`'s own reasoning (`describe-server-check.ts`): a
  * failure this Device only guessed at ("unreachable") reads differently
  * from one the Server actually reported ("http-error"), and an older
- * Server that has simply never heard of `/v1/config` ("unsupported") is
+ * Server that has simply never heard of `/v1/config` ("not-supported") is
  * neither of those — it's "older than this setting," not a failure at all.
  */
 export function describeConfigFailure(result: Extract<ConfigResult, { ok: false }>): string {
   switch (result.reason) {
     case "unreachable":
       return "Couldn't reach the server. Check that it's running and try again.";
-    case "unsupported":
+    case "not-supported":
       return "This server is older than this setting — update it to change this here.";
     case "http-error":
       return `The server rejected this (HTTP ${result.status}).`;

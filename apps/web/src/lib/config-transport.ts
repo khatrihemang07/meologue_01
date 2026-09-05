@@ -6,7 +6,7 @@ import { serverRequest } from "@/lib/server-request";
  * client-side caller) — mirrors `modelsTransport`'s shape (a discriminated
  * union, no thrown `Error`, the Server URL read fresh per call via
  * `serverRequest`) with one deliberate addition: a 404 collapses to
- * `"unsupported"`, not `"unreachable"`.
+ * `"not-supported"`, not `"unreachable"`.
  *
  * That distinction matters here in a way it doesn't for `/v1/models`:
  * `/v1/config` is registered unconditionally (ADR 0060 — it's the one route
@@ -14,16 +14,16 @@ import { serverRequest } from "@/lib/server-request";
  * how a Server *becomes* configured), so a 404 here can only mean this
  * Server predates the route entirely, never "not configured yet." Reporting
  * it as `"unreachable"` would render an older Server's Settings page as a
- * network failure to retry; `"unsupported"` reads instead as "this Server
+ * network failure to retry; `"not-supported"` reads instead as "this Server
  * is older than this setting" — the same distinction
- * `digestTransport`/`digestAtTransport` already draw with their own
- * `"not-supported"`, just spelled to match this ticket's own acceptance
- * criterion.
+ * `digestTransport`/`digestAtTransport` and `reflectTransport` already draw,
+ * and spelled the same way they spell it so a reader meets one name for one
+ * idea across every transport.
  */
 export type ConfigResult =
   | { ok: true; config: WireConfigResponse }
   | { ok: false; reason: "unreachable" }
-  | { ok: false; reason: "unsupported" }
+  | { ok: false; reason: "not-supported" }
   | { ok: false; reason: "http-error"; status: number };
 
 async function toConfigResult(response: Response | null): Promise<ConfigResult> {
@@ -31,7 +31,7 @@ async function toConfigResult(response: Response | null): Promise<ConfigResult> 
     return { ok: false, reason: "unreachable" };
   }
   if (response.status === 404) {
-    return { ok: false, reason: "unsupported" };
+    return { ok: false, reason: "not-supported" };
   }
   if (!response.ok) {
     // A failure with a status to report — the "rejected value" half of the

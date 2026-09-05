@@ -69,7 +69,7 @@ describe("getConfig / patchConfig", () => {
 
     const result = await getConfig();
 
-    expect(result).toEqual({ ok: false, reason: "unsupported" });
+    expect(result).toEqual({ ok: false, reason: "not-supported" });
   });
 
   it("reports a real Server-side failure as 'http-error', with its status", async () => {

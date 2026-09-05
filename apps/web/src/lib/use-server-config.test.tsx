@@ -103,7 +103,7 @@ describe("useServerConfig", () => {
 
     const writeResult = await result.current.save({ chat_model: "a-model" });
 
-    expect(writeResult).toEqual({ ok: false, reason: "unsupported" });
+    expect(writeResult).toEqual({ ok: false, reason: "not-supported" });
     expect(refreshCapabilities).not.toHaveBeenCalled();
   });
 });
