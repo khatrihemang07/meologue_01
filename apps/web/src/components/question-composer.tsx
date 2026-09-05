@@ -3,6 +3,7 @@ import { ArrowUp } from "lucide-react";
 import { type KeyboardEvent, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { useSettingsStore } from "@/lib/settings";
 import { isSubmitChord } from "@/lib/submit-chord";
 
 interface QuestionComposerProps {
@@ -60,11 +61,21 @@ export function QuestionComposer({
   currentModel,
 }: QuestionComposerProps) {
   const [value, setValue] = useState("");
+  // Issue #202: the Device-local default this picker starts a fresh
+  // Conversation on (settings.ts's own `defaultReflectModel` doc comment).
+  // Read here rather than threaded down as a prop: every other caller of
+  // this Device setting (composer.tsx's `formatBarVisible`) already reads
+  // straight off the store instead of being handed its value, and there is
+  // exactly one component that ever needs this one.
+  const defaultReflectModel = useSettingsStore((state) => state.defaultReflectModel);
   // Issue #98: "" is the picker's own "Server default" option — translated
   // to `undefined` only at the `onAsk` boundary below, so this component's
   // own state never has to special-case two different values meaning the
-  // same "no explicit choice" thing.
-  const [selectedModel, setSelectedModel] = useState("");
+  // same "no explicit choice" thing. Issue #202: seeded from the Device
+  // default rather than always `""`, so the very first render already
+  // shows the reader's own preference instead of flashing "Server default"
+  // for one tick before the effect below corrects it.
+  const [selectedModel, setSelectedModel] = useState(() => currentModel ?? defaultReflectModel);
 
   // Only ever fires on a *new* failure (a changed signal), so it can't fight
   // the user for control of the field while they're typing a replacement.
@@ -82,9 +93,20 @@ export function QuestionComposer({
   // every-render sync (a plain `value={currentModel ?? ""}` would fight the
   // user's own in-flight selection the instant a query refetch runs), the
   // same reasoning `restore`'s own effect above already follows.
+  //
+  // Issue #202: `currentModel ?? defaultReflectModel` rather than
+  // `currentModel ?? ""` — a Conversation already on a model (an opened
+  // Session, or this one's own first Turn landing) always wins, exactly as
+  // before; only the "nothing resolved yet" case changed, from always
+  // "Server default" to this Device's own stored preference. Opening a
+  // *different*, brand-new Session (`currentModel` going from a set value
+  // back to `undefined`) re-points the picker at the Device default again,
+  // not at whatever the reader had picked for the Session they just left —
+  // the same "each Conversation starts fresh" behaviour `currentModel`
+  // already gave every value before this default existed.
   useEffect(() => {
-    setSelectedModel(currentModel ?? "");
-  }, [currentModel]);
+    setSelectedModel(currentModel ?? defaultReflectModel);
+  }, [currentModel, defaultReflectModel]);
 
   const ask = () => {
     const question = value.trim();
