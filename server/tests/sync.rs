@@ -286,6 +286,157 @@ async fn an_edit_reaches_a_device_whose_cursor_already_passed_the_original(pool:
     assert_eq!(entries[0]["deleted_at"], Value::Null);
 }
 
+/// Issue #196's own round-trip guarantee: a second Device pulling an edit
+/// sees the *editing* Device's own `updated_at` — the timestamp `entry()`
+/// pushed it with — never its own receive time. Nothing in `run_sync` or
+/// `fetch_entries_since` stamps a value of its own onto the row; the
+/// column simply carries whatever the pushing Device wrote, unchanged, so
+/// this is really a test that no such stamping was accidentally added.
+#[sqlx::test]
+async fn an_edit_reaches_a_second_device_with_the_editing_devices_own_updated_at_not_its_receive_time(
+    pool: PgPool,
+) {
+    let device_a = Uuid::new_v4();
+    let device_b = Uuid::new_v4();
+    let entry_id = Uuid::new_v4();
+
+    post_sync(
+        &pool,
+        json!({
+            "protocol_version": 4,
+            "device_id": device_a,
+            "since_seq": 0,
+            "entries": [entry(entry_id, device_a, "original body")],
+        }),
+    )
+    .await;
+
+    let mut edited_entry = entry(entry_id, device_a, "edited body");
+    edited_entry["updated_at"] = json!("2026-03-15T08:30:00Z");
+    post_sync(
+        &pool,
+        json!({
+            "protocol_version": 4,
+            "device_id": device_a,
+            "since_seq": 0,
+            "entries": [edited_entry],
+        }),
+    )
+    .await;
+
+    let (status, polled) = post_sync(
+        &pool,
+        json!({
+            "protocol_version": 4,
+            "device_id": device_b,
+            "since_seq": 0,
+            "entries": [],
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let entries = polled["entries"].as_array().unwrap();
+    let pulled = entries.iter().find(|e| e["id"] == entry_id.to_string()).unwrap();
+    assert_eq!(
+        pulled["updated_at"], "2026-03-15T08:30:00Z",
+        "device B must see device A's own updated_at, not whenever device B happened to poll"
+    );
+}
+
+/// The property ADR 0059's own Alternatives section names by name — the
+/// rejected fix it warns against: `updated_at` must never sit in the
+/// `is distinct from` guard, because a fresh timestamp on an otherwise
+/// byte-identical body would then reassign `seq` on every replay, moving
+/// the cursor and re-delivering the row to every Device that has ever
+/// synced it, regardless of whether anything about the Entry actually
+/// changed. This pushes the identical body twice with two different
+/// `updated_at` values and asserts the second push changes nothing
+/// observable: no cursor movement, and the row never reaches a second
+/// Device that already passed it.
+#[sqlx::test]
+async fn a_replay_with_only_a_different_updated_at_does_not_resequence_or_reach_other_devices(
+    pool: PgPool,
+) {
+    let device_a = Uuid::new_v4();
+    let device_b = Uuid::new_v4();
+    let entry_id = Uuid::new_v4();
+
+    let mut first_push = entry(entry_id, device_a, "unchanged body");
+    first_push["updated_at"] = json!("2026-01-01T00:00:00Z");
+    let (_, first) = post_sync(
+        &pool,
+        json!({
+            "protocol_version": 4,
+            "device_id": device_a,
+            "since_seq": 0,
+            "entries": [first_push],
+        }),
+    )
+    .await;
+    let first_cursor = first["cursor"].as_i64().unwrap();
+
+    // Device B polls now, advancing its own cursor past this row.
+    let (_, polled) = post_sync(
+        &pool,
+        json!({
+            "protocol_version": 4,
+            "device_id": device_b,
+            "since_seq": 0,
+            "entries": [],
+        }),
+    )
+    .await;
+    let device_b_cursor = polled["cursor"].as_i64().unwrap();
+    assert!(device_b_cursor >= first_cursor);
+
+    // Device A replays the identical body, with a different updated_at —
+    // the exact shape a byte-identical "no-op edit" takes on a real client.
+    let mut replay_push = entry(entry_id, device_a, "unchanged body");
+    replay_push["updated_at"] = json!("2026-06-06T00:00:00Z");
+    let (status, replayed) = post_sync(
+        &pool,
+        json!({
+            "protocol_version": 4,
+            "device_id": device_a,
+            "since_seq": first_cursor,
+            "entries": [replay_push],
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        replayed["cursor"], first_cursor,
+        "an unchanged body must not reassign seq just because updated_at differs"
+    );
+
+    // Device B, already past this row, must not see it come back — the
+    // guard never fired, so there is nothing new to deliver.
+    let (status, repolled) = post_sync(
+        &pool,
+        json!({
+            "protocol_version": 4,
+            "device_id": device_b,
+            "since_seq": device_b_cursor,
+            "entries": [],
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let entries = repolled["entries"].as_array().unwrap();
+    assert!(
+        entries.is_empty(),
+        "a replay differing only in updated_at must not reach a Device already past this row"
+    );
+
+    // The acknowledgement (#194) still tells device A its push landed, and
+    // still carries the *server's* own updated_at — the older one, since
+    // the guard didn't fire and nothing was rewritten (ADR 0059's own
+    // Consequences section names this divergence as harmless and expected).
+    let acknowledged = replayed["acknowledged_entries"].as_array().unwrap();
+    let acked = acknowledged.iter().find(|e| e["id"] == entry_id.to_string()).unwrap();
+    assert_eq!(acked["updated_at"], "2026-01-01T00:00:00Z");
+}
+
 #[sqlx::test]
 async fn a_tombstone_is_returned_by_a_poll_with_deleted_at_set_and_a_blank_body(pool: PgPool) {
     let device = Uuid::new_v4();

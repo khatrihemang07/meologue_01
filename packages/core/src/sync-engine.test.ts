@@ -848,6 +848,32 @@ describe("sync engine", () => {
       await sync({ ...stores, transport: secondSync, deviceId: DEVICE_ID });
     });
 
+    // Issue #196's own version of criterion 1/2 together, on the Entry
+    // stream specifically — the first stream this ticket bumps
+    // ROW_SHAPE_EPOCH for from scratch (0 -> 1), unlike Task's own
+    // bump above which was already at 1 from issue #182. A Device that
+    // already had a real Entry Cursor before `updated_at` existed resets
+    // to 0 exactly once, on the very next sync() call, and never again on
+    // the ordinary syncs that follow.
+    it("resets the Entry Cursor to 0 exactly once for issue #196's own epoch bump, then never again", async () => {
+      const stores = newStores();
+      await stores.store.setCursor(42);
+
+      const resettingTransport = vi.fn(async (request) => {
+        expect(request.since_seq).toBe(0);
+        return { ...emptyResponse, cursor: 50 };
+      });
+      await sync({ ...stores, transport: resettingTransport, deviceId: DEVICE_ID });
+      expect(await stores.store.getCursor()).toBe(50);
+
+      const ordinaryTransport = vi.fn(async (request) => {
+        expect(request.since_seq).toBe(50);
+        return { ...emptyResponse, cursor: 60 };
+      });
+      await sync({ ...stores, transport: ordinaryTransport, deviceId: DEVICE_ID });
+      expect(await stores.store.getCursor()).toBe(60);
+    });
+
     // Criterion 4: re-walking a stream during catch-up must not
     // resurrect a tombstone — `fetch_entries_since`'s own doc comment
     // (server/src/sync.rs) is explicit that a poll carries tombstones
