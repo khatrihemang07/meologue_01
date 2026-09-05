@@ -29,4 +29,9 @@ export DATABASE_URL="postgres://meologue:meologue@localhost:5442/meologue"
 export STATIC_DIR="../apps/web/dist/sandbox"
 export PORT=41307
 export BIND="0.0.0.0"
+# Issue #200: names this instance in its own startup banner. The default
+# (unset) is "production" — this is the one variable in this list that
+# genuinely needs overriding rather than merely pinning, since without it
+# this Sandbox would print a banner claiming to be the instance it isn't.
+export MEOLOGUE_MODE="sandbox"
 exec cargo run

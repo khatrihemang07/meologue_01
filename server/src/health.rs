@@ -3,6 +3,7 @@ use axum::extract::State;
 use serde::Serialize;
 use utoipa::ToSchema;
 
+use crate::settings::RuntimeFlags;
 use crate::sync::PROTOCOL_VERSION;
 use crate::{DigestsEnabled, reflect::ReflectState};
 
@@ -32,6 +33,21 @@ const SERVICE_MARKER: &str = "meologue-server";
 ///   embed config is resolvable, so a chat-only Server still reports
 ///   `reflect: true` while `embeddings: false` — exactly the Server on
 ///   which `reflect.rs`'s tool loop quietly omits `similar_entries`.
+///
+///   **Issue #201 amends all three of `reflect`/`digest`/`embeddings` to
+///   read "configured AND switched on," not "configured" alone — see ADR
+///   0063, whose headline this is.** ADR 0010 pinned this handler to
+///   touching nothing but its own two constants — no state extraction, no
+///   query — specifically so a Server whose Postgres is down still answers
+///   correctly. ADR 0037 already relaxed "no state extraction" once, to
+///   add the two `AppState` reads above; what stayed load-bearing through
+///   that change, in writing, was narrower: this handler never touches
+///   `PgPool`. That is still exactly what holds here. `RuntimeFlags` reads
+///   three atomics with no pool anywhere in its type — Postgres is read
+///   for these flags twice per configuration change (once at boot, once on
+///   a `PATCH`), never per `/v1/health` request, so a Server whose
+///   database dies after boot keeps answering this route with whatever
+///   capability state it last knew, exactly as before this ticket.
 /// - `todo` — issue #172 / ADR 0051 — is **unconditionally `true`**, not
 ///   read off any `LlmConfig`. Task Sync has no model behind it and no
 ///   configuration that can disable it: any Server that answers
@@ -79,11 +95,14 @@ pub struct HealthResponse {
 /// rejects on protocol version: its whole job is letting the caller compare
 /// versions themselves. See ADR 0010.
 ///
-/// Reads `Option<ReflectState>` and `DigestsEnabled` off `AppState` (via
-/// their own `FromRef` impls in `lib.rs`) rather than the whole `AppState`
-/// — the same one-extractor-per-need shape `sync::sync_handler` and
+/// Reads `Option<ReflectState>`, `DigestsEnabled` and (issue #201)
+/// `RuntimeFlags` off `AppState` (via their own `FromRef` impls in
+/// `lib.rs`) rather than the whole `AppState` — the same
+/// one-extractor-per-need shape `sync::sync_handler` and
 /// `reflect::reflect_handler` already use, and precisely what keeps this
-/// handler from ever touching `PgPool` and staying DB-free.
+/// handler from ever touching `PgPool` and staying DB-free — see
+/// `HealthCapabilities`'s own doc comment for why gaining a third
+/// extractor here is *not* the ADR 0010 regression it might look like.
 #[utoipa::path(
     get,
     path = "/v1/health",
@@ -94,13 +113,16 @@ pub struct HealthResponse {
 pub async fn health_handler(
     State(reflect): State<Option<ReflectState>>,
     State(DigestsEnabled(digest)): State<DigestsEnabled>,
+    State(flags): State<RuntimeFlags>,
 ) -> Json<HealthResponse> {
     let capabilities = HealthCapabilities {
-        reflect: reflect.is_some(),
-        digest,
-        embeddings: reflect.as_ref().is_some_and(|state| state.embed_client.is_some()),
+        reflect: reflect.is_some() && flags.reflect_enabled(),
+        digest: digest && flags.digest_enabled(),
+        embeddings: reflect.as_ref().is_some_and(|state| state.embed_client.is_some())
+            && flags.embeddings_enabled(),
         // See HealthCapabilities::todo's own doc comment for why this is a
-        // bare `true` rather than reading anything off `LlmConfig`.
+        // bare `true` rather than reading anything off `LlmConfig` or
+        // `RuntimeFlags` — Todo has no toggle to read in the first place.
         todo: true,
     };
 

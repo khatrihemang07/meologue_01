@@ -23,6 +23,16 @@ docker compose up -d --wait postgres-sandbox
 
 cd server
 export DATABASE_URL="postgres://meologue:meologue@localhost:5442/meologue_e2e_b"
+# Issue #200: matches scripts/e2e-server.sh's own MEOLOGUE_CONFIG_LOCK — see
+# that script's comment for the full reasoning. Server B has no
+# MEOLOGUE_CHAT_*/MEOLOGUE_EMBED_* of its own for a stored row to override
+# (see this script's own header comment for why), but multi-server.spec.ts
+# does point a Device's Server URL at this Server, so its own `/v1/config`
+# is just as reachable from the suite as Server A's — locking it keeps the
+# same guarantee true here for the same reason, rather than leaving one of
+# the two e2e Servers unlocked for no reason tied to what it happens not to
+# need today.
+export MEOLOGUE_CONFIG_LOCK=1
 # Issue #112: `--release`, matching scripts/e2e-server.sh's own change and
 # its comment there — two debug-profile Rust servers running for the whole
 # suite was the largest single contributor to the suite's self-induced CPU

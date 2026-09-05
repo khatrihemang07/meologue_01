@@ -1,6 +1,6 @@
 use std::{env, net::Ipv4Addr, process::Command};
 
-use meologue_server::{digest, embedding, llm, openapi, period};
+use meologue_server::{digest, embedding, llm, openapi, settings};
 use serde_json::Value;
 use sqlx::postgres::PgPoolOptions;
 
@@ -83,7 +83,46 @@ async fn main() -> anyhow::Result<()> {
     let pool = PgPoolOptions::new().connect(&database_url).await?;
     sqlx::migrate!().run(&pool).await?;
 
-    let llm_config = llm::LlmConfig::from_env();
+    // Issue #200: the stored-settings load sits here, below the `openapi`
+    // early return above and below the migration that creates
+    // `server_settings` — both load-bearing. `cargo run -- openapi` never
+    // reaches this line at all (see that branch's own comment), so type
+    // generation never needs a live Postgres; and the migration has always
+    // run first, so this select can assume the table exists rather than
+    // handling "not yet migrated" as a third state alongside "no row yet".
+    //
+    // `settings_locked`/`mode` are each read from process environment
+    // exactly once, here, and threaded through `AppState` from this point
+    // on (`router_with_settings` below) — never re-read inside a request
+    // handler. `settings::resolve` is what actually combines
+    // `env_llm_config`/`env_tz` with `stored` into the config every worker
+    // and route-registration decision below this point uses; see that
+    // function's own doc comment for why `settings_locked` is an input to
+    // it rather than a branch taken before calling it.
+    let settings_locked = settings::config_locked();
+    let mode = settings::instance_mode();
+    let env_llm_config = llm::LlmConfig::from_env();
+    let env_tz = env::var("MEOLOGUE_TZ").ok();
+    let stored_settings = settings::load_stored(&pool).await?;
+    let resolved_settings = settings::resolve(
+        &env_llm_config,
+        env_tz.as_deref(),
+        &stored_settings,
+        settings_locked,
+    );
+
+    let llm_config = resolved_settings.llm_config();
+
+    // Issue #201: seeded once, here, from the same `resolved_settings` the
+    // chat/embed/timezone values above just came from — `RuntimeFlags::seed`
+    // reads its `locked`-aware `reflect_enabled`/`digest_enabled`/
+    // `embeddings_enabled` output, not the raw `stored_settings` row, so a
+    // locked Server starts with every flag on regardless of what happens
+    // to be stored. Cloned (cheaply — three `Arc`s) into `ReflectState`
+    // below, into both background workers, and into the Router itself, so
+    // every one of those reads the identical atomics a later `PATCH` will
+    // mutate — see `settings::RuntimeFlags`'s own doc comment.
+    let flags = settings::RuntimeFlags::seed(&resolved_settings);
 
     // Issue #97 / #136: how much room the configured chat model has,
     // resolved once here rather than once per feature — `resolve_context_window`
@@ -107,7 +146,14 @@ async fn main() -> anyhow::Result<()> {
     let embed_tx = match llm_config.embed_worker_config() {
         Some((client, model_name)) => {
             let (tx, rx) = tokio::sync::mpsc::channel(256);
-            tokio::spawn(embedding::run(pool.clone(), client, model_name, rx, embedding::SCAN_INTERVAL));
+            tokio::spawn(embedding::run(
+                pool.clone(),
+                client,
+                model_name,
+                rx,
+                embedding::SCAN_INTERVAL,
+                flags.clone(),
+            ));
             Some(tx)
         }
         None => None,
@@ -135,7 +181,13 @@ async fn main() -> anyhow::Result<()> {
     // one thing both decisions read, so they can't drift apart. Built from
     // a clone of `chat_client` so the worker below and the Router each get
     // their own `Arc` to the same underlying client.
-    let digest_tz = period::server_timezone();
+    // Issue #200: reads the resolved timezone (stored overlay on
+    // `MEOLOGUE_TZ`) rather than calling `period::server_timezone()`
+    // directly — that function is still what `settings::resolve` itself
+    // calls when nothing is stored, but everything below this point must
+    // see the *resolved* value, the same way `llm_config` just above is
+    // the resolved chat/embed configuration rather than the raw env one.
+    let digest_tz = resolved_settings.timezone();
     let digest_worker_config = llm_config.digest_worker_config();
     let digest_state = digest_worker_config.clone().map(|chat_client| digest::DigestState {
         chat_client,
@@ -149,6 +201,7 @@ async fn main() -> anyhow::Result<()> {
             digest_tz,
             digest::SCAN_INTERVAL,
             context_window,
+            flags.clone(),
         ));
     }
 
@@ -201,14 +254,23 @@ async fn main() -> anyhow::Result<()> {
                 chat_api_key: llm_config.chat_api_key.clone(),
                 chat_model,
                 chat_streaming,
+                flags: flags.clone(),
             })
         }
         None => None,
     };
 
     let static_dir = env::var("STATIC_DIR").unwrap_or_else(|_| DEFAULT_STATIC_DIR.to_string());
-    let app =
-        meologue_server::router_with_digests(pool, static_dir, embed_tx, reflect, digest_state);
+    let app = meologue_server::router_with_flags(
+        pool,
+        static_dir,
+        embed_tx,
+        reflect,
+        digest_state,
+        settings_locked,
+        mode,
+        flags,
+    );
 
     let port: u16 = env::var("PORT")
         .ok()
@@ -231,6 +293,14 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|| "0.0.0.0".to_string());
     let listener = tokio::net::TcpListener::bind((bind.as_str(), port)).await?;
     println!("meologue-server listening on :{port}");
+    // Issue #200: `MEOLOGUE_MODE` names the instance; it grants nothing and
+    // decides no precedence (`settings::InstanceMode`'s own doc comment) —
+    // this line and a later UI banner/log prefix are the only things that
+    // ever read it.
+    println!("Instance: {}", mode.as_str());
+    if settings_locked {
+        println!("Config: locked to environment (MEOLOGUE_CONFIG_LOCK is set) — stored settings are ignored.");
+    }
     println!("Server URL for Settings: http://localhost:{port}");
     // A loopback bind makes every address below unreachable, so they must not be
     // advertised. Printing "Tailscale IP URL for Settings: http://100.x.y.z:PORT"

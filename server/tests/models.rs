@@ -60,6 +60,7 @@ fn reflect_state(chat_base_url: &str) -> ReflectState {
         // other field on `reflect_state` here.
         chat_model: "codex-terra".to_string(),
         chat_streaming: false,
+        flags: meologue_server::settings::RuntimeFlags::all_on(),
     }
 }
 
@@ -115,4 +116,40 @@ async fn an_unreachable_wrapper_degrades_to_an_empty_list(pool: PgPool) {
         "an unreachable wrapper must still be a clean 200 with an empty list, not a 5xx"
     );
     assert_eq!(body["models"], serde_json::json!([]));
+}
+
+/// Issue #201: the route is registered — chat is configured — but Reflection
+/// is switched off at runtime. That is a different fact from
+/// `the_route_is_absent_when_chat_is_unconfigured` above, and must not be
+/// reported the same way: a client transport reading 404 concludes this
+/// Server has no Reflection at all, when in truth it has one and is simply
+/// not spending a wrapper call right now (ADR 0062).
+#[sqlx::test]
+async fn a_switched_off_reflection_answers_503_rather_than_404(pool: PgPool) {
+    // A reachable-looking address deliberately: the point is that the gate
+    // returns before `llm::list_models` is ever called, so nothing here
+    // depends on what is or isn't listening.
+    let reflect = reflect_state("http://127.0.0.1:1");
+    let resolved = meologue_server::settings::resolve(
+        &meologue_server::llm::LlmConfig {
+            chat_base_url: None,
+            chat_model: None,
+            chat_api_key: None,
+            embed_base_url: None,
+            embed_model: None,
+            embed_api_key: None,
+        },
+        None,
+        &meologue_server::settings::StoredSettings {
+            reflect_enabled: Some(false),
+            ..Default::default()
+        },
+        false,
+    );
+    reflect.flags.apply(&resolved);
+    assert!(!reflect.flags.reflect_enabled(), "the fixture itself must have the flag off");
+
+    let (status, _) = get_models(&pool, Some(reflect)).await;
+
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
 }
