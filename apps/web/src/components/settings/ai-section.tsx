@@ -1,7 +1,20 @@
+import type { WireConfigPatch, WireConfigResponse, WireTogglePatch } from "@meologue/core";
 import { useQuery } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 import { DeviceGroup } from "@/components/settings/device-group";
+import {
+  describeConfigFailure,
+  ServerGroup,
+  ServerSaveButton,
+  type ServerSaveStatus,
+  ServerSaveStatusLine,
+  ServerTextField,
+  ServerToggleField,
+} from "@/components/settings/server-config-form";
 import { SettingsSection } from "@/components/settings/settings-section";
 import { SwitchRow } from "@/components/settings/switch-row";
+import type { ConfigResult } from "@/lib/config-transport";
+import { describeSemanticRetrievalGap } from "@/lib/describe-server-check";
 import { modelsTransport } from "@/lib/models-transport";
 import { MODELS_QUERY_KEY } from "@/lib/query-keys";
 import {
@@ -9,6 +22,7 @@ import {
   type HideableDestinationId,
   useSettingsStore,
 } from "@/lib/settings";
+import { useServerConfig } from "@/lib/use-server-config";
 
 /**
  * Where this Device turns Server-backed intelligence on or off for
@@ -61,6 +75,15 @@ export function AiSection() {
     },
   });
   const models = modelsQuery.data ?? [];
+
+  // Issue #203's own server sub-group: the three feature toggles, the six
+  // chat/embed endpoint fields, and the unembedded-Entry count. `configState`
+  // is created here (not inside `ServerAiFields`) so `useServerConfig`'s one
+  // `useQuery` is shared with whatever `ServerGroup` below needs to decide
+  // which of its own four non-happy-path states applies — a second
+  // `useQuery` call with the identical key would just read the same cache
+  // entry a second time for no benefit.
+  const configState = useServerConfig();
 
   return (
     <section aria-labelledby="ai-heading" className="flex flex-col gap-4">
@@ -147,6 +170,263 @@ export function AiSection() {
           )}
         </SettingsSection>
       </DeviceGroup>
+
+      <ServerGroup heading="On the server" query={configState.query}>
+        {(config) => <ServerAiFields config={config} save={configState.save} />}
+      </ServerGroup>
     </section>
+  );
+}
+
+/**
+ * A stored toggle (`FeatureConfig.stored`, whose own doc comment is
+ * explicit that this is the raw column value, not `resolve`'s
+ * `locked`-aware one) read back as the draft a `ServerToggleField` needs —
+ * `null`/`undefined` (nothing stored) and the "Default" option share one
+ * meaning, matching `resolve_toggle`'s own "unset defers to configuration."
+ */
+function toggleDraftFromStored(stored: boolean | null | undefined): WireTogglePatch {
+  if (stored === true) return "on";
+  if (stored === false) return "off";
+  return "unset";
+}
+
+/** This group's own seven text fields and three toggles, read off one `ConfigResponse`. */
+interface AiServerDraft {
+  chatBaseUrl: string;
+  chatModel: string;
+  chatApiKey: string;
+  embedBaseUrl: string;
+  embedModel: string;
+  embedApiKey: string;
+  reflectEnabled: WireTogglePatch;
+  digestEnabled: WireTogglePatch;
+  embeddingsEnabled: WireTogglePatch;
+}
+
+function draftFromConfig(config: WireConfigResponse): AiServerDraft {
+  return {
+    chatBaseUrl: config.chat_base_url.value ?? "",
+    chatModel: config.chat_model.value ?? "",
+    chatApiKey: config.chat_api_key.value ?? "",
+    embedBaseUrl: config.embed_base_url.value ?? "",
+    embedModel: config.embed_model.value ?? "",
+    embedApiKey: config.embed_api_key.value ?? "",
+    reflectEnabled: toggleDraftFromStored(config.reflect.stored),
+    digestEnabled: toggleDraftFromStored(config.digest.stored),
+    embeddingsEnabled: toggleDraftFromStored(config.embeddings.stored),
+  };
+}
+
+/**
+ * Builds the `PATCH` body from exactly the fields that changed since the
+ * last load or save — the read-merge-write contract's own client-side
+ * half (`server/src/settings.rs`'s `ConfigPatch` doc comment: a key absent
+ * from the JSON body is untouched, present-and-empty clears it to `NULL`).
+ * Submitting every field on every Save, touched or not, would silently
+ * convert an environment-sourced value into a stored one just by pressing
+ * Save on a *different* field — this is what this ticket's own "manual
+ * check" (clearing one field must not disturb another) actually depends
+ * on structurally, not just by convention.
+ */
+function buildAiPatch(original: AiServerDraft, draft: AiServerDraft): WireConfigPatch {
+  const patch: WireConfigPatch = {};
+  if (draft.chatBaseUrl !== original.chatBaseUrl) patch.chat_base_url = draft.chatBaseUrl;
+  if (draft.chatModel !== original.chatModel) patch.chat_model = draft.chatModel;
+  if (draft.chatApiKey !== original.chatApiKey) patch.chat_api_key = draft.chatApiKey;
+  if (draft.embedBaseUrl !== original.embedBaseUrl) patch.embed_base_url = draft.embedBaseUrl;
+  if (draft.embedModel !== original.embedModel) patch.embed_model = draft.embedModel;
+  if (draft.embedApiKey !== original.embedApiKey) patch.embed_api_key = draft.embedApiKey;
+  if (draft.reflectEnabled !== original.reflectEnabled)
+    patch.reflect_enabled = draft.reflectEnabled;
+  if (draft.digestEnabled !== original.digestEnabled) patch.digest_enabled = draft.digestEnabled;
+  if (draft.embeddingsEnabled !== original.embeddingsEnabled) {
+    patch.embeddings_enabled = draft.embeddingsEnabled;
+  }
+  return patch;
+}
+
+const FEATURE_ROWS: { key: "reflect" | "digest" | "embeddings"; label: string }[] = [
+  { key: "reflect", label: "Reflect" },
+  { key: "digest", label: "Digest" },
+  { key: "embeddings", label: "Embeddings" },
+];
+
+/**
+ * `configured && !boot_active` per feature — "restart required," read
+ * straight off two facts the Server itself reports (`FeatureConfig`'s own
+ * doc comment on each), never inferred from anything guessed on this end.
+ * Persistent, not tied to "did this Device just Save": the gap it names is
+ * a standing fact about this process (something is now configured that its
+ * own boot never registered a route for) regardless of which Device, or
+ * which earlier session, is the one that last wrote the value.
+ */
+function restartRequiredLabels(config: WireConfigResponse): string[] {
+  return FEATURE_ROWS.filter(({ key }) => config[key].configured && !config[key].boot_active).map(
+    ({ label }) => label,
+  );
+}
+
+/**
+ * The AI section's "On the server" rows — three toggles, six chat/embed
+ * endpoint fields, and the unembedded-Entry backlog (issue #203).
+ *
+ * Only ever rendered once `ServerGroup` has a loaded `ConfigResponse` in
+ * hand, so this component's own state can seed straight from it with no
+ * "loading" branch of its own to worry about. `draft` re-seeds from `config`
+ * on every render where `config` is a new object — `useServerConfig`'s
+ * `save` invalidates the query on success, so a save that lands hands this
+ * component a fresh `config`, which is also what clears every field this
+ * save just touched back to "not dirty" with no separate reset needed.
+ */
+function ServerAiFields({
+  config,
+  save,
+}: {
+  config: WireConfigResponse;
+  save: (patch: WireConfigPatch) => Promise<ConfigResult>;
+}) {
+  const original = draftFromConfig(config);
+  const [draft, setDraft] = useState<AiServerDraft>(original);
+  const [status, setStatus] = useState<ServerSaveStatus>({ state: "idle" });
+
+  // Re-seeds whenever the Server hands back a genuinely new `config` (a
+  // fresh load, or the refetch a successful Save's own invalidation
+  // triggers) — not on every render, which would overwrite whatever the
+  // reader is still mid-typing with the value that render started from.
+  useEffect(() => {
+    setDraft(draftFromConfig(config));
+  }, [config]);
+
+  const locked = config.locked;
+  const patch = buildAiPatch(original, draft);
+  const dirty = Object.keys(patch).length > 0;
+
+  function editField<K extends keyof AiServerDraft>(key: K, value: AiServerDraft[K]) {
+    setDraft((current) => ({ ...current, [key]: value }));
+    setStatus({ state: "idle" });
+  }
+
+  async function handleSave() {
+    setStatus({ state: "saving" });
+    const result = await save(patch);
+    if (result.ok) {
+      setStatus({ state: "saved" });
+    } else {
+      setStatus({ state: "failed", message: describeConfigFailure(result) });
+    }
+  }
+
+  const restartLabels = restartRequiredLabels(config);
+  const semanticGap = describeSemanticRetrievalGap(
+    config.reflect.effective,
+    config.embeddings.effective,
+  );
+  const unembeddedCount = config.unembedded_entries;
+
+  return (
+    <>
+      <SettingsSection
+        label="Features"
+        hint="Default follows whatever chat/embed configuration is otherwise available; On and Off override it regardless."
+      >
+        <ServerToggleField
+          label="Reflect"
+          value={draft.reflectEnabled}
+          onChange={(value) => editField("reflectEnabled", value)}
+          locked={locked}
+        />
+        <ServerToggleField
+          label="Digest"
+          value={draft.digestEnabled}
+          onChange={(value) => editField("digestEnabled", value)}
+          locked={locked}
+        />
+        <ServerToggleField
+          label="Embeddings"
+          value={draft.embeddingsEnabled}
+          onChange={(value) => editField("embeddingsEnabled", value)}
+          locked={locked}
+        />
+      </SettingsSection>
+
+      <SettingsSection label="Chat endpoint">
+        <ServerTextField
+          id="server-chat-base-url"
+          label="Chat base URL"
+          field={config.chat_base_url}
+          value={draft.chatBaseUrl}
+          onChange={(value) => editField("chatBaseUrl", value)}
+          locked={locked}
+        />
+        <ServerTextField
+          id="server-chat-model"
+          label="Chat model"
+          field={config.chat_model}
+          value={draft.chatModel}
+          onChange={(value) => editField("chatModel", value)}
+          locked={locked}
+        />
+        <ServerTextField
+          id="server-chat-api-key"
+          label="Chat API key"
+          field={config.chat_api_key}
+          value={draft.chatApiKey}
+          onChange={(value) => editField("chatApiKey", value)}
+          locked={locked}
+          type="password"
+        />
+      </SettingsSection>
+
+      <SettingsSection
+        label="Embedding endpoint"
+        hint={`${unembeddedCount} ${unembeddedCount === 1 ? "Entry" : "Entries"} not yet embedded.`}
+      >
+        <ServerTextField
+          id="server-embed-base-url"
+          label="Embed base URL"
+          field={config.embed_base_url}
+          value={draft.embedBaseUrl}
+          onChange={(value) => editField("embedBaseUrl", value)}
+          locked={locked}
+        />
+        <ServerTextField
+          id="server-embed-model"
+          label="Embed model"
+          field={config.embed_model}
+          value={draft.embedModel}
+          onChange={(value) => editField("embedModel", value)}
+          locked={locked}
+        />
+        <ServerTextField
+          id="server-embed-api-key"
+          label="Embed API key"
+          field={config.embed_api_key}
+          value={draft.embedApiKey}
+          onChange={(value) => editField("embedApiKey", value)}
+          locked={locked}
+          type="password"
+        />
+        {semanticGap && (
+          <p data-testid="semantic-retrieval-gap" className="text-muted-foreground text-xs">
+            {semanticGap}
+          </p>
+        )}
+      </SettingsSection>
+
+      <div className="flex items-center gap-3">
+        <ServerSaveButton
+          onClick={handleSave}
+          disabled={locked || !dirty}
+          label="Save server AI settings"
+        />
+        <ServerSaveStatusLine status={status} />
+      </div>
+      {restartLabels.length > 0 && (
+        <p data-testid="ai-restart-required" className="text-muted-foreground text-xs">
+          Restart the server to enable {restartLabels.join(" and ")}.
+        </p>
+      )}
+    </>
   );
 }

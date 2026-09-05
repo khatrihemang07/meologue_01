@@ -1,77 +1,41 @@
-import { PROTOCOL_VERSION } from "@meologue/core";
+import type { WireConfigPatch, WireConfigResponse } from "@meologue/core";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { DeviceGroup } from "@/components/settings/device-group";
+import {
+  describeConfigFailure,
+  ServerGroup,
+  ServerSaveButton,
+  type ServerSaveStatus,
+  ServerSaveStatusLine,
+  ServerTextField,
+} from "@/components/settings/server-config-form";
 import { SettingsSection } from "@/components/settings/settings-section";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import type { ConfigResult } from "@/lib/config-transport";
+import { describeServerCheck } from "@/lib/describe-server-check";
 import { checkServerUrl, type ServerCheckResult } from "@/lib/server-check";
 import { normaliseServerUrl, refreshCapabilities, useSettingsStore } from "@/lib/settings";
 import { useSyncStatus } from "@/lib/sync-status";
+import { useServerConfig } from "@/lib/use-server-config";
 import { cn } from "@/lib/utils";
-
-// Distinct, actionable copy per outcome (ticket 30). A failed `fetch` in a
-// browser is opaque — DNS failure, connection refused, TLS failure, CORS
-// rejection and OS cleartext blocking are all indistinguishable from
-// JavaScript — so "unreachable" is deliberately the one honest catch-all
-// rather than several confident guesses.
-//
-// Issue #133: a bare "Reachable" was true and useless on a Server that
-// answers its health check but can serve neither Destination — this names
-// the specific gap instead, straight off the same `capabilities` object
-// `useDestinations()` (`chat-list.tsx`) locks rows against, so Settings and
-// the chat list can never disagree about what a Server can do. `undefined`
-// (an older Server, or one this check hasn't learned the answer from yet)
-// still reads as a plain "Reachable" — Settings has no missing-model gap to
-// name when it doesn't know one exists, the same "unknown means unlocked"
-// posture the chat list takes.
-function describeServerCheck(result: ServerCheckResult): string {
-  if (result.ok) {
-    const capabilities = result.capabilities;
-    if (capabilities === undefined) {
-      return "Reachable — this server is up and speaking the protocol this app expects.";
-    }
-    const missing: string[] = [];
-    if (!capabilities.reflect) missing.push("Reflect");
-    if (!capabilities.digest) missing.push("Digest");
-    if (missing.length === 0) {
-      return "Reachable — this server is up and speaking the protocol this app expects.";
-    }
-    // "no Digest model configured" for one gap; "no Reflect or Digest model
-    // configured" for both — `capabilities.embeddings` never gates a
-    // Destination row on its own (see `useDestinations()`), so it's left
-    // out of this sentence even though the Server reports it.
-    const gap = missing.map((name) => `${name} model`).join(" or ");
-    return `Reachable — but this server has no ${gap} configured.`;
-  }
-  switch (result.reason) {
-    case "not-configured":
-      return "No server configured — sync is off. Enter an address to turn it on.";
-    case "invalid-url":
-      return "That's not a valid URL. Enter a full address, like https://example.com.";
-    case "unreachable":
-      return "Couldn't reach this address. Check that the server is running and the address is correct.";
-    case "http-error":
-      return `Server responded with an error (HTTP ${result.status}). Check the server's logs.`;
-    case "protocol-mismatch":
-      return `Server speaks protocol v${result.serverVersion}; this app expects v${PROTOCOL_VERSION}. Update the app or the server so they match.`;
-  }
-}
 
 /**
  * How this Device reaches the Server it Syncs through — the Server URL
  * itself and its own reachability — the fourth of five topic sections
- * `settings-page.tsx` composes (issue #202).
+ * `settings-page.tsx` composes (issue #202) — plus, since issue #203, the
+ * one Server setting that belongs here rather than in AI: the timezone
+ * Digest buckets by.
  *
- * The Server URL is, today, the only setting in this section, and it's a
- * Device setting (ADR 0008): the address one Device points at is a fact
- * about that Device's own configuration, not something the Server holds on
- * every Device's behalf. It stays under "On this device" for exactly that
- * reason. A Server setting proper — configuration the Server holds for
- * itself, reachable from any Device (CONTEXT.md's own new **Server
- * setting** entry) — is what the "On the server" sub-group this ticket
- * leaves unused is waiting for; the ticket that adds one is blocked on this
- * one landing first.
+ * The Server URL itself stays a Device setting (ADR 0008): the address one
+ * Device points at is a fact about that Device's own configuration, not
+ * something the Server holds on every Device's behalf. The timezone is the
+ * opposite — a fact about the one Server process every Device Syncs
+ * through, which is exactly what CONTEXT.md's **Server setting** entry and
+ * ADR 0060 give a place to live. It rides under this section rather than
+ * AI because it's Digest's own axis, not a chat/embed one, and Digest has
+ * no topic section of its own on this page.
  */
 export function SyncSection() {
   const storedServerUrl = useSettingsStore((state) => state.serverUrl);
@@ -142,6 +106,12 @@ export function SyncSection() {
   }
 
   const status = check?.url === serverUrl ? check.result : null;
+
+  // Issue #203: shared with `ServerGroup` below and with nothing else on
+  // this page — see `ai-section.tsx`'s own identical `configState` comment
+  // for why this is created once here rather than inside the field
+  // component that actually renders the timezone row.
+  const configState = useServerConfig();
 
   return (
     <section aria-labelledby="sync-heading" className="flex flex-col gap-4">
@@ -220,6 +190,92 @@ export function SyncSection() {
           )}
         </SettingsSection>
       </DeviceGroup>
+
+      <ServerGroup heading="On the server" query={configState.query}>
+        {(config) => <ServerSyncFields config={config} save={configState.save} />}
+      </ServerGroup>
     </section>
+  );
+}
+
+/**
+ * The Sync section's one server row: the timezone Digest buckets by.
+ *
+ * `original`/`draft`/dirty-tracking mirrors `ai-section.tsx`'s own
+ * `ServerAiFields` exactly, at one field's scale instead of ten — see that
+ * component's doc comment for the reasoning behind re-seeding from `config`
+ * rather than from a ref, and for why only a genuinely edited field ever
+ * reaches the `PATCH` body at all.
+ *
+ * The restart notice here is unconditional on any successful write that
+ * actually touched `tz`, unlike `ai-section.tsx`'s three feature toggles:
+ * ADR 0060 is explicit that a stored timezone value only takes effect the
+ * next time `main.rs` runs `settings::resolve` at boot — there is no
+ * `FeatureConfig`-style `configured`/`boot_active` pair for `tz` to read
+ * this off of the way there is for Reflect/Digest/Embeddings, because
+ * nothing about the timezone gates route registration in the first place.
+ * So this reads it off the mutation's own outcome instead: "did the write
+ * that just landed include a changed tz," which is a fact about the write
+ * this Device just made, not a guess about the Server's internals.
+ */
+function ServerSyncFields({
+  config,
+  save,
+}: {
+  config: WireConfigResponse;
+  save: (patch: WireConfigPatch) => Promise<ConfigResult>;
+}) {
+  const original = config.tz.value ?? "";
+  const [draft, setDraft] = useState(original);
+  const [status, setStatus] = useState<ServerSaveStatus>({ state: "idle" });
+  const [justChangedTz, setJustChangedTz] = useState(false);
+
+  useEffect(() => {
+    setDraft(config.tz.value ?? "");
+  }, [config]);
+
+  const locked = config.locked;
+  const dirty = draft !== original;
+
+  async function handleSave() {
+    setStatus({ state: "saving" });
+    const result = await save({ tz: draft });
+    if (result.ok) {
+      setStatus({ state: "saved" });
+      setJustChangedTz(true);
+    } else {
+      setStatus({ state: "failed", message: describeConfigFailure(result) });
+    }
+  }
+
+  return (
+    <>
+      <SettingsSection
+        label="Timezone"
+        hint="The zone Digest buckets day/week/month by, e.g. America/New_York. Clear it to fall back to the environment."
+      >
+        <ServerTextField
+          id="server-timezone"
+          label="Timezone"
+          field={config.tz}
+          value={draft}
+          onChange={(value) => {
+            setDraft(value);
+            setStatus({ state: "idle" });
+            setJustChangedTz(false);
+          }}
+          locked={locked}
+        />
+      </SettingsSection>
+      <div className="flex items-center gap-3">
+        <ServerSaveButton onClick={handleSave} disabled={locked || !dirty} label="Save timezone" />
+        <ServerSaveStatusLine status={status} />
+      </div>
+      {justChangedTz && (
+        <p data-testid="sync-restart-required" className="text-muted-foreground text-xs">
+          Restart the server for the new timezone to take effect.
+        </p>
+      )}
+    </>
   );
 }

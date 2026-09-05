@@ -10,6 +10,15 @@ export const SYNC_QUERY_KEY = ["sync"] as const;
 // Issue #98: `GET /v1/models`, the Question composer's own model picker.
 export const MODELS_QUERY_KEY = ["models"] as const;
 
+// Issue #203: `GET /v1/config` (server/src/settings.rs), the AI and Sync
+// sections' own "On the server" sub-groups. Flat and unpaginated, mirroring
+// MODELS_QUERY_KEY — there is exactly one settings row per Server, the same
+// "one thing, not a list" shape `/v1/models` already has. `use-server-config.ts`
+// invalidates this prefix after every successful `PATCH /v1/config`, which
+// is also what makes a second mounted section (AI and Sync both read this
+// key) refetch the same write without a second round trip of its own.
+export const CONFIG_QUERY_KEY = ["config"] as const;
+
 /**
  * Digest's keys (issue #71), kept here rather than inline in
  * `digest-page.tsx`/`digest-reader-page.tsx` the way Reflection's own keys

@@ -2,8 +2,10 @@ import type { Locator, Page } from "@playwright/test";
 import { SERVER_A_DATABASE } from "../servers";
 import { expect, test } from "./fixtures";
 import {
+  clearServerSettings,
   entrySeq,
   entrySwipeTarget,
+  seedServerSetting,
   sendEntry,
   uniqueEntryBody,
   waitForEntryIdContaining,
@@ -305,4 +307,66 @@ test("changing the completed-checklist style rewrites no Entry (#163, ADR 0028)"
   }
 
   expect(entrySeq(id as string, SERVER_A_DATABASE)).toBe(before);
+});
+
+/**
+ * Issue #203's own acceptance criterion, and the strongest available proof
+ * for it: this suite's server A boots with `MEOLOGUE_CONFIG_LOCK=1`
+ * (`scripts/e2e-server.sh`) precisely so a stored settings row — written by
+ * an earlier spec's own `PATCH /v1/config` (once one exists), or by a
+ * developer poking at the Server by hand — can never override the LLM
+ * stub configuration the rest of this suite depends on. These two tests
+ * check that promise from the client's own Settings page, not just from
+ * `settings::resolve`'s Rust unit tests: the "On the server" sub-group must
+ * render every row read-only, and a row seeded directly into the database
+ * — bypassing the app entirely — must still be reported as coming from the
+ * environment, not from what was seeded.
+ */
+test.describe("server settings (locked e2e Server)", () => {
+  test("the server sub-groups render read-only", async ({ page }) => {
+    await openSettings(page);
+
+    // "On the server" appears twice — once under AI, once under Sync —
+    // and both must say why: this Server was started with
+    // MEOLOGUE_CONFIG_LOCK, so nothing here can be changed from a Device.
+    const lockedNotices = page.getByTestId("server-config-locked");
+    await expect(lockedNotices).toHaveCount(2);
+
+    await expect(page.getByLabel("Chat model")).toBeDisabled();
+    await expect(page.getByLabel("Chat base URL")).toBeDisabled();
+    await expect(page.getByLabel("Timezone")).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Save server AI settings" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Save timezone" })).toBeDisabled();
+    // The three feature toggles' own "On" option, one per row — every one
+    // of them read-only too, not just the text fields.
+    for (const button of await page.getByRole("button", { name: "On" }).all()) {
+      await expect(button).toBeDisabled();
+    }
+  });
+
+  test("a settings row seeded directly into the database is still reported as coming from the environment", async ({
+    page,
+  }) => {
+    // Bypasses the app entirely — the exact scenario a locked Server exists
+    // to make harmless: a row landing in `server_settings` by any means
+    // other than a `PATCH` this Server itself accepted.
+    seedServerSetting("a-poisoned-model-name", SERVER_A_DATABASE);
+
+    try {
+      await openSettings(page);
+      const chatModelField = page.getByLabel("Chat model");
+
+      // `scripts/e2e-server.sh` sets `MEOLOGUE_CHAT_MODEL=llm-stub-chat` —
+      // the seeded row must lose to that, not win, because this Server is
+      // locked (`settings::resolve`'s own doc comment: a locked Server
+      // behaves as though its settings row held nothing at all).
+      await expect(chatModelField).toHaveValue("llm-stub-chat");
+      await expect(chatModelField).not.toHaveValue("a-poisoned-model-name");
+      await expect(chatModelField).toBeDisabled();
+    } finally {
+      // Leaves no trace for whichever spec runs after this one — the same
+      // hygiene `deleteDigest` already practises for a seeded Digest.
+      clearServerSettings(SERVER_A_DATABASE);
+    }
+  });
 });

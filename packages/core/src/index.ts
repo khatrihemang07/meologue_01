@@ -96,13 +96,20 @@ export {
 } from "./task-views";
 export type { Entry } from "./types";
 export type {
+  WireConfigPatch,
+  WireConfigResponse,
   WireDigest,
   WireDigestResponse,
+  WireFeatureConfig,
+  WireInstanceMode,
   WireModelInfo,
   WireModelsResponse,
   WireReflectRequest,
   WireReflectResponse,
+  WireResolvedField,
   WireSessionResponse,
   WireSessionSummary,
   WireSessionTurn,
+  WireSource,
+  WireTogglePatch,
 } from "./wire";
