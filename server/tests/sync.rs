@@ -47,6 +47,12 @@ fn entry(id: Uuid, device_id: Uuid, body: &str) -> Value {
         "body": body,
         "created_at": "2026-01-01T00:00:00Z",
         "deleted_at": Value::Null,
+        // Issue #196: same instant as `created_at` — this fixture always
+        // builds a freshly-"created" push, and a real client's own first
+        // push starts with the two equal (mapping.ts's toWireEntryInput
+        // carries whatever the local row already holds, and a brand-new
+        // Entry's `updatedAt` starts equal to its `createdAt`).
+        "updated_at": "2026-01-01T00:00:00Z",
     })
 }
 
@@ -62,6 +68,11 @@ fn deleted_entry(id: Uuid, device_id: Uuid, deleted_at: &str) -> Value {
         "body": "",
         "created_at": "2026-01-01T00:00:00Z",
         "deleted_at": deleted_at,
+        // Issue #196: the delete's own `updated_at` — a real client
+        // stamps this the same way `entries.remove()` does
+        // (`packages/core/src/sqlite/sqlite-entry-store.ts`), reusing the
+        // single clock read that also produced `deleted_at`.
+        "updated_at": deleted_at,
     })
 }
 
@@ -155,9 +166,12 @@ async fn the_response_is_capped_at_the_bounded_batch_size(pool: PgPool) {
     let bodies: Vec<String> = (0..total).map(|i| format!("entry-{i}")).collect();
     let created_ats: Vec<chrono::DateTime<Utc>> = std::iter::repeat_n(Utc::now(), total as usize).collect();
 
+    // Issue #196: `updated_at` is NOT NULL now — a freshly-seeded row's
+    // own `updated_at` starts equal to its `created_at`, mirroring the
+    // migration's own backfill rule (../migrations/0018_updated_at.sql).
     sqlx::query(
-        "insert into entries (id, device_id, body, created_at)
-         select * from unnest($1::uuid[], $2::uuid[], $3::text[], $4::timestamptz[])",
+        "insert into entries (id, device_id, body, created_at, updated_at)
+         select * from unnest($1::uuid[], $2::uuid[], $3::text[], $4::timestamptz[], $4::timestamptz[])",
     )
     .bind(&ids)
     .bind(&device_ids)
@@ -637,6 +651,9 @@ fn task(id: Uuid, device_id: Uuid, content: &str) -> Value {
         "project_id": Value::Null,
         "section_id": Value::Null,
         "parent_id": Value::Null,
+        // Issue #196 — see `entry`'s own identical comment above for why
+        // this starts equal to `created_at`.
+        "updated_at": "2026-01-01T00:00:00Z",
     })
 }
 
@@ -647,6 +664,8 @@ fn task(id: Uuid, device_id: Uuid, content: &str) -> Value {
 fn deleted_task(id: Uuid, device_id: Uuid, deleted_at: &str) -> Value {
     let mut t = task(id, device_id, "");
     t["deleted_at"] = json!(deleted_at);
+    // Issue #196 — see `deleted_entry`'s own identical comment above.
+    t["updated_at"] = json!(deleted_at);
     t
 }
 
@@ -973,9 +992,11 @@ async fn the_task_response_is_capped_at_the_bounded_batch_size(pool: PgPool) {
         std::iter::repeat_n(Utc::now(), total as usize).collect();
     let priorities: Vec<i32> = std::iter::repeat_n(1, total as usize).collect();
 
+    // Issue #196: `updated_at` is NOT NULL now — see the identical comment
+    // on `the_response_is_capped_at_the_bounded_batch_size` above.
     sqlx::query(
-        "insert into tasks (id, device_id, content, order_key, day_order, created_at, priority)
-         select * from unnest($1::uuid[], $2::uuid[], $3::text[], $4::text[], $4::text[], $5::timestamptz[], $6::int[])",
+        "insert into tasks (id, device_id, content, order_key, day_order, created_at, priority, updated_at)
+         select * from unnest($1::uuid[], $2::uuid[], $3::text[], $4::text[], $4::text[], $5::timestamptz[], $6::int[], $5::timestamptz[])",
     )
     .bind(&ids)
     .bind(&device_ids)
@@ -1131,6 +1152,8 @@ fn project(id: Uuid, device_id: Uuid, name: &str) -> Value {
         "order_key": "V",
         "created_at": "2026-01-01T00:00:00Z",
         "deleted_at": Value::Null,
+        // Issue #196 — see `entry`'s own identical comment above.
+        "updated_at": "2026-01-01T00:00:00Z",
     })
 }
 
@@ -1145,6 +1168,7 @@ fn section(id: Uuid, device_id: Uuid, project_id: Uuid, name: &str) -> Value {
         "archived": false,
         "created_at": "2026-01-01T00:00:00Z",
         "deleted_at": Value::Null,
+        "updated_at": "2026-01-01T00:00:00Z",
     })
 }
 
@@ -1156,6 +1180,7 @@ fn label(id: Uuid, device_id: Uuid, name: &str) -> Value {
         "colour": "#b8256f",
         "created_at": "2026-01-01T00:00:00Z",
         "deleted_at": Value::Null,
+        "updated_at": "2026-01-01T00:00:00Z",
     })
 }
 
@@ -1167,6 +1192,7 @@ fn comment(id: Uuid, device_id: Uuid, task_id: Uuid, text: &str) -> Value {
         "text": text,
         "created_at": "2026-01-01T00:00:00Z",
         "deleted_at": Value::Null,
+        "updated_at": "2026-01-01T00:00:00Z",
     })
 }
 
