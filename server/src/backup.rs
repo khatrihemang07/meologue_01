@@ -35,14 +35,21 @@ pub enum BackupError {
     /// Server's own Postgres major version (from `server_major_version`),
     /// named in the error so the reader knows exactly which version to
     /// install rather than guessing from `docker-compose.yml`.
-    ToolMissing { tool: &'static str, server_major: i32 },
+    ToolMissing {
+        tool: &'static str,
+        server_major: i32,
+    },
     /// `tool` was found, but its major version is older than the server's.
     /// pg_dump/pg_restore can only speak to a Postgres server whose major
     /// version is the same or older than the tool's own — never newer —
     /// so an older client here fails at dump/restore time, not at
     /// connection time, which is exactly the "opaque failure" this
     /// ticket's acceptance criterion asks not to leave in place.
-    ToolOutdated { tool: &'static str, found: i32, required: i32 },
+    ToolOutdated {
+        tool: &'static str,
+        found: i32,
+        required: i32,
+    },
     /// `tool` ran, but exited non-zero — its stderr is the most useful
     /// thing this handler can report back.
     ProcessFailed { tool: &'static str, stderr: String },
@@ -66,7 +73,11 @@ impl IntoResponse for BackupError {
                  `apt-get install postgresql-client-{server_major}` on Debian/Ubuntu — so backup \
                  and restore can shell out to {tool}. See server/README.md."
             ),
-            BackupError::ToolOutdated { tool, found, required } => format!(
+            BackupError::ToolOutdated {
+                tool,
+                found,
+                required,
+            } => format!(
                 "{tool} {found} is older than this Server's PostgreSQL {required}. {tool} must be \
                  the same major version as the server, or newer — install PostgreSQL {required} \
                  client tools and try again. See server/README.md."
@@ -120,7 +131,9 @@ fn parse_major_version(version_output: &str) -> Option<i32> {
 /// tool-related variants for why this check exists at all rather than
 /// letting a missing or outdated binary fail as a bare non-zero exit.
 async fn ensure_tool_compatible(tool: &'static str, pool: &PgPool) -> Result<(), BackupError> {
-    let server_major = server_major_version(pool).await.map_err(BackupError::Database)?;
+    let server_major = server_major_version(pool)
+        .await
+        .map_err(BackupError::Database)?;
 
     let output = Command::new(tool).arg("--version").output().await;
     let found_major = match output {
