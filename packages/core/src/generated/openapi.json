@@ -9,6 +9,36 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/v1/backup": {
+      "get": {
+        "tags": [
+          "crate::backup"
+        ],
+        "summary": "Streams this Server's entire Postgres database — Entries, Tasks,\nSessions, Digests, and every `entries.embedding` (`vector(640)`,\n`server/migrations/0002_add_entry_embeddings.sql`) among them — as a\nsingle `pg_dump` custom-format archive. Shells out to `pg_dump` against\n`AppState::database_url` (never `docker exec`, per this module's own\nheader comment) so this works identically for a local container, a\nSandbox instance on a different port, or a remote/managed Postgres this\nServer merely has a connection string for.",
+        "description": "`--format=custom` (rather than plain SQL) is what `restore_handler`\nexpects on the other end — `pg_restore` needs its own archive format to\nsupport `--clean --if-exists`, and it compresses the embeddings, which\notherwise dominate the dump's size.",
+        "operationId": "backup_handler",
+        "responses": {
+          "200": {
+            "description": "A pg_dump custom-format archive of the whole database",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "pg_dump is missing, too old, or failed"
+          }
+        }
+      }
+    },
     "/v1/digests/{period}": {
       "get": {
         "tags": [
@@ -212,6 +242,61 @@
           },
           "426": {
             "description": "protocol_version is not one this server understands"
+          }
+        }
+      }
+    },
+    "/v1/restore": {
+      "post": {
+        "tags": [
+          "crate::backup"
+        ],
+        "summary": "Wipes this Server's database and replaces it with a `pg_dump` archive —\n**deliberately unauthenticated**, exactly like every other `/v1` route\n(ADR 0003: trust is network-level, not per-request). This is stated\nplainly here because it is the sharpest edge that decision has: a\nrequest to this path from anywhere the network lets it reach is a\nwipe-and-replace of every Entry, Task, Session and Digest this Server\nholds, with no confirmation, no credential, and no undo — its entire\nperimeter is the network itself (ADR 0017's Tailscale Serve, never\nFunnel). That was decided with this exposure understood, not\noverlooked: adding auth here alone, while every read stays open per\nADR 0003, would protect the one route that already has an off-network\nsafeguard (nobody untrusted can reach it at all) while leaving every\nEntry readable to the same untrusted caller regardless. If ADR 0003\nitself is ever revisited, this handler is revisited with it — not\nbefore.",
+        "description": "Applies via `pg_restore --clean --if-exists`, which drops each object\nthe archive describes before recreating it (`--if-exists` so a\nnot-yet-created object — a fresh database — doesn't fail the drop) —\nthis is the \"wipe\" half; \"replace\" is `pg_restore` recreating every\ntable, index and row from the archive that follows. Reports how many\nrestored rows carry an `embedding_model` different from what this\nServer is configured with (`count_mismatched_embeddings`) so the caller\ncan decide whether to rebuild them (`POST /v1/restore/rebuild-embeddings`)\nor leave them — see `RestoreReport`.",
+        "operationId": "restore_handler",
+        "requestBody": {
+          "description": "A pg_dump custom-format archive, as produced by GET /v1/backup",
+          "content": {
+            "application/octet-stream": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Restore applied; reports the embedding-model mismatch count",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestoreReport"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "pg_restore is missing, too old, or the archive failed to apply"
+          }
+        }
+      }
+    },
+    "/v1/restore/rebuild-embeddings": {
+      "post": {
+        "tags": [
+          "crate::backup"
+        ],
+        "summary": "The \"rebuild\" action offered alongside `RestoreReport` — never called\nautomatically, only when a caller chooses it over \"leave\". Nulls\n`embedding` for every row `count_mismatched_embeddings` would still\ncount, so the background worker (ADR 0022) picks them back up on its\nown schedule; see `rebuild_mismatched_embeddings`'s own doc comment for\nwhy this writes no embedding itself.",
+        "operationId": "rebuild_mismatched_embeddings_handler",
+        "responses": {
+          "200": {
+            "description": "Mismatched rows' embeddings were cleared for the background worker to refill",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RebuildReport"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The database query failed"
           }
         }
       }
@@ -1020,6 +1105,19 @@
           }
         }
       },
+      "RebuildReport": {
+        "type": "object",
+        "description": "`POST /v1/restore/rebuild-embeddings`'s response — how many rows this\ncall actually nulled out, so a client that calls it can say \"N Entries\nqueued for re-embedding\" rather than a bare acknowledgement.",
+        "required": [
+          "rebuilt_count"
+        ],
+        "properties": {
+          "rebuilt_count": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
       "ReflectRequest": {
         "type": "object",
         "required": [
@@ -1105,6 +1203,19 @@
           "tool_called": {
             "type": "boolean",
             "description": "Whether this run called a tool at all — `true` the moment any\n`harness::agent_loop::Step::ToolResult` appears in `outcome.steps`,\nregardless of whether that call (or any other) found anything.\nIssue #103's own acceptance criterion: an empty `grounding_entry_ids`\nalone cannot tell a client, or a person reading a log, which of two\nvery different runs actually happened — one that called\n`search_entries` and it came back empty, or one that never called\nanything and wrote a reply anyway (the bug this issue was filed\nagainst: the model answered \"I can't access any journal entries from\nhere\" having tried nothing). Both reach this struct with an\nidentical `grounding_entry_ids: []`, and both used to render\nidentically to the user (\"Nothing in your History matched this\nQuestion\") for exactly that reason. This field is what lets that\ndistinction survive past `run_reflect_stream_inner` — both server-\nside (the `tracing::warn!` below) and on the wire, where the client\nrenders it as a distinct \"never looked\" outcome\n(`apps/web/src/lib/conversation.ts`'s `groundingOutcome`)."
+          }
+        }
+      },
+      "RestoreReport": {
+        "type": "object",
+        "description": "`POST /v1/restore`'s response: how many `entries` rows carry an\n`embedding_model` different from the one this Server is configured\nwith, right after the dump that was just applied landed. `entries` gets\nits `embedding_model` in the same `UPDATE` that writes `embedding`\n(`embedding::store_embedding`), so this is a pure read of what the\nrestored dump actually contained — no separate metadata field for \"what\nmodel produced these embeddings\" exists or is needed (see\n`count_mismatched_embeddings`'s own doc comment).",
+        "required": [
+          "mismatched_embedding_count"
+        ],
+        "properties": {
+          "mismatched_embedding_count": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -1582,7 +1693,7 @@
               "string",
               "null"
             ],
-            "description": "The Task's own words about itself (#180,\n`../../packages/core/src/task-types.ts`'s own `description` field) —\ngains a wire representation here for the first time (issue #182).\nBefore this, `packages/core/src/mapping.ts`'s `fromWireTaskOutput`\ncarried a Device's existing local copy through unconditionally,\nbecause the wire had nothing to say about it at all; now that it's\nan ordinary `Option<String>` field like every other nullable column\nhere, that workaround is retired — see that function's own doc\ncomment for the mechanism it keeps for a future locally-held field."
+            "description": "The Task's own words about itself (#180,\n`../../packages/core/src/task-types.ts`'s own `description` field) —\ngains a wire representation here for the first time (issue #182).\nBefore this, `packages/core/src/mapping.ts`'s `fromWireTaskOutput`\ncarried a Device's existing local copy through unconditionally,\nbecause the wire had nothing to say about it at all; now that it's\nan ordinary `Option<String>` field like every other nullable column\nhere, that workaround is retired — see that function's own doc\ncomment for the mechanism it keeps for a future locally-held field.\n\nThis is also issue #186 / ADR 0057's own motivating case: a Device\nthat had already pulled a Task row before this field existed kept\nits Cursor past that row, and this field alone never reached it.\n`packages/core/src/protocol.ts`'s `ROW_SHAPE_EPOCH.tasks` is bumped\nto 1 for exactly this addition — see `PROTOCOL_VERSION`'s own doc\ncomment above for the obligation this places on the next field\nadded to any row here."
           },
           "device_id": {
             "type": "string",
