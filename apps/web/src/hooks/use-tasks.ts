@@ -320,6 +320,7 @@ export function useTasks(
     // null) sorts after every existing Task (order-key.ts's own doc
     // comment).
     const orderKey = orderKeyBetween(tasks.at(-1)?.orderKey ?? null, null);
+    const capturedAt = new Date().toISOString();
     addTaskMutation.mutate({
       id: mintId(),
       deviceId,
@@ -333,7 +334,9 @@ export function useTasks(
       // reasonable starting position for a Task that has never been
       // dragged in Today specifically.
       dayOrder: orderKey,
-      createdAt: new Date().toISOString(),
+      createdAt: capturedAt,
+      // Issue #196: starts equal to createdAt, the same single clock read.
+      updatedAt: capturedAt,
       seq: null,
       syncedAt: null,
       deletedAt: null,

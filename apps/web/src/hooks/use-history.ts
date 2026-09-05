@@ -91,6 +91,8 @@ export function promotedTaskToTask(
     // addTask own identical bootstrap for why.
     dayOrder: orderKey,
     createdAt: capturedAt,
+    // Issue #196: starts equal to createdAt.
+    updatedAt: capturedAt,
     seq: null,
     syncedAt: null,
     deletedAt: null,
@@ -380,12 +382,15 @@ export function useHistory(
       quickAddOptions,
       active,
     );
+    const capturedAt = new Date().toISOString();
     sendEntryMutation.mutate({
       entry: {
         id: mintId(),
         deviceId,
         body,
-        createdAt: new Date().toISOString(),
+        createdAt: capturedAt,
+        // Issue #196: starts equal to createdAt, the same single clock read.
+        updatedAt: capturedAt,
         seq: null,
         syncedAt: null,
         deletedAt: null,
