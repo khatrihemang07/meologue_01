@@ -1,4 +1,4 @@
-# 0059: Server settings are a stored overlay on the environment, and the UI wins
+# 0060: Server settings are a stored overlay on the environment, and the UI wins
 
 ## Status
 
@@ -7,7 +7,7 @@ counterpart on the other end of Sync: 0008 gave a Device settings of its own, he
 client-side because they describe one installation and must never travel through Sync. This ADR
 gives a Server the matching thing — settings that describe one process, held in the one database
 that process already owns, reachable and changeable by any Device that talks to it. Extended by
-[0062](0062-an-instance-names-itself-independently-of-whether-it-is-locked.md), which adds
+[0061](0061-an-instance-names-itself-independently-of-whether-it-is-locked.md), which adds
 `MEOLOGUE_MODE` on top of the mechanism this ADR builds and is explicit that naming an instance is
 an unrelated fact to the lock this ADR also introduces.
 
@@ -80,7 +80,7 @@ configured. `GET` reports, per field, the resolved value and its `source`
 (`stored`/`env`/`unset`) — without the source, a Device cannot tell a value it may Clear from one
 it can only override with its own, and cannot honestly render a "(from environment)" hint next to
 it. It also reports the instance's `mode`
-([0062](0062-an-instance-names-itself-independently-of-whether-it-is-locked.md)), whether it is
+([0061](0061-an-instance-names-itself-independently-of-whether-it-is-locked.md)), whether it is
 `locked`, and `unembedded_entries`. `PATCH` treats a field absent from its JSON body as untouched
 and an empty string as "clear to `NULL`"; `PORT`, `BIND`, `DATABASE_URL` and `STATIC_DIR` are
 deliberately not part of the overridable set at all — a bad value written through this route would

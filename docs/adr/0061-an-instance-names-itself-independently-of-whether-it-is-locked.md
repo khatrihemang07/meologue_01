@@ -1,4 +1,4 @@
-# 0062: An instance names itself, independently of whether it is locked
+# 0061: An instance names itself, independently of whether it is locked
 
 ## Status
 
@@ -6,7 +6,7 @@ Accepted. Extends [0029](0029-testing-runs-in-a-sandbox-instance-that-shares-onl
 which already gives Production and Sandbox separate ports, databases, bundle directories and
 (natively) package identifiers, but nothing that says which one a running *process* actually is —
 that fact lived only in which script happened to launch it. Also extends
-[0059](0059-server-settings-are-a-stored-overlay-on-the-environment-and-the-ui-wins.md), which
+[0060](0060-server-settings-are-a-stored-overlay-on-the-environment-and-the-ui-wins.md), which
 introduces `MEOLOGUE_CONFIG_LOCK` alongside the `MEOLOGUE_MODE` this ADR names — see Decision below
 for why the two are recorded in separate ADRs despite arriving in the same ticket and often being
 set by the same script.
@@ -22,7 +22,7 @@ the one a test suite just wiped and reseeded. A developer reading two terminal w
 that will eventually surface a Server's own identity, has had to infer this from the port number
 alone.
 
-[0059](0059-server-settings-are-a-stored-overlay-on-the-environment-and-the-ui-wins.md) introduces
+[0060](0060-server-settings-are-a-stored-overlay-on-the-environment-and-the-ui-wins.md) introduces
 a second, unrelated environment variable in the same ticket, `MEOLOGUE_CONFIG_LOCK`, which makes a
 Server ignore its stored settings and read only the environment. The two variables are easy to
 conflate, because `scripts/sandbox-server.sh` and `scripts/e2e-server.sh` are exactly the scripts
@@ -42,7 +42,7 @@ misconfigured value should degrade a banner and a UI label, never refuse to star
 would otherwise be perfectly usable.
 
 **`MEOLOGUE_MODE` decides nothing about precedence.** `settings::resolve` never reads it, and never
-will: whether a stored value wins over an environment one (ADR 0059) and which instance a process
+will: whether a stored value wins over an environment one (ADR 0060) and which instance a process
 identifies as are orthogonal questions with independent answers. A Sandbox is not somehow "more
 overridable" than Production, and Production is not somehow more authoritative than a Sandbox —
 naming an instance grants it no privilege over its own configuration, the same way a person
