@@ -118,7 +118,14 @@ export function ServerTextField({
 }) {
   return (
     <div className="flex flex-col gap-1">
-      <label htmlFor={id} className="sr-only">
+      {/*
+        Visible, not `sr-only`. Three of these sit together under "Chat
+        endpoint" — base URL, model, API key — and an unlabelled trio is
+        only legible to someone who can already tell a URL from a model
+        name by looking, which stops being true the moment one of them is
+        empty. `ServerToggleField` beside it shows its label the same way.
+      */}
+      <label htmlFor={id} className="text-sm">
         {label}
       </label>
       <Input
