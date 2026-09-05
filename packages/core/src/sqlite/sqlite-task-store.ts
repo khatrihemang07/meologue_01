@@ -41,9 +41,13 @@ import { kv, tasks } from "./schema";
 export class SqliteTaskStore implements TaskStore {
   private readonly db: ReturnType<typeof drizzle>;
   private readonly driver: SqliteDriver;
+  // Issue #196 — see SqliteEntryStore's own identical field for the
+  // mechanism and why it's injectable.
+  private readonly now: () => string;
 
-  constructor(driver: SqliteDriver) {
+  constructor(driver: SqliteDriver, now: () => string = () => new Date().toISOString()) {
     this.driver = driver;
+    this.now = now;
     this.db = drizzle((sqlText, params, method) => driver.execute(sqlText, params, method));
   }
 
@@ -184,6 +188,7 @@ export class SqliteTaskStore implements TaskStore {
           orderKey: sql`excluded.order_key`,
           dayOrder: sql`excluded.day_order`,
           createdAt: sql`excluded.created_at`,
+          updatedAt: sql`excluded.updated_at`,
           seq: sql`excluded.seq`,
           syncedAt: sql`excluded.synced_at`,
           deletedAt: sql`excluded.deleted_at`,
@@ -206,12 +211,19 @@ export class SqliteTaskStore implements TaskStore {
   // Reads the Task first, like setParent/postpone below, so the
   // cascade below only runs against a live Task's own children — not
   // when updateIfLive would have silently no-opped against a tombstone.
+  //
+  // `updatedAt` (issue #196) is stamped as `completedAt` itself, not a
+  // fresh `this.now()` read — `completedAt` already *is* this call's own
+  // "now," threaded through by the caller, and reusing it is exactly
+  // what this ticket's own brief means by preferring an already-threaded
+  // timestamp over a second, independent clock read that could disagree
+  // with it by however long the write takes.
   async complete(id: string, completedAt: string): Promise<void> {
     const current = await this.get(id);
     if (current === undefined) {
       return;
     }
-    await this.updateIfLive(id, { completedAt, seq: null, syncedAt: null });
+    await this.updateIfLive(id, { completedAt, updatedAt: completedAt, seq: null, syncedAt: null });
     await this.completeChildren(id, completedAt);
   }
 
@@ -229,7 +241,12 @@ export class SqliteTaskStore implements TaskStore {
   }
 
   async uncomplete(id: string): Promise<void> {
-    await this.updateIfLive(id, { completedAt: null, seq: null, syncedAt: null });
+    await this.updateIfLive(id, {
+      completedAt: null,
+      updatedAt: this.now(),
+      seq: null,
+      syncedAt: null,
+    });
   }
 
   /**
@@ -241,7 +258,7 @@ export class SqliteTaskStore implements TaskStore {
    * can never resurrect a Task someone else deleted.
    */
   async rename(id: string, content: string): Promise<void> {
-    await this.updateIfLive(id, { content, seq: null, syncedAt: null });
+    await this.updateIfLive(id, { content, updatedAt: this.now(), seq: null, syncedAt: null });
     // reindexFromCurrentState (not indexForSearch(patch) directly) re-reads
     // whatever the database now actually holds, so this is correct
     // whether the UPDATE above matched a row or was blocked by the
@@ -258,7 +275,7 @@ export class SqliteTaskStore implements TaskStore {
    * concurrent offline drags). No-op against a tombstone.
    */
   async reorder(id: string, orderKey: string): Promise<void> {
-    await this.updateIfLive(id, { orderKey, seq: null, syncedAt: null });
+    await this.updateIfLive(id, { orderKey, updatedAt: this.now(), seq: null, syncedAt: null });
   }
 
   /**
@@ -269,22 +286,22 @@ export class SqliteTaskStore implements TaskStore {
    * No-op against a tombstone.
    */
   async reorderToday(id: string, dayOrder: string): Promise<void> {
-    await this.updateIfLive(id, { dayOrder, seq: null, syncedAt: null });
+    await this.updateIfLive(id, { dayOrder, updatedAt: this.now(), seq: null, syncedAt: null });
   }
 
   async setDate(id: string, date: string | null): Promise<void> {
     assertValidDate(date);
-    await this.updateIfLive(id, { date, seq: null, syncedAt: null });
+    await this.updateIfLive(id, { date, updatedAt: this.now(), seq: null, syncedAt: null });
   }
 
   async setDeadline(id: string, deadline: string | null): Promise<void> {
     assertValidDeadline(deadline);
-    await this.updateIfLive(id, { deadline, seq: null, syncedAt: null });
+    await this.updateIfLive(id, { deadline, updatedAt: this.now(), seq: null, syncedAt: null });
   }
 
   async setPriority(id: string, priority: number): Promise<void> {
     assertValidPriority(priority);
-    await this.updateIfLive(id, { priority, seq: null, syncedAt: null });
+    await this.updateIfLive(id, { priority, updatedAt: this.now(), seq: null, syncedAt: null });
   }
 
   // Replaces `labelIds` wholesale — see TaskStore.setLabelIds's own doc
@@ -293,23 +310,29 @@ export class SqliteTaskStore implements TaskStore {
   // Label that's been removed is an accepted, transient state (this
   // file's own header comment, and ../label-store.ts's remove()).
   async setLabelIds(id: string, labelIds: string[]): Promise<void> {
-    await this.updateIfLive(id, { labelIds, seq: null, syncedAt: null });
+    await this.updateIfLive(id, { labelIds, updatedAt: this.now(), seq: null, syncedAt: null });
   }
 
   // See TaskStore.setDescription's own doc comment. No validation beyond
   // the string shape itself — a Description is free-form Markdown.
   async setDescription(id: string, description: string | null): Promise<void> {
-    await this.updateIfLive(id, { description, seq: null, syncedAt: null });
+    await this.updateIfLive(id, { description, updatedAt: this.now(), seq: null, syncedAt: null });
   }
 
   // See TaskStore.setProject's own doc comment for why `sectionId` is
   // cleared unconditionally alongside `projectId`.
   async setProject(id: string, projectId: string | null): Promise<void> {
-    await this.updateIfLive(id, { projectId, sectionId: null, seq: null, syncedAt: null });
+    await this.updateIfLive(id, {
+      projectId,
+      sectionId: null,
+      updatedAt: this.now(),
+      seq: null,
+      syncedAt: null,
+    });
   }
 
   async setSection(id: string, sectionId: string | null): Promise<void> {
-    await this.updateIfLive(id, { sectionId, seq: null, syncedAt: null });
+    await this.updateIfLive(id, { sectionId, updatedAt: this.now(), seq: null, syncedAt: null });
   }
 
   // See TaskStore.setParent's own doc comment for the three shapes this
@@ -356,7 +379,7 @@ export class SqliteTaskStore implements TaskStore {
       }
       assertValidNestingDepth(depth);
     }
-    await this.updateIfLive(id, { parentId, seq: null, syncedAt: null });
+    await this.updateIfLive(id, { parentId, updatedAt: this.now(), seq: null, syncedAt: null });
   }
 
   // See TaskStore.advanceRecurring's own doc comment for the full
@@ -392,15 +415,32 @@ export class SqliteTaskStore implements TaskStore {
       // The bounded rule's window has passed — files as an ordinary
       // completed Task, exactly like completeForever() below, cascading
       // to active sub-tasks for the identical reason (TaskStore.complete's
-      // own doc comment).
-      await this.updateIfLive(id, { completedAt, dateString: null, seq: null, syncedAt: null });
+      // own doc comment). `updatedAt` reuses `completedAt` for the
+      // identical reason complete()'s own comment gives: it already is
+      // this call's "now."
+      await this.updateIfLive(id, {
+        completedAt,
+        dateString: null,
+        updatedAt: completedAt,
+        seq: null,
+        syncedAt: null,
+      });
       await this.completeChildren(id, completedAt);
       return;
     }
     // `completedAt` is deliberately absent from this patch — a recurring
     // Task never enters the completed list (TaskStore.advanceRecurring's
-    // own doc comment); only `date` moves.
-    await this.updateIfLive(id, { date: outcome.date, seq: null, syncedAt: null });
+    // own doc comment); only `date` moves. `updatedAt` still reuses
+    // `completedAt` (the caller's own trigger instant for this whole
+    // call), not a second `this.now()` read — the row genuinely changed
+    // at that moment, whether or not `completedAt` itself lands on a
+    // column.
+    await this.updateIfLive(id, {
+      date: outcome.date,
+      updatedAt: completedAt,
+      seq: null,
+      syncedAt: null,
+    });
   }
 
   // See TaskStore.completeForever's own doc comment for the full
@@ -411,7 +451,13 @@ export class SqliteTaskStore implements TaskStore {
     if (current === undefined) {
       return;
     }
-    await this.updateIfLive(id, { completedAt, dateString: null, seq: null, syncedAt: null });
+    await this.updateIfLive(id, {
+      completedAt,
+      dateString: null,
+      updatedAt: completedAt,
+      seq: null,
+      syncedAt: null,
+    });
     await this.completeChildren(id, completedAt);
   }
 
@@ -427,7 +473,16 @@ export class SqliteTaskStore implements TaskStore {
     }
     const tomorrow = tomorrowOf(today);
     const nextDate = hasTime(current.date) ? `${tomorrow}T${current.date.slice(11, 16)}` : tomorrow;
-    await this.updateIfLive(id, { date: nextDate, seq: null, syncedAt: null });
+    // `today` is a floating calendar day, not a real-world instant (this
+    // method's own doc comment) — the wrong shape for `updatedAt`, unlike
+    // `completedAt` above, so this reads the injected clock instead of
+    // reusing a parameter.
+    await this.updateIfLive(id, {
+      date: nextDate,
+      updatedAt: this.now(),
+      seq: null,
+      syncedAt: null,
+    });
   }
 
   /**
@@ -439,9 +494,12 @@ export class SqliteTaskStore implements TaskStore {
    * either.
    */
   async remove(id: string): Promise<void> {
+    // Issue #196: one clock read, reused for `deletedAt` and `updatedAt`
+    // — see SqliteEntryStore.remove's identical comment for why.
+    const deletedAt = this.now();
     await this.db
       .update(tasks)
-      .set({ deletedAt: new Date().toISOString(), content: "", seq: null, syncedAt: null })
+      .set({ deletedAt, content: "", updatedAt: deletedAt, seq: null, syncedAt: null })
       .where(eq(tasks.id, id));
     await this.reindexFromCurrentState(id);
   }
@@ -714,7 +772,7 @@ const TASK_ROW_SHAPE_EPOCH_KEY = "task_row_shape_epoch";
 // once so the three call sites can't drift into selecting different
 // columns from one another.
 const TASK_SEARCH_COLUMNS =
-  "tasks.id, tasks.device_id, tasks.content, tasks.completed_at, tasks.order_key, tasks.day_order, tasks.created_at, tasks.seq, tasks.synced_at, tasks.deleted_at, tasks.date, tasks.deadline, tasks.priority, tasks.label_ids, tasks.date_string, tasks.project_id, tasks.section_id, tasks.parent_id, tasks.description";
+  "tasks.id, tasks.device_id, tasks.content, tasks.completed_at, tasks.order_key, tasks.day_order, tasks.created_at, tasks.updated_at, tasks.seq, tasks.synced_at, tasks.deleted_at, tasks.date, tasks.deadline, tasks.priority, tasks.label_ids, tasks.date_string, tasks.project_id, tasks.section_id, tasks.parent_id, tasks.description";
 
 // Shared by searchSubstringScan and searchWholeWordScan above: true when
 // `matcher` (matchesSubstring or matchesWholeWord, ../task-search.ts)
@@ -734,8 +792,8 @@ function matchesAnyField(
 // rowToEntry — a row that doesn't match the shape this query asked for
 // throws instead of silently mis-mapping a value into the wrong field.
 function rowToTask(row: unknown): Task {
-  if (!Array.isArray(row) || row.length !== 19) {
-    throw new Error(`sqlite search expected a 19-column tasks row, got ${JSON.stringify(row)}`);
+  if (!Array.isArray(row) || row.length !== 20) {
+    throw new Error(`sqlite search expected a 20-column tasks row, got ${JSON.stringify(row)}`);
   }
   const [
     id,
@@ -745,6 +803,7 @@ function rowToTask(row: unknown): Task {
     orderKey,
     dayOrder,
     createdAt,
+    updatedAt,
     seq,
     syncedAt,
     deletedAt,
@@ -762,6 +821,7 @@ function rowToTask(row: unknown): Task {
     string,
     string,
     string | null,
+    string,
     string,
     string,
     string,
@@ -786,6 +846,7 @@ function rowToTask(row: unknown): Task {
     orderKey,
     dayOrder,
     createdAt,
+    updatedAt,
     seq,
     syncedAt,
     deletedAt,

@@ -60,6 +60,8 @@ export type Project = {
   /** Fractional index (../order-key.ts) among sibling Projects sharing the same `parentId` — reused exactly as Task's own `orderKey` is, per issue #171's instruction not to invent a second ordering primitive. */
   orderKey: string;
   createdAt: string;
+  /** Issue #196 — see Task.updatedAt's own doc comment (../task-types.ts) for the mechanism and reasoning, applied here unchanged. */
+  updatedAt: string;
   seq: number | null;
   syncedAt: string | null;
   /** Tombstone (ADR 0028's rule, applied to Projects). */
@@ -100,6 +102,8 @@ export type Section = {
    */
   archived: boolean;
   createdAt: string;
+  /** Issue #196 — see Task.updatedAt's own doc comment (../task-types.ts) for the mechanism and reasoning, applied here unchanged. */
+  updatedAt: string;
   seq: number | null;
   syncedAt: string | null;
   /**

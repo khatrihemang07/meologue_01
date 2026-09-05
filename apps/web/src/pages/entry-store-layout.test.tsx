@@ -479,6 +479,15 @@ describe("EntryStoreLayout", () => {
         comment_cursor: 0,
         events: [],
         event_cursor: 0,
+        // Issue #194: always present on the wire — see sync-engine.test.ts's
+        // own `emptyResponse` for why every stream here is empty.
+        acknowledged_entries: [],
+        acknowledged_tasks: [],
+        acknowledged_projects: [],
+        acknowledged_sections: [],
+        acknowledged_labels: [],
+        acknowledged_comments: [],
+        acknowledged_events: [],
       }),
       deviceId: "device-a",
     });

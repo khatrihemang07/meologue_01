@@ -11,7 +11,9 @@ function filter(overrides: Partial<Filter> = {}): Filter {
     name: "Due today",
     colour: "#DC4C3E",
     query: "today",
+    // Issue #196: updatedAt starts equal to createdAt
     createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
     seq: 1,
     syncedAt: "2026-01-01T00:00:00.000Z",
     deletedAt: null,

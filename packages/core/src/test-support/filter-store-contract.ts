@@ -65,6 +65,20 @@ export function filterStoreContract(createStore: () => FilterStore | Promise<Fil
       await expect(store.rename("a", "")).rejects.toThrow();
       await expect(store.rename("a", "   ")).rejects.toThrow();
     });
+
+    // Issue #196: every setter that clears seq/syncedAt also stamps
+    // updatedAt with a fresh value — client-only for Filter (this type's
+    // own header comment: no server table, no Sync stream), but the local
+    // guarantee is identical.
+    it("stamps updatedAt with a fresh value", async () => {
+      const original = filter({ id: "a", name: "original", seq: 5 });
+      await store.upsert([original]);
+
+      await store.rename("a", "changed");
+
+      const [found] = await store.list();
+      expect((found?.updatedAt as string) > original.updatedAt).toBe(true);
+    });
   });
 
   describe("setColour()", () => {

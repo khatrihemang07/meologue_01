@@ -6,9 +6,14 @@ import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
  * would commit us to semantics nobody has designed yet") — that reasoning
  * held, but the design that eventually landed (ADR 0028) needs exactly one
  * of the columns it was guarding against: `deleted_at`, added by migration
- * 3 (`migrations/0001_entry_deleted_at.sql`). `rev` and `updated_at`, the
- * other two ADR 0007 named, were rejected on their own merits by ADR 0028
- * and never got a column here.
+ * 3 (`migrations/0001_entry_deleted_at.sql`). `rev`, the other column ADR
+ * 0007 named, was rejected on its own merits by ADR 0028 and never got a
+ * column here. `updated_at` — the third — was rejected by that same ADR
+ * for *ordering Sync's own conflicts*, but issue #196 revisits that
+ * decision deliberately (a superseding ADR is forthcoming): Merge (issue
+ * #199) needs a last-changed timestamp to read, even though Sync itself
+ * still never compares one. See `updatedAt` below and
+ * `migrations/0014_updated_at.sql`.
  */
 export const entries = sqliteTable(
   "entries",
@@ -17,6 +22,16 @@ export const entries = sqliteTable(
     deviceId: text("device_id").notNull(),
     body: text("body").notNull(),
     createdAt: text("created_at").notNull(),
+    // Issue #196: last-changed timestamp, added by migration 17
+    // (`migrations/0014_updated_at.sql`) as a plain `ALTER TABLE ADD
+    // COLUMN` — no SQL-level `NOT NULL` here, mirroring `tasks.dayOrder`'s
+    // own reasoning below: the migration's backfill runs unconditionally
+    // on every open rather than relying on a constraint SQLite would
+    // enforce on write. `.notNull()` here describes the TS-level shape
+    // every row is guaranteed to have *after* that backfill, the same gap
+    // between this file's declaration and the real column's own SQL
+    // constraint `dayOrder`'s comment already explains.
+    updatedAt: text("updated_at").notNull(),
     seq: integer("seq"),
     syncedAt: text("synced_at"),
     // Set when this Entry is a tombstone (ADR 0028): `A -> nothing` still
@@ -76,6 +91,10 @@ export const tasks = sqliteTable(
     // for why — the same reasoning `description` below already needed).
     dayOrder: text("day_order").notNull(),
     createdAt: text("created_at").notNull(),
+    // Issue #196 — see `entries.updatedAt`'s own doc comment above for the
+    // mechanism and for why this carries `.notNull()` despite the real
+    // column having no SQL-level constraint of its own.
+    updatedAt: text("updated_at").notNull(),
     seq: integer("seq"),
     syncedAt: text("synced_at"),
     // Tombstone (ADR 0028's rule, applied to Tasks) — same representation
@@ -201,6 +220,8 @@ export const projects = sqliteTable(
     // `parentId` — reused, not reinvented, exactly as `tasks.orderKey` is.
     orderKey: text("order_key").notNull(),
     createdAt: text("created_at").notNull(),
+    // Issue #196 — see `entries.updatedAt`'s own doc comment above.
+    updatedAt: text("updated_at").notNull(),
     seq: integer("seq"),
     syncedAt: text("synced_at"),
     // Tombstone (ADR 0028's rule, applied to Projects) — identical
@@ -244,6 +265,8 @@ export const sections = sqliteTable(
     // (../project-store.ts's archiveSection/unarchiveSection).
     archived: integer("archived", { mode: "boolean" }).notNull().default(false),
     createdAt: text("created_at").notNull(),
+    // Issue #196 — see `entries.updatedAt`'s own doc comment above.
+    updatedAt: text("updated_at").notNull(),
     seq: integer("seq"),
     syncedAt: text("synced_at"),
     // Tombstone for the Section itself — never what "deleting a Section
@@ -284,6 +307,8 @@ export const labels = sqliteTable(
     // `priority`'s 1-4 range out of SQL.
     colour: text("colour").notNull(),
     createdAt: text("created_at").notNull(),
+    // Issue #196 — see `entries.updatedAt`'s own doc comment above.
+    updatedAt: text("updated_at").notNull(),
     seq: integer("seq"),
     syncedAt: text("synced_at"),
     // Tombstone (ADR 0028's rule, applied to Labels) — identical
@@ -330,6 +355,13 @@ export const filters = sqliteTable(
     // truth" reasoning for Recurrence, applied to a Filter's own query.
     query: text("query").notNull(),
     createdAt: text("created_at").notNull(),
+    // Issue #196 — see `entries.updatedAt`'s own doc comment above for the
+    // mechanism. **Client-only**: unlike every other table's `updatedAt`
+    // here, `filters` has no server table and no Sync stream at all (this
+    // table's own doc comment above, ../filter-store.ts's own header
+    // comment) — no `server/migrations` counterpart exists for it, and no
+    // Device but this one ever reads this column.
+    updatedAt: text("updated_at").notNull(),
     seq: integer("seq"),
     syncedAt: text("synced_at"),
     // Tombstone (ADR 0028's rule, applied to Filters) — identical
@@ -369,6 +401,8 @@ export const comments = sqliteTable(
     // renderer an Entry's body and a Task's description both use.
     text: text("text").notNull(),
     createdAt: text("created_at").notNull(),
+    // Issue #196 — see `entries.updatedAt`'s own doc comment above.
+    updatedAt: text("updated_at").notNull(),
     seq: integer("seq"),
     syncedAt: text("synced_at"),
     // Tombstone (ADR 0028's rule, applied to Comments) — identical

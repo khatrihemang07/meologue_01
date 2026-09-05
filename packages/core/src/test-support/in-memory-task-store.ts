@@ -30,6 +30,12 @@ export class InMemoryTaskStore implements TaskStore {
   // Issue #186 / ADR 0057 — see EntryStore.catchUpRowShapeEpoch's own doc
   // comment (../store.ts) for what this tracks.
   private rowShapeEpoch = 0;
+  // Issue #196 — mirrors SqliteTaskStore's own identical field.
+  private readonly now: () => string;
+
+  constructor(now: () => string = () => new Date().toISOString()) {
+    this.now = now;
+  }
 
   async list(): Promise<Task[]> {
     // Active: not completed, not tombstoned — mirrors
@@ -137,7 +143,7 @@ export class InMemoryTaskStore implements TaskStore {
     if (existing === undefined || existing.deletedAt !== null) {
       return;
     }
-    this.applyIfLive(id, { completedAt, seq: null, syncedAt: null });
+    this.applyIfLive(id, { completedAt, updatedAt: completedAt, seq: null, syncedAt: null });
     await this.completeChildren(id, completedAt);
   }
 
@@ -155,11 +161,11 @@ export class InMemoryTaskStore implements TaskStore {
   }
 
   async uncomplete(id: string): Promise<void> {
-    this.applyIfLive(id, { completedAt: null, seq: null, syncedAt: null });
+    this.applyIfLive(id, { completedAt: null, updatedAt: this.now(), seq: null, syncedAt: null });
   }
 
   async rename(id: string, content: string): Promise<void> {
-    this.applyIfLive(id, { content, seq: null, syncedAt: null });
+    this.applyIfLive(id, { content, updatedAt: this.now(), seq: null, syncedAt: null });
   }
 
   /**
@@ -170,49 +176,55 @@ export class InMemoryTaskStore implements TaskStore {
    * merely unread.
    */
   async reorder(id: string, orderKey: string): Promise<void> {
-    this.applyIfLive(id, { orderKey, seq: null, syncedAt: null });
+    this.applyIfLive(id, { orderKey, updatedAt: this.now(), seq: null, syncedAt: null });
   }
 
   /** Mirrors SqliteTaskStore.reorderToday() — see TaskStore.reorderToday's own doc comment. */
   async reorderToday(id: string, dayOrder: string): Promise<void> {
-    this.applyIfLive(id, { dayOrder, seq: null, syncedAt: null });
+    this.applyIfLive(id, { dayOrder, updatedAt: this.now(), seq: null, syncedAt: null });
   }
 
   async setDate(id: string, date: string | null): Promise<void> {
     assertValidDate(date);
-    this.applyIfLive(id, { date, seq: null, syncedAt: null });
+    this.applyIfLive(id, { date, updatedAt: this.now(), seq: null, syncedAt: null });
   }
 
   async setDeadline(id: string, deadline: string | null): Promise<void> {
     assertValidDeadline(deadline);
-    this.applyIfLive(id, { deadline, seq: null, syncedAt: null });
+    this.applyIfLive(id, { deadline, updatedAt: this.now(), seq: null, syncedAt: null });
   }
 
   async setPriority(id: string, priority: number): Promise<void> {
     assertValidPriority(priority);
-    this.applyIfLive(id, { priority, seq: null, syncedAt: null });
+    this.applyIfLive(id, { priority, updatedAt: this.now(), seq: null, syncedAt: null });
   }
 
   // Mirrors SqliteTaskStore.setLabelIds — see TaskStore.setLabelIds's own
   // doc comment for why this replaces the array wholesale.
   async setLabelIds(id: string, labelIds: string[]): Promise<void> {
-    this.applyIfLive(id, { labelIds, seq: null, syncedAt: null });
+    this.applyIfLive(id, { labelIds, updatedAt: this.now(), seq: null, syncedAt: null });
   }
 
   // Mirrors SqliteTaskStore.setDescription — see TaskStore.setDescription's own doc comment.
   async setDescription(id: string, description: string | null): Promise<void> {
-    this.applyIfLive(id, { description, seq: null, syncedAt: null });
+    this.applyIfLive(id, { description, updatedAt: this.now(), seq: null, syncedAt: null });
   }
 
   // Mirrors SqliteTaskStore.setProject — see TaskStore.setProject's own
   // doc comment for why `sectionId` is cleared unconditionally alongside
   // `projectId`.
   async setProject(id: string, projectId: string | null): Promise<void> {
-    this.applyIfLive(id, { projectId, sectionId: null, seq: null, syncedAt: null });
+    this.applyIfLive(id, {
+      projectId,
+      sectionId: null,
+      updatedAt: this.now(),
+      seq: null,
+      syncedAt: null,
+    });
   }
 
   async setSection(id: string, sectionId: string | null): Promise<void> {
-    this.applyIfLive(id, { sectionId, seq: null, syncedAt: null });
+    this.applyIfLive(id, { sectionId, updatedAt: this.now(), seq: null, syncedAt: null });
   }
 
   // Mirrors SqliteTaskStore.setParent — see TaskStore.setParent's own doc
@@ -260,7 +272,7 @@ export class InMemoryTaskStore implements TaskStore {
       }
       assertValidNestingDepth(depth);
     }
-    this.applyIfLive(id, { parentId, seq: null, syncedAt: null });
+    this.applyIfLive(id, { parentId, updatedAt: this.now(), seq: null, syncedAt: null });
   }
 
   // Mirrors SqliteTaskStore.advanceRecurring — see TaskStore.advanceRecurring's
@@ -291,14 +303,23 @@ export class InMemoryTaskStore implements TaskStore {
       // A bounded rule that's run out *is* an ordinary completed Task from
       // here on (TaskStore.advanceRecurring's own doc comment) — cascades
       // to active sub-tasks exactly as complete()/completeForever() do,
-      // for the identical reason.
-      this.applyIfLive(id, { completedAt, dateString: null, seq: null, syncedAt: null });
+      // for the identical reason. `updatedAt` reuses `completedAt` itself
+      // — see SqliteTaskStore.complete's own comment for why an
+      // already-threaded timestamp beats a second clock read.
+      this.applyIfLive(id, {
+        completedAt,
+        dateString: null,
+        updatedAt: completedAt,
+        seq: null,
+        syncedAt: null,
+      });
       await this.completeChildren(id, completedAt);
       return;
     }
     // `completedAt` is deliberately absent — a recurring Task never
-    // enters the completed list; only `date` moves.
-    this.applyIfLive(id, { date: outcome.date, seq: null, syncedAt: null });
+    // enters the completed list; only `date` moves. `updatedAt` still
+    // reuses `completedAt`, the caller's own trigger instant.
+    this.applyIfLive(id, { date: outcome.date, updatedAt: completedAt, seq: null, syncedAt: null });
   }
 
   // Mirrors SqliteTaskStore.completeForever — see TaskStore.completeForever's own doc comment.
@@ -310,7 +331,13 @@ export class InMemoryTaskStore implements TaskStore {
     if (existing === undefined || existing.deletedAt !== null) {
       return;
     }
-    this.applyIfLive(id, { completedAt, dateString: null, seq: null, syncedAt: null });
+    this.applyIfLive(id, {
+      completedAt,
+      dateString: null,
+      updatedAt: completedAt,
+      seq: null,
+      syncedAt: null,
+    });
     await this.completeChildren(id, completedAt);
   }
 
@@ -327,7 +354,10 @@ export class InMemoryTaskStore implements TaskStore {
     const nextDate = hasTime(existing.date)
       ? `${tomorrow}T${existing.date.slice(11, 16)}`
       : tomorrow;
-    this.applyIfLive(id, { date: nextDate, seq: null, syncedAt: null });
+    // `today` is a floating calendar day, not an instant — see
+    // SqliteTaskStore.postpone's identical comment for why this reads
+    // the injected clock instead.
+    this.applyIfLive(id, { date: nextDate, updatedAt: this.now(), seq: null, syncedAt: null });
   }
 
   /**
@@ -340,10 +370,12 @@ export class InMemoryTaskStore implements TaskStore {
     if (existing === undefined) {
       return;
     }
+    const deletedAt = this.now();
     this.tasks.set(id, {
       ...existing,
-      deletedAt: new Date().toISOString(),
+      deletedAt,
       content: "",
+      updatedAt: deletedAt,
       seq: null,
       syncedAt: null,
     });

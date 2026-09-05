@@ -47,6 +47,12 @@ fn entry(id: Uuid, device_id: Uuid, body: &str) -> Value {
         "body": body,
         "created_at": "2026-01-01T00:00:00Z",
         "deleted_at": Value::Null,
+        // Issue #196: same instant as `created_at` — this fixture always
+        // builds a freshly-"created" push, and a real client's own first
+        // push starts with the two equal (mapping.ts's toWireEntryInput
+        // carries whatever the local row already holds, and a brand-new
+        // Entry's `updatedAt` starts equal to its `createdAt`).
+        "updated_at": "2026-01-01T00:00:00Z",
     })
 }
 
@@ -62,6 +68,11 @@ fn deleted_entry(id: Uuid, device_id: Uuid, deleted_at: &str) -> Value {
         "body": "",
         "created_at": "2026-01-01T00:00:00Z",
         "deleted_at": deleted_at,
+        // Issue #196: the delete's own `updated_at` — a real client
+        // stamps this the same way `entries.remove()` does
+        // (`packages/core/src/sqlite/sqlite-entry-store.ts`), reusing the
+        // single clock read that also produced `deleted_at`.
+        "updated_at": deleted_at,
     })
 }
 
@@ -155,9 +166,12 @@ async fn the_response_is_capped_at_the_bounded_batch_size(pool: PgPool) {
     let bodies: Vec<String> = (0..total).map(|i| format!("entry-{i}")).collect();
     let created_ats: Vec<chrono::DateTime<Utc>> = std::iter::repeat_n(Utc::now(), total as usize).collect();
 
+    // Issue #196: `updated_at` is NOT NULL now — a freshly-seeded row's
+    // own `updated_at` starts equal to its `created_at`, mirroring the
+    // migration's own backfill rule (../migrations/0018_updated_at.sql).
     sqlx::query(
-        "insert into entries (id, device_id, body, created_at)
-         select * from unnest($1::uuid[], $2::uuid[], $3::text[], $4::timestamptz[])",
+        "insert into entries (id, device_id, body, created_at, updated_at)
+         select * from unnest($1::uuid[], $2::uuid[], $3::text[], $4::timestamptz[], $4::timestamptz[])",
     )
     .bind(&ids)
     .bind(&device_ids)
@@ -270,6 +284,157 @@ async fn an_edit_reaches_a_device_whose_cursor_already_passed_the_original(pool:
     assert_eq!(entries[0]["id"], entry_id.to_string());
     assert_eq!(entries[0]["body"], "edited body");
     assert_eq!(entries[0]["deleted_at"], Value::Null);
+}
+
+/// Issue #196's own round-trip guarantee: a second Device pulling an edit
+/// sees the *editing* Device's own `updated_at` — the timestamp `entry()`
+/// pushed it with — never its own receive time. Nothing in `run_sync` or
+/// `fetch_entries_since` stamps a value of its own onto the row; the
+/// column simply carries whatever the pushing Device wrote, unchanged, so
+/// this is really a test that no such stamping was accidentally added.
+#[sqlx::test]
+async fn an_edit_reaches_a_second_device_with_the_editing_devices_own_updated_at_not_its_receive_time(
+    pool: PgPool,
+) {
+    let device_a = Uuid::new_v4();
+    let device_b = Uuid::new_v4();
+    let entry_id = Uuid::new_v4();
+
+    post_sync(
+        &pool,
+        json!({
+            "protocol_version": 4,
+            "device_id": device_a,
+            "since_seq": 0,
+            "entries": [entry(entry_id, device_a, "original body")],
+        }),
+    )
+    .await;
+
+    let mut edited_entry = entry(entry_id, device_a, "edited body");
+    edited_entry["updated_at"] = json!("2026-03-15T08:30:00Z");
+    post_sync(
+        &pool,
+        json!({
+            "protocol_version": 4,
+            "device_id": device_a,
+            "since_seq": 0,
+            "entries": [edited_entry],
+        }),
+    )
+    .await;
+
+    let (status, polled) = post_sync(
+        &pool,
+        json!({
+            "protocol_version": 4,
+            "device_id": device_b,
+            "since_seq": 0,
+            "entries": [],
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let entries = polled["entries"].as_array().unwrap();
+    let pulled = entries.iter().find(|e| e["id"] == entry_id.to_string()).unwrap();
+    assert_eq!(
+        pulled["updated_at"], "2026-03-15T08:30:00Z",
+        "device B must see device A's own updated_at, not whenever device B happened to poll"
+    );
+}
+
+/// The property ADR 0059's own Alternatives section names by name — the
+/// rejected fix it warns against: `updated_at` must never sit in the
+/// `is distinct from` guard, because a fresh timestamp on an otherwise
+/// byte-identical body would then reassign `seq` on every replay, moving
+/// the cursor and re-delivering the row to every Device that has ever
+/// synced it, regardless of whether anything about the Entry actually
+/// changed. This pushes the identical body twice with two different
+/// `updated_at` values and asserts the second push changes nothing
+/// observable: no cursor movement, and the row never reaches a second
+/// Device that already passed it.
+#[sqlx::test]
+async fn a_replay_with_only_a_different_updated_at_does_not_resequence_or_reach_other_devices(
+    pool: PgPool,
+) {
+    let device_a = Uuid::new_v4();
+    let device_b = Uuid::new_v4();
+    let entry_id = Uuid::new_v4();
+
+    let mut first_push = entry(entry_id, device_a, "unchanged body");
+    first_push["updated_at"] = json!("2026-01-01T00:00:00Z");
+    let (_, first) = post_sync(
+        &pool,
+        json!({
+            "protocol_version": 4,
+            "device_id": device_a,
+            "since_seq": 0,
+            "entries": [first_push],
+        }),
+    )
+    .await;
+    let first_cursor = first["cursor"].as_i64().unwrap();
+
+    // Device B polls now, advancing its own cursor past this row.
+    let (_, polled) = post_sync(
+        &pool,
+        json!({
+            "protocol_version": 4,
+            "device_id": device_b,
+            "since_seq": 0,
+            "entries": [],
+        }),
+    )
+    .await;
+    let device_b_cursor = polled["cursor"].as_i64().unwrap();
+    assert!(device_b_cursor >= first_cursor);
+
+    // Device A replays the identical body, with a different updated_at —
+    // the exact shape a byte-identical "no-op edit" takes on a real client.
+    let mut replay_push = entry(entry_id, device_a, "unchanged body");
+    replay_push["updated_at"] = json!("2026-06-06T00:00:00Z");
+    let (status, replayed) = post_sync(
+        &pool,
+        json!({
+            "protocol_version": 4,
+            "device_id": device_a,
+            "since_seq": first_cursor,
+            "entries": [replay_push],
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        replayed["cursor"], first_cursor,
+        "an unchanged body must not reassign seq just because updated_at differs"
+    );
+
+    // Device B, already past this row, must not see it come back — the
+    // guard never fired, so there is nothing new to deliver.
+    let (status, repolled) = post_sync(
+        &pool,
+        json!({
+            "protocol_version": 4,
+            "device_id": device_b,
+            "since_seq": device_b_cursor,
+            "entries": [],
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let entries = repolled["entries"].as_array().unwrap();
+    assert!(
+        entries.is_empty(),
+        "a replay differing only in updated_at must not reach a Device already past this row"
+    );
+
+    // The acknowledgement (#194) still tells device A its push landed, and
+    // still carries the *server's* own updated_at — the older one, since
+    // the guard didn't fire and nothing was rewritten (ADR 0059's own
+    // Consequences section names this divergence as harmless and expected).
+    let acknowledged = replayed["acknowledged_entries"].as_array().unwrap();
+    let acked = acknowledged.iter().find(|e| e["id"] == entry_id.to_string()).unwrap();
+    assert_eq!(acked["updated_at"], "2026-01-01T00:00:00Z");
 }
 
 #[sqlx::test]
@@ -426,6 +591,128 @@ async fn replaying_an_unchanged_entry_across_two_pushes_does_not_move_the_cursor
     assert_eq!(seq, first_cursor, "an unchanged replay must not reassign seq");
 }
 
+/// Issue #194 — the case no existing test covers, named explicitly in the
+/// ticket's own acceptance bar: an identical-content re-push against a
+/// Cursor that has **already advanced past** the row's own seq, not merely
+/// a re-push from `since_seq: 0` the way every replay test above this one
+/// happens to use. A `since_seq: 0` poll always gets everything back
+/// regardless of whether `is distinct from` fired, which is exactly why
+/// nothing above ever needed `acknowledged_entries` to pass. A Device that
+/// already holds this row's own seq as its Cursor is the shape that
+/// actually reproduces the bug: `entries` (the Cursor-paged read) must
+/// come back empty — `seq` genuinely didn't move — and without
+/// `acknowledged_entries`, that Device would have no way to learn its push
+/// was received at all, and would re-push this exact row on every future
+/// poll forever.
+#[sqlx::test]
+async fn a_no_op_replay_past_the_cursor_is_still_acknowledged(pool: PgPool) {
+    let device = Uuid::new_v4();
+    let entry_id = Uuid::new_v4();
+
+    let (_, first) = post_sync(
+        &pool,
+        json!({
+            "protocol_version": 4,
+            "device_id": device,
+            "since_seq": 0,
+            "entries": [entry(entry_id, device, "unchanged body")],
+        }),
+    )
+    .await;
+    let cursor = first["cursor"].as_i64().unwrap();
+
+    // Same content, but `since_seq` is now the row's own seq — this
+    // Device has genuinely already seen it, unlike every replay test
+    // above that keeps polling from 0.
+    let (status, second) = post_sync(
+        &pool,
+        json!({
+            "protocol_version": 4,
+            "device_id": device,
+            "since_seq": cursor,
+            "entries": [entry(entry_id, device, "unchanged body")],
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    assert_eq!(
+        second["entries"].as_array().unwrap().len(),
+        0,
+        "seq didn't move, so a Cursor already at it correctly gets nothing back from the ordinary read"
+    );
+    assert_eq!(second["cursor"], cursor, "acknowledging a no-op must not move the cursor");
+
+    let acknowledged = second["acknowledged_entries"].as_array().unwrap();
+    assert_eq!(acknowledged.len(), 1);
+    assert_eq!(acknowledged[0]["id"], entry_id.to_string());
+    assert_eq!(acknowledged[0]["body"], "unchanged body");
+    assert_eq!(acknowledged[0]["seq"], cursor, "the unchanged row's own seq must not have moved");
+}
+
+/// Issue #194's other acceptance criterion: a push whose edit the
+/// delete-is-terminal guard refuses must still tell the pushing Device the
+/// truth about the row — the tombstone it was refused against — rather
+/// than leaving that Device believing its own (rejected) edit landed.
+/// Without `acknowledged_entries`, this Device has no way to learn the
+/// refusal except waiting for the tombstone to happen to fall inside some
+/// later poll's Cursor-paged `entries`.
+#[sqlx::test]
+async fn acknowledged_entries_returns_the_tombstone_when_an_edit_is_refused(pool: PgPool) {
+    let device = Uuid::new_v4();
+    let entry_id = Uuid::new_v4();
+
+    post_sync(
+        &pool,
+        json!({
+            "protocol_version": 4,
+            "device_id": device,
+            "since_seq": 0,
+            "entries": [entry(entry_id, device, "original body")],
+        }),
+    )
+    .await;
+    post_sync(
+        &pool,
+        json!({
+            "protocol_version": 4,
+            "device_id": device,
+            "since_seq": 0,
+            "entries": [deleted_entry(entry_id, device, "2026-02-01T00:00:00Z")],
+        }),
+    )
+    .await;
+
+    // An offline Device's stale edit, pushed after the delete already
+    // happened server-side — refused by the `where entries.deleted_at is
+    // null` guard (`pushing_an_edit_to_an_already_deleted_entry_is_a_no_op`
+    // above already proves the row itself is untouched by this push; this
+    // test is about what the *response* tells the Device that sent it).
+    let (status, edited) = post_sync(
+        &pool,
+        json!({
+            "protocol_version": 4,
+            "device_id": device,
+            "since_seq": 0,
+            "entries": [entry(entry_id, device, "an edit that arrived too late")],
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let acknowledged = edited["acknowledged_entries"].as_array().unwrap();
+    assert_eq!(acknowledged.len(), 1);
+    assert_eq!(acknowledged[0]["id"], entry_id.to_string());
+    assert_eq!(
+        acknowledged[0]["deleted_at"], "2026-02-01T00:00:00Z",
+        "the Device must learn the tombstone its edit was refused against"
+    );
+    assert_eq!(
+        acknowledged[0]["body"], "",
+        "the tombstone's body must not be overwritten by the refused edit"
+    );
+}
+
 #[sqlx::test]
 async fn protocol_version_1_is_now_rejected(pool: PgPool) {
     let (status, _) = post_sync(
@@ -515,6 +802,9 @@ fn task(id: Uuid, device_id: Uuid, content: &str) -> Value {
         "project_id": Value::Null,
         "section_id": Value::Null,
         "parent_id": Value::Null,
+        // Issue #196 — see `entry`'s own identical comment above for why
+        // this starts equal to `created_at`.
+        "updated_at": "2026-01-01T00:00:00Z",
     })
 }
 
@@ -525,6 +815,8 @@ fn task(id: Uuid, device_id: Uuid, content: &str) -> Value {
 fn deleted_task(id: Uuid, device_id: Uuid, deleted_at: &str) -> Value {
     let mut t = task(id, device_id, "");
     t["deleted_at"] = json!(deleted_at);
+    // Issue #196 — see `deleted_entry`'s own identical comment above.
+    t["updated_at"] = json!(deleted_at);
     t
 }
 
@@ -619,6 +911,48 @@ async fn replaying_an_unchanged_task_across_two_pushes_does_not_move_the_task_cu
         .await
         .unwrap();
     assert_eq!(seq, first_cursor, "an unchanged replay must not reassign seq");
+}
+
+/// The Task-shaped sibling of
+/// `a_no_op_replay_past_the_cursor_is_still_acknowledged` — the identical
+/// case, over the second stream: an identical-content re-push against a
+/// Task Cursor that has already advanced past the row's own seq, not
+/// merely a re-push from `since_task_seq: 0`.
+#[sqlx::test]
+async fn a_no_op_task_replay_past_the_cursor_is_still_acknowledged(pool: PgPool) {
+    let device = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+
+    let (_, first) = post_sync(
+        &pool,
+        sync_request(5, device, vec![task(task_id, device, "unchanged content")]),
+    )
+    .await;
+    let task_cursor = first["task_cursor"].as_i64().unwrap();
+
+    let mut second_request = sync_request(5, device, vec![task(task_id, device, "unchanged content")]);
+    second_request["since_task_seq"] = json!(task_cursor);
+    let (status, second) = post_sync(&pool, second_request).await;
+    assert_eq!(status, StatusCode::OK);
+
+    assert_eq!(
+        second["tasks"].as_array().unwrap().len(),
+        0,
+        "seq didn't move, so a Task Cursor already at it correctly gets nothing back from the ordinary read"
+    );
+    assert_eq!(
+        second["task_cursor"], task_cursor,
+        "acknowledging a no-op must not move the task cursor"
+    );
+
+    let acknowledged = second["acknowledged_tasks"].as_array().unwrap();
+    assert_eq!(acknowledged.len(), 1);
+    assert_eq!(acknowledged[0]["id"], task_id.to_string());
+    assert_eq!(acknowledged[0]["content"], "unchanged content");
+    assert_eq!(
+        acknowledged[0]["seq"], task_cursor,
+        "the unchanged row's own seq must not have moved"
+    );
 }
 
 /// Issue #182 put `day_order` on the wire in the same bump as `description`
@@ -809,9 +1143,11 @@ async fn the_task_response_is_capped_at_the_bounded_batch_size(pool: PgPool) {
         std::iter::repeat_n(Utc::now(), total as usize).collect();
     let priorities: Vec<i32> = std::iter::repeat_n(1, total as usize).collect();
 
+    // Issue #196: `updated_at` is NOT NULL now — see the identical comment
+    // on `the_response_is_capped_at_the_bounded_batch_size` above.
     sqlx::query(
-        "insert into tasks (id, device_id, content, order_key, day_order, created_at, priority)
-         select * from unnest($1::uuid[], $2::uuid[], $3::text[], $4::text[], $4::text[], $5::timestamptz[], $6::int[])",
+        "insert into tasks (id, device_id, content, order_key, day_order, created_at, priority, updated_at)
+         select * from unnest($1::uuid[], $2::uuid[], $3::text[], $4::text[], $4::text[], $5::timestamptz[], $6::int[], $5::timestamptz[])",
     )
     .bind(&ids)
     .bind(&device_ids)
@@ -967,6 +1303,8 @@ fn project(id: Uuid, device_id: Uuid, name: &str) -> Value {
         "order_key": "V",
         "created_at": "2026-01-01T00:00:00Z",
         "deleted_at": Value::Null,
+        // Issue #196 — see `entry`'s own identical comment above.
+        "updated_at": "2026-01-01T00:00:00Z",
     })
 }
 
@@ -981,6 +1319,7 @@ fn section(id: Uuid, device_id: Uuid, project_id: Uuid, name: &str) -> Value {
         "archived": false,
         "created_at": "2026-01-01T00:00:00Z",
         "deleted_at": Value::Null,
+        "updated_at": "2026-01-01T00:00:00Z",
     })
 }
 
@@ -992,6 +1331,7 @@ fn label(id: Uuid, device_id: Uuid, name: &str) -> Value {
         "colour": "#b8256f",
         "created_at": "2026-01-01T00:00:00Z",
         "deleted_at": Value::Null,
+        "updated_at": "2026-01-01T00:00:00Z",
     })
 }
 
@@ -1003,6 +1343,7 @@ fn comment(id: Uuid, device_id: Uuid, task_id: Uuid, text: &str) -> Value {
         "text": text,
         "created_at": "2026-01-01T00:00:00Z",
         "deleted_at": Value::Null,
+        "updated_at": "2026-01-01T00:00:00Z",
     })
 }
 

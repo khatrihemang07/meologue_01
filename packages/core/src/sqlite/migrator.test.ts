@@ -77,6 +77,7 @@ describe("migrate", () => {
       [14],
       [15],
       [16],
+      [17],
     ]);
   });
 
@@ -113,8 +114,14 @@ describe("migrate", () => {
   it("re-running the search index migration's own statements does not duplicate rows", async () => {
     const driver = new NodeSqliteDriver();
     await migrate(driver);
+    // 8 positional values, not 7: `updated_at` (migration 17, issue #196)
+    // is appended at the *end* of the real, physical column order by its
+    // own `ALTER TABLE ADD COLUMN` — unlike schema.ts's declared order
+    // (which lists it beside `created_at` for readability), a positional
+    // `INSERT ... VALUES` has to match the table's actual on-disk column
+    // order, and `ADD COLUMN` always appends.
     await driver.execute(
-      "INSERT INTO entries VALUES ('a', 'device-1', 'a recurring task', '2026-01-01T00:00:00.000Z', null, null, null)",
+      "INSERT INTO entries VALUES ('a', 'device-1', 'a recurring task', '2026-01-01T00:00:00.000Z', null, null, null, null)",
       [],
       "run",
     );
@@ -255,12 +262,14 @@ describe("migrate", () => {
       [14],
       [15],
       [16],
+      [17],
     ]);
 
     // The store isn't just "didn't throw" — it's actually usable: a write
-    // that touches the new column succeeds.
+    // that touches the new column succeeds. 8 positional values — see the
+    // identical comment on the search-index test above for why.
     await driver.execute(
-      "INSERT INTO entries VALUES ('a', 'device-1', 'hello', '2026-01-01T00:00:00.000Z', null, null, null)",
+      "INSERT INTO entries VALUES ('a', 'device-1', 'hello', '2026-01-01T00:00:00.000Z', null, null, null, null)",
       [],
       "run",
     );
@@ -300,6 +309,7 @@ describe("migrate", () => {
       [14],
       [15],
       [16],
+      [17],
     ]);
 
     // The store isn't just "didn't throw" — `duration` is actually gone,
@@ -312,5 +322,105 @@ describe("migrate", () => {
     const columns = await driver.execute("PRAGMA table_info(tasks)", [], "all");
     const columnNames = columns.rows.map((row) => (row as unknown[])[1]);
     expect(columnNames).not.toContain("duration");
+  });
+
+  // Issue #196 / migration 17 (../migrations/0014_updated_at.sql):
+  // `updated_at` is backfilled to `created_at`, not to whenever the
+  // migration happens to run — see that migration's own comment for why.
+  // This is the client-side mirror of "backfills Entries that existed
+  // before the search index migration shipped" above, for the new column
+  // instead of the FTS5 index.
+  it("backfills updated_at to created_at for an Entry that predates migration 17", async () => {
+    const driver = new NodeSqliteDriver();
+    // Simulates a pre-#196 device: the `entries` table exists (through
+    // migration 3) but has no `updated_at` column yet.
+    await driver.execute(
+      `CREATE TABLE entries (
+         id text primary key, device_id text not null, body text not null,
+         created_at text not null, seq integer, synced_at text, deleted_at text
+       )`,
+      [],
+      "run",
+    );
+    await driver.execute(
+      "INSERT INTO entries (id, device_id, body, created_at) VALUES ('a', 'device-1', 'hello', '2026-01-01T00:00:00.000Z')",
+      [],
+      "run",
+    );
+
+    await migrate(driver);
+
+    const row = await driver.execute(
+      "SELECT created_at, updated_at FROM entries WHERE id = 'a'",
+      [],
+      "all",
+    );
+    expect(row.rows).toEqual([["2026-01-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z"]]);
+  });
+
+  // The idempotency half of the same guarantee: the migration's own
+  // `WHERE updated_at IS NULL` guard (mirroring migration 13's identical
+  // shape for `day_order`) means a second application only ever backfills
+  // rows still holding `NULL` — it must never re-clobber a value an
+  // ordinary edit already moved past the backfill. Simulated the same way
+  // "re-running migrate() after an interrupted ALTER TABLE" above does:
+  // delete the migration's own ledger row (the process-died-partway-
+  // through shape), plant a value that could only exist after a real
+  // post-backfill edit, then run migrate() again.
+  it("re-running migration 17 does not overwrite an updated_at an edit already moved past the backfill", async () => {
+    const driver = new NodeSqliteDriver();
+    await migrate(driver);
+    await driver.execute(
+      "INSERT INTO entries (id, device_id, body, created_at, updated_at, seq, synced_at, deleted_at) VALUES ('a', 'device-1', 'hello', '2026-01-01T00:00:00.000Z', '2026-02-02T00:00:00.000Z', null, null, null)",
+      [],
+      "run",
+    );
+    await driver.execute("DELETE FROM meologue_migrations WHERE version = 17", [], "run");
+
+    await migrate(driver);
+
+    const row = await driver.execute("SELECT updated_at FROM entries WHERE id = 'a'", [], "all");
+    expect(row.rows).toEqual([["2026-02-02T00:00:00.000Z"]]);
+  });
+
+  // The tie property Merge (issue #199) depends on: two Devices that
+  // already share a pre-existing row, migrated independently (and, in
+  // this test, at genuinely different real times — `migrate()` is never
+  // told what "now" is, so this is exercising the real backfill, not a
+  // mocked clock), must end up with the *identical* backfilled
+  // `updated_at`. Backfilling to `created_at` — stable, and already
+  // identical on both Devices before this migration ever ran — is what
+  // makes that true; backfilling to migration-run-time would instead make
+  // whichever Device happened to migrate second look like it touched the
+  // row last, a tie this ticket's own design explicitly refuses to break.
+  it("two Devices holding the same pre-existing Entry backfill to the identical updated_at", async () => {
+    const deviceA = new NodeSqliteDriver();
+    const deviceB = new NodeSqliteDriver();
+    const sharedRow = () =>
+      `CREATE TABLE entries (
+         id text primary key, device_id text not null, body text not null,
+         created_at text not null, seq integer, synced_at text, deleted_at text
+       )`;
+    for (const driver of [deviceA, deviceB]) {
+      await driver.execute(sharedRow(), [], "run");
+      await driver.execute(
+        "INSERT INTO entries (id, device_id, body, created_at) VALUES ('shared', 'device-1', 'hello', '2026-01-01T00:00:00.000Z')",
+        [],
+        "run",
+      );
+    }
+
+    // Migrated one after the other, not concurrently — if the backfill
+    // depended on wall-clock time at all, this ordering is exactly what
+    // would expose it.
+    await migrate(deviceA);
+    await migrate(deviceB);
+
+    const [rowA, rowB] = await Promise.all([
+      deviceA.execute("SELECT updated_at FROM entries WHERE id = 'shared'", [], "all"),
+      deviceB.execute("SELECT updated_at FROM entries WHERE id = 'shared'", [], "all"),
+    ]);
+    expect(rowA.rows).toEqual(rowB.rows);
+    expect(rowA.rows).toEqual([["2026-01-01T00:00:00.000Z"]]);
   });
 });

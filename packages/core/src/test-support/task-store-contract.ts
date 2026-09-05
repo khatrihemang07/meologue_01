@@ -1131,4 +1131,157 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
       });
     });
   });
+
+  // Issue #196: every setter that clears seq/syncedAt also stamps
+  // updatedAt — covered here across several of a Task's own mutators
+  // (CLAUDE.md's own brief: Task has the most setters of any store, so
+  // it's the one worth checking broadly rather than picking just one).
+  // complete()/advanceRecurring()/completeForever() each stamp updatedAt
+  // as the caller's own completedAt argument, not a second, independent
+  // clock read (SqliteTaskStore.complete's own doc comment) — checked
+  // here as an exact match rather than merely "a fresher value."
+  describe("updatedAt (issue #196)", () => {
+    it("rename() stamps a fresh updatedAt", async () => {
+      const original = task({ id: "a", seq: 5 });
+      await store.upsert([original]);
+
+      await store.rename("a", "changed");
+
+      const found = await store.get("a");
+      expect((found?.updatedAt as string) > original.updatedAt).toBe(true);
+    });
+
+    it("complete() stamps updatedAt as the completedAt it was given, not a separate clock read", async () => {
+      const original = task({ id: "a", seq: 5 });
+      await store.upsert([original]);
+
+      await store.complete("a", "2026-05-01T00:00:00.000Z");
+
+      const [found] = await store.listCompleted();
+      expect(found?.updatedAt).toBe("2026-05-01T00:00:00.000Z");
+    });
+
+    it("uncomplete() stamps a fresh updatedAt", async () => {
+      const original = task({ id: "a", seq: 5 });
+      await store.upsert([original]);
+      await store.complete("a", "2026-05-01T00:00:00.000Z");
+
+      await store.uncomplete("a");
+
+      const found = await store.get("a");
+      expect((found?.updatedAt as string) > original.updatedAt).toBe(true);
+    });
+
+    it("reorder() stamps a fresh updatedAt", async () => {
+      const original = task({ id: "a", seq: 5, orderKey: "m" });
+      await store.upsert([original]);
+
+      await store.reorder("a", orderKeyBetween(null, "m"));
+
+      const found = await store.get("a");
+      expect((found?.updatedAt as string) > original.updatedAt).toBe(true);
+    });
+
+    it("setDate() stamps a fresh updatedAt", async () => {
+      const original = task({ id: "a", seq: 5 });
+      await store.upsert([original]);
+
+      await store.setDate("a", "2026-05-01");
+
+      const found = await store.get("a");
+      expect((found?.updatedAt as string) > original.updatedAt).toBe(true);
+    });
+
+    it("setPriority() stamps a fresh updatedAt", async () => {
+      const original = task({ id: "a", seq: 5 });
+      await store.upsert([original]);
+
+      await store.setPriority("a", 4);
+
+      const found = await store.get("a");
+      expect((found?.updatedAt as string) > original.updatedAt).toBe(true);
+    });
+
+    it("setLabelIds() stamps a fresh updatedAt", async () => {
+      const original = task({ id: "a", seq: 5 });
+      await store.upsert([original]);
+
+      await store.setLabelIds("a", ["work"]);
+
+      const found = await store.get("a");
+      expect((found?.updatedAt as string) > original.updatedAt).toBe(true);
+    });
+
+    it("setProject() stamps a fresh updatedAt", async () => {
+      const original = task({ id: "a", seq: 5 });
+      await store.upsert([original]);
+
+      await store.setProject("a", "project-1");
+
+      const found = await store.get("a");
+      expect((found?.updatedAt as string) > original.updatedAt).toBe(true);
+    });
+
+    it("setParent() stamps a fresh updatedAt", async () => {
+      await store.upsert([task({ id: "parent", seq: 1 })]);
+      const original = task({ id: "child", seq: 5 });
+      await store.upsert([original]);
+
+      await store.setParent("child", "parent");
+
+      const found = await store.get("child");
+      expect((found?.updatedAt as string) > original.updatedAt).toBe(true);
+    });
+
+    it("advanceRecurring() stamps updatedAt as the completedAt it was given", async () => {
+      const original = task({
+        id: "a",
+        dateString: "every day",
+        date: "2026-01-05",
+        seq: 5,
+      });
+      await store.upsert([original]);
+
+      await store.advanceRecurring("a", "2026-05-01T00:00:00.000Z");
+
+      const found = await store.get("a");
+      expect(found?.updatedAt).toBe("2026-05-01T00:00:00.000Z");
+    });
+
+    it("completeForever() stamps updatedAt as the completedAt it was given", async () => {
+      const original = task({
+        id: "a",
+        dateString: "every day",
+        date: "2026-01-05",
+        seq: 5,
+      });
+      await store.upsert([original]);
+
+      await store.completeForever("a", "2026-05-01T00:00:00.000Z");
+
+      const [found] = await store.listCompleted();
+      expect(found?.updatedAt).toBe("2026-05-01T00:00:00.000Z");
+    });
+
+    it("postpone() stamps a fresh updatedAt, not the floating `today` it was given", async () => {
+      const original = task({ id: "a", seq: 5, date: "2025-06-01" });
+      await store.upsert([original]);
+
+      await store.postpone("a", "2026-01-05");
+
+      const found = await store.get("a");
+      expect(found?.updatedAt).not.toBe("2026-01-05");
+      expect((found?.updatedAt as string) > original.updatedAt).toBe(true);
+    });
+
+    it("remove() stamps a fresh updatedAt", async () => {
+      const original = task({ id: "a", seq: 5 });
+      await store.upsert([original]);
+
+      await store.remove("a");
+
+      const [tombstone] = await store.pending();
+      expect((tombstone?.updatedAt as string) > original.updatedAt).toBe(true);
+    });
+  });
 }

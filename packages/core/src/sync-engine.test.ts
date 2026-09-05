@@ -10,7 +10,13 @@ import { InMemoryLabelStore } from "./test-support/in-memory-label-store";
 import { InMemoryProjectStore } from "./test-support/in-memory-project-store";
 import { InMemoryTaskStore } from "./test-support/in-memory-task-store";
 import { task } from "./test-support/task-fixture";
-import type { WireEntryOutput, WireEventOutput, WireSyncResponse, WireTaskOutput } from "./wire";
+import type {
+  WireEntryOutput,
+  WireEventOutput,
+  WireSyncRequest,
+  WireSyncResponse,
+  WireTaskOutput,
+} from "./wire";
 
 const DEVICE_ID = "device-1";
 
@@ -20,6 +26,9 @@ function wireEntryOutput(overrides: Partial<WireEntryOutput> = {}): WireEntryOut
     device_id: DEVICE_ID,
     body: "hello meologue",
     created_at: "2026-01-01T00:00:00.000Z",
+    // Issue #196 — a freshly-created row's own updated_at starts equal
+    // to created_at.
+    updated_at: "2026-01-01T00:00:00.000Z",
     seq: 1,
     ...overrides,
   };
@@ -35,6 +44,8 @@ function wireTaskOutput(overrides: Partial<WireTaskOutput> = {}): WireTaskOutput
     order_key: "V",
     day_order: "V",
     created_at: "2026-01-01T00:00:00.000Z",
+    // Issue #196 — see wireEntryOutput's own identical comment above.
+    updated_at: "2026-01-01T00:00:00.000Z",
     seq: 1,
     deleted_at: null,
     date: null,
@@ -88,6 +99,17 @@ const emptyResponse: WireSyncResponse = {
   comment_cursor: 0,
   events: [],
   event_cursor: 0,
+  // Issue #194: `acknowledged_*` is always present on the wire (mirroring
+  // `entries`/`tasks`/etc. above), and empty here for the identical reason
+  // every other array above is — most tests below never push anything the
+  // Server would have something to acknowledge.
+  acknowledged_entries: [],
+  acknowledged_tasks: [],
+  acknowledged_projects: [],
+  acknowledged_sections: [],
+  acknowledged_labels: [],
+  acknowledged_comments: [],
+  acknowledged_events: [],
 };
 
 // A fresh set of the five stores issue #182/#184 added, alongside `store`
@@ -129,6 +151,7 @@ describe("sync engine", () => {
             body: "hello meologue",
             created_at: "2026-01-01T00:00:00.000Z",
             deleted_at: null,
+            updated_at: "2026-01-01T00:00:00.000Z",
           },
         ],
         since_task_seq: 0,
@@ -192,6 +215,7 @@ describe("sync engine", () => {
           section_id: null,
           parent_id: null,
           description: null,
+          updated_at: "2026-01-01T00:00:00.000Z",
         },
       ]);
       return {
@@ -237,6 +261,12 @@ describe("sync engine", () => {
 
   it("advances the Entry Cursor to the last sequence received and never regresses it", async () => {
     const stores = newStores();
+    // Issue #196 / ADR 0057: this Device is already caught up on the
+    // current row-shape epoch, mirroring "advances the Task Cursor..."
+    // below — otherwise the first sync() call's own one-time catch-up
+    // reset (now that entries gained updated_at) would zero this Cursor
+    // before either transport below ever runs.
+    await stores.store.catchUpRowShapeEpoch(ROW_SHAPE_EPOCH.entries);
     await stores.store.setCursor(10);
 
     const staleTransport = vi.fn(async () => ({ ...emptyResponse, cursor: 5 }));
@@ -275,6 +305,15 @@ describe("sync engine", () => {
   // to why there are four more Cursors rather than one shared number).
   it("advances the Project, Section, Label, Comment and Event Cursors independently and never regresses any of them", async () => {
     const stores = newStores();
+    // Issue #196 / ADR 0057: Projects, Sections, Labels and Comments each
+    // gained updated_at, bumping their own ROW_SHAPE_EPOCH — catch each up
+    // first, mirroring "advances the Task Cursor..." above, so this test
+    // exercises only the never-regresses guarantee. Events gained no
+    // field (this map's own doc comment), so it needs no catch-up call.
+    await stores.projectStore.catchUpProjectRowShapeEpoch(ROW_SHAPE_EPOCH.projects);
+    await stores.projectStore.catchUpSectionRowShapeEpoch(ROW_SHAPE_EPOCH.sections);
+    await stores.labelStore.catchUpRowShapeEpoch(ROW_SHAPE_EPOCH.labels);
+    await stores.commentStore.catchUpRowShapeEpoch(ROW_SHAPE_EPOCH.comments);
     await stores.projectStore.setProjectCursor(10);
     await stores.projectStore.setSectionCursor(20);
     await stores.labelStore.setCursor(30);
@@ -377,6 +416,121 @@ describe("sync engine", () => {
     expect(all).toHaveLength(1);
   });
 
+  // Issue #194: the exact bug this ticket fixes, reproduced at the
+  // sync-engine level rather than only server-side (server/tests/sync.rs's
+  // own `a_no_op_replay_past_the_cursor_is_still_acknowledged`) — a
+  // transport whose ordinary `entries` comes back empty (the row's own seq
+  // genuinely didn't move) must still clear this Device's `pending()` when
+  // `acknowledged_entries` names the pushed row. Before `acknowledged_*`
+  // existed, nothing in this response would have told the Device its push
+  // was received at all, and `pending()` would return this Entry forever.
+  describe("acknowledged rows clear pending() even when the ordinary read comes back empty (issue #194)", () => {
+    it("for Entries", async () => {
+      const stores = newStores();
+      await stores.store.upsert([entry({ id: "local-1", seq: null })]);
+
+      const transport = vi.fn(async () => ({
+        ...emptyResponse,
+        entries: [],
+        acknowledged_entries: [wireEntryOutput({ id: "local-1", seq: 1 })],
+      }));
+
+      await sync({
+        ...stores,
+        transport,
+        deviceId: DEVICE_ID,
+        now: () => "2026-01-01T00:05:00.000Z",
+      });
+
+      expect(await stores.store.pending()).toEqual([]);
+      // Acknowledging a no-op must not advance the Cursor either —
+      // `response.cursor` (0, from `emptyResponse`) never exceeded this
+      // Device's own starting Cursor (also 0), so `setCursor` is never
+      // called and the Cursor stays exactly where it started.
+      expect(await stores.store.getCursor()).toBe(0);
+    });
+
+    it("for Tasks", async () => {
+      const stores = newStores();
+      await stores.taskStore.upsert([task({ id: "local-task-1", seq: null })]);
+
+      const transport = vi.fn(async () => ({
+        ...emptyResponse,
+        tasks: [],
+        acknowledged_tasks: [wireTaskOutput({ id: "local-task-1", seq: 1 })],
+      }));
+
+      await sync({
+        ...stores,
+        transport,
+        deviceId: DEVICE_ID,
+        now: () => "2026-01-01T00:05:00.000Z",
+      });
+
+      expect(await stores.taskStore.pending()).toEqual([]);
+      expect(await stores.taskStore.getCursor()).toBe(0);
+    });
+
+    it("for Events", async () => {
+      const stores = newStores();
+      await stores.eventStore.record(event({ id: "local-event-1", seq: null }));
+
+      const transport = vi.fn(async () => ({
+        ...emptyResponse,
+        events: [],
+        acknowledged_events: [wireEventOutput({ id: "local-event-1", seq: 1 })],
+      }));
+
+      await sync({
+        ...stores,
+        transport,
+        deviceId: DEVICE_ID,
+        now: () => "2026-01-01T00:05:00.000Z",
+      });
+
+      expect(await stores.eventStore.pending()).toEqual([]);
+      expect(await stores.eventStore.getCursor()).toBe(0);
+    });
+  });
+
+  // Issue #194: pushes are now chunked the same way reads have always
+  // been paged — a backlog larger than one batch must complete across
+  // multiple round trips rather than building one oversized request body.
+  it("chunks a push larger than SYNC_BATCH_SIZE across multiple requests, none of which carries more than SYNC_BATCH_SIZE rows in any stream", async () => {
+    const stores = newStores();
+    const total = SYNC_BATCH_SIZE + 10;
+    await stores.store.upsert(
+      Array.from({ length: total }, (_, i) => entry({ id: `entry-${i}`, seq: null })),
+    );
+
+    const transport = vi.fn(async (request: WireSyncRequest) => {
+      // The acceptance bar itself: no single request's `entries` (or any
+      // other stream) may exceed SYNC_BATCH_SIZE, even though this
+      // Device's own backlog does.
+      expect(request.entries.length).toBeLessThanOrEqual(SYNC_BATCH_SIZE);
+      expect((request.tasks ?? []).length).toBeLessThanOrEqual(SYNC_BATCH_SIZE);
+      // Acknowledge whatever this request actually pushed, mirroring a
+      // real server's `acknowledged_entries` — this is what lets
+      // `pending()` actually drain between iterations, the same way a
+      // real Cursor-read response would.
+      return {
+        ...emptyResponse,
+        acknowledged_entries: request.entries.map((e): WireEntryOutput => ({ ...e, seq: 1 })),
+      };
+    });
+
+    await sync({ ...stores, transport, deviceId: DEVICE_ID });
+
+    // The backlog didn't fit in one push, so the loop must have run a
+    // second time to carry the remainder — `pushWasFull`, not merely
+    // `batchWasFull` off a full *response*, since every response here is
+    // otherwise empty.
+    expect(transport).toHaveBeenCalledTimes(2);
+    const pushedCounts = transport.mock.calls.map(([request]) => request.entries.length);
+    expect(pushedCounts).toEqual([SYNC_BATCH_SIZE, 10]);
+    expect(await stores.store.pending()).toEqual([]);
+  });
+
   it("immediately runs another round when the Entry batch comes back full", async () => {
     const stores = newStores();
     const fullBatch = Array.from({ length: SYNC_BATCH_SIZE }, (_, i) =>
@@ -430,6 +584,11 @@ describe("sync engine", () => {
   it("leaves pending Entries and pending Tasks pending, and both Cursors unchanged, when sync fails", async () => {
     const stores = newStores();
     await stores.store.upsert([entry({ id: "local-1", seq: null })]);
+    // Issue #196 / ADR 0057: already caught up, mirroring the Task
+    // Cursor's own identical guard below — otherwise the one-time catch-up
+    // reset (entries also gained updated_at) would zero this Cursor before
+    // the network call even runs, which this test isn't testing for.
+    await stores.store.catchUpRowShapeEpoch(ROW_SHAPE_EPOCH.entries);
     await stores.store.setCursor(3);
     await stores.taskStore.upsert([task({ id: "local-task-1", seq: null })]);
     // Issue #186 / ADR 0057: already caught up, so the Task Cursor below
@@ -687,6 +846,32 @@ describe("sync engine", () => {
         return { ...emptyResponse, task_cursor: 5 };
       });
       await sync({ ...stores, transport: secondSync, deviceId: DEVICE_ID });
+    });
+
+    // Issue #196's own version of criterion 1/2 together, on the Entry
+    // stream specifically — the first stream this ticket bumps
+    // ROW_SHAPE_EPOCH for from scratch (0 -> 1), unlike Task's own
+    // bump above which was already at 1 from issue #182. A Device that
+    // already had a real Entry Cursor before `updated_at` existed resets
+    // to 0 exactly once, on the very next sync() call, and never again on
+    // the ordinary syncs that follow.
+    it("resets the Entry Cursor to 0 exactly once for issue #196's own epoch bump, then never again", async () => {
+      const stores = newStores();
+      await stores.store.setCursor(42);
+
+      const resettingTransport = vi.fn(async (request) => {
+        expect(request.since_seq).toBe(0);
+        return { ...emptyResponse, cursor: 50 };
+      });
+      await sync({ ...stores, transport: resettingTransport, deviceId: DEVICE_ID });
+      expect(await stores.store.getCursor()).toBe(50);
+
+      const ordinaryTransport = vi.fn(async (request) => {
+        expect(request.since_seq).toBe(50);
+        return { ...emptyResponse, cursor: 60 };
+      });
+      await sync({ ...stores, transport: ordinaryTransport, deviceId: DEVICE_ID });
+      expect(await stores.store.getCursor()).toBe(60);
     });
 
     // Criterion 4: re-walking a stream during catch-up must not

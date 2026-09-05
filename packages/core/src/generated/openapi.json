@@ -415,7 +415,8 @@
           "device_id",
           "task_id",
           "text",
-          "created_at"
+          "created_at",
+          "updated_at"
         ],
         "properties": {
           "created_at": {
@@ -443,6 +444,11 @@
           },
           "text": {
             "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Issue #196 — see `EntryInput::updated_at`'s own doc comment."
           }
         }
       },
@@ -455,7 +461,8 @@
           "task_id",
           "text",
           "created_at",
-          "seq"
+          "seq",
+          "updated_at"
         ],
         "properties": {
           "created_at": {
@@ -487,6 +494,10 @@
           },
           "text": {
             "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       },
@@ -741,7 +752,8 @@
           "id",
           "device_id",
           "body",
-          "created_at"
+          "created_at",
+          "updated_at"
         ],
         "properties": {
           "body": {
@@ -766,6 +778,11 @@
           "id": {
             "type": "string",
             "format": "uuid"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Issue #196: when this Entry was last actually changed, on the\npushing Device's own clock — see `insert_entries`'s own doc\ncomment for exactly where this lands in its `set` list (and, just\nas importantly, where it does *not* land)."
           }
         }
       },
@@ -776,7 +793,8 @@
           "device_id",
           "body",
           "created_at",
-          "seq"
+          "seq",
+          "updated_at"
         ],
         "properties": {
           "body": {
@@ -805,6 +823,11 @@
           "seq": {
             "type": "integer",
             "format": "int64"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Issue #196 — see `EntryInput::updated_at`'s own doc comment."
           }
         }
       },
@@ -1015,7 +1038,8 @@
           "device_id",
           "name",
           "colour",
-          "created_at"
+          "created_at",
+          "updated_at"
         ],
         "properties": {
           "colour": {
@@ -1042,6 +1066,11 @@
           },
           "name": {
             "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Issue #196 — see `EntryInput::updated_at`'s own doc comment."
           }
         }
       },
@@ -1054,7 +1083,8 @@
           "name",
           "colour",
           "created_at",
-          "seq"
+          "seq",
+          "updated_at"
         ],
         "properties": {
           "colour": {
@@ -1085,6 +1115,10 @@
           "seq": {
             "type": "integer",
             "format": "int64"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       },
@@ -1138,7 +1172,8 @@
           "favourite",
           "archived",
           "order_key",
-          "created_at"
+          "created_at",
+          "updated_at"
         ],
         "properties": {
           "archived": {
@@ -1188,6 +1223,11 @@
               "null"
             ],
             "format": "uuid"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Issue #196 — see `EntryInput::updated_at`'s own doc comment."
           }
         }
       },
@@ -1203,7 +1243,8 @@
           "archived",
           "order_key",
           "created_at",
-          "seq"
+          "seq",
+          "updated_at"
         ],
         "properties": {
           "archived": {
@@ -1256,6 +1297,10 @@
           "seq": {
             "type": "integer",
             "format": "int64"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       },
@@ -1375,7 +1420,8 @@
           "name",
           "order_key",
           "archived",
-          "created_at"
+          "created_at",
+          "updated_at"
         ],
         "properties": {
           "archived": {
@@ -1415,6 +1461,11 @@
           "project_id": {
             "type": "string",
             "format": "uuid"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Issue #196 — see `EntryInput::updated_at`'s own doc comment."
           }
         }
       },
@@ -1429,7 +1480,8 @@
           "order_key",
           "archived",
           "created_at",
-          "seq"
+          "seq",
+          "updated_at"
         ],
         "properties": {
           "archived": {
@@ -1473,6 +1525,10 @@
           "seq": {
             "type": "integer",
             "format": "int64"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       },
@@ -1707,9 +1763,65 @@
           "comments",
           "comment_cursor",
           "events",
-          "event_cursor"
+          "event_cursor",
+          "acknowledged_entries",
+          "acknowledged_tasks",
+          "acknowledged_projects",
+          "acknowledged_sections",
+          "acknowledged_labels",
+          "acknowledged_comments",
+          "acknowledged_events"
         ],
         "properties": {
+          "acknowledged_comments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CommentOutput"
+            },
+            "description": "Issue #194: the Comment-shaped sibling — mirrors\n`acknowledged_tasks` against `comments`/`insert_comments`, gated\non `protocol_version >= 6` exactly like `comments` itself."
+          },
+          "acknowledged_entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EntryOutput"
+            },
+            "description": "Issue #194: the server's own current row for every id the\nrequest's own `entries` named, whether or not `insert_entries`'s\n`is distinct from` guard actually changed anything — see this\nmodule's own top-of-file doc comment for why a Cursor-paged array\nalone leaves a no-op push invisible to the Device that sent it.\nSelected via `where id = any($1)` inside the same transaction\n`insert_entries` already holds, against exactly the ids that\nrequest pushed — never a stream's whole backlog, and never gated\non whether anything in it changed. Empty whenever `entries` (the\nrequest field) was empty: there is nothing to acknowledge if\nnothing was pushed."
+          },
+          "acknowledged_events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventOutput"
+            },
+            "description": "Issue #194: the Event-shaped sibling of `acknowledged_entries` —\nmirrors it against `events`/`insert_events`, **ungated**, exactly\nlike `events` itself (`PROTOCOL_VERSION`'s own doc comment: there\nis no version number that separates a v6 Device that predates this\nticket from one that has it). Genuinely less interesting than\nevery `acknowledged_*` above in one respect — `insert_events`'s\nown doc comment — an Event has no mutable column and no `is\ndistinct from` guard to make silent in the first place, so a\npushed Event that already exists on this table is always a\nbyte-identical replay, never a change the guard suppressed. It\nstill clears `pending()` on that replay for the identical reason\nevery other stream needs one: without it, a Device whose Event\nCursor has already moved past that row's own `seq` — the same\nstale-Cursor shape every other stream's motivating bug takes —\nwould re-push it forever.\n\n**No `PROTOCOL_VERSION` bump for any `acknowledged_*` field\nabove** — see that constant's own doc comment for why: every one\nis new, additive, and the response type an old Device already\ndeserializes tolerates an extra JSON key it doesn't declare, the\nsame \"harmlessly ignored\" tolerance every wire response in this\ncodebase already relies on for a field it doesn't recognise. A\nDevice built before issue #194 simply never reads these seven\nkeys and keeps relying on the Cursor-paged arrays alone, the same\nway it always has — the bug this ticket fixes (a no-op push\nre-pushed forever) isn't fixed for that Device until it upgrades,\nwhich is the ordinary consequence of `PROTOCOL_VERSION` naming the\nwire shape a *build* understands, not a promise that every bugfix\nreaches every Device instantly."
+          },
+          "acknowledged_labels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LabelOutput"
+            },
+            "description": "Issue #194: the Label-shaped sibling — mirrors `acknowledged_tasks`\nagainst `labels`/`insert_labels`, gated on `protocol_version >= 6`\nexactly like `labels` itself."
+          },
+          "acknowledged_projects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectOutput"
+            },
+            "description": "Issue #194: the Project-shaped sibling of `acknowledged_entries` —\nmirrors `acknowledged_tasks` against `projects`/`insert_projects`,\ngated on `protocol_version >= 6` exactly like `projects` itself."
+          },
+          "acknowledged_sections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SectionOutput"
+            },
+            "description": "Issue #194: the Section-shaped sibling — mirrors\n`acknowledged_tasks` against `sections`/`insert_sections`, gated\non `protocol_version >= 6` exactly like `sections` itself."
+          },
+          "acknowledged_tasks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskOutput"
+            },
+            "description": "Issue #194: the Task-shaped sibling of `acknowledged_entries` —\nmirrors it field for field, against `tasks`/`insert_tasks`\ninstead. Gated on `protocol_version >= 5`, exactly like `tasks`\nitself (`run_sync`'s own doc comment): a v4 Device can never\npopulate the `tasks` request field to begin with, so there is\nnothing here for it to acknowledge either."
+          },
           "comment_cursor": {
             "type": "integer",
             "format": "int64"
@@ -1795,7 +1907,8 @@
           "order_key",
           "created_at",
           "priority",
-          "label_ids"
+          "label_ids",
+          "updated_at"
         ],
         "properties": {
           "completed_at": {
@@ -1892,6 +2005,11 @@
               "null"
             ],
             "format": "uuid"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Issue #196 — see `EntryInput::updated_at`'s own doc comment. A\nsecond bump of `ROW_SHAPE_EPOCH.tasks` (to 2), for the identical\nreason `description` above earned the first one."
           }
         }
       },
@@ -1907,7 +2025,8 @@
           "created_at",
           "seq",
           "priority",
-          "label_ids"
+          "label_ids",
+          "updated_at"
         ],
         "properties": {
           "completed_at": {
@@ -2005,6 +2124,11 @@
           "seq": {
             "type": "integer",
             "format": "int64"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Issue #196 — see `EntryInput::updated_at`'s own doc comment."
           }
         }
       },

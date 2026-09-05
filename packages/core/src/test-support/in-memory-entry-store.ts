@@ -13,6 +13,14 @@ export class InMemoryEntryStore implements EntryStore {
   // in the real SqliteEntryStore — see EntryStore.catchUpRowShapeEpoch's
   // own doc comment (../store.ts) for what this tracks and why.
   private rowShapeEpoch = 0;
+  // Issue #196 — mirrors SqliteEntryStore's own identical field
+  // (../sqlite/sqlite-entry-store.ts): an injectable clock, real by
+  // default, so a test can pin down a deterministic `updatedAt`.
+  private readonly now: () => string;
+
+  constructor(now: () => string = () => new Date().toISOString()) {
+    this.now = now;
+  }
 
   async list(page?: EntryPage): Promise<Entry[]> {
     // Excludes tombstones (ADR 0028) — mirrors SqliteEntryStore.list()'s
@@ -107,7 +115,7 @@ export class InMemoryEntryStore implements EntryStore {
       // can never resurrect an Entry deleted elsewhere.
       return;
     }
-    this.entries.set(id, { ...existing, body, seq: null, syncedAt: null });
+    this.entries.set(id, { ...existing, body, updatedAt: this.now(), seq: null, syncedAt: null });
   }
 
   /**
@@ -120,10 +128,12 @@ export class InMemoryEntryStore implements EntryStore {
     if (existing === undefined) {
       return;
     }
+    const deletedAt = this.now();
     this.entries.set(id, {
       ...existing,
-      deletedAt: new Date().toISOString(),
+      deletedAt,
       body: "",
+      updatedAt: deletedAt,
       seq: null,
       syncedAt: null,
     });

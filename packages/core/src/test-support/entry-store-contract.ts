@@ -320,6 +320,29 @@ export function entryStoreContract(createStore: () => EntryStore | Promise<Entry
     expect((await store.pending()).map((e) => e.id)).toEqual(["a"]);
   });
 
+  // Issue #196: every setter that clears seq/syncedAt also stamps
+  // updatedAt with a fresh value — checked here for edit() and remove(),
+  // the two setters EntryStore has.
+  it("edit() stamps updatedAt with a fresh value", async () => {
+    const original = entry({ id: "a", body: "original", seq: 5 });
+    await store.upsert([original]);
+
+    await store.edit("a", "changed");
+
+    const [found] = await store.list();
+    expect((found?.updatedAt as string) > original.updatedAt).toBe(true);
+  });
+
+  it("remove() stamps updatedAt with a fresh value", async () => {
+    const original = entry({ id: "a", body: "original", seq: 5 });
+    await store.upsert([original]);
+
+    await store.remove("a");
+
+    const [tombstone] = await store.pending();
+    expect((tombstone?.updatedAt as string) > original.updatedAt).toBe(true);
+  });
+
   // CONTEXT.md's domain guarantee: editing an Entry does not move it in
   // History. createdAt is what list() orders by, so this is really two
   // assertions in one — the field itself is untouched, and so is the

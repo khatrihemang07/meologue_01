@@ -83,12 +83,15 @@ export function useLabels(labelStore: LabelStore, deviceId: string): UseLabelsRe
       if (existing !== undefined) {
         id = existing.id;
       } else {
+        const capturedAt = new Date().toISOString();
         const created: Label = {
           id: mintId(),
           deviceId,
           name,
           colour: DEFAULT_LABEL_COLOUR,
-          createdAt: new Date().toISOString(),
+          createdAt: capturedAt,
+          // Issue #196: starts equal to createdAt, the same single clock read.
+          updatedAt: capturedAt,
           seq: null,
           syncedAt: null,
           deletedAt: null,

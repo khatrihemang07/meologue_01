@@ -68,17 +68,43 @@ export const SYNC_INTERVAL_MS = 5000;
  * this step reproduces the exact bug ADR 0057 exists to describe: the
  * field silently never reaches a Device that already holds the row it
  * belongs to, until something unrelated happens to touch that row again.
+ *
+ * Issue #196 bumps six of these seven by one — `entries`, `tasks`,
+ * `projects`, `sections`, `labels`, `comments` each gain `updated_at`, a
+ * field on a kind of row every one of these streams already had, which is
+ * precisely the case this map exists for. **Not `events`**: it gains no
+ * field (ADR 0056: an Event is never edited, so a last-changed timestamp
+ * would mean nothing distinct from `occurred_at`, which it already
+ * carries), so its own epoch stays exactly where issue #184 left it. This
+ * is a row-shape change, so ADR 0057 applies in full — every Device that
+ * has ever synced one of these six streams re-walks it once, in full, the
+ * next time it syncs after upgrading; that is the expected, one-time cost
+ * this map's own mechanism exists to bound, not a defect to route around.
  */
 export const ROW_SHAPE_EPOCH = {
-  entries: 0,
+  // Issue #196: `updated_at` gained a wire representation on the existing
+  // Entry stream.
+  entries: 1,
   // Issue #182: `description` gained a wire representation on the
   // existing Task stream (server/src/sync.rs's own `TaskInput.description`
   // doc comment) — the concrete case ADR 0057 was written to fix.
-  tasks: 1,
-  projects: 0,
-  sections: 0,
-  labels: 0,
-  comments: 0,
+  // Issue #196 bumps this a second time: `updated_at` is a second field
+  // added to a kind of row this stream already had.
+  tasks: 2,
+  // Issue #196: `updated_at` gained a wire representation on the existing
+  // Project stream.
+  projects: 1,
+  // Issue #196: `updated_at` gained a wire representation on the existing
+  // Section stream.
+  sections: 1,
+  // Issue #196: `updated_at` gained a wire representation on the existing
+  // Label stream.
+  labels: 1,
+  // Issue #196: `updated_at` gained a wire representation on the existing
+  // Comment stream.
+  comments: 1,
+  // Untouched by issue #196 — see this map's own header comment above for
+  // why Events carry no `updated_at` at all.
   events: 0,
 } as const satisfies Record<string, number>;
 

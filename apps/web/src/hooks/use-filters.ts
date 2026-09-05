@@ -91,13 +91,16 @@ export function useFilters(filterStore: FilterStore, deviceId: string): UseFilte
     parseFilterQuery(query);
 
     const id = mintId();
+    const now = new Date().toISOString();
     upsertMutation.mutate({
       id,
       deviceId,
       name: trimmedName,
       colour: overrides.colour ?? DEFAULT_LABEL_COLOUR,
       query,
-      createdAt: new Date().toISOString(),
+      createdAt: now,
+      // Issue #196: starts equal to createdAt, the same single clock read.
+      updatedAt: now,
       seq: null,
       syncedAt: null,
       deletedAt: null,

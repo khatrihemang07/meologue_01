@@ -7,6 +7,7 @@ export function comment(overrides: Partial<Comment> = {}): Comment {
     taskId: "task-1",
     text: "sounds good",
     createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
     seq: null,
     syncedAt: null,
     deletedAt: null,

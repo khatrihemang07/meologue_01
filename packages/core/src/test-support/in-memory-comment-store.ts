@@ -16,6 +16,12 @@ export class InMemoryCommentStore implements CommentStore {
   // Issue #186 / ADR 0057 — see EntryStore.catchUpRowShapeEpoch's own doc
   // comment (../store.ts) for what this tracks.
   private rowShapeEpoch = 0;
+  // Issue #196 — mirrors SqliteCommentStore's own identical field.
+  private readonly now: () => string;
+
+  constructor(now: () => string = () => new Date().toISOString()) {
+    this.now = now;
+  }
 
   async list(): Promise<Comment[]> {
     return [...this.comments.values()].filter((c) => c.deletedAt === null).sort(byCreatedThenId);
@@ -40,7 +46,7 @@ export class InMemoryCommentStore implements CommentStore {
 
   async edit(id: string, text: string): Promise<void> {
     assertValidCommentText(text);
-    this.applyIfLive(id, { text, seq: null, syncedAt: null });
+    this.applyIfLive(id, { text, updatedAt: this.now(), seq: null, syncedAt: null });
   }
 
   async remove(id: string): Promise<void> {
@@ -48,10 +54,12 @@ export class InMemoryCommentStore implements CommentStore {
     if (existing === undefined) {
       return;
     }
+    const deletedAt = this.now();
     this.comments.set(id, {
       ...existing,
-      deletedAt: new Date().toISOString(),
+      deletedAt,
       text: "",
+      updatedAt: deletedAt,
       seq: null,
       syncedAt: null,
     });

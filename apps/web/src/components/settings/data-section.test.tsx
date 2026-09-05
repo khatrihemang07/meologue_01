@@ -157,6 +157,10 @@ describe("DataSection", () => {
         deviceId: "device-a",
         body: "went for a walk",
         createdAt: "2026-08-16T06:00:00.000Z",
+        // Issue #196: equal to createdAt, which is what an Entry that has
+        // never been edited carries — the migration backfills every
+        // pre-existing row exactly this way.
+        updatedAt: "2026-08-16T06:00:00.000Z",
         seq: 1,
         syncedAt: "2026-08-16T06:00:01.000Z",
         deletedAt: null,

@@ -9,6 +9,7 @@ export function filter(overrides: Partial<Filter> = {}): Filter {
     colour: DEFAULT_LABEL_COLOUR,
     query: "today",
     createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
     seq: null,
     syncedAt: null,
     deletedAt: null,

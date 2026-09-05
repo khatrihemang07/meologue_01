@@ -113,6 +113,8 @@ async fn a_sync_counts_entries_pushed_and_pulled(pool: PgPool) {
                             "device_id": device,
                             "body": "hello meologue",
                             "created_at": "2026-01-01T00:00:00Z",
+                            // Issue #196: required on the wire now.
+                            "updated_at": "2026-01-01T00:00:00Z",
                         }],
                     })
                     .to_string(),

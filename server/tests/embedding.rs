@@ -80,6 +80,9 @@ fn entry(id: Uuid, device_id: Uuid, body: &str) -> Value {
         "device_id": device_id,
         "body": body,
         "created_at": "2026-01-01T00:00:00Z",
+        // Issue #196: required on the wire now — a freshly-captured
+        // Entry's own `updatedAt` starts equal to its `createdAt`.
+        "updated_at": "2026-01-01T00:00:00Z",
     })
 }
 

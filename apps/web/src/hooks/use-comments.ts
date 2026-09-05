@@ -92,12 +92,16 @@ export function useComments(
     if (trimmed === "") {
       return;
     }
+    const now = new Date().toISOString();
     upsertMutation.mutate({
       id: mintId(),
       deviceId,
       taskId,
       text: trimmed,
-      createdAt: new Date().toISOString(),
+      createdAt: now,
+      // Issue #196: a freshly-created row's own updatedAt starts equal
+      // to createdAt — the same single clock read, not a second one.
+      updatedAt: now,
       seq: null,
       syncedAt: null,
       deletedAt: null,
