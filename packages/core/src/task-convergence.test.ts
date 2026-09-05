@@ -55,25 +55,79 @@ import type {
  * writes — there's no shared index space for their edits to collide in.
  */
 
+// Mirrors server/src/sync.rs's `insert_tasks` upsert guard (issue #194):
+// a push against a row this fake already holds only counts as a real
+// change if at least one of a Task's mutable columns actually differs —
+// the identical list `insert_tasks`'s own `is distinct from` chain names,
+// `seq`/`syncedAt` excluded (this fake assigns one and owns the other,
+// exactly as the real server does). Before this existed, `FakeTaskServer`
+// could never reproduce the bug issue #194 fixes: reassigning `seq`
+// unconditionally on every push, changed or not, is exactly what made a
+// no-op replay invisible to this file's own tests.
+function taskContentChanged(existing: Task, incoming: Task): boolean {
+  return (
+    existing.content !== incoming.content ||
+    existing.completedAt !== incoming.completedAt ||
+    existing.orderKey !== incoming.orderKey ||
+    existing.dayOrder !== incoming.dayOrder ||
+    existing.deletedAt !== incoming.deletedAt ||
+    existing.date !== incoming.date ||
+    existing.deadline !== incoming.deadline ||
+    existing.priority !== incoming.priority ||
+    existing.labelIds.length !== incoming.labelIds.length ||
+    existing.labelIds.some((id, index) => id !== incoming.labelIds[index]) ||
+    existing.dateString !== incoming.dateString ||
+    existing.projectId !== incoming.projectId ||
+    existing.sectionId !== incoming.sectionId ||
+    existing.parentId !== incoming.parentId ||
+    existing.description !== incoming.description
+  );
+}
+
 // A fake Server, in the spirit of sync-engine.test.ts's transport mock —
 // a compacted change log keyed by Task id (ADR 0028's "Sync's compacted
-// change log", applied to Tasks per ADR 0047): each push overwrites the
-// current row for a given id and hands it a fresh, monotonically
-// increasing seq, exactly the shape SqliteTaskStore.upsert's
-// onConflictDoUpdate produces server-side. There's no real Task wire
-// protocol yet (ADR 0047's Consequences name that as its own ADR, 0051,
-// not this ticket's), so this models the same push/pull/cursor shape
-// sync-engine.ts uses without inventing wire types this ticket doesn't
-// own.
+// change log", applied to Tasks per ADR 0047): each push that actually
+// changes something overwrites the current row for a given id and hands
+// it a fresh, monotonically increasing seq, exactly the shape
+// SqliteTaskStore.upsert's onConflictDoUpdate produces server-side, guarded
+// by `taskContentChanged` above the identical way the real upsert's `where`
+// clause is. There's no real Task wire protocol yet (ADR 0047's
+// Consequences name that as its own ADR, 0051, not this ticket's), so this
+// models the same push/pull/cursor shape sync-engine.ts uses without
+// inventing wire types this ticket doesn't own.
 class FakeTaskServer {
   private readonly rows = new Map<string, { task: Task; seq: number }>();
   private counter = 0;
 
-  push(pending: Task[]): void {
+  /**
+   * Returns the server's own current row for every id this push named,
+   * changed or not (issue #194) — the identical "acknowledge everything
+   * pushed" contract `server/src/sync.rs`'s `insert_tasks` now returns
+   * (`SyncResponse::acknowledged_tasks`'s own doc comment), so `syncOnce`
+   * below can apply it and clear `pending()` even on a genuine no-op.
+   */
+  push(pending: Task[]): Task[] {
+    const acknowledged: Task[] = [];
     for (const t of pending) {
+      const existingRow = this.rows.get(t.id);
+      if (existingRow !== undefined && existingRow.task.deletedAt !== null) {
+        // Delete is terminal (`insert_tasks`'s own `where tasks.deleted_at
+        // is null` guard) — acknowledged with the tombstone, unchanged.
+        acknowledged.push(existingRow.task);
+        continue;
+      }
+      if (existingRow !== undefined && !taskContentChanged(existingRow.task, t)) {
+        // The exact case this ticket exists to cover: nothing changed, so
+        // no reassignment — acknowledged with the existing row, unchanged.
+        acknowledged.push(existingRow.task);
+        continue;
+      }
       this.counter += 1;
-      this.rows.set(t.id, { task: { ...t, seq: this.counter, syncedAt: null }, seq: this.counter });
+      const task = { ...t, seq: this.counter, syncedAt: null };
+      this.rows.set(t.id, { task, seq: this.counter });
+      acknowledged.push(task);
     }
+    return acknowledged;
   }
 
   pull(sinceSeq: number): { tasks: Task[]; cursor: number } {
@@ -90,7 +144,14 @@ class FakeTaskServer {
 // thousands).
 async function syncOnce(store: InMemoryTaskStore, server: FakeTaskServer): Promise<void> {
   const [pending, cursor] = await Promise.all([store.pending(), store.getCursor()]);
-  server.push(pending);
+  const acknowledged = server.push(pending);
+  // Issue #194: applied before the ordinary Cursor-read pull below,
+  // mirroring sync-engine.ts's own ordering — this is what clears
+  // `pending()` even when the server's guard found nothing to change, and
+  // it never touches the Cursor.
+  if (acknowledged.length > 0) {
+    await store.upsert(acknowledged);
+  }
   const { tasks: pulled, cursor: newCursor } = server.pull(cursor);
   if (pulled.length > 0) {
     await store.upsert(pulled);
@@ -327,6 +388,21 @@ class FakeSyncServer {
       comment_cursor: comments.cursor,
       events: events.rows,
       event_cursor: events.cursor,
+      // Issue #194: always present on the wire, but this fake never needs
+      // to populate them — every convergence test below observes a Task/
+      // Project/Section/Label/Comment through the ordinary Cursor-paged
+      // arrays above (`tasks.rows`, etc.), which `FakeStream.push` already
+      // reassigns unconditionally, unlike the real server's `is distinct
+      // from` guard. `FakeTaskServer` below (the fractional-index/`syncOnce`
+      // tests) is the one fake in this file that models that guard and
+      // needs a real acknowledgement.
+      acknowledged_entries: [],
+      acknowledged_tasks: [],
+      acknowledged_projects: [],
+      acknowledged_sections: [],
+      acknowledged_labels: [],
+      acknowledged_comments: [],
+      acknowledged_events: [],
     };
   };
 }

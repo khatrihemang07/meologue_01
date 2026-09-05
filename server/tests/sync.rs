@@ -426,6 +426,128 @@ async fn replaying_an_unchanged_entry_across_two_pushes_does_not_move_the_cursor
     assert_eq!(seq, first_cursor, "an unchanged replay must not reassign seq");
 }
 
+/// Issue #194 — the case no existing test covers, named explicitly in the
+/// ticket's own acceptance bar: an identical-content re-push against a
+/// Cursor that has **already advanced past** the row's own seq, not merely
+/// a re-push from `since_seq: 0` the way every replay test above this one
+/// happens to use. A `since_seq: 0` poll always gets everything back
+/// regardless of whether `is distinct from` fired, which is exactly why
+/// nothing above ever needed `acknowledged_entries` to pass. A Device that
+/// already holds this row's own seq as its Cursor is the shape that
+/// actually reproduces the bug: `entries` (the Cursor-paged read) must
+/// come back empty — `seq` genuinely didn't move — and without
+/// `acknowledged_entries`, that Device would have no way to learn its push
+/// was received at all, and would re-push this exact row on every future
+/// poll forever.
+#[sqlx::test]
+async fn a_no_op_replay_past_the_cursor_is_still_acknowledged(pool: PgPool) {
+    let device = Uuid::new_v4();
+    let entry_id = Uuid::new_v4();
+
+    let (_, first) = post_sync(
+        &pool,
+        json!({
+            "protocol_version": 4,
+            "device_id": device,
+            "since_seq": 0,
+            "entries": [entry(entry_id, device, "unchanged body")],
+        }),
+    )
+    .await;
+    let cursor = first["cursor"].as_i64().unwrap();
+
+    // Same content, but `since_seq` is now the row's own seq — this
+    // Device has genuinely already seen it, unlike every replay test
+    // above that keeps polling from 0.
+    let (status, second) = post_sync(
+        &pool,
+        json!({
+            "protocol_version": 4,
+            "device_id": device,
+            "since_seq": cursor,
+            "entries": [entry(entry_id, device, "unchanged body")],
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    assert_eq!(
+        second["entries"].as_array().unwrap().len(),
+        0,
+        "seq didn't move, so a Cursor already at it correctly gets nothing back from the ordinary read"
+    );
+    assert_eq!(second["cursor"], cursor, "acknowledging a no-op must not move the cursor");
+
+    let acknowledged = second["acknowledged_entries"].as_array().unwrap();
+    assert_eq!(acknowledged.len(), 1);
+    assert_eq!(acknowledged[0]["id"], entry_id.to_string());
+    assert_eq!(acknowledged[0]["body"], "unchanged body");
+    assert_eq!(acknowledged[0]["seq"], cursor, "the unchanged row's own seq must not have moved");
+}
+
+/// Issue #194's other acceptance criterion: a push whose edit the
+/// delete-is-terminal guard refuses must still tell the pushing Device the
+/// truth about the row — the tombstone it was refused against — rather
+/// than leaving that Device believing its own (rejected) edit landed.
+/// Without `acknowledged_entries`, this Device has no way to learn the
+/// refusal except waiting for the tombstone to happen to fall inside some
+/// later poll's Cursor-paged `entries`.
+#[sqlx::test]
+async fn acknowledged_entries_returns_the_tombstone_when_an_edit_is_refused(pool: PgPool) {
+    let device = Uuid::new_v4();
+    let entry_id = Uuid::new_v4();
+
+    post_sync(
+        &pool,
+        json!({
+            "protocol_version": 4,
+            "device_id": device,
+            "since_seq": 0,
+            "entries": [entry(entry_id, device, "original body")],
+        }),
+    )
+    .await;
+    post_sync(
+        &pool,
+        json!({
+            "protocol_version": 4,
+            "device_id": device,
+            "since_seq": 0,
+            "entries": [deleted_entry(entry_id, device, "2026-02-01T00:00:00Z")],
+        }),
+    )
+    .await;
+
+    // An offline Device's stale edit, pushed after the delete already
+    // happened server-side — refused by the `where entries.deleted_at is
+    // null` guard (`pushing_an_edit_to_an_already_deleted_entry_is_a_no_op`
+    // above already proves the row itself is untouched by this push; this
+    // test is about what the *response* tells the Device that sent it).
+    let (status, edited) = post_sync(
+        &pool,
+        json!({
+            "protocol_version": 4,
+            "device_id": device,
+            "since_seq": 0,
+            "entries": [entry(entry_id, device, "an edit that arrived too late")],
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let acknowledged = edited["acknowledged_entries"].as_array().unwrap();
+    assert_eq!(acknowledged.len(), 1);
+    assert_eq!(acknowledged[0]["id"], entry_id.to_string());
+    assert_eq!(
+        acknowledged[0]["deleted_at"], "2026-02-01T00:00:00Z",
+        "the Device must learn the tombstone its edit was refused against"
+    );
+    assert_eq!(
+        acknowledged[0]["body"], "",
+        "the tombstone's body must not be overwritten by the refused edit"
+    );
+}
+
 #[sqlx::test]
 async fn protocol_version_1_is_now_rejected(pool: PgPool) {
     let (status, _) = post_sync(
@@ -619,6 +741,48 @@ async fn replaying_an_unchanged_task_across_two_pushes_does_not_move_the_task_cu
         .await
         .unwrap();
     assert_eq!(seq, first_cursor, "an unchanged replay must not reassign seq");
+}
+
+/// The Task-shaped sibling of
+/// `a_no_op_replay_past_the_cursor_is_still_acknowledged` — the identical
+/// case, over the second stream: an identical-content re-push against a
+/// Task Cursor that has already advanced past the row's own seq, not
+/// merely a re-push from `since_task_seq: 0`.
+#[sqlx::test]
+async fn a_no_op_task_replay_past_the_cursor_is_still_acknowledged(pool: PgPool) {
+    let device = Uuid::new_v4();
+    let task_id = Uuid::new_v4();
+
+    let (_, first) = post_sync(
+        &pool,
+        sync_request(5, device, vec![task(task_id, device, "unchanged content")]),
+    )
+    .await;
+    let task_cursor = first["task_cursor"].as_i64().unwrap();
+
+    let mut second_request = sync_request(5, device, vec![task(task_id, device, "unchanged content")]);
+    second_request["since_task_seq"] = json!(task_cursor);
+    let (status, second) = post_sync(&pool, second_request).await;
+    assert_eq!(status, StatusCode::OK);
+
+    assert_eq!(
+        second["tasks"].as_array().unwrap().len(),
+        0,
+        "seq didn't move, so a Task Cursor already at it correctly gets nothing back from the ordinary read"
+    );
+    assert_eq!(
+        second["task_cursor"], task_cursor,
+        "acknowledging a no-op must not move the task cursor"
+    );
+
+    let acknowledged = second["acknowledged_tasks"].as_array().unwrap();
+    assert_eq!(acknowledged.len(), 1);
+    assert_eq!(acknowledged[0]["id"], task_id.to_string());
+    assert_eq!(acknowledged[0]["content"], "unchanged content");
+    assert_eq!(
+        acknowledged[0]["seq"], task_cursor,
+        "the unchanged row's own seq must not have moved"
+    );
 }
 
 /// Issue #182 put `day_order` on the wire in the same bump as `description`

@@ -945,6 +945,85 @@ export interface components {
             tasks?: components["schemas"]["TaskInput"][];
         };
         SyncResponse: {
+            /**
+             * @description Issue #194: the Comment-shaped sibling — mirrors
+             *     `acknowledged_tasks` against `comments`/`insert_comments`, gated
+             *     on `protocol_version >= 6` exactly like `comments` itself.
+             */
+            acknowledged_comments: components["schemas"]["CommentOutput"][];
+            /**
+             * @description Issue #194: the server's own current row for every id the
+             *     request's own `entries` named, whether or not `insert_entries`'s
+             *     `is distinct from` guard actually changed anything — see this
+             *     module's own top-of-file doc comment for why a Cursor-paged array
+             *     alone leaves a no-op push invisible to the Device that sent it.
+             *     Selected via `where id = any($1)` inside the same transaction
+             *     `insert_entries` already holds, against exactly the ids that
+             *     request pushed — never a stream's whole backlog, and never gated
+             *     on whether anything in it changed. Empty whenever `entries` (the
+             *     request field) was empty: there is nothing to acknowledge if
+             *     nothing was pushed.
+             */
+            acknowledged_entries: components["schemas"]["EntryOutput"][];
+            /**
+             * @description Issue #194: the Event-shaped sibling of `acknowledged_entries` —
+             *     mirrors it against `events`/`insert_events`, **ungated**, exactly
+             *     like `events` itself (`PROTOCOL_VERSION`'s own doc comment: there
+             *     is no version number that separates a v6 Device that predates this
+             *     ticket from one that has it). Genuinely less interesting than
+             *     every `acknowledged_*` above in one respect — `insert_events`'s
+             *     own doc comment — an Event has no mutable column and no `is
+             *     distinct from` guard to make silent in the first place, so a
+             *     pushed Event that already exists on this table is always a
+             *     byte-identical replay, never a change the guard suppressed. It
+             *     still clears `pending()` on that replay for the identical reason
+             *     every other stream needs one: without it, a Device whose Event
+             *     Cursor has already moved past that row's own `seq` — the same
+             *     stale-Cursor shape every other stream's motivating bug takes —
+             *     would re-push it forever.
+             *
+             *     **No `PROTOCOL_VERSION` bump for any `acknowledged_*` field
+             *     above** — see that constant's own doc comment for why: every one
+             *     is new, additive, and the response type an old Device already
+             *     deserializes tolerates an extra JSON key it doesn't declare, the
+             *     same "harmlessly ignored" tolerance every wire response in this
+             *     codebase already relies on for a field it doesn't recognise. A
+             *     Device built before issue #194 simply never reads these seven
+             *     keys and keeps relying on the Cursor-paged arrays alone, the same
+             *     way it always has — the bug this ticket fixes (a no-op push
+             *     re-pushed forever) isn't fixed for that Device until it upgrades,
+             *     which is the ordinary consequence of `PROTOCOL_VERSION` naming the
+             *     wire shape a *build* understands, not a promise that every bugfix
+             *     reaches every Device instantly.
+             */
+            acknowledged_events: components["schemas"]["EventOutput"][];
+            /**
+             * @description Issue #194: the Label-shaped sibling — mirrors `acknowledged_tasks`
+             *     against `labels`/`insert_labels`, gated on `protocol_version >= 6`
+             *     exactly like `labels` itself.
+             */
+            acknowledged_labels: components["schemas"]["LabelOutput"][];
+            /**
+             * @description Issue #194: the Project-shaped sibling of `acknowledged_entries` —
+             *     mirrors `acknowledged_tasks` against `projects`/`insert_projects`,
+             *     gated on `protocol_version >= 6` exactly like `projects` itself.
+             */
+            acknowledged_projects: components["schemas"]["ProjectOutput"][];
+            /**
+             * @description Issue #194: the Section-shaped sibling — mirrors
+             *     `acknowledged_tasks` against `sections`/`insert_sections`, gated
+             *     on `protocol_version >= 6` exactly like `sections` itself.
+             */
+            acknowledged_sections: components["schemas"]["SectionOutput"][];
+            /**
+             * @description Issue #194: the Task-shaped sibling of `acknowledged_entries` —
+             *     mirrors it field for field, against `tasks`/`insert_tasks`
+             *     instead. Gated on `protocol_version >= 5`, exactly like `tasks`
+             *     itself (`run_sync`'s own doc comment): a v4 Device can never
+             *     populate the `tasks` request field to begin with, so there is
+             *     nothing here for it to acknowledge either.
+             */
+            acknowledged_tasks: components["schemas"]["TaskOutput"][];
             /** Format: int64 */
             comment_cursor: number;
             comments: components["schemas"]["CommentOutput"][];
@@ -1072,6 +1151,14 @@ export interface components {
              *     an ordinary `Option<String>` field like every other nullable column
              *     here, that workaround is retired — see that function's own doc
              *     comment for the mechanism it keeps for a future locally-held field.
+             *
+             *     This is also issue #186 / ADR 0057's own motivating case: a Device
+             *     that had already pulled a Task row before this field existed kept
+             *     its Cursor past that row, and this field alone never reached it.
+             *     `packages/core/src/protocol.ts`'s `ROW_SHAPE_EPOCH.tasks` is bumped
+             *     to 1 for exactly this addition — see `PROTOCOL_VERSION`'s own doc
+             *     comment above for the obligation this places on the next field
+             *     added to any row here.
              */
             description?: string | null;
             /** Format: uuid */

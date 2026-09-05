@@ -10,7 +10,13 @@ import { InMemoryLabelStore } from "./test-support/in-memory-label-store";
 import { InMemoryProjectStore } from "./test-support/in-memory-project-store";
 import { InMemoryTaskStore } from "./test-support/in-memory-task-store";
 import { task } from "./test-support/task-fixture";
-import type { WireEntryOutput, WireEventOutput, WireSyncResponse, WireTaskOutput } from "./wire";
+import type {
+  WireEntryOutput,
+  WireEventOutput,
+  WireSyncRequest,
+  WireSyncResponse,
+  WireTaskOutput,
+} from "./wire";
 
 const DEVICE_ID = "device-1";
 
@@ -88,6 +94,17 @@ const emptyResponse: WireSyncResponse = {
   comment_cursor: 0,
   events: [],
   event_cursor: 0,
+  // Issue #194: `acknowledged_*` is always present on the wire (mirroring
+  // `entries`/`tasks`/etc. above), and empty here for the identical reason
+  // every other array above is — most tests below never push anything the
+  // Server would have something to acknowledge.
+  acknowledged_entries: [],
+  acknowledged_tasks: [],
+  acknowledged_projects: [],
+  acknowledged_sections: [],
+  acknowledged_labels: [],
+  acknowledged_comments: [],
+  acknowledged_events: [],
 };
 
 // A fresh set of the five stores issue #182/#184 added, alongside `store`
@@ -375,6 +392,121 @@ describe("sync engine", () => {
 
     const all = await stores.eventStore.list();
     expect(all).toHaveLength(1);
+  });
+
+  // Issue #194: the exact bug this ticket fixes, reproduced at the
+  // sync-engine level rather than only server-side (server/tests/sync.rs's
+  // own `a_no_op_replay_past_the_cursor_is_still_acknowledged`) — a
+  // transport whose ordinary `entries` comes back empty (the row's own seq
+  // genuinely didn't move) must still clear this Device's `pending()` when
+  // `acknowledged_entries` names the pushed row. Before `acknowledged_*`
+  // existed, nothing in this response would have told the Device its push
+  // was received at all, and `pending()` would return this Entry forever.
+  describe("acknowledged rows clear pending() even when the ordinary read comes back empty (issue #194)", () => {
+    it("for Entries", async () => {
+      const stores = newStores();
+      await stores.store.upsert([entry({ id: "local-1", seq: null })]);
+
+      const transport = vi.fn(async () => ({
+        ...emptyResponse,
+        entries: [],
+        acknowledged_entries: [wireEntryOutput({ id: "local-1", seq: 1 })],
+      }));
+
+      await sync({
+        ...stores,
+        transport,
+        deviceId: DEVICE_ID,
+        now: () => "2026-01-01T00:05:00.000Z",
+      });
+
+      expect(await stores.store.pending()).toEqual([]);
+      // Acknowledging a no-op must not advance the Cursor either —
+      // `response.cursor` (0, from `emptyResponse`) never exceeded this
+      // Device's own starting Cursor (also 0), so `setCursor` is never
+      // called and the Cursor stays exactly where it started.
+      expect(await stores.store.getCursor()).toBe(0);
+    });
+
+    it("for Tasks", async () => {
+      const stores = newStores();
+      await stores.taskStore.upsert([task({ id: "local-task-1", seq: null })]);
+
+      const transport = vi.fn(async () => ({
+        ...emptyResponse,
+        tasks: [],
+        acknowledged_tasks: [wireTaskOutput({ id: "local-task-1", seq: 1 })],
+      }));
+
+      await sync({
+        ...stores,
+        transport,
+        deviceId: DEVICE_ID,
+        now: () => "2026-01-01T00:05:00.000Z",
+      });
+
+      expect(await stores.taskStore.pending()).toEqual([]);
+      expect(await stores.taskStore.getCursor()).toBe(0);
+    });
+
+    it("for Events", async () => {
+      const stores = newStores();
+      await stores.eventStore.record(event({ id: "local-event-1", seq: null }));
+
+      const transport = vi.fn(async () => ({
+        ...emptyResponse,
+        events: [],
+        acknowledged_events: [wireEventOutput({ id: "local-event-1", seq: 1 })],
+      }));
+
+      await sync({
+        ...stores,
+        transport,
+        deviceId: DEVICE_ID,
+        now: () => "2026-01-01T00:05:00.000Z",
+      });
+
+      expect(await stores.eventStore.pending()).toEqual([]);
+      expect(await stores.eventStore.getCursor()).toBe(0);
+    });
+  });
+
+  // Issue #194: pushes are now chunked the same way reads have always
+  // been paged — a backlog larger than one batch must complete across
+  // multiple round trips rather than building one oversized request body.
+  it("chunks a push larger than SYNC_BATCH_SIZE across multiple requests, none of which carries more than SYNC_BATCH_SIZE rows in any stream", async () => {
+    const stores = newStores();
+    const total = SYNC_BATCH_SIZE + 10;
+    await stores.store.upsert(
+      Array.from({ length: total }, (_, i) => entry({ id: `entry-${i}`, seq: null })),
+    );
+
+    const transport = vi.fn(async (request: WireSyncRequest) => {
+      // The acceptance bar itself: no single request's `entries` (or any
+      // other stream) may exceed SYNC_BATCH_SIZE, even though this
+      // Device's own backlog does.
+      expect(request.entries.length).toBeLessThanOrEqual(SYNC_BATCH_SIZE);
+      expect((request.tasks ?? []).length).toBeLessThanOrEqual(SYNC_BATCH_SIZE);
+      // Acknowledge whatever this request actually pushed, mirroring a
+      // real server's `acknowledged_entries` — this is what lets
+      // `pending()` actually drain between iterations, the same way a
+      // real Cursor-read response would.
+      return {
+        ...emptyResponse,
+        acknowledged_entries: request.entries.map((e): WireEntryOutput => ({ ...e, seq: 1 })),
+      };
+    });
+
+    await sync({ ...stores, transport, deviceId: DEVICE_ID });
+
+    // The backlog didn't fit in one push, so the loop must have run a
+    // second time to carry the remainder — `pushWasFull`, not merely
+    // `batchWasFull` off a full *response*, since every response here is
+    // otherwise empty.
+    expect(transport).toHaveBeenCalledTimes(2);
+    const pushedCounts = transport.mock.calls.map(([request]) => request.entries.length);
+    expect(pushedCounts).toEqual([SYNC_BATCH_SIZE, 10]);
+    expect(await stores.store.pending()).toEqual([]);
   });
 
   it("immediately runs another round when the Entry batch comes back full", async () => {

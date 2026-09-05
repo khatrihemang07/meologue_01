@@ -1441,9 +1441,65 @@
           "comments",
           "comment_cursor",
           "events",
-          "event_cursor"
+          "event_cursor",
+          "acknowledged_entries",
+          "acknowledged_tasks",
+          "acknowledged_projects",
+          "acknowledged_sections",
+          "acknowledged_labels",
+          "acknowledged_comments",
+          "acknowledged_events"
         ],
         "properties": {
+          "acknowledged_comments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CommentOutput"
+            },
+            "description": "Issue #194: the Comment-shaped sibling — mirrors\n`acknowledged_tasks` against `comments`/`insert_comments`, gated\non `protocol_version >= 6` exactly like `comments` itself."
+          },
+          "acknowledged_entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EntryOutput"
+            },
+            "description": "Issue #194: the server's own current row for every id the\nrequest's own `entries` named, whether or not `insert_entries`'s\n`is distinct from` guard actually changed anything — see this\nmodule's own top-of-file doc comment for why a Cursor-paged array\nalone leaves a no-op push invisible to the Device that sent it.\nSelected via `where id = any($1)` inside the same transaction\n`insert_entries` already holds, against exactly the ids that\nrequest pushed — never a stream's whole backlog, and never gated\non whether anything in it changed. Empty whenever `entries` (the\nrequest field) was empty: there is nothing to acknowledge if\nnothing was pushed."
+          },
+          "acknowledged_events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventOutput"
+            },
+            "description": "Issue #194: the Event-shaped sibling of `acknowledged_entries` —\nmirrors it against `events`/`insert_events`, **ungated**, exactly\nlike `events` itself (`PROTOCOL_VERSION`'s own doc comment: there\nis no version number that separates a v6 Device that predates this\nticket from one that has it). Genuinely less interesting than\nevery `acknowledged_*` above in one respect — `insert_events`'s\nown doc comment — an Event has no mutable column and no `is\ndistinct from` guard to make silent in the first place, so a\npushed Event that already exists on this table is always a\nbyte-identical replay, never a change the guard suppressed. It\nstill clears `pending()` on that replay for the identical reason\nevery other stream needs one: without it, a Device whose Event\nCursor has already moved past that row's own `seq` — the same\nstale-Cursor shape every other stream's motivating bug takes —\nwould re-push it forever.\n\n**No `PROTOCOL_VERSION` bump for any `acknowledged_*` field\nabove** — see that constant's own doc comment for why: every one\nis new, additive, and the response type an old Device already\ndeserializes tolerates an extra JSON key it doesn't declare, the\nsame \"harmlessly ignored\" tolerance every wire response in this\ncodebase already relies on for a field it doesn't recognise. A\nDevice built before issue #194 simply never reads these seven\nkeys and keeps relying on the Cursor-paged arrays alone, the same\nway it always has — the bug this ticket fixes (a no-op push\nre-pushed forever) isn't fixed for that Device until it upgrades,\nwhich is the ordinary consequence of `PROTOCOL_VERSION` naming the\nwire shape a *build* understands, not a promise that every bugfix\nreaches every Device instantly."
+          },
+          "acknowledged_labels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LabelOutput"
+            },
+            "description": "Issue #194: the Label-shaped sibling — mirrors `acknowledged_tasks`\nagainst `labels`/`insert_labels`, gated on `protocol_version >= 6`\nexactly like `labels` itself."
+          },
+          "acknowledged_projects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectOutput"
+            },
+            "description": "Issue #194: the Project-shaped sibling of `acknowledged_entries` —\nmirrors `acknowledged_tasks` against `projects`/`insert_projects`,\ngated on `protocol_version >= 6` exactly like `projects` itself."
+          },
+          "acknowledged_sections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SectionOutput"
+            },
+            "description": "Issue #194: the Section-shaped sibling — mirrors\n`acknowledged_tasks` against `sections`/`insert_sections`, gated\non `protocol_version >= 6` exactly like `sections` itself."
+          },
+          "acknowledged_tasks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskOutput"
+            },
+            "description": "Issue #194: the Task-shaped sibling of `acknowledged_entries` —\nmirrors it field for field, against `tasks`/`insert_tasks`\ninstead. Gated on `protocol_version >= 5`, exactly like `tasks`\nitself (`run_sync`'s own doc comment): a v4 Device can never\npopulate the `tasks` request field to begin with, so there is\nnothing here for it to acknowledge either."
+          },
           "comment_cursor": {
             "type": "integer",
             "format": "int64"
@@ -1582,7 +1638,7 @@
               "string",
               "null"
             ],
-            "description": "The Task's own words about itself (#180,\n`../../packages/core/src/task-types.ts`'s own `description` field) —\ngains a wire representation here for the first time (issue #182).\nBefore this, `packages/core/src/mapping.ts`'s `fromWireTaskOutput`\ncarried a Device's existing local copy through unconditionally,\nbecause the wire had nothing to say about it at all; now that it's\nan ordinary `Option<String>` field like every other nullable column\nhere, that workaround is retired — see that function's own doc\ncomment for the mechanism it keeps for a future locally-held field."
+            "description": "The Task's own words about itself (#180,\n`../../packages/core/src/task-types.ts`'s own `description` field) —\ngains a wire representation here for the first time (issue #182).\nBefore this, `packages/core/src/mapping.ts`'s `fromWireTaskOutput`\ncarried a Device's existing local copy through unconditionally,\nbecause the wire had nothing to say about it at all; now that it's\nan ordinary `Option<String>` field like every other nullable column\nhere, that workaround is retired — see that function's own doc\ncomment for the mechanism it keeps for a future locally-held field.\n\nThis is also issue #186 / ADR 0057's own motivating case: a Device\nthat had already pulled a Task row before this field existed kept\nits Cursor past that row, and this field alone never reached it.\n`packages/core/src/protocol.ts`'s `ROW_SHAPE_EPOCH.tasks` is bumped\nto 1 for exactly this addition — see `PROTOCOL_VERSION`'s own doc\ncomment above for the obligation this places on the next field\nadded to any row here."
           },
           "device_id": {
             "type": "string",
