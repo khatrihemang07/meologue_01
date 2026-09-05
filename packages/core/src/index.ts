@@ -18,6 +18,8 @@ export type {
   ParsedTable,
 } from "./backup/parse";
 export { parseBackupDatabase } from "./backup/parse";
+export type { MergeOutcome, MergeResult } from "./backup/merge";
+export { mergeBackupIntoDevice } from "./backup/merge";
 export type { RestoreOutcome, RestoreResult } from "./backup/restore";
 export { restoreFromBackup } from "./backup/restore";
 export type { UnzipBackupResult, UnzippedBackup } from "./backup/restore-zip";
