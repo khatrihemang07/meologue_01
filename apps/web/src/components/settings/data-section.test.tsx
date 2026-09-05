@@ -1,6 +1,7 @@
 import type {
   Entry,
   EntryStore,
+  MergeOutcome,
   Project,
   ProjectStore,
   RestoreOutcome,
@@ -28,6 +29,7 @@ const {
   createBackupMock,
   unzipBackupMock,
   restoreFromBackupMock,
+  mergeBackupIntoDeviceMock,
   fetchServerBackupMock,
   restoreServerBackupMock,
   rebuildMismatchedEmbeddingsMock,
@@ -70,6 +72,13 @@ const {
       result: { inserted: 0, updated: 0, unchanged: 0, skippedTables: [], skippedColumns: [] },
     }),
   ),
+  // Issue #199's own dynamic import, mirroring the other three above.
+  mergeBackupIntoDeviceMock: vi.fn(
+    async (): Promise<MergeOutcome> => ({
+      ok: true,
+      result: { inserted: 0, updated: 0, unchanged: 0, skippedTables: [], skippedColumns: [] },
+    }),
+  ),
   // Server Backup/Restore (issue #198) go through server-backup-transport.ts
   // directly rather than through @meologue/core at all (that module's own
   // doc comment: a Server Backup is an opaque pg_dump archive this Device
@@ -100,9 +109,10 @@ vi.mock("@/lib/server-backup-transport", () => ({
   rebuildMismatchedEmbeddings: rebuildMismatchedEmbeddingsMock,
 }));
 
-// `createBackup`, `unzipBackup` and `restoreFromBackup` are stood in for —
-// every other @meologue/core export this file touches (the Entry/Task/
-// Project types) stays the real thing, via `importOriginal`.
+// `createBackup`, `unzipBackup`, `restoreFromBackup` and
+// `mergeBackupIntoDevice` are stood in for — every other @meologue/core
+// export this file touches (the Entry/Task/Project types) stays the real
+// thing, via `importOriginal`.
 vi.mock("@meologue/core", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@meologue/core")>();
   return {
@@ -110,6 +120,7 @@ vi.mock("@meologue/core", async (importOriginal) => {
     createBackup: createBackupMock,
     unzipBackup: unzipBackupMock,
     restoreFromBackup: restoreFromBackupMock,
+    mergeBackupIntoDevice: mergeBackupIntoDeviceMock,
   };
 });
 
@@ -264,6 +275,11 @@ describe("DataSection", () => {
     });
     restoreFromBackupMock.mockReset();
     restoreFromBackupMock.mockResolvedValue({
+      ok: true,
+      result: { inserted: 0, updated: 0, unchanged: 0, skippedTables: [], skippedColumns: [] },
+    });
+    mergeBackupIntoDeviceMock.mockReset();
+    mergeBackupIntoDeviceMock.mockResolvedValue({
       ok: true,
       result: { inserted: 0, updated: 0, unchanged: 0, skippedTables: [], skippedColumns: [] },
     });
@@ -440,6 +456,163 @@ describe("DataSection", () => {
 
       await waitFor(() =>
         expect(errorToast).toHaveBeenCalledWith("Backup isn't supported on Android yet."),
+      );
+    });
+  });
+
+  // Issue #199: Merge sits between Backup and Restore — additive, not
+  // destructive (CONTEXT.md's Merge entry), so it gates on a plain
+  // window.confirm() rather than DestructiveConfirmDialog's typed word.
+  // This exercises data-section.tsx's own wiring around loadFile/
+  // unzipBackup/mergeBackupIntoDevice, not any of those three's own logic
+  // (each already has its own test file against a real driver).
+  describe("Merge", () => {
+    let confirmMock: ReturnType<typeof vi.fn>;
+    // A successful Merge reloads the page too (data-section.tsx's own
+    // handleMerge doc comment) — same reasoning, and same stub, as
+    // Restore's own describe block below.
+    let reloadMock: ReturnType<typeof vi.fn>;
+    let originalLocation: Location;
+
+    beforeEach(() => {
+      confirmMock = vi.fn(() => true);
+      vi.stubGlobal("confirm", confirmMock);
+      reloadMock = vi.fn();
+      originalLocation = window.location;
+      Object.defineProperty(window, "location", {
+        configurable: true,
+        value: { ...originalLocation, reload: reloadMock },
+      });
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      Object.defineProperty(window, "location", {
+        configurable: true,
+        value: originalLocation,
+      });
+    });
+
+    it("is disabled while the store has not resolved", () => {
+      render(<DataSection opened={undefined} />);
+
+      expect(screen.getByRole("button", { name: "Merge a Backup…" })).toBeDisabled();
+    });
+
+    it("is enabled once the store resolves", () => {
+      render(<DataSection opened={openedStore()} />);
+
+      expect(screen.getByRole("button", { name: "Merge a Backup…" })).toBeEnabled();
+    });
+
+    it("does nothing at all when the user cancels the file picker", async () => {
+      loadFileMock.mockResolvedValue({ outcome: "cancelled" });
+
+      render(<DataSection opened={openedStore()} />);
+      fireEvent.click(screen.getByRole("button", { name: "Merge a Backup…" }));
+
+      await waitFor(() => expect(loadFileMock).toHaveBeenCalledTimes(1));
+      expect(unzipBackupMock).not.toHaveBeenCalled();
+      expect(confirmMock).not.toHaveBeenCalled();
+      expect(mergeBackupIntoDeviceMock).not.toHaveBeenCalled();
+    });
+
+    it("shows an error toast and never confirms when the picked file isn't a valid Backup", async () => {
+      loadFileMock.mockResolvedValue({
+        outcome: "loaded",
+        fileName: "not-a-backup.zip",
+        bytes: new Uint8Array([1, 2, 3]),
+      });
+      unzipBackupMock.mockReturnValue({ ok: false, reason: "That file isn't a zip." });
+      const errorToast = vi.spyOn(toast, "error");
+
+      render(<DataSection opened={openedStore()} />);
+      fireEvent.click(screen.getByRole("button", { name: "Merge a Backup…" }));
+
+      await waitFor(() => expect(errorToast).toHaveBeenCalledWith("That file isn't a zip."));
+      expect(confirmMock).not.toHaveBeenCalled();
+      expect(mergeBackupIntoDeviceMock).not.toHaveBeenCalled();
+    });
+
+    async function pickValidBackup() {
+      loadFileMock.mockResolvedValue({
+        outcome: "loaded",
+        fileName: "meologue-backup-20260816-114500.zip",
+        bytes: new Uint8Array([1, 2, 3]),
+      });
+      unzipBackupMock.mockReturnValue({
+        ok: true,
+        backup: {
+          databaseSql: "CREATE TABLE `entries` (`id` text PRIMARY KEY NOT NULL);",
+          settingsJson: "{}",
+          metaJson: "{}",
+        },
+      });
+      render(<DataSection opened={openedStore()} />);
+      fireEvent.click(screen.getByRole("button", { name: "Merge a Backup…" }));
+      await waitFor(() => expect(unzipBackupMock).toHaveBeenCalledTimes(1));
+    }
+
+    it("never calls mergeBackupIntoDevice when the reader declines the confirm", async () => {
+      confirmMock.mockReturnValue(false);
+
+      await pickValidBackup();
+
+      await waitFor(() => expect(confirmMock).toHaveBeenCalledTimes(1));
+      expect(mergeBackupIntoDeviceMock).not.toHaveBeenCalled();
+    });
+
+    it("calls mergeBackupIntoDevice with this Device's driver and database.sql, and reports the outcome", async () => {
+      mergeBackupIntoDeviceMock.mockResolvedValue({
+        ok: true,
+        result: { inserted: 3, updated: 1, unchanged: 20, skippedTables: [], skippedColumns: [] },
+      });
+      const successToast = vi.spyOn(toast, "success");
+
+      await pickValidBackup();
+
+      await waitFor(() => expect(mergeBackupIntoDeviceMock).toHaveBeenCalledTimes(1));
+      expect(mergeBackupIntoDeviceMock).toHaveBeenCalledWith(
+        fakeDriver,
+        "CREATE TABLE `entries` (`id` text PRIMARY KEY NOT NULL);",
+      );
+      await waitFor(() =>
+        expect(successToast).toHaveBeenCalledWith(
+          expect.stringContaining("3 inserted, 1 updated, 20 unchanged"),
+        ),
+      );
+      // Reloads a moment later, the same reasoning as Restore's own
+      // handleConfirmRestore doc comment.
+      await waitFor(() => expect(reloadMock).toHaveBeenCalledTimes(1), { timeout: 3000 });
+    });
+
+    it("shows an error toast and does not reload when mergeBackupIntoDevice refuses the file", async () => {
+      mergeBackupIntoDeviceMock.mockResolvedValue({
+        ok: false,
+        reason: "database.sql is not a Backup this build can read: unrecognised statement",
+      });
+      const errorToast = vi.spyOn(toast, "error");
+
+      await pickValidBackup();
+
+      await waitFor(() =>
+        expect(errorToast).toHaveBeenCalledWith(
+          "database.sql is not a Backup this build can read: unrecognised statement",
+        ),
+      );
+      expect(reloadMock).not.toHaveBeenCalled();
+    });
+
+    it("shows an error toast carrying the real error when mergeBackupIntoDevice throws", async () => {
+      mergeBackupIntoDeviceMock.mockRejectedValue(
+        new Error("Merge isn't supported on Android yet."),
+      );
+      const errorToast = vi.spyOn(toast, "error");
+
+      await pickValidBackup();
+
+      await waitFor(() =>
+        expect(errorToast).toHaveBeenCalledWith("Merge isn't supported on Android yet."),
       );
     });
   });
