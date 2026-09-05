@@ -94,6 +94,58 @@ describe("mergeBackupIntoDevice", () => {
     expect(byId["tie-goes-nowhere"]?.body).toBe("this Device's own body");
   });
 
+  it("skips a row whose content is identical even when updated_at differs, and never marks it pending", async () => {
+    // ADR 0059's own documented consequence: an "edit" that lands on
+    // identical content leaves the Server's `updated_at` older than the
+    // Device's, because the `is distinct from` guard never fired. Two
+    // Devices can therefore hold byte-identical content under different
+    // `updated_at` values through no edit either user made. Merge must
+    // treat that as unchanged — "content-identical rows are skipped
+    // outright regardless of what either side's `updated_at` says"
+    // (./merge.ts's own header comment, and CONTEXT.md's Merge entry).
+    //
+    // Getting this wrong is not cosmetic: the row falls through to the
+    // greater-`updated_at` branch, gets rewritten, and is marked pending
+    // — re-queuing a row nobody changed, which is the exact re-push
+    // failure #194 and this ticket exist to close.
+    const sourceDriver = new NodeSqliteDriver();
+    const { store: sourceStore } = await open(sourceDriver);
+    await sourceStore.upsert([
+      entry({
+        id: "e1",
+        body: "same everywhere",
+        updatedAt: "2026-03-01T00:00:00.000Z",
+        seq: 42,
+        syncedAt: "2026-01-01T00:00:01.000Z",
+      }),
+    ]);
+    const sql = await dumpDatabase(sourceDriver);
+
+    const targetDriver = new NodeSqliteDriver();
+    const { store: targetStore } = await open(targetDriver);
+    await targetStore.upsert([
+      entry({
+        id: "e1",
+        body: "same everywhere",
+        // Older than the Backup's, so the greater-updated_at branch would
+        // overwrite this row if content equality did not short-circuit first.
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        seq: 7,
+        syncedAt: "2026-01-01T00:00:02.000Z",
+      }),
+    ]);
+
+    const outcome = await mergeBackupIntoDevice(targetDriver, sql);
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) {
+      return;
+    }
+    expect(outcome.result.updated).toBe(0);
+    expect(outcome.result.unchanged).toBe(1);
+    // The decisive assertion: nothing re-entered the Sync queue.
+    expect(await targetStore.pending()).toHaveLength(0);
+  });
+
   it("skips a row whose content is identical, even when seq/synced_at differ, and counts it unchanged", async () => {
     const sourceDriver = new NodeSqliteDriver();
     const { store: sourceStore } = await open(sourceDriver);

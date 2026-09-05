@@ -10,7 +10,7 @@ import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
  * 0007 named, was rejected on its own merits by ADR 0028 and never got a
  * column here. `updated_at` — the third — was rejected by that same ADR
  * for *ordering Sync's own conflicts*, but issue #196 revisits that
- * decision deliberately (a superseding ADR is forthcoming): Merge (issue
+ * decision deliberately (ADR 0065 records it): Merge (issue
  * #199) needs a last-changed timestamp to read, even though Sync itself
  * still never compares one. See `updatedAt` below and
  * `migrations/0014_updated_at.sql`.

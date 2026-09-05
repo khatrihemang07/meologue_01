@@ -71,7 +71,7 @@ export type MergeOutcome = { ok: true; result: MergeResult } | { ok: false; reas
  * Tables Merge never touches at all — `kv` (bookkeeping, not History: this
  * Device's own `device_id` must never change, and its Sync cursors/epochs
  * describe this Device's own relationship to a Server, not the Backup's)
- * and `meologue_migrations` (../sqlite/restore.ts's own `RESTORE_EXCLUDED_TABLES`
+ * and `meologue_migrations` (./restore.ts's own `RESTORE_EXCLUDED_TABLES`
  * doc comment gives the identical reasoning for why a migration ledger
  * from a different Device's history is never adopted).
  */
@@ -79,6 +79,14 @@ const MERGE_EXCLUDED_TABLES: ReadonlySet<string> = new Set([LEDGER_TABLE, "kv"])
 
 const PRIMARY_KEY_COLUMN = "id";
 const UPDATED_AT_COLUMN = "updated_at";
+
+/**
+ * What Merge ignores when deciding whether a row changed, on top of the
+ * `seq`/`synced_at` ./row-diff.ts already excludes for both its callers.
+ * One column, and that file's own `UPDATED_AT_COLUMN` doc comment carries
+ * the reasoning for why Merge passes this and Restore does not.
+ */
+const IGNORED_WHEN_MERGING: ReadonlySet<string> = new Set([UPDATED_AT_COLUMN]);
 const DELETED_AT_COLUMN = "deleted_at";
 const SEQ_COLUMN = "seq";
 const SYNCED_AT_COLUMN = "synced_at";
@@ -194,7 +202,11 @@ async function mergeTable(
       continue;
     }
 
-    if (rowContentUnchanged(existing, row.values)) {
+    // `IGNORED_WHEN_MERGING`, not the bare two-argument call ./restore.ts
+    // makes: `updated_at` is not content as far as Merge is concerned.
+    // See ../backup/row-diff.ts's `UPDATED_AT_COLUMN` for why the two
+    // callers differ on exactly this one column.
+    if (rowContentUnchanged(existing, row.values, IGNORED_WHEN_MERGING)) {
       counts.unchanged += 1;
       continue;
     }

@@ -56,12 +56,46 @@ function valuesEqual(a: unknown, b: unknown): boolean {
 }
 
 /**
+ * `updated_at` (issue #196), which ./merge.ts asks to have ignored on top
+ * of `SYNC_BOOKKEEPING_COLUMNS` above and ./restore.ts deliberately does
+ * not — the one column whose "is this content?" answer differs between
+ * this file's two callers.
+ *
+ * Merge must ignore it. ADR 0059 records, as a named and tolerated
+ * consequence, that an "edit" landing on identical content leaves the
+ * Server's `updated_at` older than the Device's, because the `is distinct
+ * from` guard never fired. Two Devices can therefore hold byte-identical
+ * content under different `updated_at` values through no edit either user
+ * made. Comparing it would drop such a row into the greater-`updated_at`
+ * branch, rewrite it and mark it pending — re-queuing a row nobody
+ * changed, which is precisely the re-push failure #194 and #199 exist to
+ * close, and which CONTEXT.md's Merge entry rules out in as many words:
+ * "A row whose content is identical on both sides is left exactly as it
+ * is."
+ *
+ * Restore must not ignore it. Restore's promise is "this Device becomes
+ * the Backup" (CONTEXT.md's Restore entry), so a row whose `updated_at`
+ * differs genuinely is not yet the file's row, and writing it costs one
+ * write that cannot re-queue anything — Restore preserves `seq`/
+ * `synced_at` verbatim rather than blanking them (./restore.ts), so a row
+ * it rewrites does not become pending the way a merged row would.
+ */
+export const UPDATED_AT_COLUMN = "updated_at";
+
+/**
  * True when every content column `incoming` carries — every column but
- * `seq` and `synced_at` (`SYNC_BOOKKEEPING_COLUMNS` above) — is
- * byte-identical to the same column on `existing`. `existing === undefined`
- * (no row with this primary key on the target yet) is always "not equal":
- * there is nothing to compare against, so the caller inserts rather than
- * skips.
+ * `seq` and `synced_at` (`SYNC_BOOKKEEPING_COLUMNS` above), plus whatever
+ * `alsoIgnored` adds — is byte-identical to the same column on
+ * `existing`. `existing === undefined` (no row with this primary key on
+ * the target yet) is always "not equal": there is nothing to compare
+ * against, so the caller inserts rather than skips.
+ *
+ * `alsoIgnored` exists for exactly one column, `UPDATED_AT_COLUMN` above,
+ * and its doc comment carries the full reasoning for why Merge passes it
+ * and Restore does not. It is a parameter rather than a second exported
+ * predicate so that both callers keep reading the same single definition
+ * of "content", differing only in one named column rather than in two
+ * implementations that could drift apart.
  *
  * Compares exactly the columns `incoming` carries, not every column this
  * build's schema knows: the caller (../backup/parse.ts) has already
@@ -74,12 +108,13 @@ function valuesEqual(a: unknown, b: unknown): boolean {
 export function rowContentUnchanged(
   existing: Record<string, unknown> | undefined,
   incoming: Record<string, unknown>,
+  alsoIgnored?: ReadonlySet<string>,
 ): boolean {
   if (existing === undefined) {
     return false;
   }
   for (const column of Object.keys(incoming)) {
-    if (SYNC_BOOKKEEPING_COLUMNS.has(column)) {
+    if (SYNC_BOOKKEEPING_COLUMNS.has(column) || alsoIgnored?.has(column)) {
       continue;
     }
     if (!valuesEqual(existing[column], incoming[column])) {

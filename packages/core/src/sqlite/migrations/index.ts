@@ -261,7 +261,7 @@ export interface Migration {
  * `updated_at` for *ordering Sync's own conflicts* and recorded, as a
  * named consequence, "no `updated_at` column is needed anywhere." This
  * migration revisits that specific consequence, deliberately, not by
- * oversight — a superseding ADR is forthcoming. What is unchanged is the
+ * oversight — see ADR 0065, which records it. What is unchanged is the
  * rest of that ADR's Decision: Sync still resolves a conflict by Server
  * arrival order alone (the reassigned `seq`), and nothing added by this
  * migration is ever compared for that purpose. `updated_at` exists solely
