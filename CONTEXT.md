@@ -160,6 +160,24 @@ of Syncing.
 The thing a Device Syncs through. Every Device exchanges Entries with the Server rather than with
 other Devices directly.
 
+### Capability
+
+Whether the Server can actually serve a given feature right now — configured *and* switched on,
+not merely present as a route it happens to expose. A Server can accept a request at the same
+address it always has and still lack a Capability a Device asks about: the route exists, but
+nothing behind it is switched on, the gap a bare "reachable" cannot name on its own. A Device only
+ever reads a Capability; it has no way to switch one on for the Server, because a Capability
+describes a fact about how the Server is configured, not a preference any Device holds about it.
+
+### Server setting
+
+Configuration the Server holds for itself, reachable from whichever Device opens it — the
+counterpart to a Device setting, which ADR 0008 puts outside the Entry store precisely because it
+is a fact about one installation and never leaves it. A Server setting is the opposite shape: one
+Server holds it once, on behalf of every Device that Syncs through it, so a Device that changes one
+is changing it for every other Device too, not only for itself. Where a Device setting applies the
+instant it's chosen and cannot fail, a Server setting round-trips through a request that can.
+
 ### Reflection
 
 Asking a question of your own History and getting an answer drawn from it. Reflection names the

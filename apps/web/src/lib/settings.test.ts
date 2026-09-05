@@ -6,6 +6,7 @@ import {
   DEFAULT_ACCENT,
   DEFAULT_COMPLETED_STYLE,
   DEFAULT_HIDDEN_DESTINATIONS,
+  DEFAULT_REFLECT_MODEL,
   DEFAULT_SMART_DATES_ENABLED,
   DEFAULT_TEXT_SIZE,
   HIDEABLE_DESTINATIONS,
@@ -39,6 +40,7 @@ describe("settings store", () => {
       capabilities: null,
       serverReachable: true,
       hiddenDestinations: DEFAULT_HIDDEN_DESTINATIONS,
+      defaultReflectModel: DEFAULT_REFLECT_MODEL,
     });
   });
 
@@ -260,6 +262,77 @@ describe("settings store", () => {
       return import("./settings").then((fresh) => {
         expect(fresh.useSettingsStore.getState().smartDatesEnabled).toBe(
           fresh.DEFAULT_SMART_DATES_ENABLED,
+        );
+      });
+    });
+  });
+
+  // Issue #202: the Device-local default `question-composer.tsx`'s picker
+  // pre-selects a fresh Conversation on.
+  describe("default Reflect model", () => {
+    it("round-trips a written value, in the store and in storage", () => {
+      useSettingsStore.getState().setDefaultReflectModel("claude-sonnet");
+
+      expect(useSettingsStore.getState().defaultReflectModel).toBe("claude-sonnet");
+      expect(localStorage.getItem("meologue.default-reflect-model")).toBe("claude-sonnet");
+    });
+
+    it("defaults to '' — Server default, matching the picker's own sentinel", () => {
+      expect(useSettingsStore.getState().defaultReflectModel).toBe("");
+      expect(DEFAULT_REFLECT_MODEL).toBe("");
+    });
+
+    // Mirrors "hidden destinations"'s own convention below: no key at all
+    // for "nothing chosen," so a reader who picks a default and clears it
+    // back to Server default leaves no trace in storage, indistinguishable
+    // from a Device that never touched this setting.
+    it("removes the stored key entirely once cleared back to Server default", () => {
+      useSettingsStore.getState().setDefaultReflectModel("claude-sonnet");
+      expect(localStorage.getItem("meologue.default-reflect-model")).not.toBeNull();
+
+      useSettingsStore.getState().setDefaultReflectModel("");
+
+      expect(localStorage.getItem("meologue.default-reflect-model")).toBeNull();
+    });
+
+    it("does not throw when localStorage refuses the write, and still updates the store", () => {
+      vi.spyOn(localStorage, "setItem").mockImplementation(() => {
+        throw new Error("storage unavailable");
+      });
+
+      expect(() =>
+        useSettingsStore.getState().setDefaultReflectModel("claude-sonnet"),
+      ).not.toThrow();
+      expect(useSettingsStore.getState().defaultReflectModel).toBe("claude-sonnet");
+    });
+
+    it("reads a stored value back at load, with no validation against a known model list", () => {
+      // Deliberately an id no fixture model list here ever offers — the
+      // Server's own list is fetched at runtime and this module's read is
+      // synchronous, so there is nothing to validate against (settings.ts's
+      // own doc comment on `DEFAULT_REFLECT_MODEL`).
+      localStorage.setItem(
+        "meologue.default-reflect-model",
+        "a-model-this-build-has-never-heard-of",
+      );
+
+      vi.resetModules();
+      return import("./settings").then((fresh) => {
+        expect(fresh.useSettingsStore.getState().defaultReflectModel).toBe(
+          "a-model-this-build-has-never-heard-of",
+        );
+      });
+    });
+
+    it("degrades to the default when localStorage throws on read", () => {
+      vi.spyOn(localStorage, "getItem").mockImplementation(() => {
+        throw new Error("storage unavailable");
+      });
+
+      vi.resetModules();
+      return import("./settings").then((fresh) => {
+        expect(fresh.useSettingsStore.getState().defaultReflectModel).toBe(
+          fresh.DEFAULT_REFLECT_MODEL,
         );
       });
     });
