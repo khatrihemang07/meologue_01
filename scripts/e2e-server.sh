@@ -51,6 +51,17 @@ export MEOLOGUE_EMBED_MODEL="${MEOLOGUE_EMBED_MODEL:-llm-stub-embed}"
 # happens to run it. This matters more now that server/.env is loaded: the
 # developer's own is MEOLOGUE_TZ=Asia/Kolkata.
 export MEOLOGUE_TZ="${MEOLOGUE_TZ:-UTC}"
+# Issue #200: a Server now stores settings of its own in Postgres, and a
+# stored value wins over the environment (docs/adr/0059-*). This process
+# stays up for the whole suite, across every spec file Playwright runs
+# against it — so a `PATCH /v1/config` any one spec makes (a settings-page
+# spec, once one exists) would otherwise silently override the LLM stub
+# configuration exported above for every spec that runs after it in the
+# same suite run, since a stored value normally wins over the environment.
+# Locking makes this Server read only the environment, always, so the
+# suite's LLM stub config can never be poisoned by a settings write any
+# spec — or a developer poking at this Server by hand — happens to make.
+export MEOLOGUE_CONFIG_LOCK=1
 # Issue #112: `--release`, not a debug build. Two `cargo run` servers (this
 # one and e2e-server-b.sh's) doing real JSON/SQL/pgvector work for the whole
 # suite, on top of Playwright's own 4 parallel Chromium+SQLite-Worker

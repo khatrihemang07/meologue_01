@@ -4,6 +4,46 @@
  */
 
 export interface paths {
+    "/v1/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Reports this Server's settings: value and source per overridable field,
+         *     the instance's own `MEOLOGUE_MODE`, whether it is locked, and the Entry
+         *     embedding backlog. Registered unconditionally in `lib.rs`, before the
+         *     `/v1/{*rest}` catch-all and with no gate of its own — this is the one
+         *     route that must exist on an unconfigured Server, because it is how a
+         *     Server *becomes* configured (issue #200's own framing).
+         * @description **API keys are returned in full, not write-only.** Per ADR 0003 the
+         *     Server has no authentication at all, and it already warns at startup
+         *     that anything able to open a TCP connection to it can read and write
+         *     every Entry. Withholding a key that a reachable caller can already read
+         *     straight out of the process environment buys nothing and costs the
+         *     ability to check what is actually set — see ADR 0059's own Decision
+         *     section for the fuller version of this argument. Don't "fix" this.
+         */
+        get: operations["get_config_handler"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Applies a `ConfigPatch` and reports the settings row exactly as
+         *     `GET /v1/config` would immediately afterward. Writes unconditionally,
+         *     even while `locked` — `resolve`'s own doc comment is why: enforcing the
+         *     lock here as well would be enforcing it at a second call site, the
+         *     exact duplication issue #200's acceptance criteria ask this design to
+         *     avoid. A write made while locked is simply inert until the lock is
+         *     lifted, at which point it takes effect with no need to resubmit it.
+         */
+        patch: operations["patch_config_handler"];
+        trace?: never;
+    };
     "/v1/digests/{period}": {
         parameters: {
             query?: never;
@@ -246,6 +286,55 @@ export interface components {
             /** Format: uuid */
             task_id: string;
             text: string;
+        };
+        /**
+         * @description `PATCH /v1/config`'s request body. Every field is `Option<String>` with
+         *     `#[serde(default)]`, which gives three distinct wire states without
+         *     needing a nested `Option<Option<_>>`: the key absent from the JSON body
+         *     deserializes to `None` (untouched — `apply_patch` leaves that column
+         *     exactly as it was), the key present with an empty string deserializes to
+         *     `Some(String::new())` (clear to `NULL` — `apply_patch` normalises this),
+         *     and the key present with any other string becomes the new stored value.
+         *     This mirrors the read side's own "empty means unset" convention
+         *     (`LlmConfig::from_env`'s `var()` helper) rather than inventing a second
+         *     one for writes.
+         */
+        ConfigPatch: {
+            chat_api_key?: string | null;
+            chat_base_url?: string | null;
+            chat_model?: string | null;
+            embed_api_key?: string | null;
+            embed_base_url?: string | null;
+            embed_model?: string | null;
+            tz?: string | null;
+        };
+        /**
+         * @description `GET /v1/config`'s response, and what `PATCH /v1/config` echoes back
+         *     once its write lands — the same shape either way, since a client asking
+         *     "what changed" is answered by the same report as a client asking "what
+         *     is it right now."
+         */
+        ConfigResponse: {
+            chat_api_key: components["schemas"]["ResolvedField"];
+            chat_base_url: components["schemas"]["ResolvedField"];
+            chat_model: components["schemas"]["ResolvedField"];
+            embed_api_key: components["schemas"]["ResolvedField"];
+            embed_base_url: components["schemas"]["ResolvedField"];
+            embed_model: components["schemas"]["ResolvedField"];
+            locked: boolean;
+            mode: components["schemas"]["InstanceMode"];
+            tz: components["schemas"]["ResolvedField"];
+            /**
+             * Format: int64
+             * @description `select count(*) from entries where embedding is null and deleted_at
+             *     is null` — see `count_unembedded`. Reported here rather than left
+             *     for a Device to ask the embedding worker directly (there is no such
+             *     route, and there should not be one just for this): Settings is
+             *     where a reader already comes to ask "what is this Server doing,"
+             *     and a backlog count answers "is embedding still catching up" without
+             *     a second endpoint.
+             */
+            unembedded_entries: number;
         };
         /**
          * @description The wire shape of one Digest — everything a client needs to render it
@@ -514,6 +603,22 @@ export interface components {
             service: string;
         };
         /**
+         * @description Which instance this process is — issue #200. This does **not** decide
+         *     precedence anywhere in `resolve` below; a Server names itself the same
+         *     way a person introduces themselves by name, with no authority granted
+         *     by the name itself. See ADR 0062 for why this is a separate fact from
+         *     `MEOLOGUE_CONFIG_LOCK` (`config_locked` below) even though the scripts
+         *     that set the two often set them together.
+         *
+         *     Read once at startup (`instance_mode`) and threaded through `AppState`
+         *     the same way `period::server_timezone()`'s result is read once and
+         *     threaded through as `DigestState::tz` — a value this cheap to compute
+         *     still gets computed exactly once, because a Server's own identity must
+         *     not depend on when in its lifetime something happens to ask.
+         * @enum {string}
+         */
+        InstanceMode: "production" | "sandbox";
+        /**
          * @description The Label-shaped sibling of `TaskInput` — no `order_key`, mirroring
          *     `../../packages/core/src/label-types.ts`'s own Label (no manual order —
          *     see that type's own doc comment for why).
@@ -746,6 +851,11 @@ export interface components {
              */
             tool_called: boolean;
         };
+        /** @description One field's resolved value, paired with where it came from. */
+        ResolvedField: {
+            source: components["schemas"]["Source"];
+            value?: string | null;
+        };
         /**
          * @description The Section-shaped sibling of `TaskInput` — `project_id` is a plain
          *     required `Uuid`, unvalidated against a `projects` table for the
@@ -878,6 +988,15 @@ export interface components {
              */
             tool_called: boolean;
         };
+        /**
+         * @description Where one resolved field's value actually came from — the load-bearing
+         *     half of `GET /v1/config`'s contract (issue #200's own acceptance
+         *     criterion). Without this, a Device cannot tell a value it can Clear
+         *     (`Stored`) from one it can only override (`Env`), and cannot honestly
+         *     label a "(from environment)" hint.
+         * @enum {string}
+         */
+        Source: "stored" | "env" | "unset";
         SyncRequest: {
             comments?: components["schemas"]["CommentInput"][];
             /** Format: uuid */
@@ -1072,6 +1191,14 @@ export interface components {
              *     an ordinary `Option<String>` field like every other nullable column
              *     here, that workaround is retired — see that function's own doc
              *     comment for the mechanism it keeps for a future locally-held field.
+             *
+             *     This is also issue #186 / ADR 0057's own motivating case: a Device
+             *     that had already pulled a Task row before this field existed kept
+             *     its Cursor past that row, and this field alone never reached it.
+             *     `packages/core/src/protocol.ts`'s `ROW_SHAPE_EPOCH.tasks` is bumped
+             *     to 1 for exactly this addition — see `PROTOCOL_VERSION`'s own doc
+             *     comment above for the obligation this places on the next field
+             *     added to any row here.
              */
             description?: string | null;
             /** Format: uuid */
@@ -1134,6 +1261,50 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    get_config_handler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description This Server's settings — value and source per field, instance mode, lock state, and the Entry embedding backlog */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigResponse"];
+                };
+            };
+        };
+    };
+    patch_config_handler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigPatch"];
+            };
+        };
+        responses: {
+            /** @description The settings row as it now stands, in the same shape GET /v1/config reports */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigResponse"];
+                };
+            };
+        };
+    };
     latest_digest_handler: {
         parameters: {
             query?: never;

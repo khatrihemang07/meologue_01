@@ -9,6 +9,57 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/v1/config": {
+      "get": {
+        "tags": [
+          "crate::settings"
+        ],
+        "summary": "Reports this Server's settings: value and source per overridable field,\nthe instance's own `MEOLOGUE_MODE`, whether it is locked, and the Entry\nembedding backlog. Registered unconditionally in `lib.rs`, before the\n`/v1/{*rest}` catch-all and with no gate of its own — this is the one\nroute that must exist on an unconfigured Server, because it is how a\nServer *becomes* configured (issue #200's own framing).",
+        "description": "**API keys are returned in full, not write-only.** Per ADR 0003 the\nServer has no authentication at all, and it already warns at startup\nthat anything able to open a TCP connection to it can read and write\nevery Entry. Withholding a key that a reachable caller can already read\nstraight out of the process environment buys nothing and costs the\nability to check what is actually set — see ADR 0059's own Decision\nsection for the fuller version of this argument. Don't \"fix\" this.",
+        "operationId": "get_config_handler",
+        "responses": {
+          "200": {
+            "description": "This Server's settings — value and source per field, instance mode, lock state, and the Entry embedding backlog",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "crate::settings"
+        ],
+        "summary": "Applies a `ConfigPatch` and reports the settings row exactly as\n`GET /v1/config` would immediately afterward. Writes unconditionally,\neven while `locked` — `resolve`'s own doc comment is why: enforcing the\nlock here as well would be enforcing it at a second call site, the\nexact duplication issue #200's acceptance criteria ask this design to\navoid. A write made while locked is simply inert until the lock is\nlifted, at which point it takes effect with no need to resubmit it.",
+        "operationId": "patch_config_handler",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The settings row as it now stands, in the same shape GET /v1/config reports",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/digests/{period}": {
       "get": {
         "tags": [
@@ -430,6 +481,104 @@
           }
         }
       },
+      "ConfigPatch": {
+        "type": "object",
+        "description": "`PATCH /v1/config`'s request body. Every field is `Option<String>` with\n`#[serde(default)]`, which gives three distinct wire states without\nneeding a nested `Option<Option<_>>`: the key absent from the JSON body\ndeserializes to `None` (untouched — `apply_patch` leaves that column\nexactly as it was), the key present with an empty string deserializes to\n`Some(String::new())` (clear to `NULL` — `apply_patch` normalises this),\nand the key present with any other string becomes the new stored value.\nThis mirrors the read side's own \"empty means unset\" convention\n(`LlmConfig::from_env`'s `var()` helper) rather than inventing a second\none for writes.",
+        "properties": {
+          "chat_api_key": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "chat_base_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "chat_model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "embed_api_key": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "embed_base_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "embed_model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tz": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ConfigResponse": {
+        "type": "object",
+        "description": "`GET /v1/config`'s response, and what `PATCH /v1/config` echoes back\nonce its write lands — the same shape either way, since a client asking\n\"what changed\" is answered by the same report as a client asking \"what\nis it right now.\"",
+        "required": [
+          "mode",
+          "locked",
+          "unembedded_entries",
+          "chat_base_url",
+          "chat_model",
+          "chat_api_key",
+          "embed_base_url",
+          "embed_model",
+          "embed_api_key",
+          "tz"
+        ],
+        "properties": {
+          "chat_api_key": {
+            "$ref": "#/components/schemas/ResolvedField"
+          },
+          "chat_base_url": {
+            "$ref": "#/components/schemas/ResolvedField"
+          },
+          "chat_model": {
+            "$ref": "#/components/schemas/ResolvedField"
+          },
+          "embed_api_key": {
+            "$ref": "#/components/schemas/ResolvedField"
+          },
+          "embed_base_url": {
+            "$ref": "#/components/schemas/ResolvedField"
+          },
+          "embed_model": {
+            "$ref": "#/components/schemas/ResolvedField"
+          },
+          "locked": {
+            "type": "boolean"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/InstanceMode"
+          },
+          "tz": {
+            "$ref": "#/components/schemas/ResolvedField"
+          },
+          "unembedded_entries": {
+            "type": "integer",
+            "format": "int64",
+            "description": "`select count(*) from entries where embedding is null and deleted_at\nis null` — see `count_unembedded`. Reported here rather than left\nfor a Device to ask the embedding worker directly (there is no such\nroute, and there should not be one just for this): Settings is\nwhere a reader already comes to ask \"what is this Server doing,\"\nand a backlog count answers \"is embedding still catching up\" without\na second endpoint."
+          }
+        }
+      },
       "Digest": {
         "type": "object",
         "description": "The wire shape of one Digest — everything a client needs to render it\n(its Period, its inclusive local date range, its prose, the Entries it\ngrounds in) plus the two neighbour dates described on `DigestResponse`.\n`period` is the plain string (`Period::as_str`) rather than the `Period`\nenum itself — `Period` carries no `Serialize`/`ToSchema` impl of its own\n(nothing before this ticket ever put it on the wire), and adding one\njust for this single field would be more machinery than reusing the\nstring every other layer already keys on.",
@@ -767,6 +916,14 @@
             "type": "string"
           }
         }
+      },
+      "InstanceMode": {
+        "type": "string",
+        "description": "Which instance this process is — issue #200. This does **not** decide\nprecedence anywhere in `resolve` below; a Server names itself the same\nway a person introduces themselves by name, with no authority granted\nby the name itself. See ADR 0062 for why this is a separate fact from\n`MEOLOGUE_CONFIG_LOCK` (`config_locked` below) even though the scripts\nthat set the two often set them together.\n\nRead once at startup (`instance_mode`) and threaded through `AppState`\nthe same way `period::server_timezone()`'s result is read once and\nthreaded through as `DigestState::tz` — a value this cheap to compute\nstill gets computed exactly once, because a Server's own identity must\nnot depend on when in its lifetime something happens to ask.",
+        "enum": [
+          "production",
+          "sandbox"
+        ]
       },
       "LabelInput": {
         "type": "object",
@@ -1108,6 +1265,24 @@
           }
         }
       },
+      "ResolvedField": {
+        "type": "object",
+        "description": "One field's resolved value, paired with where it came from.",
+        "required": [
+          "source"
+        ],
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/Source"
+          },
+          "value": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "SectionInput": {
         "type": "object",
         "description": "The Section-shaped sibling of `TaskInput` — `project_id` is a plain\nrequired `Uuid`, unvalidated against a `projects` table for the\nidentical reason `TaskInput::project_id`'s own doc comment gives: a\nSection can arrive naming a Project this Server has never heard of\n(or, within one push, a Project pushed in the very same request — this\nServer does not require Sections to arrive after their own Project),\nand that is an accepted, transient state carried straight through.",
@@ -1330,6 +1505,15 @@
             "description": "Issue #103: whether this Turn's run called a tool at all —\n`grounding_entry_ids` alone cannot tell \"a tool ran and found\nnothing\" from \"no tool ever ran.\" No column backs this: it's\nderived, not stored — `entries_to_turns` computes it from whether a\n`tool_result` entry appears anywhere in the Turn's own run through\nthe tree, the same tree `session_entries` already holds every tool\ncall in (`harness::agent_loop::Step::ToolResult`, via\n`reflect.rs::build_tree_payloads`), rather than adding a second,\nindependently-writable flag that a future write path could forget to\nset."
           }
         }
+      },
+      "Source": {
+        "type": "string",
+        "description": "Where one resolved field's value actually came from — the load-bearing\nhalf of `GET /v1/config`'s contract (issue #200's own acceptance\ncriterion). Without this, a Device cannot tell a value it can Clear\n(`Stored`) from one it can only override (`Env`), and cannot honestly\nlabel a \"(from environment)\" hint.",
+        "enum": [
+          "stored",
+          "env",
+          "unset"
+        ]
       },
       "SyncRequest": {
         "type": "object",
@@ -1582,7 +1766,7 @@
               "string",
               "null"
             ],
-            "description": "The Task's own words about itself (#180,\n`../../packages/core/src/task-types.ts`'s own `description` field) —\ngains a wire representation here for the first time (issue #182).\nBefore this, `packages/core/src/mapping.ts`'s `fromWireTaskOutput`\ncarried a Device's existing local copy through unconditionally,\nbecause the wire had nothing to say about it at all; now that it's\nan ordinary `Option<String>` field like every other nullable column\nhere, that workaround is retired — see that function's own doc\ncomment for the mechanism it keeps for a future locally-held field."
+            "description": "The Task's own words about itself (#180,\n`../../packages/core/src/task-types.ts`'s own `description` field) —\ngains a wire representation here for the first time (issue #182).\nBefore this, `packages/core/src/mapping.ts`'s `fromWireTaskOutput`\ncarried a Device's existing local copy through unconditionally,\nbecause the wire had nothing to say about it at all; now that it's\nan ordinary `Option<String>` field like every other nullable column\nhere, that workaround is retired — see that function's own doc\ncomment for the mechanism it keeps for a future locally-held field.\n\nThis is also issue #186 / ADR 0057's own motivating case: a Device\nthat had already pulled a Task row before this field existed kept\nits Cursor past that row, and this field alone never reached it.\n`packages/core/src/protocol.ts`'s `ROW_SHAPE_EPOCH.tasks` is bumped\nto 1 for exactly this addition — see `PROTOCOL_VERSION`'s own doc\ncomment above for the obligation this places on the next field\nadded to any row here."
           },
           "device_id": {
             "type": "string",
