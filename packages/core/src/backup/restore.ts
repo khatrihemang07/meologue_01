@@ -1,10 +1,11 @@
 import type { SqliteDriver } from "../sqlite/driver";
 import { LEDGER_TABLE } from "../sqlite/migrator";
-import { DEVICE_ID_KEY, SOFT_BREAK_MIGRATION_KEY } from "../sqlite/schema";
+import { DEVICE_ID_KEY } from "../sqlite/schema";
 import { SqliteEntryStore } from "../sqlite/sqlite-entry-store";
 import { SqliteTaskStore } from "../sqlite/sqlite-task-store";
 import { quoteIdent, tableColumns } from "./dump";
 import { type ParsedTable, parseBackupDatabase } from "./parse";
+import { KV_TABLE, rearmSoftBreakMigration } from "./rearm-migrations";
 import { rowContentUnchanged } from "./row-diff";
 import { PRIMARY_KEY_COLUMN, upsertRow } from "./upsert";
 
@@ -133,7 +134,6 @@ export interface RestoreOptions {
  */
 const RESTORE_EXCLUDED_TABLES: ReadonlySet<string> = new Set([LEDGER_TABLE]);
 
-const KV_TABLE = "kv";
 /** `kv`'s own primary key — the one table Restore keys on something other than `PRIMARY_KEY_COLUMN` (./upsert.ts), since `kv` is a key/value table, not an entity table with an `id`. */
 const KV_PRIMARY_KEY_COLUMN = "key";
 
@@ -277,14 +277,6 @@ async function resetCursorsAndEpochs(driver: SqliteDriver): Promise<void> {
  * a far cheaper mistake than leaving a Restored History silently
  * unmigrated forever.
  */
-async function rearmSoftBreakMigration(driver: SqliteDriver): Promise<void> {
-  await driver.execute(
-    `DELETE FROM ${quoteIdent(KV_TABLE)} WHERE key = ?`,
-    [SOFT_BREAK_MIGRATION_KEY],
-    "run",
-  );
-}
-
 /**
  * Applies a Backup's `database.sql` to `driver`'s own database, replacing
  * its contents with the Backup's (this file's own header comment has the

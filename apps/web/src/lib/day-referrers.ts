@@ -43,17 +43,27 @@ import { type InlineNode, parseInlineMarkdown } from "@/lib/inline-markdown";
 
 /**
  * Whether `nodes` contains a `[[dayKey]]` date Reference anywhere, including
- * nested inside `**bold**`/`_italic_` text. `parseInlineMarkdown` nests a
- * Reference inside its enclosing emphasis/strong node rather than
- * flattening every mark to the top level, so a shallow `.some` over `nodes`
- * alone would miss `**[[2026-08-28]]**`.
+ * nested inside `**bold**`/`_italic_`/`~~struck~~` text. `parseInlineMarkdown`
+ * nests a Reference inside its enclosing mark node rather than flattening
+ * every mark to the top level, so a shallow `.some` over `nodes` alone would
+ * miss `**[[2026-08-28]]**`.
+ *
+ * The recursion tests for `children` rather than listing the mark kinds that
+ * have them, and that is deliberate. Listing them is how this went wrong: the
+ * check named `emphasis` and `strong`, so when `strikethrough` was added
+ * (issue #211) a Reference inside `~~…~~` silently stopped being found here —
+ * no error, no failing test, just a day that no longer knows what Refers to
+ * it. The same shape had to be repaired in `collectTaskReferenceRawsInline`
+ * for the same reason at the same time. Structural recursion cannot fall out
+ * of step with the mark set, so the next mark this dialect grows is handled
+ * without anyone having to remember this file exists.
  */
 function referencesDay(nodes: readonly InlineNode[], dayKey: string): boolean {
   return nodes.some((node) => {
     if (node.kind === "dateReference") {
       return node.date === dayKey;
     }
-    if (node.kind === "emphasis" || node.kind === "strong") {
+    if ("children" in node) {
       return referencesDay(node.children, dayKey);
     }
     return false;

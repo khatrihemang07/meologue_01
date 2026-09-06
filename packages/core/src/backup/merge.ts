@@ -1,10 +1,10 @@
 import type { SqliteDriver } from "../sqlite/driver";
 import { LEDGER_TABLE } from "../sqlite/migrator";
-import { SOFT_BREAK_MIGRATION_KEY } from "../sqlite/schema";
 import { SqliteEntryStore } from "../sqlite/sqlite-entry-store";
 import { SqliteTaskStore } from "../sqlite/sqlite-task-store";
 import { quoteIdent, tableColumns } from "./dump";
 import { type ParsedTable, parseBackupDatabase } from "./parse";
+import { rearmSoftBreakMigration } from "./rearm-migrations";
 import type { SafetyBackupOutcome, TakeSafetyBackup } from "./restore";
 import { rowContentUnchanged } from "./row-diff";
 import { PRIMARY_KEY_COLUMN, upsertRow } from "./upsert";
@@ -133,14 +133,6 @@ const MERGE_EXCLUDED_TABLES: ReadonlySet<string> = new Set([LEDGER_TABLE, "kv"])
  * nothing that actually needed it — the migration's own per-row
  * `updatedAt` guard is what decides that, not this marker.
  */
-async function rearmSoftBreakMigration(driver: SqliteDriver): Promise<void> {
-  await driver.execute(
-    `DELETE FROM ${quoteIdent("kv")} WHERE key = ?`,
-    [SOFT_BREAK_MIGRATION_KEY],
-    "run",
-  );
-}
-
 const UPDATED_AT_COLUMN = "updated_at";
 
 /**

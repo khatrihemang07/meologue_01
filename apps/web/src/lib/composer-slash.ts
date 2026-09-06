@@ -1,6 +1,6 @@
 /**
  * The `/` menu's pure logic (issue #165) — trigger detection, query
- * filtering, and the seven-item ordering the ticket lists — built as its
+ * filtering, and the fixed ordering the ticket lists — built as its
  * own module rather than folded into composer-picker.ts, per the user's
  * explicit choice recorded on that issue: the `/` menu and the `[[` picker
  * share a SHAPE (an absolutely-positioned dropdown anchored to a trigger
@@ -118,7 +118,7 @@ export function deriveSlashMenu(
  * that follows drops every combining mark in the U+0300–U+036F block —
  * leaving the bare letters `filterSlashItems` actually compares. That is
  * the entire "accent-insensitive" half of the ticket's filter rule; there
- * is no locale-aware collation involved, because none is needed for seven
+ * is no locale-aware collation involved, because none is needed for a handful of
  * fixed, ASCII-English labels — this only has to survive a reader typing
  * an accented character by habit or autocorrect, not sort them.
  */
