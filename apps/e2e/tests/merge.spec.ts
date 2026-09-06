@@ -48,12 +48,29 @@ test("a Backup from one Device merges into another, adding what it's missing and
   // registered before the click that raises it.
   pageB.once("dialog", (dialog) => dialog.accept());
   const [fileChooser] = await Promise.all([pageB.waitForEvent("filechooser"), mergeButton.click()]);
+
+  // Issue #208: Merge saves a safety Backup of this Device before it writes
+  // anything, the same guard Restore gained in #204 — so picking the file
+  // below sets off a download of its own as well as the reload.
+  //
+  // Both listeners are registered BEFORE `setFiles` rather than awaited
+  // after it. `setFiles` is what starts the whole flow, and an event that
+  // has already fired by the time a listener is attached can never be
+  // waited for — which is exactly how this test used to fail
+  // intermittently in a full run and pass every time it was re-run alone.
+  const safetyBackup = pageB.waitForEvent("download");
+  const reloaded = pageB.waitForEvent("load");
   await fileChooser.setFiles(backupPath as string);
+
+  // The safety Backup names itself as one, distinct at a glance from a
+  // Backup taken on purpose — see restore.spec.ts's identical assertion and
+  // backup-zip.ts's `BackupKind` for why that prefix carries weight.
+  expect((await safetyBackup).suggestedFilename()).toContain("meologue-safety-backup-");
 
   // A successful Merge reloads the page (data-section.tsx's own handleMerge
   // doc comment, mirroring Restore's identical reasoning) — waiting for the
   // real `load` event is what proves that actually happened.
-  await pageB.waitForEvent("load");
+  await reloaded;
 
   await openDestination(pageB, "Composer");
   await expect(pageB.getByText(onlyOnA)).toBeVisible();
