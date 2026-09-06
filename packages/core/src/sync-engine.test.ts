@@ -278,6 +278,85 @@ describe("sync engine", () => {
     expect(await stores.store.getCursor()).toBe(15);
   });
 
+  // Issue #215 / ADR 0068. The race this closes, driven at the level it
+  // actually happens: the edit lands *while the request is in flight*, so
+  // pending() had already been read and the push had already gone out
+  // without it. That is the real shape — a store-open rewrite (ADR 0053's
+  // Task backfill, ADR 0067's soft-break pass) firing alongside the
+  // session's first Sync — and it is why the fix cannot live in the push.
+  //
+  // The Cursor starts at 0 because that is what Restore leaves behind
+  // (ADR 0064's `resetCursorsAndEpochs`), which is what makes the pull the
+  // entire History at once and the window as wide as it ever gets.
+  it("does not discard a local edit made while a Cursor-reset pull was in flight", async () => {
+    const stores = newStores();
+    await stores.store.catchUpRowShapeEpoch(ROW_SHAPE_EPOCH.entries);
+    await stores.store.upsert([
+      entry({
+        id: "a",
+        body: "as the Server still has it",
+        seq: 1,
+        syncedAt: "2026-01-01T00:00:00.000Z",
+      }),
+    ]);
+    await stores.store.setCursor(0);
+
+    const transport = vi.fn(async (request) => {
+      // Nothing was pending when the request was built, so the edit below
+      // cannot have been pushed by it.
+      expect(request.entries).toEqual([]);
+      await stores.store.edit("a", "rewritten at store open");
+      return {
+        ...emptyResponse,
+        entries: [wireEntryOutput({ id: "a", body: "as the Server still has it", seq: 1 })],
+        cursor: 1,
+      } satisfies WireSyncResponse;
+    });
+
+    await sync({ ...stores, transport, deviceId: DEVICE_ID });
+
+    const [survived] = await stores.store.list();
+    expect(survived).toMatchObject({ id: "a", body: "rewritten at store open", seq: null });
+  });
+
+  // The half that makes the test above worth anything. Surviving in the
+  // database is not enough: a row left looking already-synced is never
+  // pushed, so the edit dies at the *next* pull instead of this one.
+  it("still pushes the edit that survived a Cursor-reset pull, on the next round", async () => {
+    const stores = newStores();
+    await stores.store.catchUpRowShapeEpoch(ROW_SHAPE_EPOCH.entries);
+    await stores.store.upsert([
+      entry({
+        id: "a",
+        body: "as the Server still has it",
+        seq: 1,
+        syncedAt: "2026-01-01T00:00:00.000Z",
+      }),
+    ]);
+    await stores.store.setCursor(0);
+
+    const racingTransport = vi.fn(async () => {
+      await stores.store.edit("a", "rewritten at store open");
+      return {
+        ...emptyResponse,
+        entries: [wireEntryOutput({ id: "a", body: "as the Server still has it", seq: 1 })],
+        cursor: 1,
+      } satisfies WireSyncResponse;
+    });
+    await sync({ ...stores, transport: racingTransport, deviceId: DEVICE_ID });
+
+    let pushedOnTheNextRound: WireSyncRequest["entries"] = [];
+    const nextTransport = vi.fn(async (request) => {
+      pushedOnTheNextRound = request.entries;
+      return emptyResponse;
+    });
+    await sync({ ...stores, transport: nextTransport, deviceId: DEVICE_ID });
+
+    expect(pushedOnTheNextRound).toEqual([
+      expect.objectContaining({ id: "a", body: "rewritten at store open" }),
+    ]);
+  });
+
   // The Task-shaped sibling of the test above, over `task_cursor` instead
   // of `cursor` — the two Cursors are tracked, and must never regress,
   // completely independently of one another.

@@ -43,7 +43,60 @@ export interface EntryStore {
    * argument does.
    */
   list(page?: EntryPage): Promise<Entry[]>;
+  /**
+   * Writes rows wholesale — every column taken from the Entry handed over,
+   * whatever the local row currently says. This is the right shape for a
+   * local capture and for Sync's *acknowledgement* path (ADR 0059), and
+   * deliberately the wrong one for Sync's pull: see applyPulled below.
+   */
   upsert(entries: Entry[]): Promise<void>;
+  /**
+   * Sync's **pull** write path (issue #215 / ADR 0068) — the Cursor-read
+   * rows in a SyncResponse, never the acknowledged ones.
+   *
+   * upsert() overwrites a row unconditionally. That is correct when this
+   * Device asked for the write, and wrong for a pull, because a pull can
+   * arrive while a local change is still waiting to be pushed. The row is
+   * then overwritten *and* stamped with the Server's `seq`, so it also
+   * stops looking pending — nothing re-pushes it, and the local change is
+   * gone with no error and no conflict anywhere. The window is widest
+   * straight after a Restore, which resets every Cursor to 0 (ADR 0064)
+   * so the very next pull is the entire History at once, and widest of
+   * all for a write made at store-open: ADR 0053's Task backfill and
+   * ADR 0067's soft-break pass both rewrite bodies exactly then.
+   *
+   * **An incoming row is applied unless the local row is pending and
+   * strictly newer.** Three clauses, each carrying its own reason:
+   *
+   * - *pending* is `seq IS NULL` — the same "the Server has not
+   *   acknowledged this yet" signal edit(), remove() and pending()
+   *   already share. A row the Server has acknowledged has nothing local
+   *   left to lose, so it is overwritten exactly as before.
+   * - *strictly newer* compares `updatedAt`, which ADR 0065 put on the
+   *   wire and left for whoever next revisited Sync's conflict rule. A
+   *   tie must apply, not refuse: a tie is this Device's own row coming
+   *   back with a `seq` on it, and refusing it would leave the row
+   *   pending and re-pushing on every tick forever.
+   * - *unless it is a tombstone* — deletion is terminal in both
+   *   directions (ADR 0064), so an incoming tombstone lands over a newer
+   *   local edit, the mirror of edit()'s own `WHERE deleted_at IS NULL`
+   *   guard refusing to resurrect one.
+   *
+   * **ADR 0028's conflict rule is untouched.** Last-writer-wins by Server
+   * arrival still decides every conflict the Server ever sees. A local
+   * edit that has not been pushed has not reached that ordering at all;
+   * refusing to discard it is what lets it get there. A genuinely newer
+   * row from another Device still wins, exactly as before.
+   *
+   * **The acknowledgement path knowingly does not use this**, and that is
+   * not an oversight — ADR 0068's Consequences names the narrower race it
+   * leaves open. An `updatedAt` guard there would deadlock on ADR 0065's
+   * own tolerated divergence: an edit landing on identical content leaves
+   * the Server holding an *older* `updatedAt` than this Device, so the
+   * acknowledgement would be refused forever and the row would re-push on
+   * every tick.
+   */
+  applyPulled(entries: Entry[]): Promise<void>;
   pending(): Promise<Entry[]>;
   getCursor(): Promise<number>;
   setCursor(seq: number): Promise<void>;

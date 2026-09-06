@@ -322,6 +322,7 @@ function fakeFullEntryStore(seed: Entry[]): EntryStore {
   return {
     ...inner,
     upsert: async () => {},
+    applyPulled: async () => {},
     pending: async () => [],
     getCursor: async () => 0,
     setCursor: async () => {},

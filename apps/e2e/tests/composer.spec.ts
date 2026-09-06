@@ -386,8 +386,7 @@ test("Enter in the MIDDLE of a ticked item's text also produces an unticked new 
   // press and re-reads the offset until it reaches the target, so the test
   // asserts the precondition it depends on instead of assuming it.
   const TARGET = "buy".length;
-  const caretOffset = () =>
-    page.evaluate(() => window.getSelection()?.anchorOffset ?? -1);
+  const caretOffset = () => page.evaluate(() => window.getSelection()?.anchorOffset ?? -1);
   await expect
     .poll(
       async () => {
@@ -989,24 +988,25 @@ test("Shift+Enter behaves exactly like Enter — a soft break in one paragraph, 
 // this test cares about even exists — so an ordinary reload alone would
 // find the marker already set and skip the scan entirely. Merge re-arms
 // that marker (ADR 0067's own acceptance criterion: "A Merge re-arms the
-// pass") — chosen over Restore for that same re-arming, deliberately: a
-// self-Merge changes nothing else (every row is byte-identical to what is
-// already here, so `mergeTable`'s own content-diff skips all of them) and,
-// unlike Restore, never resets this Device's Sync Cursor to 0
-// (`restoreTable`'s own `resetCursorsAndEpochs`, which Merge has no
-// equivalent of at all) — a real, load-sensitive race was found and fixed
-// here during verification: Restore's cursor reset makes the very next
-// Sync pull this Device's *entire* History back from the Server, and
-// `EntryStore.upsert`'s own unconditional overwrite (sqlite-entry-store.ts)
-// has no way to tell "the Server's answer is older than a pending local
-// edit sitting on top of it" — under load, that pull's own `upsert()` can
-// land after this migration's own `store.edit()` and silently stomp the
-// freshly-halved body back to its pre-migration shape before this
-// migration's own `requestSync` ever gets to push it. That hazard is
-// real, pre-existing (any local write racing the ambient `SyncLoop` tick
-// on a freshly-reset Cursor is exposed to it, not only this migration's
-// own), and out of scope to fix here — a Merge is what lets this spec
-// verify the migration itself without depending on winning that race.
+// pass") — chosen over Restore for that same re-arming, and a self-Merge
+// changes nothing else (every row is byte-identical to what is already
+// here, so `mergeTable`'s own content-diff skips all of them).
+//
+// Merge was ALSO originally chosen to dodge a hazard that no longer
+// exists, and the reason is worth keeping rather than deleting: Restore
+// resets this Device's Sync Cursor to 0 (`restoreTable`'s own
+// `resetCursorsAndEpochs`, which Merge has no equivalent of), so the very
+// next pull brings this Device's *entire* History back, and
+// `EntryStore.upsert`'s unconditional overwrite could land after this
+// migration's own `store.edit()` and silently stomp the freshly-halved
+// body back to its pre-migration shape. That was issue #215, fixed by
+// ADR 0068: the pull now goes through `EntryStore.applyPulled`, which
+// refuses a stale row sitting on top of an unpushed local edit. Merge is
+// kept here anyway — it is the cheaper of the two re-arming paths and
+// this spec is already the heaviest chain in this file — while the
+// Restore path's own version of this is covered deterministically in
+// `packages/core/src/backup/restore.test.ts`, where it does not depend on
+// winning a load-sensitive race to mean anything.
 // ---------------------------------------------------------------------------
 
 test("a pre-cutoff Entry's doubled blank line is halved after a Merge re-arms the pass, and is not halved again on a later reload", async ({

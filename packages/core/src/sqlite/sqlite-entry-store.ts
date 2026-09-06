@@ -121,6 +121,49 @@ export class SqliteEntryStore implements EntryStore {
     }
   }
 
+  /**
+   * Issue #215 / ADR 0068 — see EntryStore.applyPulled's own doc comment
+   * (../store.ts) for the rule and every reason behind it.
+   *
+   * The guard is a `setWhere` on the same single upsert statement, not a
+   * SELECT-then-write: reading the row first and deciding in TypeScript
+   * would put an `await` between the read and the write, which is exactly
+   * the interleaving this method exists to close. ADR 0007's "one
+   * statement" property is kept for the same reason it was worth having.
+   *
+   * `excluded` is the incoming row; the bare column names are the local
+   * one SQLite is about to overwrite.
+   */
+  async applyPulled(incoming: Entry[]): Promise<void> {
+    if (incoming.length === 0) {
+      return;
+    }
+    await this.db
+      .insert(entries)
+      .values(incoming)
+      .onConflictDoUpdate({
+        target: entries.id,
+        set: {
+          deviceId: sql`excluded.device_id`,
+          body: sql`excluded.body`,
+          createdAt: sql`excluded.created_at`,
+          updatedAt: sql`excluded.updated_at`,
+          seq: sql`excluded.seq`,
+          syncedAt: sql`excluded.synced_at`,
+          deletedAt: sql`excluded.deleted_at`,
+        },
+        setWhere: sql`${entries.seq} IS NOT NULL OR excluded.updated_at >= ${entries.updatedAt} OR excluded.deleted_at IS NOT NULL`,
+      });
+    // Deliberately reindexFromCurrentState(), not indexForSearch(entry)
+    // as upsert() does: once a row can be refused, indexing the incoming
+    // body would make Search the one place a refused edit still appeared
+    // to have landed. Same reasoning edit() and remove() already give for
+    // choosing this over indexing what the caller assumed it wrote.
+    for (const entry of incoming) {
+      await this.reindexFromCurrentState(entry.id);
+    }
+  }
+
   async search(query: string): Promise<Entry[]> {
     const trimmed = query.trim();
     if (trimmed === "") {

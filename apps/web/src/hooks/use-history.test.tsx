@@ -57,6 +57,7 @@ function createFakeStore(): EntryStore {
     upsert: vi.fn(async (incoming: Entry[]) => {
       entries = [...entries, ...incoming];
     }),
+    applyPulled: vi.fn(async () => {}),
     pending: vi.fn(async () => []),
     getCursor: vi.fn(async () => 0),
     setCursor: vi.fn(async () => {}),
@@ -615,6 +616,7 @@ describe("useHistory", () => {
       return {
         list,
         upsert: vi.fn(async () => {}),
+        applyPulled: vi.fn(async () => {}),
         pending: vi.fn(async () => []),
         getCursor: vi.fn(async () => 0),
         setCursor: vi.fn(async () => {}),

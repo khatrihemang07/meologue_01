@@ -156,6 +156,62 @@ describe("restoreFromBackup", () => {
     expect(restoredEntry?.syncedAt).toBe("2026-01-02T00:00:00.000Z");
   });
 
+  // Issue #215 / ADR 0068. The test above proves Restore leaves the Cursor
+  // at 0; this one proves what that costs and that the cost is now paid
+  // for. A Cursor of 0 means the very next pull is this Device's entire
+  // History at once — the widest form of the window `applyPulled()` exists
+  // to close — and a store-open rewrite (ADR 0053's Task backfill, ADR
+  // 0067's soft-break pass) is running in exactly that moment.
+  //
+  // Driven against the real SqliteEntryStore that Restore just wrote
+  // through, not the in-memory double, and against `applyPulled()`
+  // directly rather than through `sync()`: the pull's arrival is the
+  // event under test, and reproducing it through a whole Sync round trip
+  // would make this depend on winning a race rather than on the guard.
+  it("does not let the full-History pull a Restore invites stomp an edit made at store open", async () => {
+    const sourceDriver = new NodeSqliteDriver();
+    const { store: sourceStore } = await open(sourceDriver);
+    await sourceStore.upsert([
+      entry({
+        id: "e1",
+        body: "as the Server still has it",
+        seq: 42,
+        syncedAt: "2026-01-02T00:00:00.000Z",
+      }),
+    ]);
+    const sql = await dumpDatabase(sourceDriver);
+
+    const targetDriver = new NodeSqliteDriver();
+    const { store } = await open(targetDriver);
+    const outcome = await restoreFromBackup({
+      driver: targetDriver,
+      databaseSql: sql,
+      takeSafetyBackup: okSafetyBackup,
+    });
+    expect(outcome.ok).toBe(true);
+    expect(await store.getCursor()).toBe(0);
+
+    // The store-open rewrite, on the restored row.
+    await store.edit("e1", "rewritten at store open");
+
+    // The Cursor-0 pull coming back with the Server's older copy of every
+    // row this Device holds.
+    await store.applyPulled([
+      entry({
+        id: "e1",
+        body: "as the Server still has it",
+        seq: 42,
+        syncedAt: "2026-01-03T00:00:00.000Z",
+      }),
+    ]);
+
+    const [survived] = await store.list();
+    expect(survived).toMatchObject({ body: "rewritten at store open", seq: null });
+    // Still pending, so the next Sync pushes it — surviving in the
+    // database is worth nothing if the row is left looking already-synced.
+    expect((await store.pending()).map((e) => e.id)).toEqual(["e1"]);
+  });
+
   // Issue #214 / ADR 0067: a Backup taken before the soft-break migration
   // existed never names its own `kv` marker row at all, so
   // `restoreTable`'s ordinary "only upsert what the file names" kv

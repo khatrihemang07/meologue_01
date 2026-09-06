@@ -230,6 +230,7 @@ function createFakeEntryStore(initial: readonly Entry[] = []): EntryStore {
     upsert: vi.fn(async (incoming: Entry[]) => {
       entries = [...entries, ...incoming];
     }),
+    applyPulled: vi.fn(async () => {}),
     pending: vi.fn(async () => []),
     getCursor: vi.fn(async () => 0),
     setCursor: vi.fn(async () => {}),

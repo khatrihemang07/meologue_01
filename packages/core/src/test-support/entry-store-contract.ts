@@ -428,4 +428,211 @@ export function entryStoreContract(createStore: () => EntryStore | Promise<Entry
     expect(await store.list()).toEqual([]);
     expect(await store.search("recur")).toEqual([]);
   });
+
+  // Issue #215 / ADR 0068: the pull's own write path. Everything above
+  // exercises upsert(), which stays deliberately wholesale; these are the
+  // cases that separate applyPulled() from it. See
+  // EntryStore.applyPulled's doc comment (../store.ts) for the rule and
+  // why the acknowledgement path is knowingly not held to it.
+  describe("applyPulled() (issue #215)", () => {
+    it("applies an incoming row over a local row with nothing pending", async () => {
+      await store.upsert([
+        entry({
+          id: "a",
+          body: "as this Device last saw it",
+          seq: 1,
+          syncedAt: "2026-01-01T00:00:00.000Z",
+        }),
+      ]);
+
+      await store.applyPulled([
+        entry({
+          id: "a",
+          body: "edited on another Device",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-02T00:00:00.000Z",
+          seq: 2,
+          syncedAt: "2026-01-02T00:00:00.000Z",
+        }),
+      ]);
+
+      const [found] = await store.list();
+      expect(found).toMatchObject({ id: "a", body: "edited on another Device", seq: 2 });
+    });
+
+    it("inserts an Entry this Device has never seen", async () => {
+      await store.applyPulled([entry({ id: "fresh", body: "from another Device", seq: 7 })]);
+
+      expect((await store.list()).map((e) => e.id)).toEqual(["fresh"]);
+    });
+
+    // The defect itself: a store-open rewrite (ADR 0053's Task backfill,
+    // ADR 0067's soft-break pass) edits a row, and the pull that lands
+    // straight afterwards carries the Server's older copy of it.
+    it("does not overwrite a local edit that has not been pushed yet", async () => {
+      const synced = entry({
+        id: "a",
+        body: "before the local edit",
+        seq: 1,
+        syncedAt: "2026-01-01T00:00:00.000Z",
+      });
+      await store.upsert([synced]);
+      await store.edit("a", "the local edit nobody has pushed");
+
+      await store.applyPulled([
+        entry({
+          id: "a",
+          body: "before the local edit",
+          seq: 1,
+          syncedAt: "2026-01-02T00:00:00.000Z",
+        }),
+      ]);
+
+      const [found] = await store.list();
+      expect(found).toMatchObject({ id: "a", body: "the local edit nobody has pushed" });
+    });
+
+    // The half that makes the first half worth anything: surviving is not
+    // enough if the row is left looking already-synced, because then
+    // nothing ever pushes it and the edit is lost at the next pull anyway.
+    it("leaves the surviving local edit pending, so the next Sync still pushes it", async () => {
+      await store.upsert([
+        entry({ id: "a", body: "before", seq: 1, syncedAt: "2026-01-01T00:00:00.000Z" }),
+      ]);
+      await store.edit("a", "the local edit nobody has pushed");
+
+      await store.applyPulled([
+        entry({ id: "a", body: "before", seq: 1, syncedAt: "2026-01-02T00:00:00.000Z" }),
+      ]);
+
+      const pending = await store.pending();
+      expect(pending.map((e) => e.id)).toEqual(["a"]);
+      expect(pending[0]).toMatchObject({ body: "the local edit nobody has pushed", seq: null });
+    });
+
+    // Search has to agree with what the row actually holds. Indexing the
+    // refused incoming body here would make Search the one place the lost
+    // edit still appeared to have happened.
+    it("indexes the row that survived, not the incoming row it refused", async () => {
+      await store.upsert([
+        entry({ id: "a", body: "a recurring chore", seq: 1, syncedAt: "2026-01-01T00:00:00.000Z" }),
+      ]);
+      await store.edit("a", "a finished errand");
+
+      await store.applyPulled([
+        entry({ id: "a", body: "a recurring chore", seq: 1, syncedAt: "2026-01-02T00:00:00.000Z" }),
+      ]);
+
+      expect((await store.search("errand")).map((e) => e.id)).toEqual(["a"]);
+      expect(await store.search("recurring")).toEqual([]);
+    });
+
+    // ADR 0028's last-writer-wins is not weakened: a genuinely newer row
+    // from elsewhere still lands. Only a *stale* one is refused.
+    it("applies an incoming row that is newer than the pending local edit", async () => {
+      await store.upsert([
+        entry({ id: "a", body: "before", seq: 1, syncedAt: "2026-01-01T00:00:00.000Z" }),
+      ]);
+      await store.edit("a", "the local edit");
+
+      await store.applyPulled([
+        entry({
+          id: "a",
+          body: "a later edit from another Device",
+          // Far enough ahead to beat the real clock edit() just stamped,
+          // whatever today happens to be — this contract runs against
+          // implementations whose `now` is the real one.
+          updatedAt: "2099-01-01T00:00:00.000Z",
+          seq: 9,
+          syncedAt: "2026-01-02T00:00:00.000Z",
+        }),
+      ]);
+
+      const [found] = await store.list();
+      expect(found).toMatchObject({ id: "a", body: "a later edit from another Device", seq: 9 });
+    });
+
+    // A tie is this Device's own row coming back with a `seq` on it. It
+    // must land, or the row stays pending and re-pushes on every tick
+    // forever.
+    it("applies an incoming row whose updatedAt ties the pending local row", async () => {
+      await store.upsert([
+        entry({ id: "a", body: "before", seq: 1, syncedAt: "2026-01-01T00:00:00.000Z" }),
+      ]);
+      await store.edit("a", "the local edit");
+      const [local] = await store.list();
+
+      await store.applyPulled([
+        entry({
+          id: "a",
+          body: "the local edit",
+          updatedAt: local?.updatedAt as string,
+          seq: 9,
+          syncedAt: "2026-01-02T00:00:00.000Z",
+        }),
+      ]);
+
+      expect(await store.pending()).toEqual([]);
+      expect((await store.list())[0]).toMatchObject({ id: "a", seq: 9 });
+    });
+
+    // ADR 0064: deletion is terminal in both directions. A tombstone
+    // arriving from elsewhere beats a local edit even though the edit is
+    // newer — the same asymmetry edit()'s own `WHERE deleted_at IS NULL`
+    // guard already enforces from the other side.
+    it("applies an incoming tombstone even over a newer pending local edit", async () => {
+      await store.upsert([
+        entry({ id: "a", body: "a recurring chore", seq: 1, syncedAt: "2026-01-01T00:00:00.000Z" }),
+      ]);
+      await store.edit("a", "the local edit nobody has pushed");
+
+      await store.applyPulled([
+        entry({
+          id: "a",
+          body: "",
+          updatedAt: "2026-01-02T00:00:00.000Z",
+          seq: 9,
+          syncedAt: "2026-01-02T00:00:00.000Z",
+          deletedAt: "2026-01-02T00:00:00.000Z",
+        }),
+      ]);
+
+      expect(await store.list()).toEqual([]);
+      expect(await store.search("pushed")).toEqual([]);
+    });
+
+    // A batch is the ordinary case — a Cursor-reset pull hands over the
+    // whole History at once. One refused row must not stop the rest of
+    // that batch from landing.
+    it("refuses only the rows it must, applying the rest of the batch", async () => {
+      await store.upsert([
+        entry({ id: "a", body: "before", seq: 1, syncedAt: "2026-01-01T00:00:00.000Z" }),
+        entry({ id: "b", body: "b before", seq: 2, syncedAt: "2026-01-01T00:00:00.000Z" }),
+      ]);
+      await store.edit("a", "the local edit nobody has pushed");
+
+      await store.applyPulled([
+        entry({ id: "a", body: "before", seq: 1, syncedAt: "2026-01-02T00:00:00.000Z" }),
+        entry({
+          id: "b",
+          body: "b, edited elsewhere",
+          updatedAt: "2026-01-02T00:00:00.000Z",
+          seq: 3,
+          syncedAt: "2026-01-02T00:00:00.000Z",
+        }),
+      ]);
+
+      const byId = new Map((await store.list()).map((e) => [e.id, e]));
+      expect(byId.get("a")).toMatchObject({ body: "the local edit nobody has pushed", seq: null });
+      expect(byId.get("b")).toMatchObject({ body: "b, edited elsewhere", seq: 3 });
+    });
+
+    it("is a no-op on an empty batch", async () => {
+      await store.upsert([entry({ id: "a", seq: 1 })]);
+
+      await store.applyPulled([]);
+
+      expect((await store.list()).map((e) => e.id)).toEqual(["a"]);
+    });
+  });
 }

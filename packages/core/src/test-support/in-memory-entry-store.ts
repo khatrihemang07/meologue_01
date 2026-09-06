@@ -72,6 +72,27 @@ export class InMemoryEntryStore implements EntryStore {
     }
   }
 
+  /**
+   * Mirrors SqliteEntryStore.applyPulled() — see EntryStore.applyPulled's
+   * doc comment (../store.ts) for the rule both implementations owe
+   * callers, and the real store for why it is expressed as a `setWhere`
+   * on one statement there rather than as this read-then-decide.
+   */
+  async applyPulled(incoming: Entry[]): Promise<void> {
+    for (const entry of incoming) {
+      const local = this.entries.get(entry.id);
+      const refused =
+        local !== undefined &&
+        local.seq === null &&
+        local.updatedAt > entry.updatedAt &&
+        entry.deletedAt === null;
+      if (refused) {
+        continue;
+      }
+      this.entries.set(entry.id, entry);
+    }
+  }
+
   async pending(): Promise<Entry[]> {
     // Tombstones awaiting push have `seq === null` exactly like a newly
     // captured Entry (ADR 0028), so they're picked up here with no

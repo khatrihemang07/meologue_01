@@ -592,6 +592,11 @@ const notReadyPagination: UseHistoryPagination = {
 const ENTRY_STORE_METHODS: StoreMethodNames<EntryStore> = {
   list: true,
   upsert: true,
+  // Issue #215 / ADR 0068 — the identical compile-time checkpoint above,
+  // and it matters here more than most: `sync()` reaches this through the
+  // deferred store on the session's very first tick, which is exactly the
+  // tick a store-open rewrite races.
+  applyPulled: true,
   pending: true,
   getCursor: true,
   setCursor: true,
