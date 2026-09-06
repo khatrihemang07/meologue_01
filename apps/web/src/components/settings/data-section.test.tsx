@@ -149,6 +149,9 @@ function createFakeStore(entries: Entry[] = []): EntryStore {
     setCursor: vi.fn(async () => {}),
     // Issue #186 / ADR 0057.
     catchUpRowShapeEpoch: vi.fn(async () => {}),
+    // Issue #214 / ADR 0067.
+    hasCompletedSoftBreakMigration: vi.fn(async () => true),
+    markSoftBreakMigrationComplete: vi.fn(async () => {}),
     search: vi.fn(async () => []),
     edit: vi.fn(async () => {}),
     remove: vi.fn(async () => {}),

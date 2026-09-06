@@ -164,4 +164,25 @@ export interface EntryStore {
    * single local integer comparison, not a network round trip.
    */
   catchUpRowShapeEpoch(currentEpoch: number): Promise<void>;
+  /**
+   * Issue #214 / ADR 0067: whether this Device has already run the
+   * one-time newline-halving migration (`apps/web/src/lib/soft-break-migration.ts`)
+   * at least once. Backed by `kv` (`SOFT_BREAK_MIGRATION_KEY`,
+   * ./sqlite/schema.ts) rather than `localStorage`, so Restore — which
+   * restores `kv` — carries this marker along with everything else; see
+   * that key's own doc comment for why living there matters.
+   *
+   * This is an optimisation, not the source of correctness: the migration
+   * itself is guarded per-row (`Entry.updatedAt` against
+   * `protocol.ts`'s `BODY_SOFT_BREAK_CUTOFF`), so a Device that answers
+   * `false` here when it has, in fact, already migrated every Entry it
+   * holds simply re-scans once for nothing, cheaply and safely, rather
+   * than corrupting anything. Callers use this the way
+   * `hasAlreadyBackfilled` (`backfill-tasks.ts`'s own local equivalent for
+   * ADR 0053's backfill) uses its own flag — to skip a redundant scan on
+   * every ordinary open, not to decide whether a rewrite is safe.
+   */
+  hasCompletedSoftBreakMigration(): Promise<boolean>;
+  /** Records that this Device has run the migration `hasCompletedSoftBreakMigration` reports on — see that method's own doc comment. */
+  markSoftBreakMigrationComplete(): Promise<void>;
 }

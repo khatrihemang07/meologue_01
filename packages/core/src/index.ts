@@ -73,7 +73,12 @@ export { compareByOrder, orderKeyBetween } from "./order-key";
 export { MAX_SECTIONS_PER_PROJECT } from "./project-fields";
 export type { ProjectStore } from "./project-store";
 export type { Project, Section } from "./project-types";
-export { PROTOCOL_VERSION, SYNC_BATCH_SIZE, SYNC_INTERVAL_MS } from "./protocol";
+export {
+  BODY_SOFT_BREAK_CUTOFF,
+  PROTOCOL_VERSION,
+  SYNC_BATCH_SIZE,
+  SYNC_INTERVAL_MS,
+} from "./protocol";
 export { englishQuickAddLanguage } from "./quick-add/en";
 export type { QuickAddLanguage } from "./quick-add/language";
 export { demoteQuickAddToken, parseQuickAdd } from "./quick-add/parse-quick-add";

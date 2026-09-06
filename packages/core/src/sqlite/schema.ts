@@ -492,3 +492,17 @@ export const DEVICE_ID_KEY = "device_id";
 // never held it, is the same failure as a Cursor claiming progress the
 // rows behind it never made.
 export const ROW_SHAPE_EPOCH_KEY = "row_shape_epoch";
+// Issue #214 / ADR 0067: whether this Device has run the one-time
+// newline-halving pass (apps/web/src/lib/soft-break-migration.ts) at least
+// once. Lives in `kv`, not `localStorage`, for the identical ADR 0007
+// reason `CURSOR_KEY`/`ROW_SHAPE_EPOCH_KEY` do — Restore restores `kv`
+// wholesale-per-row, so a marker kept anywhere else would survive a
+// Restore and leave the Restored (potentially pre-migration) rows
+// permanently unmigrated. This is an optimisation only, never the source
+// of correctness: the migration's own per-row guard, `Entry.updatedAt`
+// against `protocol.ts`'s `BODY_SOFT_BREAK_CUTOFF`, is what actually makes
+// re-running safe — losing this key (a cleared profile, a Restore, a
+// Merge, which excludes `kv` entirely and so is handled by explicitly
+// clearing this one key rather than relying on that exclusion) costs one
+// redundant, still-safe re-scan of History, never a double-halved body.
+export const SOFT_BREAK_MIGRATION_KEY = "soft_break_migration_ran";

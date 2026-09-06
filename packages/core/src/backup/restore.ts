@@ -1,6 +1,6 @@
 import type { SqliteDriver } from "../sqlite/driver";
 import { LEDGER_TABLE } from "../sqlite/migrator";
-import { DEVICE_ID_KEY } from "../sqlite/schema";
+import { DEVICE_ID_KEY, SOFT_BREAK_MIGRATION_KEY } from "../sqlite/schema";
 import { SqliteEntryStore } from "../sqlite/sqlite-entry-store";
 import { SqliteTaskStore } from "../sqlite/sqlite-task-store";
 import { quoteIdent, tableColumns } from "./dump";
@@ -260,6 +260,32 @@ async function resetCursorsAndEpochs(driver: SqliteDriver): Promise<void> {
 }
 
 /**
+ * Issue #214 / ADR 0067: re-arms the one-time newline-halving migration
+ * unconditionally, on every Restore. `restoreTable`'s own `kv` handling
+ * (above) only upserts rows the Backup file actually names and otherwise
+ * leaves this Device's existing `kv` rows untouched — a Backup taken
+ * before this migration existed never names `SOFT_BREAK_MIGRATION_KEY` at
+ * all, so if this Device had already run the migration before Restoring
+ * that Backup, the marker would otherwise survive Restore unchanged and
+ * the just-Restored, pre-migration bodies would never be revisited. This
+ * runs regardless of what the Backup contained, the same
+ * always-reset-regardless-of-the-file posture `resetCursorsAndEpochs`
+ * takes for Cursors just above: re-arming a Device that had, in fact,
+ * already migrated everything it just restored costs one redundant,
+ * still-safe re-scan (the migration's own per-row `updatedAt` guard is
+ * what actually decides whether any given row needs rewriting), which is
+ * a far cheaper mistake than leaving a Restored History silently
+ * unmigrated forever.
+ */
+async function rearmSoftBreakMigration(driver: SqliteDriver): Promise<void> {
+  await driver.execute(
+    `DELETE FROM ${quoteIdent(KV_TABLE)} WHERE key = ?`,
+    [SOFT_BREAK_MIGRATION_KEY],
+    "run",
+  );
+}
+
+/**
  * Applies a Backup's `database.sql` to `driver`'s own database, replacing
  * its contents with the Backup's (this file's own header comment has the
  * full reasoning for every guard below).
@@ -356,6 +382,7 @@ export async function restoreFromBackup(options: RestoreOptions): Promise<Restor
     }
     onProgress?.("Resetting Sync state…");
     await resetCursorsAndEpochs(driver);
+    await rearmSoftBreakMigration(driver);
     await driver.execute("COMMIT", [], "run");
   } catch (error) {
     await driver.execute("ROLLBACK", [], "run").catch(() => {

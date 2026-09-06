@@ -361,6 +361,35 @@ describe("mergeBackupIntoDevice", () => {
     expect(kv.cursor).toBe("7");
   });
 
+  // Issue #214 / ADR 0067: `kv` is entirely excluded from Merge (this
+  // file's own `MERGE_EXCLUDED_TABLES`), so without an explicit re-arm
+  // step a Device that had already run the soft-break migration would
+  // keep that marker forever after folding in another Device's rows —
+  // including rows that Device never migrated. This is the one, narrow
+  // exception to the "does not apply settings" test just above: this
+  // single `kv` row is deliberately touched, unconditionally, on every
+  // Merge, regardless of what the Backup itself carried.
+  it("re-arms the soft-break migration on Merge, even though kv is otherwise untouched", async () => {
+    const sourceDriver = new NodeSqliteDriver();
+    const { store: sourceStore } = await open(sourceDriver);
+    await sourceStore.upsert([entry({ id: "e1", body: "from source" })]);
+    const sql = await dumpDatabase(sourceDriver);
+
+    const targetDriver = new NodeSqliteDriver();
+    const { store: targetStore } = await open(targetDriver);
+    await targetStore.markSoftBreakMigrationComplete();
+    expect(await targetStore.hasCompletedSoftBreakMigration()).toBe(true);
+
+    const outcome = await mergeBackupIntoDevice({
+      driver: targetDriver,
+      databaseSql: sql,
+      takeSafetyBackup: okSafetyBackup,
+    });
+    expect(outcome.ok).toBe(true);
+
+    expect(await targetStore.hasCompletedSoftBreakMigration()).toBe(false);
+  });
+
   it("merging a Backup of a Device with mostly-shared history marks almost nothing pending", async () => {
     const sourceDriver = new NodeSqliteDriver();
     const { store: sourceStore } = await open(sourceDriver);

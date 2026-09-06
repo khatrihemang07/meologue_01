@@ -4,7 +4,14 @@ import { mintId } from "../id";
 import type { EntryPage, EntryStore } from "../store";
 import type { Entry } from "../types";
 import type { SqliteDriver } from "./driver";
-import { CURSOR_KEY, DEVICE_ID_KEY, entries, kv, ROW_SHAPE_EPOCH_KEY } from "./schema";
+import {
+  CURSOR_KEY,
+  DEVICE_ID_KEY,
+  entries,
+  kv,
+  ROW_SHAPE_EPOCH_KEY,
+  SOFT_BREAK_MIGRATION_KEY,
+} from "./schema";
 
 /**
  * The SQLite-backed EntryStore (ADR 0007), platform-free — it talks to a
@@ -334,6 +341,17 @@ export class SqliteEntryStore implements EntryStore {
     }
     await this.setCursor(0);
     await this.setKv(ROW_SHAPE_EPOCH_KEY, String(currentEpoch));
+  }
+
+  // Issue #214 / ADR 0067 — see EntryStore.hasCompletedSoftBreakMigration's
+  // own doc comment (../store.ts) for the mechanism and why an absent key
+  // means "not yet."
+  async hasCompletedSoftBreakMigration(): Promise<boolean> {
+    return (await this.getKv(SOFT_BREAK_MIGRATION_KEY)) === "true";
+  }
+
+  async markSoftBreakMigrationComplete(): Promise<void> {
+    await this.setKv(SOFT_BREAK_MIGRATION_KEY, "true");
   }
 
   /** Resolves this Device's id, minting and persisting one on first run. */

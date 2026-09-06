@@ -13,6 +13,11 @@ export class InMemoryEntryStore implements EntryStore {
   // in the real SqliteEntryStore — see EntryStore.catchUpRowShapeEpoch's
   // own doc comment (../store.ts) for what this tracks and why.
   private rowShapeEpoch = 0;
+  // Issue #214 / ADR 0067: mirrors SOFT_BREAK_MIGRATION_KEY's persisted
+  // value in the real SqliteEntryStore — see
+  // EntryStore.hasCompletedSoftBreakMigration's own doc comment
+  // (../store.ts).
+  private softBreakMigrationComplete = false;
   // Issue #196 — mirrors SqliteEntryStore's own identical field
   // (../sqlite/sqlite-entry-store.ts): an injectable clock, real by
   // default, so a test can pin down a deterministic `updatedAt`.
@@ -90,6 +95,16 @@ export class InMemoryEntryStore implements EntryStore {
     }
     this.cursor = 0;
     this.rowShapeEpoch = currentEpoch;
+  }
+
+  // Issue #214 / ADR 0067 — see EntryStore.hasCompletedSoftBreakMigration's
+  // own doc comment (../store.ts) for the mechanism this mirrors.
+  async hasCompletedSoftBreakMigration(): Promise<boolean> {
+    return this.softBreakMigrationComplete;
+  }
+
+  async markSoftBreakMigrationComplete(): Promise<void> {
+    this.softBreakMigrationComplete = true;
   }
 
   async search(query: string): Promise<Entry[]> {

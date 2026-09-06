@@ -109,3 +109,34 @@ export const ROW_SHAPE_EPOCH = {
 } as const satisfies Record<string, number>;
 
 export type SyncStream = keyof typeof ROW_SHAPE_EPOCH;
+
+/**
+ * Issue #214 / ADR 0067: the moment the build that made Enter insert a
+ * single `\n` (issue #212, ADR 0066) shipped, in UTC — the instant on
+ * either side of which the two old, distinguishable shapes stop being
+ * distinguishable. Before it, a `\n\n` an Entry's own body carries could
+ * only have come from one Enter under the old keymap (which stored two
+ * newlines per press) or from a genuine blank line (four); from this
+ * moment on, a `\n\n` is already what one Enter meant to produce, and
+ * halving it would remove a real blank line a reader typed on purpose.
+ *
+ * Lives beside `ROW_SHAPE_EPOCH` rather than in `apps/web` for the
+ * identical reason that map does: the one-time newline-halving pass this
+ * constant gates is guarded per-row, on `Entry.updatedAt` against this
+ * value (`apps/web/src/lib/soft-break-migration.ts`), and `updatedAt`
+ * travels on the wire — a row migrated on one Device arrives at every
+ * other Device already past this cutoff, so this value has to read
+ * identically everywhere or two Devices could disagree about whether the
+ * same row still needs migrating. A Device-local constant duplicated in
+ * `apps/web` (or worse, computed from a Device's own build time) could
+ * drift between Devices on different release trains; this one can't,
+ * because there is exactly one copy.
+ *
+ * Deliberately NOT wired into `ROW_SHAPE_EPOCH`/`catchUpRowShapeEpoch`:
+ * that mechanism resets a stream's *Cursor* so an already-pulled row is
+ * re-fetched from the Server once more; this migration needs no re-fetch
+ * at all; it rewrites bodies already sitting in this Device's own
+ * database, once, and the row's own `updatedAt` is timestamp enough to
+ * tell old writing from new without a second, redundant epoch counter.
+ */
+export const BODY_SOFT_BREAK_CUTOFF = "2026-09-06T12:24:27.000Z";

@@ -156,6 +156,37 @@ describe("restoreFromBackup", () => {
     expect(restoredEntry?.syncedAt).toBe("2026-01-02T00:00:00.000Z");
   });
 
+  // Issue #214 / ADR 0067: a Backup taken before the soft-break migration
+  // existed never names its own `kv` marker row at all, so
+  // `restoreTable`'s ordinary "only upsert what the file names" kv
+  // handling would otherwise leave whatever this Device already had
+  // untouched — exactly the failure this migration's own re-arm step
+  // exists to close. `sql` here stands in for that kind of Backup: it
+  // genuinely never touched `SOFT_BREAK_MIGRATION_KEY`, the same way a
+  // real pre-#214 build's dump never would have.
+  it("re-arms the soft-break migration on Restore, even from a Backup that never named the marker", async () => {
+    const sourceDriver = new NodeSqliteDriver();
+    const { store: sourceStore } = await open(sourceDriver);
+    await sourceStore.upsert([entry({ id: "e1", body: "a\n\n\n\nb" })]);
+    const sql = await dumpDatabase(sourceDriver);
+
+    const targetDriver = new NodeSqliteDriver();
+    const { store: targetStore } = await open(targetDriver);
+    // This Device had already run the migration once, before Restoring an
+    // old Backup that predates it existing at all.
+    await targetStore.markSoftBreakMigrationComplete();
+    expect(await targetStore.hasCompletedSoftBreakMigration()).toBe(true);
+
+    const outcome = await restoreFromBackup({
+      driver: targetDriver,
+      databaseSql: sql,
+      takeSafetyBackup: okSafetyBackup,
+    });
+    expect(outcome.ok).toBe(true);
+
+    expect(await targetStore.hasCompletedSoftBreakMigration()).toBe(false);
+  });
+
   it("makes Search work immediately after a Restore, on a database with no prior FTS5 rows at all", async () => {
     const sourceDriver = new NodeSqliteDriver();
     const { store: sourceStore, taskStore: sourceTaskStore } = await open(sourceDriver);

@@ -26,6 +26,7 @@ import { describe, expect, it } from "vitest";
 import { entryDocumentToMarkdown, entryMarkdownToDocument } from "./entry-document";
 import { entrySchema } from "./entry-schema";
 import { formatTaskReference } from "./inline-markdown";
+import { halveSoftBreakRuns } from "./soft-break-migration";
 
 const ENTRY_ID = "0192abcd-1234-7890-abcd-0123456789ab";
 const TASK_ID = "0192abcd-1234-7890-abcd-0123456789ac";
@@ -274,6 +275,46 @@ describe("entryMarkdownToDocument / entryDocumentToMarkdown round trip", () => {
       // successfully and only fail here, which is exactly why this needs
       // its own assertion rather than trusting construction not to throw.
       expect(() => entryMarkdownToDocument(body).check()).not.toThrow();
+    });
+  });
+});
+
+/**
+ * Issue #214 / ADR 0067: the invariant that stands in for a safety Backup
+ * on the one-time newline-halving migration (`soft-break-migration.ts`).
+ * No safety Backup is taken before that migration runs — on web that would
+ * mean a download prompt on every app open, worse than the defect it
+ * fixes — so what makes running it unattended survivable has to be a
+ * property of the transform itself, asserted here rather than assumed:
+ * `halveSoftBreakRuns` only ever removes `\n` characters. It can shorten a
+ * run of newlines; it can never touch a word, a mark, a Reference, or a
+ * list, and it can never touch a non-newline character full stop.
+ *
+ * Asserted by stripping every `\n` from both `halveSoftBreakRuns(body)`
+ * and `roundTrip(body)` (the plain round trip, with no halving at all) and
+ * requiring the two to come out identical — across the *entire* existing
+ * round-trip corpus above, not a handful of newline-shaped examples,
+ * because the property this is meant to prove is "nothing here can ever
+ * lose a word," and that has to hold for every shape this dialect can
+ * produce, not merely the ones this ticket was written to think about.
+ *
+ * This is also why `halveSoftBreakRuns` itself always parses and
+ * re-serializes, even a body with no `"\n\n"` at all, rather than
+ * short-circuiting by returning it verbatim (that file's own doc comment
+ * on `halveSoftBreakRuns` has the full reasoning): several entries in this
+ * very corpus — `"1) a\n2) b"`, `"before ~ after"` — have no double
+ * newline yet still change under the plain round trip (an ordered list's
+ * `)` delimiter normalises to `.`; a lone `~` gains an escaping
+ * backslash), and a short-circuit would make `halveSoftBreakRuns` disagree
+ * with `roundTrip` on exactly those non-newline characters — the one
+ * thing this invariant exists to rule out.
+ */
+describe("halveSoftBreakRuns only ever removes newline characters (issue #214)", () => {
+  describe.each(CORPUS)("%s", (_name, body) => {
+    it("agrees with the plain round trip once newlines are stripped from both", () => {
+      const halved = halveSoftBreakRuns(body).replace(/\n/g, "");
+      const plain = roundTrip(body).replace(/\n/g, "");
+      expect(halved).toBe(plain);
     });
   });
 });

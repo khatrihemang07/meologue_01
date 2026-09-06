@@ -2,10 +2,13 @@ import type { Locator, Page } from "@playwright/test";
 import { SERVER_A_DATABASE } from "../servers";
 import { expect, test } from "./fixtures";
 import {
+  advanceDateByDays,
   composerField,
   editEntryViaMenu,
   entryRow,
   entrySeq,
+  installDateOffset,
+  openDestination,
   sendEntry,
   uniqueEntryBody,
   waitForEntryId,
@@ -50,6 +53,32 @@ async function caretToStartOfLine(page: Page, editor: Locator): Promise<void> {
   // One more turn of the event loop after the DOM selection has settled, so
   // DOMObserver's flush of that `selectionchange` has actually run.
   await page.waitForTimeout(50);
+}
+
+/**
+ * Presses Enter until the field's own paragraph ends in exactly `target`
+ * consecutive `\n` characters — issue #214's own soft-break-migration test
+ * needs several Enters typed back to back with nothing in between, and
+ * `caretToStartOfLine`'s own comment (above) already names the general
+ * hazard: a keypress fired while ProseMirror's DOMObserver hasn't yet
+ * flushed the previous one's mutation is simply lost, so a fixed count of
+ * `.press("Enter")` calls can silently under-count. Counts the trailing run
+ * rather than assuming one press adds exactly one `\n`, and presses again
+ * only when the count still falls short — the identical "poll and retry
+ * the action itself," not just the assertion, idiom the ArrowLeft test
+ * above this one already uses for the same class of race.
+ */
+async function pressEnterUntil(editor: Locator, target: number): Promise<void> {
+  await expect
+    .poll(async () => {
+      const text = (await editor.locator("p").textContent()) ?? "";
+      const trailingRun = /\n*$/.exec(text)?.[0].length ?? 0;
+      if (trailingRun < target) {
+        await editor.press("Enter");
+      }
+      return trailingRun;
+    })
+    .toBe(target);
 }
 
 test("typing consumes the marker characters and applies the formatting", async ({ page }) => {
@@ -939,6 +968,175 @@ test("Shift+Enter behaves exactly like Enter — a soft break in one paragraph, 
   // itself).
   await expect(page.locator('[data-slot="bubble-body"]', { hasText: firstLine })).toHaveCount(0);
   await expect(page.locator('[data-slot="bubble-body"]', { hasText: secondLine })).toHaveCount(0);
+});
+
+// ---------------------------------------------------------------------------
+// Issue #214 / ADR 0067: the one-time pass that halves a run of newlines
+// written before Enter meant one line per press (#212, just above). This
+// spec seeds an Entry that LOOKS like it was written under the old keymap —
+// a real Entry whose `updated_at` is backdated ahead of
+// `BODY_SOFT_BREAK_CUTOFF` via `installDateOffset`/`advanceDateByDays`
+// (helpers.ts) — and drives it through a real self-Merge (merge.spec.ts's
+// own file-chooser technique, aimed at this same Device rather than a
+// second one) to prove the migration actually runs against this Device's
+// real, opened store, not merely that the pure transform unit
+// (soft-break-migration.test.ts) is correct in isolation.
+//
+// A Merge, not a plain reload, is what actually lets this test SEE the
+// pre-cutoff Entry get migrated: the migration's own "already ran" marker
+// (`kv`) is set the very first time this fresh Device opens its (empty)
+// store at all, at the very first `page.goto` below — before the Entry
+// this test cares about even exists — so an ordinary reload alone would
+// find the marker already set and skip the scan entirely. Merge re-arms
+// that marker (ADR 0067's own acceptance criterion: "A Merge re-arms the
+// pass") — chosen over Restore for that same re-arming, deliberately: a
+// self-Merge changes nothing else (every row is byte-identical to what is
+// already here, so `mergeTable`'s own content-diff skips all of them) and,
+// unlike Restore, never resets this Device's Sync Cursor to 0
+// (`restoreTable`'s own `resetCursorsAndEpochs`, which Merge has no
+// equivalent of at all) — a real, load-sensitive race was found and fixed
+// here during verification: Restore's cursor reset makes the very next
+// Sync pull this Device's *entire* History back from the Server, and
+// `EntryStore.upsert`'s own unconditional overwrite (sqlite-entry-store.ts)
+// has no way to tell "the Server's answer is older than a pending local
+// edit sitting on top of it" — under load, that pull's own `upsert()` can
+// land after this migration's own `store.edit()` and silently stomp the
+// freshly-halved body back to its pre-migration shape before this
+// migration's own `requestSync` ever gets to push it. That hazard is
+// real, pre-existing (any local write racing the ambient `SyncLoop` tick
+// on a freshly-reset Cursor is exposed to it, not only this migration's
+// own), and out of scope to fix here — a Merge is what lets this spec
+// verify the migration itself without depending on winning that race.
+// ---------------------------------------------------------------------------
+
+test("a pre-cutoff Entry's doubled blank line is halved after a Merge re-arms the pass, and is not halved again on a later reload", async ({
+  page,
+}) => {
+  // Longer than this file's implicit default (`playwright.config.ts`'s
+  // `timeout: 60_000`): this test drives a real Backup, a real self-Merge
+  // (its own reload plus a safety-Backup download), the Tasks backfill and
+  // this migration, and an Edit round trip — the heaviest single chain
+  // this file runs.
+  test.setTimeout(120_000);
+
+  const marker = uniqueEntryBody("composer-soft-break-migration");
+
+  // `installDateOffset` only reaches documents navigated to AFTER it's
+  // registered (its own doc comment) — must run before the very first
+  // `page.goto` below.
+  await installDateOffset(page);
+  await page.goto("/composer");
+
+  // Backdated well before `BODY_SOFT_BREAK_CUTOFF` (packages/core/src/protocol.ts)
+  // — 400 days covers any real clock this suite could possibly run against
+  // relative to that fixed instant. `EntryStore.edit`/the initial capture
+  // both stamp `updated_at`/`created_at` from this same, now-offset clock.
+  await advanceDateByDays(page, -400);
+
+  const editor = composerField(page);
+  await editor.click();
+  await editor.pressSequentially(marker);
+  // Four Enters, back to back, with nothing typed between them — under the
+  // OLD (pre-#212) keymap this is what a single deliberate blank line
+  // looked like on the wire (two newlines per press). `pressEnterUntil`
+  // (above) is what makes this reliable rather than assuming four presses
+  // land as four newlines.
+  await pressEnterUntil(editor, 4);
+  await editor.pressSequentially("tail");
+  await expect.poll(() => editor.locator("p").textContent()).toBe(`${marker}\n\n\n\ntail`);
+
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.locator('[data-slot="bubble-body"]', { hasText: marker })).toBeVisible();
+
+  // Back to the real clock — everything from here on (Settings' own
+  // filenames, the reads below) should behave normally; only the Entry's
+  // already-stamped `updated_at` needs to stay backdated, and it does,
+  // untouched by this. Also gives Sync a real, unhurried moment to push
+  // this Entry (this suite's default Server URL keeps Sync live) and
+  // settle before the self-Merge below, rather than racing it.
+  await advanceDateByDays(page, 0);
+  await waitForEntryId(`${marker}\n\n\n\ntail`, SERVER_A_DATABASE);
+
+  // Back up this (still un-migrated) Device, then immediately Merge that
+  // same Backup into itself — merge.spec.ts's own file-chooser dance,
+  // reused verbatim, aimed at this same page rather than a second Device.
+  // The point is not "this Device gains rows it was missing" (a self-Merge
+  // is a no-op on content — merge.ts's own `rowContentUnchanged` skips
+  // every row here, since the Backup and this Device agree byte for byte);
+  // it is that Merge's own `rearmSoftBreakMigration` step (merge.ts)
+  // clears the migration's marker unconditionally, so the reload it
+  // performs on success is a genuinely fresh, re-armed store-open — the
+  // first one to ever see this particular Entry.
+  await openDestination(page, "Settings");
+  const backupButton = page.getByRole("button", { name: "Back up this Device" });
+  await expect(backupButton).toBeEnabled();
+  const [download] = await Promise.all([page.waitForEvent("download"), backupButton.click()]);
+  const backupPath = await download.path();
+  expect(backupPath).not.toBeNull();
+
+  const mergeButton = page.getByRole("button", { name: "Merge a Backup…" });
+  await expect(mergeButton).toBeEnabled();
+  // Merge's own confirm() is a native dialog — Playwright dismisses one by
+  // default, so accepting it needs an explicit listener registered before
+  // the click that raises it (merge.spec.ts's own identical comment).
+  page.once("dialog", (dialog) => dialog.accept());
+  const [fileChooser] = await Promise.all([page.waitForEvent("filechooser"), mergeButton.click()]);
+  // Registered before `setFiles`, for the identical reason merge.spec.ts's
+  // own comment gives: an event already fired cannot be waited for after.
+  const safetyBackup = page.waitForEvent("download");
+  const reloaded = page.waitForEvent("load");
+  await fileChooser.setFiles(backupPath as string);
+  expect((await safetyBackup).suggestedFilename()).toContain("meologue-safety-backup-");
+  await reloaded;
+
+  await openDestination(page, "Composer");
+  const bubbleAfterMerge = page.locator('[data-slot="bubble-body"]', { hasText: marker });
+  await expect(bubbleAfterMerge).toBeVisible();
+  // Halved exactly once: four newlines become two — one real blank line,
+  // reading the way it was meant to. This is what proves the migration
+  // itself actually ran, driven by the real, opened store — not merely
+  // that Merge preserved the Entry unchanged.
+  await expect
+    .poll(() => bubbleAfterMerge.locator("p").textContent(), {
+      message: "the migration should have halved the doubled blank line once Merge re-armed it",
+    })
+    .toBe(`${marker}\n\ntail`);
+
+  // The STORED body, not merely the rendered result: reopening for Edit
+  // re-parses the Entry's real, persisted text (`entryMarkdownToDocument`)
+  // — this is the "alpha, Enter, bravo" test's own byte-identical-round-trip
+  // technique, applied to what the migration itself wrote rather than to
+  // what the Composer wrote.
+  const row = entryRow(page, marker);
+  await row.hover();
+  await row.getByRole("button", { name: "Edit", exact: true }).click();
+  await expect(page.getByText("Editing Entry")).toBeVisible();
+  const reopenedEditor = composerField(page);
+  await expect.poll(() => reopenedEditor.locator("p").textContent()).toBe(`${marker}\n\ntail`);
+  // Leave edit mode without committing — this Entry's `updated_at` is now
+  // whatever the migration's own `store.edit` stamped it to (past the
+  // cutoff), and a real Send here would bump it again for an unrelated
+  // reason, muddying the second-reload assertion below.
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await expect(page.getByText("Editing Entry")).toHaveCount(0);
+
+  // The migration is not idempotent in general — halving `\n\n` a SECOND
+  // time would remove the real blank line this pass just resolved
+  // correctly (`\n\n` -> `\n`) — so this is the acceptance criterion that
+  // actually matters: an ordinary reload (no further Merge, so the marker
+  // Merge set is still in place) must leave the once-halved body exactly
+  // alone, both because the marker now says "already ran" and because
+  // this Entry's `updated_at` (stamped by the migration's own
+  // `store.edit`) is now past the cutoff either way.
+  await page.reload();
+
+  const bubbleAfterSecondReload = page.locator('[data-slot="bubble-body"]', { hasText: marker });
+  await expect(bubbleAfterSecondReload).toBeVisible();
+  await expect
+    .poll(() => bubbleAfterSecondReload.locator("p").textContent(), {
+      message: "a later store-open must not halve an already-migrated body again",
+    })
+    .toBe(`${marker}\n\ntail`);
 });
 
 test("the submit chord still sends, unchanged", async ({ page }) => {

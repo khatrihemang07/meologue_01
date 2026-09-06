@@ -1,5 +1,6 @@
 import type { SqliteDriver } from "../sqlite/driver";
 import { LEDGER_TABLE } from "../sqlite/migrator";
+import { SOFT_BREAK_MIGRATION_KEY } from "../sqlite/schema";
 import { SqliteEntryStore } from "../sqlite/sqlite-entry-store";
 import { SqliteTaskStore } from "../sqlite/sqlite-task-store";
 import { quoteIdent, tableColumns } from "./dump";
@@ -119,6 +120,26 @@ export interface MergeOptions {
  * from a different Device's history is never adopted).
  */
 const MERGE_EXCLUDED_TABLES: ReadonlySet<string> = new Set([LEDGER_TABLE, "kv"]);
+
+/**
+ * Issue #214 / ADR 0067: re-arms the one-time newline-halving migration
+ * unconditionally, on every Merge. `kv` is entirely excluded above, so a
+ * Device that has already run the migration keeps that marker after
+ * folding in another Device's rows — including, potentially, Entries that
+ * still carry the old double-newline shape this migration exists to fix,
+ * merged in from a Device that had never run it (or ran it against an
+ * older `BODY_SOFT_BREAK_CUTOFF`). Clearing the marker here, every time,
+ * costs one redundant, still-safe re-scan on a Merge that brought in
+ * nothing that actually needed it — the migration's own per-row
+ * `updatedAt` guard is what decides that, not this marker.
+ */
+async function rearmSoftBreakMigration(driver: SqliteDriver): Promise<void> {
+  await driver.execute(
+    `DELETE FROM ${quoteIdent("kv")} WHERE key = ?`,
+    [SOFT_BREAK_MIGRATION_KEY],
+    "run",
+  );
+}
 
 const UPDATED_AT_COLUMN = "updated_at";
 
@@ -355,6 +376,7 @@ export async function mergeBackupIntoDevice(options: MergeOptions): Promise<Merg
       onProgress?.(`Merging ${table.name}…`);
       await mergeTable(driver, table, counts);
     }
+    await rearmSoftBreakMigration(driver);
     await driver.execute("COMMIT", [], "run");
   } catch (error) {
     await driver.execute("ROLLBACK", [], "run").catch(() => {
