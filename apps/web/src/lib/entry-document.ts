@@ -87,6 +87,15 @@ function inlineNodesToPM(
           ...inlineNodesToPM(node.children, [...marks, entrySchema.mark("strong")], taskChecked),
         );
         break;
+      case "strikethrough":
+        out.push(
+          ...inlineNodesToPM(
+            node.children,
+            [...marks, entrySchema.mark("strikethrough")],
+            taskChecked,
+          ),
+        );
+        break;
       case "dateReference":
         out.push(
           entrySchema.node(
@@ -219,43 +228,53 @@ export function entryMarkdownToDocument(body: string): PMNode {
 
 /**
  * Fallback rank for the marks that can be simultaneously active on one
- * leaf, used only when `localMarkRank` (below) cannot tell which of two
- * co-occurring marks should nest outside the other. `code` sits apart from
- * the other two — it is written as a wrap around whatever `strong`/`em` are
- * already open (see `writeCodeSpan`), not through this generic diffing at
- * all — so its rank here only matters for sorting it consistently relative
- * to them on the rare path that reaches `openableMarks` with it still
- * present (it never does in practice; see that function).
+ * leaf, used only when `localMarkRank` (below) cannot order two co-occurring
+ * marks by their measured span — either because the spans tie exactly, or
+ * because (only reachable from a document built by hand, never from
+ * `entryMarkdownToDocument`) neither mark's span contains the other's.
+ * `code` sits apart from the rest — it is written as a wrap around whatever
+ * `strong`/`em`/`strikethrough` are already open (see `writeCodeSpan`), not
+ * through this generic diffing at all — so its rank here only matters for
+ * sorting it consistently relative to them on the rare path that reaches
+ * `openableMarks` with it still present (it never does in practice; see
+ * that function).
  */
-const DEFAULT_MARK_RANK: Record<string, number> = { strong: 0, em: 1, code: 2 };
+const DEFAULT_MARK_RANK: Record<string, number> = { strong: 0, em: 1, strikethrough: 2, code: 3 };
 
 /**
- * Which of `strong`/`em` nests outside the other, *for this one paragraph*
- * — computed from where each mark actually occurs among the paragraph's
- * leaves, not a single fixed choice for the whole file. A `Node`'s marks
- * are an unordered *set*, so nothing on a leaf itself says whether `strong`
- * or `em` was the outer one in the source; the paragraph's leaf sequence as
- * a whole still does, though, since `inlineNodesToPM` only ever produces
- * these sets by flattening a genuinely nested `InlineNode` tree — meaning
- * whichever of the two marks spans a *wider* run of leaves always properly
- * contains the other's, never merely overlaps it.
+ * The nesting order for every non-`code` mark actually present in this one
+ * paragraph, *for this paragraph specifically* — computed from where each
+ * mark occurs among the paragraph's leaves, not a fixed choice for the
+ * whole file. A `Node`'s marks are an unordered *set*, so nothing on a leaf
+ * itself says which of several co-occurring marks was outermost in the
+ * source; the paragraph's leaf sequence as a whole still does, though,
+ * since `inlineNodesToPM` only ever produces these sets by flattening a
+ * genuinely nested `InlineNode` tree — meaning whichever mark spans a
+ * *wider* run of leaves always properly contains the others', never merely
+ * overlaps them.
  *
- * This is not a cosmetic choice: get it backwards and `writeInline`'s
- * diffing is forced to close the wider-spanning mark and reopen it moments
- * later just to let the narrower one drop out from "inside" it — and that
- * reopened delimiter lands directly against whatever the narrower mark is
- * doing at the same boundary, with no character between them, which is
- * exactly the run-length ambiguity CommonMark's delimiter tokenizer
- * resolves in ways this file does not control (`*italic **and** bold*`,
- * with a fixed `strong`-always-outer rank, serializes to a string that
- * reparses into a different tree — caught by the property test below, not
- * reasoned out ahead of time). Ranking by measured span keeps whichever
- * mark is actually outer in the common prefix `writeInline` never has to
- * touch, so this situation cannot arise for any leaf sequence a properly
- * nested tree can produce. Two marks that neither contains the other (only
- * reachable from a document built by hand rather than through
- * `entryMarkdownToDocument`, since that is precisely what "properly
- * nested" rules out) fall back to `DEFAULT_MARK_RANK`.
+ * This used to be a single hard-coded choice between exactly two marks
+ * (`strong`/`em`), returning one of two fixed `Record`s. That stopped being
+ * enough the moment a third nestable mark (`strikethrough`, issue #211)
+ * existed: `openableMarks`' `rank[name] ?? 99` fallback pinned whichever
+ * mark this function didn't know how to rank all the way to the innermost
+ * position, unconditionally — so `~~struck **bold** back~~` (strikethrough
+ * wrapping strong) would rank `strikethrough` after `strong` regardless of
+ * which one actually nested outside the other in the source, the exact
+ * failure the property test below caught once already for
+ * `*italic **and** bold*` under the old two-mark version of this same bug.
+ *
+ * The general fix: collect every non-`code` mark's `[min, max]` leaf-index
+ * span, then sort by `min` ascending (a mark that starts earlier is never
+ * inside one that starts later, for a properly nested tree), breaking ties
+ * by `max` descending (when two marks start together, the one extending
+ * further is the outer one), and only then by `DEFAULT_MARK_RANK` — which
+ * only ever matters for marks whose spans are identical, since two spans
+ * that tie on `min` are only reachable this way. The result is assigned
+ * ranks `0..n-1` in that order, so `openableMarks` never needs its `?? 99`
+ * fallback for any mark this function has actually seen. This is not
+ * specific to two marks in any way, and works identically for three,
+ * four, or however many nestable marks this dialect ever grows.
  */
 function localMarkRank(content: PMNode): Record<string, number> {
   const spans = new Map<string, { min: number; max: number }>();
@@ -275,16 +294,21 @@ function localMarkRank(content: PMNode): Record<string, number> {
     index += 1;
   });
 
-  const strong = spans.get("strong");
-  const em = spans.get("em");
-  if (strong !== undefined && em !== undefined) {
-    const strongContainsEm = strong.min <= em.min && strong.max >= em.max;
-    const emContainsStrong = em.min <= strong.min && em.max >= strong.max;
-    if (emContainsStrong && !strongContainsEm) {
-      return { strong: 1, em: 0, code: 2 };
+  const ordered = [...spans.entries()].sort(([nameA, a], [nameB, b]) => {
+    if (a.min !== b.min) {
+      return a.min - b.min;
     }
-  }
-  return DEFAULT_MARK_RANK;
+    if (a.max !== b.max) {
+      return b.max - a.max;
+    }
+    return (DEFAULT_MARK_RANK[nameA] ?? 99) - (DEFAULT_MARK_RANK[nameB] ?? 99);
+  });
+
+  const rank: Record<string, number> = {};
+  ordered.forEach(([name], i) => {
+    rank[name] = i;
+  });
+  return rank;
 }
 
 /** Marks in this paragraph's canonical (rank) order, `code` excluded — see `localMarkRank`'s comment. */
@@ -300,7 +324,16 @@ function markOpen(mark: Mark): string {
       return "**";
     case "em":
       return "*";
+    case "strikethrough":
+      return "~~";
     default:
+      // Any mark not named here — deliberately including an underline mark
+      // this schema will never define (entry-schema.ts's own comment on why
+      // underline is refused) — drops silently rather than erroring. That
+      // silence is exactly why underline can't be added as a mark at all:
+      // there is no Markdown spelling for it, so it would apply in the
+      // Composer and vanish the moment it round-trips through here, with
+      // nothing anywhere to say so.
       return "";
   }
 }
@@ -363,7 +396,7 @@ const LINE_START_ORDERED = /^\d+[.)](?=[ \t\n]|$)/;
  * parser left to reintroduce them, so nothing here needs to escape `#`,
  * `>`, `` ``` ``, `---`, or leading indentation at all).
  *
- * Four things get escaped:
+ * Five things get escaped:
  *
  * - `\` itself, so a literal backslash never reads back as the start of an
  *   escape sequence.
@@ -371,12 +404,31 @@ const LINE_START_ORDERED = /^\d+[.)](?=[ \t\n]|$)/;
  *   delimiter once escaped this way, since this serializer never emits the
  *   `_`-delimited form, so there is exactly one character to guard.
  * - `` ` ``, unconditionally — the inline-code delimiter.
+ * - `~`, unconditionally (issue #211) — GFM Strikethrough's only delimiter,
+ *   the same one-character-to-guard reasoning as `*` above (this serializer
+ *   never emits a single-`~` form either). Unconditional is the only option
+ *   that actually works here, not merely the simplest one: `@lezer/
+ *   markdown`'s `Strikethrough` parser explicitly refuses a delimiter run
+ *   of three (`if (next != 126 || cx.char(pos+1) != 126 || cx.char(pos+2)
+ *   == 126) return -1` — inline-markdown.ts's own comment on why both
+ *   `.configure()` calls need this extension has the full node names). A
+ *   struck run whose own text happens to end in `~` — `~~a~~~~` — would put
+ *   three tildes in a row right where the closing delimiter needs to be;
+ *   the parser refuses that as a closer, and the whole span would silently
+ *   revert to literal text on the next parse, the same "recognition may
+ *   exceed emission, so emission has to be conservative" shape ADR 0045
+ *   already documents for `*`. Escaping every `~` in the source text (never
+ *   the delimiters this function itself writes — those come from
+ *   `markOpen`, through `w.write`, which is never escaped) means a struck
+ *   run's own text can never produce three consecutive tildes in the first
+ *   place, so the ambiguous case cannot arise rather than needing to be
+ *   detected.
  * - `[` immediately followed by another `[` — `referenceParser` only ever
  *   fires on two consecutive open brackets (`inline-markdown.ts`'s own
  *   `parse`), so a lone `[` is never ambiguous and only the first of a pair
  *   needs the backslash.
  *
- * A fifth case is conditional on position: a `-`/`+` or a digit run
+ * A sixth case is conditional on position: a `-`/`+` or a digit run
  * followed by `.`/`)` — CommonMark's bullet and ordered list markers — only
  * mean list structure at the *start of a line*, so only those are escaped,
  * and only there. This is reachable: `parseEntryMarkdown` only ever
@@ -427,7 +479,7 @@ function escapeUserText(text: string, atLineStart: boolean): string {
       }
     }
     const ch = text[i] as string;
-    if (ch === "\\" || ch === "*" || ch === "`") {
+    if (ch === "\\" || ch === "*" || ch === "`" || ch === "~") {
       result += `\\${ch}`;
       i += 1;
       lineStart = false;

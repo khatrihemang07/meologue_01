@@ -1061,7 +1061,7 @@ export function Composer({
           // size-11 (44px) — same tap-target override as Send, immediately
           // below, and for the identical reason (`icon-lg` alone is 36px).
           className="size-11 shrink-0 self-end rounded-full"
-          // Same caret-preserving trick as the toolbar's own eleven buttons
+          // Same caret-preserving trick as the toolbar's own twelve buttons
           // (composer-toolbar.tsx's own comment): without it, clicking this
           // WHILE typing blurs the editor (an ordinary click moves DOM
           // focus onto whatever was clicked), `isFocused` above flips to

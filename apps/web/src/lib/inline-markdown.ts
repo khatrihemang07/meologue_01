@@ -1,8 +1,8 @@
 /**
  * Parses prose into nodes for rendering. Two parsers live here, on one
- * shared dialect — the mark set (bold, italic, inline code, `[[…]]`
- * References, backslash escapes) and `referenceParser` that recognises the
- * marks are defined exactly once and configured onto both.
+ * shared dialect — the mark set (bold, italic, strikethrough, inline code,
+ * `[[…]]` References, backslash escapes) and `referenceParser` that
+ * recognises the marks are defined exactly once and configured onto both.
  *
  * `parseInlineMarkdown` (ADR 0041) is inline only, and structurally so.
  * `@lezer/markdown`'s `parseInline` never invokes the block layer at all:
@@ -36,7 +36,13 @@
  * omitted.
  */
 import type { SyntaxNode } from "@lezer/common";
-import { parser as commonmark, type Element, type InlineParser, TaskList } from "@lezer/markdown";
+import {
+  parser as commonmark,
+  type Element,
+  type InlineParser,
+  Strikethrough,
+  TaskList,
+} from "@lezer/markdown";
 
 /**
  * What a Reference points at. A Reference is a mark in the body rather than a
@@ -47,6 +53,7 @@ export type InlineNode =
   | { kind: "text"; text: string }
   | { kind: "emphasis"; children: InlineNode[] }
   | { kind: "strong"; children: InlineNode[] }
+  | { kind: "strikethrough"; children: InlineNode[] }
   | { kind: "code"; text: string }
   /** `[[YYYY-MM-DD]]` — `date` is the day it names, `raw` the text as typed. */
   | { kind: "dateReference"; date: string; raw: string }
@@ -252,11 +259,14 @@ const referenceParser: InlineParser = {
  * Autolink is not in the default dialect, so a bare URL stays text with no
  * removal needed — also deliberate (ADR 0041).
  */
-const inlineParser = commonmark.configure({
-  defineNodes: ["DateReference", "EntryReference", "TaskReference"],
-  parseInline: [referenceParser],
-  remove: ["Link", "Image", "HTMLTag", "Entity", "HardBreak"],
-});
+const inlineParser = commonmark.configure([
+  {
+    defineNodes: ["DateReference", "EntryReference", "TaskReference"],
+    parseInline: [referenceParser],
+    remove: ["Link", "Image", "HTMLTag", "Entity", "HardBreak"],
+  },
+  Strikethrough,
+]);
 
 const nodeNames = inlineParser.nodeSet.types.map((type) => type.name);
 
@@ -267,7 +277,13 @@ const nodeNames = inlineParser.nodeSet.types.map((type) => type.name);
  * list here for both walkers, since `walk` (below) can never actually see
  * one.
  */
-const PUNCTUATION = new Set(["EmphasisMark", "CodeMark", "LinkMark", "TaskMarker"]);
+const PUNCTUATION = new Set([
+  "EmphasisMark",
+  "CodeMark",
+  "LinkMark",
+  "TaskMarker",
+  "StrikethroughMark",
+]);
 
 interface RawElement extends Element {
   readonly children?: readonly RawElement[];
@@ -324,6 +340,12 @@ function walk(
         break;
       case "StrongEmphasis":
         nodes.push({ kind: "strong", children: walk(children, body, element.from, element.to) });
+        break;
+      case "Strikethrough":
+        nodes.push({
+          kind: "strikethrough",
+          children: walk(children, body, element.from, element.to),
+        });
         break;
       case "InlineCode": {
         // The text between the two CodeMarks. Nothing inside is parsed, which
@@ -404,6 +426,7 @@ export function inlineNodesToText(nodes: readonly InlineNode[]): string {
         break;
       case "emphasis":
       case "strong":
+      case "strikethrough":
         text += inlineNodesToText(node.children);
         break;
       case "dateReference":
@@ -488,10 +511,13 @@ export interface EntryListItem {
  * constructs, because there is nothing left running that would produce a
  * node for them to special-case.
  *
- * `TaskList` (from `@lezer/markdown`) adds the one piece of GFM syntax in
- * the mark set: `- [ ]`/`- [x]` inside a list item. It only ever fires
- * inside a `ListItem` (its own `leaf` hook checks `cx.parentType()`), so a
- * bare `[ ] not a list` elsewhere in an Entry is never mistaken for one.
+ * `TaskList` (from `@lezer/markdown`) adds one piece of GFM syntax to the
+ * mark set: `- [ ]`/`- [x]` inside a list item. It only ever fires inside a
+ * `ListItem` (its own `leaf` hook checks `cx.parentType()`), so a bare
+ * `[ ] not a list` elsewhere in an Entry is never mistaken for one.
+ * `Strikethrough` (issue #211) adds the other: `~~x~~`, recognised the same
+ * way `inlineParser` above recognises it — both configure calls carry it,
+ * which is what keeps the two parsers agreeing (ADR 0043, ADR 0045).
  */
 const entryParser = commonmark.configure([
   {
@@ -514,6 +540,7 @@ const entryParser = commonmark.configure([
     ],
   },
   TaskList,
+  Strikethrough,
 ]);
 
 /** Every direct child of a `SyntaxNode`, in document order. */
@@ -566,6 +593,12 @@ function walkEntryInline(
       case "StrongEmphasis":
         result.push({
           kind: "strong",
+          children: walkEntryInline(children, body, node.from, node.to),
+        });
+        break;
+      case "Strikethrough":
+        result.push({
+          kind: "strikethrough",
           children: walkEntryInline(children, body, node.from, node.to),
         });
         break;
@@ -895,7 +928,11 @@ function collectTaskReferenceRawsInline(
   for (const node of nodes) {
     if (node.kind === "taskReference" && node.taskId === taskId) {
       out.push(node.raw);
-    } else if (node.kind === "emphasis" || node.kind === "strong") {
+    } else if (
+      node.kind === "emphasis" ||
+      node.kind === "strong" ||
+      node.kind === "strikethrough"
+    ) {
       collectTaskReferenceRawsInline(node.children, taskId, out);
     }
   }

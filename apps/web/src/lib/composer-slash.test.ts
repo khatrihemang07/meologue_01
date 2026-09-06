@@ -129,6 +129,7 @@ describe("buildSlashMenuItems", () => {
   const registry = [
     { id: "bold", label: "Bold" },
     { id: "italic", label: "Italic" },
+    { id: "strikethrough", label: "Strikethrough" },
     { id: "code", label: "Code" },
     { id: "bulletList", label: "Bullet list" },
     { id: "orderedList", label: "Numbered list" },
@@ -140,7 +141,7 @@ describe("buildSlashMenuItems", () => {
     { id: "redo", label: "Redo" },
   ];
 
-  it("reorders the registry into the ticket's own seven-item order, dropping the rest", () => {
+  it("reorders the registry into SLASH_MENU_COMMAND_IDS' own order, dropping the rest", () => {
     expect(buildSlashMenuItems(registry).map((item) => item.id)).toEqual(SLASH_MENU_COMMAND_IDS);
   });
 

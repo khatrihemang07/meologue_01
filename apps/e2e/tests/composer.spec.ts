@@ -56,19 +56,21 @@ test("typing consumes the marker characters and applies the formatting", async (
   await page.goto("/composer");
   const editor = composerField(page);
   await editor.click();
-  await editor.pressSequentially("**bold** *italic* `code`");
+  await editor.pressSequentially("**bold** *italic* `code` ~~struck~~");
 
   // The marker characters themselves are gone — this is the ticket's own
   // headline acceptance criterion, checked the strongest way available:
-  // the literal asterisk/backtick characters must not exist anywhere in
-  // the field's rendered text, not merely "some strong element exists
+  // the literal asterisk/backtick/tilde characters must not exist anywhere
+  // in the field's rendered text, not merely "some strong element exists
   // somewhere on the page."
   await expect(editor).not.toContainText("*");
   await expect(editor).not.toContainText("`");
+  await expect(editor).not.toContainText("~");
 
   await expect(editor.locator("strong")).toHaveText("bold");
   await expect(editor.locator("em")).toHaveText("italic");
   await expect(editor.locator("code")).toHaveText("code");
+  await expect(editor.locator("s")).toHaveText("struck");
 });
 
 // Regression coverage for a real defect this ticket's own manual
@@ -1188,7 +1190,7 @@ test("the format toolbar is off by default, shows only while the Composer has fo
 
   // Switching it on shows the row immediately, without blurring the editor
   // — the toggle button gets the same caret-preserving treatment as the
-  // toolbar's own eleven buttons (composer.tsx's own comment on it), which
+  // toolbar's own twelve buttons (composer.tsx's own comment on it), which
   // is what makes "immediately" true rather than "after clicking back in".
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-pressed", "true");
@@ -1222,7 +1224,7 @@ test("the format toolbar is off by default, shows only while the Composer has fo
   await expect(page.getByRole("toolbar", { name: "Formatting" })).toBeVisible();
 });
 
-test("the bold, italic and code toolbar buttons apply their marks, reflect the caret's own pressed state, and never blur the editor", async ({
+test("the bold, italic, strikethrough and code toolbar buttons apply their marks, reflect the caret's own pressed state, and never blur the editor", async ({
   page,
 }) => {
   await page.goto("/composer");
@@ -1249,6 +1251,13 @@ test("the bold, italic and code toolbar buttons apply their marks, reflect the c
   await italicButton.click();
   await expect(editor.locator("em")).toHaveText("word");
   await expect(italicButton).toHaveAttribute("aria-pressed", "true");
+  await expect(editor).toBeFocused();
+
+  const strikethroughButton = toolbar.getByRole("button", { name: "Strikethrough" });
+  await expect(strikethroughButton).toHaveAttribute("aria-pressed", "false");
+  await strikethroughButton.click();
+  await expect(editor.locator("s")).toHaveText("word");
+  await expect(strikethroughButton).toHaveAttribute("aria-pressed", "true");
   await expect(editor).toBeFocused();
 
   const codeButton = toolbar.getByRole("button", { name: "Code" });
@@ -1386,7 +1395,7 @@ test("the undo and redo toolbar buttons revert and restore an edit, and are disa
   await expect(editor).toBeFocused();
 });
 
-test("Mod-b, Mod-i and Mod-e apply their marks from the keyboard, with no toolbar involved", async ({
+test("Mod-b, Mod-i, Mod-Shift-x and Mod-e apply their marks from the keyboard, with no toolbar involved", async ({
   page,
 }) => {
   await page.goto("/composer");
@@ -1400,6 +1409,11 @@ test("Mod-b, Mod-i and Mod-e apply their marks from the keyboard, with no toolba
 
   await editor.press("ControlOrMeta+i");
   await expect(editor.locator("em")).toHaveText("word");
+
+  // UpNote's own verified chord for the same action
+  // (docs/reference/upnote-macos-detail.md, "Cmd+Shift+X").
+  await editor.press("ControlOrMeta+Shift+x");
+  await expect(editor.locator("s")).toHaveText("word");
 
   await editor.press("ControlOrMeta+e");
   await expect(editor.locator("code")).toHaveText("word");
@@ -1452,7 +1466,7 @@ test("the submit chord still sends, even with the format toolbar switched on", a
 // position, and the mutual-exclusion with the `[[` picker ADR 0046 records.
 // ---------------------------------------------------------------------------
 
-test("/ at the very start of a block opens the slash menu, offering all seven items", async ({
+test("/ at the very start of a block opens the slash menu, offering all eight items", async ({
   page,
 }) => {
   await page.goto("/composer");
@@ -1467,6 +1481,7 @@ test("/ at the very start of a block opens the slash menu, offering all seven it
     "Numbered list",
     "Bold",
     "Italic",
+    "Strikethrough",
     "Code",
     "Reference",
   ]);
@@ -1581,12 +1596,12 @@ test("arrow keys move the highlighted row and wrap at both ends", async ({ page 
   await editor.pressSequentially("/");
 
   const options = page.getByRole("option");
-  await expect(options).toHaveCount(7);
+  await expect(options).toHaveCount(8);
   await expect(options.nth(0)).toHaveAttribute("aria-selected", "true");
 
   // Wraps UP from the first row straight to the last.
   await editor.press("ArrowUp");
-  await expect(options.nth(6)).toHaveAttribute("aria-selected", "true");
+  await expect(options.nth(7)).toHaveAttribute("aria-selected", "true");
 
   // Wraps back DOWN from the last row to the first.
   await editor.press("ArrowDown");

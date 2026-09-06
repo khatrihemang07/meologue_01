@@ -22,8 +22,10 @@ describe("entrySchema", () => {
     );
   });
 
-  it("has exactly the mark set: strong, em, code", () => {
-    expect(Object.keys(entrySchema.marks).sort()).toEqual(["strong", "em", "code"].sort());
+  it("has exactly the mark set: strong, em, code, strikethrough", () => {
+    expect(Object.keys(entrySchema.marks).sort()).toEqual(
+      ["strong", "em", "code", "strikethrough"].sort(),
+    );
   });
 
   it("gives list_item a nullable checked attribute rather than a second node type", () => {

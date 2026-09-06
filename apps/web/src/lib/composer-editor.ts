@@ -47,6 +47,7 @@ import {
   outdent,
   redoCommand,
   splitListItemUnchecked,
+  strikethrough,
   toggleCheckboxDone,
   undoCommand,
 } from "@/lib/composer-commands";
@@ -172,6 +173,19 @@ function markInputRule(regexp: RegExp, markType: MarkType): InputRule {
 const strongInputRule = markInputRule(/\*\*([^*]+)\*\*$/, requireMarkType("strong"));
 const emInputRule = markInputRule(/(?<!\*)\*([^*]+)\*$/, requireMarkType("em"));
 const codeInputRule = markInputRule(/`([^`]+)`$/, requireMarkType("code"));
+
+/**
+ * `~~struck~~` (issue #211). Unlike the `*`/`**` pair above, `~~` has no
+ * one-character sibling delimiter to collide with — GFM Strikethrough is
+ * always exactly two tildes, never one — so this needs no lookbehind guard
+ * the way `emInputRule` does: there is no shorter `~x~` form typed a
+ * keystroke earlier that a naive pattern could misfire against. `[^~]+`
+ * still matters, though, for a reason that IS keystroke-order-sensitive:
+ * without it, typing a third `~` immediately after `~~x~~` (`~~x~~~`) would
+ * match with `x~` captured, sliding the mark's closing delimiter one
+ * character to the right instead of leaving the stray `~` alone.
+ */
+const strikethroughInputRule = markInputRule(/~~([^~]+)~~$/, requireMarkType("strikethrough"));
 
 /**
  * The underscore spellings of the same two marks, which exist for one
@@ -493,6 +507,7 @@ export function buildInputRules(): InputRule[] {
     emInputRule,
     emUnderscoreInputRule,
     codeInputRule,
+    strikethroughInputRule,
     bulletListInputRule,
     orderedListInputRule,
     checkboxInputRule(),
@@ -697,16 +712,22 @@ function historyKeymap(): Plugin {
 }
 
 /**
- * Issue #164's four chords — the toolbar's own eleven buttons (#164,
- * composer-toolbar.tsx) are how every one of `composerCommands` is reached
- * without a keyboard, but four of them are common enough, and old enough as
- * conventions (every rich-text surface a reader has ever used binds
- * Cmd/Ctrl-B/I), that they also get a direct chord: `bold.run`/`italic.run`/
- * `code.run` (composer-commands.ts) are wired here exactly as `undo`/`redo`
- * are just above — the registry owns what each action IS, this file only
- * owns which keystroke reaches it. `Mod-Shift-Enter` is the fourth, bound to
- * `toggleCheckboxDone.run` (composer-commands.ts) rather than a button:
- * see that command's own doc comment for why it gets a chord and no button.
+ * Issue #164's four chords, plus one more issue #211 adds — the toolbar's
+ * own twelve buttons (#164/#211, composer-toolbar.tsx) are how every one of
+ * `composerCommands` is reached without a keyboard, but some of them are
+ * common enough, and old enough as conventions (every rich-text surface a
+ * reader has ever used binds Cmd/Ctrl-B/I), that they also get a direct
+ * chord: `bold.run`/`italic.run`/`code.run`/`strikethrough.run`
+ * (composer-commands.ts) are wired here exactly as `undo`/`redo` are just
+ * above — the registry owns what each action IS, this file only owns which
+ * keystroke reaches it. `Mod-Shift-x` for `strikethrough` is UpNote's own
+ * verified chord for the same action (`docs/reference/upnote-macos-detail.md`,
+ * "Cmd+Shift+X"), not a choice made up for this app; it is not on the
+ * never-claim list below (`Mod-1`-`Mod-9`, `Mod-l`, `Mod-[`/`Mod-]`,
+ * `Mod-t`/`Mod-w`/`Mod-n`/`Mod-r`/`Mod-d`), and no browser this app ships on
+ * reserves it. `Mod-Shift-Enter` is bound to `toggleCheckboxDone.run`
+ * (composer-commands.ts) rather than a button: see that command's own doc
+ * comment for why it gets a chord and no button.
  *
  * `Mod-Shift-Enter` is safe to claim specifically because `isSubmitChord`
  * (submit-chord.ts) already returns `false` whenever `event.shiftKey` is
@@ -753,6 +774,7 @@ function formatKeymap(): Plugin {
     "Mod-b": bold.run,
     "Mod-i": italic.run,
     "Mod-e": code.run,
+    "Mod-Shift-x": strikethrough.run,
     "Mod-Shift-Enter": toggleCheckboxDone.run,
   });
 }

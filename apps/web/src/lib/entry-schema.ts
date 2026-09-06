@@ -229,6 +229,25 @@ const marks: { [name: string]: MarkSpec } = {
     toDOM: () => ["code", 0],
     parseDOM: [{ tag: "code" }],
   },
+  // `~~x~~` (issue #211). `<s>`/`<strike>`/`<del>` all render the same way
+  // in a browser, so `parseDOM` accepts whichever one pasted-in HTML used;
+  // `toDOM` picks `<s>`, the only one of the three that is not deprecated
+  // (`<strike>`) and does not carry `<del>`'s "tracked deletion" semantic,
+  // which struck-through prose in an Entry is not.
+  //
+  // Underline is deliberately NOT a mark here, unlike strikethrough: it has
+  // no Markdown spelling (`__x__` already means `strong` on both sides of
+  // this dialect), and `markOpen` (entry-document.ts) falls through to
+  // `default: return ""` for any mark it doesn't recognise — an underline
+  // mark would apply in the Composer, then round-trip through
+  // `entryDocumentToMarkdown` as plain, unformatted text with no error
+  // anywhere to say so. `strikethrough` has a real GFM spelling (`~~x~~`)
+  // and does not have this problem, which is the whole reason it can be
+  // added and underline still cannot (ADR 0045's amendment for #211).
+  strikethrough: {
+    toDOM: () => ["s", 0],
+    parseDOM: [{ tag: "s" }, { tag: "strike" }, { tag: "del" }],
+  },
 };
 
 /**

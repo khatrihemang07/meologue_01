@@ -1,12 +1,13 @@
 /**
- * The Composer's format toolbar (issue #164) — a row of eleven buttons, in
- * five groups, that sits above the input while the Composer has focus:
- * **bold · italic · code** | **bullet · ordered · checklist** |
- * **outdent · indent** | **Reference** | **undo · redo**.
+ * The Composer's format toolbar (issue #164, extended by issue #211) — a
+ * row of twelve buttons, in five groups, that sits above the input while
+ * the Composer has focus: **bold · italic · strikethrough · code** |
+ * **bullet · ordered · checklist** | **outdent · indent** | **Reference** |
+ * **undo · redo**.
  *
  * Every button reaches through `composerCommands`/its individual named
  * exports (composer-commands.ts, issue #160) rather than reimplementing any
- * editing behaviour here — this component's only job is to lay eleven
+ * editing behaviour here — this component's only job is to lay twelve
  * `ComposerCommand`s out, read `isActive`/`isEnabled` off the
  * `commandStates` map composer.tsx recomputes on every transaction, and
  * report which command was pressed. `onRun` is composer.tsx's own concern
@@ -41,6 +42,7 @@ import {
   List as ListPlain,
   ListTodo,
   Redo2,
+  Strikethrough,
   Undo2,
 } from "lucide-react";
 import type { ComponentType } from "react";
@@ -57,6 +59,7 @@ import {
   outdent,
   redoCommand,
   reference,
+  strikethrough,
   undoCommand,
 } from "@/lib/composer-commands";
 
@@ -93,6 +96,7 @@ const GROUPS: readonly (readonly ToolbarButtonSpec[])[] = [
   [
     { command: bold, Icon: Bold },
     { command: italic, Icon: Italic },
+    { command: strikethrough, Icon: Strikethrough },
     { command: code, Icon: Code },
   ],
   [

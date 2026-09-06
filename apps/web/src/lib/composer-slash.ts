@@ -167,15 +167,16 @@ export function filterSlashItems<T extends SlashMenuCommand>(
 }
 
 /**
- * The seven items, in the exact order issue #165 lists them — Checklist,
- * Bullet list, Numbered list, Bold, Italic, Code, Reference — which is NOT
- * `composerCommands`' own array order (composer-commands.ts groups marks
- * first, for its toolbar's own layout, and also carries four items — indent,
- * outdent, undo, redo — this menu has no row for at all). Kept here as a
- * list of `id`s only, never as a second copy of any command's behaviour:
- * `buildSlashMenuItems` below is what turns this into actual commands,
- * reaching through the one registry composer-commands.ts already is —
- * the ticket's own explicit "do not reimplement."
+ * The seven items issue #165 lists — Checklist, Bullet list, Numbered list,
+ * Bold, Italic, Code, Reference — plus Strikethrough, added by issue #211
+ * (placed after Italic, before Code, mirroring composer-toolbar.tsx's own
+ * placement). Not `composerCommands`' own array order (composer-commands.ts
+ * groups marks first, for its toolbar's own layout, and also carries four
+ * items — indent, outdent, undo, redo — this menu has no row for at all).
+ * Kept here as a list of `id`s only, never as a second copy of any command's
+ * behaviour: `buildSlashMenuItems` below is what turns this into actual
+ * commands, reaching through the one registry composer-commands.ts already
+ * is — the ticket's own explicit "do not reimplement."
  */
 export const SLASH_MENU_COMMAND_IDS: readonly string[] = [
   "checklist",
@@ -183,6 +184,7 @@ export const SLASH_MENU_COMMAND_IDS: readonly string[] = [
   "orderedList",
   "bold",
   "italic",
+  "strikethrough",
   "code",
   "reference",
 ];

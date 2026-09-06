@@ -86,6 +86,13 @@ export function renderNodes(
           </em>,
         );
         break;
+      case "strikethrough":
+        rendered.push(
+          <s key={key} className="line-through">
+            {renderNodes(node.children, query, refs, `${key}-`)}
+          </s>,
+        );
+        break;
       case "code":
         rendered.push(
           // Inline, and styled without a background box that would change the

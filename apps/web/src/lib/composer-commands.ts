@@ -88,6 +88,7 @@ const listItemNodeType = requireNodeType("list_item");
 const strongMarkType = requireMarkType("strong");
 const emMarkType = requireMarkType("em");
 const codeMarkType = requireMarkType("code");
+const strikethroughMarkType = requireMarkType("strikethrough");
 
 // ---------------------------------------------------------------------------
 // The registry's own shape
@@ -107,7 +108,7 @@ export interface ComposerCommand {
 }
 
 // ---------------------------------------------------------------------------
-// Marks: bold, italic, code
+// Marks: bold, italic, strikethrough, code
 // ---------------------------------------------------------------------------
 
 /**
@@ -147,6 +148,11 @@ function markCommand(id: string, label: string, markType: MarkType): ComposerCom
 
 export const bold: ComposerCommand = markCommand("bold", "Bold", strongMarkType);
 export const italic: ComposerCommand = markCommand("italic", "Italic", emMarkType);
+export const strikethrough: ComposerCommand = markCommand(
+  "strikethrough",
+  "Strikethrough",
+  strikethroughMarkType,
+);
 export const code: ComposerCommand = markCommand("code", "Code", codeMarkType);
 
 // ---------------------------------------------------------------------------
@@ -346,11 +352,11 @@ export const checklist: ComposerCommand = {
 /**
  * Flips a task's own `checked` between `true` and `false` — issue #164's
  * `Mod-Shift-Enter`, composer-editor.ts's own keymap. Deliberately NOT one
- * of the eleven `composerCommands` a toolbar button reaches for: the ticket
+ * of the twelve `composerCommands` a toolbar button reaches for: the ticket
  * gives this action a chord and nothing else (no button, no `/` menu row),
  * the same way `bulletList`/`orderedList`/`checklist` above get a button and
  * no chord — the two are reached by different, non-overlapping paths, not
- * duplicated across both. It's exported and named like the eleven anyway
+ * duplicated across both. It's exported and named like the twelve anyway
  * (rather than kept as a bare `Command` closure in composer-editor.ts) so a
  * keyboard-shortcuts settings screen, if one is ever built, has a `label` to
  * show without composer-editor.ts having to invent one.
@@ -567,6 +573,7 @@ export const redoCommand: ComposerCommand = {
 export const composerCommands: readonly ComposerCommand[] = [
   bold,
   italic,
+  strikethrough,
   code,
   bulletList,
   orderedList,

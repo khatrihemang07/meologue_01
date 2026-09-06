@@ -34,6 +34,7 @@ import {
   redoCommand,
   reference,
   splitListItemUnchecked,
+  strikethrough,
   toggleCheckboxDone,
   undoCommand,
 } from "./composer-commands";
@@ -160,11 +161,12 @@ function runCommand(
 // ---------------------------------------------------------------------------
 
 describe("composerCommands", () => {
-  it("lists exactly the eleven actions the ticket requires, each with a unique id", () => {
+  it("lists exactly the twelve actions the ticket requires, each with a unique id", () => {
     const ids = composerCommands.map((command) => command.id);
     expect(ids).toEqual([
       "bold",
       "italic",
+      "strikethrough",
       "code",
       "bulletList",
       "orderedList",
@@ -186,6 +188,12 @@ describe("composerCommands", () => {
 describe.each([
   { command: bold, id: "bold", markName: "strong", markdown: "before **bold** after" },
   { command: italic, id: "italic", markName: "em", markdown: "before *italic* after" },
+  {
+    command: strikethrough,
+    id: "strikethrough",
+    markName: "strikethrough",
+    markdown: "before ~~struck~~ after",
+  },
   { command: code, id: "code", markName: "code", markdown: "before `code` after" },
 ])("$id", ({ command, markName, markdown }) => {
   it("is active when the whole selection carries the mark, inactive otherwise", () => {
@@ -497,7 +505,7 @@ describe("undo / redo", () => {
 });
 
 // ---------------------------------------------------------------------------
-// toggleCheckboxDone — issue #164's Mod-Shift-Enter, not one of the eleven
+// toggleCheckboxDone — issue #164's Mod-Shift-Enter, not one of the twelve
 // toolbar buttons (see this command's own doc comment for why).
 // ---------------------------------------------------------------------------
 
