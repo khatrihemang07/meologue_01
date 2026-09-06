@@ -28,6 +28,23 @@ import {
  * needing 3.42, while `strftime('%f', …)` has been present essentially
  * forever. Not worth a platform-specific failure that would only show up
  * as a Sync that quietly stops converging.
+ *
+ * **This normalisation is permanent. Do not delete it after a migration.**
+ * The tempting future cleanup is to normalise `updated_at` once, on
+ * ingest, and then let every comparison go back to a plain `>=`. That is
+ * a real improvement for the steady state and it still does not make this
+ * removable, because Backup is a time machine: `dump.ts` writes a lossless
+ * copy of the database exactly as it stands, and `restore.ts` puts those
+ * values back verbatim (reason 3 in its own header — `seq`/`synced_at` are
+ * preserved rather than rewritten). A Backup taken *before* any such
+ * migration therefore carries pre-migration shapes, and Restoring or
+ * Merging it a year later reintroduces them into a fully migrated
+ * database. The set of restorable Backups is unbounded and grows every
+ * time someone clicks Back up, so "all data has been normalised" is never
+ * true — and Restore is what people reach for when something has already
+ * gone wrong, which makes this ordinary rather than an edge case.
+ * Anything comparing `updated_at` has to stay shape-tolerant for good.
+ * See ADR 0065's amendment (issue #217) for the fork this leaves open.
  */
 const MILLISECOND_PRECISION = "%Y-%m-%dT%H:%M:%f";
 

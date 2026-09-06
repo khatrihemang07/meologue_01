@@ -122,3 +122,40 @@ Merge-scoped fix is legitimate and does not need to touch it.
 
 **The general rule this ADR should have carried from the start:** a timestamp that crosses the wire
 is ordered by instant, never by byte order, unless something actually pins its shape at both ends.
+
+### The shape-tolerance is permanent, because Backup is a time machine
+
+The obvious future cleanup is to normalise `updated_at` once — on ingest, or as a one-time pass —
+and then let every comparison go back to a plain `>=`. **That would be a real improvement for the
+steady state, and it still would not make the comparison-site normalisation removable.**
+
+A Backup is a lossless copy of the database exactly as it stands (ADR 0064; `dump.ts` writes the
+values verbatim), and Restore puts them back unchanged rather than rewriting them — reason 3 in
+`restore.ts`'s own header preserves `seq`/`synced_at` from the file precisely so a Restore does not
+re-push the whole database. So a Backup taken *before* any normalising migration carries the old
+shapes forever, and Restoring or Merging that file a year later reintroduces them into a database
+where every live row has been normalised.
+
+**There is no point at which "all data has been normalised" becomes true.** The set of restorable
+Backups is unbounded and grows every time someone clicks Back up. And Restore is the operation
+people reach for when something has already gone wrong, so old Backups meeting current Devices is
+ordinary, not an edge case.
+
+The practical consequence is about how the guard is *described*, not just whether it exists: if it
+is written as a migration-era workaround, someone deletes it in a year with a commit message about
+cleaning up after the migration, and the bug comes back silently — for exactly the users who were
+already recovering from something. Anything that compares `updated_at` stays shape-tolerant
+permanently.
+
+**One fork is deliberately left open here.** If a normalising migration does happen, it has to
+decide what Restore does with a Backup that predates it. Normalising on the way in would contradict
+ADR 0064's "a Backup is a faithful copy of what this Device already has" and Restore's own promise
+to preserve what the file holds; staying faithful means old shapes keep arriving indefinitely. The
+instinct on both sides of this discussion was that **Restore should stay faithful and the
+comparison should stay tolerant** — but that is a real fork and whoever takes issue #217 should
+settle it explicitly rather than inherit it.
+
+It also gives the regression suite a third case, beyond the two cross-shape pairs above: a row whose
+`updated_at` arrived via Restore from an old-shape Backup, winning or losing a Merge correctly. It
+is the same comparison, but it is the case that outlives any migration, and it is the one nobody
+will think to keep.
