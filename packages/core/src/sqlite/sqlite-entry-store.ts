@@ -14,6 +14,24 @@ import {
 } from "./schema";
 
 /**
+ * The `strftime` format both sides of applyPulled()'s `updated_at`
+ * comparison are put through before they are compared — see that method's
+ * own doc comment for why comparing the raw columns is wrong in both
+ * directions. Millisecond precision, because that is the finest this
+ * client can express: `new Date().toISOString()` emits exactly three
+ * fractional digits.
+ *
+ * `strftime` rather than `unixepoch(..., 'subsec')`, which would read
+ * better: this string is evaluated by four different SQLite builds (node,
+ * wa-sqlite over OPFS, `@capacitor-community/sqlite`, and Tauri's
+ * rusqlite), and `unixepoch` needs 3.38 with the `'subsec'` modifier
+ * needing 3.42, while `strftime('%f', …)` has been present essentially
+ * forever. Not worth a platform-specific failure that would only show up
+ * as a Sync that quietly stops converging.
+ */
+const MILLISECOND_PRECISION = "%Y-%m-%dT%H:%M:%f";
+
+/**
  * The SQLite-backed EntryStore (ADR 0007), platform-free — it talks to a
  * database only through the injected SqliteDriver. Use ./open.ts rather
  * than this constructor directly: it also runs migrations and resolves
@@ -133,6 +151,38 @@ export class SqliteEntryStore implements EntryStore {
    *
    * `excluded` is the incoming row; the bare column names are the local
    * one SQLite is about to overwrite.
+   *
+   * **Both timestamps are normalised through `strftime` before they are
+   * compared, and a plain `>=` on the raw columns would be wrong.** The
+   * two sides genuinely do not share a format: this client stamps
+   * `updatedAt` with `new Date().toISOString()`, which always emits
+   * exactly three fractional digits, while the Server serialises
+   * `DateTime<Utc>` through chrono's default, which emits *as many digits
+   * as it needs* — six in practice, and **none at all** when the
+   * nanoseconds happen to be zero. A byte-wise compare of two such
+   * strings is not chronological order, in either direction:
+   *
+   * - `...02.500000Z` (Server, same instant) vs `...02.500Z` (local)
+   *   compares as *smaller*, because `'0' < 'Z'` — so a Server row that
+   *   is genuinely at least as new gets refused, this Device's pending
+   *   edit is pushed instead, and the other Device's edit is the one that
+   *   is lost.
+   * - `...02Z` (Server, half a second older) vs `...02.500Z` (local)
+   *   compares as *greater*, because `'Z' > '.'` — so a stale row
+   *   overwrites a newer pending local edit, which is exactly the
+   *   data loss this whole method exists to prevent.
+   *
+   * `%f` normalises both to millisecond precision, which is the finest
+   * granularity this client can express anyway. Sub-millisecond
+   * differences collapse into a tie, and a tie applies — the safe
+   * direction, since the incoming row is the one that has been through
+   * the Server.
+   *
+   * `strftime` returns NULL for anything it cannot parse, which makes
+   * this clause NULL rather than true, so an unreadable timestamp on
+   * either side refuses the row instead of overwriting on a comparison
+   * nobody can trust. The local edit survives and is pushed. That is the
+   * right way round to fail.
    */
   async applyPulled(incoming: Entry[]): Promise<void> {
     if (incoming.length === 0) {
@@ -152,7 +202,7 @@ export class SqliteEntryStore implements EntryStore {
           syncedAt: sql`excluded.synced_at`,
           deletedAt: sql`excluded.deleted_at`,
         },
-        setWhere: sql`${entries.seq} IS NOT NULL OR excluded.updated_at >= ${entries.updatedAt} OR excluded.deleted_at IS NOT NULL`,
+        setWhere: sql`${entries.seq} IS NOT NULL OR strftime('${sql.raw(MILLISECOND_PRECISION)}', excluded.updated_at) >= strftime('${sql.raw(MILLISECOND_PRECISION)}', ${entries.updatedAt}) OR excluded.deleted_at IS NOT NULL`,
       });
     // Deliberately reindexFromCurrentState(), not indexForSearch(entry)
     // as upsert() does: once a row can be refused, indexing the incoming

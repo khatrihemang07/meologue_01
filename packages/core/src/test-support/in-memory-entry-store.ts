@@ -77,19 +77,31 @@ export class InMemoryEntryStore implements EntryStore {
    * doc comment (../store.ts) for the rule both implementations owe
    * callers, and the real store for why it is expressed as a `setWhere`
    * on one statement there rather than as this read-then-decide.
+   *
+   * Written as "apply unless", the same shape the SQL is in, rather than
+   * as its inverse: the two have to agree on the awkward cases, and the
+   * easiest way to keep them agreeing is to keep them the same sentence.
+   * `Date.parse` stands in for the real store's `strftime` normalisation
+   * (see there for why comparing the raw strings is wrong) and returns
+   * `NaN` exactly where `strftime` returns NULL, so an unreadable
+   * timestamp on either side refuses the row in both implementations
+   * rather than only in one.
    */
   async applyPulled(incoming: Entry[]): Promise<void> {
     for (const entry of incoming) {
       const local = this.entries.get(entry.id);
-      const refused =
-        local !== undefined &&
-        local.seq === null &&
-        local.updatedAt > entry.updatedAt &&
-        entry.deletedAt === null;
-      if (refused) {
-        continue;
+      const incomingMs = Date.parse(entry.updatedAt);
+      const localMs = local === undefined ? Number.NaN : Date.parse(local.updatedAt);
+      const incomingIsAtLeastAsNew =
+        !Number.isNaN(incomingMs) && !Number.isNaN(localMs) && incomingMs >= localMs;
+      const apply =
+        local === undefined ||
+        local.seq !== null ||
+        incomingIsAtLeastAsNew ||
+        entry.deletedAt !== null;
+      if (apply) {
+        this.entries.set(entry.id, entry);
       }
-      this.entries.set(entry.id, entry);
     }
   }
 

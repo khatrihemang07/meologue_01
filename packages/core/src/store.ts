@@ -73,10 +73,22 @@ export interface EntryStore {
    *   already share. A row the Server has acknowledged has nothing local
    *   left to lose, so it is overwritten exactly as before.
    * - *strictly newer* compares `updatedAt`, which ADR 0065 put on the
-   *   wire and left for whoever next revisited Sync's conflict rule. A
-   *   tie must apply, not refuse: a tie is this Device's own row coming
-   *   back with a `seq` on it, and refusing it would leave the row
-   *   pending and re-pushing on every tick forever.
+   *   wire and left for whoever next revisited Sync's conflict rule.
+   *   Compared at millisecond precision rather than as raw strings —
+   *   the Server and this client do not write the field in the same
+   *   shape, and a byte-wise compare of the two is not chronological
+   *   order in either direction. `SqliteEntryStore.applyPulled` has the
+   *   formats and both failures worked through.
+   *   A tie applies rather than refuses, for two reasons. The incoming
+   *   row has been through the Server and this Device's has not, so on
+   *   a genuine tie the Server's copy is the better default. And the
+   *   normalisation above turns any sub-millisecond difference into a
+   *   tie, where applying is the direction that cannot strand a row.
+   *   (It is *not* what rescues this Device's own row coming back with
+   *   a `seq` on it — `sync-engine.ts` applies `acknowledged_entries`
+   *   through `upsert()` before this method sees the Cursor-read arm,
+   *   so such a row already has a `seq` and is taken by the first
+   *   clause. That belongs to the acknowledgement path, not here.)
    * - *unless it is a tombstone* — deletion is terminal in both
    *   directions (ADR 0064), so an incoming tombstone lands over a newer
    *   local edit, the mirror of edit()'s own `WHERE deleted_at IS NULL`

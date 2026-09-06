@@ -52,9 +52,25 @@ arm. The Cursor-read arm moves to `applyPulled`.
 - *Pending* is `seq IS NULL` — the same "the Server has not acknowledged this yet" signal `edit()`,
   `remove()` and `pending()` already share. A row the Server has acknowledged has nothing local
   left to lose and is overwritten exactly as before.
-- *Strictly newer* compares `updated_at`. **A tie applies, and that is not a detail.** A tie is
-  this Device's own row coming back with a `seq` on it; refusing it would leave the row pending and
-  re-pushing on every tick, forever.
+- *Strictly newer* compares `updated_at`, **normalised to milliseconds on both sides, because the
+  two sides do not write it in the same shape.** This client stamps it with
+  `new Date().toISOString()`, which always emits exactly three fractional digits. The Server
+  serialises `DateTime<Utc>` through chrono's default, which emits as many digits as it needs —
+  six in practice, and none at all when the nanoseconds are zero. A byte-wise comparison of two
+  such strings is not chronological order, and it fails in *both* directions: `'0' < 'Z'` makes
+  the Server's `...02.500000Z` compare smaller than a local `...02.500Z` at the same instant, and
+  `'Z' > '.'` makes an older `...02Z` compare greater than a newer `...02.500Z`. The second of
+  those is this ADR's own bug, arriving through the guard instead of around it. Both sides go
+  through `strftime('%Y-%m-%dT%H:%M:%f', …)` first. It was caught in review, against real rows: a
+  Device's database holds 137 Server-written 6-digit timestamps beside 4 locally-written 3-digit
+  ones.
+- **A tie applies rather than refuses.** The incoming row has been through the Server and this
+  Device's has not, so on a genuine tie the Server's copy is the better default; and normalising
+  to milliseconds turns every sub-millisecond difference into a tie, where applying is the
+  direction that cannot strand a row. This is *not* what rescues this Device's own row coming back
+  with a `seq` on it — `sync-engine.ts` applies `acknowledged_entries` before the Cursor-read arm,
+  so such a row already has a `seq` and is taken by the first clause. That belongs to the
+  acknowledgement path.
 - *Unless the incoming row is a tombstone.* Deletion is terminal in both directions (ADR 0064), so
   a tombstone lands over a newer local edit — the mirror of `edit()`'s own `WHERE deleted_at IS
   NULL` guard refusing to resurrect one.
@@ -94,6 +110,14 @@ still wins, exactly as before.
 
 ## Consequences
 
+**Merge compares the same field the same wrong way, and this ADR does not fix it.** `merge.ts`'s
+case 6 does a plain string `>` on `updated_at` and states the assumption in a comment — "Both are
+ISO 8601 strings of identical shape ... so a plain string comparison orders them correctly." The
+rows above show they are not of identical shape. It is pre-existing, it is the same root cause,
+and it is filed as issue #217 rather than folded in here. **`updated_at` should not be compared as a raw string
+anywhere in this codebase**; that is the general lesson, and this ADR only closes the one call
+site it owns.
+
 **Clock skew can still lose an edit, and that is inherited, not introduced.** A Device with a fast
 clock wins a collision. ADR 0065 accepted this knowingly when it made `updated_at` the
 discriminator, bounded by deletion being terminal — a skewed clock can win an edit but cannot
@@ -107,7 +131,7 @@ folding that in here would have buried a second Sync change inside the fix for t
 
 **Only Entries are covered.** Tasks, Projects, Sections, Labels, Comments and Events keep the
 unguarded `upsert()` on both arms. Entry is where the exposure was observed and where the
-store-open rewrites actually write; extending the rule is a mechanical follow-up, not a redesign,
+store-open rewrites actually write; extending the rule is a mechanical follow-up (issue #218), not a redesign,
 and doing it without a demonstrated failure would be six speculative changes to Sync at once.
 
 **`upsert()` is now the narrower door, and its name no longer says so.** It is Sync's

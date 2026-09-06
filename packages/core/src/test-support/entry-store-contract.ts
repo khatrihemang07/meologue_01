@@ -627,6 +627,105 @@ export function entryStoreContract(createStore: () => EntryStore | Promise<Entry
       expect(byId.get("b")).toMatchObject({ body: "b, edited elsewhere", seq: 3 });
     });
 
+    // The Server and this client do not write `updated_at` in the same
+    // shape, and a byte-wise compare of the two is not chronological
+    // order — see SqliteEntryStore.applyPulled's own doc comment for the
+    // formats and the two ways it goes wrong. These are both taken from
+    // real rows: a Device's own database holds 6-digit Server timestamps
+    // and 3-digit local ones side by side.
+    describe("across the Server's timestamp format and this client's", () => {
+      // `'0' < 'Z'`, so the Server's own row compares as *smaller* than a
+      // local edit at the very same instant. Refusing it would push this
+      // Device's copy over the other Device's edit — losing theirs.
+      it("applies a Server row at the same instant, written to microsecond precision", async () => {
+        await store.upsert([
+          entry({
+            id: "a",
+            body: "before",
+            updatedAt: "2026-09-05T16:23:02.500Z",
+            seq: 1,
+            syncedAt: "2026-09-05T16:23:02.500Z",
+          }),
+        ]);
+        // Pending, and stamped by this client at millisecond precision.
+        await store.upsert([
+          entry({ id: "a", body: "local", updatedAt: "2026-09-05T16:23:02.500Z", seq: null }),
+        ]);
+
+        await store.applyPulled([
+          entry({
+            id: "a",
+            body: "from the Server",
+            updatedAt: "2026-09-05T16:23:02.500000Z",
+            seq: 9,
+            syncedAt: "2026-09-05T16:23:03.000Z",
+          }),
+        ]);
+
+        expect((await store.list())[0]).toMatchObject({ body: "from the Server", seq: 9 });
+      });
+
+      // `'Z' > '.'`, so a Server row half a second OLDER compares as
+      // greater. Applying it is the #215 data loss itself, arriving
+      // through the guard rather than around it.
+      it("refuses an older Server row that carries no fractional seconds at all", async () => {
+        await store.upsert([
+          entry({
+            id: "a",
+            body: "before",
+            updatedAt: "2026-09-05T16:23:02.000Z",
+            seq: 1,
+            syncedAt: "2026-09-05T16:23:02.000Z",
+          }),
+        ]);
+        await store.edit("a", "the local edit nobody has pushed");
+        // Whatever the real clock just stamped, re-pin it to a value in
+        // the same second as the Server row below — that is the only
+        // window where the two formats can be compared wrongly.
+        const [pending] = await store.list();
+        await store.upsert([
+          entry({
+            id: "a",
+            body: pending?.body as string,
+            updatedAt: "2026-09-05T16:23:02.500Z",
+            seq: null,
+          }),
+        ]);
+
+        await store.applyPulled([
+          entry({
+            id: "a",
+            body: "the Server's older copy",
+            updatedAt: "2026-09-05T16:23:02Z",
+            seq: 1,
+            syncedAt: "2026-09-05T16:23:03.000Z",
+          }),
+        ]);
+
+        const [survived] = await store.list();
+        expect(survived).toMatchObject({
+          body: "the local edit nobody has pushed",
+          seq: null,
+        });
+      });
+
+      // Neither implementation can order a timestamp it cannot read, and
+      // the two must agree on which way to fail. Refusing keeps the local
+      // edit and re-pushes it; applying would discard it on a comparison
+      // nobody can trust.
+      it("refuses a pending row rather than overwrite it on an unreadable timestamp", async () => {
+        await store.upsert([
+          entry({ id: "a", body: "local", updatedAt: "not a timestamp", seq: null }),
+        ]);
+
+        await store.applyPulled([
+          entry({ id: "a", body: "from the Server", updatedAt: "2026-09-05T16:23:02Z", seq: 9 }),
+        ]);
+
+        expect((await store.list())[0]).toMatchObject({ body: "local", seq: null });
+      });
+    });
+
     it("is a no-op on an empty batch", async () => {
       await store.upsert([entry({ id: "a", seq: 1 })]);
 
