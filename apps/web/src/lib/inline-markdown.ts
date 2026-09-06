@@ -920,6 +920,23 @@ export function refreshTaskReferenceLabel(body: string, taskId: string, label: s
   return out;
 }
 
+/**
+ * Every `[[task:…]]` raw for `taskId` anywhere in `nodes`, including inside
+ * marks — a Task's label has to be refreshed whether or not someone bolded
+ * or struck the Reference to it.
+ *
+ * The recursion tests for `children` rather than naming the mark kinds that
+ * have them. It named them until issue #211, and that is exactly how it
+ * broke: adding `strikethrough` made a Reference inside `~~…~~` invisible
+ * here, so renaming a Task silently stopped updating that Entry's cached
+ * label — no error, no failing test, just a label that quietly disagrees
+ * with the Task it names. `referencesDay` (day-referrers.ts) had the same
+ * shape and the same bug at the same time, for the same reason.
+ *
+ * Naming the kinds means every future mark has to remember two files it has
+ * nothing to do with. Recursing on structure cannot fall out of step with
+ * the mark set at all, so it does not depend on anyone remembering.
+ */
 function collectTaskReferenceRawsInline(
   nodes: readonly InlineNode[],
   taskId: string,
@@ -928,11 +945,7 @@ function collectTaskReferenceRawsInline(
   for (const node of nodes) {
     if (node.kind === "taskReference" && node.taskId === taskId) {
       out.push(node.raw);
-    } else if (
-      node.kind === "emphasis" ||
-      node.kind === "strong" ||
-      node.kind === "strikethrough"
-    ) {
+    } else if ("children" in node) {
       collectTaskReferenceRawsInline(node.children, taskId, out);
     }
   }
