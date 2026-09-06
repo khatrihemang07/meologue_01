@@ -16,6 +16,14 @@ import {
   useSettingsStore,
 } from "./settings";
 
+/** Same stand-in as entry-row.test.tsx's own `stubHoverCapable` — see its comment. */
+function stubHoverCapable(matches: boolean) {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn((query: string) => ({ matches, media: query })),
+  );
+}
+
 function healthResponse(capabilities?: unknown) {
   return {
     ok: true,
@@ -264,6 +272,64 @@ describe("settings store", () => {
           fresh.DEFAULT_SMART_DATES_ENABLED,
         );
       });
+    });
+  });
+
+  // Issue #213: the default now follows `hoverCapable()` rather than a flat
+  // `false` (`defaultFormatBarVisible`'s own doc comment) — a phone has no
+  // other way to reach indent/outdent/soft-break at all. Each case here
+  // re-imports the module fresh (`vi.resetModules()`), the same pattern
+  // `completedStyle`/`smartDatesEnabled` above use, because the default is
+  // read once at store construction (module load), not per render.
+  describe("format bar visibility", () => {
+    it("defaults to hidden on a hover-capable device with no stored preference", () => {
+      stubHoverCapable(true);
+
+      vi.resetModules();
+      return import("./settings").then((fresh) => {
+        expect(fresh.useSettingsStore.getState().formatBarVisible).toBe(false);
+      });
+    });
+
+    it("defaults to visible on a touch device with no stored preference", () => {
+      stubHoverCapable(false);
+
+      vi.resetModules();
+      return import("./settings").then((fresh) => {
+        expect(fresh.useSettingsStore.getState().formatBarVisible).toBe(true);
+      });
+    });
+
+    // The requirement this ticket exists to protect: a reader who explicitly
+    // turned the toolbar off must never have it turned back on just because
+    // they're on a touch device.
+    it("respects a stored 'false' on a touch device rather than overriding it", () => {
+      stubHoverCapable(false);
+      localStorage.setItem("meologue.format-bar-visible", "false");
+
+      vi.resetModules();
+      return import("./settings").then((fresh) => {
+        expect(fresh.useSettingsStore.getState().formatBarVisible).toBe(false);
+      });
+    });
+
+    it("respects a stored 'true' on a hover-capable device", () => {
+      stubHoverCapable(true);
+      localStorage.setItem("meologue.format-bar-visible", "true");
+
+      vi.resetModules();
+      return import("./settings").then((fresh) => {
+        expect(fresh.useSettingsStore.getState().formatBarVisible).toBe(true);
+      });
+    });
+
+    it("does not throw when matchMedia is unavailable at all, and defaults to visible", () => {
+      vi.stubGlobal("matchMedia", undefined);
+
+      vi.resetModules();
+      return expect(
+        import("./settings").then((fresh) => fresh.useSettingsStore.getState().formatBarVisible),
+      ).resolves.toBe(true);
     });
   });
 

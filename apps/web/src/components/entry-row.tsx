@@ -9,7 +9,7 @@
 import type { Entry } from "@meologue/core";
 import { type MouseEvent, memo, type ReactNode, useState } from "react";
 import { Link } from "react-router";
-import { EntryHoverActions, hoverCapable } from "@/components/entry-actions";
+import { EntryHoverActions } from "@/components/entry-actions";
 import { entryProse } from "@/components/entry-prose";
 import { TaskScheduleChips } from "@/components/task-schedule-chips";
 import { useDayHasEntries } from "@/hooks/use-day-has-entries";
@@ -22,6 +22,7 @@ import {
 } from "@/lib/entry-day";
 import { formatAbsoluteTime } from "@/lib/entry-time";
 import { entryBlocksToText, parseEntryMarkdown } from "@/lib/inline-markdown";
+import { hoverCapable } from "@/lib/pointer";
 import { setTaskMarkerChecked } from "@/lib/toggle-task";
 import { cn } from "@/lib/utils";
 import { useEntryStore } from "@/pages/entry-store-layout";

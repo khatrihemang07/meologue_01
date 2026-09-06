@@ -1030,7 +1030,7 @@ describe("ComposerPage", () => {
   // own focused test (entry-row.test.tsx, entry-actions.test.tsx,
   // composer.test.tsx, use-history.test.tsx); this is the one place that
   // proves they're actually connected. jsdom has no `matchMedia`
-  // (entry-actions.tsx's `hoverCapable()` reads that as "no hover"), so a
+  // (`hoverCapable()`, lib/pointer.ts, reads that as "no hover"), so a
   // plain tap on the row here opens the sheet exactly as it would on a
   // touch device — no explicit stub needed for that default.
   // #127: the sheet is reached by swiping a bubble left, not by tapping it.
