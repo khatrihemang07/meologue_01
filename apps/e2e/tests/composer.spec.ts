@@ -345,17 +345,32 @@ test("Enter in the MIDDLE of a ticked item's text also produces an unticked new 
   // still at the end, and the Enter below becomes an end-of-item split — which
   // still yields two checkboxes, so only the text assertions catch it.
   await expect(editor.locator("li p")).toHaveText("buy milk");
-  // Caret starts after "milk"; walk it back to just after "buy", before
-  // the space — a mid-text split, not an end-of-item one. Each press is
-  // confirmed applied before the next is sent: fired back to back they race
-  // ProseMirror's re-render and some are silently dropped, which lands the
-  // caret mid-word and makes this test fail on the text assertions only.
+  // Caret starts after "milk"; walk it back to just after "buy", before the
+  // space — a mid-text split, not an end-of-item one.
+  //
+  // ProseMirror does not learn about a caret move from the keypress that caused
+  // it: the browser moves the DOM selection, fires `selectionchange`, and
+  // DOMObserver flushes that into editor state on a LATER task. A press sent
+  // inside that window is simply lost, so a fixed number of ArrowLefts lands the
+  // caret at an offset nobody chose. Counting the presses cannot fix that; only
+  // re-pressing until the caret actually arrives can. `expect.poll` retries the
+  // press and re-reads the offset until it reaches the target, so the test
+  // asserts the precondition it depends on instead of assuming it.
+  const TARGET = "buy".length;
   const caretOffset = () =>
     page.evaluate(() => window.getSelection()?.anchorOffset ?? -1);
-  for (let i = 0; i < " milk".length; i++) {
-    await editor.press("ArrowLeft");
-    await expect.poll(caretOffset).toBe("buy milk".length - (i + 1));
-  }
+  await expect
+    .poll(
+      async () => {
+        const offset = await caretOffset();
+        if (offset > TARGET) {
+          await editor.press("ArrowLeft");
+        }
+        return offset;
+      },
+      { message: "caret never reached the middle of the item's text" },
+    )
+    .toBe(TARGET);
   await editor.press("Enter");
 
   const boxes = editor.locator('input[type="checkbox"]');
