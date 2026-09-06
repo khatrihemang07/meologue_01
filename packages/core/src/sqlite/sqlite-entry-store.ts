@@ -204,13 +204,35 @@ export class SqliteEntryStore implements EntryStore {
         },
         setWhere: sql`${entries.seq} IS NOT NULL OR strftime('${sql.raw(MILLISECOND_PRECISION)}', excluded.updated_at) >= strftime('${sql.raw(MILLISECOND_PRECISION)}', ${entries.updatedAt}) OR excluded.deleted_at IS NOT NULL`,
       });
-    // Deliberately reindexFromCurrentState(), not indexForSearch(entry)
-    // as upsert() does: once a row can be refused, indexing the incoming
-    // body would make Search the one place a refused edit still appeared
-    // to have landed. Same reasoning edit() and remove() already give for
+    // Re-derived from what the rows now actually hold, never from
+    // `incoming`: once a row can be refused, indexing the incoming body
+    // would make Search the one place a refused edit still appeared to
+    // have landed. Same reasoning edit() and remove() already give for
     // choosing this over indexing what the caller assumed it wrote.
-    for (const entry of incoming) {
-      await this.reindexFromCurrentState(entry.id);
+    //
+    // Read back in one query per chunk rather than through
+    // reindexFromCurrentState()'s own per-row SELECT, which is what this
+    // first shipped as. A Cursor-reset pull hands over the entire History
+    // (the whole reason this method exists), so a per-row round trip here
+    // is paid once per Entry a Device owns, all inside the first Sync
+    // after a Restore. `chunkIds` is the same bound-parameter limit
+    // getMany() already respects.
+    //
+    // This is a cost change, not a correctness one, and it is worth being
+    // precise about that: it was written while chasing an intermittent
+    // failure in `restore.spec.ts`'s "Search works immediately after",
+    // and it did **not** fix it. That test fails about 1 run in 10 both
+    // here and on the commit before this whole feature, so it is
+    // pre-existing and unrelated. The batching earns its place on its own
+    // terms; it is not a fix for anything.
+    for (const chunk of chunkIds(incoming.map((entry) => entry.id))) {
+      const rows = await this.db
+        .select({ id: entries.id, body: entries.body, deletedAt: entries.deletedAt })
+        .from(entries)
+        .where(inArray(entries.id, chunk));
+      for (const row of rows) {
+        await this.indexForSearch(row);
+      }
     }
   }
 
