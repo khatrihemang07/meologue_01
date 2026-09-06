@@ -56,7 +56,7 @@
 import { toggleMark } from "prosemirror-commands";
 import { redo, redoDepth, undo, undoDepth } from "prosemirror-history";
 import type { MarkType, NodeType, Node as PMNode } from "prosemirror-model";
-import { liftListItem, sinkListItem, wrapInList } from "prosemirror-schema-list";
+import { liftListItem, sinkListItem, splitListItem, wrapInList } from "prosemirror-schema-list";
 import type { Command, EditorState, Transaction } from "prosemirror-state";
 import { entrySchema } from "@/lib/entry-schema";
 
@@ -383,6 +383,79 @@ export const toggleCheckboxDone: ComposerCommand = {
     return item !== null && item.attrs.checked !== null;
   },
   run: toggleCheckboxDoneRun,
+};
+
+/**
+ * `Enter` on a `list_item`, wired to composer-editor.ts's `listKeymap()`
+ * instead of the bare `splitListItem(listItemNodeType)` it used to bind
+ * directly — issue #210. Continuing a DONE checklist item must start the
+ * new item unchecked (UpNote's own behaviour, and the only reading of
+ * ADR 0053 consistent with "every checkbox is a Task": minting an
+ * already-completed Task on every Enter would make finishing a checklist
+ * item and pressing Enter silently create a second done Task nobody
+ * asked for).
+ *
+ * This is NOT fixable by passing `itemAttrs` to `splitListItem` itself
+ * (verified by reading prosemirror-schema-list's own source, not
+ * assumed): `itemAttrs` is only spliced into the SECOND split node's type
+ * when `$to.pos == $from.end()` — caret at the very end of the item's
+ * text. A split further back (this function's own "middle of a ticked
+ * item's text" acceptance case) takes the earlier "delete the selection,
+ * then `canSplit`/`split` with no `types` override" path instead, which
+ * copies the ORIGINAL node's type and attrs onto both halves — no
+ * `itemAttrs` involved at all, so passing one there would silently do
+ * nothing for exactly the case this function most needs to handle. And a
+ * STATIC `{ checked: false }`, even where `itemAttrs` is honoured, cannot
+ * tell "was already a task" from "is a plain bullet": it would turn
+ * Enter on a plain bullet (`checked: null`) into a checkbox, which is not
+ * this ticket's ask and not UpNote's own behaviour either.
+ *
+ * The fix instead reads the ORIGINAL item's `checked` before splitting,
+ * runs the real `splitListItem(listItemNodeType)` with a capturing
+ * `dispatch` (the same "borrow the transaction `wrapInList` already
+ * built, then add one more step before dispatching it" shape
+ * `wrapAsChecklist` above uses), and — only when that original was
+ * `checked === true` — patches the NEW item (found by resolving the
+ * captured transaction's own post-split selection, which
+ * `splitListItem`'s own two branches both leave sitting inside the new
+ * item: either the default "selection maps through the steps" behaviour
+ * every `Transaction` gives for free, or that branch's own explicit
+ * `tr.setSelection` into the freshly created empty textblock) back down
+ * to `checked: false`.
+ *
+ * Returns `false` unchanged, dispatching nothing, whenever the real
+ * `splitListItem` itself would — most importantly the empty-top-level-item
+ * case its own doc comment describes as "bail out and let next command
+ * handle lifting," which is exactly what lets `composer-editor.ts`'s
+ * `listChain` (`chainCommands(splitListItemUnchecked, outdent.run)`) still
+ * fall through to `outdent.run` there, unchanged from before this
+ * function existed.
+ */
+export const splitListItemUnchecked: Command = (state, dispatch) => {
+  const split = splitListItem(listItemNodeType);
+  if (!dispatch) {
+    return split(state);
+  }
+  const originalItem = nearestListItem(state);
+  let captured: Transaction | null = null;
+  if (!split(state, (tr) => (captured = tr))) {
+    return false;
+  }
+  if (captured === null) {
+    return false;
+  }
+  const tr: Transaction = captured;
+  if (originalItem !== null && originalItem.attrs.checked === true) {
+    const $from = tr.selection.$from;
+    for (let depth = $from.depth; depth > 0; depth--) {
+      if ($from.node(depth).type === listItemNodeType) {
+        tr.setNodeMarkup($from.before(depth), undefined, { checked: false });
+        break;
+      }
+    }
+  }
+  dispatch(tr.scrollIntoView());
+  return true;
 };
 
 // ---------------------------------------------------------------------------

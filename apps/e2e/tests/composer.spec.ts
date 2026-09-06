@@ -278,6 +278,15 @@ test("[x] and [X] start a checked checklist item directly", async ({ page }) => 
   const editor = composerField(page);
   await editor.click();
   await editor.pressSequentially("[x] first");
+  // Since issue #210, this Enter itself yields an UNCHECKED second item
+  // (`splitListItemUnchecked`, composer-commands.ts) — "first" was a done
+  // task, and continuing it must not silently mint a second done Task.
+  // The typed "[X] " that follows is what re-checks it, via the ORDINARY
+  // `checkboxInputRule` a person typing that marker on any line would
+  // trigger. So this test now exercises two independent mechanisms in
+  // sequence (split-then-uncheck, then a fresh input rule re-checking it),
+  // not one — and still ends up checked either way, which is why it still
+  // passes unchanged.
   await editor.press("Enter");
   await editor.pressSequentially("[X] second");
 
@@ -286,6 +295,95 @@ test("[x] and [X] start a checked checklist item directly", async ({ page }) => 
   await expect(boxes.nth(0)).toBeChecked();
   await expect(boxes.nth(1)).toBeChecked();
   await expect(editor).not.toContainText("[");
+});
+
+/**
+ * Issue #210: continuing a DONE checklist item must not mint a second done
+ * Task. `splitListItemUnchecked` (composer-commands.ts) has direct unit
+ * coverage against a plain `EditorState`; this is the keystroke path
+ * itself, through a real `EditorView` and `listKeymap`'s actual `Enter`
+ * binding.
+ */
+test("Enter after a ticked checklist item's text produces an UNticked new item", async ({
+  page,
+}) => {
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  await editor.pressSequentially("[x] first");
+  await editor.press("Enter");
+  await editor.pressSequentially("second");
+
+  const boxes = editor.locator('input[type="checkbox"]');
+  await expect(boxes).toHaveCount(2);
+  await expect(boxes.nth(0)).toBeChecked();
+  await expect(boxes.nth(1)).not.toBeChecked();
+  await expect(editor.locator("li").nth(0)).toHaveText("first");
+  await expect(editor.locator("li").nth(1)).toHaveText("second");
+});
+
+/**
+ * The case `itemAttrs` cannot reach at all (composer-commands.ts's own
+ * comment on `splitListItemUnchecked`): `splitListItem` only honours
+ * `itemAttrs` when the caret sits at `$from.end()`. Splitting further back
+ * takes an entirely different internal path that copies the ORIGINAL
+ * item's own type and attrs onto both halves, so this is the case that
+ * actually exercises the transaction-patching fix rather than a param
+ * `splitListItem` would have handled on its own.
+ */
+test("Enter in the MIDDLE of a ticked item's text also produces an unticked new item", async ({
+  page,
+}) => {
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  await editor.pressSequentially("[x] buy milk");
+  // Wait for the checklist input rule's transaction to land before moving the
+  // caret. Without this the ArrowLefts race it, arrive while the selection is
+  // still at the end, and the Enter below becomes an end-of-item split — which
+  // still yields two checkboxes, so only the text assertions catch it.
+  await expect(editor.locator("li p")).toHaveText("buy milk");
+  // Caret starts after "milk"; walk it back to just after "buy", before
+  // the space — a mid-text split, not an end-of-item one. Each press is
+  // confirmed applied before the next is sent: fired back to back they race
+  // ProseMirror's re-render and some are silently dropped, which lands the
+  // caret mid-word and makes this test fail on the text assertions only.
+  const caretOffset = () =>
+    page.evaluate(() => window.getSelection()?.anchorOffset ?? -1);
+  for (let i = 0; i < " milk".length; i++) {
+    await editor.press("ArrowLeft");
+    await expect.poll(caretOffset).toBe("buy milk".length - (i + 1));
+  }
+  await editor.press("Enter");
+
+  const boxes = editor.locator('input[type="checkbox"]');
+  await expect(boxes).toHaveCount(2);
+  // The first half keeps the original item's own checked state...
+  await expect(boxes.nth(0)).toBeChecked();
+  // ...only the newly split-off second half is forced back to unchecked.
+  await expect(boxes.nth(1)).not.toBeChecked();
+  await expect(editor.locator("li").nth(0)).toHaveText("buy");
+  await expect(editor.locator("li").nth(1)).toHaveText("milk");
+});
+
+/**
+ * The regression a STATIC `checked: false` (rather than reading the
+ * original item's own state) would cause: Enter on a plain bullet must
+ * stay a plain bullet, `checked` left `null` — never promoted to a
+ * checkbox just because it went through the same split path a task does.
+ */
+test("Enter on a plain (non-checkbox) bullet still produces a plain bullet, never minting a checkbox", async ({
+  page,
+}) => {
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  await editor.pressSequentially("- first");
+  await editor.press("Enter");
+  await editor.pressSequentially("second");
+
+  await expect(editor.locator('input[type="checkbox"]')).toHaveCount(0);
+  await expect(editor.locator("ul > li")).toHaveCount(2);
 });
 
 /**
@@ -495,6 +593,66 @@ test("Backspace at the very start of a list item lifts it out one level, and out
   await expect(editor.locator("ul > li")).toHaveCount(1);
   await expect(editor.locator("ul > li").first()).toHaveText("top");
   await expect(editor.locator("ul + p", { hasText: "mid" })).toBeVisible();
+});
+
+/**
+ * Issue #210: `Backspace` is now `chainCommands(undoInputRule,
+ * liftAtStartOfListItem)`, not `liftAtStartOfListItem` alone
+ * (`listKeymap`, composer-editor.ts — its own comment there has the full
+ * "why `undoInputRule` must run FIRST" reasoning). `undoInputRule`
+ * (prosemirror-inputrules) only fires when the IMMEDIATELY PRECEDING
+ * transaction was an `InputRule` match, so typing `"- "` — which converts
+ * the line into a bullet via a `wrappingInputRule` — leaves exactly that
+ * behind for the very next `Backspace` to revert: the literal two
+ * characters come back and the list disappears, rather than (as before
+ * this ticket) `Backspace` doing nothing at all, since `baseKeymap`'s own
+ * Backspace has no character to delete at offset 0 of an otherwise-empty
+ * paragraph.
+ *
+ * jsdom cannot exercise this at all (ADR 0044): `undoInputRule` reads a
+ * plugin's OWN state, which only exists after a real dispatch through a
+ * mounted `EditorView` — there is no unit-test seam for this half of the
+ * ticket, only this one.
+ */
+test('Backspace right after typing "- " undoes the bullet input rule, restoring the literal text', async ({
+  page,
+}) => {
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  await editor.pressSequentially("- ");
+  await expect(editor.locator("ul > li")).toHaveCount(1);
+
+  await editor.press("Backspace");
+
+  await expect(editor.locator("ul")).toHaveCount(0);
+  await expect.poll(() => editor.locator("p").textContent()).toBe("- ");
+});
+
+/**
+ * The same mechanism, on a mark input rule rather than a list one — and
+ * the visible behaviour change the ticket explicitly calls out: Backspace
+ * right after `**bold**` now un-bolds the word and restores the literal
+ * asterisks, rather than deleting just the last letter the way it did
+ * before this ticket. Intended (it's UpNote's own behaviour, and
+ * `undoInputRule` degrades to ordinary character deletion the rest of the
+ * time — this is only reachable in the single keystroke right after an
+ * input rule fires), but flagged here because it changes a very common
+ * keystroke's behaviour in a visible way.
+ */
+test('Backspace right after "**bold**" undoes the bold input rule, restoring the asterisks', async ({
+  page,
+}) => {
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  await editor.pressSequentially("**bold**");
+  await expect(editor.locator("strong")).toHaveText("bold");
+
+  await editor.press("Backspace");
+
+  await expect(editor.locator("strong")).toHaveCount(0);
+  await expect.poll(() => editor.locator("p").textContent()).toBe("**bold**");
 });
 
 /**

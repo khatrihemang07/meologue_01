@@ -33,6 +33,7 @@ import {
   outdent,
   redoCommand,
   reference,
+  splitListItemUnchecked,
   toggleCheckboxDone,
   undoCommand,
 } from "./composer-commands";
@@ -110,6 +111,26 @@ function caretInNthParagraph(doc: PMNode, n: number): number {
     throw new Error(`fixture has no ${n}th paragraph`);
   }
   return result;
+}
+
+/** Every position of type `nodeName` in `doc`, document order — used below where a fixture needs the SECOND (or later) `list_item` a split just created, not just the first `findNodePos` returns. */
+function findNodePositions(doc: PMNode, nodeName: string): number[] {
+  const positions: number[] = [];
+  doc.descendants((node, pos) => {
+    if (node.type.name === nodeName) {
+      positions.push(pos);
+    }
+  });
+  return positions;
+}
+
+/** The (0-indexed) `n`th position of type `nodeName` in `doc` — `findNodePositions` plus a bounds check, so callers get a plain `number` under `noUncheckedIndexedAccess` instead of `number | undefined`. */
+function nthNodePos(doc: PMNode, nodeName: string, n: number): number {
+  const pos = findNodePositions(doc, nodeName)[n];
+  if (pos === undefined) {
+    throw new Error(`fixture has no "${nodeName}" #${n}`);
+  }
+  return pos;
 }
 
 function countNodesOfType(doc: PMNode, nodeName: string): number {
@@ -509,5 +530,95 @@ describe("toggleCheckboxDone", () => {
     expect(unchecked.applied).toBe(true);
     const uncheckedItemPos = findNodePos(unchecked.next.doc, "list_item");
     expect(unchecked.next.doc.nodeAt(uncheckedItemPos)?.attrs.checked).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// splitListItemUnchecked (issue #210)
+// ---------------------------------------------------------------------------
+
+/** A `bullet_list` containing one EMPTY, checked top-level `list_item` — built directly off `entrySchema` rather than through `entryMarkdownToDocument`, since there is no Markdown source text for "a task with no text at all." Exists only to exercise `splitListItem`'s own documented bail-out ("empty item — let the next command handle lifting"), which `splitListItemUnchecked` must preserve unchanged. */
+function emptyCheckedItemDoc(): PMNode {
+  const paragraph = entrySchema.nodes.paragraph?.create();
+  const item = entrySchema.nodes.list_item?.create({ checked: true }, paragraph);
+  const list = entrySchema.nodes.bullet_list?.create(null, item);
+  const doc = entrySchema.nodes.doc?.create(null, list);
+  if (doc === undefined) {
+    throw new Error("entrySchema is missing a node type this fixture needs");
+  }
+  return doc;
+}
+
+describe("splitListItemUnchecked", () => {
+  it("unchecks the new item when Enter splits at the end of a ticked item's text", () => {
+    const doc = docFor("- [x] item");
+    const start = caretInFirstParagraph(doc);
+    const text = doc.resolve(start).parent.textContent;
+    const state = stateAt(doc, { from: start + text.length });
+
+    const { applied, next } = runCommand({ run: splitListItemUnchecked }, state);
+    expect(applied).toBe(true);
+    expect(findNodePositions(next.doc, "list_item")).toHaveLength(2);
+    expect(next.doc.nodeAt(nthNodePos(next.doc, "list_item", 0))?.attrs.checked).toBe(true);
+    expect(next.doc.nodeAt(nthNodePos(next.doc, "list_item", 1))?.attrs.checked).toBe(false);
+  });
+
+  it("unchecks the new item when Enter splits in the MIDDLE of a ticked item's text — the case `itemAttrs` cannot reach", () => {
+    const doc = docFor("- [x] item");
+    const start = caretInFirstParagraph(doc);
+    const text = doc.resolve(start).parent.textContent; // " item"
+    const mid = start + text.indexOf("te"); // inside "item", not at its end
+    const state = stateAt(doc, { from: mid });
+
+    const { applied, next } = runCommand({ run: splitListItemUnchecked }, state);
+    expect(applied).toBe(true);
+    expect(findNodePositions(next.doc, "list_item")).toHaveLength(2);
+    // The first half keeps the ORIGINAL item's own checked state...
+    expect(next.doc.nodeAt(nthNodePos(next.doc, "list_item", 0))?.attrs.checked).toBe(true);
+    // ...only the newly split-off second half is forced back to unchecked.
+    expect(next.doc.nodeAt(nthNodePos(next.doc, "list_item", 1))?.attrs.checked).toBe(false);
+  });
+
+  it("leaves checked null on a plain (non-checkbox) bullet — Enter there must not mint a checkbox", () => {
+    const doc = docFor("- item");
+    const start = caretInFirstParagraph(doc);
+    const text = doc.resolve(start).parent.textContent;
+    const state = stateAt(doc, { from: start + text.length });
+
+    const { applied, next } = runCommand({ run: splitListItemUnchecked }, state);
+    expect(applied).toBe(true);
+    expect(findNodePositions(next.doc, "list_item")).toHaveLength(2);
+    expect(next.doc.nodeAt(nthNodePos(next.doc, "list_item", 0))?.attrs.checked).toBeNull();
+    expect(next.doc.nodeAt(nthNodePos(next.doc, "list_item", 1))?.attrs.checked).toBeNull();
+  });
+
+  it("leaves checked false on an already-unchecked checklist item", () => {
+    const doc = docFor("- [ ] item");
+    const start = caretInFirstParagraph(doc);
+    const text = doc.resolve(start).parent.textContent;
+    const state = stateAt(doc, { from: start + text.length });
+
+    const { applied, next } = runCommand({ run: splitListItemUnchecked }, state);
+    expect(applied).toBe(true);
+    expect(findNodePositions(next.doc, "list_item")).toHaveLength(2);
+    expect(next.doc.nodeAt(nthNodePos(next.doc, "list_item", 0))?.attrs.checked).toBe(false);
+    expect(next.doc.nodeAt(nthNodePos(next.doc, "list_item", 1))?.attrs.checked).toBe(false);
+  });
+
+  it("returns false and dispatches nothing on an empty top-level item, the same bail-out real splitListItem documents — leaves outdent.run to lift it out instead", () => {
+    const doc = emptyCheckedItemDoc();
+    const state = stateAt(doc, { from: caretInFirstParagraph(doc) });
+
+    const { applied, next } = runCommand({ run: splitListItemUnchecked }, state);
+    expect(applied).toBe(false);
+    expect(next).toBe(state);
+  });
+
+  it("supports a dry run with no dispatch, like every ProseMirror command", () => {
+    const doc = docFor("- [x] item");
+    const state = stateAt(doc, { from: caretInFirstParagraph(doc) });
+    expect(splitListItemUnchecked(state)).toBe(true);
+    // Untouched — a dry run must not mutate the document.
+    expect(countNodesOfType(state.doc, "list_item")).toBe(1);
   });
 });

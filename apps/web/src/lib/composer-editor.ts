@@ -33,10 +33,9 @@
  */
 import { baseKeymap, chainCommands, splitBlock } from "prosemirror-commands";
 import { history } from "prosemirror-history";
-import { InputRule, inputRules, wrappingInputRule } from "prosemirror-inputrules";
+import { InputRule, inputRules, undoInputRule, wrappingInputRule } from "prosemirror-inputrules";
 import { keymap } from "prosemirror-keymap";
 import type { MarkType, NodeType, Node as PMNode, ResolvedPos } from "prosemirror-model";
-import { splitListItem } from "prosemirror-schema-list";
 import { type Command, type EditorState, Plugin, PluginKey } from "prosemirror-state";
 import { findWrapping } from "prosemirror-transform";
 import { Decoration, DecorationSet, type EditorView, type NodeView } from "prosemirror-view";
@@ -47,6 +46,7 @@ import {
   italic,
   outdent,
   redoCommand,
+  splitListItemUnchecked,
   toggleCheckboxDone,
   undoCommand,
 } from "@/lib/composer-commands";
@@ -502,12 +502,12 @@ export function buildInputRules(): InputRule[] {
 }
 
 // ---------------------------------------------------------------------------
-// Keymap: splitListItem / outdent on Enter, undo/redo, everything else from
-// prosemirror-commands' baseKeymap
+// Keymap: splitListItemUnchecked / outdent on Enter, undo/redo, everything
+// else from prosemirror-commands' baseKeymap
 // ---------------------------------------------------------------------------
 
 /**
- * `chainCommands(splitListItem, outdent.run)` is the shape
+ * `chainCommands(splitListItemUnchecked, outdent.run)` is the shape
  * prosemirror-schema-list's own `splitListItem` doc comment is written
  * for: on a non-empty list item it splits into the next item; on an EMPTY
  * top-level item it deliberately returns `false` ("bail out and let next
@@ -518,6 +518,15 @@ export function buildInputRules(): InputRule[] {
  * key falls through (see this module's own comment on plugin order in
  * `buildComposerPlugins`) to `baseKeymap`'s own Enter, an ordinary
  * paragraph split.
+ *
+ * `splitListItemUnchecked` (composer-commands.ts, issue #210) is the real
+ * `splitListItem(listItemNodeType)` plus one patch: a new item split off a
+ * DONE task (`checked === true`) starts unchecked, matching UpNote and
+ * ADR 0053's "every checkbox is a Task" — otherwise finishing a checklist
+ * item and pressing Enter would silently mint a second already-completed
+ * Task. Its own module comment (composer-commands.ts) is the full
+ * reasoning for why this can't be done by passing `itemAttrs` to
+ * `splitListItem` directly.
  *
  * `outdent` (issue #160, composer-commands.ts) is `liftListItem(listItemNodeType)`
  * itself, given a name and reused here rather than called a second time —
@@ -546,9 +555,32 @@ export function buildInputRules(): InputRule[] {
  * inserted the same plain newline).
  */
 /**
- * Backspace lifts a list item out one level, but ONLY at the very start of
- * the item's FIRST paragraph — issue #162. Unlike Tab/Ctrl-]'s indent
- * below, this cannot simply bind straight to `outdent.run`
+ * Backspace is bound to `chainCommands(undoInputRule, liftAtStartOfListItem)`
+ * (`listKeymap` below), not to `liftAtStartOfListItem` alone — issue #210.
+ * `undoInputRule` (prosemirror-inputrules) reverts the most recent
+ * `InputRule` match (typing `- ` into a bullet, `**word**` into bold, and
+ * every other rule `buildInputRules` below registers) IF AND ONLY IF the
+ * immediately preceding transaction was that rule firing; otherwise it
+ * returns `false` untouched, so this binding degrades to exactly today's
+ * `liftAtStartOfListItem`-only behaviour the rest of the time. This does
+ * mean Backspace right after `**bold**` now un-bolds and restores the
+ * literal asterisks — UpNote's own behaviour, intended, but flagged here
+ * (and in the commit message) as a visible change to an extremely common
+ * keystroke.
+ *
+ * `undoInputRule` MUST run first, not second — the two are not
+ * interchangeable order. After typing `- ` the caret sits at offset 0 of
+ * the fresh item's own (now-empty) paragraph, which is EXACTLY
+ * `liftAtStartOfListItem`'s own trigger condition below. Reversed
+ * (`liftAtStartOfListItem` first), Backspace there would lift the brand
+ * new item back out of its list before `undoInputRule` ever got a chance
+ * to run — destroying the `- ` text via a list-structure change instead of
+ * restoring it as plain characters, the opposite of the ticket's ask.
+ *
+ * `liftAtStartOfListItem` itself lifts a list item out one level, but ONLY
+ * at the very start of the item's FIRST paragraph — issue #162. Unlike
+ * Tab/Ctrl-]'s indent below, this cannot simply bind straight to
+ * `outdent.run`
  * (`liftListItem(listItemNodeType)`, composer-commands.ts): that command's
  * own applicability check is only "is the caret inside a list item
  * somewhere," true for every position in a multi-paragraph item, not just
@@ -637,11 +669,11 @@ export const liftAtStartOfListItem: Command = (state, dispatch) => {
  * already cover for anyone on a layout where it doesn't work.
  */
 function listKeymap(): Plugin {
-  const listChain = chainCommands(splitListItem(listItemNodeType), outdent.run);
+  const listChain = chainCommands(splitListItemUnchecked, outdent.run);
   return keymap({
     Enter: listChain,
     "Shift-Enter": chainCommands(listChain, splitBlock),
-    Backspace: liftAtStartOfListItem,
+    Backspace: chainCommands(undoInputRule, liftAtStartOfListItem),
     Tab: indent.run,
     "Shift-Tab": outdent.run,
     "Ctrl-]": indent.run,
