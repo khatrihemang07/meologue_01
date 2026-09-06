@@ -1,10 +1,20 @@
 import { describe, expect, it } from "vitest";
+import type { SqliteDriver } from "../sqlite/driver";
 import { NodeSqliteDriver } from "../sqlite/node-driver";
 import { open } from "../sqlite/open";
 import { entry } from "../test-support/entry-fixture";
 import { event } from "../test-support/event-fixture";
+import { InterruptingDriver, NoTransactionDriver } from "../test-support/interrupting-driver";
+import { task } from "../test-support/task-fixture";
 import { dumpDatabase } from "./dump";
 import { mergeBackupIntoDevice } from "./merge";
+import { restoreFromBackup, type SafetyBackupOutcome, type TakeSafetyBackup } from "./restore";
+
+/** A `takeSafetyBackup` that always succeeds, reporting a fixed file name — every test below except the "safety Backup itself failed"/interruption ones just needs Merge to get past this step, not to exercise it (mirrors ./restore.test.ts's identical `okSafetyBackup`). */
+const okSafetyBackup: TakeSafetyBackup = async () => ({
+  ok: true,
+  fileName: "meologue-safety-backup-20260101-000000.zip",
+});
 
 describe("mergeBackupIntoDevice", () => {
   it("inserts a row only the Backup has, and leaves a row only this Device has untouched", async () => {
@@ -26,7 +36,11 @@ describe("mergeBackupIntoDevice", () => {
       entry({ id: "only-locally", body: "never left this Device", seq: 5 }),
     ]);
 
-    const outcome = await mergeBackupIntoDevice(targetDriver, sql);
+    const outcome = await mergeBackupIntoDevice({
+      driver: targetDriver,
+      databaseSql: sql,
+      takeSafetyBackup: okSafetyBackup,
+    });
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) {
       return;
@@ -79,7 +93,11 @@ describe("mergeBackupIntoDevice", () => {
       }),
     ]);
 
-    const outcome = await mergeBackupIntoDevice(targetDriver, sql);
+    const outcome = await mergeBackupIntoDevice({
+      driver: targetDriver,
+      databaseSql: sql,
+      takeSafetyBackup: okSafetyBackup,
+    });
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) {
       return;
@@ -135,7 +153,11 @@ describe("mergeBackupIntoDevice", () => {
       }),
     ]);
 
-    const outcome = await mergeBackupIntoDevice(targetDriver, sql);
+    const outcome = await mergeBackupIntoDevice({
+      driver: targetDriver,
+      databaseSql: sql,
+      takeSafetyBackup: okSafetyBackup,
+    });
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) {
       return;
@@ -165,7 +187,11 @@ describe("mergeBackupIntoDevice", () => {
       entry({ id: "e1", body: "same everywhere", seq: 7, syncedAt: null }),
     ]);
 
-    const outcome = await mergeBackupIntoDevice(targetDriver, sql);
+    const outcome = await mergeBackupIntoDevice({
+      driver: targetDriver,
+      databaseSql: sql,
+      takeSafetyBackup: okSafetyBackup,
+    });
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) {
       return;
@@ -205,7 +231,11 @@ describe("mergeBackupIntoDevice", () => {
       }),
     ]);
 
-    const outcome = await mergeBackupIntoDevice(targetDriver, sql);
+    const outcome = await mergeBackupIntoDevice({
+      driver: targetDriver,
+      databaseSql: sql,
+      takeSafetyBackup: okSafetyBackup,
+    });
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) {
       return;
@@ -247,7 +277,11 @@ describe("mergeBackupIntoDevice", () => {
       }),
     ]);
 
-    const outcome = await mergeBackupIntoDevice(targetDriver, sql);
+    const outcome = await mergeBackupIntoDevice({
+      driver: targetDriver,
+      databaseSql: sql,
+      takeSafetyBackup: okSafetyBackup,
+    });
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) {
       return;
@@ -282,7 +316,11 @@ describe("mergeBackupIntoDevice", () => {
       event({ id: "only-locally" }),
     ]);
 
-    const outcome = await mergeBackupIntoDevice(targetDriver, sql);
+    const outcome = await mergeBackupIntoDevice({
+      driver: targetDriver,
+      databaseSql: sql,
+      takeSafetyBackup: okSafetyBackup,
+    });
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) {
       return;
@@ -309,7 +347,11 @@ describe("mergeBackupIntoDevice", () => {
 
     const before = await targetDriver.execute("SELECT key, value FROM kv ORDER BY key", [], "all");
 
-    const outcome = await mergeBackupIntoDevice(targetDriver, sql);
+    const outcome = await mergeBackupIntoDevice({
+      driver: targetDriver,
+      databaseSql: sql,
+      takeSafetyBackup: okSafetyBackup,
+    });
     expect(outcome.ok).toBe(true);
 
     const after = await targetDriver.execute("SELECT key, value FROM kv ORDER BY key", [], "all");
@@ -341,7 +383,11 @@ describe("mergeBackupIntoDevice", () => {
     await sourceStore.upsert([entry({ id: "new-from-source", body: "only from the backup" })]);
 
     const sql = await dumpDatabase(sourceDriver);
-    const outcome = await mergeBackupIntoDevice(targetDriver, sql);
+    const outcome = await mergeBackupIntoDevice({
+      driver: targetDriver,
+      databaseSql: sql,
+      takeSafetyBackup: okSafetyBackup,
+    });
 
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) {
@@ -355,5 +401,264 @@ describe("mergeBackupIntoDevice", () => {
     // rows were rewritten, so none of them re-entered pending().
     const pending = await targetStore.pending();
     expect(pending.map((e) => e.id)).toEqual(["new-from-source"]);
+  });
+
+  it("names the safety Backup it took in a successful outcome's own result", async () => {
+    const driver = new NodeSqliteDriver();
+    await open(driver);
+    const sql = await dumpDatabase(driver);
+
+    const outcome = await mergeBackupIntoDevice({
+      driver,
+      databaseSql: sql,
+      takeSafetyBackup: async () => ({ ok: true, fileName: "meologue-safety-backup-x.zip" }),
+    });
+
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) {
+      return;
+    }
+    expect(outcome.result.safetyBackupFileName).toBe("meologue-safety-backup-x.zip");
+  });
+});
+
+describe("mergeBackupIntoDevice — the safety Backup itself (issue #208)", () => {
+  it("never calls BEGIN, and writes nothing, when takeSafetyBackup reports failure", async () => {
+    const driver = new NodeSqliteDriver();
+    const { store } = await open(driver);
+    await store.upsert([entry({ id: "e1", body: "still here" })]);
+    const sql = await dumpDatabase(driver);
+
+    let sawBegin = false;
+    const observingDriver: SqliteDriver = {
+      execute: (statementSql, params, method) => {
+        if (statementSql === "BEGIN") {
+          sawBegin = true;
+        }
+        return driver.execute(statementSql, params, method);
+      },
+    };
+
+    const outcome = await mergeBackupIntoDevice({
+      driver: observingDriver,
+      databaseSql: sql,
+      takeSafetyBackup: async () => ({ ok: false, reason: "disk full" }),
+    });
+
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) {
+      return;
+    }
+    expect(outcome.reason).toContain("disk full");
+    expect(sawBegin).toBe(false);
+    expect((await store.list()).map((e) => e.id)).toEqual(["e1"]);
+  });
+
+  it("treats a thrown takeSafetyBackup the same as a reported failure — ok:false, nothing written", async () => {
+    const driver = new NodeSqliteDriver();
+    const { store } = await open(driver);
+    await store.upsert([entry({ id: "e1", body: "still here" })]);
+    const sql = await dumpDatabase(driver);
+
+    const outcome = await mergeBackupIntoDevice({
+      driver,
+      databaseSql: sql,
+      takeSafetyBackup: async () => {
+        throw new Error("save panel crashed");
+      },
+    });
+
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) {
+      return;
+    }
+    expect(outcome.reason).toContain("save panel crashed");
+    expect((await store.list()).map((e) => e.id)).toEqual(["e1"]);
+  });
+
+  it("never even calls takeSafetyBackup for a malformed file — refusing the file needs no safety net", async () => {
+    const driver = new NodeSqliteDriver();
+    await open(driver);
+    let called = false;
+    const takeSafetyBackup: TakeSafetyBackup = async () => {
+      called = true;
+      return { ok: true, fileName: "unused.zip" };
+    };
+
+    const outcome = await mergeBackupIntoDevice({
+      driver,
+      databaseSql: "garbage not sql at all;",
+      takeSafetyBackup,
+    });
+
+    expect(outcome.ok).toBe(false);
+    expect(called).toBe(false);
+  });
+});
+
+/**
+ * Builds a fresh "this Device, before a Merge" — one Entry the incoming
+ * Backup below will overwrite (a newer `updated_at`, case 6 in ./merge.ts's
+ * own header comment), and nothing else. Mirrors ./restore.test.ts's own
+ * `buildPreRestoreTarget`: Merge never deletes a row (this file's own
+ * header comment, second bullet), so there is no equivalent "keep every
+ * row the incoming Backup also mentions" constraint here — an `UPDATE`
+ * never repositions a row's rowid the way a `DELETE` + reinsert would, so
+ * `dumpDatabase`'s order-free `SELECT` stays stable across the whole test
+ * regardless of what the incoming Backup adds.
+ */
+async function buildPreMergeTarget(): Promise<{ driver: NodeSqliteDriver; deviceId: string }> {
+  const driver = new NodeSqliteDriver();
+  const { store, deviceId } = await open(driver);
+  await store.upsert([
+    entry({ id: "e1", body: "original e1", updatedAt: "2026-01-01T00:00:00.000Z" }),
+  ]);
+  return { driver, deviceId };
+}
+
+/**
+ * The Backup being merged into `buildPreMergeTarget`'s Device — carries a
+ * genuinely newer `e1` (so Merge actually overwrites this Device's own
+ * row, not just adds rows it lacked) plus `e2`/`t1`, which this Device
+ * never had. Proving Merge can overwrite, not merely insert, is the whole
+ * point: issue #208's own framing is that an interrupted Merge can leave
+ * "some rows overwritten by the Backup's version, some not" — a fixture
+ * that only ever inserted new rows would never exercise that half of the
+ * risk.
+ */
+async function buildIncomingMergeBackupSql(): Promise<string> {
+  const sourceDriver = new NodeSqliteDriver();
+  const { store: sourceStore, taskStore: sourceTaskStore } = await open(sourceDriver);
+  await sourceStore.upsert([
+    entry({ id: "e1", body: "from the Backup, newer", updatedAt: "2026-02-01T00:00:00.000Z" }),
+    entry({ id: "e2", body: "only ever in the Backup", updatedAt: "2026-01-01T00:00:00.000Z" }),
+  ]);
+  await sourceTaskStore.upsert([task({ id: "t1", content: "buy milk" })]);
+  return dumpDatabase(sourceDriver);
+}
+
+describe("mergeBackupIntoDevice — an interrupted apply is recoverable from its own safety Backup (issue #208)", () => {
+  /**
+   * Runs the interrupted Merge itself, against a driver stack that (a)
+   * behaves like `TauriSqliteDriver` — no real transaction, `ROLLBACK`
+   * does nothing — and (b) throws partway through, at
+   * `failAtMutationNumber`. Mirrors ./restore.test.ts's own
+   * `runInterruptedRestore` — same two driver classes
+   * (../test-support/interrupting-driver.ts), same event log, same
+   * "safety Backup dumped through the very driver about to be written
+   * into" seam.
+   */
+  async function runInterruptedMerge(failAtMutationNumber: number) {
+    const { driver: rawDriver } = await buildPreMergeTarget();
+    const preMergeSql = await dumpDatabase(rawDriver);
+    const incomingSql = await buildIncomingMergeBackupSql();
+
+    const events: string[] = [];
+    const pooledDriver = new NoTransactionDriver(rawDriver);
+    const interruptingDriver = new InterruptingDriver(pooledDriver, failAtMutationNumber, () =>
+      events.push("mutation"),
+    );
+
+    let safetyBackupSql: string | null = null;
+    const takeSafetyBackup: TakeSafetyBackup = async (): Promise<SafetyBackupOutcome> => {
+      events.push("safety-backup-start");
+      safetyBackupSql = await dumpDatabase(interruptingDriver);
+      events.push("safety-backup-done");
+      return { ok: true, fileName: "meologue-safety-backup-20260101-000000.zip" };
+    };
+
+    let thrown: unknown;
+    try {
+      await mergeBackupIntoDevice({
+        driver: interruptingDriver,
+        databaseSql: incomingSql,
+        takeSafetyBackup,
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    return {
+      rawDriver,
+      preMergeSql,
+      safetyBackupSql: safetyBackupSql as string | null,
+      events,
+      thrown,
+    };
+  }
+
+  it("interrupted early — after just one mutating statement already committed", async () => {
+    const { rawDriver, preMergeSql, safetyBackupSql, events, thrown } =
+      await runInterruptedMerge(2);
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toContain("meologue-safety-backup-20260101-000000.zip");
+
+    expect(events[0]).toBe("safety-backup-start");
+    expect(events[1]).toBe("safety-backup-done");
+    expect(events.filter((event) => event === "mutation").length).toBe(2);
+    expect(safetyBackupSql).toBe(preMergeSql);
+
+    // The Device is genuinely half-merged — not a vacuous pass: at least
+    // one mutating statement committed (NoTransactionDriver's autocommit,
+    // exactly like the pooled Tauri driver it stands in for) before the
+    // interruption, and that statement really changed the database.
+    expect(await dumpDatabase(rawDriver)).not.toBe(preMergeSql);
+
+    // Reapplying the safety Backup — via Restore, not a second Merge:
+    // re-merging it would compare its own (older) updated_at against the
+    // now-overwritten row's newer one and lose, leaving the corruption in
+    // place, which is exactly why the recovery instructions (this file's
+    // own mergeBackupIntoDevice doc comment, and the thrown error above)
+    // say "restore", not "merge". Byte-identical dumpDatabase output
+    // proves this Device is genuinely back to its pre-Merge state, not
+    // merely "close enough".
+    const recovery = await restoreFromBackup({
+      driver: rawDriver,
+      databaseSql: safetyBackupSql as string,
+      takeSafetyBackup: okSafetyBackup,
+    });
+    expect(recovery.ok).toBe(true);
+    expect(await dumpDatabase(rawDriver)).toBe(preMergeSql);
+  });
+
+  it("interrupted partway through, after several rows were already mutated", async () => {
+    // A dry run (real transaction, so fully recoverable on its own)
+    // against an identical setup, just to learn how many mutating
+    // statements the apply produces in total — so the number chosen below
+    // is a genuinely different point in the sequence, not a guess.
+    const { driver: dryRunDriver } = await buildPreMergeTarget();
+    const dryRunSql = await buildIncomingMergeBackupSql();
+    let totalMutations = 0;
+    const countingDriver = new InterruptingDriver(dryRunDriver, Number.POSITIVE_INFINITY, () => {
+      totalMutations += 1;
+    });
+    const dryRunOutcome = await mergeBackupIntoDevice({
+      driver: countingDriver,
+      databaseSql: dryRunSql,
+      takeSafetyBackup: okSafetyBackup,
+    });
+    expect(dryRunOutcome.ok).toBe(true);
+    expect(totalMutations).toBeGreaterThan(1);
+
+    const midpoint = Math.ceil(totalMutations / 2);
+    const { rawDriver, preMergeSql, safetyBackupSql, events, thrown } =
+      await runInterruptedMerge(midpoint);
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toContain("meologue-safety-backup-20260101-000000.zip");
+    expect(events[0]).toBe("safety-backup-start");
+    expect(events[1]).toBe("safety-backup-done");
+    expect(events.filter((event) => event === "mutation").length).toBe(midpoint);
+    expect(safetyBackupSql).toBe(preMergeSql);
+    expect(await dumpDatabase(rawDriver)).not.toBe(preMergeSql);
+
+    const recovery = await restoreFromBackup({
+      driver: rawDriver,
+      databaseSql: safetyBackupSql as string,
+      takeSafetyBackup: okSafetyBackup,
+    });
+    expect(recovery.ok).toBe(true);
+    expect(await dumpDatabase(rawDriver)).toBe(preMergeSql);
   });
 });

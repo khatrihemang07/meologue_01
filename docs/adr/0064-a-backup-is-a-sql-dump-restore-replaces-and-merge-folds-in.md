@@ -52,6 +52,15 @@ overwrites a live row ahead of any timestamp comparison, and an existing tombsto
 undone by an incoming row. That second half is what bounds the deliberate absence of a clock-skew
 guard: a fast-clocked Device can win an edit, but it cannot resurrect something you deleted.
 
+**Merge takes a safety Backup first too (issue #208), on the identical seam issue #204 built for
+Restore.** Merge is mostly additive — a row only this Device holds is never touched — but where
+both sides hold a row, the more recently changed one overwrites the other, so a Merge interrupted
+partway can still leave the Device half-merged: some rows already overwritten by the Backup's
+version, some not, with no record of which. That is a smaller harm than Restore's own gap, because
+Merge never deletes and so can never lose a row that only ever existed locally — which is exactly
+why this shipped as a follow-up ticket rather than alongside #204 — but it is not zero harm, and
+the same machinery closes it the same way.
+
 **Settings travel with a Restore, overturning ADR 0008 — except the Server URL.** A Device restored
 without its theme, accent, text size and hidden destinations is not the Device that was backed up.
 The Server URL is the exception because ADR 0011 makes an unreachable one mean "Sync is off",
@@ -110,6 +119,17 @@ safety Backup's own file name in the error it surfaces, so "your data is safe, h
 never left implicit. Narrowing macOS's transaction gap itself — the `migrate()`-style,
 per-statement-idempotent rewrite this ADR's own Context section already judged too large for
 Restore's scope — remains open.
+
+Issue #208 gives `mergeBackupIntoDevice` the identical `takeSafetyBackup` parameter, on the
+identical seam, for the identical structural reason — `BEGIN`/`COMMIT`/`ROLLBACK` around Merge is
+no more transactional on macOS's pooled driver than it was for Restore, and #208 does not narrow
+that gap any more than #204 did. What #208 mitigates is smaller than what #204 did: Merge's own
+apply never deletes a row, so an interrupted Merge can leave rows unpredictably overwritten but can
+never lose one that only ever existed locally, unlike an interrupted Restore. The safety Backup
+this parameter takes is the same kind of artifact either way — `createBackup`'s own `kind:
+"safety-backup"` (`backup-zip.ts`) is not specific to which operation asked for it, since "restore
+this file" is the identical recovery instruction regardless, and a caller telling the two apart
+from a Downloads folder's timestamps already needs no help this file name doesn't already give.
 
 `pg_dump`/`pg_restore` on the host is now a prerequisite for the Server's own backup, documented in
 the server README. There is no server Dockerfile — the Rust server runs on the host — so this is a

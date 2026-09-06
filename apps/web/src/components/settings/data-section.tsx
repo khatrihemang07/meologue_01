@@ -451,6 +451,18 @@ export function DataSection({ opened }: { opened: ExportStoreHandle | undefined 
   // own reasoning above: nothing else on this route needs
   // mergeBackupIntoDevice, so it stays out of the Settings chunk Vite
   // fetches on every visit.
+  //
+  // `takeSafetyBackup` (issue #208) is the identical seam
+  // handleConfirmRestore's own closure above builds, reusing the same
+  // `saveBackupFile` helper with `kind: "safety-backup"` rather than a
+  // second copy of that dump-and-save logic — see this file's own
+  // `saveBackupFile` doc comment for why one function serves both
+  // callers. A Merge is additive, so the harm an interruption prevents is
+  // smaller than Restore's own (mergeBackupIntoDevice's own header
+  // comment in @meologue/core has the full reasoning: Merge never
+  // deletes, so it can leave rows unpredictably overwritten but never
+  // lose one that only ever existed locally) — but "smaller" is not
+  // "none," and the machinery was already sitting right here.
   async function handleMerge() {
     if (!opened) {
       return;
@@ -469,22 +481,49 @@ export function DataSection({ opened }: { opened: ExportStoreHandle | undefined 
     }
 
     const confirmed = window.confirm(
-      "Merge this Backup into this Device? A row only the Backup has will be added, a row only this Device has stays as it is, and where both hold the same row the more recently changed one wins. Settings are not applied.",
+      "Merge this Backup into this Device? A row only the Backup has will be added, a row only this Device has stays as it is, and where both hold the same row the more recently changed one wins. Settings are not applied. A safety Backup of what's currently on this Device will be saved first, so this stays recoverable even if the Merge is interrupted partway through.",
     );
     if (!confirmed) {
       return;
     }
 
+    // Reassigned into a variable of its own, narrowed type intact — the
+    // same reason handleConfirmRestore's own `store` local exists above:
+    // the `takeSafetyBackup` closure below is a nested function, its own
+    // scope, and can't otherwise see `opened` as definitely present.
+    const store = opened;
     setMerging(true);
     try {
       const { mergeBackupIntoDevice } = await import("@meologue/core");
-      const outcome = await mergeBackupIntoDevice(opened.driver, unzipped.backup.databaseSql);
+
+      async function takeSafetyBackup() {
+        const saveOutcome = await saveBackupFile(store.driver, store.deviceId, "safety-backup");
+        if (saveOutcome.status === "cancelled") {
+          return {
+            ok: false as const,
+            reason:
+              "The safety Backup's save panel was cancelled, so nothing was merged. Merge needs somewhere to save it first.",
+          };
+        }
+        if (saveOutcome.status === "failed") {
+          return { ok: false as const, reason: saveOutcome.reason };
+        }
+        return { ok: true as const, fileName: saveOutcome.fileName };
+      }
+
+      const outcome = await mergeBackupIntoDevice({
+        driver: store.driver,
+        databaseSql: unzipped.backup.databaseSql,
+        takeSafetyBackup,
+      });
       if (!outcome.ok) {
         toast.error(outcome.reason);
         return;
       }
-      const { inserted, updated, unchanged } = outcome.result;
-      toast.success(`Merged: ${inserted} inserted, ${updated} updated, ${unchanged} unchanged.`);
+      const { inserted, updated, unchanged, safetyBackupFileName } = outcome.result;
+      toast.success(
+        `Merged: ${inserted} inserted, ${updated} updated, ${unchanged} unchanged. A safety Backup of what was here before was saved to ${safetyBackupFileName}.`,
+      );
       // Merge writes straight to the database below every store's own
       // abstraction, the same as Restore just above — a reload is the
       // identical honest reset handleConfirmRestore's own doc comment

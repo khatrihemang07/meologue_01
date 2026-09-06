@@ -198,7 +198,7 @@ export function entrySeq(id: string, database: string): string | undefined {
  * a completion this function was asked to find took longer than 20s to
  * reach the Server, not never.
  *
- * Issue #190 is now fixed (`fixtures.ts`'s `resetTasks` fixture — this same
+ * Issue #190 is now fixed (`fixtures.ts`'s `resetServer` fixture — this same
  * file), so a fresh measurement would likely find `waitForEntryId`'s own
  * 20s enough again; the wider budget is left in place rather than tightened
  * back down; it costs nothing on a test that finishes well within it, and
@@ -438,39 +438,74 @@ export function clearServerSettings(database: string): void {
 }
 
 /**
- * Deletes every row from `tasks`, on both e2e databases — issue #190's
- * structural fix. `fixtures.ts`'s own autouse fixture calls this before
- * every single test, not merely at a spec-file boundary, so the guarantee
- * holds regardless of which earlier file — or even which earlier test in
- * the SAME file — happened to create a Task.
+ * Deletes every row from every content-bearing table, on both e2e
+ * databases — issue #190's structural fix, widened by issue #207 to the
+ * whole Server rather than just `tasks`. `fixtures.ts`'s own autouse
+ * fixture calls this before every single test, not merely at a spec-file
+ * boundary, so the guarantee holds regardless of which earlier file — or
+ * even which earlier test in the SAME file — happened to write a row.
  *
  * A Task has no per-Device or per-user scope to isolate along in the first
  * place (server/migrations/0010_create_tasks.sql's own header comment:
  * "meologue is one person's journal and one person's task list" — every
  * Device pulls every row), so the only place isolation between one test and
- * the next can live is the shared table itself. Truncating it is cheap
- * (`docker exec`/`psql`, the same round trip `pollSql` already pays inside
- * this same test run) next to the cost a real per-file Server or database
- * would add on top of the two this suite already boots.
+ * the next can live is the shared table itself. Every other table this
+ * function now also clears makes the identical trade for the identical
+ * reason — `entries`, `projects`, `sections`, `labels`, `comments` and
+ * `events` all carry that same 0010 header's "no foreign key, no
+ * collaboration column, every Device pulls every row" shape, column for
+ * column. `sessions` (and the two tables that hang off it,
+ * `session_entries`/`session_records`) never sync at all, but a Session
+ * accumulates across tests exactly the same way a row in a synced table
+ * does, and `digests` is the fixed corpus reflection.spec.ts's own header
+ * comment already leans on to make its own Grounding assertion
+ * deterministic regardless of how many other specs ran first — leaving
+ * either out would reopen the identical "the corpus is whatever every
+ * earlier test happened to leave" bug for a surface this ticket didn't
+ * bother naming.
+ *
+ * `server_settings` is deliberately excluded. It isn't a growing corpus at
+ * all — one row, forever upserted in place, never appended to — and the
+ * two specs that ever touch it (`settings.spec.ts`, and Digest seeding has
+ * no equivalent here) already take it away again themselves
+ * (`clearServerSettings`, in a `finally`) the same way `digest-fit.spec.ts`
+ * already tidies up its own seeded Digests. Resetting it here on top of
+ * that would be a second, unasked-for guarantee for a table this ticket's
+ * own failures never touch.
+ *
+ * Truncating (not deleting row by row) is cheap — a single `docker
+ * exec`/`psql` round trip per database, the same shape `pollSql` already
+ * pays inside this same test run — next to the cost a real per-file Server
+ * or database would add on top of the two this suite already boots. Every
+ * table named here in one statement, rather than one `TRUNCATE` per table
+ * or a `CASCADE`: Postgres allows truncating tables that reference each
+ * other with no `CASCADE` at all as long as every table in the reference
+ * chain is named in the same command, and naming them explicitly (rather
+ * than reaching for `CASCADE`) means this can never silently reach into a
+ * table nobody has looked at yet.
  *
  * Both databases, not only `SERVER_A_DATABASE`: multi-server.spec.ts is the
- * one spec that ever talks to `SERVER_B_DATABASE`, and it does not exercise
- * Todo, but resetting a database this suite never dirties is a no-op, not a
- * risk — leaving it out on the assumption "nothing writes Tasks there today"
- * is exactly the kind of convention this fix is trying not to depend on.
- *
- * Deliberately `tasks` only, not `entries`: every other spec that reads back
- * a broad surface (History, Search) already matches its own row by
- * `uniqueEntryBody`'s random content rather than by counting the whole page
- * (todo.spec.ts's own former `toHaveCount` — see git history — was the one
- * assertion counting a whole surface instead). Widening the reset to
- * `entries` would be a second, unasked-for change with a real cost
- * (reflection.spec.ts's embeddings, search.spec.ts's index) for no failure
- * this ticket needs it to fix.
+ * one spec that ever talks to `SERVER_B_DATABASE` and it barely dirties it,
+ * but resetting a database this suite mostly doesn't touch is a no-op, not
+ * a risk — leaving it out on the assumption "nothing writes there today" is
+ * exactly the kind of convention this fix is trying not to depend on.
  */
-export function resetTasks(): void {
+export function resetServer(): void {
+  const tables = [
+    "entries",
+    "session_records",
+    "session_entries",
+    "sessions",
+    "digests",
+    "tasks",
+    "projects",
+    "sections",
+    "labels",
+    "comments",
+    "events",
+  ];
   for (const database of [SERVER_A_DATABASE, SERVER_B_DATABASE]) {
-    runSql("delete from tasks;", database);
+    runSql(`truncate table ${tables.join(", ")};`, database);
   }
 }
 

@@ -23,7 +23,7 @@ export default defineConfig({
   // time. Every spec in this suite is already written on the assumption
   // that it runs sequentially against one shared Server (todo.spec.ts's own
   // header comment predates this line), and `tests/fixtures.ts`'s own
-  // `resetTasks` fixture depends on "before every test" being a
+  // `resetServer` fixture depends on "before every test" being a
   // well-defined moment — neither is true unless there is only one worker.
   // The cost is real (the suite no longer gets any file-level parallelism),
   // but a suite that was quietly racing two Node processes against the same

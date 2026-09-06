@@ -4,7 +4,9 @@ import { SqliteEntryStore } from "../sqlite/sqlite-entry-store";
 import { SqliteTaskStore } from "../sqlite/sqlite-task-store";
 import { quoteIdent, tableColumns } from "./dump";
 import { type ParsedTable, parseBackupDatabase } from "./parse";
+import type { SafetyBackupOutcome, TakeSafetyBackup } from "./restore";
 import { rowContentUnchanged } from "./row-diff";
+import { PRIMARY_KEY_COLUMN, upsertRow } from "./upsert";
 
 /**
  * Merge (issue #199, CONTEXT.md's Merge entry): folds another Device's
@@ -54,6 +56,26 @@ import { rowContentUnchanged } from "./row-diff";
  * typed rows, never through `driver.execute` on the file's raw text —
  * identical posture to ./restore.ts, for the identical reason (that
  * file's own header comment, and ./parse.ts's).
+ *
+ * **`mergeBackupIntoDevice` also takes and requires a `takeSafetyBackup`
+ * callback, on the identical seam issue #204 built for ./restore.ts**
+ * (issue #208): `BEGIN`/`COMMIT`/`ROLLBACK` below is exactly as much of a
+ * guarantee here as it is there — none at all on macOS's pooled
+ * `TauriSqliteDriver` (apps/web/src/platform/tauri-sqlite-driver.ts,
+ * ../sqlite/migrator.ts's own `migrate()` carries the identical caveat) —
+ * so an apply interrupted partway through this file's own `mergeTable`
+ * can leave the Device holding some rows the Backup overwrote and some it
+ * didn't, with no record of which. This is a **smaller** harm than the
+ * one issue #204 closed for Restore, not the same one: Merge never
+ * deletes a row (second bullet above — "a row only this Device holds is
+ * left completely alone"), so an interrupted Merge can never lose a row
+ * that only ever existed locally. What it *can* still do is silently
+ * apply case 6's "greater `updated_at` wins" to some rows a Backup shares
+ * with this Device and not others — a state nobody chose, and, before
+ * this, nothing could undo. The machinery to close that already existed
+ * (#195's Backup, #204's `takeSafetyBackup` seam); this file reuses it
+ * rather than deciding a half-merged Device is an acceptable state to
+ * leave someone in just because it usually isn't destructive.
  */
 
 export interface MergeResult {
@@ -63,9 +85,30 @@ export interface MergeResult {
   /** Carried straight through from `./parse.ts`'s `ParseBackupSuccess` — see `RestoreResult`'s identical field for why. */
   skippedTables: string[];
   skippedColumns: string[];
+  /** The safety Backup `takeSafetyBackup` (below) produced before this Merge wrote anything — named here too, not just in a toast, for the identical reason `RestoreResult.safetyBackupFileName` (./restore.ts) is: anything downstream of a successful Merge can still point back at "and here's the copy of what this Device held before." */
+  safetyBackupFileName: string;
 }
 
 export type MergeOutcome = { ok: true; result: MergeResult } | { ok: false; reason: string };
+
+/**
+ * Deliberately the same shape as ./restore.ts's `RestoreOptions` — `driver`
+ * and `databaseSql` mean the same thing in both, `takeSafetyBackup` is the
+ * identical `TakeSafetyBackup` type (imported, not redeclared: a second,
+ * independently-typed copy could drift), and `onProgress` is optional for
+ * the identical reason it is on `RestoreOptions` (a Merge at personal-log
+ * scale doesn't need one to feel responsive, but a caller that wants one
+ * — the same `onProgress` closure a caller already wired up for Restore —
+ * should be able to reuse it rather than write a second). A reader who
+ * already knows `RestoreOptions` should recognise this on sight.
+ */
+export interface MergeOptions {
+  driver: SqliteDriver;
+  databaseSql: string;
+  /** Awaited after the read-only parse and before a single mutating statement reaches `driver` — see this file's own header comment's `takeSafetyBackup` paragraph, and `TakeSafetyBackup`'s own doc comment (./restore.ts), for the full reasoning. */
+  takeSafetyBackup: TakeSafetyBackup;
+  onProgress?: (message: string) => void;
+}
 
 /**
  * Tables Merge never touches at all — `kv` (bookkeeping, not History: this
@@ -77,7 +120,6 @@ export type MergeOutcome = { ok: true; result: MergeResult } | { ok: false; reas
  */
 const MERGE_EXCLUDED_TABLES: ReadonlySet<string> = new Set([LEDGER_TABLE, "kv"]);
 
-const PRIMARY_KEY_COLUMN = "id";
 const UPDATED_AT_COLUMN = "updated_at";
 
 /**
@@ -98,15 +140,18 @@ interface MergeCounts {
 }
 
 /**
- * Upserts one row into `tableName`, stripping `seq`/`synced_at` to `null`
- * first when the table carries them — unlike ./restore.ts, which preserves
- * both verbatim from the file (that function's own header comment, reason
- * 3), Merge always marks whatever it writes unsynced: this ticket's own
- * brief ("only rows Merge actually inserted or overwrote are marked
- * pending … so they reach the Server the way any local edit does"). A
- * Backup's `seq` was assigned by a Server against a different push from a
- * different Device; carrying it across to this Device's own row would
- * claim a Sync position this Device never earned.
+ * Upserts one row into `tableName` via ./upsert.ts's shared `upsertRow`,
+ * stripping `seq`/`synced_at` to `null` first when the table carries them
+ * — unlike ./restore.ts, which hands `upsertRow` a row's values untouched
+ * (that function's own header comment, reason 3), Merge always marks
+ * whatever it writes unsynced: this ticket's own brief ("only rows Merge
+ * actually inserted or overwrote are marked pending … so they reach the
+ * Server the way any local edit does"). A Backup's `seq` was assigned by a
+ * Server against a different push from a different Device; carrying it
+ * across to this Device's own row would claim a Sync position this Device
+ * never earned. The stripping happens here, before `upsertRow` is called,
+ * rather than as a flag `upsertRow` itself branches on — ./upsert.ts's own
+ * doc comment explains why that decision belongs at the call site.
  */
 async function writeRow(
   driver: SqliteDriver,
@@ -121,21 +166,7 @@ async function writeRow(
     valuesToWrite[SYNCED_AT_COLUMN] = null;
   }
 
-  const rowColumns = Object.keys(valuesToWrite);
-  const placeholders = rowColumns.map(() => "?").join(", ");
-  const updateAssignments = rowColumns
-    .filter((column) => column !== PRIMARY_KEY_COLUMN)
-    .map((column) => `${quoteIdent(column)} = excluded.${quoteIdent(column)}`)
-    .join(", ");
-  const upsertSql =
-    updateAssignments.length > 0
-      ? `INSERT INTO ${quoteIdent(tableName)} (${rowColumns.map(quoteIdent).join(", ")}) VALUES (${placeholders}) ON CONFLICT (${quoteIdent(PRIMARY_KEY_COLUMN)}) DO UPDATE SET ${updateAssignments}`
-      : `INSERT INTO ${quoteIdent(tableName)} (${rowColumns.map(quoteIdent).join(", ")}) VALUES (${placeholders}) ON CONFLICT (${quoteIdent(PRIMARY_KEY_COLUMN)}) DO NOTHING`;
-  await driver.execute(
-    upsertSql,
-    rowColumns.map((column) => valuesToWrite[column]),
-    "run",
-  );
+  await upsertRow(driver, tableName, PRIMARY_KEY_COLUMN, valuesToWrite);
 }
 
 /**
@@ -256,25 +287,61 @@ async function mergeTable(
 
 /**
  * Applies a Backup's `database.sql` to `driver`'s own database additively
- * — see this file's own header comment for the full rule set. `BEGIN`/
- * `COMMIT`/`ROLLBACK` and the post-commit FTS5 rebuild mirror
- * ./restore.ts's `restoreFromBackup` exactly, including that function's
- * own caveat about `TauriSqliteDriver` having no real transaction API
- * (that function's own doc comment carries the full reasoning, which
- * applies here verbatim — a second copy of it would only drift).
+ * — see this file's own header comment for the full rule set.
+ *
+ * `options.takeSafetyBackup` runs first (issue #208) — after the
+ * read-only parse above, before a single `BEGIN` or mutating statement
+ * reaches `driver`, on the identical structural guarantee
+ * `restoreFromBackup` (./restore.ts) makes for Restore: if it throws, or
+ * resolves `{ ok: false }`, this function returns `{ ok: false, reason }`
+ * of its own having called `driver.execute` for nothing but the read-only
+ * parse — no `BEGIN`, no write, nothing to roll back. See that function's
+ * own doc comment, and `SafetyBackupOutcome`'s, for the full reasoning,
+ * which applies here verbatim.
+ *
+ * `BEGIN`/`COMMIT`/`ROLLBACK` and the post-commit FTS5 rebuild otherwise
+ * mirror `restoreFromBackup` exactly, including that function's own
+ * caveat about `TauriSqliteDriver` having no real transaction API: this is
+ * a real guarantee on the single-connection driver this package's own
+ * tests run against, and not a proven one on macOS's pooled driver today
+ * — issue #208 does not narrow that gap any more than issue #204 closed
+ * it for Restore, it only makes the result of hitting it recoverable. This
+ * file's own header comment (the `takeSafetyBackup` paragraph) explains
+ * why that gap costs Merge less than it costs Restore — an interrupted
+ * Merge can leave rows unpredictably overwritten, never lose one that
+ * only ever existed locally — without pretending the two carry an
+ * identical risk.
+ *
+ * The thrown `Error` on a mid-apply failure names the safety Backup's own
+ * file name, identically to `restoreFromBackup`'s own `catch` block: it
+ * is, after all, an ordinary Backup, restorable the same way any other
+ * one is (CONTEXT.md's Restore entry), regardless of which operation
+ * triggered the app to take it.
  *
  * `settings.json` is never read here at all: CONTEXT.md's Merge entry —
  * "a Merge carries rows and nothing else" — and this ticket's own brief
  * are both explicit that settings are Restore's business, not Merge's.
  */
-export async function mergeBackupIntoDevice(
-  driver: SqliteDriver,
-  databaseSql: string,
-  onProgress?: (message: string) => void,
-): Promise<MergeOutcome> {
+export async function mergeBackupIntoDevice(options: MergeOptions): Promise<MergeOutcome> {
+  const { driver, databaseSql, takeSafetyBackup, onProgress } = options;
+
   const parsed = await parseBackupDatabase(databaseSql, driver);
   if (!parsed.ok) {
     return parsed;
+  }
+
+  onProgress?.("Saving a safety Backup…");
+  const safetyBackup = await takeSafetyBackup().catch(
+    (error: unknown): SafetyBackupOutcome => ({
+      ok: false,
+      reason: error instanceof Error ? error.message : String(error),
+    }),
+  );
+  if (!safetyBackup.ok) {
+    return {
+      ok: false,
+      reason: `Safety Backup failed, so nothing was merged: ${safetyBackup.reason}`,
+    };
   }
 
   const counts: MergeCounts = { inserted: 0, updated: 0, unchanged: 0 };
@@ -295,7 +362,11 @@ export async function mergeBackupIntoDevice(
       // connection is already gone there is nothing left to roll back on
       // it, and the original error below is the one worth surfacing.
     });
-    throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Merge failed partway through: ${message} A safety Backup taken immediately before this Merge began was saved to ${safetyBackup.fileName} — restoring that file returns this Device to exactly the state it was in before this Merge started.`,
+      { cause: error },
+    );
   }
 
   onProgress?.("Rebuilding search…");
@@ -314,6 +385,7 @@ export async function mergeBackupIntoDevice(
       ...counts,
       skippedTables: parsed.skippedTables,
       skippedColumns: parsed.skippedColumns,
+      safetyBackupFileName: safetyBackup.fileName,
     },
   };
 }

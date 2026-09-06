@@ -16,7 +16,7 @@ import { openDestination, waitForTaskOrder, waitForTaskParent } from "./helpers"
  * to count EVERY `li[data-task-id]` on the page, trusting that nothing
  * other than this test had ever put one there — a trust an earlier spec
  * file (composer.spec.ts, promoting a checkbox line into a Task) broke.
- * `fixtures.ts`'s `resetTasks` fixture now makes that trust actually true
+ * `fixtures.ts`'s `resetServer` fixture now makes that trust actually true
  * (no Task survives from a previous test, in this file or any other), but
  * the count below is scoped to `first`/`second` by their own random content
  * regardless — so this test reads as "the two Tasks I just added," which is
@@ -49,7 +49,7 @@ test("adding, completing (with Undo), reordering and reloading all leave Todo ex
   // first Task added sorts before the second.
   //
   // Scoped to `first`/`second` by their own random content, not a bare
-  // `li[data-task-id]` — issue #190. `resetTasks` (fixtures.ts) already
+  // `li[data-task-id]` — issue #190. `resetServer` (fixtures.ts) already
   // guarantees these are the only two Tasks that exist when this runs, but
   // the count itself should still read as "the Tasks THIS test added,"
   // not "however many happen to be on the page" — that was the assertion's
