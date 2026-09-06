@@ -29,6 +29,7 @@ import type { Node as PMNode } from "prosemirror-model";
 import { EditorState, TextSelection, type Transaction } from "prosemirror-state";
 import type { DecorationSet } from "prosemirror-view";
 import { describe, expect, it } from "vitest";
+import { insertSoftBreak } from "./composer-commands";
 import {
   activeChecklistPromotion,
   buildInputRules,
@@ -37,6 +38,10 @@ import {
   checklistHighlightPluginKey,
   checklistShortcutInputRulePattern,
   liftAtStartOfListItem,
+  pickerPlugin,
+  pickerPluginKey,
+  slashPlugin,
+  slashPluginKey,
   taskReferenceSeparatorPlugin,
 } from "./composer-editor";
 import { entryMarkdownToDocument } from "./entry-document";
@@ -152,6 +157,64 @@ function emptyDoc(): PMNode {
 }
 
 /**
+ * A document holding ONE paragraph whose own text is exactly `text` — built
+ * directly against `entrySchema` rather than through `entryMarkdownToDocument`,
+ * because this is standing in for a LIVE-edited paragraph, not a parsed one.
+ * `"alpha\n"` is exactly what the document looks like right after typing
+ * `alpha` and pressing Enter under issue #212's model: `insertSoftBreak`
+ * inserts a literal `\n` into the paragraph's own text rather than splitting
+ * it into two paragraphs, so the fixture below has to be ONE paragraph
+ * containing a real `\n` character, not two paragraph nodes.
+ */
+function docWithParagraphText(text: string): PMNode {
+  return entrySchema.node("doc", null, [
+    entrySchema.node("paragraph", null, text.length > 0 ? entrySchema.text(text) : undefined),
+  ]);
+}
+
+/** The position at the END of a document's first paragraph's own content — where typing lands right after that paragraph's existing text, in particular right after a soft break's own trailing `\n`. Mirrors `startOfFirstParagraph` above, offset by the paragraph's own `content.size` instead of always landing at its start. */
+function endOfFirstParagraph(doc: PMNode): number {
+  let found: number | null = null;
+  doc.descendants((node, pos) => {
+    if (found === null && node.type.name === "paragraph") {
+      found = pos + node.nodeSize - 1;
+    }
+  });
+  if (found === null) {
+    throw new Error("fixture has no paragraph");
+  }
+  return found;
+}
+
+/**
+ * The two places a line-start input rule must fire from, as of issue #212's
+ * `(?:^|\n)` widening (`lineStartWrappingInputRule`, composer-editor.ts, has
+ * the full account of why `^` alone stopped being enough the moment Enter
+ * stopped splitting the block): a fresh block's own start, unchanged since
+ * ADR 0045's original loop, and — new here — a line typed after a soft
+ * break INSIDE an existing paragraph, which is what Enter now produces
+ * instead of a second paragraph. A marker recognised at block start but not
+ * after a soft break is exactly the reader/writer split the ticket names:
+ * `parseEntryMarkdown` reads the STORED `"alpha\n- milk"` as a genuine
+ * two-block document regardless of which position created it, so the
+ * Composer's own input rules have to agree from both.
+ */
+function lineStartPositions(): readonly {
+  label: string;
+  doc: () => PMNode;
+  pos: (doc: PMNode) => number;
+}[] {
+  return [
+    { label: "at block start", doc: emptyDoc, pos: startOfFirstParagraph },
+    {
+      label: "after a soft break",
+      doc: () => docWithParagraphText("alpha\n"),
+      pos: endOfFirstParagraph,
+    },
+  ];
+}
+
+/**
  * CommonMark's bullet-marker alphabet (`@lezer/markdown`'s stock `BulletList`
  * parser, which `entryParser` uses unmodified — inline-markdown.ts) and its
  * ordered-list delimiter alphabet (same source, "`1.` and `1)` both give
@@ -169,34 +232,59 @@ const READER_ORDERED_DELIMITERS = [".", ")"] as const;
 
 describe("reader/writer symmetry: bullet markers", () => {
   for (const marker of READER_BULLET_MARKERS) {
-    it(`"${marker} " is a bullet to both parseEntryMarkdown and the Composer`, () => {
-      const blocks = parseEntryMarkdown(`${marker} milk`);
-      expect(blocks).toHaveLength(1);
-      expect(blocks[0]?.kind).toBe("bulletList");
+    for (const position of lineStartPositions()) {
+      it(`"${marker} " is a bullet to both parseEntryMarkdown and the Composer, ${position.label}`, () => {
+        const blocks = parseEntryMarkdown(`${marker} milk`);
+        expect(blocks).toHaveLength(1);
+        expect(blocks[0]?.kind).toBe("bulletList");
 
-      const result = typeAt(emptyDoc(), startOfFirstParagraph(emptyDoc()), `${marker} `);
-      expect(result).not.toBeNull();
-      expect(result?.firstChild?.type.name).toBe("bullet_list");
-      expect(result?.firstChild?.firstChild?.type.name).toBe("list_item");
-    });
+        const doc = position.doc();
+        const result = typeAt(doc, position.pos(doc), `${marker} `);
+        expect(result).not.toBeNull();
+        // `lastChild`, not `firstChild`: at block start the bullet list IS
+        // the document's only child; after a soft break it is the SECOND
+        // child, following the untouched `alpha` paragraph — asserting
+        // `lastChild` covers both without branching per position, and
+        // implicitly checks the preceding prose survived rather than being
+        // swallowed into the new list item (`lineStartWrappingInputRule`'s
+        // own "wrong paragraph" trap).
+        const list = result?.lastChild;
+        expect(list?.type.name).toBe("bullet_list");
+        expect(list?.firstChild?.type.name).toBe("list_item");
+      });
+    }
   }
+
+  it("does nothing when a marker is typed mid-line, only preceded by an ordinary space", () => {
+    // "alpha " (a trailing space, not a newline) is the negative space
+    // `(?:^|\n)` is supposed to still refuse — a marker typed after
+    // ordinary prose on the SAME line, with no line break anywhere before
+    // it, must stay literal text exactly as it always has.
+    const doc = docWithParagraphText("alpha ");
+    const result = typeAt(doc, endOfFirstParagraph(doc), "- ");
+    expect(result).toBeNull();
+  });
 });
 
 describe("reader/writer symmetry: ordered-list delimiters", () => {
   for (const delimiter of READER_ORDERED_DELIMITERS) {
-    it(`"1${delimiter} " is an ordered list to both parseEntryMarkdown and the Composer`, () => {
-      const blocks = parseEntryMarkdown(`1${delimiter} alpha`);
-      expect(blocks).toHaveLength(1);
-      expect(blocks[0]?.kind).toBe("orderedList");
-      if (blocks[0]?.kind === "orderedList") {
-        expect(blocks[0].start).toBe(1);
-      }
+    for (const position of lineStartPositions()) {
+      it(`"1${delimiter} " is an ordered list to both parseEntryMarkdown and the Composer, ${position.label}`, () => {
+        const blocks = parseEntryMarkdown(`1${delimiter} alpha`);
+        expect(blocks).toHaveLength(1);
+        expect(blocks[0]?.kind).toBe("orderedList");
+        if (blocks[0]?.kind === "orderedList") {
+          expect(blocks[0].start).toBe(1);
+        }
 
-      const result = typeAt(emptyDoc(), startOfFirstParagraph(emptyDoc()), `1${delimiter} `);
-      expect(result).not.toBeNull();
-      expect(result?.firstChild?.type.name).toBe("ordered_list");
-      expect(result?.firstChild?.attrs.order).toBe(1);
-    });
+        const doc = position.doc();
+        const result = typeAt(doc, position.pos(doc), `1${delimiter} `);
+        expect(result).not.toBeNull();
+        const list = result?.lastChild;
+        expect(list?.type.name).toBe("ordered_list");
+        expect(list?.attrs.order).toBe(1);
+      });
+    }
 
     it(`"5${delimiter} " starts an ordered list at 5, matching "5. "`, () => {
       const blocks = parseEntryMarkdown(`5${delimiter} alpha`);
@@ -209,6 +297,12 @@ describe("reader/writer symmetry: ordered-list delimiters", () => {
       expect(result?.firstChild?.attrs.order).toBe(5);
     });
   }
+
+  it("does nothing when a delimiter is typed mid-line, only preceded by an ordinary space", () => {
+    const doc = docWithParagraphText("alpha ");
+    const result = typeAt(doc, endOfFirstParagraph(doc), "1. ");
+    expect(result).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -245,6 +339,18 @@ describe("checklistShortcutInputRulePattern", () => {
     expect(checklistShortcutInputRulePattern.test(`[]${NBSP}`)).toBe(true);
     expect(checklistShortcutInputRulePattern.test(`[x]${NBSP}`)).toBe(true);
   });
+
+  // Issue #212's line-start widening — see `lineStartWrappingInputRule`'s
+  // own doc comment (composer-editor.ts) for the full account of why `^`
+  // alone stopped being enough once Enter stopped splitting the block.
+  it("also matches right after a newline, not only at the very start of a block", () => {
+    expect(checklistShortcutInputRulePattern.test("alpha\n[] ")).toBe(true);
+    expect(checklistShortcutInputRulePattern.test("alpha\n[x] ")).toBe(true);
+  });
+
+  it("still does not match mid-line, with no newline anywhere before it", () => {
+    expect(checklistShortcutInputRulePattern.test("alpha [] ")).toBe(false);
+  });
 });
 
 describe("checklistShortcutInputRule (via buildInputRules)", () => {
@@ -273,6 +379,26 @@ describe("checklistShortcutInputRule (via buildInputRules)", () => {
     const pos = startOfFirstParagraph(doc) + "milk ".length;
     const result = typeAt(doc, pos, "[] ");
     expect(result).toBeNull();
+  });
+
+  // Issue #212: a checklist marker typed right after a soft break — `alpha`
+  // then Enter then `[] ` — must still convert, splitting the marker's own
+  // line into its own paragraph before wrapping it, and leaving the
+  // preceding `alpha` paragraph untouched rather than swallowed into the
+  // new item.
+  it("creates a checklist item after a soft break, leaving the preceding line as its own paragraph", () => {
+    const doc = docWithParagraphText("alpha\n");
+    const result = typeAt(doc, endOfFirstParagraph(doc), "[] ");
+    expect(result).not.toBeNull();
+    expect(result?.childCount).toBe(2);
+    expect(result?.firstChild?.type.name).toBe("paragraph");
+    expect(result?.firstChild?.textContent).toBe("alpha");
+    const list = result?.lastChild;
+    expect(list?.type.name).toBe("bullet_list");
+    expect(list?.childCount).toBe(1);
+    const item = list?.firstChild;
+    expect(item?.type.name).toBe("list_item");
+    expect(item?.attrs.checked).toBe(false);
   });
 
   it("keeps checkboxInputRule's existing two-step upgrade path working unchanged", () => {
@@ -447,6 +573,79 @@ describe("liftAtStartOfListItem", () => {
     // exactly one bullet_list left, not zero.
     expect(countNodesOfType(next.doc, "bullet_list")).toBe(1);
     expect(countNodesOfType(next.doc, "list_item")).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A soft break still closes the Reference picker / `/` menu — issue #212's
+// own acceptance bar, exercised here against the REAL plugins (not just
+// `derivePicker`/`deriveSlashMenu` in isolation, which composer-picker.test
+// .ts/composer-slash.test.ts already cover) so the actual `insertSoftBreak`
+// command is what is proven to close them, not merely "a `\n` in the
+// query would, in principle." Built through real, incremental
+// `state.apply` calls — typing `[[`, then `da`, mirrors exactly how
+// `pickerPlugin`'s own `apply` tracks an open picker turn by turn
+// (`previous`/`relativePrevious`, composer-editor.ts) — rather than
+// constructing a state directly from a doc already holding "[[da", which
+// would skip `init()` ever having a chance to open it in the first place.
+// ---------------------------------------------------------------------------
+
+/** Applies a plain `insertText` transaction — the test-only stand-in for a keystroke that carries no mark of its own, matching every fixture below (no bold/code in play). */
+function typeInto(state: EditorState, text: string): EditorState {
+  const { from, to } = state.selection;
+  return state.apply(state.tr.insertText(text, from, to));
+}
+
+/** Dispatches `insertSoftBreak` (composer-commands.ts) against `state` via a capturing `dispatch`, returning the resulting state. Throws if the command refuses to apply — every call site below is set up so it always does. */
+function applySoftBreak(state: EditorState): EditorState {
+  let captured: Transaction | null = null;
+  const applied = insertSoftBreak(state, (tr) => {
+    captured = tr;
+  });
+  if (!applied || captured === null) {
+    throw new Error("insertSoftBreak did not apply");
+  }
+  return state.apply(captured);
+}
+
+describe("pickerPlugin / slashPlugin: a soft break still closes them", () => {
+  it("closes the Reference picker", () => {
+    let state = EditorState.create({
+      schema: entrySchema,
+      doc: entryMarkdownToDocument(""),
+      selection: TextSelection.create(entryMarkdownToDocument(""), 1),
+      plugins: [pickerPlugin()],
+    });
+    state = typeInto(state, "[[");
+    state = typeInto(state, "da");
+    expect(pickerPluginKey.getState(state)).not.toBeNull();
+
+    const next = applySoftBreak(state);
+    expect(pickerPluginKey.getState(next)).toBeNull();
+  });
+
+  it("closes the `/` menu", () => {
+    // `slashPlugin()` is mounted alongside `pickerPlugin()` — never alone —
+    // because its own `apply` (composer-editor.ts) reads
+    // `pickerPluginKey.getState(newState)` and defers unconditionally
+    // whenever that ISN'T exactly `null`; without `pickerPlugin()` also
+    // registered, that read comes back `undefined` (no such plugin key in
+    // this state at all), and `undefined !== null` is `true`, so the `/`
+    // menu would never open at all — a fact about this TEST's own harness,
+    // not something either plugin does in the real Composer, where
+    // `buildComposerPlugins` always registers both together.
+    let state = EditorState.create({
+      schema: entrySchema,
+      doc: entryMarkdownToDocument(""),
+      selection: TextSelection.create(entryMarkdownToDocument(""), 1),
+      plugins: [pickerPlugin(), slashPlugin()],
+    });
+    state = typeInto(state, "/");
+    state = typeInto(state, "che");
+    expect(slashPluginKey.getState(state)).not.toBeNull();
+
+    const next = applySoftBreak(state);
+    expect(slashPluginKey.getState(next)).toBeNull();
   });
 });
 

@@ -805,7 +805,116 @@ test("underscores mark emphasis, except inside a word", async ({ page }) => {
   await expect(editor.locator("strong")).toHaveCount(1);
 });
 
-test("Shift+Enter never sends, on this build the same as every other", async ({ page }) => {
+// ---------------------------------------------------------------------------
+// Issue #212: Enter is a soft break outside a list — this is the reported
+// defect's own fix. Pressing Enter once used to render as a blank line
+// (ADR 0066 has the full mechanism: a paragraph split's own required `\n\n`
+// separator IS a blank line, under the `white-space: pre-wrap` every prose
+// surface sets). One Enter must now give one new line; two Enters must give
+// exactly one blank line, no more.
+// ---------------------------------------------------------------------------
+
+test('alpha, Enter, bravo — one paragraph whose text is "alpha\\nbravo", Send and reopening for edit round-tripping it byte-identically', async ({
+  page,
+}) => {
+  const marker = uniqueEntryBody("composer-soft-break-two-lines");
+  const body = `${marker}\nbravo`;
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  await editor.pressSequentially(marker);
+  await editor.press("Enter");
+  await editor.pressSequentially("bravo");
+
+  // One `<p>`, not two — a soft break, not a block split.
+  await expect(editor.locator("p")).toHaveCount(1);
+  await expect.poll(() => editor.locator("p").textContent()).toBe(body);
+
+  await page.getByRole("button", { name: "Send" }).click();
+  // An EXACT match against the full two-line string (`waitForEntryId`'s own
+  // query is `body = <literal>`) is itself the byte-identical proof at the
+  // Server: if the Composer had serialized this as two paragraph siblings
+  // instead of one soft-broken line, the stored body would carry `\n\n`,
+  // not `\n`, and this lookup would never resolve.
+  const id = await waitForEntryId(body, SERVER_A_DATABASE);
+  expect(id).toBeDefined();
+
+  const bubble = page.locator('[data-slot="bubble-body"]', { hasText: marker });
+  await expect(bubble).toBeVisible();
+
+  // Reopen for edit — the Composer re-parses the stored body
+  // (`entryMarkdownToDocument`) back into a live document; the round trip
+  // is byte-identical only if that re-parse produces the SAME one
+  // paragraph with the same internal `\n`, not two paragraphs merged back
+  // together with a rendered gap.
+  const row = entryRow(page, marker);
+  await row.hover();
+  await row.getByRole("button", { name: "Edit", exact: true }).click();
+  await expect(page.getByText("Editing Entry")).toBeVisible();
+  const reopenedEditor = composerField(page);
+  await expect(reopenedEditor.locator("p")).toHaveCount(1);
+  await expect.poll(() => reopenedEditor.locator("p").textContent()).toBe(body);
+});
+
+test("alpha, Enter, Enter, bravo — exactly one blank line, not two", async ({ page }) => {
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  await editor.pressSequentially("alpha");
+  await editor.press("Enter");
+  await editor.press("Enter");
+  await editor.pressSequentially("bravo");
+
+  // Still one `<p>` — two soft breaks inside it, `"alpha\n\nbravo"`, is
+  // exactly one blank line under `white-space: pre-wrap`. `.textContent()`,
+  // not a Playwright text matcher — this file's own established reason
+  // (the "two consecutive spaces" test's comment, above): text matchers
+  // normalise whitespace before comparing, which would hide the very
+  // distinction ("one `\n`" vs "two") this test exists to catch.
+  await expect(editor.locator("p")).toHaveCount(1);
+  await expect.poll(() => editor.locator("p").textContent()).toBe("alpha\n\nbravo");
+});
+
+test("alpha, Enter, - milk, Enter, eggs — a paragraph plus a two-item bullet list", async ({
+  page,
+}) => {
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  await editor.pressSequentially("alpha");
+  await editor.press("Enter");
+  // The bullet marker is typed right after a soft break, not at a fresh
+  // block's own start — exactly the case issue #212's `(?:^|\n)` widening
+  // (`lineStartWrappingInputRule`, composer-editor.ts) exists for. Without
+  // it, "- milk" would stay literal text on screen while the stored body
+  // parsed as a real list the instant it was Sent.
+  await editor.pressSequentially("- milk");
+  // Caret is now inside the freshly-converted list item — Enter here is
+  // still `splitListItemUnchecked` (unchanged by issue #212), not a soft
+  // break, so this opens a SECOND list item rather than inserting a `\n`.
+  await editor.press("Enter");
+  await editor.pressSequentially("eggs");
+
+  await expect(editor.locator("p").first()).toHaveText("alpha");
+  await expect(editor.locator("ul > li")).toHaveCount(2);
+  await expect(editor.locator("ul > li").nth(0)).toHaveText("milk");
+  await expect(editor.locator("ul > li").nth(1)).toHaveText("eggs");
+});
+
+/**
+ * Issue #212 changes what this test's own middle section proves. Before
+ * that ticket, Shift+Enter fell through to `splitBlock` — a second `<p>`,
+ * matching plain Enter's own pre-#212 paragraph split — and this test's
+ * only job was "still doesn't send." Now that plain Enter is itself a soft
+ * break (`insertSoftBreak`, composer-commands.ts), Shift+Enter is bound to
+ * the IDENTICAL chain, not a variant of it (composer-editor.ts's own
+ * `listKeymap` comment has the full "why identical, not merely harmless"
+ * account) — so this is also the test that proves Shift+Enter behaves like
+ * Enter now, not only that it still refuses to send.
+ */
+test("Shift+Enter behaves exactly like Enter — a soft break in one paragraph, never sends", async ({
+  page,
+}) => {
   const firstLine = uniqueEntryBody("composer-shift-enter-one");
   const secondLine = uniqueEntryBody("composer-shift-enter-two");
   await page.goto("/composer");
@@ -815,15 +924,19 @@ test("Shift+Enter never sends, on this build the same as every other", async ({ 
   await editor.press("Shift+Enter");
   await editor.pressSequentially(secondLine);
 
-  // Still in the field, now two paragraphs — nothing was sent. This suite
-  // runs its specs sequentially against one shared server (playwright.config.ts's
-  // own `fullyParallel: false`), so History already carries whatever every
+  // One `<p>`, not two — a soft break, exactly like plain Enter, not a
+  // block split.
+  await expect(editor.locator("p")).toHaveCount(1);
+  await expect.poll(() => editor.locator("p").textContent()).toBe(`${firstLine}\n${secondLine}`);
+
+  // Still in the field — nothing was sent. This suite runs its specs
+  // sequentially against one shared server (playwright.config.ts's own
+  // `fullyParallel: false`), so History already carries whatever every
   // earlier spec in this run sent — the two lines' own unique bodies are
   // what a "nothing sent" check has to name, not History's total count.
   // Scoped to a History bubble specifically (not a bare `getByText`, which
   // would also match the two lines still sitting, unsent, in the field
   // itself).
-  await expect(editor.locator("p")).toHaveCount(2);
   await expect(page.locator('[data-slot="bubble-body"]', { hasText: firstLine })).toHaveCount(0);
   await expect(page.locator('[data-slot="bubble-body"]', { hasText: secondLine })).toHaveCount(0);
 });

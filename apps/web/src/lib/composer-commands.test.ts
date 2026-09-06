@@ -33,6 +33,7 @@ import {
   outdent,
   redoCommand,
   reference,
+  softBreak,
   splitListItemUnchecked,
   strikethrough,
   toggleCheckboxDone,
@@ -161,7 +162,7 @@ function runCommand(
 // ---------------------------------------------------------------------------
 
 describe("composerCommands", () => {
-  it("lists exactly the twelve actions the ticket requires, each with a unique id", () => {
+  it("lists exactly the thirteen actions the ticket requires, each with a unique id", () => {
     const ids = composerCommands.map((command) => command.id);
     expect(ids).toEqual([
       "bold",
@@ -174,6 +175,7 @@ describe("composerCommands", () => {
       "indent",
       "outdent",
       "reference",
+      "softBreak",
       "undo",
       "redo",
     ]);
@@ -461,6 +463,105 @@ describe("reference", () => {
     const { applied, next } = runCommand(reference, state);
     expect(applied).toBe(true);
     expect(next.doc.textBetween(0, next.doc.content.size)).toBe("he[[llo");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// softBreak / insertSoftBreak — issue #212
+// ---------------------------------------------------------------------------
+
+/** The position right after a document's first (and only) top-level paragraph's own content — mirrors composer-editor.test.ts's identical helper, duplicated here for the reason `stateAt` above already documents about the two files. */
+function endOfFirstParagraph(doc: PMNode): number {
+  const first = doc.firstChild;
+  if (first === null || first.type.name !== "paragraph") {
+    throw new Error("fixture has no leading paragraph");
+  }
+  return 1 + first.content.size;
+}
+
+describe("softBreak", () => {
+  it("is never reported active — inserting a break has no pressed state to report", () => {
+    expect(softBreak.isActive(stateAt(docFor("hello"), { from: 1 }))).toBe(false);
+  });
+
+  it("is enabled in an ordinary textblock", () => {
+    expect(softBreak.isEnabled(stateAt(docFor("hello"), { from: 1 }))).toBe(true);
+  });
+
+  it("is disabled (and a no-op on run) outside a textblock — a NodeSelection on a block node", () => {
+    const doc = docFor("- milk");
+    const pos = findNodePos(doc, "bullet_list");
+    const state = EditorState.create({
+      schema: entrySchema,
+      doc,
+      selection: NodeSelection.create(doc, pos),
+    });
+    expect(softBreak.isEnabled(state)).toBe(false);
+    expect(runCommand(softBreak, state).applied).toBe(false);
+  });
+
+  it("inserts a literal newline at the caret, in place — never a new paragraph", () => {
+    const doc = docFor("hello");
+    const state = stateAt(doc, { from: 3 }); // caret between "he" and "llo"
+    const { applied, next } = runCommand(softBreak, state);
+    expect(applied).toBe(true);
+    expect(next.doc.childCount).toBe(1);
+    expect(next.doc.firstChild?.type.name).toBe("paragraph");
+    expect(next.doc.textBetween(0, next.doc.content.size)).toBe("he\nllo");
+  });
+
+  it("two soft breaks in a row give a genuine blank line — the ticket's own acceptance bar", () => {
+    const doc = docFor("hello");
+    const once = runCommand(softBreak, stateAt(doc, { from: 3 }));
+    const twice = runCommand(softBreak, stateAt(once.next.doc, { from: 4 }));
+    expect(twice.applied).toBe(true);
+    expect(twice.next.doc.textBetween(0, twice.next.doc.content.size)).toBe("he\n\nllo");
+  });
+
+  it("inherits an active mark (strong) onto the inserted newline, like any other typed character", () => {
+    const strongMarkType = entrySchema.marks.strong;
+    if (strongMarkType === undefined) {
+      throw new Error("entrySchema has no strong mark");
+    }
+    const doc = entrySchema.node("doc", null, [
+      entrySchema.node("paragraph", null, entrySchema.text("bold", [strongMarkType.create()])),
+    ]);
+    const insertAt = endOfFirstParagraph(doc);
+    const state = stateAt(doc, { from: insertAt });
+    const { applied, next } = runCommand(softBreak, state);
+    expect(applied).toBe(true);
+    expect(next.doc.textBetween(1, next.doc.content.size - 1)).toBe("bold\n");
+    // `rangeHasMark`, not a search for a standalone "\n" text node: the
+    // inserted character shares the SAME mark set as the "bold" text run it
+    // was appended to, so ProseMirror's own `Fragment` joins the two into
+    // ONE text node ("bold\n") rather than leaving two adjacent nodes with
+    // identical marks — checking the mark over the newline's own position
+    // range is what stays correct regardless of that joining.
+    expect(next.doc.rangeHasMark(insertAt, insertAt + 1, strongMarkType)).toBe(true);
+  });
+
+  it("strips the code mark from the inserted newline, but keeps every other inherited mark", () => {
+    const codeMarkType = entrySchema.marks.code;
+    const strongMarkType = entrySchema.marks.strong;
+    if (codeMarkType === undefined || strongMarkType === undefined) {
+      throw new Error("entrySchema is missing a mark type this test needs");
+    }
+    const doc = entrySchema.node("doc", null, [
+      entrySchema.node("paragraph", null, [
+        entrySchema.text("snippet", [codeMarkType.create(), strongMarkType.create()]),
+      ]),
+    ]);
+    const state = stateAt(doc, { from: endOfFirstParagraph(doc) });
+    const { applied, next } = runCommand(softBreak, state);
+    expect(applied).toBe(true);
+    let newlineMarkNames: string[] = [];
+    next.doc.descendants((node) => {
+      if (node.isText && node.text === "\n") {
+        newlineMarkNames = node.marks.map((mark) => mark.type.name);
+      }
+    });
+    expect(newlineMarkNames).toContain("strong");
+    expect(newlineMarkNames).not.toContain("code");
   });
 });
 

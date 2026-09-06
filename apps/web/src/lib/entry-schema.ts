@@ -99,9 +99,48 @@ const taskReferenceAttrs: { [name: string]: { default?: unknown; validate?: stri
 const nodes: { [name: string]: NodeSpec } = {
   doc: { content: "block+" },
 
+  /**
+   * `whitespace: "pre"` (issue #212) — NOT a rendering setting (that is
+   * index.css's `white-space: pre-wrap`/`break-spaces` on `.ProseMirror`,
+   * issue #158, untouched here) but a PARSING one: it is what
+   * `prosemirror-view`'s own `parseBetween`/`readDOMChange` and
+   * `NodeViewDesc.parseRule` read (`type.whitespace == "pre"`) to decide
+   * `preserveWhitespace: "full"` versus the plain `true` a "normal"
+   * textblock gets instead. That distinction is invisible until the exact
+   * moment issue #212 needs it: a `\n` a command inserts directly into the
+   * model (`insertSoftBreak`, composer-commands.ts) renders correctly on
+   * its OWN transaction, since nothing re-parses the DOM to produce that
+   * one — but the very next keystroke typed anywhere in the SAME paragraph
+   * triggers a native DOM mutation, which ProseMirror reads back into the
+   * model by RE-PARSING that paragraph's own DOM through
+   * `prosemirror-model`'s `DOMParser.addTextNode`. Under plain `true` (not
+   * `"full"`), that function's own fallback branch is
+   * `value.replace(/\r?\n|\r/g, " ")` — literally converting every
+   * embedded newline back into a single space — because a "normal"
+   * textblock's real line breaks are supposed to be separate NODES (a
+   * block split, or a `hard_break`), never a raw `\n` character sitting
+   * inside one text run. Verified empirically, not reasoned out ahead of
+   * time: an e2e run typing `alpha` (Enter) `bravo` showed the correct
+   * `"alpha\n<br class=\"ProseMirror-trailingBreak\">"` markup right after
+   * Enter, and `"alpha bravo"` — the `\n` silently gone, replaced by a
+   * plain space — the instant the very first character of `bravo` was
+   * typed. `"pre"` makes `DOMParser` take the `preserveWhitespace ===
+   * "full"` branch instead (`value.replace(/\r\n?/g, "\n")`, i.e.
+   * normalise line endings and otherwise touch nothing), which is what
+   * lets an embedded `\n` survive a real keystroke rather than only ever
+   * being provably correct in a state built directly by a `Transaction`
+   * and never touched again.
+   *
+   * This affects PARSING only — `entryMarkdownToDocument`'s own path never
+   * goes through `DOMParser` at all (`blocksToPM`/`inlineNodesToPM` build
+   * `PMNode`s directly via `schema.text(...)`), so nothing about how a
+   * Sent body reads back changes; only how a LIVE keystroke or a paste
+   * reconciles against the DOM does.
+   */
   paragraph: {
     content: "inline*",
     group: "block",
+    whitespace: "pre",
   },
 
   text: { group: "inline" },
