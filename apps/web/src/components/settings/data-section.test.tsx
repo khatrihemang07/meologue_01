@@ -1,6 +1,7 @@
 import type {
   Entry,
   EntryStore,
+  MergeOptions,
   MergeOutcome,
   Project,
   ProjectStore,
@@ -82,9 +83,16 @@ const {
   ),
   // Issue #199's own dynamic import, mirroring the other three above.
   mergeBackupIntoDeviceMock: vi.fn(
-    async (): Promise<MergeOutcome> => ({
+    async (_options: MergeOptions): Promise<MergeOutcome> => ({
       ok: true,
-      result: { inserted: 0, updated: 0, unchanged: 0, skippedTables: [], skippedColumns: [] },
+      result: {
+        inserted: 0,
+        updated: 0,
+        unchanged: 0,
+        skippedTables: [],
+        skippedColumns: [],
+        safetyBackupFileName: "meologue-safety-backup-20260816-114500.zip",
+      },
     }),
   ),
   // Server Backup/Restore (issue #198) go through server-backup-transport.ts
@@ -296,7 +304,14 @@ describe("DataSection", () => {
     mergeBackupIntoDeviceMock.mockReset();
     mergeBackupIntoDeviceMock.mockResolvedValue({
       ok: true,
-      result: { inserted: 0, updated: 0, unchanged: 0, skippedTables: [], skippedColumns: [] },
+      result: {
+        inserted: 0,
+        updated: 0,
+        unchanged: 0,
+        skippedTables: [],
+        skippedColumns: [],
+        safetyBackupFileName: "meologue-safety-backup-20260816-114500.zip",
+      },
     });
     fetchServerBackupMock.mockReset();
     fetchServerBackupMock.mockResolvedValue({ ok: true, bytes: new Uint8Array([9, 9, 9]) });
@@ -580,25 +595,106 @@ describe("DataSection", () => {
     it("calls mergeBackupIntoDevice with this Device's driver and database.sql, and reports the outcome", async () => {
       mergeBackupIntoDeviceMock.mockResolvedValue({
         ok: true,
-        result: { inserted: 3, updated: 1, unchanged: 20, skippedTables: [], skippedColumns: [] },
+        result: {
+          inserted: 3,
+          updated: 1,
+          unchanged: 20,
+          skippedTables: [],
+          skippedColumns: [],
+          safetyBackupFileName: "meologue-safety-backup-20260816-090000.zip",
+        },
       });
       const successToast = vi.spyOn(toast, "success");
 
       await pickValidBackup();
 
       await waitFor(() => expect(mergeBackupIntoDeviceMock).toHaveBeenCalledTimes(1));
-      expect(mergeBackupIntoDeviceMock).toHaveBeenCalledWith(
-        fakeDriver,
-        "CREATE TABLE `entries` (`id` text PRIMARY KEY NOT NULL);",
-      );
+      expect(mergeBackupIntoDeviceMock).toHaveBeenCalledWith({
+        driver: fakeDriver,
+        databaseSql: "CREATE TABLE `entries` (`id` text PRIMARY KEY NOT NULL);",
+        takeSafetyBackup: expect.any(Function),
+      });
       await waitFor(() =>
         expect(successToast).toHaveBeenCalledWith(
           expect.stringContaining("3 inserted, 1 updated, 20 unchanged"),
         ),
       );
+      // Names the safety Backup too (issue #208), mirroring Restore's own
+      // success toast — the whole point of taking one is that a reader can
+      // find it again.
+      await waitFor(() =>
+        expect(successToast).toHaveBeenCalledWith(
+          expect.stringContaining("meologue-safety-backup-20260816-090000.zip"),
+        ),
+      );
       // Reloads a moment later, the same reasoning as Restore's own
       // handleConfirmRestore doc comment.
       await waitFor(() => expect(reloadMock).toHaveBeenCalledTimes(1), { timeout: 3000 });
+    });
+
+    // Issue #208: mergeBackupIntoDevice refuses to write anything until this
+    // callback resolves — this test proves data-section.tsx's own
+    // `takeSafetyBackup` actually does what the ADR 0064 amendment and the
+    // confirmation prompt's own copy both promise, by having
+    // mergeBackupIntoDeviceMock call it the same way the real function does
+    // (before reporting an outcome) rather than ignoring it the way every
+    // other test in this describe block's default mock does — mirrors
+    // Restore's own "gives restoreFromBackup a takeSafetyBackup…" test
+    // below.
+    it("gives mergeBackupIntoDevice a takeSafetyBackup that saves a safety Backup — via createBackup(kind: safety-backup) + saveFile — before Merge can succeed", async () => {
+      mergeBackupIntoDeviceMock.mockImplementation(async (options: MergeOptions) => {
+        const safetyOutcome = await options.takeSafetyBackup();
+        expect(safetyOutcome.ok).toBe(true);
+        return {
+          ok: true,
+          result: {
+            inserted: 0,
+            updated: 0,
+            unchanged: 0,
+            skippedTables: [],
+            skippedColumns: [],
+            safetyBackupFileName: safetyOutcome.ok ? safetyOutcome.fileName : "",
+          },
+        };
+      });
+
+      await pickValidBackup();
+
+      await waitFor(() => expect(mergeBackupIntoDeviceMock).toHaveBeenCalledTimes(1));
+      expect(createBackupMock).toHaveBeenCalledWith(
+        fakeDriver,
+        expect.any(Object),
+        expect.objectContaining({ kind: "safety-backup" }),
+      );
+      expect(saveFileMock).toHaveBeenCalledWith(
+        "meologue-backup-20260816-114500.zip",
+        expect.any(Uint8Array),
+      );
+      await waitFor(() => expect(reloadMock).toHaveBeenCalledTimes(1), { timeout: 3000 });
+    });
+
+    it("reports the safety Backup's own failure as the Merge's failure, without ever calling mergeBackupIntoDevice's own apply", async () => {
+      saveFileMock.mockResolvedValueOnce("cancelled");
+      mergeBackupIntoDeviceMock.mockImplementation(async (options: MergeOptions) => {
+        const safetyOutcome = await options.takeSafetyBackup();
+        if (!safetyOutcome.ok) {
+          return {
+            ok: false,
+            reason: `Safety Backup failed, so nothing was merged: ${safetyOutcome.reason}`,
+          };
+        }
+        throw new Error("should not reach the apply — the safety Backup was cancelled");
+      });
+      const errorToast = vi.spyOn(toast, "error");
+
+      await pickValidBackup();
+
+      await waitFor(() =>
+        expect(errorToast).toHaveBeenCalledWith(
+          expect.stringContaining("Safety Backup failed, so nothing was merged"),
+        ),
+      );
+      expect(reloadMock).not.toHaveBeenCalled();
     });
 
     it("shows an error toast and does not reload when mergeBackupIntoDevice refuses the file", async () => {

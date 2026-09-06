@@ -148,6 +148,14 @@ whose content is identical on both sides is left exactly as it is.
 A Merge carries rows and nothing else. Settings belong to a Device, not to its History, so a
 Merge never touches them — that is a Restore's business.
 
+Before it folds anything in, Merge takes a safety Backup of the Device's own current contents
+too, the same way Restore does, and for the same reason: where both sides hold a row, the one
+changed more recently overwrites the other, so a Merge interrupted partway can leave the Device
+holding some rows the incoming Backup overwrote and some it didn't, with no record of which. It
+can't lose a row that only ever existed locally — Merge never deletes — so this is a smaller risk
+than the one Restore's safety Backup guards against, but the same safety Backup makes it
+recoverable all the same.
+
 ### Cursor
 
 A Device's record of how far it has Synced, one per stream (Entries, Tasks, Projects, Sections,
