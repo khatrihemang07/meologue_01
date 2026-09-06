@@ -42,6 +42,24 @@ cd "$(dirname "$0")/.."
 
 CONTAINER=meologue-postgres-sandbox
 
+# Compose derives its project name from the working directory unless told
+# otherwise, but docker-compose.yml pins `container_name` to a fixed string.
+# Run this from a git worktree — whose directory is NOT `meologue_01` — and
+# the two disagree: compose decides no container of its own exists, tries to
+# create one under the fixed name, and fails outright because the real one is
+# already using it. The failure is at `up`, before any test runs, and reads
+# as a name collision rather than as "you are in a worktree."
+#
+# Pinning it here is what makes the existing healthy container get adopted
+# instead of recreated, from any directory. A literal rather than something
+# derived from the checkout's own name, to match `container_name` in
+# docker-compose.yml being a literal — the two have to agree, and deriving
+# only one of them would let them drift apart silently.
+#
+# An explicit COMPOSE_PROJECT_NAME in the environment still wins, so this
+# takes nothing away from anyone who knows what they are doing.
+export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-meologue_01}"
+
 docker compose up -d --wait postgres-sandbox
 
 for db in meologue_e2e_a meologue_e2e_b; do
