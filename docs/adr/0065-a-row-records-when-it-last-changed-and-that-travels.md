@@ -81,3 +81,44 @@ are interleaved; and the Server migration collided at version 18 with a migratio
 in parallel. Two files claiming one version is a collision git cannot see — neither edits the other,
 so the merge is clean and the failure surfaces later as a `_sqlx_migrations_pkey` violation, 81
 tests at a time.
+
+## Amendment (issue #217): the value travels, the *shape* was never pinned
+
+The Consequences above tell whoever next revisits Sync's conflict rule that this column is "already
+there and already correct on both sides of the wire." That sentence is what invited issue #215 in,
+and it is half right in a way that cost real time — so it is corrected here rather than left to be
+trusted again.
+
+**The value is correct on both sides. The format is not the same on both sides, and this ADR never
+said it had to be.** The client stamps `new Date().toISOString()`, which always emits exactly three
+fractional digits. The Server carries `DateTime<Utc>` and serialises RFC 3339 through chrono's
+default, which emits as many digits as it needs — six in practice, and **none at all** when the
+nanosecond component is zero. Nothing in this ADR, the wire type, or either schema constrains that.
+
+So `updated_at` must never be compared as a raw string, and the "identical shape" this ADR's own
+backfill reasoning relies on holds only *within* one writer, never across the wire. `'.'` is `0x2E`
+and `'Z'` is `0x5A`, so byte order and chronological order disagree in both directions:
+
+| Server value | Client value | Raw comparison says | Truth |
+|---|---|---|---|
+| `...T12:00:00Z` | `...T12:00:00.500Z` | Server greater | Client is 500ms **later** |
+| `...T12:00:00.123456Z` | `...T12:00:00.123Z` | Client greater | Server is 456µs **later** |
+
+The first row is the likelier one: a Server timestamp landing on a whole second is ordinary, and
+every client timestamp inside that second then loses to it while being later.
+
+**Nothing caught this because no test ever built a cross-shape pair.** Every fixture on both sides
+constructs timestamps in a single shape — the client suites through `toISOString()` or a pinned
+`now`, the Rust suites through `DateTime<Utc>` values. The mismatch exists only where the two meet.
+A test that pins this has to construct a Server-shaped `...:00Z` against a client-shaped
+`...:00.500Z` and assert the later one wins.
+
+**What has been fixed, and what has not.** ADR 0068 normalises both sides through
+`strftime('%Y-%m-%dT%H:%M:%f', …)` in `EntryStore.applyPulled`, which is the one call site that ADR
+owns. `merge.ts`'s case 6 still compares raw strings — and its comment still asserts the assumption
+this amendment disproves — so Merge can pick the older of two copies as the winner. That is issue
+#217. Restore is genuinely unaffected: it never uses `updated_at` to choose between rows, so a
+Merge-scoped fix is legitimate and does not need to touch it.
+
+**The general rule this ADR should have carried from the start:** a timestamp that crosses the wire
+is ordered by instant, never by byte order, unless something actually pins its shape at both ends.
