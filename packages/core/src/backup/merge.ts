@@ -6,6 +6,7 @@ import { quoteIdent, tableColumns } from "./dump";
 import { type ParsedTable, parseBackupDatabase } from "./parse";
 import type { SafetyBackupOutcome, TakeSafetyBackup } from "./restore";
 import { rowContentUnchanged } from "./row-diff";
+import { PRIMARY_KEY_COLUMN, upsertRow } from "./upsert";
 
 /**
  * Merge (issue #199, CONTEXT.md's Merge entry): folds another Device's
@@ -119,7 +120,6 @@ export interface MergeOptions {
  */
 const MERGE_EXCLUDED_TABLES: ReadonlySet<string> = new Set([LEDGER_TABLE, "kv"]);
 
-const PRIMARY_KEY_COLUMN = "id";
 const UPDATED_AT_COLUMN = "updated_at";
 
 /**
@@ -140,15 +140,18 @@ interface MergeCounts {
 }
 
 /**
- * Upserts one row into `tableName`, stripping `seq`/`synced_at` to `null`
- * first when the table carries them — unlike ./restore.ts, which preserves
- * both verbatim from the file (that function's own header comment, reason
- * 3), Merge always marks whatever it writes unsynced: this ticket's own
- * brief ("only rows Merge actually inserted or overwrote are marked
- * pending … so they reach the Server the way any local edit does"). A
- * Backup's `seq` was assigned by a Server against a different push from a
- * different Device; carrying it across to this Device's own row would
- * claim a Sync position this Device never earned.
+ * Upserts one row into `tableName` via ./upsert.ts's shared `upsertRow`,
+ * stripping `seq`/`synced_at` to `null` first when the table carries them
+ * — unlike ./restore.ts, which hands `upsertRow` a row's values untouched
+ * (that function's own header comment, reason 3), Merge always marks
+ * whatever it writes unsynced: this ticket's own brief ("only rows Merge
+ * actually inserted or overwrote are marked pending … so they reach the
+ * Server the way any local edit does"). A Backup's `seq` was assigned by a
+ * Server against a different push from a different Device; carrying it
+ * across to this Device's own row would claim a Sync position this Device
+ * never earned. The stripping happens here, before `upsertRow` is called,
+ * rather than as a flag `upsertRow` itself branches on — ./upsert.ts's own
+ * doc comment explains why that decision belongs at the call site.
  */
 async function writeRow(
   driver: SqliteDriver,
@@ -163,21 +166,7 @@ async function writeRow(
     valuesToWrite[SYNCED_AT_COLUMN] = null;
   }
 
-  const rowColumns = Object.keys(valuesToWrite);
-  const placeholders = rowColumns.map(() => "?").join(", ");
-  const updateAssignments = rowColumns
-    .filter((column) => column !== PRIMARY_KEY_COLUMN)
-    .map((column) => `${quoteIdent(column)} = excluded.${quoteIdent(column)}`)
-    .join(", ");
-  const upsertSql =
-    updateAssignments.length > 0
-      ? `INSERT INTO ${quoteIdent(tableName)} (${rowColumns.map(quoteIdent).join(", ")}) VALUES (${placeholders}) ON CONFLICT (${quoteIdent(PRIMARY_KEY_COLUMN)}) DO UPDATE SET ${updateAssignments}`
-      : `INSERT INTO ${quoteIdent(tableName)} (${rowColumns.map(quoteIdent).join(", ")}) VALUES (${placeholders}) ON CONFLICT (${quoteIdent(PRIMARY_KEY_COLUMN)}) DO NOTHING`;
-  await driver.execute(
-    upsertSql,
-    rowColumns.map((column) => valuesToWrite[column]),
-    "run",
-  );
+  await upsertRow(driver, tableName, PRIMARY_KEY_COLUMN, valuesToWrite);
 }
 
 /**

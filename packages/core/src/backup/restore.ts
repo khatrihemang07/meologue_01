@@ -6,6 +6,7 @@ import { SqliteTaskStore } from "../sqlite/sqlite-task-store";
 import { quoteIdent, tableColumns } from "./dump";
 import { type ParsedTable, parseBackupDatabase } from "./parse";
 import { rowContentUnchanged } from "./row-diff";
+import { PRIMARY_KEY_COLUMN, upsertRow } from "./upsert";
 
 /**
  * Restore (issue #197, `CONTEXT.md`'s Restore entry): "this Device becomes
@@ -133,8 +134,8 @@ export interface RestoreOptions {
 const RESTORE_EXCLUDED_TABLES: ReadonlySet<string> = new Set([LEDGER_TABLE]);
 
 const KV_TABLE = "kv";
+/** `kv`'s own primary key — the one table Restore keys on something other than `PRIMARY_KEY_COLUMN` (./upsert.ts), since `kv` is a key/value table, not an entity table with an `id`. */
 const KV_PRIMARY_KEY_COLUMN = "key";
-const DEFAULT_PRIMARY_KEY_COLUMN = "id";
 
 interface RestoreCounts {
   inserted: number;
@@ -176,8 +177,7 @@ async function restoreTable(
   table: ParsedTable,
   counts: RestoreCounts,
 ): Promise<void> {
-  const primaryKeyColumn =
-    table.name === KV_TABLE ? KV_PRIMARY_KEY_COLUMN : DEFAULT_PRIMARY_KEY_COLUMN;
+  const primaryKeyColumn = table.name === KV_TABLE ? KV_PRIMARY_KEY_COLUMN : PRIMARY_KEY_COLUMN;
   const columns = await tableColumns(driver, table.name);
   const columnNames = columns.map((column) => column.name);
   const selectSql = `SELECT ${columnNames.map(quoteIdent).join(", ")} FROM ${quoteIdent(table.name)}`;
@@ -212,21 +212,11 @@ async function restoreTable(
       continue;
     }
 
-    const rowColumns = Object.keys(row.values);
-    const placeholders = rowColumns.map(() => "?").join(", ");
-    const updateAssignments = rowColumns
-      .filter((column) => column !== primaryKeyColumn)
-      .map((column) => `${quoteIdent(column)} = excluded.${quoteIdent(column)}`)
-      .join(", ");
-    const upsertSql =
-      updateAssignments.length > 0
-        ? `INSERT INTO ${quoteIdent(table.name)} (${rowColumns.map(quoteIdent).join(", ")}) VALUES (${placeholders}) ON CONFLICT (${quoteIdent(primaryKeyColumn)}) DO UPDATE SET ${updateAssignments}`
-        : `INSERT INTO ${quoteIdent(table.name)} (${rowColumns.map(quoteIdent).join(", ")}) VALUES (${placeholders}) ON CONFLICT (${quoteIdent(primaryKeyColumn)}) DO NOTHING`;
-    await driver.execute(
-      upsertSql,
-      rowColumns.map((column) => row.values[column]),
-      "run",
-    );
+    // Reason 3 in this file's own header comment: seq/synced_at travel
+    // through untouched — row.values is handed to ./upsert.ts's shared
+    // helper exactly as ./parse.ts produced it, with no stripping step
+    // Merge's own writeRow (./merge.ts) applies before its own call.
+    await upsertRow(driver, table.name, primaryKeyColumn, row.values);
 
     if (existing === undefined) {
       counts.inserted += 1;
