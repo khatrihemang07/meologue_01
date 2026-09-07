@@ -397,6 +397,40 @@ export async function sync(options: SyncEngineOptions): Promise<void> {
       await taskStore.setCursor(response.task_cursor);
     }
 
+    // Issue #209: **the per-stream repetition below is deliberate, and this
+    // is the record of that decision rather than an omission.**
+    //
+    // Each stream gets its own three blocks — apply the acknowledged rows,
+    // apply the Cursor-read rows, advance the Cursor — and adding an eighth
+    // stream means writing three more. That looks like six copies of one
+    // shape asking to be a table. It is not, and #218 is what settled it:
+    // extending the pull guard touched all six blocks at once, which is the
+    // closest thing to a controlled experiment this question is going to
+    // get.
+    //
+    // Every block differs in three independent ways: its own
+    // `fromWire*Output` mapper (Tasks' takes a third argument, `existing`,
+    // that no other stream has — ../mapping.ts explains why), its store's
+    // method names (`upsert` vs `upsertProjects`/`upsertSections`, and now
+    // `applyPulled` vs `applyPulledProjects`/`applyPulledSections`), and its
+    // Cursor accessor (`setCursor` vs `setProjectCursor`/`setSectionCursor`).
+    // A table-driven version has to carry all three back as data, so what it
+    // actually buys is a config object per stream in place of a block per
+    // stream — the same count of things to get right, one indirection
+    // further from the code that runs.
+    //
+    // The repetition also has a property the abstraction would remove:
+    // **the two arms are visibly different per stream, and must be.** Entries
+    // run `applyAcknowledged` and `applyPulled`; the other five run `upsert`
+    // and `applyPulled`. That asymmetry is load-bearing (ADR 0068's
+    // amendment for #216 says why) and a shared helper would have to
+    // special-case it, hiding exactly the difference a reader most needs to
+    // see. `applyIncomingTasks` was that helper for Tasks, serving both
+    // arms, and #218 had to split it for precisely this reason.
+    //
+    // Revisit if a stream is ever added that is genuinely uniform with an
+    // existing one on all three axes. Until then, six honest blocks beat one
+    // clever one.
     if (response.acknowledged_projects.length > 0) {
       const syncedAt = now();
       await projectStore.upsertProjects(
