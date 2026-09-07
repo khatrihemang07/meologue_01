@@ -172,10 +172,14 @@ on is left alone and left pending; a row that has not is confirmed, whatever the
 
 Three details that are easy to get wrong:
 
-- **Both timestamps in that comparison are written by this Device.** `pending()` only ever returns
-  rows a local mutation stamped, so they are the same shape by construction. This is the one
-  `updated_at` comparison in the codebase that is safe as a raw `=`, and it is safe precisely
-  because it is not comparing across the wire (issue #217, ADR 0065's own amendment).
+- **It is an equality between a row and a snapshot of itself, not between two writers.** That is
+  what lets it be a raw `=` where every other `updated_at` comparison needs normalising (issue
+  #217): both sides hold the identical string, whatever wrote it. The tempting justification —
+  "a pending row's `updated_at` was written by this Device, so both are client-shaped" — is
+  **false**, and worth recording as such: Merge marks every row it writes as pending (`merge.ts`'s
+  `writeRow` nulls `seq`/`synced_at`) while taking `updated_at` straight from the Backup file,
+  which may hold the Server's six-digit shape. Such a row is pending, is pushed, and is
+  acknowledged here. It works because the real reason never depended on the shape.
 - **A row that is no longer pending is confirmed unconditionally.** It has nothing local left to
   lose, and that is what keeps a redelivered acknowledgement idempotent.
 - **Acknowledgements are matched to pushed rows by id, not by position.** Nothing in ADR 0059

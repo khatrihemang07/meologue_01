@@ -46,10 +46,13 @@ export interface EntryPage {
  * and the row would re-push on every tick.
  *
  * What actually answers the question is "is the local row still the one I
- * pushed", and only the caller knows what it pushed. Both timestamps in that
- * comparison are written by this same Device, so it is exact and free of the
- * clock skew and wire-shape problems that make `updated_at` awkward to compare
- * across Devices (../updated-at.ts).
+ * pushed", and only the caller knows what it pushed. That comparison is an
+ * equality between a row and a snapshot of itself, not between two writers, so
+ * it is exact whatever shape the timestamp is in and needs none of the
+ * normalisation ./updated-at.ts exists for — see
+ * SqliteEntryStore.applyAcknowledged for why the obvious justification for
+ * that ("a pending row is always client-written") is false, and why it does
+ * not matter.
  */
 export interface AcknowledgedEntry {
   /** The Server's current row for this id, as ADR 0059 returns it — a full row, so a write the Server refused against a tombstone teaches this Device the tombstone. */

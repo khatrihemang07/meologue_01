@@ -272,12 +272,22 @@ export class SqliteEntryStore implements EntryStore {
    * what keeps a redelivered acknowledgement idempotent.
    *
    * Plain `=` on `updated_at`, deliberately, where applyPulled needs
-   * `strftime` normalisation (../updated-at.ts): both values here were
-   * written by *this* Device — `pending()` only ever returns rows a local
-   * mutation stamped — so they are the same shape by construction and
-   * equality is exact. This is the one `updated_at` comparison in the
-   * codebase that is safe raw, and it is safe because it is not comparing
-   * across the wire.
+   * `strftime` normalisation (../updated-at.ts). Equality, not ordering, and that is what makes it shape-proof. Both
+   * sides of this comparison are the *same row* — its current value against
+   * a snapshot of itself taken when it was pushed — so whatever wrote that
+   * string, both sides hold it byte for byte, and `=` is exact without any
+   * of the normalisation ../updated-at.ts exists for. This is not a
+   * cross-writer comparison at all, which is the only reason it can skip
+   * that.
+   *
+   * Worth naming the tempting wrong justification, because it is nearly
+   * right: "a pending row's `updated_at` was always written by this Device,
+   * so both are client-shaped." That is false. Merge marks every row it
+   * writes as pending (`merge.ts`'s `writeRow` nulls `seq`/`synced_at`)
+   * while taking `updated_at` straight from the Backup file, which may hold
+   * the Server's own six-digit shape. Such a row is pending, gets pushed,
+   * and is acknowledged here — and it works, because the reason above never
+   * depended on the shape.
    */
   async applyAcknowledged(rows: readonly AcknowledgedEntry[]): Promise<void> {
     if (rows.length === 0) {

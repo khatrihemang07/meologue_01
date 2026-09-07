@@ -878,6 +878,43 @@ export function entryStoreContract(createStore: () => EntryStore | Promise<Entry
       expect(await store.search("recurring")).toEqual([]);
     });
 
+    // The guard is a raw `=` on `updated_at` where every other comparison
+    // needs normalising, and the reason is that it compares a row against a
+    // snapshot of ITSELF rather than across writers — so the shape is
+    // irrelevant. This pins that, because the obvious justification ("a
+    // pending row is always client-written") is false: Merge marks every
+    // row it writes as pending while taking `updated_at` straight from the
+    // Backup file, which may hold the Server's six-digit shape. Such a row
+    // is pending, gets pushed, and lands here.
+    it("confirms a pending row whose updatedAt is in the Server's shape, not this client's", async () => {
+      const merged = entry({
+        id: "a",
+        body: "folded in by a Merge",
+        // Six fractional digits — what a Backup taken from a Server-written
+        // row carries, and what Merge writes back verbatim.
+        updatedAt: "2026-09-05T16:23:02.794113Z",
+        seq: null,
+        syncedAt: null,
+      });
+      await store.upsert([merged]);
+
+      await store.applyAcknowledged([
+        {
+          asPushed: merged,
+          confirmed: entry({
+            id: "a",
+            body: "folded in by a Merge",
+            updatedAt: "2026-09-05T16:23:02.794113Z",
+            seq: 11,
+            syncedAt: "2026-09-07T00:00:00.000Z",
+          }),
+        },
+      ]);
+
+      expect(await store.pending()).toEqual([]);
+      expect((await store.list())[0]).toMatchObject({ id: "a", seq: 11 });
+    });
+
     it("is a no-op on an empty batch", async () => {
       await store.upsert([entry({ id: "a", seq: 1 })]);
       await store.applyAcknowledged([]);
