@@ -26,6 +26,7 @@ import { describe, expect, it } from "vitest";
 import { entryDocumentToMarkdown, entryMarkdownToDocument } from "./entry-document";
 import { entrySchema } from "./entry-schema";
 import { formatTaskReference } from "./inline-markdown";
+import { halveSoftBreakRuns } from "./soft-break-migration";
 
 const ENTRY_ID = "0192abcd-1234-7890-abcd-0123456789ab";
 const TASK_ID = "0192abcd-1234-7890-abcd-0123456789ac";
@@ -77,6 +78,31 @@ const NAMED_CASES: ReadonlyArray<readonly [string, string]> = [
   ["nested strong inside emphasis", "*italic **and** bold*"],
   ["bold spanning an entire list item", "- **the whole item is bold**"],
   ["emphasis spanning part of a list item, part plain", "- plain **bold** plain again"],
+
+  // Issue #211: strikethrough, nesting with the other two marks in both
+  // directions — the shape `localMarkRank`'s generalized span-ranking
+  // exists to get right for a THIRD nestable mark, not just the strong/em
+  // pair it used to hard-code.
+  ["struck text", "~~struck~~"],
+  ["strikethrough containing bold", "~~struck **bold** back~~"],
+  ["bold containing strikethrough", "**bold ~~struck~~ back**"],
+  ["emphasis containing strikethrough", "*em ~~struck~~*"],
+  ["strikethrough containing emphasis", "~~struck *em* back~~"],
+  // All three nestable marks at once, three levels deep — `localMarkRank`'s
+  // generalized span-ranking has to order THREE spans correctly here, not
+  // just break a tie between two.
+  ["strong containing emphasis containing strikethrough", "**bold *em ~~struck~~ back* end**"],
+  // `escapeUserText` escapes every `~` unconditionally (this file's own
+  // comment on why: a struck run ending in `~` would otherwise serialize a
+  // `~~~` closer that `@lezer/markdown`'s Strikethrough parser refuses).
+  // This body already has that escape in its source — an escaped tilde
+  // (`\~` -> literal `~`) as the LAST character of a struck run — so its
+  // round trip is a genuine identity, not merely a stable second pass; see
+  // the "round-trips ... exactly" list below for the actual assertion.
+  ["a struck run whose text ends in ~, via an escaped tilde", "~~a\\~~~"],
+  ["a lone ~ survives as ordinary prose text", "before ~ after"],
+  ["a triple tilde is not a valid strikethrough pair, stays literal", "~~~"],
+  ["an escaped strikethrough delimiter stays literal", "\\~\\~not struck\\~\\~"],
 
   ["an escaped asterisk", "\\*not bold\\*"],
   ["an escaped backtick", "\\`not code\\`"],
@@ -153,6 +179,7 @@ const INLINE_FRAGMENTS: readonly string[] = [
   "plain text",
   "**bold**",
   "*em*",
+  "~~struck~~",
   "`code`",
   "[[2026-08-28]]",
   `[[e:${ENTRY_ID}]]`,
@@ -248,6 +275,46 @@ describe("entryMarkdownToDocument / entryDocumentToMarkdown round trip", () => {
       // successfully and only fail here, which is exactly why this needs
       // its own assertion rather than trusting construction not to throw.
       expect(() => entryMarkdownToDocument(body).check()).not.toThrow();
+    });
+  });
+});
+
+/**
+ * Issue #214 / ADR 0067: the invariant that stands in for a safety Backup
+ * on the one-time newline-halving migration (`soft-break-migration.ts`).
+ * No safety Backup is taken before that migration runs — on web that would
+ * mean a download prompt on every app open, worse than the defect it
+ * fixes — so what makes running it unattended survivable has to be a
+ * property of the transform itself, asserted here rather than assumed:
+ * `halveSoftBreakRuns` only ever removes `\n` characters. It can shorten a
+ * run of newlines; it can never touch a word, a mark, a Reference, or a
+ * list, and it can never touch a non-newline character full stop.
+ *
+ * Asserted by stripping every `\n` from both `halveSoftBreakRuns(body)`
+ * and `roundTrip(body)` (the plain round trip, with no halving at all) and
+ * requiring the two to come out identical — across the *entire* existing
+ * round-trip corpus above, not a handful of newline-shaped examples,
+ * because the property this is meant to prove is "nothing here can ever
+ * lose a word," and that has to hold for every shape this dialect can
+ * produce, not merely the ones this ticket was written to think about.
+ *
+ * This is also why `halveSoftBreakRuns` itself always parses and
+ * re-serializes, even a body with no `"\n\n"` at all, rather than
+ * short-circuiting by returning it verbatim (that file's own doc comment
+ * on `halveSoftBreakRuns` has the full reasoning): several entries in this
+ * very corpus — `"1) a\n2) b"`, `"before ~ after"` — have no double
+ * newline yet still change under the plain round trip (an ordered list's
+ * `)` delimiter normalises to `.`; a lone `~` gains an escaping
+ * backslash), and a short-circuit would make `halveSoftBreakRuns` disagree
+ * with `roundTrip` on exactly those non-newline characters — the one
+ * thing this invariant exists to rule out.
+ */
+describe("halveSoftBreakRuns only ever removes newline characters (issue #214)", () => {
+  describe.each(CORPUS)("%s", (_name, body) => {
+    it("agrees with the plain round trip once newlines are stripped from both", () => {
+      const halved = halveSoftBreakRuns(body).replace(/\n/g, "");
+      const plain = roundTrip(body).replace(/\n/g, "");
+      expect(halved).toBe(plain);
     });
   });
 });
@@ -352,6 +419,13 @@ describe("entryDocumentToMarkdown", () => {
       "- [ ] todo\n- [x] done",
       "- outer\n  - inner",
       `- [ ] ${formatTaskReference(TASK_ID, "buy milk")}`,
+      "~~struck~~ and **bold** and *em*",
+      // The struck run's own text already ends in an escaped tilde
+      // (`\~` -> literal `~`), so the write side has nothing further to
+      // escape and this is a genuine no-op first pass — the case
+      // `escapeUserText`'s own comment on refusing a `~~~` closer exists
+      // to keep true.
+      "~~a\\~~~",
     ];
     for (const body of exact) {
       expect(roundTrip(body)).toBe(body);
@@ -360,6 +434,16 @@ describe("entryDocumentToMarkdown", () => {
 
   it("emits an empty document as an empty string", () => {
     expect(roundTrip("")).toBe("");
+  });
+
+  it("a literal ~ in ordinary prose survives a round trip", () => {
+    // Not byte-identical (escapeUserText now escapes every `~`
+    // unconditionally, the same way it already did for `*`), but the
+    // reader-facing TEXT is unchanged — reparsing the written form gives
+    // back a document whose visible text still reads "before ~ after",
+    // never a dropped or duplicated tilde.
+    const written = roundTrip("before ~ after");
+    expect(entryMarkdownToDocument(written).textContent).toBe("before ~ after");
   });
 });
 
@@ -434,6 +518,42 @@ describe("documents built by editing, not by parsing", () => {
   it("separates three typed paragraphs, not just the first pair", () => {
     const written = entryDocumentToMarkdown(doc(para("a"), para("b"), para("c")));
     expect(written).toBe("a\n\nb\n\nc");
+    expect(roundTrip(written)).toBe(written);
+  });
+
+  // Issue #211. Typing "check~" and then toggling strikethrough on the
+  // selection is a leaf whose text ends in `~` and carries the mark — a
+  // shape the Markdown-sourced corpus above cannot easily produce directly
+  // (parsing never leaves a mark's own delimiter characters inside the
+  // parsed text), but an ordinary thing to do in a live editor.
+  it("escapes a struck run's own trailing ~ rather than emitting an ambiguous ~~~ closer", () => {
+    const strikethroughMarkType = entrySchema.marks.strikethrough;
+    if (strikethroughMarkType === undefined) {
+      throw new Error("entrySchema has no strikethrough mark");
+    }
+    const written = entryDocumentToMarkdown(
+      doc(
+        nodeType("paragraph").create(
+          null,
+          entrySchema.text("check~", [strikethroughMarkType.create()]),
+        ),
+      ),
+    );
+    // Three raw tildes DO appear adjacent in the output (`\~~~`) — but the
+    // first of the three is the escaped character, not part of the closing
+    // delimiter, so this is not the ambiguous case at all. The actual
+    // invariant — that the close delimiter itself is exactly two characters,
+    // never three, is what the reparse assertions below confirm directly:
+    // if the write side had instead emitted an unescaped closer (`~~check~~~`,
+    // three-in-a-row with none of them escaped), `@lezer/markdown`'s
+    // Strikethrough parser would refuse it (`cx.char(pos+2) == 126` in its
+    // own delimiter scan) and `reparsed` below would come back as plain,
+    // unstruck text instead.
+    expect(written).toBe("~~check\\~~~");
+    const reparsed = entryMarkdownToDocument(written);
+    expect(reparsed.textContent).toBe("check~");
+    const leaf = reparsed.firstChild?.firstChild;
+    expect(leaf?.marks.some((mark) => mark.type.name === "strikethrough")).toBe(true);
     expect(roundTrip(written)).toBe(written);
   });
 });

@@ -9,6 +9,17 @@ ticket: the Composer becomes a ProseMirror `EditorView` holding a live document 
 so formatting appears as it is typed. Depends on issue #154's `entry-schema.ts`/`entry-document.ts`,
 which this ADR consumes rather than rebuilds.
 
+**Superseded in its Enter/Shift-Enter keymap by [0066](0066-enter-is-a-soft-break.md):** this ADR's
+own "Enter is `chainCommands(splitListItem, liftListItem)`, then `baseKeymap`'s own paragraph
+split" (and Shift-Enter's identical chain plus its own `splitBlock` fallback) is reversed — outside
+a list, Enter now inserts a literal `\n` into the current paragraph rather than splitting it, because
+a paragraph split's own required `\n\n` separator (a lone `\n` is a CommonMark lazy continuation)
+rendered as a real blank line the reader never asked for on the very first Enter. Everything else
+this ADR decided is unaffected and still load-bearing: the ProseMirror choice itself, `entry-schema.ts`/
+`entry-document.ts` as the one shared grammar, `prosemirror-history` for undo, the `[[` picker's own
+port, dirty-only commits, and Enter's own list behaviour (`splitListItem`/`liftListItem` inside a
+list item, unchanged by 0066).
+
 ## Context
 
 Writing `**deadline**` in the Composer showed the asterisks. It became bold only once the Entry was

@@ -230,11 +230,15 @@ function createFakeEntryStore(initial: readonly Entry[] = []): EntryStore {
     upsert: vi.fn(async (incoming: Entry[]) => {
       entries = [...entries, ...incoming];
     }),
+    applyPulled: vi.fn(async () => {}),
     pending: vi.fn(async () => []),
     getCursor: vi.fn(async () => 0),
     setCursor: vi.fn(async () => {}),
     // Issue #186 / ADR 0057.
     catchUpRowShapeEpoch: vi.fn(async () => {}),
+    // Issue #214 / ADR 0067.
+    hasCompletedSoftBreakMigration: vi.fn(async () => true),
+    markSoftBreakMigrationComplete: vi.fn(async () => {}),
     search: vi.fn(async (query: string) => entries.filter((e) => e.body.includes(query))),
     edit: vi.fn(async (id: string, body: string) => {
       entries = entries.map((e) => (e.id === id ? { ...e, body, seq: null } : e));

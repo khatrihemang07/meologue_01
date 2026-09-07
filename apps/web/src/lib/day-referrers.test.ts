@@ -80,6 +80,35 @@ describe("dayReferrers", () => {
     await expect(dayReferrers(store, "2026-08-28", 0)).resolves.toEqual([referrer]);
   });
 
+  // The regression that adding a mark to the dialect causes here. When
+  // `strikethrough` arrived (issue #211) this recursion still named only
+  // `emphasis` and `strong`, so a Reference inside `~~…~~` stopped being
+  // found — silently, because nothing throws when a day simply reports
+  // fewer referrers than it has. Every mark the dialect grows needs a case
+  // like this one, which is why the recursion now tests for `children`
+  // structurally rather than listing kinds.
+  it("finds a Reference nested inside struck-through text", async () => {
+    const referrer = entry({
+      id: "struck",
+      body: "~~[[2026-08-28]]~~ turned out to be wrong",
+      createdAt: "2026-08-29T10:00:00.000Z",
+    });
+    const store = fakeStore([referrer]);
+
+    await expect(dayReferrers(store, "2026-08-28", 0)).resolves.toEqual([referrer]);
+  });
+
+  it("finds a Reference nested two marks deep", async () => {
+    const referrer = entry({
+      id: "nested",
+      body: "**bold ~~[[2026-08-28]]~~ back**",
+      createdAt: "2026-08-29T10:00:00.000Z",
+    });
+    const store = fakeStore([referrer]);
+
+    await expect(dayReferrers(store, "2026-08-28", 0)).resolves.toEqual([referrer]);
+  });
+
   it("ignores a mark for a different day, even one search's index also surfaced", async () => {
     const wrongDay = entry({ id: "wrong", body: "see [[2026-08-29]]" });
     const store = fakeStore([wrongDay]);

@@ -2,10 +2,13 @@ import type { Locator, Page } from "@playwright/test";
 import { SERVER_A_DATABASE } from "../servers";
 import { expect, test } from "./fixtures";
 import {
+  advanceDateByDays,
   composerField,
   editEntryViaMenu,
   entryRow,
   entrySeq,
+  installDateOffset,
+  openDestination,
   sendEntry,
   uniqueEntryBody,
   waitForEntryId,
@@ -52,23 +55,51 @@ async function caretToStartOfLine(page: Page, editor: Locator): Promise<void> {
   await page.waitForTimeout(50);
 }
 
+/**
+ * Presses Enter until the field's own paragraph ends in exactly `target`
+ * consecutive `\n` characters — issue #214's own soft-break-migration test
+ * needs several Enters typed back to back with nothing in between, and
+ * `caretToStartOfLine`'s own comment (above) already names the general
+ * hazard: a keypress fired while ProseMirror's DOMObserver hasn't yet
+ * flushed the previous one's mutation is simply lost, so a fixed count of
+ * `.press("Enter")` calls can silently under-count. Counts the trailing run
+ * rather than assuming one press adds exactly one `\n`, and presses again
+ * only when the count still falls short — the identical "poll and retry
+ * the action itself," not just the assertion, idiom the ArrowLeft test
+ * above this one already uses for the same class of race.
+ */
+async function pressEnterUntil(editor: Locator, target: number): Promise<void> {
+  await expect
+    .poll(async () => {
+      const text = (await editor.locator("p").textContent()) ?? "";
+      const trailingRun = /\n*$/.exec(text)?.[0].length ?? 0;
+      if (trailingRun < target) {
+        await editor.press("Enter");
+      }
+      return trailingRun;
+    })
+    .toBe(target);
+}
+
 test("typing consumes the marker characters and applies the formatting", async ({ page }) => {
   await page.goto("/composer");
   const editor = composerField(page);
   await editor.click();
-  await editor.pressSequentially("**bold** *italic* `code`");
+  await editor.pressSequentially("**bold** *italic* `code` ~~struck~~");
 
   // The marker characters themselves are gone — this is the ticket's own
   // headline acceptance criterion, checked the strongest way available:
-  // the literal asterisk/backtick characters must not exist anywhere in
-  // the field's rendered text, not merely "some strong element exists
+  // the literal asterisk/backtick/tilde characters must not exist anywhere
+  // in the field's rendered text, not merely "some strong element exists
   // somewhere on the page."
   await expect(editor).not.toContainText("*");
   await expect(editor).not.toContainText("`");
+  await expect(editor).not.toContainText("~");
 
   await expect(editor.locator("strong")).toHaveText("bold");
   await expect(editor.locator("em")).toHaveText("italic");
   await expect(editor.locator("code")).toHaveText("code");
+  await expect(editor.locator("s")).toHaveText("struck");
 });
 
 // Regression coverage for a real defect this ticket's own manual
@@ -278,6 +309,15 @@ test("[x] and [X] start a checked checklist item directly", async ({ page }) => 
   const editor = composerField(page);
   await editor.click();
   await editor.pressSequentially("[x] first");
+  // Since issue #210, this Enter itself yields an UNCHECKED second item
+  // (`splitListItemUnchecked`, composer-commands.ts) — "first" was a done
+  // task, and continuing it must not silently mint a second done Task.
+  // The typed "[X] " that follows is what re-checks it, via the ORDINARY
+  // `checkboxInputRule` a person typing that marker on any line would
+  // trigger. So this test now exercises two independent mechanisms in
+  // sequence (split-then-uncheck, then a fresh input rule re-checking it),
+  // not one — and still ends up checked either way, which is why it still
+  // passes unchanged.
   await editor.press("Enter");
   await editor.pressSequentially("[X] second");
 
@@ -286,6 +326,109 @@ test("[x] and [X] start a checked checklist item directly", async ({ page }) => 
   await expect(boxes.nth(0)).toBeChecked();
   await expect(boxes.nth(1)).toBeChecked();
   await expect(editor).not.toContainText("[");
+});
+
+/**
+ * Issue #210: continuing a DONE checklist item must not mint a second done
+ * Task. `splitListItemUnchecked` (composer-commands.ts) has direct unit
+ * coverage against a plain `EditorState`; this is the keystroke path
+ * itself, through a real `EditorView` and `listKeymap`'s actual `Enter`
+ * binding.
+ */
+test("Enter after a ticked checklist item's text produces an UNticked new item", async ({
+  page,
+}) => {
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  await editor.pressSequentially("[x] first");
+  await editor.press("Enter");
+  await editor.pressSequentially("second");
+
+  const boxes = editor.locator('input[type="checkbox"]');
+  await expect(boxes).toHaveCount(2);
+  await expect(boxes.nth(0)).toBeChecked();
+  await expect(boxes.nth(1)).not.toBeChecked();
+  await expect(editor.locator("li").nth(0)).toHaveText("first");
+  await expect(editor.locator("li").nth(1)).toHaveText("second");
+});
+
+/**
+ * The case `itemAttrs` cannot reach at all (composer-commands.ts's own
+ * comment on `splitListItemUnchecked`): `splitListItem` only honours
+ * `itemAttrs` when the caret sits at `$from.end()`. Splitting further back
+ * takes an entirely different internal path that copies the ORIGINAL
+ * item's own type and attrs onto both halves, so this is the case that
+ * actually exercises the transaction-patching fix rather than a param
+ * `splitListItem` would have handled on its own.
+ */
+test("Enter in the MIDDLE of a ticked item's text also produces an unticked new item", async ({
+  page,
+}) => {
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  await editor.pressSequentially("[x] buy milk");
+  // Wait for the checklist input rule's transaction to land before moving the
+  // caret. Without this the ArrowLefts race it, arrive while the selection is
+  // still at the end, and the Enter below becomes an end-of-item split — which
+  // still yields two checkboxes, so only the text assertions catch it.
+  await expect(editor.locator("li p")).toHaveText("buy milk");
+  // Caret starts after "milk"; walk it back to just after "buy", before the
+  // space — a mid-text split, not an end-of-item one.
+  //
+  // ProseMirror does not learn about a caret move from the keypress that caused
+  // it: the browser moves the DOM selection, fires `selectionchange`, and
+  // DOMObserver flushes that into editor state on a LATER task. A press sent
+  // inside that window is simply lost, so a fixed number of ArrowLefts lands the
+  // caret at an offset nobody chose. Counting the presses cannot fix that; only
+  // re-pressing until the caret actually arrives can. `expect.poll` retries the
+  // press and re-reads the offset until it reaches the target, so the test
+  // asserts the precondition it depends on instead of assuming it.
+  const TARGET = "buy".length;
+  const caretOffset = () => page.evaluate(() => window.getSelection()?.anchorOffset ?? -1);
+  await expect
+    .poll(
+      async () => {
+        const offset = await caretOffset();
+        if (offset > TARGET) {
+          await editor.press("ArrowLeft");
+        }
+        return offset;
+      },
+      { message: "caret never reached the middle of the item's text" },
+    )
+    .toBe(TARGET);
+  await editor.press("Enter");
+
+  const boxes = editor.locator('input[type="checkbox"]');
+  await expect(boxes).toHaveCount(2);
+  // The first half keeps the original item's own checked state...
+  await expect(boxes.nth(0)).toBeChecked();
+  // ...only the newly split-off second half is forced back to unchecked.
+  await expect(boxes.nth(1)).not.toBeChecked();
+  await expect(editor.locator("li").nth(0)).toHaveText("buy");
+  await expect(editor.locator("li").nth(1)).toHaveText("milk");
+});
+
+/**
+ * The regression a STATIC `checked: false` (rather than reading the
+ * original item's own state) would cause: Enter on a plain bullet must
+ * stay a plain bullet, `checked` left `null` — never promoted to a
+ * checkbox just because it went through the same split path a task does.
+ */
+test("Enter on a plain (non-checkbox) bullet still produces a plain bullet, never minting a checkbox", async ({
+  page,
+}) => {
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  await editor.pressSequentially("- first");
+  await editor.press("Enter");
+  await editor.pressSequentially("second");
+
+  await expect(editor.locator('input[type="checkbox"]')).toHaveCount(0);
+  await expect(editor.locator("ul > li")).toHaveCount(2);
 });
 
 /**
@@ -498,6 +641,66 @@ test("Backspace at the very start of a list item lifts it out one level, and out
 });
 
 /**
+ * Issue #210: `Backspace` is now `chainCommands(undoInputRule,
+ * liftAtStartOfListItem)`, not `liftAtStartOfListItem` alone
+ * (`listKeymap`, composer-editor.ts — its own comment there has the full
+ * "why `undoInputRule` must run FIRST" reasoning). `undoInputRule`
+ * (prosemirror-inputrules) only fires when the IMMEDIATELY PRECEDING
+ * transaction was an `InputRule` match, so typing `"- "` — which converts
+ * the line into a bullet via a `wrappingInputRule` — leaves exactly that
+ * behind for the very next `Backspace` to revert: the literal two
+ * characters come back and the list disappears, rather than (as before
+ * this ticket) `Backspace` doing nothing at all, since `baseKeymap`'s own
+ * Backspace has no character to delete at offset 0 of an otherwise-empty
+ * paragraph.
+ *
+ * jsdom cannot exercise this at all (ADR 0044): `undoInputRule` reads a
+ * plugin's OWN state, which only exists after a real dispatch through a
+ * mounted `EditorView` — there is no unit-test seam for this half of the
+ * ticket, only this one.
+ */
+test('Backspace right after typing "- " undoes the bullet input rule, restoring the literal text', async ({
+  page,
+}) => {
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  await editor.pressSequentially("- ");
+  await expect(editor.locator("ul > li")).toHaveCount(1);
+
+  await editor.press("Backspace");
+
+  await expect(editor.locator("ul")).toHaveCount(0);
+  await expect.poll(() => editor.locator("p").textContent()).toBe("- ");
+});
+
+/**
+ * The same mechanism, on a mark input rule rather than a list one — and
+ * the visible behaviour change the ticket explicitly calls out: Backspace
+ * right after `**bold**` now un-bolds the word and restores the literal
+ * asterisks, rather than deleting just the last letter the way it did
+ * before this ticket. Intended (it's UpNote's own behaviour, and
+ * `undoInputRule` degrades to ordinary character deletion the rest of the
+ * time — this is only reachable in the single keystroke right after an
+ * input rule fires), but flagged here because it changes a very common
+ * keystroke's behaviour in a visible way.
+ */
+test('Backspace right after "**bold**" undoes the bold input rule, restoring the asterisks', async ({
+  page,
+}) => {
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  await editor.pressSequentially("**bold**");
+  await expect(editor.locator("strong")).toHaveText("bold");
+
+  await editor.press("Backspace");
+
+  await expect(editor.locator("strong")).toHaveCount(0);
+  await expect.poll(() => editor.locator("p").textContent()).toBe("**bold**");
+});
+
+/**
  * The accessibility regression this ticket most explicitly guards against:
  * a Composer that swallows Tab unconditionally traps keyboard focus inside
  * itself (WCAG 2.1.2), unable to hand it back to the rest of the page. Tab
@@ -630,7 +833,116 @@ test("underscores mark emphasis, except inside a word", async ({ page }) => {
   await expect(editor.locator("strong")).toHaveCount(1);
 });
 
-test("Shift+Enter never sends, on this build the same as every other", async ({ page }) => {
+// ---------------------------------------------------------------------------
+// Issue #212: Enter is a soft break outside a list — this is the reported
+// defect's own fix. Pressing Enter once used to render as a blank line
+// (ADR 0066 has the full mechanism: a paragraph split's own required `\n\n`
+// separator IS a blank line, under the `white-space: pre-wrap` every prose
+// surface sets). One Enter must now give one new line; two Enters must give
+// exactly one blank line, no more.
+// ---------------------------------------------------------------------------
+
+test('alpha, Enter, bravo — one paragraph whose text is "alpha\\nbravo", Send and reopening for edit round-tripping it byte-identically', async ({
+  page,
+}) => {
+  const marker = uniqueEntryBody("composer-soft-break-two-lines");
+  const body = `${marker}\nbravo`;
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  await editor.pressSequentially(marker);
+  await editor.press("Enter");
+  await editor.pressSequentially("bravo");
+
+  // One `<p>`, not two — a soft break, not a block split.
+  await expect(editor.locator("p")).toHaveCount(1);
+  await expect.poll(() => editor.locator("p").textContent()).toBe(body);
+
+  await page.getByRole("button", { name: "Send" }).click();
+  // An EXACT match against the full two-line string (`waitForEntryId`'s own
+  // query is `body = <literal>`) is itself the byte-identical proof at the
+  // Server: if the Composer had serialized this as two paragraph siblings
+  // instead of one soft-broken line, the stored body would carry `\n\n`,
+  // not `\n`, and this lookup would never resolve.
+  const id = await waitForEntryId(body, SERVER_A_DATABASE);
+  expect(id).toBeDefined();
+
+  const bubble = page.locator('[data-slot="bubble-body"]', { hasText: marker });
+  await expect(bubble).toBeVisible();
+
+  // Reopen for edit — the Composer re-parses the stored body
+  // (`entryMarkdownToDocument`) back into a live document; the round trip
+  // is byte-identical only if that re-parse produces the SAME one
+  // paragraph with the same internal `\n`, not two paragraphs merged back
+  // together with a rendered gap.
+  const row = entryRow(page, marker);
+  await row.hover();
+  await row.getByRole("button", { name: "Edit", exact: true }).click();
+  await expect(page.getByText("Editing Entry")).toBeVisible();
+  const reopenedEditor = composerField(page);
+  await expect(reopenedEditor.locator("p")).toHaveCount(1);
+  await expect.poll(() => reopenedEditor.locator("p").textContent()).toBe(body);
+});
+
+test("alpha, Enter, Enter, bravo — exactly one blank line, not two", async ({ page }) => {
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  await editor.pressSequentially("alpha");
+  await editor.press("Enter");
+  await editor.press("Enter");
+  await editor.pressSequentially("bravo");
+
+  // Still one `<p>` — two soft breaks inside it, `"alpha\n\nbravo"`, is
+  // exactly one blank line under `white-space: pre-wrap`. `.textContent()`,
+  // not a Playwright text matcher — this file's own established reason
+  // (the "two consecutive spaces" test's comment, above): text matchers
+  // normalise whitespace before comparing, which would hide the very
+  // distinction ("one `\n`" vs "two") this test exists to catch.
+  await expect(editor.locator("p")).toHaveCount(1);
+  await expect.poll(() => editor.locator("p").textContent()).toBe("alpha\n\nbravo");
+});
+
+test("alpha, Enter, - milk, Enter, eggs — a paragraph plus a two-item bullet list", async ({
+  page,
+}) => {
+  await page.goto("/composer");
+  const editor = composerField(page);
+  await editor.click();
+  await editor.pressSequentially("alpha");
+  await editor.press("Enter");
+  // The bullet marker is typed right after a soft break, not at a fresh
+  // block's own start — exactly the case issue #212's `(?:^|\n)` widening
+  // (`lineStartWrappingInputRule`, composer-editor.ts) exists for. Without
+  // it, "- milk" would stay literal text on screen while the stored body
+  // parsed as a real list the instant it was Sent.
+  await editor.pressSequentially("- milk");
+  // Caret is now inside the freshly-converted list item — Enter here is
+  // still `splitListItemUnchecked` (unchanged by issue #212), not a soft
+  // break, so this opens a SECOND list item rather than inserting a `\n`.
+  await editor.press("Enter");
+  await editor.pressSequentially("eggs");
+
+  await expect(editor.locator("p").first()).toHaveText("alpha");
+  await expect(editor.locator("ul > li")).toHaveCount(2);
+  await expect(editor.locator("ul > li").nth(0)).toHaveText("milk");
+  await expect(editor.locator("ul > li").nth(1)).toHaveText("eggs");
+});
+
+/**
+ * Issue #212 changes what this test's own middle section proves. Before
+ * that ticket, Shift+Enter fell through to `splitBlock` — a second `<p>`,
+ * matching plain Enter's own pre-#212 paragraph split — and this test's
+ * only job was "still doesn't send." Now that plain Enter is itself a soft
+ * break (`insertSoftBreak`, composer-commands.ts), Shift+Enter is bound to
+ * the IDENTICAL chain, not a variant of it (composer-editor.ts's own
+ * `listKeymap` comment has the full "why identical, not merely harmless"
+ * account) — so this is also the test that proves Shift+Enter behaves like
+ * Enter now, not only that it still refuses to send.
+ */
+test("Shift+Enter behaves exactly like Enter — a soft break in one paragraph, never sends", async ({
+  page,
+}) => {
   const firstLine = uniqueEntryBody("composer-shift-enter-one");
   const secondLine = uniqueEntryBody("composer-shift-enter-two");
   await page.goto("/composer");
@@ -640,17 +952,191 @@ test("Shift+Enter never sends, on this build the same as every other", async ({ 
   await editor.press("Shift+Enter");
   await editor.pressSequentially(secondLine);
 
-  // Still in the field, now two paragraphs — nothing was sent. This suite
-  // runs its specs sequentially against one shared server (playwright.config.ts's
-  // own `fullyParallel: false`), so History already carries whatever every
+  // One `<p>`, not two — a soft break, exactly like plain Enter, not a
+  // block split.
+  await expect(editor.locator("p")).toHaveCount(1);
+  await expect.poll(() => editor.locator("p").textContent()).toBe(`${firstLine}\n${secondLine}`);
+
+  // Still in the field — nothing was sent. This suite runs its specs
+  // sequentially against one shared server (playwright.config.ts's own
+  // `fullyParallel: false`), so History already carries whatever every
   // earlier spec in this run sent — the two lines' own unique bodies are
   // what a "nothing sent" check has to name, not History's total count.
   // Scoped to a History bubble specifically (not a bare `getByText`, which
   // would also match the two lines still sitting, unsent, in the field
   // itself).
-  await expect(editor.locator("p")).toHaveCount(2);
   await expect(page.locator('[data-slot="bubble-body"]', { hasText: firstLine })).toHaveCount(0);
   await expect(page.locator('[data-slot="bubble-body"]', { hasText: secondLine })).toHaveCount(0);
+});
+
+// ---------------------------------------------------------------------------
+// Issue #214 / ADR 0067: the one-time pass that halves a run of newlines
+// written before Enter meant one line per press (#212, just above). This
+// spec seeds an Entry that LOOKS like it was written under the old keymap —
+// a real Entry whose `updated_at` is backdated ahead of
+// `BODY_SOFT_BREAK_CUTOFF` via `installDateOffset`/`advanceDateByDays`
+// (helpers.ts) — and drives it through a real self-Merge (merge.spec.ts's
+// own file-chooser technique, aimed at this same Device rather than a
+// second one) to prove the migration actually runs against this Device's
+// real, opened store, not merely that the pure transform unit
+// (soft-break-migration.test.ts) is correct in isolation.
+//
+// A Merge, not a plain reload, is what actually lets this test SEE the
+// pre-cutoff Entry get migrated: the migration's own "already ran" marker
+// (`kv`) is set the very first time this fresh Device opens its (empty)
+// store at all, at the very first `page.goto` below — before the Entry
+// this test cares about even exists — so an ordinary reload alone would
+// find the marker already set and skip the scan entirely. Merge re-arms
+// that marker (ADR 0067's own acceptance criterion: "A Merge re-arms the
+// pass") — chosen over Restore for that same re-arming, and a self-Merge
+// changes nothing else (every row is byte-identical to what is already
+// here, so `mergeTable`'s own content-diff skips all of them).
+//
+// Merge was ALSO originally chosen to dodge a hazard that no longer
+// exists, and the reason is worth keeping rather than deleting: Restore
+// resets this Device's Sync Cursor to 0 (`restoreTable`'s own
+// `resetCursorsAndEpochs`, which Merge has no equivalent of), so the very
+// next pull brings this Device's *entire* History back, and
+// `EntryStore.upsert`'s unconditional overwrite could land after this
+// migration's own `store.edit()` and silently stomp the freshly-halved
+// body back to its pre-migration shape. That was issue #215, fixed by
+// ADR 0068: the pull now goes through `EntryStore.applyPulled`, which
+// refuses a stale row sitting on top of an unpushed local edit. Merge is
+// kept here anyway — it is the cheaper of the two re-arming paths and
+// this spec is already the heaviest chain in this file — while the
+// Restore path's own version of this is covered deterministically in
+// `packages/core/src/backup/restore.test.ts`, where it does not depend on
+// winning a load-sensitive race to mean anything.
+// ---------------------------------------------------------------------------
+
+test("a pre-cutoff Entry's doubled blank line is halved after a Merge re-arms the pass, and is not halved again on a later reload", async ({
+  page,
+}) => {
+  // Longer than this file's implicit default (`playwright.config.ts`'s
+  // `timeout: 60_000`): this test drives a real Backup, a real self-Merge
+  // (its own reload plus a safety-Backup download), the Tasks backfill and
+  // this migration, and an Edit round trip — the heaviest single chain
+  // this file runs.
+  test.setTimeout(120_000);
+
+  const marker = uniqueEntryBody("composer-soft-break-migration");
+
+  // `installDateOffset` only reaches documents navigated to AFTER it's
+  // registered (its own doc comment) — must run before the very first
+  // `page.goto` below.
+  await installDateOffset(page);
+  await page.goto("/composer");
+
+  // Backdated well before `BODY_SOFT_BREAK_CUTOFF` (packages/core/src/protocol.ts)
+  // — 400 days covers any real clock this suite could possibly run against
+  // relative to that fixed instant. `EntryStore.edit`/the initial capture
+  // both stamp `updated_at`/`created_at` from this same, now-offset clock.
+  await advanceDateByDays(page, -400);
+
+  const editor = composerField(page);
+  await editor.click();
+  await editor.pressSequentially(marker);
+  // Four Enters, back to back, with nothing typed between them — under the
+  // OLD (pre-#212) keymap this is what a single deliberate blank line
+  // looked like on the wire (two newlines per press). `pressEnterUntil`
+  // (above) is what makes this reliable rather than assuming four presses
+  // land as four newlines.
+  await pressEnterUntil(editor, 4);
+  await editor.pressSequentially("tail");
+  await expect.poll(() => editor.locator("p").textContent()).toBe(`${marker}\n\n\n\ntail`);
+
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.locator('[data-slot="bubble-body"]', { hasText: marker })).toBeVisible();
+
+  // Back to the real clock — everything from here on (Settings' own
+  // filenames, the reads below) should behave normally; only the Entry's
+  // already-stamped `updated_at` needs to stay backdated, and it does,
+  // untouched by this. Also gives Sync a real, unhurried moment to push
+  // this Entry (this suite's default Server URL keeps Sync live) and
+  // settle before the self-Merge below, rather than racing it.
+  await advanceDateByDays(page, 0);
+  await waitForEntryId(`${marker}\n\n\n\ntail`, SERVER_A_DATABASE);
+
+  // Back up this (still un-migrated) Device, then immediately Merge that
+  // same Backup into itself — merge.spec.ts's own file-chooser dance,
+  // reused verbatim, aimed at this same page rather than a second Device.
+  // The point is not "this Device gains rows it was missing" (a self-Merge
+  // is a no-op on content — merge.ts's own `rowContentUnchanged` skips
+  // every row here, since the Backup and this Device agree byte for byte);
+  // it is that Merge's own `rearmSoftBreakMigration` step (merge.ts)
+  // clears the migration's marker unconditionally, so the reload it
+  // performs on success is a genuinely fresh, re-armed store-open — the
+  // first one to ever see this particular Entry.
+  await openDestination(page, "Settings");
+  const backupButton = page.getByRole("button", { name: "Back up this Device" });
+  await expect(backupButton).toBeEnabled();
+  const [download] = await Promise.all([page.waitForEvent("download"), backupButton.click()]);
+  const backupPath = await download.path();
+  expect(backupPath).not.toBeNull();
+
+  const mergeButton = page.getByRole("button", { name: "Merge a Backup…" });
+  await expect(mergeButton).toBeEnabled();
+  // Merge's own confirm() is a native dialog — Playwright dismisses one by
+  // default, so accepting it needs an explicit listener registered before
+  // the click that raises it (merge.spec.ts's own identical comment).
+  page.once("dialog", (dialog) => dialog.accept());
+  const [fileChooser] = await Promise.all([page.waitForEvent("filechooser"), mergeButton.click()]);
+  // Registered before `setFiles`, for the identical reason merge.spec.ts's
+  // own comment gives: an event already fired cannot be waited for after.
+  const safetyBackup = page.waitForEvent("download");
+  const reloaded = page.waitForEvent("load");
+  await fileChooser.setFiles(backupPath as string);
+  expect((await safetyBackup).suggestedFilename()).toContain("meologue-safety-backup-");
+  await reloaded;
+
+  await openDestination(page, "Composer");
+  const bubbleAfterMerge = page.locator('[data-slot="bubble-body"]', { hasText: marker });
+  await expect(bubbleAfterMerge).toBeVisible();
+  // Halved exactly once: four newlines become two — one real blank line,
+  // reading the way it was meant to. This is what proves the migration
+  // itself actually ran, driven by the real, opened store — not merely
+  // that Merge preserved the Entry unchanged.
+  await expect
+    .poll(() => bubbleAfterMerge.locator("p").textContent(), {
+      message: "the migration should have halved the doubled blank line once Merge re-armed it",
+    })
+    .toBe(`${marker}\n\ntail`);
+
+  // The STORED body, not merely the rendered result: reopening for Edit
+  // re-parses the Entry's real, persisted text (`entryMarkdownToDocument`)
+  // — this is the "alpha, Enter, bravo" test's own byte-identical-round-trip
+  // technique, applied to what the migration itself wrote rather than to
+  // what the Composer wrote.
+  const row = entryRow(page, marker);
+  await row.hover();
+  await row.getByRole("button", { name: "Edit", exact: true }).click();
+  await expect(page.getByText("Editing Entry")).toBeVisible();
+  const reopenedEditor = composerField(page);
+  await expect.poll(() => reopenedEditor.locator("p").textContent()).toBe(`${marker}\n\ntail`);
+  // Leave edit mode without committing — this Entry's `updated_at` is now
+  // whatever the migration's own `store.edit` stamped it to (past the
+  // cutoff), and a real Send here would bump it again for an unrelated
+  // reason, muddying the second-reload assertion below.
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await expect(page.getByText("Editing Entry")).toHaveCount(0);
+
+  // The migration is not idempotent in general — halving `\n\n` a SECOND
+  // time would remove the real blank line this pass just resolved
+  // correctly (`\n\n` -> `\n`) — so this is the acceptance criterion that
+  // actually matters: an ordinary reload (no further Merge, so the marker
+  // Merge set is still in place) must leave the once-halved body exactly
+  // alone, both because the marker now says "already ran" and because
+  // this Entry's `updated_at` (stamped by the migration's own
+  // `store.edit`) is now past the cutoff either way.
+  await page.reload();
+
+  const bubbleAfterSecondReload = page.locator('[data-slot="bubble-body"]', { hasText: marker });
+  await expect(bubbleAfterSecondReload).toBeVisible();
+  await expect
+    .poll(() => bubbleAfterSecondReload.locator("p").textContent(), {
+      message: "a later store-open must not halve an already-migrated body again",
+    })
+    .toBe(`${marker}\n\ntail`);
 });
 
 test("the submit chord still sends, unchanged", async ({ page }) => {
@@ -1030,7 +1516,7 @@ test("the format toolbar is off by default, shows only while the Composer has fo
 
   // Switching it on shows the row immediately, without blurring the editor
   // — the toggle button gets the same caret-preserving treatment as the
-  // toolbar's own eleven buttons (composer.tsx's own comment on it), which
+  // toolbar's own twelve buttons (composer.tsx's own comment on it), which
   // is what makes "immediately" true rather than "after clicking back in".
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-pressed", "true");
@@ -1064,7 +1550,7 @@ test("the format toolbar is off by default, shows only while the Composer has fo
   await expect(page.getByRole("toolbar", { name: "Formatting" })).toBeVisible();
 });
 
-test("the bold, italic and code toolbar buttons apply their marks, reflect the caret's own pressed state, and never blur the editor", async ({
+test("the bold, italic, strikethrough and code toolbar buttons apply their marks, reflect the caret's own pressed state, and never blur the editor", async ({
   page,
 }) => {
   await page.goto("/composer");
@@ -1091,6 +1577,13 @@ test("the bold, italic and code toolbar buttons apply their marks, reflect the c
   await italicButton.click();
   await expect(editor.locator("em")).toHaveText("word");
   await expect(italicButton).toHaveAttribute("aria-pressed", "true");
+  await expect(editor).toBeFocused();
+
+  const strikethroughButton = toolbar.getByRole("button", { name: "Strikethrough" });
+  await expect(strikethroughButton).toHaveAttribute("aria-pressed", "false");
+  await strikethroughButton.click();
+  await expect(editor.locator("s")).toHaveText("word");
+  await expect(strikethroughButton).toHaveAttribute("aria-pressed", "true");
   await expect(editor).toBeFocused();
 
   const codeButton = toolbar.getByRole("button", { name: "Code" });
@@ -1228,7 +1721,7 @@ test("the undo and redo toolbar buttons revert and restore an edit, and are disa
   await expect(editor).toBeFocused();
 });
 
-test("Mod-b, Mod-i and Mod-e apply their marks from the keyboard, with no toolbar involved", async ({
+test("Mod-b, Mod-i, Mod-Shift-x and Mod-e apply their marks from the keyboard, with no toolbar involved", async ({
   page,
 }) => {
   await page.goto("/composer");
@@ -1242,6 +1735,11 @@ test("Mod-b, Mod-i and Mod-e apply their marks from the keyboard, with no toolba
 
   await editor.press("ControlOrMeta+i");
   await expect(editor.locator("em")).toHaveText("word");
+
+  // UpNote's own verified chord for the same action
+  // (docs/reference/upnote-macos-detail.md, "Cmd+Shift+X").
+  await editor.press("ControlOrMeta+Shift+x");
+  await expect(editor.locator("s")).toHaveText("word");
 
   await editor.press("ControlOrMeta+e");
   await expect(editor.locator("code")).toHaveText("word");
@@ -1294,7 +1792,7 @@ test("the submit chord still sends, even with the format toolbar switched on", a
 // position, and the mutual-exclusion with the `[[` picker ADR 0046 records.
 // ---------------------------------------------------------------------------
 
-test("/ at the very start of a block opens the slash menu, offering all seven items", async ({
+test("/ at the very start of a block opens the slash menu, offering all eight items", async ({
   page,
 }) => {
   await page.goto("/composer");
@@ -1309,6 +1807,7 @@ test("/ at the very start of a block opens the slash menu, offering all seven it
     "Numbered list",
     "Bold",
     "Italic",
+    "Strikethrough",
     "Code",
     "Reference",
   ]);
@@ -1423,12 +1922,12 @@ test("arrow keys move the highlighted row and wrap at both ends", async ({ page 
   await editor.pressSequentially("/");
 
   const options = page.getByRole("option");
-  await expect(options).toHaveCount(7);
+  await expect(options).toHaveCount(8);
   await expect(options.nth(0)).toHaveAttribute("aria-selected", "true");
 
   // Wraps UP from the first row straight to the last.
   await editor.press("ArrowUp");
-  await expect(options.nth(6)).toHaveAttribute("aria-selected", "true");
+  await expect(options.nth(7)).toHaveAttribute("aria-selected", "true");
 
   // Wraps back DOWN from the last row to the first.
   await editor.press("ArrowDown");

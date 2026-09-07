@@ -28,7 +28,7 @@ function entry(overrides: Partial<Entry>): Entry {
 /**
  * Stands in for `matchMedia("(hover: hover)")`, the same idea as
  * `theme.test.ts`'s own `stubMatchMedia` for `(prefers-color-scheme:
- * dark)` — `hoverCapable()` (entry-actions.tsx) only ever reads `.matches`
+ * dark)` — `hoverCapable()` (lib/pointer.ts) only ever reads `.matches`
  * once per call, so this stub needs no `addEventListener` of its own.
  */
 function stubHoverCapable(matches: boolean) {

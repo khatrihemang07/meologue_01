@@ -5,6 +5,7 @@ import { SqliteEntryStore } from "../sqlite/sqlite-entry-store";
 import { SqliteTaskStore } from "../sqlite/sqlite-task-store";
 import { quoteIdent, tableColumns } from "./dump";
 import { type ParsedTable, parseBackupDatabase } from "./parse";
+import { KV_TABLE, rearmSoftBreakMigration } from "./rearm-migrations";
 import { rowContentUnchanged } from "./row-diff";
 import { PRIMARY_KEY_COLUMN, upsertRow } from "./upsert";
 
@@ -133,7 +134,6 @@ export interface RestoreOptions {
  */
 const RESTORE_EXCLUDED_TABLES: ReadonlySet<string> = new Set([LEDGER_TABLE]);
 
-const KV_TABLE = "kv";
 /** `kv`'s own primary key — the one table Restore keys on something other than `PRIMARY_KEY_COLUMN` (./upsert.ts), since `kv` is a key/value table, not an entity table with an `id`. */
 const KV_PRIMARY_KEY_COLUMN = "key";
 
@@ -356,6 +356,7 @@ export async function restoreFromBackup(options: RestoreOptions): Promise<Restor
     }
     onProgress?.("Resetting Sync state…");
     await resetCursorsAndEpochs(driver);
+    await rearmSoftBreakMigration(driver);
     await driver.execute("COMMIT", [], "run");
   } catch (error) {
     await driver.execute("ROLLBACK", [], "run").catch(() => {

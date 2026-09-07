@@ -26,7 +26,13 @@ characters simply follow along afterward.
 What the user typed is what is stored, until the user edits it. Editing rewrites the body from the
 document the Composer was showing, and that normalizes formatting — one way of writing emphasis
 can come back as another. The characters change; what the Entry says does not. An Entry that is
-never edited keeps the exact characters it was captured with.
+never edited keeps the exact characters it was captured with, with two deliberate, bounded
+exceptions: the backfill that turned every checkbox already in History into a Task (ADR 0053) once
+rewrote a checkbox line into a task reference the first time this app modelled a checkbox as a Task
+at all, and a one-time pass (ADR 0067) halves a run of newlines written before Enter meant one line
+per press, so old writing renders the way it was meant to rather than with a spurious blank line.
+Each runs at most once per Entry, never as an ordinary consequence of Syncing or of opening the app
+on an Entry it has already reached.
 
 It is identified by an id minted on the Device that created it, so an Entry's identity does not
 depend on ever reaching another Device or a server. Its body can change after the fact, and an

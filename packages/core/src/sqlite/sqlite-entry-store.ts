@@ -4,7 +4,49 @@ import { mintId } from "../id";
 import type { EntryPage, EntryStore } from "../store";
 import type { Entry } from "../types";
 import type { SqliteDriver } from "./driver";
-import { CURSOR_KEY, DEVICE_ID_KEY, entries, kv, ROW_SHAPE_EPOCH_KEY } from "./schema";
+import {
+  CURSOR_KEY,
+  DEVICE_ID_KEY,
+  entries,
+  kv,
+  ROW_SHAPE_EPOCH_KEY,
+  SOFT_BREAK_MIGRATION_KEY,
+} from "./schema";
+
+/**
+ * The `strftime` format both sides of applyPulled()'s `updated_at`
+ * comparison are put through before they are compared — see that method's
+ * own doc comment for why comparing the raw columns is wrong in both
+ * directions. Millisecond precision, because that is the finest this
+ * client can express: `new Date().toISOString()` emits exactly three
+ * fractional digits.
+ *
+ * `strftime` rather than `unixepoch(..., 'subsec')`, which would read
+ * better: this string is evaluated by four different SQLite builds (node,
+ * wa-sqlite over OPFS, `@capacitor-community/sqlite`, and Tauri's
+ * rusqlite), and `unixepoch` needs 3.38 with the `'subsec'` modifier
+ * needing 3.42, while `strftime('%f', …)` has been present essentially
+ * forever. Not worth a platform-specific failure that would only show up
+ * as a Sync that quietly stops converging.
+ *
+ * **This normalisation is permanent. Do not delete it after a migration.**
+ * The tempting future cleanup is to normalise `updated_at` once, on
+ * ingest, and then let every comparison go back to a plain `>=`. That is
+ * a real improvement for the steady state and it still does not make this
+ * removable, because Backup is a time machine: `dump.ts` writes a lossless
+ * copy of the database exactly as it stands, and `restore.ts` puts those
+ * values back verbatim (reason 3 in its own header — `seq`/`synced_at` are
+ * preserved rather than rewritten). A Backup taken *before* any such
+ * migration therefore carries pre-migration shapes, and Restoring or
+ * Merging it a year later reintroduces them into a fully migrated
+ * database. The set of restorable Backups is unbounded and grows every
+ * time someone clicks Back up, so "all data has been normalised" is never
+ * true — and Restore is what people reach for when something has already
+ * gone wrong, which makes this ordinary rather than an edge case.
+ * Anything comparing `updated_at` has to stay shape-tolerant for good.
+ * See ADR 0065's amendment (issue #217) for the fork this leaves open.
+ */
+const MILLISECOND_PRECISION = "%Y-%m-%dT%H:%M:%f";
 
 /**
  * The SQLite-backed EntryStore (ADR 0007), platform-free — it talks to a
@@ -111,6 +153,103 @@ export class SqliteEntryStore implements EntryStore {
       });
     for (const entry of newEntries) {
       await this.indexForSearch(entry);
+    }
+  }
+
+  /**
+   * Issue #215 / ADR 0068 — see EntryStore.applyPulled's own doc comment
+   * (../store.ts) for the rule and every reason behind it.
+   *
+   * The guard is a `setWhere` on the same single upsert statement, not a
+   * SELECT-then-write: reading the row first and deciding in TypeScript
+   * would put an `await` between the read and the write, which is exactly
+   * the interleaving this method exists to close. ADR 0007's "one
+   * statement" property is kept for the same reason it was worth having.
+   *
+   * `excluded` is the incoming row; the bare column names are the local
+   * one SQLite is about to overwrite.
+   *
+   * **Both timestamps are normalised through `strftime` before they are
+   * compared, and a plain `>=` on the raw columns would be wrong.** The
+   * two sides genuinely do not share a format: this client stamps
+   * `updatedAt` with `new Date().toISOString()`, which always emits
+   * exactly three fractional digits, while the Server serialises
+   * `DateTime<Utc>` through chrono's default, which emits *as many digits
+   * as it needs* — six in practice, and **none at all** when the
+   * nanoseconds happen to be zero. A byte-wise compare of two such
+   * strings is not chronological order, in either direction:
+   *
+   * - `...02.500000Z` (Server, same instant) vs `...02.500Z` (local)
+   *   compares as *smaller*, because `'0' < 'Z'` — so a Server row that
+   *   is genuinely at least as new gets refused, this Device's pending
+   *   edit is pushed instead, and the other Device's edit is the one that
+   *   is lost.
+   * - `...02Z` (Server, half a second older) vs `...02.500Z` (local)
+   *   compares as *greater*, because `'Z' > '.'` — so a stale row
+   *   overwrites a newer pending local edit, which is exactly the
+   *   data loss this whole method exists to prevent.
+   *
+   * `%f` normalises both to millisecond precision, which is the finest
+   * granularity this client can express anyway. Sub-millisecond
+   * differences collapse into a tie, and a tie applies — the safe
+   * direction, since the incoming row is the one that has been through
+   * the Server.
+   *
+   * `strftime` returns NULL for anything it cannot parse, which makes
+   * this clause NULL rather than true, so an unreadable timestamp on
+   * either side refuses the row instead of overwriting on a comparison
+   * nobody can trust. The local edit survives and is pushed. That is the
+   * right way round to fail.
+   */
+  async applyPulled(incoming: Entry[]): Promise<void> {
+    if (incoming.length === 0) {
+      return;
+    }
+    await this.db
+      .insert(entries)
+      .values(incoming)
+      .onConflictDoUpdate({
+        target: entries.id,
+        set: {
+          deviceId: sql`excluded.device_id`,
+          body: sql`excluded.body`,
+          createdAt: sql`excluded.created_at`,
+          updatedAt: sql`excluded.updated_at`,
+          seq: sql`excluded.seq`,
+          syncedAt: sql`excluded.synced_at`,
+          deletedAt: sql`excluded.deleted_at`,
+        },
+        setWhere: sql`${entries.seq} IS NOT NULL OR strftime('${sql.raw(MILLISECOND_PRECISION)}', excluded.updated_at) >= strftime('${sql.raw(MILLISECOND_PRECISION)}', ${entries.updatedAt}) OR excluded.deleted_at IS NOT NULL`,
+      });
+    // Re-derived from what the rows now actually hold, never from
+    // `incoming`: once a row can be refused, indexing the incoming body
+    // would make Search the one place a refused edit still appeared to
+    // have landed. Same reasoning edit() and remove() already give for
+    // choosing this over indexing what the caller assumed it wrote.
+    //
+    // Read back in one query per chunk rather than through
+    // reindexFromCurrentState()'s own per-row SELECT, which is what this
+    // first shipped as. A Cursor-reset pull hands over the entire History
+    // (the whole reason this method exists), so a per-row round trip here
+    // is paid once per Entry a Device owns, all inside the first Sync
+    // after a Restore. `chunkIds` is the same bound-parameter limit
+    // getMany() already respects.
+    //
+    // This is a cost change, not a correctness one, and it is worth being
+    // precise about that: it was written while chasing an intermittent
+    // failure in `restore.spec.ts`'s "Search works immediately after",
+    // and it did **not** fix it. That test fails about 1 run in 10 both
+    // here and on the commit before this whole feature, so it is
+    // pre-existing and unrelated. The batching earns its place on its own
+    // terms; it is not a fix for anything.
+    for (const chunk of chunkIds(incoming.map((entry) => entry.id))) {
+      const rows = await this.db
+        .select({ id: entries.id, body: entries.body, deletedAt: entries.deletedAt })
+        .from(entries)
+        .where(inArray(entries.id, chunk));
+      for (const row of rows) {
+        await this.indexForSearch(row);
+      }
     }
   }
 
@@ -334,6 +473,17 @@ export class SqliteEntryStore implements EntryStore {
     }
     await this.setCursor(0);
     await this.setKv(ROW_SHAPE_EPOCH_KEY, String(currentEpoch));
+  }
+
+  // Issue #214 / ADR 0067 — see EntryStore.hasCompletedSoftBreakMigration's
+  // own doc comment (../store.ts) for the mechanism and why an absent key
+  // means "not yet."
+  async hasCompletedSoftBreakMigration(): Promise<boolean> {
+    return (await this.getKv(SOFT_BREAK_MIGRATION_KEY)) === "true";
+  }
+
+  async markSoftBreakMigrationComplete(): Promise<void> {
+    await this.setKv(SOFT_BREAK_MIGRATION_KEY, "true");
   }
 
   /** Resolves this Device's id, minting and persisting one on first run. */

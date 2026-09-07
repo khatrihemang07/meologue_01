@@ -8,6 +8,7 @@ import {
   parseInlineMarkdown,
   parseReferenceDate,
   parseReferenceTask,
+  refreshTaskReferenceLabel,
 } from "./inline-markdown";
 
 const ENTRY_ID = "0192abcd-1234-7890-abcd-0123456789ab";
@@ -46,6 +47,13 @@ describe("parseInlineMarkdown", () => {
       expect(parseInlineMarkdown("`code`")).toEqual([{ kind: "code", text: "code" }]);
     });
 
+    // Issue #211.
+    it("parses ~~struck~~ as strikethrough", () => {
+      expect(parseInlineMarkdown("~~struck~~")).toEqual([
+        { kind: "strikethrough", children: [{ kind: "text", text: "struck" }] },
+      ]);
+    });
+
     it("nests an emphasis inside a strong", () => {
       expect(parseInlineMarkdown("**a *b* c**")).toEqual([
         {
@@ -53,6 +61,19 @@ describe("parseInlineMarkdown", () => {
           children: [
             { kind: "text", text: "a " },
             { kind: "emphasis", children: [{ kind: "text", text: "b" }] },
+            { kind: "text", text: " c" },
+          ],
+        },
+      ]);
+    });
+
+    it("nests a strong inside a strikethrough", () => {
+      expect(parseInlineMarkdown("~~a **b** c~~")).toEqual([
+        {
+          kind: "strikethrough",
+          children: [
+            { kind: "text", text: "a " },
+            { kind: "strong", children: [{ kind: "text", text: "b" }] },
             { kind: "text", text: " c" },
           ],
         },
@@ -79,6 +100,18 @@ describe("parseInlineMarkdown", () => {
 
     it("leaves an unclosed backtick as text", () => {
       expect(parseInlineMarkdown("`unclosed")).toEqual([{ kind: "text", text: "`unclosed" }]);
+    });
+
+    it("leaves an unclosed ~~ as text", () => {
+      expect(parseInlineMarkdown("~~oops")).toEqual([{ kind: "text", text: "~~oops" }]);
+    });
+
+    it("leaves a lone ~ as text — GFM Strikethrough is always a two-character pair", () => {
+      expect(parseInlineMarkdown("a ~ b")).toEqual([{ kind: "text", text: "a ~ b" }]);
+    });
+
+    it("leaves a run of three ~ as text — @lezer/markdown's Strikethrough refuses that as a delimiter", () => {
+      expect(parseInlineMarkdown("~~~")).toEqual([{ kind: "text", text: "~~~" }]);
     });
   });
 
@@ -362,6 +395,15 @@ describe("inlineNodesToText", () => {
     expect(inlineNodesToText(nodes)).toBe("a b c");
   });
 
+  it("joins text across a strikethrough the same way, ignoring formatting", () => {
+    const nodes: InlineNode[] = [
+      { kind: "text", text: "a " },
+      { kind: "strikethrough", children: [{ kind: "text", text: "b" }] },
+      { kind: "text", text: " c" },
+    ];
+    expect(inlineNodesToText(nodes)).toBe("a b c");
+  });
+
   it("renders a Reference's raw text, not its resolved id", () => {
     const nodes: InlineNode[] = [
       { kind: "dateReference", date: "2026-08-28", raw: "[[2026-08-28]]" },
@@ -401,6 +443,27 @@ describe("parseEntryMarkdown", () => {
     const body = "a recurring **Question** with a `code` span and [[2026-08-28]]";
     expect(parseEntryMarkdown(body)).toEqual([
       { kind: "prose", children: parseInlineMarkdown(body) },
+    ]);
+  });
+
+  // Issue #211: `walkEntryInline` (this parser's own inline walker, a
+  // separate function from `walk` above because the two parser APIs don't
+  // share a node shape) needs the SAME `Strikethrough` case `walk` gets —
+  // missing it here is exactly the one-dialect-two-parsers failure ADR
+  // 0043/0045 exist to prevent, and it would not show up in the test right
+  // above (a list-free body already delegates entirely to `parseInlineMarkdown`
+  // through a different code path than a body that has to walk a list).
+  it("parses ~~struck~~ inside a list item the same way parseInlineMarkdown parses it bare", () => {
+    expect(parseEntryMarkdown("- ~~struck~~")).toEqual([
+      {
+        kind: "bulletList",
+        items: [
+          {
+            task: undefined,
+            content: [{ kind: "prose", children: parseInlineMarkdown("~~struck~~") }],
+          },
+        ],
+      },
     ]);
   });
 
@@ -667,5 +730,35 @@ describe("entryBlocksToText", () => {
   it("flattens a nested list into one space-joined run", () => {
     const flat = entryBlocksToText(parseEntryMarkdown("- top\n  - nested"));
     expect(flat.replace(/\s+/g, " ").trim()).toBe("top nested");
+  });
+});
+
+// Issue #211: `collectTaskReferenceRawsInline` recurses only into
+// `emphasis`/`strong`/`strikethrough` — missing any one of the three makes a
+// `[[task:…]]` inside that mark invisible to `refreshTaskReferenceLabel`
+// with no error anywhere, since `refreshTaskReferenceLabel` itself returns
+// the body UNCHANGED when it finds no occurrences (there is nothing to
+// distinguish "the label already matched" from "the mark was invisible").
+describe("refreshTaskReferenceLabel finds a task reference nested inside a mark", () => {
+  const oldRaw = formatTaskReference(ENTRY_ID, "buy milk");
+  const newRaw = formatTaskReference(ENTRY_ID, "buy oat milk");
+
+  it("inside a strikethrough", () => {
+    const body = `- [ ] ~~${oldRaw} (cancelled)~~`;
+    expect(refreshTaskReferenceLabel(body, ENTRY_ID, "buy oat milk")).toBe(
+      `- [ ] ~~${newRaw} (cancelled)~~`,
+    );
+  });
+
+  it("inside a strikethrough nested inside a strong — all three levels at once", () => {
+    const body = `**~~${oldRaw}~~**`;
+    expect(refreshTaskReferenceLabel(body, ENTRY_ID, "buy oat milk")).toBe(`**~~${newRaw}~~**`);
+  });
+
+  it("inside an emphasis, and inside a strong, for the same coverage the mark set already had", () => {
+    expect(refreshTaskReferenceLabel(`*${oldRaw}*`, ENTRY_ID, "buy oat milk")).toBe(`*${newRaw}*`);
+    expect(refreshTaskReferenceLabel(`**${oldRaw}**`, ENTRY_ID, "buy oat milk")).toBe(
+      `**${newRaw}**`,
+    );
   });
 });

@@ -1,6 +1,6 @@
 /**
  * The `/` menu's pure logic (issue #165) — trigger detection, query
- * filtering, and the seven-item ordering the ticket lists — built as its
+ * filtering, and the fixed ordering the ticket lists — built as its
  * own module rather than folded into composer-picker.ts, per the user's
  * explicit choice recorded on that issue: the `/` menu and the `[[` picker
  * share a SHAPE (an absolutely-positioned dropdown anchored to a trigger
@@ -118,7 +118,7 @@ export function deriveSlashMenu(
  * that follows drops every combining mark in the U+0300–U+036F block —
  * leaving the bare letters `filterSlashItems` actually compares. That is
  * the entire "accent-insensitive" half of the ticket's filter rule; there
- * is no locale-aware collation involved, because none is needed for seven
+ * is no locale-aware collation involved, because none is needed for a handful of
  * fixed, ASCII-English labels — this only has to survive a reader typing
  * an accented character by habit or autocorrect, not sort them.
  */
@@ -167,15 +167,16 @@ export function filterSlashItems<T extends SlashMenuCommand>(
 }
 
 /**
- * The seven items, in the exact order issue #165 lists them — Checklist,
- * Bullet list, Numbered list, Bold, Italic, Code, Reference — which is NOT
- * `composerCommands`' own array order (composer-commands.ts groups marks
- * first, for its toolbar's own layout, and also carries four items — indent,
- * outdent, undo, redo — this menu has no row for at all). Kept here as a
- * list of `id`s only, never as a second copy of any command's behaviour:
- * `buildSlashMenuItems` below is what turns this into actual commands,
- * reaching through the one registry composer-commands.ts already is —
- * the ticket's own explicit "do not reimplement."
+ * The seven items issue #165 lists — Checklist, Bullet list, Numbered list,
+ * Bold, Italic, Code, Reference — plus Strikethrough, added by issue #211
+ * (placed after Italic, before Code, mirroring composer-toolbar.tsx's own
+ * placement). Not `composerCommands`' own array order (composer-commands.ts
+ * groups marks first, for its toolbar's own layout, and also carries four
+ * items — indent, outdent, undo, redo — this menu has no row for at all).
+ * Kept here as a list of `id`s only, never as a second copy of any command's
+ * behaviour: `buildSlashMenuItems` below is what turns this into actual
+ * commands, reaching through the one registry composer-commands.ts already
+ * is — the ticket's own explicit "do not reimplement."
  */
 export const SLASH_MENU_COMMAND_IDS: readonly string[] = [
   "checklist",
@@ -183,6 +184,7 @@ export const SLASH_MENU_COMMAND_IDS: readonly string[] = [
   "orderedList",
   "bold",
   "italic",
+  "strikethrough",
   "code",
   "reference",
 ];

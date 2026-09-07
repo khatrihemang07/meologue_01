@@ -29,6 +29,7 @@
  */
 import type { ServerCapabilities } from "@meologue/core";
 import { create } from "zustand";
+import { hoverCapable } from "@/lib/pointer";
 import { checkServerUrl } from "@/lib/server-check";
 
 const THEME_KEY = "meologue.theme";
@@ -346,31 +347,48 @@ function writeStoredCompletedStyle(style: CompletedStyleId): void {
  * Device draws the Composer's own chrome, never Synced, and never entering
  * the glossary for the same reason those three don't.
  *
- * Off by default. UpNote's own equivalent (`FORMAT_BAR_VISIBLE` in its
+ * Issue #213: the default now follows `hoverCapable()` rather than being a
+ * flat `false`. UpNote's own equivalent (`FORMAT_BAR_VISIBLE` in its
  * shipped bundle, verified the same way `DEFAULT_COMPLETED_STYLE` above
- * was) also defaults to `false` — a toolbar most Sends never touch should
- * not cost every reader a permanent row of vertical space in a footer that
- * already grows to eight lines and claims the bottom safe area
- * (composer.tsx's own layout comments). Reaching for it once, from the
- * toggle button beside Send, is what turns it on for good.
+ * was) defaults to `false` on a pointer device — a toolbar most Sends
+ * never touch there should not cost every reader a permanent row of
+ * vertical space in a footer that already grows to eight lines and claims
+ * the bottom safe area (composer.tsx's own layout comments) — but on a
+ * touch device the toolbar carries indent, outdent and the soft break,
+ * which a phone's keyboard (there isn't one) has no other way to reach at
+ * all (docs/reference/upnote-android-detail.md), so hiding it there by
+ * default would hide the only path to those three actions until the
+ * reader happens to find the toggle beside Send.
  *
+ * `defaultFormatBarVisible` is a function, not a plain constant, precisely
+ * because that default now depends on the device rather than being one
+ * fixed value — every other reader of "the default" (this module's own
+ * store construction below, and `readStoredFormatBarVisible`) calls it
+ * rather than assuming a single boolean.
+ */
+export function defaultFormatBarVisible(): boolean {
+  return !hoverCapable();
+}
+
+/**
  * Stored as the literal strings `"true"`/`"false"` rather than reusing the
  * `isXxxId`-against-a-list-of-known-values pattern every enum setting above
- * uses: a boolean has no finite id list to validate against, so
- * `readStoredFormatBarVisible` below treats anything other than the exact
- * string `"true"` — a missing key, a hand-edited value, a corrupt one, or a
- * stray `"1"` from some other convention — as `false`, which is also this
- * setting's own default. Corruption and "never touched this setting"
- * therefore degrade to the identical, safe answer, the same property
- * `isAccentId`/`isTextSizeId` give their own callers.
+ * uses: a boolean has no finite id list to validate against. Unlike the
+ * pre-#213 version of this setting, a missing key no longer means the same
+ * thing as a stored `"false"` — the device-dependent default above only
+ * applies when NOTHING was ever stored, and a reader who explicitly turned
+ * the toolbar off must never have it turned back on just because they are
+ * on a touch device. `readStoredSmartDatesEnabled` below already draws
+ * this exact "no key at all" vs. "stored false" distinction for the same
+ * reason (a device-dependent-but-persisted default), so this follows it
+ * rather than inventing a second way to ask the same question.
  */
-export const DEFAULT_FORMAT_BAR_VISIBLE = false;
-
 function readStoredFormatBarVisible(): boolean {
   try {
-    return localStorage.getItem(FORMAT_BAR_VISIBLE_KEY) === "true";
+    const stored = localStorage.getItem(FORMAT_BAR_VISIBLE_KEY);
+    return stored === null ? defaultFormatBarVisible() : stored === "true";
   } catch {
-    return DEFAULT_FORMAT_BAR_VISIBLE;
+    return defaultFormatBarVisible();
   }
 }
 
@@ -663,7 +681,7 @@ interface SettingsState {
   accent: AccentId;
   textSize: TextSizeId;
   completedStyle: CompletedStyleId;
-  /** Issue #164: whether the Composer's format toolbar is switched on. See `DEFAULT_FORMAT_BAR_VISIBLE`'s own doc comment above. */
+  /** Issue #164: whether the Composer's format toolbar is switched on. See `defaultFormatBarVisible`'s own doc comment above. */
   formatBarVisible: boolean;
   /** Issue #170: whether Todo's add field runs its quick-add parser's eager/natural-language family. See `DEFAULT_SMART_DATES_ENABLED`'s own doc comment above. */
   smartDatesEnabled: boolean;

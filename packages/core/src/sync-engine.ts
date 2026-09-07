@@ -70,7 +70,7 @@ export interface SyncEngineOptions {
  * Runs push and pull as a single loop: pending Entries, Tasks, Projects,
  * Sections, Labels, Comments and Events all go out in the same request,
  * everything that comes back (including this Device's own, now-confirmed
- * rows) is upserted into its own store, and every Cursor advances — one
+ * rows) is written into its own store, and every Cursor advances — one
  * endpoint, one round trip (ADR 0051), so a Task and the Entry referencing
  * it (or a Project and the Task naming it, or a Task and the Event
  * recording what happened to it) always arrive together rather than
@@ -326,7 +326,16 @@ export async function sync(options: SyncEngineOptions): Promise<void> {
     }
     if (response.entries.length > 0) {
       const syncedAt = now();
-      await store.upsert(response.entries.map((entry) => fromWireEntryOutput(entry, syncedAt)));
+      // Issue #215 / ADR 0068: applyPulled(), not upsert(), and only
+      // here. This is the Cursor-read arm — rows this Device asked for by
+      // position in the log, which can therefore be older than a local
+      // change still waiting to be pushed. The acknowledged arm above
+      // stays on upsert() deliberately; see EntryStore.applyPulled's own
+      // doc comment (./store.ts) for why an updatedAt guard there would
+      // refuse ADR 0059's acknowledgement forever.
+      await store.applyPulled(
+        response.entries.map((entry) => fromWireEntryOutput(entry, syncedAt)),
+      );
     }
     if (response.cursor > cursor) {
       await store.setCursor(response.cursor);

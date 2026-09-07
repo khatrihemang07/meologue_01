@@ -188,3 +188,65 @@ way the marker-alphabet fixes are, it is a faster path to structure the reader a
 through `- [ ] `. It adds no new stored spelling, no new parser obligation, and nothing for the
 symmetry test to enforce, because there is no reader-side marker on the other end of it to be
 symmetric with.
+
+## Amendment (issue #211): strikethrough's `~` escape, and why underline still can't join it
+
+Issue #211 added a third mark, `~~x~~` (GFM Strikethrough), to the dialect this ADR's own "one
+dialect" claim already covers for `*`/`1)`. Unlike those two, there was never a Composer-side
+recognition gap to close here — `strikethroughInputRule` (composer-editor.ts) was added new,
+alongside the parser extension, in the same change, so the two were never able to drift apart the
+way `bulletListInputRule` and `entryParser` did. What this amendment records instead is a different
+instance of the same underlying lesson this ADR's `*` account already teaches: **conditional
+escaping, chosen because it looks sufficient, is not actually sufficient**, and the fix is the same
+shape as the `*` fix was — escape unconditionally rather than trying to detect the ambiguous case.
+
+`escapeUserText` (entry-document.ts) now escapes every `~` in user-authored text, unconditionally,
+in the same branch as `\`, `*`, and `` ` ``. The tempting alternative — escape a `~` only when it
+would actually create ambiguity, e.g. only when it is the LAST character of a struck run, right
+before the closing `~~` — was not implemented, and not because it was harder to write. It is
+provably insufficient on its own terms: `@lezer/markdown`'s `Strikethrough` extension refuses a
+delimiter run of three outright (`if (next != 126 || cx.char(pos+1) != 126 || cx.char(pos+2) == 126)
+return -1` — 126 is `~`), so a struck run whose own text ends in `~` serializes, under a
+"leave it alone unless we're at the boundary" rule, to `~~a~~~~` (a legitimate closer immediately
+run into a fourth stray tilde) or `~~a~~~` depending on exactly where the conditional draws its
+line — and either way the resulting closer is either mis-parsed as an even-longer run the parser
+still refuses, or matched short, leaving a dangling tilde outside the mark. There is no placement of
+a narrower, position-only condition that gets every case right, because the ambiguity is about how
+many tildes end up ADJACENT once the mark's own delimiters are written next to the text — a property
+of the OUTPUT, not of one character's position in the INPUT. Escaping every `~` in the source text
+sidesteps the question entirely: the written text between two `~~` delimiters can then never itself
+contain an unescaped tilde, so the three-in-a-row case cannot arise, rather than needing to be
+detected and special-cased. This is the exact same resolution ADR 0045's own account of `*` already
+settled on ("unconditionally... since this serializer never emits the `_`-delimited form, so there is
+exactly one character to guard") — this amendment is that reasoning applied to a second delimiter
+character rather than a new argument.
+
+**Underline joins this ADR's list of things considered and rejected, not because of any escaping
+gap, but because it has no escaping story at all.** `strikethrough` earns a mark in `entrySchema`
+specifically because it has a Markdown spelling (`~~x~~`) for `entry-document.ts`'s serializer to
+write and for `entryParser` to read back — the same "one dialect" property this ADR's title
+describes. Underline has never had one: HTML has `<u>`, but this dialect emits no HTML (ADR 0041),
+and CommonMark itself has no underline syntax to spell it in. Adding an `underline` mark to
+`entrySchema` anyway would not fail loudly the way a missing parser extension does — `markOpen`'s
+`default: return ""` (entry-document.ts) means a mark this function doesn't recognise is simply
+dropped from the written string, silently, with the character it was applied to still written out
+as plain text. A reader would see underlined text in the Composer for as long as it stayed open, and
+plain, unformatted text the moment it was Sent and reopened — the exact "two parse entry points
+disagreeing about the same typed text" failure this ADR's own Context section already tells the
+story of for `*`, except with no error and no round-trip test able to catch it (the string a
+fixpoint property compares is not the string a human reads for meaning; `roundTrip` cannot know that
+formatting, not text, went missing). `__x__` already meaning `strong` on both sides of this dialect
+closes the door completely: there is no spare delimiter left to give underline even if a spelling
+were invented for it. Refusing it is not an oversight or a gap parallel to the `*` one — it is the
+correct, permanent answer for a mark that structurally cannot be stored as this Entry body's
+Markdown.
+
+**Before enabling `~~` recognition, the Sandbox and Production Postgres corpora were checked for
+existing Entries containing a `~~...~~` pair** (the retroactive-restyling risk this ADR's own
+Consequences section already names for `*`/`1)`/`[] `, which applies here identically: turning a
+parser on changes what an unrelated body written BEFORE this ticket landed is understood to mean, and
+the round-trip property test cannot catch it because the stored string is unchanged, only its
+rendered meaning is). `SELECT count(*) FILTER (WHERE body ~ '~~[^~]+~~') FROM entries WHERE
+deleted_at IS NULL` returned `0` of `8` non-deleted Entries in the Production database and `0` of
+`128` in the Sandbox's seeded journal corpus — no existing Entry anywhere in either database is
+affected by this ticket.

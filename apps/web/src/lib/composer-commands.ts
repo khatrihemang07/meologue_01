@@ -56,7 +56,7 @@
 import { toggleMark } from "prosemirror-commands";
 import { redo, redoDepth, undo, undoDepth } from "prosemirror-history";
 import type { MarkType, NodeType, Node as PMNode } from "prosemirror-model";
-import { liftListItem, sinkListItem, wrapInList } from "prosemirror-schema-list";
+import { liftListItem, sinkListItem, splitListItem, wrapInList } from "prosemirror-schema-list";
 import type { Command, EditorState, Transaction } from "prosemirror-state";
 import { entrySchema } from "@/lib/entry-schema";
 
@@ -88,6 +88,7 @@ const listItemNodeType = requireNodeType("list_item");
 const strongMarkType = requireMarkType("strong");
 const emMarkType = requireMarkType("em");
 const codeMarkType = requireMarkType("code");
+const strikethroughMarkType = requireMarkType("strikethrough");
 
 // ---------------------------------------------------------------------------
 // The registry's own shape
@@ -107,7 +108,7 @@ export interface ComposerCommand {
 }
 
 // ---------------------------------------------------------------------------
-// Marks: bold, italic, code
+// Marks: bold, italic, strikethrough, code
 // ---------------------------------------------------------------------------
 
 /**
@@ -147,6 +148,11 @@ function markCommand(id: string, label: string, markType: MarkType): ComposerCom
 
 export const bold: ComposerCommand = markCommand("bold", "Bold", strongMarkType);
 export const italic: ComposerCommand = markCommand("italic", "Italic", emMarkType);
+export const strikethrough: ComposerCommand = markCommand(
+  "strikethrough",
+  "Strikethrough",
+  strikethroughMarkType,
+);
 export const code: ComposerCommand = markCommand("code", "Code", codeMarkType);
 
 // ---------------------------------------------------------------------------
@@ -346,14 +352,17 @@ export const checklist: ComposerCommand = {
 /**
  * Flips a task's own `checked` between `true` and `false` — issue #164's
  * `Mod-Shift-Enter`, composer-editor.ts's own keymap. Deliberately NOT one
- * of the eleven `composerCommands` a toolbar button reaches for: the ticket
- * gives this action a chord and nothing else (no button, no `/` menu row),
- * the same way `bulletList`/`orderedList`/`checklist` above get a button and
- * no chord — the two are reached by different, non-overlapping paths, not
- * duplicated across both. It's exported and named like the eleven anyway
- * (rather than kept as a bare `Command` closure in composer-editor.ts) so a
- * keyboard-shortcuts settings screen, if one is ever built, has a `label` to
- * show without composer-editor.ts having to invent one.
+ * of `composerCommands`' own entries — unlike `softBreak` below (issue
+ * #212), which IS one despite also having no toolbar button yet, this
+ * action has no future toolbar button OR `/` menu row planned for it at
+ * all: the ticket gives it a chord and nothing else, the same way
+ * `bulletList`/`orderedList`/`checklist` above get a button and no chord —
+ * the two are reached by different, non-overlapping paths, not duplicated
+ * across both. It's exported and named like the registry's own entries
+ * anyway (rather than kept as a bare `Command` closure in
+ * composer-editor.ts) so a keyboard-shortcuts settings screen, if one is
+ * ever built, has a `label` to show without composer-editor.ts having to
+ * invent one.
  *
  * A no-op — `false`, nothing dispatched — outside a task item entirely:
  * neither a plain bullet (`checked === null`) nor bare text has a checked
@@ -383,6 +392,158 @@ export const toggleCheckboxDone: ComposerCommand = {
     return item !== null && item.attrs.checked !== null;
   },
   run: toggleCheckboxDoneRun,
+};
+
+/**
+ * `Enter` on a `list_item`, wired to composer-editor.ts's `listKeymap()`
+ * instead of the bare `splitListItem(listItemNodeType)` it used to bind
+ * directly — issue #210. Continuing a DONE checklist item must start the
+ * new item unchecked (UpNote's own behaviour, and the only reading of
+ * ADR 0053 consistent with "every checkbox is a Task": minting an
+ * already-completed Task on every Enter would make finishing a checklist
+ * item and pressing Enter silently create a second done Task nobody
+ * asked for).
+ *
+ * This is NOT fixable by passing `itemAttrs` to `splitListItem` itself
+ * (verified by reading prosemirror-schema-list's own source, not
+ * assumed): `itemAttrs` is only spliced into the SECOND split node's type
+ * when `$to.pos == $from.end()` — caret at the very end of the item's
+ * text. A split further back (this function's own "middle of a ticked
+ * item's text" acceptance case) takes the earlier "delete the selection,
+ * then `canSplit`/`split` with no `types` override" path instead, which
+ * copies the ORIGINAL node's type and attrs onto both halves — no
+ * `itemAttrs` involved at all, so passing one there would silently do
+ * nothing for exactly the case this function most needs to handle. And a
+ * STATIC `{ checked: false }`, even where `itemAttrs` is honoured, cannot
+ * tell "was already a task" from "is a plain bullet": it would turn
+ * Enter on a plain bullet (`checked: null`) into a checkbox, which is not
+ * this ticket's ask and not UpNote's own behaviour either.
+ *
+ * The fix instead reads the ORIGINAL item's `checked` before splitting,
+ * runs the real `splitListItem(listItemNodeType)` with a capturing
+ * `dispatch` (the same "borrow the transaction `wrapInList` already
+ * built, then add one more step before dispatching it" shape
+ * `wrapAsChecklist` above uses), and — only when that original was
+ * `checked === true` — patches the NEW item (found by resolving the
+ * captured transaction's own post-split selection, which
+ * `splitListItem`'s own two branches both leave sitting inside the new
+ * item: either the default "selection maps through the steps" behaviour
+ * every `Transaction` gives for free, or that branch's own explicit
+ * `tr.setSelection` into the freshly created empty textblock) back down
+ * to `checked: false`.
+ *
+ * Returns `false` unchanged, dispatching nothing, whenever the real
+ * `splitListItem` itself would — most importantly the empty-top-level-item
+ * case its own doc comment describes as "bail out and let next command
+ * handle lifting," which is exactly what lets `composer-editor.ts`'s
+ * `listChain` (`chainCommands(splitListItemUnchecked, outdent.run)`) still
+ * fall through to `outdent.run` there, unchanged from before this
+ * function existed.
+ */
+export const splitListItemUnchecked: Command = (state, dispatch) => {
+  const split = splitListItem(listItemNodeType);
+  if (!dispatch) {
+    return split(state);
+  }
+  const originalItem = nearestListItem(state);
+  let captured: Transaction | null = null;
+  if (!split(state, (tr) => (captured = tr))) {
+    return false;
+  }
+  if (captured === null) {
+    return false;
+  }
+  const tr: Transaction = captured;
+  if (originalItem !== null && originalItem.attrs.checked === true) {
+    const $from = tr.selection.$from;
+    for (let depth = $from.depth; depth > 0; depth--) {
+      if ($from.node(depth).type === listItemNodeType) {
+        tr.setNodeMarkup($from.before(depth), undefined, { checked: false });
+        break;
+      }
+    }
+  }
+  dispatch(tr.scrollIntoView());
+  return true;
+};
+
+// ---------------------------------------------------------------------------
+// Soft break — Enter outside a list, issue #212
+// ---------------------------------------------------------------------------
+
+/**
+ * Enter's new meaning outside a list (issue #212, `listKeymap` in
+ * composer-editor.ts): insert a literal `\n` into the CURRENT paragraph
+ * rather than splitting it into two. Two of these in a row therefore give
+ * `\n\n` — a genuine blank line under the `white-space: pre-wrap` every
+ * prose surface already sets — where one used to give a paragraph split
+ * that serialized to the very same `\n\n` on Send (a required separator,
+ * since a lone `\n` is a CommonMark lazy continuation) and so ALSO rendered
+ * as a blank line on the very first Enter. See ADR 0066 for the full
+ * account of why the fix belongs at the keystroke rather than in
+ * `collectBlocks`, the reader's own block-merging step, which already
+ * copies a blank line through verbatim and needs nothing changed here.
+ *
+ * `replaceSelectionWith(…, false)` — the `false` is `inheritMarks: false`,
+ * and it is load-bearing, not a default left alone: `Transaction`'s own
+ * implementation (verified by reading `prosemirror-state`'s source, not
+ * assumed), when `inheritMarks` is `true` (its actual default), calls
+ * `node.mark(this.storedMarks ?? …)` on whatever node it was handed —
+ * OVERWRITING this function's own carefully-`code`-stripped mark set with
+ * the caret's raw stored marks, `code` included, right back. Passing
+ * `false` is what keeps the marks this function computed below actually
+ * the ones that land on the inserted character.
+ *
+ * Marks are inherited from the caret's own stored/resolved marks — the
+ * same read `markActive` above already uses — MINUS `code`. Every other
+ * mark (`strong`, `em`, `strikethrough`) continuing across a soft break is
+ * the wanted behaviour (typing stays bold on the next line); `code` is
+ * excluded on purpose: a code span's own backtick-fence length
+ * (`entry-document.ts`'s `writeCodeSpan`) is chosen long enough to beat
+ * every backtick run ALREADY inside the span, and a newline inside one is
+ * invisible to that choice today — a later edit that has to widen the
+ * fence to dodge a sequence spanning the newline's own neighbours would be
+ * a silent content edit for a keystroke that looks, on screen, like
+ * nothing more than moving to the next line.
+ *
+ * Dispatched as a plain document edit — never through `handleTextInput`,
+ * the way a typed character reaches `prosemirror-inputrules` — so it can
+ * never itself re-trigger an input rule. That matters concretely for step
+ * 3's re-anchored line-start rules just below: those rules match against
+ * `\n` appearing in the SAME textblock's own text, which this command is
+ * what puts there in the first place, but the `\n` itself is never the
+ * character an input rule's own trailing-space/trailing-marker match
+ * looks for, so dispatching it this way cannot loop back into firing one.
+ *
+ * Returns `false` outside a textblock (mirrors `insertReferenceTrigger`'s
+ * own identical guard above) — there is nowhere to insert a character
+ * into a `bullet_list` or `list_item` itself, only into the textblock
+ * nested inside one, and the caret is always resolved to some textblock
+ * whenever this command is reachable through `listKeymap`'s own chain in
+ * the first place.
+ */
+export const insertSoftBreak: Command = (state, dispatch) => {
+  if (!state.selection.$from.parent.isTextblock) {
+    return false;
+  }
+  if (dispatch) {
+    const marks = (state.storedMarks ?? state.selection.$from.marks()).filter(
+      (mark) => mark.type !== codeMarkType,
+    );
+    dispatch(state.tr.replaceSelectionWith(entrySchema.text("\n", marks), false).scrollIntoView());
+  }
+  return true;
+};
+
+export const softBreak: ComposerCommand = {
+  id: "softBreak",
+  label: "Insert line break",
+  // No caret position is ever "already" a soft break the way a mark or a
+  // list wrap is — inserting a character has no pressed state to report,
+  // the same reasoning `reference`'s own `isActive` above gives.
+  isActive: () => false,
+  isEnabled: (state) => insertSoftBreak(state),
+  run: insertSoftBreak,
 };
 
 // ---------------------------------------------------------------------------
@@ -494,6 +655,7 @@ export const redoCommand: ComposerCommand = {
 export const composerCommands: readonly ComposerCommand[] = [
   bold,
   italic,
+  strikethrough,
   code,
   bulletList,
   orderedList,
@@ -501,6 +663,7 @@ export const composerCommands: readonly ComposerCommand[] = [
   indent,
   outdent,
   reference,
+  softBreak,
   undoCommand,
   redoCommand,
 ];

@@ -13,6 +13,11 @@ export class InMemoryEntryStore implements EntryStore {
   // in the real SqliteEntryStore — see EntryStore.catchUpRowShapeEpoch's
   // own doc comment (../store.ts) for what this tracks and why.
   private rowShapeEpoch = 0;
+  // Issue #214 / ADR 0067: mirrors SOFT_BREAK_MIGRATION_KEY's persisted
+  // value in the real SqliteEntryStore — see
+  // EntryStore.hasCompletedSoftBreakMigration's own doc comment
+  // (../store.ts).
+  private softBreakMigrationComplete = false;
   // Issue #196 — mirrors SqliteEntryStore's own identical field
   // (../sqlite/sqlite-entry-store.ts): an injectable clock, real by
   // default, so a test can pin down a deterministic `updatedAt`.
@@ -67,6 +72,39 @@ export class InMemoryEntryStore implements EntryStore {
     }
   }
 
+  /**
+   * Mirrors SqliteEntryStore.applyPulled() — see EntryStore.applyPulled's
+   * doc comment (../store.ts) for the rule both implementations owe
+   * callers, and the real store for why it is expressed as a `setWhere`
+   * on one statement there rather than as this read-then-decide.
+   *
+   * Written as "apply unless", the same shape the SQL is in, rather than
+   * as its inverse: the two have to agree on the awkward cases, and the
+   * easiest way to keep them agreeing is to keep them the same sentence.
+   * `Date.parse` stands in for the real store's `strftime` normalisation
+   * (see there for why comparing the raw strings is wrong) and returns
+   * `NaN` exactly where `strftime` returns NULL, so an unreadable
+   * timestamp on either side refuses the row in both implementations
+   * rather than only in one.
+   */
+  async applyPulled(incoming: Entry[]): Promise<void> {
+    for (const entry of incoming) {
+      const local = this.entries.get(entry.id);
+      const incomingMs = Date.parse(entry.updatedAt);
+      const localMs = local === undefined ? Number.NaN : Date.parse(local.updatedAt);
+      const incomingIsAtLeastAsNew =
+        !Number.isNaN(incomingMs) && !Number.isNaN(localMs) && incomingMs >= localMs;
+      const apply =
+        local === undefined ||
+        local.seq !== null ||
+        incomingIsAtLeastAsNew ||
+        entry.deletedAt !== null;
+      if (apply) {
+        this.entries.set(entry.id, entry);
+      }
+    }
+  }
+
   async pending(): Promise<Entry[]> {
     // Tombstones awaiting push have `seq === null` exactly like a newly
     // captured Entry (ADR 0028), so they're picked up here with no
@@ -90,6 +128,16 @@ export class InMemoryEntryStore implements EntryStore {
     }
     this.cursor = 0;
     this.rowShapeEpoch = currentEpoch;
+  }
+
+  // Issue #214 / ADR 0067 — see EntryStore.hasCompletedSoftBreakMigration's
+  // own doc comment (../store.ts) for the mechanism this mirrors.
+  async hasCompletedSoftBreakMigration(): Promise<boolean> {
+    return this.softBreakMigrationComplete;
+  }
+
+  async markSoftBreakMigrationComplete(): Promise<void> {
+    this.softBreakMigrationComplete = true;
   }
 
   async search(query: string): Promise<Entry[]> {

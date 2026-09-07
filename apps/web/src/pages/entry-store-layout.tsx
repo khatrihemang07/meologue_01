@@ -38,6 +38,7 @@ import {
 } from "@/lib/entry-store-errors";
 import type { ComposerPromotionContext } from "@/lib/promote-tasks";
 import { ENTRY_STORE_QUERY_KEY } from "@/lib/query-keys";
+import { runSoftBreakMigrationOnce } from "@/lib/soft-break-migration";
 import { createDriver } from "@/platform/sqlite-driver";
 
 export interface EntryStoreOutletContext {
@@ -591,6 +592,11 @@ const notReadyPagination: UseHistoryPagination = {
 const ENTRY_STORE_METHODS: StoreMethodNames<EntryStore> = {
   list: true,
   upsert: true,
+  // Issue #215 / ADR 0068 — the identical compile-time checkpoint above,
+  // and it matters here more than most: `sync()` reaches this through the
+  // deferred store on the session's very first tick, which is exactly the
+  // tick a store-open rewrite races.
+  applyPulled: true,
   pending: true,
   getCursor: true,
   setCursor: true,
@@ -603,6 +609,9 @@ const ENTRY_STORE_METHODS: StoreMethodNames<EntryStore> = {
   edit: true,
   remove: true,
   getMany: true,
+  // Issue #214 / ADR 0067 — the identical compile-time checkpoint above.
+  hasCompletedSoftBreakMigration: true,
+  markSoftBreakMigrationComplete: true,
 };
 
 // Exported, alongside every other `defer*UntilOpen` below (issue #186 /
@@ -1021,13 +1030,21 @@ export function EntryStoreLayout() {
   // double-invoke of a fresh mount's effects can never launch two scans
   // side by side.
   const backfillStarted = useRef(false);
+  // Issue #214: the soft-break migration effect below chains onto this
+  // Promise so it never starts scanning before the Tasks backfill above
+  // has finished rewriting bodies of its own — see that effect's own
+  // comment for why the order matters. Starts pre-resolved so the second
+  // effect has something to chain onto even on a render where `data` is
+  // still `undefined` and this effect's own body returns immediately
+  // without ever assigning it.
+  const backfillDone = useRef<Promise<void>>(Promise.resolve());
   // biome-ignore lint/correctness/useExhaustiveDependencies: `resolveLabelIds` is read for its current value only, deliberately not a reactive trigger — `backfillStarted` already limits this to one call for the lifetime of this component, so re-running it because a *different* function identity was handed over on a later render would be wrong, not merely redundant.
   useEffect(() => {
     if (data === undefined || backfillStarted.current) {
       return;
     }
     backfillStarted.current = true;
-    void runTasksBackfillOnce(
+    backfillDone.current = runTasksBackfillOnce(
       data.store,
       data.taskStore,
       data.projectStore,
@@ -1036,6 +1053,32 @@ export function EntryStoreLayout() {
       data.eventStore,
       data.deviceId,
       resolveLabelIds,
+    );
+  }, [data]);
+
+  // Issue #214 / ADR 0067: the one-time newline-halving migration, kicked
+  // off the moment the real store is open — mirrors the Tasks backfill
+  // effect immediately above closely enough to read as its sibling,
+  // including its own `useRef` concurrency guard for the identical
+  // React-dev-mode-double-invoke reason that effect's own comment gives.
+  // Ordered strictly *after* the Tasks backfill by chaining onto
+  // `backfillDone` rather than merely being declared later: the backfill
+  // also rewrites bodies (`promoteBareCheckboxes`'s own text changes), and
+  // letting it finish first is what guarantees this migration sees the
+  // final text rather than racing it — two effects that both fire off
+  // `data` becoming available give no such guarantee on their own.
+  const softBreakMigrationStarted = useRef(false);
+  useEffect(() => {
+    if (data === undefined || softBreakMigrationStarted.current) {
+      return;
+    }
+    softBreakMigrationStarted.current = true;
+    const { store, taskStore, projectStore, labelStore, commentStore, eventStore, deviceId } = data;
+    void backfillDone.current.then(() =>
+      runSoftBreakMigrationOnce(
+        { store, taskStore, projectStore, labelStore, commentStore, eventStore },
+        deviceId,
+      ),
     );
   }, [data]);
 

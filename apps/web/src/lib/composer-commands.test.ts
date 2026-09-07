@@ -33,6 +33,9 @@ import {
   outdent,
   redoCommand,
   reference,
+  softBreak,
+  splitListItemUnchecked,
+  strikethrough,
   toggleCheckboxDone,
   undoCommand,
 } from "./composer-commands";
@@ -112,6 +115,26 @@ function caretInNthParagraph(doc: PMNode, n: number): number {
   return result;
 }
 
+/** Every position of type `nodeName` in `doc`, document order — used below where a fixture needs the SECOND (or later) `list_item` a split just created, not just the first `findNodePos` returns. */
+function findNodePositions(doc: PMNode, nodeName: string): number[] {
+  const positions: number[] = [];
+  doc.descendants((node, pos) => {
+    if (node.type.name === nodeName) {
+      positions.push(pos);
+    }
+  });
+  return positions;
+}
+
+/** The (0-indexed) `n`th position of type `nodeName` in `doc` — `findNodePositions` plus a bounds check, so callers get a plain `number` under `noUncheckedIndexedAccess` instead of `number | undefined`. */
+function nthNodePos(doc: PMNode, nodeName: string, n: number): number {
+  const pos = findNodePositions(doc, nodeName)[n];
+  if (pos === undefined) {
+    throw new Error(`fixture has no "${nodeName}" #${n}`);
+  }
+  return pos;
+}
+
 function countNodesOfType(doc: PMNode, nodeName: string): number {
   let count = 0;
   doc.descendants((node) => {
@@ -139,11 +162,12 @@ function runCommand(
 // ---------------------------------------------------------------------------
 
 describe("composerCommands", () => {
-  it("lists exactly the eleven actions the ticket requires, each with a unique id", () => {
+  it("lists exactly the thirteen actions the ticket requires, each with a unique id", () => {
     const ids = composerCommands.map((command) => command.id);
     expect(ids).toEqual([
       "bold",
       "italic",
+      "strikethrough",
       "code",
       "bulletList",
       "orderedList",
@@ -151,6 +175,7 @@ describe("composerCommands", () => {
       "indent",
       "outdent",
       "reference",
+      "softBreak",
       "undo",
       "redo",
     ]);
@@ -165,6 +190,12 @@ describe("composerCommands", () => {
 describe.each([
   { command: bold, id: "bold", markName: "strong", markdown: "before **bold** after" },
   { command: italic, id: "italic", markName: "em", markdown: "before *italic* after" },
+  {
+    command: strikethrough,
+    id: "strikethrough",
+    markName: "strikethrough",
+    markdown: "before ~~struck~~ after",
+  },
   { command: code, id: "code", markName: "code", markdown: "before `code` after" },
 ])("$id", ({ command, markName, markdown }) => {
   it("is active when the whole selection carries the mark, inactive otherwise", () => {
@@ -436,6 +467,105 @@ describe("reference", () => {
 });
 
 // ---------------------------------------------------------------------------
+// softBreak / insertSoftBreak — issue #212
+// ---------------------------------------------------------------------------
+
+/** The position right after a document's first (and only) top-level paragraph's own content — mirrors composer-editor.test.ts's identical helper, duplicated here for the reason `stateAt` above already documents about the two files. */
+function endOfFirstParagraph(doc: PMNode): number {
+  const first = doc.firstChild;
+  if (first === null || first.type.name !== "paragraph") {
+    throw new Error("fixture has no leading paragraph");
+  }
+  return 1 + first.content.size;
+}
+
+describe("softBreak", () => {
+  it("is never reported active — inserting a break has no pressed state to report", () => {
+    expect(softBreak.isActive(stateAt(docFor("hello"), { from: 1 }))).toBe(false);
+  });
+
+  it("is enabled in an ordinary textblock", () => {
+    expect(softBreak.isEnabled(stateAt(docFor("hello"), { from: 1 }))).toBe(true);
+  });
+
+  it("is disabled (and a no-op on run) outside a textblock — a NodeSelection on a block node", () => {
+    const doc = docFor("- milk");
+    const pos = findNodePos(doc, "bullet_list");
+    const state = EditorState.create({
+      schema: entrySchema,
+      doc,
+      selection: NodeSelection.create(doc, pos),
+    });
+    expect(softBreak.isEnabled(state)).toBe(false);
+    expect(runCommand(softBreak, state).applied).toBe(false);
+  });
+
+  it("inserts a literal newline at the caret, in place — never a new paragraph", () => {
+    const doc = docFor("hello");
+    const state = stateAt(doc, { from: 3 }); // caret between "he" and "llo"
+    const { applied, next } = runCommand(softBreak, state);
+    expect(applied).toBe(true);
+    expect(next.doc.childCount).toBe(1);
+    expect(next.doc.firstChild?.type.name).toBe("paragraph");
+    expect(next.doc.textBetween(0, next.doc.content.size)).toBe("he\nllo");
+  });
+
+  it("two soft breaks in a row give a genuine blank line — the ticket's own acceptance bar", () => {
+    const doc = docFor("hello");
+    const once = runCommand(softBreak, stateAt(doc, { from: 3 }));
+    const twice = runCommand(softBreak, stateAt(once.next.doc, { from: 4 }));
+    expect(twice.applied).toBe(true);
+    expect(twice.next.doc.textBetween(0, twice.next.doc.content.size)).toBe("he\n\nllo");
+  });
+
+  it("inherits an active mark (strong) onto the inserted newline, like any other typed character", () => {
+    const strongMarkType = entrySchema.marks.strong;
+    if (strongMarkType === undefined) {
+      throw new Error("entrySchema has no strong mark");
+    }
+    const doc = entrySchema.node("doc", null, [
+      entrySchema.node("paragraph", null, entrySchema.text("bold", [strongMarkType.create()])),
+    ]);
+    const insertAt = endOfFirstParagraph(doc);
+    const state = stateAt(doc, { from: insertAt });
+    const { applied, next } = runCommand(softBreak, state);
+    expect(applied).toBe(true);
+    expect(next.doc.textBetween(1, next.doc.content.size - 1)).toBe("bold\n");
+    // `rangeHasMark`, not a search for a standalone "\n" text node: the
+    // inserted character shares the SAME mark set as the "bold" text run it
+    // was appended to, so ProseMirror's own `Fragment` joins the two into
+    // ONE text node ("bold\n") rather than leaving two adjacent nodes with
+    // identical marks — checking the mark over the newline's own position
+    // range is what stays correct regardless of that joining.
+    expect(next.doc.rangeHasMark(insertAt, insertAt + 1, strongMarkType)).toBe(true);
+  });
+
+  it("strips the code mark from the inserted newline, but keeps every other inherited mark", () => {
+    const codeMarkType = entrySchema.marks.code;
+    const strongMarkType = entrySchema.marks.strong;
+    if (codeMarkType === undefined || strongMarkType === undefined) {
+      throw new Error("entrySchema is missing a mark type this test needs");
+    }
+    const doc = entrySchema.node("doc", null, [
+      entrySchema.node("paragraph", null, [
+        entrySchema.text("snippet", [codeMarkType.create(), strongMarkType.create()]),
+      ]),
+    ]);
+    const state = stateAt(doc, { from: endOfFirstParagraph(doc) });
+    const { applied, next } = runCommand(softBreak, state);
+    expect(applied).toBe(true);
+    let newlineMarkNames: string[] = [];
+    next.doc.descendants((node) => {
+      if (node.isText && node.text === "\n") {
+        newlineMarkNames = node.marks.map((mark) => mark.type.name);
+      }
+    });
+    expect(newlineMarkNames).toContain("strong");
+    expect(newlineMarkNames).not.toContain("code");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // undo / redo
 // ---------------------------------------------------------------------------
 
@@ -476,7 +606,7 @@ describe("undo / redo", () => {
 });
 
 // ---------------------------------------------------------------------------
-// toggleCheckboxDone — issue #164's Mod-Shift-Enter, not one of the eleven
+// toggleCheckboxDone — issue #164's Mod-Shift-Enter, not one of the twelve
 // toolbar buttons (see this command's own doc comment for why).
 // ---------------------------------------------------------------------------
 
@@ -509,5 +639,95 @@ describe("toggleCheckboxDone", () => {
     expect(unchecked.applied).toBe(true);
     const uncheckedItemPos = findNodePos(unchecked.next.doc, "list_item");
     expect(unchecked.next.doc.nodeAt(uncheckedItemPos)?.attrs.checked).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// splitListItemUnchecked (issue #210)
+// ---------------------------------------------------------------------------
+
+/** A `bullet_list` containing one EMPTY, checked top-level `list_item` — built directly off `entrySchema` rather than through `entryMarkdownToDocument`, since there is no Markdown source text for "a task with no text at all." Exists only to exercise `splitListItem`'s own documented bail-out ("empty item — let the next command handle lifting"), which `splitListItemUnchecked` must preserve unchanged. */
+function emptyCheckedItemDoc(): PMNode {
+  const paragraph = entrySchema.nodes.paragraph?.create();
+  const item = entrySchema.nodes.list_item?.create({ checked: true }, paragraph);
+  const list = entrySchema.nodes.bullet_list?.create(null, item);
+  const doc = entrySchema.nodes.doc?.create(null, list);
+  if (doc === undefined) {
+    throw new Error("entrySchema is missing a node type this fixture needs");
+  }
+  return doc;
+}
+
+describe("splitListItemUnchecked", () => {
+  it("unchecks the new item when Enter splits at the end of a ticked item's text", () => {
+    const doc = docFor("- [x] item");
+    const start = caretInFirstParagraph(doc);
+    const text = doc.resolve(start).parent.textContent;
+    const state = stateAt(doc, { from: start + text.length });
+
+    const { applied, next } = runCommand({ run: splitListItemUnchecked }, state);
+    expect(applied).toBe(true);
+    expect(findNodePositions(next.doc, "list_item")).toHaveLength(2);
+    expect(next.doc.nodeAt(nthNodePos(next.doc, "list_item", 0))?.attrs.checked).toBe(true);
+    expect(next.doc.nodeAt(nthNodePos(next.doc, "list_item", 1))?.attrs.checked).toBe(false);
+  });
+
+  it("unchecks the new item when Enter splits in the MIDDLE of a ticked item's text — the case `itemAttrs` cannot reach", () => {
+    const doc = docFor("- [x] item");
+    const start = caretInFirstParagraph(doc);
+    const text = doc.resolve(start).parent.textContent; // " item"
+    const mid = start + text.indexOf("te"); // inside "item", not at its end
+    const state = stateAt(doc, { from: mid });
+
+    const { applied, next } = runCommand({ run: splitListItemUnchecked }, state);
+    expect(applied).toBe(true);
+    expect(findNodePositions(next.doc, "list_item")).toHaveLength(2);
+    // The first half keeps the ORIGINAL item's own checked state...
+    expect(next.doc.nodeAt(nthNodePos(next.doc, "list_item", 0))?.attrs.checked).toBe(true);
+    // ...only the newly split-off second half is forced back to unchecked.
+    expect(next.doc.nodeAt(nthNodePos(next.doc, "list_item", 1))?.attrs.checked).toBe(false);
+  });
+
+  it("leaves checked null on a plain (non-checkbox) bullet — Enter there must not mint a checkbox", () => {
+    const doc = docFor("- item");
+    const start = caretInFirstParagraph(doc);
+    const text = doc.resolve(start).parent.textContent;
+    const state = stateAt(doc, { from: start + text.length });
+
+    const { applied, next } = runCommand({ run: splitListItemUnchecked }, state);
+    expect(applied).toBe(true);
+    expect(findNodePositions(next.doc, "list_item")).toHaveLength(2);
+    expect(next.doc.nodeAt(nthNodePos(next.doc, "list_item", 0))?.attrs.checked).toBeNull();
+    expect(next.doc.nodeAt(nthNodePos(next.doc, "list_item", 1))?.attrs.checked).toBeNull();
+  });
+
+  it("leaves checked false on an already-unchecked checklist item", () => {
+    const doc = docFor("- [ ] item");
+    const start = caretInFirstParagraph(doc);
+    const text = doc.resolve(start).parent.textContent;
+    const state = stateAt(doc, { from: start + text.length });
+
+    const { applied, next } = runCommand({ run: splitListItemUnchecked }, state);
+    expect(applied).toBe(true);
+    expect(findNodePositions(next.doc, "list_item")).toHaveLength(2);
+    expect(next.doc.nodeAt(nthNodePos(next.doc, "list_item", 0))?.attrs.checked).toBe(false);
+    expect(next.doc.nodeAt(nthNodePos(next.doc, "list_item", 1))?.attrs.checked).toBe(false);
+  });
+
+  it("returns false and dispatches nothing on an empty top-level item, the same bail-out real splitListItem documents — leaves outdent.run to lift it out instead", () => {
+    const doc = emptyCheckedItemDoc();
+    const state = stateAt(doc, { from: caretInFirstParagraph(doc) });
+
+    const { applied, next } = runCommand({ run: splitListItemUnchecked }, state);
+    expect(applied).toBe(false);
+    expect(next).toBe(state);
+  });
+
+  it("supports a dry run with no dispatch, like every ProseMirror command", () => {
+    const doc = docFor("- [x] item");
+    const state = stateAt(doc, { from: caretInFirstParagraph(doc) });
+    expect(splitListItemUnchecked(state)).toBe(true);
+    // Untouched — a dry run must not mutate the document.
+    expect(countNodesOfType(state.doc, "list_item")).toBe(1);
   });
 });

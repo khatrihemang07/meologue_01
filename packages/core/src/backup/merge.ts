@@ -4,6 +4,7 @@ import { SqliteEntryStore } from "../sqlite/sqlite-entry-store";
 import { SqliteTaskStore } from "../sqlite/sqlite-task-store";
 import { quoteIdent, tableColumns } from "./dump";
 import { type ParsedTable, parseBackupDatabase } from "./parse";
+import { rearmSoftBreakMigration } from "./rearm-migrations";
 import type { SafetyBackupOutcome, TakeSafetyBackup } from "./restore";
 import { rowContentUnchanged } from "./row-diff";
 import { PRIMARY_KEY_COLUMN, upsertRow } from "./upsert";
@@ -355,6 +356,7 @@ export async function mergeBackupIntoDevice(options: MergeOptions): Promise<Merg
       onProgress?.(`Merging ${table.name}…`);
       await mergeTable(driver, table, counts);
     }
+    await rearmSoftBreakMigration(driver);
     await driver.execute("COMMIT", [], "run");
   } catch (error) {
     await driver.execute("ROLLBACK", [], "run").catch(() => {

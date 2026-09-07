@@ -31,22 +31,31 @@
  * `/` menu read the Reference picker's already-computed state for the same
  * transaction and defer to it, per ADR 0046.
  */
-import { baseKeymap, chainCommands, splitBlock } from "prosemirror-commands";
+import { baseKeymap, chainCommands } from "prosemirror-commands";
 import { history } from "prosemirror-history";
-import { InputRule, inputRules, wrappingInputRule } from "prosemirror-inputrules";
+import { InputRule, inputRules, undoInputRule } from "prosemirror-inputrules";
 import { keymap } from "prosemirror-keymap";
-import type { MarkType, NodeType, Node as PMNode, ResolvedPos } from "prosemirror-model";
-import { splitListItem } from "prosemirror-schema-list";
+import type {
+  Attrs,
+  MarkType,
+  NodeRange,
+  NodeType,
+  Node as PMNode,
+  ResolvedPos,
+} from "prosemirror-model";
 import { type Command, type EditorState, Plugin, PluginKey } from "prosemirror-state";
-import { findWrapping } from "prosemirror-transform";
+import { canJoin, findWrapping } from "prosemirror-transform";
 import { Decoration, DecorationSet, type EditorView, type NodeView } from "prosemirror-view";
 import {
   bold,
   code,
   indent,
+  insertSoftBreak,
   italic,
   outdent,
   redoCommand,
+  splitListItemUnchecked,
+  strikethrough,
   toggleCheckboxDone,
   undoCommand,
 } from "@/lib/composer-commands";
@@ -174,6 +183,19 @@ const emInputRule = markInputRule(/(?<!\*)\*([^*]+)\*$/, requireMarkType("em"));
 const codeInputRule = markInputRule(/`([^`]+)`$/, requireMarkType("code"));
 
 /**
+ * `~~struck~~` (issue #211). Unlike the `*`/`**` pair above, `~~` has no
+ * one-character sibling delimiter to collide with — GFM Strikethrough is
+ * always exactly two tildes, never one — so this needs no lookbehind guard
+ * the way `emInputRule` does: there is no shorter `~x~` form typed a
+ * keystroke earlier that a naive pattern could misfire against. `[^~]+`
+ * still matters, though, for a reason that IS keystroke-order-sensitive:
+ * without it, typing a third `~` immediately after `~~x~~` (`~~x~~~`) would
+ * match with `x~` captured, sliding the mark's closing delimiter one
+ * character to the right instead of leaving the stray `~` alone.
+ */
+const strikethroughInputRule = markInputRule(/~~([^~]+)~~$/, requireMarkType("strikethrough"));
+
+/**
  * The underscore spellings of the same two marks, which exist for one
  * reason: the READER already understands them.
  *
@@ -228,6 +250,101 @@ const orderedListNodeType = requireNodeType("ordered_list");
 const listItemNodeType = requireNodeType("list_item");
 
 /**
+ * `wrappingInputRule` (prosemirror-inputrules) only ever anchors at the
+ * start of the CURRENT textblock — every regexp it is handed is meant to
+ * begin with `^`, and its own handler unconditionally treats `start` (the
+ * match's own beginning) as sitting directly against the paragraph's own
+ * open boundary, resolving straight to `tr.doc.resolve(start).blockRange()`
+ * with no split anywhere. That stopped being enough the moment issue #212
+ * made Enter, outside a list, insert a literal `\n` into the CURRENT
+ * paragraph instead of starting a new one: a second line typed after a
+ * soft break lives in the SAME textblock as the first, and
+ * `prosemirror-inputrules`' own matching is built against
+ * `$from.parent.textBetween(...)` — the whole textblock's text, not the
+ * visual line — so `^` can only ever match the paragraph's own start, never
+ * a line beginning partway through it. Verified by reading
+ * prosemirror-inputrules' `run()` (inputrules.ts) directly, not assumed:
+ * `textBefore` there is built from `$from.parent`, with no per-line
+ * segmentation anywhere in the function.
+ *
+ * Left alone, `alpha` + Enter + `- milk` would leave the literal characters
+ * `- milk` on screen — `^` never matches after the soft break's own `\n` —
+ * while `parseEntryMarkdown` reads the STORED text, `"alpha\n- milk"`, as a
+ * genuine two-block document: a paragraph followed by a bullet list. That
+ * is exactly the reader/writer split ADR 0045 exists to forbid, reintroduced
+ * at the exact seam issue #212 just finished closing for prose. This helper,
+ * and the two regexps below built with it, are how `bulletListInputRule`/
+ * `orderedListInputRule` keep recognising the SAME text `parseEntryMarkdown`
+ * does regardless of which line of a paragraph it starts on.
+ *
+ * Behaves exactly like `wrappingInputRule` when `match[0]` does not begin
+ * with `\n` (the ordinary "start of a fresh textblock" case, `getAttrs`/
+ * `joinPredicate` included, unchanged). When it DOES begin with `\n` — the
+ * marker was typed right after a soft break, not at the paragraph's own
+ * start — this deletes the matched range (the `\n` and the marker text
+ * together) and then splits the now-merged paragraph at that same point
+ * (`tr.split`), so the marker's own line becomes its own, separate
+ * paragraph before anything tries to wrap it. `tr.split` inserts a close
+ * token and an open token at the split point — two positions' worth — so
+ * every position downstream of it shifts by 2; the wrap that follows
+ * resolves the new trailing paragraph through `tr.mapping.map(start, 1)`
+ * rather than reusing the pre-split `start` as a raw offset, which would
+ * otherwise land one node too early, INSIDE the paragraph that precedes
+ * the split. `blockRange()` is deliberately taken on that mapped, POST-split
+ * position — on the new trailing paragraph — never on the original: the
+ * two-trap warning this function exists to satisfy (position arithmetic
+ * unverified ahead of time, confirmed here only by this file's own tests
+ * actually passing) is that resolving against the wrong paragraph wraps the
+ * whole PRECEDING prose into the freshly-made list item instead of just the
+ * marker's own line.
+ *
+ * The join predicate is dropped entirely on the newline branch — a list
+ * started out of a soft-broken line has no adjacent list above it to join
+ * into; the paragraph immediately before the split point is ordinary prose
+ * (`alpha`, in the example above), not a `bullet_list`/`ordered_list` this
+ * new one could ever merge with.
+ */
+function lineStartWrappingInputRule(
+  regexp: RegExp,
+  nodeType: NodeType,
+  getAttrs: Attrs | null | ((match: RegExpMatchArray) => Attrs | null) = null,
+  joinPredicate?: (match: RegExpMatchArray, node: PMNode) => boolean,
+): InputRule {
+  return new InputRule(regexp, (state, match, start, end) => {
+    const attrs = typeof getAttrs === "function" ? getAttrs(match) : getAttrs;
+    const tr = state.tr.delete(start, end);
+    const splitAtNewline = match[0].startsWith("\n");
+    if (splitAtNewline) {
+      tr.split(start);
+    }
+    const $rangeStart = splitAtNewline
+      ? tr.doc.resolve(tr.mapping.map(start, 1))
+      : tr.doc.resolve(start);
+    const range: NodeRange | null = $rangeStart.blockRange();
+    if (range === null) {
+      return null;
+    }
+    const wrapping = findWrapping(range, nodeType, attrs);
+    if (wrapping === null) {
+      return null;
+    }
+    tr.wrap(range, wrapping);
+    if (!splitAtNewline) {
+      const before = tr.doc.resolve(start - 1).nodeBefore;
+      if (
+        before !== null &&
+        before.type === nodeType &&
+        canJoin(tr.doc, start - 1) &&
+        (joinPredicate === undefined || joinPredicate(match, before))
+      ) {
+        tr.join(start - 1);
+      }
+    }
+    return tr;
+  });
+}
+
+/**
  * `[-+*]`: CommonMark's own bullet-marker alphabet is exactly these three
  * characters (see `entryParser`'s use of the stock `@lezer/markdown` bullet
  * parser, inline-markdown.ts), so `parseEntryMarkdown` already turns
@@ -244,8 +361,24 @@ const listItemNodeType = requireNodeType("list_item");
  * inferred from reading the grammar: typing `* milk` before this change
  * left `* milk` on screen and only became a bullet after Send. ADR 0045
  * has the full account.
+ *
+ * `(?:^|\n)`: issue #212 widens this from a bare `^` to accept a line start
+ * that follows a soft break too (`lineStartWrappingInputRule`'s own comment
+ * above has the full account of why `^` alone stopped being enough).
+ * `[^\S\n]*`, not `\s*`, for the leading run before the marker — `\s`
+ * matches a newline too, and a run typed as `alpha\n\n- milk` (a genuine
+ * blank line the reader deliberately left, then a bullet on the next)
+ * would otherwise have its OWN blank line silently swallowed into this
+ * rule's leading whitespace, disappearing under `\n` in the `(?:^|\n)`
+ * branch as well as the blank line's own leftover `\n`. `[^\S\n]*` matches
+ * ordinary indentation (spaces, tabs, NBSP) exactly as `\s*` always did,
+ * while leaving every OTHER newline in `match[0]` — there can be at most
+ * the one this rule's own `(?:^|\n)` already consumed — alone.
  */
-const bulletListInputRule = wrappingInputRule(/^\s*([-+*])\s$/, bulletListNodeType);
+const bulletListInputRule = lineStartWrappingInputRule(
+  /(?:^|\n)[^\S\n]*([-+*])\s$/,
+  bulletListNodeType,
+);
 
 /**
  * `[.)]`: CommonMark's ordered-list marker is a run of digits followed by
@@ -257,9 +390,14 @@ const bulletListInputRule = wrappingInputRule(/^\s*([-+*])\s$/, bulletListNodeTy
  * `1) alpha` left the literal text `1) alpha` on screen for as long as it
  * was being edited, then reflowed into a numbered item the instant it was
  * Sent. Verified on a real macOS build the same way the `*` case was.
+ *
+ * `(?:^|\n)`: the identical issue #212 widening `bulletListInputRule` just
+ * above got, and for the identical reason — a marker typed right after a
+ * soft break lives in the same textblock as the line before it, where a
+ * bare `^` can never reach it again.
  */
-const orderedListInputRule = wrappingInputRule(
-  /^(\d+)[.)]\s$/,
+const orderedListInputRule = lineStartWrappingInputRule(
+  /(?:^|\n)(\d+)[.)]\s$/,
   orderedListNodeType,
   (match) => ({ order: Number(match[1]) }),
   // Standard prosemirror-schema-list join predicate (its own module
@@ -272,7 +410,9 @@ const orderedListInputRule = wrappingInputRule(
   // plays no part in this predicate — `markerFor` only ever writes `N. `
   // regardless of which one was typed (emission does not change, ADR
   // 0045), so a `1) `/`2) `/`3) ` run joins exactly as a `1. `/`2. `/`3. `
-  // one already did.
+  // one already did. Never even consulted on the `\n`-prefixed branch —
+  // `lineStartWrappingInputRule` drops the join there unconditionally, its
+  // own comment explains why.
   (match, node) => node.childCount + Number(node.attrs.order) === Number(match[1]),
 );
 
@@ -312,6 +452,19 @@ const orderedListInputRule = wrappingInputRule(
  * `EditorView` — ADR 0044) can feed a real U+00A0 through the pattern
  * directly rather than only through a live keystroke no test harness here
  * can send.
+ */
+/**
+ * Stays `^`-anchored, unlike `bulletListInputRule`/`orderedListInputRule`/
+ * `checklistShortcutInputRulePattern` below (issue #212's line-start
+ * widening) — deliberately, not an oversight this ticket left behind.
+ * `checkboxInputRule`'s own handler only ever fires inside a `list_item`'s
+ * LEADING paragraph (`$start.index(-1) !== 0` below rejects anything
+ * else), and Enter inside a list item is still `splitListItemUnchecked`
+ * (`listKeymap`, unchanged by issue #212) — a real block split, never
+ * `insertSoftBreak`. There is therefore no way for a `\n` to ever appear
+ * inside that leading paragraph's own text for this rule to need to look
+ * past: a soft break is a prose-only concept, unreachable from inside a
+ * list item at all.
  */
 export const checkboxInputRulePattern = /^\[([ \u00A0xX])\]\s$/;
 
@@ -374,8 +527,17 @@ function checkboxInputRule(): InputRule {
  * mount a live `EditorView` (ADR 0044), so a unit test exercises this
  * pattern (and `checklistShortcutInputRule`'s handler) directly rather than
  * through a live keystroke, which belongs in apps/e2e's composer.spec.ts.
+ *
+ * `(?:^|\n)`: issue #212's line-start widening, identical in shape and
+ * reason to `bulletListInputRule`'s own (that rule's comment has the full
+ * account) — a `[] `/`[x] ` typed right after a soft break lives in the
+ * same textblock as the line above it, where a bare `^` can never reach it.
+ * There is no leading-whitespace run to guard here the way
+ * `bulletListInputRule`'s `[^\S\n]*` does: this pattern never allowed
+ * indentation before the bracket to begin with (`^\[`, not `^\s*\[`), so
+ * there is nothing for a bare `\s*` to have swallowed a blank line with.
  */
-export const checklistShortcutInputRulePattern = /^\[([xX]?)\]\s$/;
+export const checklistShortcutInputRulePattern = /(?:^|\n)\[([xX]?)\]\s$/;
 
 /**
  * The handler side of `checklistShortcutInputRulePattern` above. Unlike
@@ -420,6 +582,21 @@ export const checklistShortcutInputRulePattern = /^\[([xX]?)\]\s$/;
  * paragraphs, with no Enter-inside-a-list-item in between — is not how a
  * checklist actually gets built one item at a time, and is not part of
  * this ticket's acceptance bar.
+ *
+ * Issue #212's split-first prologue is the same one
+ * `lineStartWrappingInputRule` gives `bulletListInputRule`/
+ * `orderedListInputRule` above, inlined here rather than shared through
+ * that helper: this handler already builds its own transaction by hand
+ * (the module comment above already explains why `wrappingInputRule`
+ * itself was never usable for this rule) and needs the SAME "delete the
+ * matched range, split at that point when it began with `\n`, resolve the
+ * wrap target through `tr.mapping`" shape that helper's own comment
+ * documents in full. `start` is re-resolved through `tr.mapping.map(start,
+ * 1)` at every step from here on — never reused as a raw pre-transaction
+ * offset — for the identical reason: a split shifts every later position
+ * by 2 (one open token, one close), and the ORIGINAL `list_item` guard
+ * just above already ran against the PRE-transaction document, where no
+ * split has happened yet and `start` still means what it says.
  */
 function checklistShortcutInputRule(): InputRule {
   return new InputRule(checklistShortcutInputRulePattern, (state, match, start, end) => {
@@ -428,7 +605,10 @@ function checklistShortcutInputRule(): InputRule {
       return null;
     }
     const tr = state.tr.delete(start, end);
-    const range = tr.doc.resolve(start).blockRange();
+    if (match[0].startsWith("\n")) {
+      tr.split(start);
+    }
+    const range = tr.doc.resolve(tr.mapping.map(start, 1)).blockRange();
     if (range === null) {
       return null;
     }
@@ -437,7 +617,7 @@ function checklistShortcutInputRule(): InputRule {
       return null;
     }
     tr.wrap(range, wrapping);
-    const $wrapped = tr.doc.resolve(tr.mapping.map(start));
+    const $wrapped = tr.doc.resolve(tr.mapping.map(start, 1));
     if ($wrapped.node(-1).type !== listItemNodeType) {
       return null;
     }
@@ -493,6 +673,7 @@ export function buildInputRules(): InputRule[] {
     emInputRule,
     emUnderscoreInputRule,
     codeInputRule,
+    strikethroughInputRule,
     bulletListInputRule,
     orderedListInputRule,
     checkboxInputRule(),
@@ -502,22 +683,47 @@ export function buildInputRules(): InputRule[] {
 }
 
 // ---------------------------------------------------------------------------
-// Keymap: splitListItem / outdent on Enter, undo/redo, everything else from
-// prosemirror-commands' baseKeymap
+// Keymap: splitListItemUnchecked / outdent on Enter, undo/redo, everything
+// else from prosemirror-commands' baseKeymap
 // ---------------------------------------------------------------------------
 
 /**
- * `chainCommands(splitListItem, outdent.run)` is the shape
- * prosemirror-schema-list's own `splitListItem` doc comment is written
- * for: on a non-empty list item it splits into the next item; on an EMPTY
- * top-level item it deliberately returns `false` ("bail out and let next
- * command handle lifting") rather than lifting itself, which is exactly
- * what makes chaining `outdent.run` right after it correct instead of
- * redundant — Enter on an empty item then escapes the list one level, per
- * the ticket. Outside a list entirely both commands return `false` and the
- * key falls through (see this module's own comment on plugin order in
- * `buildComposerPlugins`) to `baseKeymap`'s own Enter, an ordinary
- * paragraph split.
+ * `chainCommands(splitListItemUnchecked, outdent.run, insertSoftBreak)` is
+ * three fallbacks, tried in order, and each of the three names exactly one
+ * of the ticket's own required behaviours rather than one command doing
+ * all of it: inside a non-empty list item, split into the next item; on an
+ * EMPTY top-level item ("bail out and let next command handle lifting" —
+ * `splitListItem`'s own doc comment, prosemirror-schema-list), escape the
+ * list one level; everywhere else — no list at all — `insertSoftBreak`
+ * (composer-commands.ts, issue #212) inserts a literal `\n` into the
+ * current paragraph instead of splitting it. Enter no longer reaches
+ * `baseKeymap`'s own Enter (an ordinary paragraph split) at all: this
+ * plugin's own chain now always returns `true` outside a list, the same
+ * way it always did inside one.
+ *
+ * **This is the reported defect's actual fix.** A paragraph split
+ * serializes to `\n\n` (`entry-document.ts`'s `writeBlocks` — a lone `\n`
+ * between two paragraph siblings is a CommonMark lazy continuation, so the
+ * separator MUST be a full blank line), and `collectBlocks`
+ * (inline-markdown.ts) merges consecutive paragraph siblings back into one
+ * prose run with that gap copied verbatim — so the very first Enter
+ * already produced a real blank line the instant the Entry was Sent and
+ * reopened, not merely on the second press. `insertSoftBreak` sidesteps
+ * the whole merge: two of them in a row give `\n\n` INSIDE one paragraph's
+ * own text, which needed no split, no merge, and no `\n\n`-means-separator
+ * convention to begin with — it is just two characters typed into a
+ * `white-space: pre-wrap` element, where `\n\n` has always meant a blank
+ * line. See ADR 0066 for the full account, including why the fix does not
+ * touch `collectBlocks` itself.
+ *
+ * `splitListItemUnchecked` (composer-commands.ts, issue #210) is the real
+ * `splitListItem(listItemNodeType)` plus one patch: a new item split off a
+ * DONE task (`checked === true`) starts unchecked, matching UpNote and
+ * ADR 0053's "every checkbox is a Task" — otherwise finishing a checklist
+ * item and pressing Enter would silently mint a second already-completed
+ * Task. Its own module comment (composer-commands.ts) is the full
+ * reasoning for why this can't be done by passing `itemAttrs` to
+ * `splitListItem` directly.
  *
  * `outdent` (issue #160, composer-commands.ts) is `liftListItem(listItemNodeType)`
  * itself, given a name and reused here rather than called a second time —
@@ -526,29 +732,60 @@ export function buildInputRules(): InputRule[] {
  * `liftListItem` that could quietly diverge if one were ever edited without
  * the other.
  *
- * `Shift-Enter` is bound to the SAME chain, plus `splitBlock` appended as
- * its own final fallback — not left to fall through to `baseKeymap` the
- * way plain `Enter` does. `prosemirror-keymap`'s own matching (verified by
- * reading its source, not assumed) only tries a held Shift as a fallback
- * for single-character keys — "a", producing "A" — never for a NAMED key
- * like "Enter", so a keymap that binds only `Enter` is never consulted at
- * all for `Shift-Enter`; the keydown handler returns `false` outright,
- * nothing calls `preventDefault()`, and the browser's own native
- * contenteditable behaviour runs unopposed — normally a bare `<br>`,
- * which `entrySchema` has no node for at all (there is no `hard_break`),
- * so ProseMirror's own DOMObserver reconciles the DOM straight back to
- * the document's real state on its very next update and the keystroke
- * simply vanishes. The ticket's own requirement is only "Shift+Enter
- * still never sends" — true either way, since `isSubmitChord` already
- * excludes it — but silently eating the keystroke is worse than making it
- * behave exactly like a plain Enter, which is what the pre-#155
- * `<textarea>` did for both (issue #76: neither one ever sent, and both
- * inserted the same plain newline).
+ * `Shift-Enter` is bound to the IDENTICAL chain, not merely something that
+ * also inserts a break: it must stay its own explicit binding regardless
+ * — `prosemirror-keymap`'s own matching (verified by reading its source,
+ * not assumed) only tries a held Shift as a fallback for single-character
+ * keys ("a", producing "A"), never for a NAMED key like "Enter", so a
+ * keymap that binds only `Enter` is never even consulted for
+ * `Shift-Enter`; the keydown handler returns `false` outright, nothing
+ * calls `preventDefault()`, and the browser's own native contenteditable
+ * behaviour runs unopposed — normally a bare `<br>`, which `entrySchema`
+ * has no node for at all (there is no `hard_break`), so ProseMirror's own
+ * DOMObserver reconciles the DOM straight back to the document's real
+ * state on its very next update and the keystroke simply vanishes.
+ *
+ * And under THIS model, identical is the only reading that makes sense —
+ * not merely the safe fallback it was before issue #212. A block split
+ * now serializes to `\n\n`, i.e. what a caller reaching for `Shift-Enter`
+ * would get is two soft breaks in a single keystroke: "insert a blank
+ * line," a gesture with no name, no discoverability, and the exact
+ * opposite of UpNote's own Shift+Enter (a single new line, same as
+ * Enter). Binding it to `chainCommands(listChain, splitBlock)` — this
+ * file's own pre-#212 shape — would have quietly reintroduced this
+ * ticket's own bug through the one door Enter itself no longer opens.
+ * `isSubmitChord` already excludes any Shift-held Enter before either
+ * keymap is reached, so "Shift+Enter must never send" holds regardless of
+ * which of the two readings this binding takes — that requirement alone
+ * does not decide between them.
  */
 /**
- * Backspace lifts a list item out one level, but ONLY at the very start of
- * the item's FIRST paragraph — issue #162. Unlike Tab/Ctrl-]'s indent
- * below, this cannot simply bind straight to `outdent.run`
+ * Backspace is bound to `chainCommands(undoInputRule, liftAtStartOfListItem)`
+ * (`listKeymap` below), not to `liftAtStartOfListItem` alone — issue #210.
+ * `undoInputRule` (prosemirror-inputrules) reverts the most recent
+ * `InputRule` match (typing `- ` into a bullet, `**word**` into bold, and
+ * every other rule `buildInputRules` below registers) IF AND ONLY IF the
+ * immediately preceding transaction was that rule firing; otherwise it
+ * returns `false` untouched, so this binding degrades to exactly today's
+ * `liftAtStartOfListItem`-only behaviour the rest of the time. This does
+ * mean Backspace right after `**bold**` now un-bolds and restores the
+ * literal asterisks — UpNote's own behaviour, intended, but flagged here
+ * (and in the commit message) as a visible change to an extremely common
+ * keystroke.
+ *
+ * `undoInputRule` MUST run first, not second — the two are not
+ * interchangeable order. After typing `- ` the caret sits at offset 0 of
+ * the fresh item's own (now-empty) paragraph, which is EXACTLY
+ * `liftAtStartOfListItem`'s own trigger condition below. Reversed
+ * (`liftAtStartOfListItem` first), Backspace there would lift the brand
+ * new item back out of its list before `undoInputRule` ever got a chance
+ * to run — destroying the `- ` text via a list-structure change instead of
+ * restoring it as plain characters, the opposite of the ticket's ask.
+ *
+ * `liftAtStartOfListItem` itself lifts a list item out one level, but ONLY
+ * at the very start of the item's FIRST paragraph — issue #162. Unlike
+ * Tab/Ctrl-]'s indent below, this cannot simply bind straight to
+ * `outdent.run`
  * (`liftListItem(listItemNodeType)`, composer-commands.ts): that command's
  * own applicability check is only "is the caret inside a list item
  * somewhere," true for every position in a multi-paragraph item, not just
@@ -637,11 +874,11 @@ export const liftAtStartOfListItem: Command = (state, dispatch) => {
  * already cover for anyone on a layout where it doesn't work.
  */
 function listKeymap(): Plugin {
-  const listChain = chainCommands(splitListItem(listItemNodeType), outdent.run);
+  const enterChain = chainCommands(splitListItemUnchecked, outdent.run, insertSoftBreak);
   return keymap({
-    Enter: listChain,
-    "Shift-Enter": chainCommands(listChain, splitBlock),
-    Backspace: liftAtStartOfListItem,
+    Enter: enterChain,
+    "Shift-Enter": enterChain,
+    Backspace: chainCommands(undoInputRule, liftAtStartOfListItem),
     Tab: indent.run,
     "Shift-Tab": outdent.run,
     "Ctrl-]": indent.run,
@@ -665,16 +902,22 @@ function historyKeymap(): Plugin {
 }
 
 /**
- * Issue #164's four chords — the toolbar's own eleven buttons (#164,
- * composer-toolbar.tsx) are how every one of `composerCommands` is reached
- * without a keyboard, but four of them are common enough, and old enough as
- * conventions (every rich-text surface a reader has ever used binds
- * Cmd/Ctrl-B/I), that they also get a direct chord: `bold.run`/`italic.run`/
- * `code.run` (composer-commands.ts) are wired here exactly as `undo`/`redo`
- * are just above — the registry owns what each action IS, this file only
- * owns which keystroke reaches it. `Mod-Shift-Enter` is the fourth, bound to
- * `toggleCheckboxDone.run` (composer-commands.ts) rather than a button:
- * see that command's own doc comment for why it gets a chord and no button.
+ * Issue #164's four chords, plus one more issue #211 adds — the toolbar's
+ * own twelve buttons (#164/#211, composer-toolbar.tsx) are how every one of
+ * `composerCommands` is reached without a keyboard, but some of them are
+ * common enough, and old enough as conventions (every rich-text surface a
+ * reader has ever used binds Cmd/Ctrl-B/I), that they also get a direct
+ * chord: `bold.run`/`italic.run`/`code.run`/`strikethrough.run`
+ * (composer-commands.ts) are wired here exactly as `undo`/`redo` are just
+ * above — the registry owns what each action IS, this file only owns which
+ * keystroke reaches it. `Mod-Shift-x` for `strikethrough` is UpNote's own
+ * verified chord for the same action (`docs/reference/upnote-macos-detail.md`,
+ * "Cmd+Shift+X"), not a choice made up for this app; it is not on the
+ * never-claim list below (`Mod-1`-`Mod-9`, `Mod-l`, `Mod-[`/`Mod-]`,
+ * `Mod-t`/`Mod-w`/`Mod-n`/`Mod-r`/`Mod-d`), and no browser this app ships on
+ * reserves it. `Mod-Shift-Enter` is bound to `toggleCheckboxDone.run`
+ * (composer-commands.ts) rather than a button: see that command's own doc
+ * comment for why it gets a chord and no button.
  *
  * `Mod-Shift-Enter` is safe to claim specifically because `isSubmitChord`
  * (submit-chord.ts) already returns `false` whenever `event.shiftKey` is
@@ -721,6 +964,7 @@ function formatKeymap(): Plugin {
     "Mod-b": bold.run,
     "Mod-i": italic.run,
     "Mod-e": code.run,
+    "Mod-Shift-x": strikethrough.run,
     "Mod-Shift-Enter": toggleCheckboxDone.run,
   });
 }

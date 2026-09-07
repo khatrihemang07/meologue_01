@@ -81,3 +81,81 @@ are interleaved; and the Server migration collided at version 18 with a migratio
 in parallel. Two files claiming one version is a collision git cannot see — neither edits the other,
 so the merge is clean and the failure surfaces later as a `_sqlx_migrations_pkey` violation, 81
 tests at a time.
+
+## Amendment (issue #217): the value travels, the *shape* was never pinned
+
+The Consequences above tell whoever next revisits Sync's conflict rule that this column is "already
+there and already correct on both sides of the wire." That sentence is what invited issue #215 in,
+and it is half right in a way that cost real time — so it is corrected here rather than left to be
+trusted again.
+
+**The value is correct on both sides. The format is not the same on both sides, and this ADR never
+said it had to be.** The client stamps `new Date().toISOString()`, which always emits exactly three
+fractional digits. The Server carries `DateTime<Utc>` and serialises RFC 3339 through chrono's
+default, which emits as many digits as it needs — six in practice, and **none at all** when the
+nanosecond component is zero. Nothing in this ADR, the wire type, or either schema constrains that.
+
+So `updated_at` must never be compared as a raw string, and the "identical shape" this ADR's own
+backfill reasoning relies on holds only *within* one writer, never across the wire. `'.'` is `0x2E`
+and `'Z'` is `0x5A`, so byte order and chronological order disagree in both directions:
+
+| Server value | Client value | Raw comparison says | Truth |
+|---|---|---|---|
+| `...T12:00:00Z` | `...T12:00:00.500Z` | Server greater | Client is 500ms **later** |
+| `...T12:00:00.123456Z` | `...T12:00:00.123Z` | Client greater | Server is 456µs **later** |
+
+The first row is the likelier one: a Server timestamp landing on a whole second is ordinary, and
+every client timestamp inside that second then loses to it while being later.
+
+**Nothing caught this because no test ever built a cross-shape pair.** Every fixture on both sides
+constructs timestamps in a single shape — the client suites through `toISOString()` or a pinned
+`now`, the Rust suites through `DateTime<Utc>` values. The mismatch exists only where the two meet.
+A test that pins this has to construct a Server-shaped `...:00Z` against a client-shaped
+`...:00.500Z` and assert the later one wins.
+
+**What has been fixed, and what has not.** ADR 0068 normalises both sides through
+`strftime('%Y-%m-%dT%H:%M:%f', …)` in `EntryStore.applyPulled`, which is the one call site that ADR
+owns. `merge.ts`'s case 6 still compares raw strings — and its comment still asserts the assumption
+this amendment disproves — so Merge can pick the older of two copies as the winner. That is issue
+#217. Restore is genuinely unaffected: it never uses `updated_at` to choose between rows, so a
+Merge-scoped fix is legitimate and does not need to touch it.
+
+**The general rule this ADR should have carried from the start:** a timestamp that crosses the wire
+is ordered by instant, never by byte order, unless something actually pins its shape at both ends.
+
+### The shape-tolerance is permanent, because Backup is a time machine
+
+The obvious future cleanup is to normalise `updated_at` once — on ingest, or as a one-time pass —
+and then let every comparison go back to a plain `>=`. **That would be a real improvement for the
+steady state, and it still would not make the comparison-site normalisation removable.**
+
+A Backup is a lossless copy of the database exactly as it stands (ADR 0064; `dump.ts` writes the
+values verbatim), and Restore puts them back unchanged rather than rewriting them — reason 3 in
+`restore.ts`'s own header preserves `seq`/`synced_at` from the file precisely so a Restore does not
+re-push the whole database. So a Backup taken *before* any normalising migration carries the old
+shapes forever, and Restoring or Merging that file a year later reintroduces them into a database
+where every live row has been normalised.
+
+**There is no point at which "all data has been normalised" becomes true.** The set of restorable
+Backups is unbounded and grows every time someone clicks Back up. And Restore is the operation
+people reach for when something has already gone wrong, so old Backups meeting current Devices is
+ordinary, not an edge case.
+
+The practical consequence is about how the guard is *described*, not just whether it exists: if it
+is written as a migration-era workaround, someone deletes it in a year with a commit message about
+cleaning up after the migration, and the bug comes back silently — for exactly the users who were
+already recovering from something. Anything that compares `updated_at` stays shape-tolerant
+permanently.
+
+**One fork is deliberately left open here.** If a normalising migration does happen, it has to
+decide what Restore does with a Backup that predates it. Normalising on the way in would contradict
+ADR 0064's "a Backup is a faithful copy of what this Device already has" and Restore's own promise
+to preserve what the file holds; staying faithful means old shapes keep arriving indefinitely. The
+instinct on both sides of this discussion was that **Restore should stay faithful and the
+comparison should stay tolerant** — but that is a real fork and whoever takes issue #217 should
+settle it explicitly rather than inherit it.
+
+It also gives the regression suite a third case, beyond the two cross-shape pairs above: a row whose
+`updated_at` arrived via Restore from an old-shape Backup, winning or losing a Merge correctly. It
+is the same comparison, but it is the case that outlives any migration, and it is the one nobody
+will think to keep.

@@ -59,7 +59,41 @@ export default defineConfig({
     // opened manually rather than through this fixture.
     storageState: serverUrlStorageState(SERVER_A_URL),
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  projects: [
+    // `testIgnore` keeps composer-touch.spec.ts (below) off this project:
+    // with no filter of its own, "chromium" would otherwise pick it up too
+    // — Playwright's default per-project `testMatch` is "everything in
+    // `testDir`" — and run its touch-only assertions (indent/outdent/
+    // soft-break present, code absent) against a genuinely hover-capable
+    // Desktop Chrome, where they'd fail for having nothing to do with a
+    // real defect.
+    {
+      name: "chromium",
+      use: { ...devices["Desktop Chrome"] },
+      testIgnore: /composer-touch\.spec\.ts/,
+    },
+    // Issue #213: the only browser coverage that can actually see a touch
+    // device. `page.emulateMedia()` (used elsewhere in this suite) covers
+    // media/colorScheme/reducedMotion/forcedColors/contrast — NOT `hover`,
+    // so there is no way to make the default "chromium" project itself
+    // report `(hover: none)`. `devices["Pixel 7"]`'s `isMobile: true` is
+    // what does that — Chromium reports no-hover for a mobile UA, not
+    // merely for `hasTouch` — which a plain `{ hasTouch: true }` override on
+    // the desktop project would not have triggered.
+    //
+    // `testMatch` scopes this to composer-touch.spec.ts alone, deliberately:
+    // `workers: 1, fullyParallel: false` above exist because this suite
+    // shares one Postgres across every test (this config's own comment on
+    // `workers`), and an unscoped second project would run the ENTIRE
+    // existing suite a second time against that same database, doubling
+    // both the runtime and the two Rust servers/Postgres container already
+    // booted for it.
+    {
+      name: "chromium-touch",
+      use: { ...devices["Pixel 7"] },
+      testMatch: /composer-touch\.spec\.ts/,
+    },
+  ],
   // Two fully independent Servers, each against its own Postgres (ADR 0011):
   // server A is the production serving path from ticket 11 — it also builds
   // and serves the web app — and server B exists only to prove a Device's

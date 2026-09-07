@@ -44,15 +44,31 @@ const { runTasksBackfillOnceMock } = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/backfill-tasks", () => ({ runTasksBackfillOnce: runTasksBackfillOnceMock }));
 
+// Issue #214: the soft-break migration effect, stubbed for the identical
+// reason `runTasksBackfillOnceMock` above is — this file's own tests don't
+// care about `soft-break-migration.ts`'s own scanning logic
+// (soft-break-migration.test.ts owns that), only that this layout kicks it
+// off, in order, once the real store opens.
+const { runSoftBreakMigrationOnceMock } = vi.hoisted(() => ({
+  runSoftBreakMigrationOnceMock: vi.fn(async () => {}),
+}));
+vi.mock("@/lib/soft-break-migration", () => ({
+  runSoftBreakMigrationOnce: runSoftBreakMigrationOnceMock,
+}));
+
 function createFakeStore(): EntryStore {
   return {
     list: vi.fn(async () => []),
     upsert: vi.fn(async () => {}),
+    applyPulled: vi.fn(async () => {}),
     pending: vi.fn(async () => []),
     getCursor: vi.fn(async () => 0),
     setCursor: vi.fn(async () => {}),
     // Issue #186 / ADR 0057.
     catchUpRowShapeEpoch: vi.fn(async () => {}),
+    // Issue #214 / ADR 0067.
+    hasCompletedSoftBreakMigration: vi.fn(async () => true),
+    markSoftBreakMigrationComplete: vi.fn(async () => {}),
     search: vi.fn(async () => []),
     edit: vi.fn(async () => {}),
     remove: vi.fn(async () => {}),
@@ -186,6 +202,7 @@ describe("EntryStoreLayout", () => {
     createDriver.mockReset();
     openMock.mockReset();
     runTasksBackfillOnceMock.mockClear();
+    runSoftBreakMigrationOnceMock.mockClear();
     mountEvents = [];
   });
 
@@ -316,6 +333,55 @@ describe("EntryStoreLayout", () => {
       eventStore,
       "device-a",
       expect.any(Function),
+    );
+  });
+
+  // Issue #214 / ADR 0067: the soft-break migration's own store-open
+  // trigger — pins down both that EntryStoreLayout calls it with the real
+  // opened stores/deviceId, and that it does not start until the Tasks
+  // backfill above has actually *resolved*, not merely been called
+  // (soft-break-migration.ts's own header comment on why the ordering
+  // matters: that backfill rewrites bodies too, and this migration must
+  // see the final text). soft-break-migration.test.ts owns whether the
+  // migration itself does the right thing once called.
+  it("kicks off the soft-break migration only after the Tasks backfill has resolved", async () => {
+    createDriver.mockResolvedValue({});
+    const store = createFakeStore();
+    const taskStore = createFakeTaskStore();
+    const projectStore = {} as ProjectStore;
+    const labelStore = {} as LabelStore;
+    const commentStore = {} as CommentStore;
+    const eventStore = {} as EventStore;
+    openMock.mockResolvedValue({
+      store,
+      taskStore,
+      projectStore,
+      labelStore,
+      commentStore,
+      eventStore,
+      deviceId: "device-a",
+    });
+
+    let resolveBackfill: () => void = () => {};
+    runTasksBackfillOnceMock.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveBackfill = resolve;
+        }),
+    );
+
+    await renderLayout();
+
+    await waitFor(() => expect(runTasksBackfillOnceMock).toHaveBeenCalledTimes(1));
+    // The backfill is still pending — the migration must not have started.
+    expect(runSoftBreakMigrationOnceMock).not.toHaveBeenCalled();
+
+    resolveBackfill();
+
+    await waitFor(() => expect(runSoftBreakMigrationOnceMock).toHaveBeenCalledTimes(1));
+    expect(runSoftBreakMigrationOnceMock).toHaveBeenCalledWith(
+      { store, taskStore, projectStore, labelStore, commentStore, eventStore },
+      "device-a",
     );
   });
 

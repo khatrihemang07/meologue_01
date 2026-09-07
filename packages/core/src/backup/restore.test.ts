@@ -156,6 +156,93 @@ describe("restoreFromBackup", () => {
     expect(restoredEntry?.syncedAt).toBe("2026-01-02T00:00:00.000Z");
   });
 
+  // Issue #215 / ADR 0068. The test above proves Restore leaves the Cursor
+  // at 0; this one proves what that costs and that the cost is now paid
+  // for. A Cursor of 0 means the very next pull is this Device's entire
+  // History at once — the widest form of the window `applyPulled()` exists
+  // to close — and a store-open rewrite (ADR 0053's Task backfill, ADR
+  // 0067's soft-break pass) is running in exactly that moment.
+  //
+  // Driven against the real SqliteEntryStore that Restore just wrote
+  // through, not the in-memory double, and against `applyPulled()`
+  // directly rather than through `sync()`: the pull's arrival is the
+  // event under test, and reproducing it through a whole Sync round trip
+  // would make this depend on winning a race rather than on the guard.
+  it("does not let the full-History pull a Restore invites stomp an edit made at store open", async () => {
+    const sourceDriver = new NodeSqliteDriver();
+    const { store: sourceStore } = await open(sourceDriver);
+    await sourceStore.upsert([
+      entry({
+        id: "e1",
+        body: "as the Server still has it",
+        seq: 42,
+        syncedAt: "2026-01-02T00:00:00.000Z",
+      }),
+    ]);
+    const sql = await dumpDatabase(sourceDriver);
+
+    const targetDriver = new NodeSqliteDriver();
+    const { store } = await open(targetDriver);
+    const outcome = await restoreFromBackup({
+      driver: targetDriver,
+      databaseSql: sql,
+      takeSafetyBackup: okSafetyBackup,
+    });
+    expect(outcome.ok).toBe(true);
+    expect(await store.getCursor()).toBe(0);
+
+    // The store-open rewrite, on the restored row.
+    await store.edit("e1", "rewritten at store open");
+
+    // The Cursor-0 pull coming back with the Server's older copy of every
+    // row this Device holds.
+    await store.applyPulled([
+      entry({
+        id: "e1",
+        body: "as the Server still has it",
+        seq: 42,
+        syncedAt: "2026-01-03T00:00:00.000Z",
+      }),
+    ]);
+
+    const [survived] = await store.list();
+    expect(survived).toMatchObject({ body: "rewritten at store open", seq: null });
+    // Still pending, so the next Sync pushes it — surviving in the
+    // database is worth nothing if the row is left looking already-synced.
+    expect((await store.pending()).map((e) => e.id)).toEqual(["e1"]);
+  });
+
+  // Issue #214 / ADR 0067: a Backup taken before the soft-break migration
+  // existed never names its own `kv` marker row at all, so
+  // `restoreTable`'s ordinary "only upsert what the file names" kv
+  // handling would otherwise leave whatever this Device already had
+  // untouched — exactly the failure this migration's own re-arm step
+  // exists to close. `sql` here stands in for that kind of Backup: it
+  // genuinely never touched `SOFT_BREAK_MIGRATION_KEY`, the same way a
+  // real pre-#214 build's dump never would have.
+  it("re-arms the soft-break migration on Restore, even from a Backup that never named the marker", async () => {
+    const sourceDriver = new NodeSqliteDriver();
+    const { store: sourceStore } = await open(sourceDriver);
+    await sourceStore.upsert([entry({ id: "e1", body: "a\n\n\n\nb" })]);
+    const sql = await dumpDatabase(sourceDriver);
+
+    const targetDriver = new NodeSqliteDriver();
+    const { store: targetStore } = await open(targetDriver);
+    // This Device had already run the migration once, before Restoring an
+    // old Backup that predates it existing at all.
+    await targetStore.markSoftBreakMigrationComplete();
+    expect(await targetStore.hasCompletedSoftBreakMigration()).toBe(true);
+
+    const outcome = await restoreFromBackup({
+      driver: targetDriver,
+      databaseSql: sql,
+      takeSafetyBackup: okSafetyBackup,
+    });
+    expect(outcome.ok).toBe(true);
+
+    expect(await targetStore.hasCompletedSoftBreakMigration()).toBe(false);
+  });
+
   it("makes Search work immediately after a Restore, on a database with no prior FTS5 rows at all", async () => {
     const sourceDriver = new NodeSqliteDriver();
     const { store: sourceStore, taskStore: sourceTaskStore } = await open(sourceDriver);

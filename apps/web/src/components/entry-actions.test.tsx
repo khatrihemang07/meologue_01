@@ -1,7 +1,7 @@
 import type { Entry } from "@meologue/core";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { EntryActionsSheet, EntryHoverActions, hoverCapable } from "./entry-actions";
+import { EntryActionsSheet, EntryHoverActions } from "./entry-actions";
 
 function entry(overrides: Partial<Entry>): Entry {
   return {
@@ -18,32 +18,9 @@ function entry(overrides: Partial<Entry>): Entry {
   };
 }
 
-/** Same stand-in as entry-row.test.tsx's — see its own comment. */
-function stubHoverCapable(matches: boolean) {
-  vi.stubGlobal(
-    "matchMedia",
-    vi.fn((query: string) => ({ matches, media: query })),
-  );
-}
-
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
-});
-
-describe("hoverCapable", () => {
-  it("reflects matchMedia('(hover: hover)')", () => {
-    stubHoverCapable(true);
-    expect(hoverCapable()).toBe(true);
-
-    stubHoverCapable(false);
-    expect(hoverCapable()).toBe(false);
-  });
-
-  it("reads false when matchMedia isn't available at all", () => {
-    vi.stubGlobal("matchMedia", undefined);
-    expect(hoverCapable()).toBe(false);
-  });
 });
 
 describe("EntryHoverActions", () => {
