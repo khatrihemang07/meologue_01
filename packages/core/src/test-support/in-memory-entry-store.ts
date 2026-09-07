@@ -1,4 +1,4 @@
-import type { EntryPage, EntryStore } from "../store";
+import type { AcknowledgedEntry, EntryPage, EntryStore } from "../store";
 import type { Entry } from "../types";
 import { isAtLeastAsNewAs } from "../updated-at";
 
@@ -101,6 +101,23 @@ export class InMemoryEntryStore implements EntryStore {
         entry.deletedAt !== null;
       if (apply) {
         this.entries.set(entry.id, entry);
+      }
+    }
+  }
+
+  /**
+   * Mirrors SqliteEntryStore.applyAcknowledged() — see
+   * EntryStore.applyAcknowledged's doc comment (../store.ts) for the rule,
+   * and the real store for why the `updatedAt` equality here is raw rather
+   * than normalised (both sides were written by this same Device).
+   */
+  async applyAcknowledged(rows: readonly AcknowledgedEntry[]): Promise<void> {
+    for (const { confirmed, asPushed } of rows) {
+      const local = this.entries.get(confirmed.id);
+      const apply =
+        local === undefined || local.seq !== null || local.updatedAt === asPushed.updatedAt;
+      if (apply) {
+        this.entries.set(confirmed.id, confirmed);
       }
     }
   }

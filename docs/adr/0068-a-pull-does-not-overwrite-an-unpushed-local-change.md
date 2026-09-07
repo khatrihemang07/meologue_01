@@ -137,3 +137,46 @@ and doing it without a demonstrated failure would be six speculative changes to 
 **`upsert()` is now the narrower door, and its name no longer says so.** It is Sync's
 acknowledgement path and local capture; the pull has its own. The doc comments on both say which is
 which, because the names alone do not.
+
+## Amendment (issue #216): the acknowledgement arm gets its own rule
+
+The Consequences above filed the acknowledgement arm's narrower race rather than fixing it. It is
+fixed now, and the reason it needed a *different* rule rather than the same one is the part worth
+keeping.
+
+**The race.** This Device pushes edit v1. The user makes edit v2 before the response lands, so
+`edit()` clears `seq` and the row is pending again. The acknowledgement for v1 arrives, `upsert()`
+writes it wholesale — body back to v1, `seq` from the Server — and the row stops looking pending.
+Nothing re-pushes it. v2 is gone, by the same silent mechanism as #215.
+
+**Why `applyPulled`'s rule cannot be reused.** It refuses an incoming row whose `updated_at` is
+older than a pending local one. Applied here it deadlocks on ADR 0065's tolerated divergence: an
+edit landing on identical content leaves the Server holding an *older* `updated_at` than this
+Device, because the Server's `is distinct from` guard never fired. The acknowledgement would be
+refused forever, the row would never clear pending, and it would re-push on every tick — trading
+silent data loss for a silent infinite loop.
+
+**The rule that does work: "is the local row still the one I pushed?"** Not "which is newer". That
+question is answered by comparing the local `updated_at` against the value the row carried *when it
+was pushed*, and only the caller knows that — so `EntryStore.applyAcknowledged` takes
+`AcknowledgedEntry`, pairing the Server's confirmation with the row as pushed. A row that has moved
+on is left alone and left pending; a row that has not is confirmed, whatever the Server's
+`updated_at` says, which is what keeps ADR 0065's divergence harmless exactly as that ADR promised.
+
+Three details that are easy to get wrong:
+
+- **Both timestamps in that comparison are written by this Device.** `pending()` only ever returns
+  rows a local mutation stamped, so they are the same shape by construction. This is the one
+  `updated_at` comparison in the codebase that is safe as a raw `=`, and it is safe precisely
+  because it is not comparing across the wire (issue #217, ADR 0065's own amendment).
+- **A row that is no longer pending is confirmed unconditionally.** It has nothing local left to
+  lose, and that is what keeps a redelivered acknowledgement idempotent.
+- **Acknowledgements are matched to pushed rows by id, not by position.** Nothing in ADR 0059
+  promises the array comes back in the order it was sent. An acknowledgement for an id this request
+  did not push is dropped: there is no local state it could correctly confirm.
+
+The cost is one guarded statement per acknowledged row instead of one per batch, because each row's
+guard compares against its own pushed value and a single `setWhere` cannot carry a different value
+per row. The guard still lives inside the statement rather than in a read-then-write, so no `await`
+sits between deciding and writing — the same property `applyPulled` protects, and for the same
+reason: this method exists because of a write that interleaves with a Sync round trip.

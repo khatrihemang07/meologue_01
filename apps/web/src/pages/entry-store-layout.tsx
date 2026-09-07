@@ -597,6 +597,9 @@ const ENTRY_STORE_METHODS: StoreMethodNames<EntryStore> = {
   // deferred store on the session's very first tick, which is exactly the
   // tick a store-open rewrite races.
   applyPulled: true,
+  // Issue #216 — the acknowledgement arm's own write path, alongside the
+  // pull's above. Same compile-time checkpoint, same reason.
+  applyAcknowledged: true,
   pending: true,
   getCursor: true,
   setCursor: true,

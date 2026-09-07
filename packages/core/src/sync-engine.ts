@@ -19,7 +19,7 @@ import {
 } from "./mapping";
 import type { ProjectStore } from "./project-store";
 import { PROTOCOL_VERSION, ROW_SHAPE_EPOCH, SYNC_BATCH_SIZE } from "./protocol";
-import type { EntryStore } from "./store";
+import type { AcknowledgedEntry, EntryStore } from "./store";
 import type { TaskStore } from "./task-store";
 import type { WireSyncRequest, WireSyncResponse } from "./wire";
 
@@ -320,9 +320,29 @@ export async function sync(options: SyncEngineOptions): Promise<void> {
     // advance one.
     if (response.acknowledged_entries.length > 0) {
       const syncedAt = now();
-      await store.upsert(
-        response.acknowledged_entries.map((entry) => fromWireEntryOutput(entry, syncedAt)),
-      );
+      // Issue #216: applyAcknowledged(), not upsert(), and it needs the row
+      // as *pushed* alongside the Server's confirmation — `entriesToPush` is
+      // exactly that, read from `pending()` before this request went out.
+      // Without it the store cannot tell "the Server confirmed what I sent"
+      // from "the Server confirmed what I sent, and the user has edited it
+      // since", and applying the second reverts that edit and clears its
+      // pending mark so nothing re-pushes it.
+      //
+      // Matched by id rather than by position: nothing in ADR 0059 promises
+      // `acknowledged_entries` comes back in the order it was sent, and a
+      // positional pairing would be a silent mismatch if it ever did not.
+      // An acknowledgement for an id this request did not push is dropped —
+      // it cannot be reasoned about here, and there is no local state it
+      // could correctly confirm.
+      const pushedById = new Map(entriesToPush.map((entry) => [entry.id, entry]));
+      const acknowledged: AcknowledgedEntry[] = [];
+      for (const wire of response.acknowledged_entries) {
+        const asPushed = pushedById.get(wire.id);
+        if (asPushed !== undefined) {
+          acknowledged.push({ confirmed: fromWireEntryOutput(wire, syncedAt), asPushed });
+        }
+      }
+      await store.applyAcknowledged(acknowledged);
     }
     if (response.entries.length > 0) {
       const syncedAt = now();
