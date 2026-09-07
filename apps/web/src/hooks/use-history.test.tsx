@@ -58,6 +58,7 @@ function createFakeStore(): EntryStore {
       entries = [...entries, ...incoming];
     }),
     applyPulled: vi.fn(async () => {}),
+    applyAcknowledged: vi.fn(async () => {}),
     pending: vi.fn(async () => []),
     getCursor: vi.fn(async () => 0),
     setCursor: vi.fn(async () => {}),
@@ -96,6 +97,7 @@ function createFakeTaskStore(): TaskStore {
     upsert: vi.fn(async (incoming: Task[]) => {
       active = [...active, ...incoming];
     }),
+    applyPulled: vi.fn(async () => {}),
     complete: vi.fn(async () => {}),
     uncomplete: vi.fn(async () => {}),
     rename: vi.fn(async () => {}),
@@ -617,6 +619,7 @@ describe("useHistory", () => {
         list,
         upsert: vi.fn(async () => {}),
         applyPulled: vi.fn(async () => {}),
+        applyAcknowledged: vi.fn(async () => {}),
         pending: vi.fn(async () => []),
         getCursor: vi.fn(async () => 0),
         setCursor: vi.fn(async () => {}),

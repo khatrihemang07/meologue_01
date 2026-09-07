@@ -38,6 +38,7 @@ function createFakeStore(): LabelStore {
     upsert: vi.fn(async (incoming: Label[]) => {
       active = [...active, ...incoming];
     }),
+    applyPulled: vi.fn(async () => {}),
     rename: vi.fn(async () => {}),
     setColour: vi.fn(async () => {}),
     remove: vi.fn(async () => {}),

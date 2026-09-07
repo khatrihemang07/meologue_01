@@ -26,6 +26,15 @@ import type { SqliteDriver } from "./driver";
 import { kv, tasks } from "./schema";
 
 /**
+ * See SqliteEntryStore's own identical constant (../sqlite/sqlite-entry-
+ * store.ts) for the full reasoning — this is the same normalisation,
+ * applied to `tasks.updated_at` instead of `entries.updated_at`. Kept as
+ * its own constant, not imported, because the two stores intentionally
+ * share no runtime code (ADR 0047), only the shape of the fix.
+ */
+const MILLISECOND_PRECISION = "%Y-%m-%dT%H:%M:%f";
+
+/**
  * The SQLite-backed TaskStore (ADR 0047), platform-free — mirrors
  * SqliteEntryStore (./sqlite-entry-store.ts) closely enough that a reader
  * of one recognises the other, including its hand-maintained FTS index
@@ -205,6 +214,87 @@ export class SqliteTaskStore implements TaskStore {
       });
     for (const t of normalized) {
       await this.indexForSearch(t);
+    }
+  }
+
+  /**
+   * Issue #218 — see TaskStore.applyPulled's own doc comment (../task-
+   * store.ts) and EntryStore.applyPulled's (../store.ts), which carries
+   * the full rule and the reasoning behind every clause. Mirrors
+   * SqliteEntryStore.applyPulled's own `setWhere` shape (../sqlite/
+   * sqlite-entry-store.ts) exactly, applied to `tasks` instead of
+   * `entries`.
+   *
+   * **Two FTS5 tables, not one.** `upsert` above indexes the incoming
+   * rows directly; this cannot, because `setWhere` can refuse a row this
+   * statement still hands to `indexForSearch` if that row were indexed
+   * as-is — a refused pull would then appear to have landed in Search
+   * even though the table itself kept the local edit. So this re-reads
+   * whichever rows survive, in chunks (`chunkIds`, the same batching
+   * SqliteEntryStore.applyPulled uses), and indexes those instead —
+   * `indexForSearch` itself already maintains both `tasks_fts` and
+   * `task_descriptions_fts` from the one `{ id, content, description,
+   * deletedAt }` shape.
+   */
+  async applyPulled(incoming: Task[]): Promise<void> {
+    if (incoming.length === 0) {
+      return;
+    }
+    // See upsert()'s own comment for why each defaulter runs before the
+    // write — applyPulled owes callers the identical guarantee upsert
+    // does: no column here is ever actually `undefined`.
+    const normalized = incoming
+      .map(withDefaultSchedulingFields)
+      .map(withDefaultLabelIds)
+      .map(withDefaultDateString)
+      .map(withDefaultStructureFields)
+      .map(withDefaultDescription)
+      .map(withDefaultDayOrder);
+    await this.db
+      .insert(tasks)
+      .values(normalized)
+      .onConflictDoUpdate({
+        target: tasks.id,
+        set: {
+          deviceId: sql`excluded.device_id`,
+          content: sql`excluded.content`,
+          completedAt: sql`excluded.completed_at`,
+          orderKey: sql`excluded.order_key`,
+          dayOrder: sql`excluded.day_order`,
+          createdAt: sql`excluded.created_at`,
+          updatedAt: sql`excluded.updated_at`,
+          seq: sql`excluded.seq`,
+          syncedAt: sql`excluded.synced_at`,
+          deletedAt: sql`excluded.deleted_at`,
+          date: sql`excluded.date`,
+          deadline: sql`excluded.deadline`,
+          priority: sql`excluded.priority`,
+          labelIds: sql`excluded.label_ids`,
+          dateString: sql`excluded.date_string`,
+          projectId: sql`excluded.project_id`,
+          sectionId: sql`excluded.section_id`,
+          parentId: sql`excluded.parent_id`,
+          description: sql`excluded.description`,
+        },
+        setWhere: sql`${tasks.seq} IS NOT NULL OR strftime('${sql.raw(MILLISECOND_PRECISION)}', excluded.updated_at) >= strftime('${sql.raw(MILLISECOND_PRECISION)}', ${tasks.updatedAt}) OR excluded.deleted_at IS NOT NULL`,
+      });
+    // Re-derived from what the rows now actually hold, never from
+    // `normalized` — see SqliteEntryStore.applyPulled's identical
+    // comment for why indexing the incoming shape would make Search the
+    // one place a refused pull still appeared to have landed.
+    for (const chunk of chunkIds(normalized.map((t) => t.id))) {
+      const rows = await this.db
+        .select({
+          id: tasks.id,
+          content: tasks.content,
+          description: tasks.description,
+          deletedAt: tasks.deletedAt,
+        })
+        .from(tasks)
+        .where(inArray(tasks.id, chunk));
+      for (const row of rows) {
+        await this.indexForSearch(row);
+      }
     }
   }
 
@@ -770,6 +860,20 @@ export class SqliteTaskStore implements TaskStore {
       .values({ key, value })
       .onConflictDoUpdate({ target: kv.key, set: { value } });
   }
+}
+
+// Mirrors SqliteEntryStore's own identical helper (../sqlite/sqlite-
+// entry-store.ts) — see its comment for why this is chunked at all
+// rather than one IN-list of arbitrary size. Used only by applyPulled's
+// own re-read above.
+const APPLY_PULLED_CHUNK_SIZE = 500;
+
+function chunkIds(ids: string[]): string[][] {
+  const chunks: string[][] = [];
+  for (let i = 0; i < ids.length; i += APPLY_PULLED_CHUNK_SIZE) {
+    chunks.push(ids.slice(i, i + APPLY_PULLED_CHUNK_SIZE));
+  }
+  return chunks;
 }
 
 // Namespaced apart from CURSOR_KEY (../sqlite/schema.ts) — see

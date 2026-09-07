@@ -597,6 +597,9 @@ const ENTRY_STORE_METHODS: StoreMethodNames<EntryStore> = {
   // deferred store on the session's very first tick, which is exactly the
   // tick a store-open rewrite races.
   applyPulled: true,
+  // Issue #216 — the acknowledgement arm's own write path, alongside the
+  // pull's above. Same compile-time checkpoint, same reason.
+  applyAcknowledged: true,
   pending: true,
   getCursor: true,
   setCursor: true,
@@ -648,6 +651,7 @@ const TASK_STORE_METHODS: StoreMethodNames<TaskStore> = {
   listCompleted: true,
   get: true,
   upsert: true,
+  applyPulled: true,
   complete: true,
   uncomplete: true,
   rename: true,
@@ -703,6 +707,7 @@ const LABEL_STORE_METHODS: StoreMethodNames<LabelStore> = {
   list: true,
   get: true,
   upsert: true,
+  applyPulled: true,
   rename: true,
   setColour: true,
   remove: true,
@@ -727,6 +732,7 @@ const PROJECT_STORE_METHODS: StoreMethodNames<ProjectStore> = {
   listProjects: true,
   getProject: true,
   upsertProjects: true,
+  applyPulledProjects: true,
   renameProject: true,
   setProjectColour: true,
   setProjectDescription: true,
@@ -749,6 +755,7 @@ const PROJECT_STORE_METHODS: StoreMethodNames<ProjectStore> = {
   // Issue #182's Sync write path for Sections — the identical
   // compile-time checkpoint as every method here.
   upsertSections: true,
+  applyPulledSections: true,
   renameSection: true,
   setSectionDescription: true,
   reorderSection: true,
@@ -777,6 +784,7 @@ const COMMENT_STORE_METHODS: StoreMethodNames<CommentStore> = {
   listByTask: true,
   get: true,
   upsert: true,
+  applyPulled: true,
   edit: true,
   remove: true,
   pending: true,

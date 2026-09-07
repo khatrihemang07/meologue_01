@@ -1132,6 +1132,160 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
     });
   });
 
+  // Issue #218: Sync's pull write path — everything above exercises
+  // upsert(), which stays deliberately wholesale; these are the cases
+  // that separate applyPulled() from it. See TaskStore.applyPulled's own
+  // doc comment (../task-store.ts) and EntryStore.applyPulled's
+  // (../store.ts, mirrored section for section by
+  // entry-store-contract.ts's own "applyPulled() (issue #215)" block)
+  // for the rule and every reason behind it.
+  describe("applyPulled() (issue #218)", () => {
+    it("applies an incoming row over a local row with nothing pending", async () => {
+      await store.upsert([task({ id: "a", content: "as this Device last saw it", seq: 1 })]);
+
+      await store.applyPulled([
+        task({
+          id: "a",
+          content: "edited on another Device",
+          updatedAt: "2026-01-02T00:00:00.000Z",
+          seq: 2,
+        }),
+      ]);
+
+      const found = await store.get("a");
+      expect(found).toMatchObject({ id: "a", content: "edited on another Device", seq: 2 });
+    });
+
+    it("inserts a Task this Device has never seen", async () => {
+      await store.applyPulled([task({ id: "fresh", content: "from another Device", seq: 7 })]);
+
+      expect(await store.get("fresh")).toMatchObject({ id: "fresh" });
+    });
+
+    it("does not overwrite a local edit that has not been pushed yet", async () => {
+      await store.upsert([task({ id: "a", content: "before the local edit", seq: 1 })]);
+      await store.rename("a", "the local edit nobody has pushed");
+
+      await store.applyPulled([task({ id: "a", content: "before the local edit", seq: 1 })]);
+
+      const found = await store.get("a");
+      expect(found).toMatchObject({ content: "the local edit nobody has pushed" });
+    });
+
+    it("leaves the surviving local edit pending, so the next Sync still pushes it", async () => {
+      await store.upsert([task({ id: "a", content: "before", seq: 1 })]);
+      await store.rename("a", "the local edit nobody has pushed");
+
+      await store.applyPulled([task({ id: "a", content: "before", seq: 1 })]);
+
+      const pending = await store.pending();
+      expect(pending.map((t) => t.id)).toEqual(["a"]);
+      expect(pending[0]).toMatchObject({
+        content: "the local edit nobody has pushed",
+        seq: null,
+      });
+    });
+
+    it("applies an incoming row that is newer than the pending local edit", async () => {
+      await store.upsert([task({ id: "a", content: "before", seq: 1 })]);
+      await store.rename("a", "the local edit");
+
+      await store.applyPulled([
+        task({
+          id: "a",
+          content: "a later edit from another Device",
+          updatedAt: "2099-01-01T00:00:00.000Z",
+          seq: 9,
+        }),
+      ]);
+
+      const found = await store.get("a");
+      expect(found).toMatchObject({ content: "a later edit from another Device", seq: 9 });
+    });
+
+    it("applies an incoming row whose updatedAt ties the pending local row", async () => {
+      await store.upsert([task({ id: "a", content: "before", seq: 1 })]);
+      await store.rename("a", "the local edit");
+      const local = await store.get("a");
+
+      await store.applyPulled([
+        task({
+          id: "a",
+          content: "the local edit",
+          updatedAt: local?.updatedAt as string,
+          seq: 9,
+        }),
+      ]);
+
+      expect(await store.pending()).toEqual([]);
+      expect(await store.get("a")).toMatchObject({ id: "a", seq: 9 });
+    });
+
+    it("applies an incoming tombstone even over a newer pending local edit", async () => {
+      await store.upsert([task({ id: "a", content: "a recurring chore", seq: 1 })]);
+      await store.rename("a", "the local edit nobody has pushed");
+
+      await store.applyPulled([
+        task({
+          id: "a",
+          content: "",
+          updatedAt: "2026-01-02T00:00:00.000Z",
+          seq: 9,
+          deletedAt: "2026-01-02T00:00:00.000Z",
+        }),
+      ]);
+
+      expect(await store.get("a")).toBeUndefined();
+      expect(await store.search("pushed")).toEqual([]);
+    });
+
+    it("refuses only the rows it must, applying the rest of the batch", async () => {
+      await store.upsert([
+        task({ id: "a", content: "before", seq: 1 }),
+        task({ id: "b", content: "b before", seq: 2 }),
+      ]);
+      await store.rename("a", "the local edit nobody has pushed");
+
+      await store.applyPulled([
+        task({ id: "a", content: "before", seq: 1 }),
+        task({
+          id: "b",
+          content: "b, edited elsewhere",
+          updatedAt: "2026-01-02T00:00:00.000Z",
+          seq: 3,
+        }),
+      ]);
+
+      const a = await store.get("a");
+      const b = await store.get("b");
+      expect(a).toMatchObject({ content: "the local edit nobody has pushed", seq: null });
+      expect(b).toMatchObject({ content: "b, edited elsewhere", seq: 3 });
+    });
+
+    // Search has to agree with what the row actually holds — indexing
+    // the refused incoming content here would make Search the one place
+    // the lost edit still appeared to have happened. Task-specific: both
+    // tasks_fts (title) and task_descriptions_fts (Description) have to
+    // reflect the survivor.
+    it("indexes the row that survived, not the incoming row it refused", async () => {
+      await store.upsert([task({ id: "a", content: "a recurring chore", seq: 1 })]);
+      await store.rename("a", "a finished errand");
+
+      await store.applyPulled([task({ id: "a", content: "a recurring chore", seq: 1 })]);
+
+      expect((await store.search("errand")).map((t) => t.id)).toEqual(["a"]);
+      expect(await store.search("recurring")).toEqual([]);
+    });
+
+    it("is a no-op on an empty batch", async () => {
+      await store.upsert([task({ id: "a", seq: 1 })]);
+
+      await store.applyPulled([]);
+
+      expect(await store.get("a")).toMatchObject({ id: "a" });
+    });
+  });
+
   // Issue #196: every setter that clears seq/syncedAt also stamps
   // updatedAt — covered here across several of a Task's own mutators
   // (CLAUDE.md's own brief: Task has the most setters of any store, so

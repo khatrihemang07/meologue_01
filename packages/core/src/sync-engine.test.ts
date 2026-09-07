@@ -357,6 +357,50 @@ describe("sync engine", () => {
     ]);
   });
 
+  // Issue #216, at the level it actually happens: the user edits a row
+  // while the request carrying its push is still in flight, so `pending()`
+  // had already been read and the acknowledgement coming back is for the
+  // OLD body. Applying it would revert the edit and stamp a `seq`, so
+  // nothing would ever re-push it.
+  it("does not let an acknowledgement undo an edit made while the push was in flight", async () => {
+    const stores = newStores();
+    await stores.store.upsert([entry({ id: "a", body: "pushed body", seq: null })]);
+
+    const transport = vi.fn(async (request) => {
+      expect(request.entries).toEqual([expect.objectContaining({ body: "pushed body" })]);
+      // The edit lands after the push was built, before the response is
+      // applied — the window this ticket is about.
+      await stores.store.edit("a", "edited while in flight");
+      return {
+        ...emptyResponse,
+        acknowledged_entries: [wireEntryOutput({ id: "a", body: "pushed body", seq: 4 })],
+      } satisfies WireSyncResponse;
+    });
+
+    await sync({ ...stores, transport, deviceId: DEVICE_ID });
+
+    const [survived] = await stores.store.list();
+    expect(survived).toMatchObject({ body: "edited while in flight", seq: null });
+  });
+
+  // ADR 0059's whole purpose still has to work: an acknowledgement for a
+  // row nothing has touched since the push clears its pending mark, so the
+  // row does not re-push on every tick forever.
+  it("still clears pending when the acknowledged row has not changed since the push", async () => {
+    const stores = newStores();
+    await stores.store.upsert([entry({ id: "a", body: "pushed body", seq: null })]);
+
+    const transport = vi.fn(async () => ({
+      ...emptyResponse,
+      acknowledged_entries: [wireEntryOutput({ id: "a", body: "pushed body", seq: 4 })],
+    }));
+
+    await sync({ ...stores, transport, deviceId: DEVICE_ID });
+
+    expect(await stores.store.pending()).toEqual([]);
+    expect((await stores.store.list())[0]).toMatchObject({ seq: 4 });
+  });
+
   // The Task-shaped sibling of the test above, over `task_cursor` instead
   // of `cursor` — the two Cursors are tracked, and must never regress,
   // completely independently of one another.

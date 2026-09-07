@@ -16,6 +16,7 @@ import {
 import { matchesSubstring, matchesWholeWord } from "../task-search";
 import type { TaskSearchOptions, TaskStore } from "../task-store";
 import type { Task } from "../task-types";
+import { isAtLeastAsNewAs } from "../updated-at";
 
 /**
  * A fake TaskStore for exercising the sync engine and Todo's UI in tests —
@@ -135,6 +136,36 @@ export class InMemoryTaskStore implements TaskStore {
           ),
         ),
       );
+    }
+  }
+
+  /**
+   * Mirrors SqliteTaskStore.applyPulled() (issue #218) — see
+   * TaskStore.applyPulled's own doc comment (../task-store.ts) for the
+   * rule both implementations owe callers, and InMemoryEntryStore.
+   * applyPulled's own comment (./in-memory-entry-store.ts) for why this
+   * is written as "apply unless," the same shape the SQL guard is in.
+   */
+  async applyPulled(incoming: Task[]): Promise<void> {
+    for (const raw of incoming) {
+      const entry = withDefaultDayOrder(
+        withDefaultDescription(
+          withDefaultStructureFields(
+            withDefaultDateString(withDefaultLabelIds(withDefaultSchedulingFields(raw))),
+          ),
+        ),
+      );
+      const local = this.tasks.get(entry.id);
+      const incomingIsAtLeastAsNew =
+        local !== undefined && isAtLeastAsNewAs(entry.updatedAt, local.updatedAt);
+      const apply =
+        local === undefined ||
+        local.seq !== null ||
+        incomingIsAtLeastAsNew ||
+        entry.deletedAt !== null;
+      if (apply) {
+        this.tasks.set(entry.id, entry);
+      }
     }
   }
 

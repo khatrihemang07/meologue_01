@@ -133,6 +133,7 @@ export {
   today,
 } from "./task-views";
 export type { Entry } from "./types";
+export { isAtLeastAsNewAs, isStrictlyNewerThan } from "./updated-at";
 export type {
   WireConfigPatch,
   WireConfigResponse,

@@ -11,6 +11,15 @@ import type { SqliteDriver } from "./driver";
 import { kv, labels } from "./schema";
 
 /**
+ * See SqliteEntryStore's own identical constant (./sqlite-entry-store.ts)
+ * for the full reasoning — this is the same normalisation, applied to
+ * `labels.updated_at` instead of `entries.updated_at`. Kept as its own
+ * constant, not imported, because these stores intentionally share no
+ * runtime code (ADR 0047), only the shape of the fix.
+ */
+const MILLISECOND_PRECISION = "%Y-%m-%dT%H:%M:%f";
+
+/**
  * The SQLite-backed LabelStore (issue #170) — mirrors SqliteTaskStore
  * (./sqlite-task-store.ts) closely enough that a reader of one recognises
  * the other, including the same non-atomicity every store built against
@@ -79,6 +88,40 @@ export class SqliteLabelStore implements LabelStore {
           syncedAt: sql`excluded.synced_at`,
           deletedAt: sql`excluded.deleted_at`,
         },
+      });
+  }
+
+  /**
+   * Issue #218 — see LabelStore.applyPulled's own doc comment (../label-
+   * store.ts) and EntryStore.applyPulled's (../store.ts), which carries
+   * the full rule and the reasoning behind every clause. Mirrors
+   * SqliteEntryStore.applyPulled's own `setWhere` shape (./sqlite-entry-
+   * store.ts) exactly, applied to `labels` instead of `entries`. No
+   * search index to maintain here — Labels have none — so, unlike
+   * SqliteTaskStore.applyPulled, there is no re-read/reindex step after
+   * the write.
+   */
+  async applyPulled(incoming: Label[]): Promise<void> {
+    if (incoming.length === 0) {
+      return;
+    }
+    const normalized = incoming.map(withDefaultLabelColour);
+    await this.db
+      .insert(labels)
+      .values(normalized)
+      .onConflictDoUpdate({
+        target: labels.id,
+        set: {
+          deviceId: sql`excluded.device_id`,
+          name: sql`excluded.name`,
+          colour: sql`excluded.colour`,
+          createdAt: sql`excluded.created_at`,
+          updatedAt: sql`excluded.updated_at`,
+          seq: sql`excluded.seq`,
+          syncedAt: sql`excluded.synced_at`,
+          deletedAt: sql`excluded.deleted_at`,
+        },
+        setWhere: sql`${labels.seq} IS NOT NULL OR strftime('${sql.raw(MILLISECOND_PRECISION)}', excluded.updated_at) >= strftime('${sql.raw(MILLISECOND_PRECISION)}', ${labels.updatedAt}) OR excluded.deleted_at IS NOT NULL`,
       });
   }
 

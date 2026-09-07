@@ -32,6 +32,35 @@ export interface EntryPage {
   limit?: number;
 }
 
+/**
+ * Issue #216: what Sync's acknowledgement arm hands the store — the Server's
+ * confirmation for a row, paired with the row **as this Device pushed it**.
+ *
+ * The pairing is the whole point. An acknowledgement cannot be applied
+ * unconditionally, because the user can edit a row between the push going out
+ * and the response coming back; applying it then reverts that edit *and*
+ * stamps a `seq`, so nothing re-pushes it and the edit is gone. Nor can it be
+ * guarded on `updatedAt` the way EntryStore.applyPulled is: ADR 0065 tolerates
+ * the Server holding an *older* `updatedAt` after an edit that landed on
+ * identical content, so that guard would refuse the acknowledgement forever
+ * and the row would re-push on every tick.
+ *
+ * What actually answers the question is "is the local row still the one I
+ * pushed", and only the caller knows what it pushed. That comparison is an
+ * equality between a row and a snapshot of itself, not between two writers, so
+ * it is exact whatever shape the timestamp is in and needs none of the
+ * normalisation ./updated-at.ts exists for — see
+ * SqliteEntryStore.applyAcknowledged for why the obvious justification for
+ * that ("a pending row is always client-written") is false, and why it does
+ * not matter.
+ */
+export interface AcknowledgedEntry {
+  /** The Server's current row for this id, as ADR 0059 returns it — a full row, so a write the Server refused against a tombstone teaches this Device the tombstone. */
+  readonly confirmed: Entry;
+  /** The row this Device sent, exactly as `pending()` handed it over. Only its `updatedAt` is read. */
+  readonly asPushed: Entry;
+}
+
 export interface EntryStore {
   /**
    * Every live Entry (tombstones excluded — ADR 0028), newest first by
@@ -109,6 +138,22 @@ export interface EntryStore {
    * every tick.
    */
   applyPulled(entries: Entry[]): Promise<void>;
+  /**
+   * Sync's **acknowledgement** write path (issue #216) — ADR 0059's
+   * `acknowledged_*` rows, never the Cursor-read ones.
+   *
+   * Applies each confirmation **only while the local row is still the one
+   * that was pushed**, compared on `updatedAt` against `asPushed` (see
+   * AcknowledgedEntry above for why that is the right question and why
+   * applyPulled's rule cannot be reused here). A row edited since the push
+   * is left exactly as it is, and left pending, so the next Sync carries the
+   * newer edit instead of the acknowledgement quietly undoing it.
+   *
+   * A row that is no longer pending is confirmed unconditionally: it has
+   * nothing local left to lose, and this is what keeps a redelivered
+   * acknowledgement idempotent.
+   */
+  applyAcknowledged(rows: readonly AcknowledgedEntry[]): Promise<void>;
   pending(): Promise<Entry[]>;
   getCursor(): Promise<number>;
   setCursor(seq: number): Promise<void>;

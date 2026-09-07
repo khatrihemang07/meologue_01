@@ -112,6 +112,153 @@ describe("mergeBackupIntoDevice", () => {
     expect(byId["tie-goes-nowhere"]?.body).toBe("this Device's own body");
   });
 
+  // Issue #217 / ADR 0065's amendment: the Server and this client do not
+  // write `updated_at` in the same shape, so byte order is not
+  // chronological order. The test above uses one shape on both sides,
+  // which is exactly why nothing caught this — the mismatch only exists
+  // where the two writers meet, and no fixture built a cross-shape pair.
+  describe("across the Server's timestamp shape and this client's", () => {
+    // The damaging direction, and the likely one: `'Z'` (0x5A) sorts above
+    // `'.'` (0x2E), so a Server value landing on a whole second compares
+    // GREATER than every client value inside that same second while being
+    // up to a second EARLIER. Raw comparison lets the Backup's older row
+    // overwrite this Device's later one.
+    it("does not let a whole-second Backup row overwrite a later row inside that same second", async () => {
+      const sourceDriver = new NodeSqliteDriver();
+      const { store: sourceStore } = await open(sourceDriver);
+      await sourceStore.upsert([
+        entry({
+          id: "whole-second",
+          body: "the Backup's older body",
+          // Server-shaped: chrono emits no fraction at all when the
+          // nanosecond component is zero.
+          updatedAt: "2026-02-01T12:00:00Z",
+        }),
+      ]);
+      const sql = await dumpDatabase(sourceDriver);
+
+      const targetDriver = new NodeSqliteDriver();
+      const { store: targetStore } = await open(targetDriver);
+      await targetStore.upsert([
+        entry({
+          id: "whole-second",
+          body: "this Device's later body",
+          // Client-shaped, and genuinely 500ms AFTER the Backup's row.
+          updatedAt: "2026-02-01T12:00:00.500Z",
+        }),
+      ]);
+
+      const outcome = await mergeBackupIntoDevice({
+        driver: targetDriver,
+        databaseSql: sql,
+        takeSafetyBackup: okSafetyBackup,
+      });
+      expect(outcome.ok).toBe(true);
+
+      const [merged] = await targetStore.list();
+      expect(merged?.body).toBe("this Device's later body");
+    });
+
+    // The mirror: a Server-shaped Backup row that really is later must
+    // still win over a client-shaped local row, so the fix cannot simply
+    // refuse everything it cannot compare byte-wise.
+    it("still lets a genuinely later Backup row win across the two shapes", async () => {
+      const sourceDriver = new NodeSqliteDriver();
+      const { store: sourceStore } = await open(sourceDriver);
+      await sourceStore.upsert([
+        entry({
+          id: "server-later",
+          body: "the Backup's later body",
+          updatedAt: "2026-02-01T12:00:01.250000Z",
+        }),
+      ]);
+      const sql = await dumpDatabase(sourceDriver);
+
+      const targetDriver = new NodeSqliteDriver();
+      const { store: targetStore } = await open(targetDriver);
+      await targetStore.upsert([
+        entry({
+          id: "server-later",
+          body: "this Device's earlier body",
+          updatedAt: "2026-02-01T12:00:00.500Z",
+        }),
+      ]);
+
+      const outcome = await mergeBackupIntoDevice({
+        driver: targetDriver,
+        databaseSql: sql,
+        takeSafetyBackup: okSafetyBackup,
+      });
+      expect(outcome.ok).toBe(true);
+
+      const [merged] = await targetStore.list();
+      expect(merged?.body).toBe("the Backup's later body");
+    });
+
+    // The case that outlives any future normalising migration, and the one
+    // nobody would think to keep once the two above start looking
+    // redundant. A Backup is a lossless copy of the database as it stood
+    // (dump.ts) and Restore puts those values back verbatim (restore.ts's
+    // own reason 3), so old shapes re-enter a Device through Restore no
+    // matter how thoroughly the live corpus has been normalised. Here the
+    // old shape arrives by a real Restore rather than being hand-written,
+    // and then has to lose a Merge correctly.
+    it("orders a row correctly after its old-shape updated_at arrived through a real Restore", async () => {
+      // An old Backup, carrying the Server's whole-second shape.
+      const oldBackupDriver = new NodeSqliteDriver();
+      const { store: oldBackupStore } = await open(oldBackupDriver);
+      await oldBackupStore.upsert([
+        entry({
+          id: "revived",
+          body: "the old Backup's body",
+          updatedAt: "2026-02-01T12:00:00Z",
+        }),
+      ]);
+      const oldBackupSql = await dumpDatabase(oldBackupDriver);
+
+      // This Device restores it, which writes that shape back verbatim.
+      const deviceDriver = new NodeSqliteDriver();
+      const { store: deviceStore } = await open(deviceDriver);
+      const restored = await restoreFromBackup({
+        driver: deviceDriver,
+        databaseSql: oldBackupSql,
+        takeSafetyBackup: okSafetyBackup,
+      });
+      expect(restored.ok).toBe(true);
+      // The old shape really is what is now stored — if Restore ever starts
+      // normalising on the way in, this assertion is the one that should
+      // fail and force the decision to be made deliberately.
+      const revivedRow = await deviceDriver.execute(
+        "SELECT updated_at FROM entries WHERE id = 'revived'",
+        [],
+        "get",
+      );
+      expect(revivedRow.rows).toEqual(["2026-02-01T12:00:00Z"]);
+
+      // A second Backup, client-shaped and 500ms later, merged in.
+      const laterDriver = new NodeSqliteDriver();
+      const { store: laterStore } = await open(laterDriver);
+      await laterStore.upsert([
+        entry({
+          id: "revived",
+          body: "the later body",
+          updatedAt: "2026-02-01T12:00:00.500Z",
+        }),
+      ]);
+      const laterSql = await dumpDatabase(laterDriver);
+
+      const outcome = await mergeBackupIntoDevice({
+        driver: deviceDriver,
+        databaseSql: laterSql,
+        takeSafetyBackup: okSafetyBackup,
+      });
+      expect(outcome.ok).toBe(true);
+
+      const [merged] = await deviceStore.list();
+      expect(merged?.body).toBe("the later body");
+    });
+  });
+
   it("skips a row whose content is identical even when updated_at differs, and never marks it pending", async () => {
     // ADR 0059's own documented consequence: an "edit" that lands on
     // identical content leaves the Server's `updated_at` older than the

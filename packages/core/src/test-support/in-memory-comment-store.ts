@@ -2,6 +2,7 @@ import { assertValidCommentText } from "../comment-fields";
 import type { CommentStore } from "../comment-store";
 import type { Comment } from "../comment-types";
 import { matchesSubstring } from "../task-search";
+import { isAtLeastAsNewAs } from "../updated-at";
 
 /**
  * A fake CommentStore for exercising Todo's UI in tests — the
@@ -41,6 +42,30 @@ export class InMemoryCommentStore implements CommentStore {
   async upsert(newComments: Comment[]): Promise<void> {
     for (const c of newComments) {
       this.comments.set(c.id, c);
+    }
+  }
+
+  /**
+   * Mirrors SqliteCommentStore.applyPulled() (issue #218) — see
+   * CommentStore.applyPulled's own doc comment (../comment-store.ts) for
+   * the rule, and InMemoryEntryStore.applyPulled's own comment (./in-
+   * memory-entry-store.ts) for why this is written as "apply unless,"
+   * the same shape the SQL guard is in. No defaulter — Comments have
+   * none.
+   */
+  async applyPulled(incoming: Comment[]): Promise<void> {
+    for (const entry of incoming) {
+      const local = this.comments.get(entry.id);
+      const incomingIsAtLeastAsNew =
+        local !== undefined && isAtLeastAsNewAs(entry.updatedAt, local.updatedAt);
+      const apply =
+        local === undefined ||
+        local.seq !== null ||
+        incomingIsAtLeastAsNew ||
+        entry.deletedAt !== null;
+      if (apply) {
+        this.comments.set(entry.id, entry);
+      }
     }
   }
 

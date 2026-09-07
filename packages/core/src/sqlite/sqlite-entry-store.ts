@@ -1,7 +1,7 @@
 import { and, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
 import { mintId } from "../id";
-import type { EntryPage, EntryStore } from "../store";
+import type { AcknowledgedEntry, EntryPage, EntryStore } from "../store";
 import type { Entry } from "../types";
 import type { SqliteDriver } from "./driver";
 import {
@@ -248,6 +248,78 @@ export class SqliteEntryStore implements EntryStore {
         .from(entries)
         .where(inArray(entries.id, chunk));
       for (const row of rows) {
+        await this.indexForSearch(row);
+      }
+    }
+  }
+
+  /**
+   * Issue #216 — see EntryStore.applyAcknowledged's own doc comment
+   * (../store.ts) for the rule, and AcknowledgedEntry's for why the row as
+   * pushed has to travel alongside the confirmation.
+   *
+   * One guarded statement **per row**, unlike applyPulled's single batch
+   * upsert, and that is forced rather than chosen: each row's guard compares
+   * against its own `asPushed.updatedAt`, and a single `setWhere` cannot
+   * carry a different value per row of a batch. The guard still sits inside
+   * the statement rather than in a read-then-write, so there is no `await`
+   * between deciding and writing — the same property applyPulled protects,
+   * which matters here for exactly the same reason: this method exists
+   * because of a write that interleaves with a Sync round trip.
+   *
+   * `entries.seq IS NOT NULL` first: a row the Server has already
+   * acknowledged has nothing local left to lose, and confirming it again is
+   * what keeps a redelivered acknowledgement idempotent.
+   *
+   * Plain `=` on `updated_at`, deliberately, where applyPulled needs
+   * `strftime` normalisation (../updated-at.ts). Equality, not ordering, and that is what makes it shape-proof. Both
+   * sides of this comparison are the *same row* — its current value against
+   * a snapshot of itself taken when it was pushed — so whatever wrote that
+   * string, both sides hold it byte for byte, and `=` is exact without any
+   * of the normalisation ../updated-at.ts exists for. This is not a
+   * cross-writer comparison at all, which is the only reason it can skip
+   * that.
+   *
+   * Worth naming the tempting wrong justification, because it is nearly
+   * right: "a pending row's `updated_at` was always written by this Device,
+   * so both are client-shaped." That is false. Merge marks every row it
+   * writes as pending (`merge.ts`'s `writeRow` nulls `seq`/`synced_at`)
+   * while taking `updated_at` straight from the Backup file, which may hold
+   * the Server's own six-digit shape. Such a row is pending, gets pushed,
+   * and is acknowledged here — and it works, because the reason above never
+   * depended on the shape.
+   */
+  async applyAcknowledged(rows: readonly AcknowledgedEntry[]): Promise<void> {
+    if (rows.length === 0) {
+      return;
+    }
+    for (const { confirmed, asPushed } of rows) {
+      await this.db
+        .insert(entries)
+        .values(confirmed)
+        .onConflictDoUpdate({
+          target: entries.id,
+          set: {
+            deviceId: sql`excluded.device_id`,
+            body: sql`excluded.body`,
+            createdAt: sql`excluded.created_at`,
+            updatedAt: sql`excluded.updated_at`,
+            seq: sql`excluded.seq`,
+            syncedAt: sql`excluded.synced_at`,
+            deletedAt: sql`excluded.deleted_at`,
+          },
+          setWhere: sql`${entries.seq} IS NOT NULL OR ${entries.updatedAt} = ${asPushed.updatedAt}`,
+        });
+    }
+    // Re-derived from whatever survived, never from `confirmed` — the same
+    // reasoning applyPulled gives, and it applies the moment a row can be
+    // refused at all.
+    for (const chunk of chunkIds(rows.map(({ confirmed }) => confirmed.id))) {
+      const found = await this.db
+        .select({ id: entries.id, body: entries.body, deletedAt: entries.deletedAt })
+        .from(entries)
+        .where(inArray(entries.id, chunk));
+      for (const row of found) {
         await this.indexForSearch(row);
       }
     }

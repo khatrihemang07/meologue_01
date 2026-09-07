@@ -235,6 +235,33 @@ describe("halveSoftBreaksInHistory", () => {
     expect(store.entries[0]?.body).toBe("a\n\n\n\nb");
   });
 
+  // Issue #217: the cutoff guard used to be a raw string comparison, and
+  // `updated_at` does not have one shape — the Server writes six
+  // fractional digits where this client writes three. `BODY_SOFT_BREAK_CUTOFF`
+  // is client-shaped and lands on a whole second, so a Server-written row
+  // inside that same millisecond compared as SMALLER and was rewritten
+  // despite being at or after the cutoff.
+  it("scans, but never writes, a Server-shaped row inside the cutoff's own millisecond", async () => {
+    const serverShapedAtCutoff = `${BODY_SOFT_BREAK_CUTOFF.replace(/\.\d{3}Z$/, ".000400Z")}`;
+    const store = fakeEntryStore([
+      entry({ id: "e1", body: "a\n\n\n\nb", updatedAt: serverShapedAtCutoff }),
+    ]);
+    const report = await halveSoftBreaksInHistory({ store });
+    expect(report).toEqual({ scanned: 1, rewritten: 0 });
+    expect(store.entries[0]?.body).toBe("a\n\n\n\nb");
+  });
+
+  // A body rewrite is not recoverable from inside this pass, so a
+  // timestamp neither comparison can read must skip rather than proceed.
+  it("scans, but never writes, a row whose updatedAt cannot be read at all", async () => {
+    const store = fakeEntryStore([
+      entry({ id: "e1", body: "a\n\n\n\nb", updatedAt: "not a timestamp" }),
+    ]);
+    const report = await halveSoftBreaksInHistory({ store });
+    expect(report).toEqual({ scanned: 1, rewritten: 0 });
+    expect(store.entries[0]?.body).toBe("a\n\n\n\nb");
+  });
+
   it("scans, but never writes, a row whose only \\n\\n is a block separator with nothing left to halve — proving nothing here would Sync or stale a Digest", async () => {
     // Contains "\n\n" (so it passes the runner's own cheap pre-check), but
     // that "\n\n" is the separator ahead of the paragraph following the
@@ -323,6 +350,7 @@ function fakeFullEntryStore(seed: Entry[]): EntryStore {
     ...inner,
     upsert: async () => {},
     applyPulled: async () => {},
+    applyAcknowledged: async () => {},
     pending: async () => [],
     getCursor: async () => 0,
     setCursor: async () => {},

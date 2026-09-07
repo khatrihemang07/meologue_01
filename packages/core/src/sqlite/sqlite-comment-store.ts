@@ -8,6 +8,15 @@ import type { SqliteDriver } from "./driver";
 import { comments, kv } from "./schema";
 
 /**
+ * See SqliteEntryStore's own identical constant (./sqlite-entry-store.ts)
+ * for the full reasoning — this is the same normalisation, applied to
+ * `comments.updated_at` instead of `entries.updated_at`. Kept as its own
+ * constant, not imported, because these stores intentionally share no
+ * runtime code (ADR 0047), only the shape of the fix.
+ */
+const MILLISECOND_PRECISION = "%Y-%m-%dT%H:%M:%f";
+
+/**
  * The SQLite-backed CommentStore (issue #180) — mirrors SqliteLabelStore
  * (./sqlite-label-store.ts) closely enough that a reader of one
  * recognises the other, including the same non-atomicity every store
@@ -78,6 +87,40 @@ export class SqliteCommentStore implements CommentStore {
           syncedAt: sql`excluded.synced_at`,
           deletedAt: sql`excluded.deleted_at`,
         },
+      });
+  }
+
+  /**
+   * Issue #218 — see CommentStore.applyPulled's own doc comment (../
+   * comment-store.ts) and EntryStore.applyPulled's (../store.ts), which
+   * carries the full rule and the reasoning behind every clause. Mirrors
+   * SqliteEntryStore.applyPulled's own `setWhere` shape (./sqlite-entry-
+   * store.ts) exactly, applied to `comments` instead of `entries`. No
+   * defaulter to run — Comments have none, unlike Task/Project/Section/
+   * Label — and no search index to maintain: CommentStore.search's own
+   * doc comment already establishes it as a live scan over list(), so no
+   * reindex step is needed here either.
+   */
+  async applyPulled(incoming: Comment[]): Promise<void> {
+    if (incoming.length === 0) {
+      return;
+    }
+    await this.db
+      .insert(comments)
+      .values(incoming)
+      .onConflictDoUpdate({
+        target: comments.id,
+        set: {
+          deviceId: sql`excluded.device_id`,
+          taskId: sql`excluded.task_id`,
+          text: sql`excluded.text`,
+          createdAt: sql`excluded.created_at`,
+          updatedAt: sql`excluded.updated_at`,
+          seq: sql`excluded.seq`,
+          syncedAt: sql`excluded.synced_at`,
+          deletedAt: sql`excluded.deleted_at`,
+        },
+        setWhere: sql`${comments.seq} IS NOT NULL OR strftime('${sql.raw(MILLISECOND_PRECISION)}', excluded.updated_at) >= strftime('${sql.raw(MILLISECOND_PRECISION)}', ${comments.updatedAt}) OR excluded.deleted_at IS NOT NULL`,
       });
   }
 

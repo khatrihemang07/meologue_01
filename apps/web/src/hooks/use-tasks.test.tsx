@@ -105,6 +105,7 @@ function createFakeStore(): TaskStore {
     upsert: vi.fn(async (incoming: Task[]) => {
       active = [...active, ...incoming];
     }),
+    applyPulled: vi.fn(async () => {}),
     complete: vi.fn(async (id: string, completedAt: string) => {
       const found = active.find((t) => t.id === id);
       if (!found) return;
@@ -231,6 +232,7 @@ function createFakeEntryStore(initial: readonly Entry[] = []): EntryStore {
       entries = [...entries, ...incoming];
     }),
     applyPulled: vi.fn(async () => {}),
+    applyAcknowledged: vi.fn(async () => {}),
     pending: vi.fn(async () => []),
     getCursor: vi.fn(async () => 0),
     setCursor: vi.fn(async () => {}),

@@ -734,4 +734,191 @@ export function entryStoreContract(createStore: () => EntryStore | Promise<Entry
       expect((await store.list()).map((e) => e.id)).toEqual(["a"]);
     });
   });
+
+  // Issue #216: Sync's acknowledgement arm. `upsert()` overwrote a row
+  // wholesale from whatever the Server confirmed, which loses an edit made
+  // between the push going out and the response coming back — the row is
+  // reverted to the pushed version AND stamped with a `seq`, so nothing
+  // re-pushes it. The narrower sibling of #215, and it cannot use
+  // applyPulled's rule: ADR 0065 tolerates the Server holding an OLDER
+  // `updated_at` after an edit that landed on identical content, so an
+  // `updated_at` guard would refuse the acknowledgement forever and the
+  // row would re-push on every tick.
+  describe("applyAcknowledged() (issue #216)", () => {
+    it("confirms a row that has not changed since it was pushed, clearing pending", async () => {
+      const pushed = entry({ id: "a", body: "pushed body", seq: null });
+      await store.upsert([pushed]);
+
+      await store.applyAcknowledged([
+        {
+          asPushed: pushed,
+          confirmed: entry({
+            id: "a",
+            body: "pushed body",
+            seq: 7,
+            syncedAt: "2026-01-02T00:00:00.000Z",
+          }),
+        },
+      ]);
+
+      expect(await store.pending()).toEqual([]);
+      expect((await store.list())[0]).toMatchObject({ id: "a", seq: 7 });
+    });
+
+    // ADR 0065's tolerated divergence: an edit landing on identical content
+    // leaves the Server with an OLDER updated_at than this Device. The
+    // acknowledgement must still land, or the row never clears pending.
+    it("confirms an unchanged row even when the Server's updatedAt is older than this Device's", async () => {
+      const pushed = entry({
+        id: "a",
+        body: "same content",
+        updatedAt: "2026-02-01T00:00:00.000Z",
+        seq: null,
+      });
+      await store.upsert([pushed]);
+
+      await store.applyAcknowledged([
+        {
+          asPushed: pushed,
+          confirmed: entry({
+            id: "a",
+            body: "same content",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+            seq: 7,
+            syncedAt: "2026-01-02T00:00:00.000Z",
+          }),
+        },
+      ]);
+
+      expect(await store.pending()).toEqual([]);
+    });
+
+    // The defect itself: the user edits again while the request is in
+    // flight. The acknowledgement is for the OLD body and must not land.
+    it("does not overwrite an edit made after the push went out", async () => {
+      const pushed = entry({ id: "a", body: "pushed body", seq: null });
+      await store.upsert([pushed]);
+      await store.edit("a", "edited while the request was in flight");
+
+      await store.applyAcknowledged([
+        {
+          asPushed: pushed,
+          confirmed: entry({
+            id: "a",
+            body: "pushed body",
+            seq: 7,
+            syncedAt: "2026-01-02T00:00:00.000Z",
+          }),
+        },
+      ]);
+
+      expect((await store.list())[0]).toMatchObject({
+        body: "edited while the request was in flight",
+      });
+    });
+
+    it("leaves that newer edit pending, so the next Sync pushes it", async () => {
+      const pushed = entry({ id: "a", body: "pushed body", seq: null });
+      await store.upsert([pushed]);
+      await store.edit("a", "edited while the request was in flight");
+
+      await store.applyAcknowledged([
+        {
+          asPushed: pushed,
+          confirmed: entry({
+            id: "a",
+            body: "pushed body",
+            seq: 7,
+            syncedAt: "2026-01-02T00:00:00.000Z",
+          }),
+        },
+      ]);
+
+      const pending = await store.pending();
+      expect(pending.map((e) => e.id)).toEqual(["a"]);
+      expect(pending[0]).toMatchObject({ seq: null });
+    });
+
+    // ADR 0059: full rows are acknowledged precisely so a write the Server
+    // REFUSED (because the row is tombstoned there) teaches this Device the
+    // tombstone. That has to keep working.
+    it("carries back a tombstone the Server refused the write against", async () => {
+      const pushed = entry({ id: "a", body: "an edit the Server will refuse", seq: null });
+      await store.upsert([pushed]);
+
+      await store.applyAcknowledged([
+        {
+          asPushed: pushed,
+          confirmed: entry({
+            id: "a",
+            body: "",
+            seq: 9,
+            syncedAt: "2026-01-02T00:00:00.000Z",
+            deletedAt: "2026-01-02T00:00:00.000Z",
+          }),
+        },
+      ]);
+
+      expect(await store.list()).toEqual([]);
+    });
+
+    it("indexes the row that survived, not the confirmation it refused", async () => {
+      const pushed = entry({ id: "a", body: "a recurring chore", seq: null });
+      await store.upsert([pushed]);
+      await store.edit("a", "a finished errand");
+
+      await store.applyAcknowledged([
+        {
+          asPushed: pushed,
+          confirmed: entry({ id: "a", body: "a recurring chore", seq: 7 }),
+        },
+      ]);
+
+      expect((await store.search("errand")).map((e) => e.id)).toEqual(["a"]);
+      expect(await store.search("recurring")).toEqual([]);
+    });
+
+    // The guard is a raw `=` on `updated_at` where every other comparison
+    // needs normalising, and the reason is that it compares a row against a
+    // snapshot of ITSELF rather than across writers — so the shape is
+    // irrelevant. This pins that, because the obvious justification ("a
+    // pending row is always client-written") is false: Merge marks every
+    // row it writes as pending while taking `updated_at` straight from the
+    // Backup file, which may hold the Server's six-digit shape. Such a row
+    // is pending, gets pushed, and lands here.
+    it("confirms a pending row whose updatedAt is in the Server's shape, not this client's", async () => {
+      const merged = entry({
+        id: "a",
+        body: "folded in by a Merge",
+        // Six fractional digits — what a Backup taken from a Server-written
+        // row carries, and what Merge writes back verbatim.
+        updatedAt: "2026-09-05T16:23:02.794113Z",
+        seq: null,
+        syncedAt: null,
+      });
+      await store.upsert([merged]);
+
+      await store.applyAcknowledged([
+        {
+          asPushed: merged,
+          confirmed: entry({
+            id: "a",
+            body: "folded in by a Merge",
+            updatedAt: "2026-09-05T16:23:02.794113Z",
+            seq: 11,
+            syncedAt: "2026-09-07T00:00:00.000Z",
+          }),
+        },
+      ]);
+
+      expect(await store.pending()).toEqual([]);
+      expect((await store.list())[0]).toMatchObject({ id: "a", seq: 11 });
+    });
+
+    it("is a no-op on an empty batch", async () => {
+      await store.upsert([entry({ id: "a", seq: 1 })]);
+      await store.applyAcknowledged([]);
+      expect((await store.list()).map((e) => e.id)).toEqual(["a"]);
+    });
+  });
 }

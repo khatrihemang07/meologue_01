@@ -87,6 +87,7 @@ function createFakeStore(): ProjectStore {
     upsertProjects: vi.fn(async (incoming: Project[]) => {
       projects = [...projects, ...incoming];
     }),
+    applyPulledProjects: vi.fn(async () => {}),
     renameProject: vi.fn(async () => {}),
     setProjectColour: vi.fn(async () => {}),
     setProjectDescription: vi.fn(async () => {}),
@@ -119,6 +120,7 @@ function createFakeStore(): ProjectStore {
     upsertSections: vi.fn(async (incoming: Section[]) => {
       sections = [...sections, ...incoming];
     }),
+    applyPulledSections: vi.fn(async () => {}),
     renameSection: vi.fn(async () => {}),
     setSectionDescription: vi.fn(async () => {}),
     reorderSection: vi.fn(async () => {}),

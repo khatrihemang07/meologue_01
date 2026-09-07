@@ -147,13 +147,19 @@ cleaning up after the migration, and the bug comes back silently — for exactly
 already recovering from something. Anything that compares `updated_at` stays shape-tolerant
 permanently.
 
-**One fork is deliberately left open here.** If a normalising migration does happen, it has to
-decide what Restore does with a Backup that predates it. Normalising on the way in would contradict
-ADR 0064's "a Backup is a faithful copy of what this Device already has" and Restore's own promise
-to preserve what the file holds; staying faithful means old shapes keep arriving indefinitely. The
-instinct on both sides of this discussion was that **Restore should stay faithful and the
-comparison should stay tolerant** — but that is a real fork and whoever takes issue #217 should
-settle it explicitly rather than inherit it.
+**The fork is now settled, in issue #217: nothing is normalised on ingest, and every comparison
+stays shape-tolerant.** The alternative — normalise `updated_at` as it arrives, or in a one-time
+pass, so the stored corpus becomes uniform — was rejected on three grounds. It cannot retire a
+single comparison-site guard, for the Backup reason above, so it buys no simplification anywhere.
+It would have Restore rewrite values on the way in, contradicting ADR 0064's "a Backup is a
+faithful copy of what this Device already has" and `restore.ts`'s own reason 3. And it would be a
+schema migration plus a Cursor reset (ADR 0057) whose entire benefit is cosmetic uniformity in a
+column that is now never read raw.
+
+What replaced it is smaller and does the whole job: one function,
+`packages/core/src/updated-at.ts`, is the only place two `updated_at` values are ever ordered, and
+`SqliteEntryStore.applyPulled` does the same thing in SQL because it has to happen inside one
+statement. Both truncate to milliseconds, which is the finest this client can express.
 
 It also gives the regression suite a third case, beyond the two cross-shape pairs above: a row whose
 `updated_at` arrived via Restore from an old-shape Backup, winning or losing a Merge correctly. It

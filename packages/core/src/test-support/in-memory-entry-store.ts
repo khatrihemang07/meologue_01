@@ -1,5 +1,6 @@
-import type { EntryPage, EntryStore } from "../store";
+import type { AcknowledgedEntry, EntryPage, EntryStore } from "../store";
 import type { Entry } from "../types";
+import { isAtLeastAsNewAs } from "../updated-at";
 
 /**
  * A fake EntryStore for exercising the sync engine in tests. The real,
@@ -81,19 +82,18 @@ export class InMemoryEntryStore implements EntryStore {
    * Written as "apply unless", the same shape the SQL is in, rather than
    * as its inverse: the two have to agree on the awkward cases, and the
    * easiest way to keep them agreeing is to keep them the same sentence.
-   * `Date.parse` stands in for the real store's `strftime` normalisation
-   * (see there for why comparing the raw strings is wrong) and returns
-   * `NaN` exactly where `strftime` returns NULL, so an unreadable
-   * timestamp on either side refuses the row in both implementations
-   * rather than only in one.
+   * `isAtLeastAsNewAs` (../updated-at.ts) stands in for the real store's
+   * `strftime` normalisation — same millisecond resolution, same reason
+   * (see there for why comparing the raw strings is wrong) — and answers
+   * `false` for an unreadable value exactly where `strftime` returns NULL,
+   * so a timestamp neither side can read refuses the row in both
+   * implementations rather than only in one.
    */
   async applyPulled(incoming: Entry[]): Promise<void> {
     for (const entry of incoming) {
       const local = this.entries.get(entry.id);
-      const incomingMs = Date.parse(entry.updatedAt);
-      const localMs = local === undefined ? Number.NaN : Date.parse(local.updatedAt);
       const incomingIsAtLeastAsNew =
-        !Number.isNaN(incomingMs) && !Number.isNaN(localMs) && incomingMs >= localMs;
+        local !== undefined && isAtLeastAsNewAs(entry.updatedAt, local.updatedAt);
       const apply =
         local === undefined ||
         local.seq !== null ||
@@ -101,6 +101,23 @@ export class InMemoryEntryStore implements EntryStore {
         entry.deletedAt !== null;
       if (apply) {
         this.entries.set(entry.id, entry);
+      }
+    }
+  }
+
+  /**
+   * Mirrors SqliteEntryStore.applyAcknowledged() — see
+   * EntryStore.applyAcknowledged's doc comment (../store.ts) for the rule,
+   * and the real store for why the `updatedAt` equality here is raw rather
+   * than normalised (both sides were written by this same Device).
+   */
+  async applyAcknowledged(rows: readonly AcknowledgedEntry[]): Promise<void> {
+    for (const { confirmed, asPushed } of rows) {
+      const local = this.entries.get(confirmed.id);
+      const apply =
+        local === undefined || local.seq !== null || local.updatedAt === asPushed.updatedAt;
+      if (apply) {
+        this.entries.set(confirmed.id, confirmed);
       }
     }
   }
