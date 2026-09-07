@@ -10,6 +10,7 @@ import {
 import type { ProjectStore } from "../project-store";
 import type { Project, Section } from "../project-types";
 import type { TaskStore } from "../task-store";
+import { isAtLeastAsNewAs } from "../updated-at";
 
 /**
  * A fake ProjectStore for exercising Todo's UI in tests — the Project-
@@ -56,6 +57,30 @@ export class InMemoryProjectStore implements ProjectStore {
   async upsertProjects(newProjects: Project[]): Promise<void> {
     for (const p of newProjects) {
       this.projects.set(p.id, withDefaultProjectFields(p));
+    }
+  }
+
+  /**
+   * Mirrors SqliteProjectStore.applyPulledProjects() (issue #218) — see
+   * ProjectStore.applyPulledProjects's own doc comment (../project-store.ts)
+   * for the rule, and InMemoryEntryStore.applyPulled's own comment
+   * (./in-memory-entry-store.ts) for why this is written as "apply
+   * unless," the same shape the SQL guard is in.
+   */
+  async applyPulledProjects(incoming: Project[]): Promise<void> {
+    for (const raw of incoming) {
+      const entry = withDefaultProjectFields(raw);
+      const local = this.projects.get(entry.id);
+      const incomingIsAtLeastAsNew =
+        local !== undefined && isAtLeastAsNewAs(entry.updatedAt, local.updatedAt);
+      const apply =
+        local === undefined ||
+        local.seq !== null ||
+        incomingIsAtLeastAsNew ||
+        entry.deletedAt !== null;
+      if (apply) {
+        this.projects.set(entry.id, entry);
+      }
     }
   }
 
@@ -208,6 +233,29 @@ export class InMemoryProjectStore implements ProjectStore {
   async upsertSections(newSections: Section[]): Promise<void> {
     for (const s of newSections) {
       this.sections.set(s.id, withDefaultSectionFields(s));
+    }
+  }
+
+  /**
+   * Mirrors SqliteProjectStore.applyPulledSections() (issue #218) — see
+   * ProjectStore.applyPulledSections's own doc comment (../project-store.ts)
+   * for the rule, including why this deliberately carries no
+   * twenty-section cap.
+   */
+  async applyPulledSections(incoming: Section[]): Promise<void> {
+    for (const raw of incoming) {
+      const entry = withDefaultSectionFields(raw);
+      const local = this.sections.get(entry.id);
+      const incomingIsAtLeastAsNew =
+        local !== undefined && isAtLeastAsNewAs(entry.updatedAt, local.updatedAt);
+      const apply =
+        local === undefined ||
+        local.seq !== null ||
+        incomingIsAtLeastAsNew ||
+        entry.deletedAt !== null;
+      if (apply) {
+        this.sections.set(entry.id, entry);
+      }
     }
   }
 

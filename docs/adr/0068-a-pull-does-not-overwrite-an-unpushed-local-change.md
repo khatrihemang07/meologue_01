@@ -129,10 +129,17 @@ v1 overwrites v2 and clears its pending mark. It needs a different mechanism —
 acknowledged row against *what this Device actually pushed*, which only the engine knows — and
 folding that in here would have buried a second Sync change inside the fix for the first.
 
-**Only Entries are covered.** Tasks, Projects, Sections, Labels, Comments and Events keep the
-unguarded `upsert()` on both arms. Entry is where the exposure was observed and where the
-store-open rewrites actually write; extending the rule is a mechanical follow-up (issue #218), not a redesign,
-and doing it without a demonstrated failure would be six speculative changes to Sync at once.
+**~~Only Entries are covered.~~ Every mutable stream is covered now (issue #218).** This ADR
+originally scoped the rule to Entries, on the grounds that extending it without a demonstrated
+failure would be six speculative changes to Sync at once. That held only until the argument for
+Entries was checked against the other streams and turned out to apply unchanged: Tasks, Projects,
+Sections, Labels and Comments all clear `seq` on a local edit exactly as Entries do, and
+`resetCursorsAndEpochs` (ADR 0064) resets *every* Cursor, so a Restore exposes all of them to the
+same full-History pull at once. The scope limit was a statement about evidence, not about design,
+and the evidence generalised.
+
+`Event` remains genuinely exempt, and not by omission: it is append-only, has no `deletedAt`, and
+no edit path could ever make one pending.
 
 **`upsert()` is now the narrower door, and its name no longer says so.** It is Sync's
 acknowledgement path and local capture; the pull has its own. The doc comments on both say which is

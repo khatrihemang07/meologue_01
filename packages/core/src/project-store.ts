@@ -80,6 +80,17 @@ export interface ProjectStore {
   getProject(id: string): Promise<Project | undefined>;
   /** Sync's write path: upsert wholesale, exactly as LabelStore.upsert/TaskStore.upsert do. No validation — see this interface's own header comment on why creation goes through here unchecked and mutation goes through the setters below instead, mirroring Label's identical asymmetry. */
   upsertProjects(projects: Project[]): Promise<void>;
+  /**
+   * Sync's **pull** write path for Projects (issue #218) — the
+   * Cursor-read rows in a SyncResponse, never the acknowledged ones.
+   * Mirrors EntryStore.applyPulled exactly (./store.ts's own doc comment
+   * carries the full rule and every reason behind it): an incoming row
+   * is applied unless the local row is pending (`seq IS NULL`) and
+   * strictly newer by `updatedAt`, and even then a tombstone still wins.
+   * `upsertProjects` above stays wholesale and is what the acknowledged
+   * arm keeps using.
+   */
+  applyPulledProjects(projects: Project[]): Promise<void>;
   /** Changes `name` and clears `seq`. Refuses (throws) an empty name — ./project-fields.ts's assertValidProjectName. No-op against a tombstone. */
   renameProject(id: string, name: string): Promise<void>;
   /** Changes `colour` and clears `seq`. Refuses (throws) a hex outside label-colors.ts's current palette — ./project-fields.ts's assertValidProjectColour. No-op against a tombstone. */
@@ -180,6 +191,15 @@ export interface ProjectStore {
    * validated creation door in this codebase already has.
    */
   upsertSections(sections: Section[]): Promise<void>;
+  /**
+   * Sync's **pull** write path for Sections (issue #218) — mirrors
+   * applyPulledProjects above and EntryStore.applyPulled's own doc
+   * comment (./store.ts) for the rule. Deliberately carries no
+   * twenty-section cap, the same as upsertSections above (addSection's
+   * own doc comment explains why that check cannot live in a
+   * trusted-bulk-merge path — a pull is exactly such a path).
+   */
+  applyPulledSections(sections: Section[]): Promise<void>;
   /** Changes `name` and clears `seq`. Refuses (throws) an empty name. No-op against a tombstone. */
   renameSection(id: string, name: string): Promise<void>;
   /** Changes `description` and clears `seq`. `null` clears it. No-op against a tombstone. */

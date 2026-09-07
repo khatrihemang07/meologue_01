@@ -180,6 +180,140 @@ export function commentStoreContract(
     expect((await store.pending()).map((c) => c.id)).toEqual(["unsynced"]);
   });
 
+  // Issue #218: Sync's pull write path — everything above exercises
+  // upsert(), which stays deliberately wholesale; these are the cases
+  // that separate applyPulled() from it. See CommentStore.applyPulled's
+  // own doc comment (../comment-store.ts) and EntryStore.applyPulled's
+  // (../store.ts, mirrored section for section by entry-store-
+  // contract.ts's own "applyPulled() (issue #215)" block) for the rule
+  // and every reason behind it.
+  describe("applyPulled() (issue #218)", () => {
+    it("applies an incoming row over a local row with nothing pending", async () => {
+      await store.upsert([comment({ id: "a", text: "as this Device last saw it", seq: 1 })]);
+
+      await store.applyPulled([
+        comment({
+          id: "a",
+          text: "edited on another Device",
+          updatedAt: "2026-01-02T00:00:00.000Z",
+          seq: 2,
+        }),
+      ]);
+
+      expect(await store.get("a")).toMatchObject({
+        id: "a",
+        text: "edited on another Device",
+        seq: 2,
+      });
+    });
+
+    it("inserts a Comment this Device has never seen", async () => {
+      await store.applyPulled([comment({ id: "fresh", text: "from another Device", seq: 7 })]);
+
+      expect(await store.get("fresh")).toMatchObject({ id: "fresh" });
+    });
+
+    it("does not overwrite a local edit that has not been pushed yet", async () => {
+      await store.upsert([comment({ id: "a", text: "before the local edit", seq: 1 })]);
+      await store.edit("a", "the local edit nobody has pushed");
+
+      await store.applyPulled([comment({ id: "a", text: "before the local edit", seq: 1 })]);
+
+      expect(await store.get("a")).toMatchObject({ text: "the local edit nobody has pushed" });
+    });
+
+    it("leaves the surviving local edit pending, so the next Sync still pushes it", async () => {
+      await store.upsert([comment({ id: "a", text: "before", seq: 1 })]);
+      await store.edit("a", "the local edit nobody has pushed");
+
+      await store.applyPulled([comment({ id: "a", text: "before", seq: 1 })]);
+
+      const pending = await store.pending();
+      expect(pending.map((c) => c.id)).toEqual(["a"]);
+      expect(pending[0]).toMatchObject({ text: "the local edit nobody has pushed", seq: null });
+    });
+
+    it("applies an incoming row that is newer than the pending local edit", async () => {
+      await store.upsert([comment({ id: "a", text: "before", seq: 1 })]);
+      await store.edit("a", "the local edit");
+
+      await store.applyPulled([
+        comment({
+          id: "a",
+          text: "a later edit from another Device",
+          updatedAt: "2099-01-01T00:00:00.000Z",
+          seq: 9,
+        }),
+      ]);
+
+      expect(await store.get("a")).toMatchObject({
+        text: "a later edit from another Device",
+        seq: 9,
+      });
+    });
+
+    it("applies an incoming row whose updatedAt ties the pending local row", async () => {
+      await store.upsert([comment({ id: "a", text: "before", seq: 1 })]);
+      await store.edit("a", "the local edit");
+      const local = await store.get("a");
+
+      await store.applyPulled([
+        comment({ id: "a", text: "the local edit", updatedAt: local?.updatedAt as string, seq: 9 }),
+      ]);
+
+      expect(await store.pending()).toEqual([]);
+      expect(await store.get("a")).toMatchObject({ id: "a", seq: 9 });
+    });
+
+    it("applies an incoming tombstone even over a newer pending local edit", async () => {
+      await store.upsert([comment({ id: "a", text: "a live Comment", seq: 1 })]);
+      await store.edit("a", "the local edit nobody has pushed");
+
+      await store.applyPulled([
+        comment({
+          id: "a",
+          text: "",
+          updatedAt: "2026-01-02T00:00:00.000Z",
+          seq: 9,
+          deletedAt: "2026-01-02T00:00:00.000Z",
+        }),
+      ]);
+
+      expect(await store.get("a")).toBeUndefined();
+    });
+
+    it("refuses only the rows it must, applying the rest of the batch", async () => {
+      await store.upsert([
+        comment({ id: "a", text: "before", seq: 1 }),
+        comment({ id: "b", text: "b before", seq: 2 }),
+      ]);
+      await store.edit("a", "the local edit nobody has pushed");
+
+      await store.applyPulled([
+        comment({ id: "a", text: "before", seq: 1 }),
+        comment({
+          id: "b",
+          text: "b, edited elsewhere",
+          updatedAt: "2026-01-02T00:00:00.000Z",
+          seq: 3,
+        }),
+      ]);
+
+      const a = await store.get("a");
+      const b = await store.get("b");
+      expect(a).toMatchObject({ text: "the local edit nobody has pushed", seq: null });
+      expect(b).toMatchObject({ text: "b, edited elsewhere", seq: 3 });
+    });
+
+    it("is a no-op on an empty batch", async () => {
+      await store.upsert([comment({ id: "a", seq: 1 })]);
+
+      await store.applyPulled([]);
+
+      expect(await store.get("a")).toMatchObject({ id: "a" });
+    });
+  });
+
   it("starts the cursor at 0 and reflects whatever it's set to", async () => {
     expect(await store.getCursor()).toBe(0);
 

@@ -174,10 +174,19 @@ export async function sync(options: SyncEngineOptions): Promise<void> {
   // still has to be askable even though no field on Task needs it answered
   // right now. `get()` returns `undefined` for a Task this Device has
   // never seen, or has since tombstoned — both cases correctly have
-  // nothing local to carry through. Factored out once (issue #194) because
-  // `acknowledged_tasks` and `tasks` both need it, in that order, every
-  // iteration.
-  async function applyIncomingTasks(wireTasks: WireSyncResponse["tasks"]): Promise<void> {
+  // nothing local to carry through.
+  //
+  // Issue #218: split into two functions, one per write path, rather than
+  // the single `applyIncomingTasks` this used to be — the acknowledged arm
+  // (ADR 0059) and the Cursor-read arm (ADR 0068) now write through
+  // different TaskStore methods (see each call site below), so a single
+  // shared function would have to take the write method as a parameter for
+  // no real gain: the `get`/`fromWireTaskOutput` mapping is the only part
+  // worth sharing, and each keeps it inline rather than behind a third,
+  // shared helper.
+  async function applyAcknowledgedTasks(
+    wireTasks: WireSyncResponse["acknowledged_tasks"],
+  ): Promise<void> {
     if (wireTasks.length === 0) {
       return;
     }
@@ -189,6 +198,27 @@ export async function sync(options: SyncEngineOptions): Promise<void> {
       }),
     );
     await taskStore.upsert(incomingTasks);
+  }
+
+  // Issue #218 / ADR 0068 (extended to Tasks): applyPulled(), not
+  // upsert() — this is the Cursor-read arm, rows this Device asked for by
+  // position in the log, which can therefore be older than a local change
+  // still waiting to be pushed. See TaskStore.applyPulled's own doc
+  // comment (./task-store.ts) and EntryStore.applyPulled's (./store.ts)
+  // for the rule and why the acknowledged arm above stays on upsert()
+  // deliberately.
+  async function applyPulledTasks(wireTasks: WireSyncResponse["tasks"]): Promise<void> {
+    if (wireTasks.length === 0) {
+      return;
+    }
+    const syncedAt = now();
+    const incomingTasks = await Promise.all(
+      wireTasks.map(async (wireTask) => {
+        const existing = await taskStore.get(wireTask.id);
+        return fromWireTaskOutput(wireTask, syncedAt, existing);
+      }),
+    );
+    await taskStore.applyPulled(incomingTasks);
   }
 
   let batchWasFull = true;
@@ -361,8 +391,8 @@ export async function sync(options: SyncEngineOptions): Promise<void> {
       await store.setCursor(response.cursor);
     }
 
-    await applyIncomingTasks(response.acknowledged_tasks);
-    await applyIncomingTasks(response.tasks);
+    await applyAcknowledgedTasks(response.acknowledged_tasks);
+    await applyPulledTasks(response.tasks);
     if (response.task_cursor > taskCursor) {
       await taskStore.setCursor(response.task_cursor);
     }
@@ -375,7 +405,13 @@ export async function sync(options: SyncEngineOptions): Promise<void> {
     }
     if (response.projects.length > 0) {
       const syncedAt = now();
-      await projectStore.upsertProjects(
+      // Issue #218 / ADR 0068 (extended to Projects): applyPulledProjects(),
+      // not upsertProjects() — this is the Cursor-read arm; see
+      // ProjectStore.applyPulledProjects's own doc comment
+      // (./project-store.ts) and EntryStore.applyPulled's (./store.ts) for
+      // the rule and why the acknowledged arm above stays on
+      // upsertProjects() deliberately.
+      await projectStore.applyPulledProjects(
         response.projects.map((project) => fromWireProjectOutput(project, syncedAt)),
       );
     }
@@ -397,7 +433,13 @@ export async function sync(options: SyncEngineOptions): Promise<void> {
     }
     if (response.sections.length > 0) {
       const syncedAt = now();
-      await projectStore.upsertSections(
+      // Issue #218 / ADR 0068 (extended to Sections): applyPulledSections(),
+      // not upsertSections() — this is the Cursor-read arm; see
+      // ProjectStore.applyPulledSections's own doc comment
+      // (./project-store.ts) and EntryStore.applyPulled's (./store.ts) for
+      // the rule and why the acknowledged arm above stays on
+      // upsertSections() deliberately.
+      await projectStore.applyPulledSections(
         response.sections.map((section) => fromWireSectionOutput(section, syncedAt)),
       );
     }
@@ -413,7 +455,14 @@ export async function sync(options: SyncEngineOptions): Promise<void> {
     }
     if (response.labels.length > 0) {
       const syncedAt = now();
-      await labelStore.upsert(response.labels.map((label) => fromWireLabelOutput(label, syncedAt)));
+      // Issue #218 / ADR 0068 (extended to Labels): applyPulled(), not
+      // upsert() — this is the Cursor-read arm; see LabelStore.applyPulled's
+      // own doc comment (./label-store.ts) and EntryStore.applyPulled's
+      // (./store.ts) for the rule and why the acknowledged arm above stays
+      // on upsert() deliberately.
+      await labelStore.applyPulled(
+        response.labels.map((label) => fromWireLabelOutput(label, syncedAt)),
+      );
     }
     if (response.label_cursor > labelCursor) {
       await labelStore.setCursor(response.label_cursor);
@@ -427,7 +476,12 @@ export async function sync(options: SyncEngineOptions): Promise<void> {
     }
     if (response.comments.length > 0) {
       const syncedAt = now();
-      await commentStore.upsert(
+      // Issue #218 / ADR 0068 (extended to Comments): applyPulled(), not
+      // upsert() — this is the Cursor-read arm; see
+      // CommentStore.applyPulled's own doc comment (./comment-store.ts) and
+      // EntryStore.applyPulled's (./store.ts) for the rule and why the
+      // acknowledged arm above stays on upsert() deliberately.
+      await commentStore.applyPulled(
         response.comments.map((comment) => fromWireCommentOutput(comment, syncedAt)),
       );
     }

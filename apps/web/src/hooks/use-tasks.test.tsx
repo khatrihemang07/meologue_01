@@ -105,6 +105,7 @@ function createFakeStore(): TaskStore {
     upsert: vi.fn(async (incoming: Task[]) => {
       active = [...active, ...incoming];
     }),
+    applyPulled: vi.fn(async () => {}),
     complete: vi.fn(async (id: string, completedAt: string) => {
       const found = active.find((t) => t.id === id);
       if (!found) return;

@@ -44,6 +44,16 @@ export interface LabelStore {
    * (future) Sync round trip both use.
    */
   upsert(labels: Label[]): Promise<void>;
+  /**
+   * Sync's **pull** write path (issue #218) — the Cursor-read rows in a
+   * SyncResponse, never the acknowledged ones. Mirrors
+   * EntryStore.applyPulled exactly (./store.ts's own doc comment carries
+   * the full rule and every reason behind it): an incoming row is
+   * applied unless the local row is pending (`seq IS NULL`) and strictly
+   * newer by `updatedAt`, and even then a tombstone still wins. `upsert`
+   * above stays wholesale and is what the acknowledged arm keeps using.
+   */
+  applyPulled(labels: Label[]): Promise<void>;
   /** Changes `name` and clears `seq`. Refuses (throws) an empty name — ./label-fields.ts's assertValidLabelName. No-op against a tombstone. */
   rename(id: string, name: string): Promise<void>;
   /** Changes `colour` and clears `seq`. Refuses (throws) a hex outside label-colors.ts's current palette — ./label-fields.ts's assertValidLabelColour. No-op against a tombstone. */

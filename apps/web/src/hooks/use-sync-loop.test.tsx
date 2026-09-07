@@ -73,6 +73,7 @@ function createFakeTaskStore(): TaskStore {
     listCompleted: vi.fn(async () => []),
     get: vi.fn(async () => undefined),
     upsert: vi.fn(async () => {}),
+    applyPulled: vi.fn(async () => {}),
     complete: vi.fn(async () => {}),
     uncomplete: vi.fn(async () => {}),
     rename: vi.fn(async () => {}),

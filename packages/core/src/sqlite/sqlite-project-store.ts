@@ -15,6 +15,16 @@ import type { SqliteDriver } from "./driver";
 import { kv, projects, sections } from "./schema";
 
 /**
+ * See SqliteEntryStore's own identical constant (./sqlite-entry-store.ts)
+ * for the full reasoning — this is the same normalisation, applied to
+ * `projects.updated_at`/`sections.updated_at` instead of
+ * `entries.updated_at`. Kept as its own constant, not imported, because
+ * these stores intentionally share no runtime code (ADR 0047), only the
+ * shape of the fix.
+ */
+const MILLISECOND_PRECISION = "%Y-%m-%dT%H:%M:%f";
+
+/**
  * The SQLite-backed ProjectStore (issue #171) — mirrors SqliteLabelStore
  * (./sqlite-label-store.ts) closely enough that a reader of one
  * recognises the other, including the same non-atomicity every store
@@ -87,6 +97,45 @@ export class SqliteProjectStore implements ProjectStore {
           syncedAt: sql`excluded.synced_at`,
           deletedAt: sql`excluded.deleted_at`,
         },
+      });
+  }
+
+  /**
+   * Issue #218 — see ProjectStore.applyPulledProjects's own doc comment
+   * (../project-store.ts) and EntryStore.applyPulled's (../store.ts),
+   * which carries the full rule and the reasoning behind every clause.
+   * Mirrors SqliteEntryStore.applyPulled's own `setWhere` shape (./
+   * sqlite-entry-store.ts) exactly, applied to `projects` instead of
+   * `entries`. No search index to maintain here — Projects have none —
+   * so, unlike SqliteTaskStore.applyPulled, there is no re-read/reindex
+   * step after the write.
+   */
+  async applyPulledProjects(incoming: Project[]): Promise<void> {
+    if (incoming.length === 0) {
+      return;
+    }
+    const normalized = incoming.map(withDefaultProjectFields);
+    await this.db
+      .insert(projects)
+      .values(normalized)
+      .onConflictDoUpdate({
+        target: projects.id,
+        set: {
+          deviceId: sql`excluded.device_id`,
+          name: sql`excluded.name`,
+          colour: sql`excluded.colour`,
+          favourite: sql`excluded.favourite`,
+          archived: sql`excluded.archived`,
+          parentId: sql`excluded.parent_id`,
+          description: sql`excluded.description`,
+          orderKey: sql`excluded.order_key`,
+          createdAt: sql`excluded.created_at`,
+          updatedAt: sql`excluded.updated_at`,
+          seq: sql`excluded.seq`,
+          syncedAt: sql`excluded.synced_at`,
+          deletedAt: sql`excluded.deleted_at`,
+        },
+        setWhere: sql`${projects.seq} IS NOT NULL OR strftime('${sql.raw(MILLISECOND_PRECISION)}', excluded.updated_at) >= strftime('${sql.raw(MILLISECOND_PRECISION)}', ${projects.updatedAt}) OR excluded.deleted_at IS NOT NULL`,
       });
   }
 
@@ -296,6 +345,40 @@ export class SqliteProjectStore implements ProjectStore {
           syncedAt: sql`excluded.synced_at`,
           deletedAt: sql`excluded.deleted_at`,
         },
+      });
+  }
+
+  /**
+   * Issue #218 — see ProjectStore.applyPulledSections's own doc comment
+   * (../project-store.ts) for the rule and why this deliberately carries
+   * no twenty-section cap, mirroring upsertSections above exactly plus
+   * the `setWhere` guard. No search index to maintain — Sections have
+   * none — so no reindex step, the same as applyPulledProjects above.
+   */
+  async applyPulledSections(incoming: Section[]): Promise<void> {
+    if (incoming.length === 0) {
+      return;
+    }
+    const normalized = incoming.map(withDefaultSectionFields);
+    await this.db
+      .insert(sections)
+      .values(normalized)
+      .onConflictDoUpdate({
+        target: sections.id,
+        set: {
+          deviceId: sql`excluded.device_id`,
+          projectId: sql`excluded.project_id`,
+          name: sql`excluded.name`,
+          description: sql`excluded.description`,
+          orderKey: sql`excluded.order_key`,
+          archived: sql`excluded.archived`,
+          createdAt: sql`excluded.created_at`,
+          updatedAt: sql`excluded.updated_at`,
+          seq: sql`excluded.seq`,
+          syncedAt: sql`excluded.synced_at`,
+          deletedAt: sql`excluded.deleted_at`,
+        },
+        setWhere: sql`${sections.seq} IS NOT NULL OR strftime('${sql.raw(MILLISECOND_PRECISION)}', excluded.updated_at) >= strftime('${sql.raw(MILLISECOND_PRECISION)}', ${sections.updatedAt}) OR excluded.deleted_at IS NOT NULL`,
       });
   }
 

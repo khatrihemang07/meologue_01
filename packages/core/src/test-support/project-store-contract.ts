@@ -308,6 +308,159 @@ export function projectStoreContract(
         expect(await projectStore.getProjectCursor()).toBe(50);
       });
     });
+
+    // Issue #218: Sync's pull write path — everything above exercises
+    // upsertProjects(), which stays deliberately wholesale; these are
+    // the cases that separate applyPulledProjects() from it. See
+    // ProjectStore.applyPulledProjects's own doc comment
+    // (../project-store.ts) and EntryStore.applyPulled's (../store.ts,
+    // mirrored section for section by entry-store-contract.ts's own
+    // "applyPulled() (issue #215)" block) for the rule and every reason
+    // behind it.
+    describe("applyPulledProjects() (issue #218)", () => {
+      it("applies an incoming row over a local row with nothing pending", async () => {
+        await projectStore.upsertProjects([
+          project({ id: "a", name: "as this Device last saw it", seq: 1 }),
+        ]);
+
+        await projectStore.applyPulledProjects([
+          project({
+            id: "a",
+            name: "edited on another Device",
+            updatedAt: "2026-01-02T00:00:00.000Z",
+            seq: 2,
+          }),
+        ]);
+
+        expect(await projectStore.getProject("a")).toMatchObject({
+          id: "a",
+          name: "edited on another Device",
+          seq: 2,
+        });
+      });
+
+      it("inserts a Project this Device has never seen", async () => {
+        await projectStore.applyPulledProjects([
+          project({ id: "fresh", name: "from another Device", seq: 7 }),
+        ]);
+
+        expect(await projectStore.getProject("fresh")).toMatchObject({ id: "fresh" });
+      });
+
+      it("does not overwrite a local edit that has not been pushed yet", async () => {
+        await projectStore.upsertProjects([
+          project({ id: "a", name: "before the local edit", seq: 1 }),
+        ]);
+        await projectStore.renameProject("a", "the local edit nobody has pushed");
+
+        await projectStore.applyPulledProjects([
+          project({ id: "a", name: "before the local edit", seq: 1 }),
+        ]);
+
+        expect(await projectStore.getProject("a")).toMatchObject({
+          name: "the local edit nobody has pushed",
+        });
+      });
+
+      it("leaves the surviving local edit pending, so the next Sync still pushes it", async () => {
+        await projectStore.upsertProjects([project({ id: "a", name: "before", seq: 1 })]);
+        await projectStore.renameProject("a", "the local edit nobody has pushed");
+
+        await projectStore.applyPulledProjects([project({ id: "a", name: "before", seq: 1 })]);
+
+        const pending = await projectStore.pendingProjects();
+        expect(pending.map((p) => p.id)).toEqual(["a"]);
+        expect(pending[0]).toMatchObject({
+          name: "the local edit nobody has pushed",
+          seq: null,
+        });
+      });
+
+      it("applies an incoming row that is newer than the pending local edit", async () => {
+        await projectStore.upsertProjects([project({ id: "a", name: "before", seq: 1 })]);
+        await projectStore.renameProject("a", "the local edit");
+
+        await projectStore.applyPulledProjects([
+          project({
+            id: "a",
+            name: "a later edit from another Device",
+            updatedAt: "2099-01-01T00:00:00.000Z",
+            seq: 9,
+          }),
+        ]);
+
+        expect(await projectStore.getProject("a")).toMatchObject({
+          name: "a later edit from another Device",
+          seq: 9,
+        });
+      });
+
+      it("applies an incoming row whose updatedAt ties the pending local row", async () => {
+        await projectStore.upsertProjects([project({ id: "a", name: "before", seq: 1 })]);
+        await projectStore.renameProject("a", "the local edit");
+        const local = await projectStore.getProject("a");
+
+        await projectStore.applyPulledProjects([
+          project({
+            id: "a",
+            name: "the local edit",
+            updatedAt: local?.updatedAt as string,
+            seq: 9,
+          }),
+        ]);
+
+        expect(await projectStore.pendingProjects()).toEqual([]);
+        expect(await projectStore.getProject("a")).toMatchObject({ id: "a", seq: 9 });
+      });
+
+      it("applies an incoming tombstone even over a newer pending local edit", async () => {
+        await projectStore.upsertProjects([project({ id: "a", name: "a live Project", seq: 1 })]);
+        await projectStore.renameProject("a", "the local edit nobody has pushed");
+
+        await projectStore.applyPulledProjects([
+          project({
+            id: "a",
+            name: "",
+            updatedAt: "2026-01-02T00:00:00.000Z",
+            seq: 9,
+            deletedAt: "2026-01-02T00:00:00.000Z",
+          }),
+        ]);
+
+        expect(await projectStore.getProject("a")).toBeUndefined();
+      });
+
+      it("refuses only the rows it must, applying the rest of the batch", async () => {
+        await projectStore.upsertProjects([
+          project({ id: "a", name: "before", seq: 1 }),
+          project({ id: "b", name: "b before", seq: 2 }),
+        ]);
+        await projectStore.renameProject("a", "the local edit nobody has pushed");
+
+        await projectStore.applyPulledProjects([
+          project({ id: "a", name: "before", seq: 1 }),
+          project({
+            id: "b",
+            name: "b, edited elsewhere",
+            updatedAt: "2026-01-02T00:00:00.000Z",
+            seq: 3,
+          }),
+        ]);
+
+        const a = await projectStore.getProject("a");
+        const b = await projectStore.getProject("b");
+        expect(a).toMatchObject({ name: "the local edit nobody has pushed", seq: null });
+        expect(b).toMatchObject({ name: "b, edited elsewhere", seq: 3 });
+      });
+
+      it("is a no-op on an empty batch", async () => {
+        await projectStore.upsertProjects([project({ id: "a", seq: 1 })]);
+
+        await projectStore.applyPulledProjects([]);
+
+        expect(await projectStore.getProject("a")).toMatchObject({ id: "a" });
+      });
+    });
   });
 
   describe("Section", () => {
@@ -638,6 +791,192 @@ export function projectStoreContract(
         await projectStore.catchUpSectionRowShapeEpoch(1);
 
         expect(await projectStore.getSectionCursor()).toBe(50);
+      });
+    });
+
+    // Issue #218: Sync's pull write path for Sections — mirrors the
+    // Project block above exactly, applied to applyPulledSections(). See
+    // ProjectStore.applyPulledSections's own doc comment
+    // (../project-store.ts) for the rule, including why this
+    // deliberately carries no twenty-section cap.
+    describe("applyPulledSections() (issue #218)", () => {
+      it("applies an incoming row over a local row with nothing pending", async () => {
+        await projectStore.addSection(
+          section({ id: "a", projectId: "project-1", name: "as this Device last saw it", seq: 1 }),
+        );
+
+        await projectStore.applyPulledSections([
+          section({
+            id: "a",
+            projectId: "project-1",
+            name: "edited on another Device",
+            updatedAt: "2026-01-02T00:00:00.000Z",
+            seq: 2,
+          }),
+        ]);
+
+        expect(await projectStore.getSection("a")).toMatchObject({
+          id: "a",
+          name: "edited on another Device",
+          seq: 2,
+        });
+      });
+
+      it("inserts a Section this Device has never seen", async () => {
+        await projectStore.applyPulledSections([
+          section({ id: "fresh", projectId: "project-1", name: "from another Device", seq: 7 }),
+        ]);
+
+        expect(await projectStore.getSection("fresh")).toMatchObject({ id: "fresh" });
+      });
+
+      it("does not overwrite a local edit that has not been pushed yet", async () => {
+        await projectStore.addSection(
+          section({ id: "a", projectId: "project-1", name: "before the local edit", seq: 1 }),
+        );
+        await projectStore.renameSection("a", "the local edit nobody has pushed");
+
+        await projectStore.applyPulledSections([
+          section({ id: "a", projectId: "project-1", name: "before the local edit", seq: 1 }),
+        ]);
+
+        expect(await projectStore.getSection("a")).toMatchObject({
+          name: "the local edit nobody has pushed",
+        });
+      });
+
+      it("leaves the surviving local edit pending, so the next Sync still pushes it", async () => {
+        await projectStore.addSection(
+          section({ id: "a", projectId: "project-1", name: "before", seq: 1 }),
+        );
+        await projectStore.renameSection("a", "the local edit nobody has pushed");
+
+        await projectStore.applyPulledSections([
+          section({ id: "a", projectId: "project-1", name: "before", seq: 1 }),
+        ]);
+
+        const pending = await projectStore.pendingSections();
+        expect(pending.map((s) => s.id)).toEqual(["a"]);
+        expect(pending[0]).toMatchObject({
+          name: "the local edit nobody has pushed",
+          seq: null,
+        });
+      });
+
+      it("applies an incoming row that is newer than the pending local edit", async () => {
+        await projectStore.addSection(
+          section({ id: "a", projectId: "project-1", name: "before", seq: 1 }),
+        );
+        await projectStore.renameSection("a", "the local edit");
+
+        await projectStore.applyPulledSections([
+          section({
+            id: "a",
+            projectId: "project-1",
+            name: "a later edit from another Device",
+            updatedAt: "2099-01-01T00:00:00.000Z",
+            seq: 9,
+          }),
+        ]);
+
+        expect(await projectStore.getSection("a")).toMatchObject({
+          name: "a later edit from another Device",
+          seq: 9,
+        });
+      });
+
+      it("applies an incoming row whose updatedAt ties the pending local row", async () => {
+        await projectStore.addSection(
+          section({ id: "a", projectId: "project-1", name: "before", seq: 1 }),
+        );
+        await projectStore.renameSection("a", "the local edit");
+        const local = await projectStore.getSection("a");
+
+        await projectStore.applyPulledSections([
+          section({
+            id: "a",
+            projectId: "project-1",
+            name: "the local edit",
+            updatedAt: local?.updatedAt as string,
+            seq: 9,
+          }),
+        ]);
+
+        expect(await projectStore.pendingSections()).toEqual([]);
+        expect(await projectStore.getSection("a")).toMatchObject({ id: "a", seq: 9 });
+      });
+
+      it("applies an incoming tombstone even over a newer pending local edit", async () => {
+        await projectStore.addSection(
+          section({ id: "a", projectId: "project-1", name: "a live Section", seq: 1 }),
+        );
+        await projectStore.renameSection("a", "the local edit nobody has pushed");
+
+        await projectStore.applyPulledSections([
+          section({
+            id: "a",
+            projectId: "project-1",
+            name: "",
+            updatedAt: "2026-01-02T00:00:00.000Z",
+            seq: 9,
+            deletedAt: "2026-01-02T00:00:00.000Z",
+          }),
+        ]);
+
+        expect(await projectStore.getSection("a")).toBeUndefined();
+      });
+
+      it("refuses only the rows it must, applying the rest of the batch", async () => {
+        await projectStore.addSection(
+          section({ id: "a", projectId: "project-1", name: "before", seq: 1 }),
+        );
+        await projectStore.addSection(
+          section({ id: "b", projectId: "project-1", name: "b before", orderKey: "z", seq: 2 }),
+        );
+        await projectStore.renameSection("a", "the local edit nobody has pushed");
+
+        await projectStore.applyPulledSections([
+          section({ id: "a", projectId: "project-1", name: "before", seq: 1 }),
+          section({
+            id: "b",
+            projectId: "project-1",
+            name: "b, edited elsewhere",
+            orderKey: "z",
+            updatedAt: "2026-01-02T00:00:00.000Z",
+            seq: 3,
+          }),
+        ]);
+
+        const a = await projectStore.getSection("a");
+        const b = await projectStore.getSection("b");
+        expect(a).toMatchObject({ name: "the local edit nobody has pushed", seq: null });
+        expect(b).toMatchObject({ name: "b, edited elsewhere", seq: 3 });
+      });
+
+      // Sections deliberately carry no twenty-cap here — the exact case
+      // ProjectStore.applyPulledSections's own doc comment names: a pull
+      // is a trusted-bulk-merge path and must never refuse a row another
+      // Device already committed.
+      it("does not enforce the twenty-section cap", async () => {
+        for (let i = 0; i < MAX_SECTIONS_PER_PROJECT; i++) {
+          await projectStore.addSection(
+            section({ id: `section-${i}`, projectId: "project-1", orderKey: `k${i}` }),
+          );
+        }
+
+        await projectStore.applyPulledSections([
+          section({ id: "one-more", projectId: "project-1", orderKey: "z", seq: 1 }),
+        ]);
+
+        expect(await projectStore.getSection("one-more")).toMatchObject({ id: "one-more" });
+      });
+
+      it("is a no-op on an empty batch", async () => {
+        await projectStore.addSection(section({ id: "a", projectId: "project-1", seq: 1 }));
+
+        await projectStore.applyPulledSections([]);
+
+        expect(await projectStore.getSection("a")).toMatchObject({ id: "a" });
       });
     });
   });
