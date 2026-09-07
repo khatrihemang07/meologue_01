@@ -46,7 +46,7 @@
  */
 
 import type { EntryStore } from "@meologue/core";
-import { BODY_SOFT_BREAK_CUTOFF } from "@meologue/core";
+import { BODY_SOFT_BREAK_CUTOFF, isStrictlyNewerThan } from "@meologue/core";
 import { Fragment, type Node as PMNode } from "prosemirror-model";
 import { entryDocumentToMarkdown, entryMarkdownToDocument } from "@/lib/entry-document";
 import { queryClient } from "@/lib/query-client";
@@ -241,7 +241,22 @@ export async function halveSoftBreaksInHistory(
       continue;
     }
     scanned += 1;
-    if (entry.updatedAt >= cutoff) {
+    // Issue #217: compared by INSTANT, and only rewrite a row this can
+    // positively establish is older than the cutoff. This was
+    // `entry.updatedAt >= cutoff`, a raw string comparison, and
+    // `updated_at` does not have one shape — the Server emits six
+    // fractional digits where this client emits three, so a Server-written
+    // `…:27.000400Z` compared as SMALLER than this cutoff's own
+    // `…:27.000Z` and the row was rewritten despite being after it.
+    // Narrow (it needs the row to land in the cutoff's own millisecond)
+    // but the same defect as #217's, and this guard is the only thing
+    // standing between a post-cutoff body and an unwanted rewrite.
+    //
+    // Phrased as "not provably older" rather than "newer or equal" so an
+    // unreadable timestamp skips the row instead of rewriting it. Refusing
+    // to touch a body is always the recoverable direction; rewriting one on
+    // a comparison nobody can trust is not.
+    if (!isStrictlyNewerThan(cutoff, entry.updatedAt)) {
       continue;
     }
     if (!entry.body.includes("\n\n")) {

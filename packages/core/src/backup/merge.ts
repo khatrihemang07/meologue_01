@@ -2,6 +2,7 @@ import type { SqliteDriver } from "../sqlite/driver";
 import { LEDGER_TABLE } from "../sqlite/migrator";
 import { SqliteEntryStore } from "../sqlite/sqlite-entry-store";
 import { SqliteTaskStore } from "../sqlite/sqlite-task-store";
+import { isStrictlyNewerThan } from "../updated-at";
 import { quoteIdent, tableColumns } from "./dump";
 import { type ParsedTable, parseBackupDatabase } from "./parse";
 import { rearmSoftBreakMigration } from "./rearm-migrations";
@@ -265,18 +266,27 @@ async function mergeTable(
       continue;
     }
 
-    // Case 6: neither side is deleted — greater updated_at wins, equal (or
-    // lesser) does nothing. Both are ISO 8601 strings of identical shape
-    // (../sqlite/schema.ts's own `updatedAt` columns), so a plain string
-    // comparison orders them correctly, the same assumption every other
-    // `ORDER BY created_at`/`updated_at` query in this codebase already
-    // makes.
+    // Case 6: neither side is deleted — the later updated_at wins, equal
+    // (or earlier) does nothing.
+    //
+    // Compared by INSTANT, never as raw strings (issue #217). This used to
+    // read `incomingUpdatedAt > existingUpdatedAt` under a comment
+    // asserting that both sides are "ISO 8601 strings of identical shape",
+    // and that assertion was simply false: the Server emits six fractional
+    // digits, or none at all on a whole second, while this client always
+    // emits three. `'Z'` sorts above `'.'`, so a Backup row landing on a
+    // whole second compared GREATER than every local row inside that same
+    // second and overwrote rows that were genuinely later. See
+    // ../updated-at.ts for the full mechanism and for why this stays
+    // shape-tolerant permanently rather than until some future migration.
+    //
+    // A tie still does nothing, which is the pre-existing rule and the safe
+    // one: sub-millisecond differences collapse into a tie, and "leave this
+    // Device's row alone" is the resting place that cannot lose data a
+    // Merge was not asked to overwrite.
     const existingUpdatedAt = existing[UPDATED_AT_COLUMN];
     const incomingUpdatedAt = row.values[UPDATED_AT_COLUMN];
-    const incomingIsNewer =
-      typeof incomingUpdatedAt === "string" &&
-      typeof existingUpdatedAt === "string" &&
-      incomingUpdatedAt > existingUpdatedAt;
+    const incomingIsNewer = isStrictlyNewerThan(incomingUpdatedAt, existingUpdatedAt);
     if (incomingIsNewer) {
       await writeRow(driver, table.name, row.values);
       counts.updated += 1;
