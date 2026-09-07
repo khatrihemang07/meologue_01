@@ -32,7 +32,9 @@
  * **Millisecond resolution, deliberately.** `Date.parse` truncates below the
  * millisecond, which is the finest this client can express anyway, and it
  * matches what `SqliteEntryStore.applyPulled` does with
- * `strftime('%Y-%m-%dT%H:%M:%f', …)` on the SQL side. Two values inside the
+ * `strftime('%Y-%m-%dT%H:%M:%f', …)` on the SQL side — including for a
+ * timestamp carrying no timezone designator, which readAsUtc below exists to
+ * keep the two sides agreeing about. Two values inside the
  * same millisecond therefore tie rather than order, and each caller decides
  * what a tie means — see ADR 0065's amendment for why a tie is the safe
  * resting place on both sides of that fence. Sub-millisecond ordering is not
@@ -77,6 +79,45 @@ export function isAtLeastAsNewAs(candidate: unknown, reference: unknown): boolea
 }
 
 /**
+ * A trailing timezone designator: `Z`, or an offset like `+05:30`/`-0800`.
+ * Anything with a time but without one of these is a "naive" timestamp, and
+ * the two sides of this rule read those differently — see readAsUtc.
+ */
+const TIMEZONE_DESIGNATOR = /(?:Z|[+-]\d{2}:?\d{2})$/i;
+
+/** A time component, i.e. `HH:MM`. A date on its own is already unambiguous. */
+const HAS_TIME = /\d{2}:\d{2}/;
+
+/**
+ * **A timestamp with no timezone designator is read as UTC, because that is
+ * what the SQL side does with it.**
+ *
+ * `strftime` treats `2026-01-01T10:00:00` as UTC on every machine.
+ * `Date.parse` treats that same string as **local time** — per the ECMA-262
+ * rule for a date-time form with no designator — so the two implementations
+ * of one documented rule would disagree by the Device's own UTC offset, and
+ * silently: no exception, just a plausible wrong answer that changes when the
+ * Device moves.
+ *
+ * That is not hypothetical where it matters most. `merge.ts` orders whatever
+ * `updated_at` a Backup file happens to hold, and `parse.ts` does not
+ * constrain its shape — so without this, merging the *same* Backup on two
+ * Devices in different timezones could pick a different winner for the same
+ * conflicting row. Device-independent conflict resolution is exactly the
+ * property ADR 0065 and issue #217 exist to protect.
+ *
+ * A date with no time at all is left alone: both sides already read
+ * `2026-01-01` as UTC midnight, and appending anything would only break it.
+ */
+function readAsUtc(value: string): string {
+  const trimmed = value.trim();
+  if (!HAS_TIME.test(trimmed) || TIMEZONE_DESIGNATOR.test(trimmed)) {
+    return trimmed;
+  }
+  return `${trimmed}Z`;
+}
+
+/**
  * Milliseconds since the epoch, or `undefined` for anything that is not a
  * readable timestamp string. `undefined` rather than `NaN` so callers cannot
  * accidentally propagate a value that compares false against everything
@@ -86,6 +127,6 @@ function parseInstant(value: unknown): number | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
-  const ms = Date.parse(value);
+  const ms = Date.parse(readAsUtc(value));
   return Number.isNaN(ms) ? undefined : ms;
 }
