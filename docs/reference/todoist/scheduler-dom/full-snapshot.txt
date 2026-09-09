@@ -1,0 +1,347 @@
+[p8 "Inbox – Todoist" | space "todoist parity verification"(2): 8 managed, 0 untracked — p1 "Inbox – Todoist", p2 "Inbox – Todoist", p3 "Getting Started 👋 – Todoist", p4 "Inbox – Todoist", p5 "Inbox – Todoist", p6 "Inbox – Todoist", p7 "Filters & Labels – Todoist", p8* "Inbox – Todoist" | budget 8/8]
+root
+  container
+    container
+      container
+        button "Settings" [ref=1, loc=css:button[aria-label="Settings"]]
+          image
+          svg_root
+          text "Hemang"
+          svg_root
+        container
+          anchor "Notifications" [ref=2, loc=css:a[aria-label="Notifications"], url=https://app.todoist.com/app/notifications]
+            svg_root
+          button "Open/close sidebar" [ref=3, loc=css:button[aria-label="Open/close sidebar"]]
+            svg_root
+      container
+        button [ref=4]
+          svg_root
+          text "Add task"
+        button "Dictate tasks with Ramble" [ref=5]
+          svg_root
+      navigation "Main Navigation: contains Projects, Labels, and Filters"
+        unordered_list "Main filters"
+          list_item "Search" [ref=6]
+            button "Search" [ref=7, loc=css:button[aria-label="Search"]]
+              svg_root
+              text "Search"
+          button [ref=8]
+            list_item "Inbox6" [ref=9]
+              anchor "Inbox, 6 tasks" [ref=10, loc=css:a[aria-label="Inbox, 6 tasks"], url=https://app.todoist.com/app/inbox]
+                svg_root
+                text "Inbox"
+              text "6"
+          list_item "10Today1" [ref=11]
+            anchor "Today, 1 task" [ref=12, loc=css:a[aria-label="Today, 1 task"], url=https://app.todoist.com/app/today]
+              svg_root "10"
+                text "10"
+              text "Today"
+            text "1"
+          list_item "Upcoming" [ref=13]
+            anchor "Upcoming" [ref=14, loc=css:a[aria-label="Upcoming"], url=https://app.todoist.com/app/upcoming]
+              svg_root
+              text "Upcoming"
+          list_item "Filters & Labels" [ref=15]
+            anchor "Filters & Labels" [ref=16, loc=css:a[aria-label="Filters & Labels"], url=https://app.todoist.com/app/filters-labels]
+              svg_root
+              text "Filters & Labels"
+          list_item "Reporting" [ref=17]
+            anchor "Reporting" [ref=18, loc=css:a[aria-label="Reporting"], url=https://app.todoist.com/app/activity]
+              svg_root
+              text "Reporting"
+        container
+          container
+            anchor [ref=19, loc=href:/app/projects, url=https://app.todoist.com/app/projects]
+              text "My Projects"
+            button "My projects menu" [ref=20, loc=css:button[aria-label="My projects menu"]]
+              svg_root
+            button "Toggle list of My Projects" [ref=21, loc=css:button[aria-label="Toggle list of My Projects"]]
+              svg_root
+          unordered_list "Projects"
+            button [ref=22]
+              list_item "Getting Started 👋14" [ref=23]
+                anchor "Getting Started 👋, 14 tasks" [ref=24, loc=css:a[aria-label="Getting Started 👋, 14 tasks"], url=https://app.todoist.com/app/project/getting-started-6h5pC9QRMFgm375m]
+                  svg_root
+                  container
+                    text "Getting Started"
+                    text "👋"
+                container
+                  text "14"
+                  button "More actions" [ref=25]
+                    svg_root
+      button [ref=26]
+        svg_root
+        text "Help & resources"
+    container "Main Content" [ref=27]
+      container [ref=28]
+        container
+          button "View Options Menu" [ref=29, loc=css:button[aria-label="View Options Menu"]]
+            svg_root
+            text "Display: 2"
+          anchor "Comments" [ref=30, loc=css:a[aria-label="Comments"], url=https://app.todoist.com/app/inbox/comments]
+            svg_root
+          button "Project options menu" [ref=31, loc=css:button[aria-label="Project options menu"]]
+            svg_root
+        heading
+          text "Inbox"
+        list_item
+          container "(No Section)"
+            unordered_list
+              container
+                container [ref=32]
+                  list_item
+                    button "Task: Need to improve reflect and todo completely. They are crap right now. Specially when typing long title or updating titlePlus date keeper is crap Shift enter is also counting just like enter. Wr..." [ref=33]
+                      container
+                        svg_root
+                        checkbox "Mark task as complete" [ref=34]
+                          svg_root
+                        container
+                          container
+                            text "Need to improve reflect and todo completely. They are crap right now. Specially when typing long title or updating title"
+                            paragraph
+                              text "Plus date keeper is crap"
+                              text "…"
+                          button [ref=35]
+                            container
+                              svg_root
+                              text "Yesterday"
+                container [ref=36]
+                  list_item
+                    button "Task: hair wash" [ref=37]
+                      container
+                        svg_root
+                        checkbox "Mark task as complete" [ref=38]
+                          svg_root
+                        container
+                          text "hair wash"
+                          button [ref=39]
+                            container
+                              svg_root
+                              text "Saturday"
+                              svg_root
+                container [ref=40]
+                  list_item
+                    button "Task: naukri photo update" [ref=41]
+                      container
+                        svg_root
+                        checkbox "Mark task as complete" [ref=42]
+                          svg_root
+                        container
+                          text "naukri photo update"
+                          button [ref=43]
+                            container
+                              svg_root
+                              text "Saturday"
+                container [ref=44]
+                  list_item
+                    button "Task: Buy mobile holder and get the bike fixed" [ref=45]
+                      container
+                        svg_root
+                        checkbox "Mark task as complete" [ref=46]
+                          svg_root
+                        container
+                          text "Buy mobile holder and get the bike fixed"
+                          container
+                            button [ref=47]
+                              container
+                                svg_root
+                                text "Saturday"
+                            anchor "1 comment" [ref=48, loc=href:/app/task/buy-mobile-holder-and-get-the-bike-fixed-6hMc452X7r23VX2G?intent=reply, url=https://app.todoist.com/app/task/buy-mobile-holder-and-get-the-bike-fixed-6hMc452X7r23VX2G?intent=reply]
+                              svg_root
+                              text "1"
+                container [ref=49]
+                  list_item
+                    button "Task: Check for ipad cover" [ref=50]
+                      container
+                        svg_root
+                        checkbox "Mark task as complete" [ref=51]
+                          svg_root
+                        container
+                          text "Check for ipad cover"
+                          container
+                            button [ref=52]
+                              container
+                                svg_root
+                                text "Saturday"
+                            anchor "1 comment" [ref=53, loc=href:/app/task/check-for-ipad-cover-6hMfJ27p678RC43G?intent=reply, url=https://app.todoist.com/app/task/check-for-ipad-cover-6hMfJ27p678RC43G?intent=reply]
+                              svg_root
+                              text "1"
+                container [ref=54]
+                  list_item
+                    button "Task: Buy bluetooth for vishalAmazon.in" [ref=55]
+                      container
+                        svg_root
+                        checkbox "Mark task as complete" [ref=56]
+                          svg_root
+                        container
+                          container
+                            text "Buy bluetooth for vishal"
+                            paragraph
+                              anchor [ref=57, loc=href:https://www.amazon.in/dp/B0DHVH4S77?th=1, url=https://www.amazon.in/dp/B0DHVH4S77?th=1]
+                                text "Amazon.in"
+                          button [ref=58]
+                            container
+                              svg_root
+                              text "Saturday"
+              list_item
+                container
+                  textfield "Task name" [ref=59]
+                    paragraph
+                      text "Task name"
+                  container
+                    container
+                      button "More actions" [ref=60]
+                        svg_root
+                      button "Select project" [ref=61, loc=role:button[name="Select project"]]
+                        svg_root
+                        text "Inbox"
+                      button "Set date" [ref=62, loc=role:button[name="Set date"]]
+                        svg_root
+                        text "Date"
+                      button "Set priority" [ref=63, loc=role:button[name="Set priority"]]
+                        svg_root
+                        text "Priority"
+                      button "Add labels" [ref=64, loc=role:button[name="Add labels"]]
+                        svg_root
+                        text "Labels"
+                    container
+                      button "Cancel" [ref=65, loc=css:button[aria-label="Cancel"]]
+                        svg_root
+                      button "Dictate tasks with Ramble" [ref=66]
+                        svg_root
+                  svg_root
+                  text "Attach to task"
+                  text "Keep the file with your task for later."
+                  svg_root
+                  text "Scan for tasks"
+                  text "We’ll scan the file and turn it into tasks."
+              list_item
+                button [ref=67]
+                  svg_root
+                  text "Add task"
+            unordered_list
+              container [ref=68]
+                list_item
+                  button "Task: add split and splid both without fail EOD" [ref=69]
+                    container
+                      checkbox "Mark task as incomplete" [ref=70, loc=css:button[aria-label="Mark task as incomplete"]]
+                        svg_root
+                      container
+                        text "add split and splid both without fail EOD"
+                        button [ref=71]
+                          container
+                            svg_root
+                            text "1 Sep"
+              button [ref=72]
+                svg_root
+                text "+48 completed tasks"
+          button [ref=73]
+            text "Add section"
+  container
+    textbox "Type a date" [ref=74, loc=css:input[placeholder="Type a date"]]
+      text "Type a date"
+    container
+      container
+        button [ref=75]
+          svg_root "10"
+            text "10"
+          text "Today"
+          text "Thu"
+        button [ref=76]
+          svg_root
+          text "Tomorrow"
+          text "Fri"
+        button [ref=77]
+          svg_root
+          text "This weekend"
+          text "Sat"
+        button [ref=78]
+          svg_root
+          text "Next week"
+          text "Mon 14 Sep"
+      container
+        container
+          text "Sep 2026"
+          container
+            button "Navigate to previous month" [ref=79, loc=css:button[aria-label="Navigate to previous month"]]
+              svg_root
+            button "Navigate to current month" [ref=80, loc=css:button[aria-label="Navigate to current month"]]
+            button "Navigate to next month" [ref=81, loc=css:button[aria-label="Navigate to next month"]]
+              svg_root
+        container
+          text "M"
+          text "T"
+          text "W"
+          text "T"
+          text "F"
+          text "S"
+          text "S"
+        container [ref=82]
+          grid [ref=83]
+            row
+              text "7"
+              text "8"
+              text "9"
+              button "2026-09-10" [ref=84, loc=css:button[aria-label="2026-09-10"]]
+                text "10"
+              button "2026-09-11" [ref=85, loc=css:button[aria-label="2026-09-11"]]
+                text "11"
+              button "2026-09-12" [ref=86, loc=css:button[aria-label="2026-09-12"]]
+                text "12"
+              button "2026-09-13" [ref=87, loc=css:button[aria-label="2026-09-13"]]
+                text "13"
+            row
+              button "2026-09-14" [ref=88, loc=css:button[aria-label="2026-09-14"]]
+                text "14"
+              button "2026-09-15" [ref=89, loc=css:button[aria-label="2026-09-15"]]
+                text "15"
+              button "2026-09-16" [ref=90, loc=css:button[aria-label="2026-09-16"]]
+                text "16"
+              button "2026-09-17" [ref=91, loc=css:button[aria-label="2026-09-17"]]
+                text "17"
+              button "2026-09-18" [ref=92, loc=css:button[aria-label="2026-09-18"]]
+                text "18"
+              button "2026-09-19" [ref=93, loc=css:button[aria-label="2026-09-19"]]
+                text "19"
+              button "2026-09-20" [ref=94, loc=css:button[aria-label="2026-09-20"]]
+                text "20"
+            row
+              button "2026-09-21" [ref=95, loc=css:button[aria-label="2026-09-21"]]
+                text "21"
+              button "2026-09-22" [ref=96, loc=css:button[aria-label="2026-09-22"]]
+                text "22"
+              button "2026-09-23" [ref=97, loc=css:button[aria-label="2026-09-23"]]
+                text "23"
+              button "2026-09-24" [ref=98, loc=css:button[aria-label="2026-09-24"]]
+                text "24"
+              button "2026-09-25" [ref=99, loc=css:button[aria-label="2026-09-25"]]
+                text "25"
+              button "2026-09-26" [ref=100, loc=css:button[aria-label="2026-09-26"]]
+                text "26"
+              button "2026-09-27" [ref=101, loc=css:button[aria-label="2026-09-27"]]
+                text "27"
+            row
+              button "2026-09-28" [ref=102, loc=css:button[aria-label="2026-09-28"]]
+                text "28"
+              button "2026-09-29" [ref=103, loc=css:button[aria-label="2026-09-29"]]
+                text "29"
+              button "2026-09-30" [ref=104, loc=css:button[aria-label="2026-09-30"]]
+                text "30"
+          container
+            text "Oct"
+            grid [ref=105]
+              row
+                button "2026-10-01" [ref=106, loc=css:button[aria-label="2026-10-01"]]
+                  text "1"
+                button "2026-10-02" [ref=107, loc=css:button[aria-label="2026-10-02"]]
+                  text "2"
+                button "2026-10-03" [ref=108, loc=css:button[aria-label="2026-10-03"]]
+                  text "3"
+                button "2026-10-04" [ref=109, loc=css:button[aria-label="2026-10-04"]]
+                  text "4"
+      button [ref=110]
+        svg_root
+        text "Time"
+      button [ref=111]
+        svg_root
+        text "Repeat"

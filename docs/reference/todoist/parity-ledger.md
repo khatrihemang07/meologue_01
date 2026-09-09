@@ -80,3 +80,31 @@ _Rows are appended as each reference doc in this directory is written._
 | QA-22 | Deadline syntax in the composer | — | — | `blocked` | Never reached |
 | QA-23 | Plain `Enter` isolated from `Shift+Enter` | — | — | `blocked` | Stopped after the account mutation |
 | QA-24 | Growth behaviour with a 300+ character title | — | — | `blocked` | Never reached |
+| DATE-01 | Overdue renders a relative word ("Yesterday") in `rgb(255,112,102)` with a calendar icon | scheduler-and-priority.md §9 | — | `todoist-captured` | Re-verified independently |
+| DATE-02 | Completion **overrides** the date tone — a completed overdue row mutes to `rgb(204,204,204)` | scheduler-and-priority.md §9 | — | `todoist-captured` | Re-verified |
+| DATE-03 | Within the next 7 days renders the **weekday name only**, in `rgb(169,112,255)` | scheduler-and-priority.md §9 | — | `todoist-captured` | Re-verified; tracks the date, not recurrence |
+| DATE-04 | A recurring task appends ↻ after the date, same colour | scheduler-and-priority.md §7 | — | `todoist-captured` | |
+| DATE-05 | Upcoming day headings read `10 Sep ‧ Today ‧ Thursday`, separator U+2027; only today/tomorrow get a relative word | scheduler-and-priority.md §9 | — | `todoist-captured` | |
+| DATE-06 | Row wording for a task due exactly today / tomorrow | — | — | `blocked` | No such task exists in the account |
+| DATE-07 | Row rendering of a date carrying a time | — | — | `blocked` | No such task exists |
+| DATE-08 | Row rendering of a Deadline | — | — | `blocked` | **Deadline is Pro-only**; account is Free |
+| SCHED-01 | Anchored popover, 250×525px, radius 10px, background `rgb(38,38,38)`, border `1px solid rgb(61,61,61)` | scheduler-and-priority.md §1 | — | `todoist-captured` | Dark theme; light untested |
+| SCHED-02 | Quick options in order: Today `Thu` · Tomorrow `Fri` · This weekend `Sat` · Next week `Mon 14 Sep` | scheduler-and-priority.md §2 | — | `todoist-captured` | Next week shows a full date, others a weekday |
+| SCHED-03 | "No Date" appears **only once a date is already set** | scheduler-and-priority.md §2 | — | `todoist-captured` | |
+| SCHED-04 | A "Type a date" input accepts dates and recurrence phrases and previews the resolution above the quick options | scheduler-and-priority.md §3 | — | `todoist-captured` | Preview shows the resolved date and task count |
+| SCHED-05 | Picking a date **writes the phrase back into the title** as a highlighted recognition token | scheduler-and-priority.md §3 | — | `todoist-captured` | Picker and typed parsing share one mechanism |
+| SCHED-06 | Calendar week starts **Monday** | scheduler-and-priority.md §4 | — | `todoist-captured` | |
+| SCHED-07 | Today carries **no `aria-current`** and no ring — only bold and `rgb(226,106,96)` | scheduler-and-priority.md §4 | — | `todoist-captured` | Deliberate; do not "fix" |
+| SCHED-08 | Selected day is a filled circle, `rgb(222,76,74)`, 24px, radius 12px | scheduler-and-priority.md §4 | — | `todoist-captured` | |
+| SCHED-09 | Days carrying tasks get a 3×3px dot via `::before`, no extra DOM node | scheduler-and-priority.md §4 | — | `todoist-captured` | |
+| SCHED-10 | Weekends dim to `rgb(204,204,204)`, independent of today/busy | scheduler-and-priority.md §4 | — | `todoist-captured` | |
+| SCHED-11 | Time opens a second dialog with start time, duration and timezone, defaulting to "Floating time" | scheduler-and-priority.md §5 | — | `todoist-captured` | Matches our floating-time glossary rule |
+| SCHED-12 | Duration is Pro-gated | scheduler-and-priority.md §5 | — | `divergent` | We removed Duration deliberately (issue #179) |
+| SCHED-13 | The Deadline picker's own UI | — | — | `blocked` | **Pro-only paywall** |
+| SCHED-14 | The dedicated Repeat dialog's contents | — | — | `blocked` | Not opened this run |
+| PRI-01 | Picker swatches: P1 `rgb(209,69,59)`, P2 `rgb(235,137,9)`, P3 `rgb(36,111,224)`, P4 `rgb(102,102,102)` | scheduler-and-priority.md §10a | — | `todoist-captured` | Four confirmed genuinely distinct |
+| PRI-02 | Internal `data-value` is **inverted** from the label — P1 is 4 | scheduler-and-priority.md §10a | — | `todoist-captured` | Our store already inverts identically |
+| PRI-03 | P4 is pre-selected and is the invisible default — a transparent ring, not a grey one | scheduler-and-priority.md §10d | — | `todoist-captured` | |
+| PRI-04 | The composer pill colours only the **flag icon**; its `P1` text stays neutral grey | scheduler-and-priority.md §10b | — | `todoist-captured` | |
+| PRI-05 | The row checkbox ring red `rgb(255,112,102)` is **not** the picker red `rgb(209,69,59)` | scheduler-and-priority.md §10c | — | `todoist-captured` | Two surfaces, two values — don't unify into one token |
+| PRI-06 | Row rendering for P2 and P3 | scheduler-and-priority.md §10c | — | `blocked` | No P2/P3 task exists in the account |
