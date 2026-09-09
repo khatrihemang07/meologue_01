@@ -128,3 +128,19 @@ _Rows are appended as each reference doc in this directory is written._
 | KBD-04 | Focus **wraps** at both ends, and the cycle includes the "Add task" button and completed rows | keyboard.md §2 | — | `todoist-captured` | Verified |
 | KBD-05 | The focus ring is an **inset box-shadow** `rgb(23,91,194) 0 0 0 1px` plus a `rgba(255,255,255,0.14)` background tint — the CSS `outline` property is unset | keyboard.md §2 | — | `todoist-captured` | Verified |
 | KBD-06 | The full 80-key map, key by key | keyboard.md §1 | — | `todoist-captured` | **Transcribed from the overlay; each key still needs driving before it can read `matched`** |
+| DET-06 | Activating the title swaps in `tiptap ProseMirror` editors labelled "Task name" and "Description" — **the same component as the composer** | lifecycle.md, quick-add.md | — | `todoist-captured` | Resolves DET-04; the user's central claim, confirmed |
+| DET-07 | Recognition fires in the **detail** title exactly as in the composer — same span, padding and match id | lifecycle.md | — | `todoist-captured` | Our detail title does no parsing at all |
+| DET-08 | While editing, the properties panel's Date control does **not** reflect an in-title recognition until save — unlike the composer's footer, which fills live | lifecycle.md | — | `todoist-captured` | Two surfaces, two behaviours |
+| DET-09 | Editing is **task-wide**: clicking the description puts title and description into edit together, sharing one Cancel/Save | lifecycle.md §1 | — | `todoist-captured` | |
+| DET-10 | Clicking a generic part of the edit form focuses the **title**, not the description | lifecycle.md §1 | — | `todoist-captured` | A destructive trap worth reproducing carefully |
+| DET-11 | The Description placeholder reads exactly "Description"; there is **no formatting toolbar** anywhere | lifecycle.md §1 | — | `todoist-captured` | |
+| DET-12 | Description markdown renders **live as input rules** — bold, bullet list, inline code | lifecycle.md §1 | — | `todoist-captured` | |
+| DET-13 | A bare URL in a description is **rewritten on save** to the fetched page title | lifecycle.md §1 | — | `todoist-captured` | Network-dependent; likely a deliberate divergence for us |
+| CMT-01 | Comments submit on **Ctrl/Cmd+Enter or the "Comment" button** — Enter and Shift+Enter both insert a newline | lifecycle.md §2 | — | `todoist-captured` | Opposite of the task composer |
+| CMT-02 | Comment markdown renders like the description's, but a bare URL keeps its text and gains an unfurl card | lifecycle.md §2 | — | `todoist-captured` | |
+| CMT-03 | Comment edit, delete and their confirmation wording | lifecycle.md §2 | — | `todoist-captured` | |
+| CMT-04 | Undo toast reads exactly **"1 task completed"** with an "Undo" button and a Close, in `role="alert" aria-live="polite"` | lifecycle.md §3 | — | `todoist-captured` | Appears ~150–300ms after completion |
+| CMT-05 | The toast auto-dismisses after **6–8 seconds**, and Ctrl/Cmd+Z also undoes a completion | lifecycle.md §3 | — | `todoist-captured` | Measured |
+| CMT-06 | Activity wording: `You added {task}`, `You completed {task}`, `You uncompleted {task}`, `You commented {content} on {task}`, `You added a description {content} to {task}`, `You changed the description of {task} to {content}`, `You removed the description {content} from {task}`, `You deleted a comment from {task}`, `You changed the name of {task}` | lifecycle.md §4 | — | `todoist-captured` | A rename shows only the new name, never old→new |
+| CMT-07 | The activity list has **no filters** and ends with "That's it. No more history to load." | lifecycle.md §4 | — | `todoist-captured` | |
+| CMT-08 | Italics, strikethrough, headings, numbered lists, blockquotes, fenced code blocks | — | — | `blocked` | Not exercised in the write session |
