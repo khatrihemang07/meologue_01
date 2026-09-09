@@ -108,3 +108,23 @@ _Rows are appended as each reference doc in this directory is written._
 | PRI-04 | The composer pill colours only the **flag icon**; its `P1` text stays neutral grey | scheduler-and-priority.md §10b | — | `todoist-captured` | |
 | PRI-05 | The row checkbox ring red `rgb(255,112,102)` is **not** the picker red `rgb(209,69,59)` | scheduler-and-priority.md §10c | — | `todoist-captured` | Two surfaces, two values — don't unify into one token |
 | PRI-06 | Row rendering for P2 and P3 | scheduler-and-priority.md §10c | — | `blocked` | No P2/P3 task exists in the account |
+| ROW-01 | Row height 59px, zero padding on the row itself | row-and-detail.md §1 | — | `todoist-captured` | |
+| ROW-02 | Divider is `border-bottom: 1px solid rgb(61,61,61)` with **0px left inset** — full list width | row-and-detail.md §1 | — | `todoist-captured` | |
+| ROW-03 | Checkbox: 24×24 hit box around an 18×18 visible ring, `1px solid rgb(169,169,169)`, tinted by priority | row-and-detail.md §1 | — | `todoist-captured` | |
+| ROW-04 | Hover reveals drag handle, then Edit · Date · Comment · More, each `opacity` 0→1; the row background does **not** change | row-and-detail.md §1 | — | `todoist-captured` | Our build changes background and hides these on coarse pointers |
+| ROW-05 | Long titles **wrap** to 4 lines via `-webkit-line-clamp: 4`, they do not truncate to one | row-and-detail.md §1 | — | `todoist-captured` | The user complained specifically about long titles |
+| ROW-06 | Markdown in a **title** stays literal | row-and-detail.md §1 | — | `todoist-captured` | |
+| ROW-07 | A Description renders as **real HTML from markdown**, previewed as a first line beneath the title | row-and-detail.md §1 | — | `todoist-captured` | Our row shows no description indicator at all |
+| ROW-08 | Comment count is an icon plus number, linking to `?intent=reply` | row-and-detail.md §1 | — | `todoist-captured` | |
+| ROW-09 | Metadata blocks are adjacent flex children with a gap — no separator glyph between date and comments | row-and-detail.md §1 | — | `todoist-captured` | |
+| DET-01 | Opening a task changes the URL to `/app/task/{slug}-{id}`; Escape returns | row-and-detail.md §2 | — | `todoist-captured` | Our detail is already a route |
+| DET-02 | The detail title at rest is a **non-editable `div.task_content`** — the same display component the row uses, not the composer's editor | row-and-detail.md §2 | — | `todoist-captured` | Display and edit are split |
+| DET-03 | The title carries the hint "Activate to edit the task name" | row-and-detail.md §2 | — | `todoist-captured` | |
+| DET-04 | What the title becomes **once activated** for editing | — | — | `blocked` | Would have meant typing into a real task; the open question for #225 |
+| DET-05 | The detail dialog is `data-testid="task-details-modal"` | keyboard.md §1 | — | `todoist-captured` | |
+| KBD-01 | The overlay lists **80 shortcuts across 8 sections**: General 13, Quick Add 11, Navigate 15, Edit task 17, Add task 5, Sub-task 3, Projects 11, Calendar/Upcoming 5 | keyboard.md §1 | — | `todoist-captured` | Transcribed, not driven |
+| KBD-02 | `?` opens the shortcuts overlay | keyboard.md §1 | — | `todoist-captured` | Verified by driving |
+| KBD-03 | **Both** arrow keys and `j`/`k` move focus between rows | keyboard.md §2 | — | `todoist-captured` | Verified via `document.activeElement` |
+| KBD-04 | Focus **wraps** at both ends, and the cycle includes the "Add task" button and completed rows | keyboard.md §2 | — | `todoist-captured` | Verified |
+| KBD-05 | The focus ring is an **inset box-shadow** `rgb(23,91,194) 0 0 0 1px` plus a `rgba(255,255,255,0.14)` background tint — the CSS `outline` property is unset | keyboard.md §2 | — | `todoist-captured` | Verified |
+| KBD-06 | The full 80-key map, key by key | keyboard.md §1 | — | `todoist-captured` | **Transcribed from the overlay; each key still needs driving before it can read `matched`** |
