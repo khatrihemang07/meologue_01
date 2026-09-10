@@ -108,7 +108,7 @@ export function ComposerSection() {
           marker typed on purpose — `monday`, `5pm`, `monthly`, Todoist's
           own documented "Create **monthly** report" false positive
           (packages/core/src/quick-add/types.ts's own QuickAddTokenKind doc
-          comment names the family exactly). `#project`, `%label`, `p1`,
+          comment names the family exactly). `#project`, `@label`, `p1`,
           `!reminder`, `{deadline}`, `for 45min` and the rest of the
           sigil-marked family keep working regardless: a reader who typed
           an explicit marker asked for that word to mean something, so
@@ -117,7 +117,7 @@ export function ComposerSection() {
         */}
         <SettingsSection
           label="Todo"
-          hint="Off still recognises #project, %label, p1-p4, !reminder, {deadline} and for 45min in the add field — only words like monday, 5pm or monthly stop being read as dates."
+          hint="Off still recognises #project, @label, p1-p4, !reminder, {deadline} and for 45min in the add field — only words like monday, 5pm or monthly stop being read as dates."
         >
           <SwitchRow
             label="Smart date recognition"

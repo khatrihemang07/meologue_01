@@ -1,0 +1,90 @@
+# 0070: Todo's navigation is what the shell's existing pane renders
+
+## Status
+
+Accepted. Amends [0049](0049-todo-is-the-first-destination-with-internal-navigation.md) at one
+breakpoint, and **concedes that [0030](0030-the-shell-gets-a-root-screen.md)'s "every Destination is
+a full-bleed push" stops being true for Todo at desktop width** — see *What this does take* below.
+Builds on [0036](0036-the-shell-is-a-chat-list-and-a-thread-is-a-chat-thread.md), whose pane this
+reuses rather than adds to, and on [0069](0069-todo-renders-through-its-own-token-scope.md), which
+is what lets the pane repaint without the rest of the shell repainting with it.
+
+## Context
+
+Todoist's web application is a persistent left sidebar beside a content column: Add task, Search,
+Inbox / Today / Upcoming / Filters & Labels with counts, a Favourites section, and a project tree.
+An exact clone of Todoist has that shape. This app deliberately does not — ADR 0036 deleted the
+app-wide persistent nav, and ADR 0049 argued at length that Todo's own bottom bar is not a
+reopening of that decision.
+
+It would be easy to read those two ADRs as "no persistent navigation, anywhere" and stop. That
+reading is broader than what was actually decided, and the difference is this ADR.
+
+**0036's argument was about cost, and it was specific.** The nav "spent a permanent slice of the
+screen on a question already answered": roughly 56px of every page, forever, whether or not the page
+open at the time had any use for it. The Composer paid the bar's height to advertise Reflect; Reflect
+paid it back to advertise the Composer.
+
+**That cost is already being paid here, and not by this ADR.** At the wide breakpoint,
+`chat-shell-layout.tsx` *already* renders a left pane — `ChatListPane`, a divider, and a
+user-draggable persisted width. ADR 0036 put it there. So the question this ADR answers is not
+"should Todo add a permanent pane" but "what should the pane that already exists show while the
+reader is inside Todo".
+
+## Decision
+
+**Inside `/todo/*` at the wide breakpoint, the shell's existing pane renders `TodoSidebar` instead
+of `ChatListPane`. Below that breakpoint nothing changes at all.**
+
+No second pane, no second divider, no second width mechanism. The clamp, the drag, the persisted
+width and the `--list-w` variable are ADR 0036's and are reused untouched.
+
+`TodoNav`'s bottom bar hides itself at the wide breakpoint, because the sidebar has taken over its
+role and both carry `aria-label="Todo"` — two nav landmarks with the same name on screen at once is
+the duplicate-landmark defect `chat-list-pane.tsx` already argues a `<div>` instead of a `<header>`
+into existence to avoid, rebuilt on the other axis. Below the breakpoint the bar renders exactly as
+it always has.
+
+### What this does not take
+
+ADR 0049's line holds. The sidebar is mounted only inside `/todo/*` and leaves the component tree
+entirely — unmounted, not hidden — the instant the reader navigates anywhere else. The Composer
+never pays for it. Reflect never pays for it. It remains a claim on one Destination's own interior,
+which is precisely the kind of decision 0049 says a Destination is free to make about itself.
+
+### What this does take
+
+**ADR 0030's root screen is displaced rather than pushed over, for Todo, at ≥900px.** 0030's shape
+is a flat list of rows the reader leaves by a full-bleed push, and at desktop width a reader who
+enters Todo no longer has that list beside them — they have Todo's own navigation instead. That is a
+real amendment and it is stated here rather than smoothed over. The root screen is still how the
+reader *arrives*, and Back still returns them to it; what changes is that the pane stops showing it
+while they are inside this one Destination.
+
+Below the breakpoint, none of this applies: there is no pane, the root screen is the whole screen,
+and `TodoNav` is still the answer. So 0049 is amended at one breakpoint, not replaced — and the
+narrow layout, which is also the Android layout, is untouched. That constraint is held by a test
+rather than by this paragraph.
+
+## Consequences
+
+The pane now shows one of two things depending on route, which means a reader at desktop width sees
+Todo's own navigation and the chat list at different times rather than together. That is the trade:
+parity with the source this feature is measured against, paid for in one Destination's interior, at
+one breakpoint.
+
+Because ADR 0069 scopes the palette to the same subtree, the pane also repaints while Todo is open
+and returns to the app's own palette when it is not — one attribute, set on the element both the
+pane and the page already share.
+
+## Alternatives considered
+
+- **Add a third pane for Todo, beside the existing one.** Rejected: two persistent panes at 900px
+  leave the content column too narrow to hold Todoist's own row density, and it would genuinely be
+  the permanent-slice cost 0036 refused, rather than a reuse of a slice already spent.
+- **Keep `TodoNav` at every width and skip the sidebar.** Rejected: it is the one visible piece of
+  chrome that makes the destination read as a phone app on a desktop, and "make it exactly like
+  Todoist" was the instruction this work exists to satisfy.
+- **Put the sidebar inside `Shell` instead of the pane.** Rejected: `Shell` sits inside the pane's
+  sibling, so a sidebar there would render beside the content *within* the destination, leaving the
+  chat list still occupying the real pane — two lists, one of them irrelevant.

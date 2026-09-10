@@ -1,0 +1,16 @@
+{
+  "editables": [
+    {
+      "ariaLabel": "Task name",
+      "placeholder": null,
+      "rect": {}
+    }
+  ],
+  "dialogRect": {},
+  "dialogPadding": "16px",
+  "dialogBorder": "1px solid rgb(61, 61, 61)",
+  "dialogRadius": "12px",
+  "dialogShadow": "rgba(0, 0, 0, 0.2) 0px 4px 8px 0px",
+  "dialogBg": "rgb(40, 40, 40)",
+  "qaRect": {}
+}

@@ -1,0 +1,18 @@
+{
+  "found": true,
+  "paddingLeft": "4px",
+  "paddingRight": "4px",
+  "paddingTop": "0px",
+  "paddingBottom": "0px",
+  "margin": "0px",
+  "display": "inline-block",
+  "backgroundColor": "rgb(111, 38, 37)",
+  "borderRadius": "3px",
+  "color": "rgb(255, 255, 255)",
+  "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"Noto Sans\", system-ui, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Segoe UI Symbol\", \"Noto Color Emoji\"",
+  "fontSize": "16px",
+  "fontWeight": "400",
+  "fontStyle": "normal",
+  "lineHeight": "23px",
+  "outerHTML": "<span data-match-id=\"10 Sep\" class=\"xKV6aZZRBPE399i5L33M1cjNVQHbGoo4\" data-highlighted-match=\"true\" data-testid=\"natural-language-match\">tod</span>"
+}

@@ -1,4 +1,4 @@
-import type { Filter } from "@meologue/core";
+import type { Filter, Label } from "@meologue/core";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { describe, expect, it } from "vitest";
@@ -21,10 +21,25 @@ function filter(overrides: Partial<Filter> = {}): Filter {
   };
 }
 
-function renderFiltersView(filters: Filter[]) {
+function label(overrides: Partial<Label> = {}): Label {
+  return {
+    id: "label-1",
+    deviceId: "device-a",
+    name: "Family",
+    colour: "#369307",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    seq: 1,
+    syncedAt: "2026-01-01T00:00:00.000Z",
+    deletedAt: null,
+    ...overrides,
+  };
+}
+
+function renderFiltersView(filters: Filter[], labels: Label[] = []) {
   return render(
     <MemoryRouter>
-      <FiltersView filters={filters} />
+      <FiltersView filters={filters} labels={labels} />
     </MemoryRouter>,
   );
 }
@@ -65,5 +80,42 @@ describe("FiltersView", () => {
     renderFiltersView([filter({ query: "#Work & p1" })]);
 
     expect(screen.getByText("#Work & p1")).toBeInTheDocument();
+  });
+});
+
+// Issue #229's own fix for ledger row NAV-06: "Filters & Labels" is one
+// destination covering both — this page's own Labels section, plus a
+// real link to full Label management.
+describe("FiltersView — Labels section (NAV-06)", () => {
+  it("renders with no labels prop at all, unchanged (every pre-#229 caller)", () => {
+    render(
+      <MemoryRouter>
+        <FiltersView filters={[filter()]} />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText(/No Labels yet/)).toBeInTheDocument();
+  });
+
+  it("shows an empty message with no Labels yet", () => {
+    renderFiltersView([], []);
+
+    expect(screen.getByText(/No Labels yet/)).toBeInTheDocument();
+  });
+
+  it("lists every Label by name and colour", () => {
+    renderFiltersView([], [label({ id: "a", name: "Family" }), label({ id: "b", name: "Work" })]);
+
+    expect(screen.getByText("Family")).toBeInTheDocument();
+    expect(screen.getByText("Work")).toBeInTheDocument();
+  });
+
+  it("links to the dedicated Label management screen", () => {
+    renderFiltersView([], []);
+
+    expect(screen.getByRole("link", { name: "Manage Labels" })).toHaveAttribute(
+      "href",
+      "/todo/labels",
+    );
   });
 });

@@ -1,10 +1,11 @@
 import type { Event, Task } from "@meologue/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { useState } from "react";
 import { Link, MemoryRouter, Outlet, Route, Routes } from "react-router";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { localDayKey } from "@/components/date-picker-sheet";
+import { localDayKey } from "@/lib/local-day-key";
 import type { EntryStoreOutletContext } from "@/pages/entry-store-layout";
 import { TodoPage } from "./todo-page";
 
@@ -19,6 +20,55 @@ vi.mock("sonner", () => {
   (toast as any).error = vi.fn();
   return { toast };
 });
+
+/**
+ * Stands in for the real `TaskTitleEditor` — issue #226 converted
+ * `AddTaskForm`'s own Quick Add field onto it, so this page mounts one
+ * unconditionally now, not only once a Task row enters rename mode.
+ * task-title-editor.tsx's own header comment explains why no test mounts
+ * that component directly (a real ProseMirror `EditorView`, which jsdom
+ * cannot usefully mount); task-detail-view.test.tsx and task-row.test.tsx
+ * mock the identical module the identical way. `onChange` is wired here
+ * (theirs isn't) because add-task-form.tsx's own `commit` reads Quick
+ * Add's live text from it, not from `onCommit` alone the way a rename
+ * does.
+ */
+function StubTaskTitleEditor({
+  value,
+  onChange,
+  onCommit,
+  ariaLabel,
+  placeholder,
+}: {
+  value: string;
+  onChange?: (value: string) => void;
+  onCommit: (value: string) => void;
+  onCancel: () => void;
+  ariaLabel?: string;
+  placeholder?: string;
+}) {
+  const [text, setText] = useState(value);
+  return (
+    <input
+      aria-label={ariaLabel ?? "Task name"}
+      placeholder={placeholder}
+      value={text}
+      onChange={(event) => {
+        setText(event.target.value);
+        onChange?.(event.target.value);
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          onCommit(text);
+        }
+      }}
+    />
+  );
+}
+
+vi.mock("@/components/todo/task-title-editor", () => ({
+  TaskTitleEditor: StubTaskTitleEditor,
+}));
 
 function task(overrides: Partial<Task> = {}): Task {
   return {
@@ -118,6 +168,7 @@ function readyContext(overrides: Partial<EntryStoreOutletContext> = {}): EntrySt
     setTaskDate: vi.fn(),
     setTaskDeadline: vi.fn(),
     setTaskPriority: vi.fn(),
+    setTaskDateString: vi.fn(),
     setTaskLabels: vi.fn(),
     setTaskDescription: vi.fn(),
     listTasksInProject: vi.fn(async () => []),
@@ -163,6 +214,11 @@ function readyContext(overrides: Partial<EntryStoreOutletContext> = {}): EntrySt
     setFilterColour: vi.fn(),
     setFilterQuery: vi.fn(async () => {}),
     removeFilter: vi.fn(),
+    addLabel: vi.fn(),
+    renameLabel: vi.fn(),
+    setLabelColour: vi.fn(),
+    removeLabel: vi.fn(),
+    removeProject: vi.fn(),
     disabled: false,
     ...overrides,
   };
@@ -304,7 +360,7 @@ describe("TodoPage", () => {
   // for the "bad/typo'd address must not break nav scoping" case.
   const DETAIL_TASK_ID = "11111111-1111-7111-8111-111111111111";
 
-  it("opens a Task's own view over its background, with a breadcrumb and an editable title", async () => {
+  it("opens a Task's own view over its background, with a breadcrumb and its own title", async () => {
     renderTodoPage(
       inboxContext([task({ id: DETAIL_TASK_ID, content: "call mum" })]),
       `/todo/task/call-mum-${DETAIL_TASK_ID}`,
@@ -314,7 +370,10 @@ describe("TodoPage", () => {
     // `location.state.from` (todo-page.tsx's own `backgroundView` doc
     // comment) — is still rendered, dimmed behind the modal/sheet.
     await waitFor(() => expect(screen.getAllByText("call mum")).not.toHaveLength(0));
-    const dialog = screen.getByRole("dialog");
+    // `LazyTaskDetailView` resolves its `import()` asynchronously
+    // (lazy-task-detail-view.ts's own header comment) — `findByRole`,
+    // not `getByRole`, tolerates the one microtask/render that takes.
+    const dialog = await screen.findByRole("dialog");
     expect(dialog).toBeInTheDocument();
     // "Inbox" appears twice inside the dialog — the breadcrumb and the
     // Project attribute row both say it, for different reasons (this
@@ -323,7 +382,11 @@ describe("TodoPage", () => {
     // scopes to the breadcrumb's own `<header>` specifically rather than
     // an unscoped match that would resolve to both.
     expect(dialog.querySelector("header")).toHaveTextContent("Inbox");
-    expect(within(dialog).getByLabelText("Task title")).toHaveValue("call mum");
+    // Issue #225: the title is a non-editable display element at rest
+    // (DET-02) — a `<button>`, not a labelled textbox — until a reader
+    // activates it (task-detail-view.test.tsx's own suite covers that
+    // activation and the shared editor it swaps in).
+    expect(within(dialog).getByRole("button", { name: "call mum" })).toBeInTheDocument();
   });
 
   // The coordinator's own gap-fix report: `openTask` used to be looked up
@@ -348,7 +411,7 @@ describe("TodoPage", () => {
     await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
     const dialog = screen.getByRole("dialog");
     expect(within(dialog).getByLabelText('Mark "call mum" not done')).toBeChecked();
-    expect(within(dialog).getByLabelText("Task title")).toHaveClass("line-through");
+    expect(within(dialog).getByRole("button", { name: "call mum" })).toHaveClass("line-through");
   });
 
   it("un-completing from a completed Task's own detail view calls uncompleteTask", async () => {
@@ -441,12 +504,12 @@ describe("TodoPage", () => {
     const addTask = vi.fn();
     renderTodoPage(inboxContext([], { addTask }));
 
-    fireEvent.change(screen.getByLabelText("Add a Task"), { target: { value: "call mum" } });
+    fireEvent.change(await screen.findByLabelText("Add a Task"), { target: { value: "call mum" } });
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
 
     // handleAdd (todo-page.tsx) awaits resolveLabelIds before calling
     // addTask — issue #170's own async label-resolution step, invisible
-    // here since "call mum" carries no `%label` token to resolve, but
+    // here since "call mum" carries no `@label` token to resolve, but
     // still a real microtask this assertion has to wait past.
     await waitFor(() =>
       expect(addTask).toHaveBeenCalledWith(
@@ -466,7 +529,7 @@ describe("TodoPage", () => {
     const addTask = vi.fn();
     renderTodoPage(readyContext({ addTask }), "/todo/today");
 
-    fireEvent.change(screen.getByLabelText("Add a Task"), { target: { value: "call mum" } });
+    fireEvent.change(await screen.findByLabelText("Add a Task"), { target: { value: "call mum" } });
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
 
     await waitFor(() =>
@@ -484,7 +547,7 @@ describe("TodoPage", () => {
     const addTask = vi.fn();
     renderTodoPage(readyContext({ addTask }), "/todo/today");
 
-    fireEvent.change(screen.getByLabelText("Add a Task"), {
+    fireEvent.change(await screen.findByLabelText("Add a Task"), {
       target: { value: "call mum tomorrow" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
@@ -773,7 +836,14 @@ describe("TodoPage — Today", () => {
   it("still offers the Add form and Todo's own nav from Today", () => {
     renderTodoPage(readyContext(), "/todo/today");
 
-    expect(screen.getByLabelText("Add a Task")).toBeInTheDocument();
+    // The "Add" button, not the field itself: this describe block runs
+    // under fake timers (this file's own `beforeEach` above), and the
+    // field is behind a `React.lazy` boundary (`add-task-form.tsx`'s own
+    // header comment) whose resolution `findByLabelText`'s internal
+    // polling can't observe without the timers being advanced — the
+    // button sits outside that boundary and is always present
+    // synchronously, which is all "still offers the Add form" needs.
+    expect(screen.getByRole("button", { name: "Add" })).toBeInTheDocument();
     expect(screen.getByRole("navigation", { name: "Todo" })).toBeInTheDocument();
   });
 
@@ -816,7 +886,10 @@ describe("TodoPage — scheduling", () => {
 
     await waitFor(() => expect(screen.getByText("call mum")).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: 'Date "call mum"' }));
-    expect(screen.getByText('Schedule "call mum"')).toBeInTheDocument();
+    // `LazyTaskScheduleSheet` resolves its `import()` asynchronously
+    // (lazy-task-schedule-sheet.ts's own header comment) — `findByText`,
+    // not `getByText`, tolerates the one microtask/render that takes.
+    expect(await screen.findByText('Schedule "call mum"')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "P1" }));
 
@@ -829,9 +902,12 @@ describe("TodoPage — scheduling", () => {
 
     await waitFor(() => expect(screen.getByText("call mum")).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: 'Date "call mum"' }));
-    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    // `LazyTaskScheduleSheet` resolves its `import()` asynchronously
+    // (lazy-task-schedule-sheet.ts's own header comment) — wait for the
+    // dialog to actually mount before dismissing it.
+    fireEvent.keyDown(await screen.findByRole("dialog"), { key: "Escape" });
 
-    expect(screen.queryByText('Schedule "call mum"')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText('Schedule "call mum"')).not.toBeInTheDocument());
   });
 });
 
@@ -937,7 +1013,7 @@ describe("TodoPage — Projects", () => {
     const addTask = vi.fn();
     renderTodoPage(readyContext({ projects: [project], addTask }), "/todo/projects/p1");
 
-    fireEvent.change(screen.getByLabelText("Add a Task"), { target: { value: "buy milk" } });
+    fireEvent.change(await screen.findByLabelText("Add a Task"), { target: { value: "buy milk" } });
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
 
     await waitFor(() =>

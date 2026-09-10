@@ -24,8 +24,8 @@ describe("taskFieldsFromQuickAdd", () => {
     expect(result.content).toBe("buy milk #Shopping");
   });
 
-  it("resolves a %label into labelNames, not labelIds — resolution is a caller concern", () => {
-    const result = fields("call mum %Family");
+  it("resolves a @label into labelNames, not labelIds — resolution is a caller concern", () => {
+    const result = fields("call mum @Family");
 
     expect(result.labelNames).toEqual(["Family"]);
     expect(result.content).toBe("call mum");
@@ -199,7 +199,7 @@ describe("taskFieldsFromQuickAdd", () => {
     });
 
     it("still recognises sigil-marked tokens", () => {
-      const result = fields("buy milk p1 %Shopping", { smartDates: false });
+      const result = fields("buy milk p1 @Shopping", { smartDates: false });
 
       expect(result.priority).toBe(4);
       expect(result.labelNames).toEqual(["Shopping"]);

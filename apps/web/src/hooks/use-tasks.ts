@@ -59,6 +59,24 @@ export interface AddTaskOverrides {
    * `null` the same way it leaves `parentId` below `null`.
    */
   sectionId?: string | null;
+  /**
+   * Nests the new Task directly under `parentId` at creation (issue #229's
+   * "Sub-tasks" section — `task-detail-view.tsx`'s own "Add sub-task"
+   * field is the one caller that sets this). `undefined`/`null` by
+   * default, matching every other field above: a Task added anywhere else
+   * in Todo is never nested on its own. This is a narrower carve-out of
+   * the reasoning `addTask`'s own body comment on `parentId: null` used to
+   * state unconditionally ("nesting is a deliberate, separate act reached
+   * after the Task already exists") — that reasoning is still exactly
+   * right for *retrofitting* an existing Task under a sibling (drag,
+   * keyboard indent), which still goes through `setTaskParent` alone, but
+   * it never covered a field whose entire purpose from the moment it's
+   * typed into is "this is a sub-task of that Task" — creating it
+   * top-level and reparenting it a beat later would record a spurious
+   * "moved under another Task" activity line for a Task that was never
+   * meaningfully top-level to begin with.
+   */
+  parentId?: string | null;
 }
 
 export interface UseTasksResult {
@@ -99,6 +117,24 @@ export interface UseTasksResult {
   setTaskDeadline: (id: string, deadline: string | null) => void;
   /** Sets a Task's stored `priority` (1-4) — callers pass `storedPriorityOf(uiPriority)`, never the UI number directly (task-types.ts's own warning against open-coding the inversion). */
   setTaskPriority: (id: string, priority: number) => void;
+  /**
+   * Sets (or clears) a Task's `dateString` (issue #227) — the door
+   * task-schedule-popover.tsx's "Type a date" input goes through to give
+   * an existing Task a Recurrence, change one, or clear it back to `null`,
+   * none of which any surface could do before this ticket
+   * (TaskStore.setDateString's own doc comment carries the full
+   * reasoning, including why `date` is recomputed by the store itself
+   * rather than trusted from the caller). `now` is threaded through
+   * rather than read here, the one exception to this file's own
+   * `new Date().toISOString()`-at-the-mutation convention: the popover
+   * already reads a single `now` once per open to keep its quick options
+   * and its typed preview from disagreeing about what day "today" is,
+   * and reusing that same instant for the commit is what keeps a
+   * commit's resolved date matching the preview the reader just clicked,
+   * rather than a second, independent clock read that could in principle
+   * roll over a calendar day between the two.
+   */
+  setTaskDateString: (id: string, dateString: string | null, now: string) => void;
   /**
    * Replaces a Task's `labelIds` wholesale — TaskStore.setLabelIds's own
    * doc comment on why "read, splice, write back the whole array" is the
@@ -385,16 +421,14 @@ export function useTasks(
       // what decides which, the same way it already decides `captureDate`.
       // `sectionId` mirrors it for a Section's own add affordance.
       //
-      // `parentId` is always `null` here, never an override — a new Task
-      // is never minted as anyone's sub-task directly. Nesting one under
-      // an existing Task is a deliberate, separate act (keyboard
-      // indent/outdent onto TaskStore.setParent, todo-page.tsx) reached
-      // after the Task already exists, exactly as dragging a freshly
-      // added Task under a sibling is a second gesture in Todoist itself,
-      // never something the add field predicts on a reader's behalf.
+      // `parentId` defaults to `null` — a new Task is not anyone's
+      // sub-task unless a caller says so explicitly (`AddTaskOverrides.parentId`'s
+      // own doc comment above has the full account of the one caller that
+      // does, and why this is narrower than "nesting is always a separate
+      // act reached after the Task exists").
       projectId: overrides.projectId ?? null,
       sectionId: overrides.sectionId ?? null,
-      parentId: null,
+      parentId: overrides.parentId ?? null,
       // No Description yet (issue #180) — the same "nothing chosen yet"
       // state every other never-overridden field above starts in; there
       // is no AddTaskOverrides field for it, mirroring `parentId` above:
@@ -566,6 +600,29 @@ export function useTasks(
     setPriorityMutation.mutate({ id, priority });
   }
 
+  const setDateStringMutation = useMutation({
+    mutationFn: async ({
+      id,
+      dateString,
+      now,
+    }: {
+      id: string;
+      dateString: string | null;
+      now: string;
+    }) => {
+      const before = await findTask(id);
+      await taskStore.setDateString(id, dateString, now);
+      if (before) {
+        recordTaskEvent(before, "updated", { dateString, lastDateString: before.dateString });
+      }
+    },
+    onSuccess: afterLocalWrite,
+  });
+
+  function setTaskDateString(id: string, dateString: string | null, now: string) {
+    setDateStringMutation.mutate({ id, dateString, now });
+  }
+
   const setLabelIdsMutation = useMutation({
     mutationFn: async ({ id, labelIds }: { id: string; labelIds: string[] }) => {
       const before = await findTask(id);
@@ -582,8 +639,18 @@ export function useTasks(
   }
 
   const setDescriptionMutation = useMutation({
-    mutationFn: ({ id, description }: { id: string; description: string | null }) =>
-      taskStore.setDescription(id, description),
+    // Issue #229: recorded on the activity log (format-event.ts's own
+    // `"description" in extra` branch reads `description`/`lastDescription`
+    // the identical way `date`/`deadline` above already do) — before this
+    // ticket, a Description edit left no trace at all, the one Task
+    // attribute this hook silently didn't log.
+    mutationFn: async ({ id, description }: { id: string; description: string | null }) => {
+      const before = await findTask(id);
+      await taskStore.setDescription(id, description);
+      if (before) {
+        recordTaskEvent(before, "updated", { description, lastDescription: before.description });
+      }
+    },
     onSuccess: afterLocalWrite,
   });
 
@@ -757,6 +824,7 @@ export function useTasks(
     setTaskDate,
     setTaskDeadline,
     setTaskPriority,
+    setTaskDateString,
     setTaskLabels,
     setTaskDescription,
     listTasksInProject,

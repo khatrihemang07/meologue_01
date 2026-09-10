@@ -109,7 +109,7 @@ import { taskFieldsFromQuickAdd } from "@/lib/quick-add-task";
  * Every field below except `id`/`checked` is exactly
  * `quick-add-task.ts`'s own `QuickAddTaskFields` shape (`content` in
  * place of that file's `content`, `labelNames` still unresolved — a
- * `%label` name needs a LabelStore round trip this module has no
+ * `@label` name needs a LabelStore round trip this module has no
  * business making, `use-history.ts`'s own `upsertPromotedTasks` is what
  * awaits `resolveLabelIds` the same way `todo-page.tsx`'s `handleAdd`
  * already does for the add field) — because Promotion and Todo's own add

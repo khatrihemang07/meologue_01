@@ -56,12 +56,15 @@ function renderProjectView(overrides: Partial<Parameters<typeof ProjectView>[0]>
       onSetProject: vi.fn(),
       onSetLabels: vi.fn(),
       onCopyLink: vi.fn(),
+      onRename: vi.fn(),
       commentCountFor: vi.fn(() => 0),
     },
     onRename: vi.fn(),
+    onSetColour: vi.fn(),
     onSetDescription: vi.fn(),
     onToggleFavourite: vi.fn(),
     onToggleArchived: vi.fn(),
+    onDeleteProject: vi.fn(),
     onAddSection: vi.fn(async () => {}),
     onRenameSection: vi.fn(),
     onReorderSection: vi.fn(),
@@ -85,6 +88,60 @@ function renderProjectView(overrides: Partial<Parameters<typeof ProjectView>[0]>
   // rather than at every call site.
   return { ...render(<ProjectView {...props} />, { wrapper: MemoryRouter }), props };
 }
+
+describe("ProjectView — colour and delete (issue #229)", () => {
+  it("recolours through the header's own colour select", () => {
+    const onSetColour = vi.fn();
+    renderProjectView({ onSetColour });
+
+    fireEvent.change(screen.getByLabelText("Project colour"), {
+      target: { value: "#4180FF" },
+    });
+
+    expect(onSetColour).toHaveBeenCalledWith("#4180FF");
+  });
+
+  // Verbatim (docs/reference/todoist/quick-add.md § "Destructive
+  // confirmation wording"): "Delete project? The <name> project and all
+  // its tasks will be permanently deleted. This action cannot be undone."
+  it("shows Todoist's own verbatim delete wording", async () => {
+    renderProjectView({ project: project({ name: "Groceries" }) });
+
+    fireEvent.click(screen.getByRole("button", { name: 'Delete Project "Groceries"' }));
+
+    await waitFor(() => expect(screen.getByRole("alertdialog")).toBeInTheDocument());
+    expect(screen.getByText("Delete project?")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'The "Groceries" project and all its tasks will be permanently deleted. This action cannot be undone.',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("only calls onDeleteProject after the confirmation, not on the request alone", async () => {
+    const onDeleteProject = vi.fn();
+    renderProjectView({ onDeleteProject });
+
+    fireEvent.click(screen.getByRole("button", { name: 'Delete Project "Groceries"' }));
+    await waitFor(() => expect(screen.getByRole("alertdialog")).toBeInTheDocument());
+    expect(onDeleteProject).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    expect(onDeleteProject).toHaveBeenCalled();
+  });
+
+  it("cancelling leaves the Project untouched", async () => {
+    const onDeleteProject = vi.fn();
+    renderProjectView({ onDeleteProject });
+
+    fireEvent.click(screen.getByRole("button", { name: 'Delete Project "Groceries"' }));
+    await waitFor(() => expect(screen.getByRole("alertdialog")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(onDeleteProject).not.toHaveBeenCalled();
+  });
+});
 
 describe("ProjectView — Section delete", () => {
   // The confirmation names the count and says it cannot be undone (issue

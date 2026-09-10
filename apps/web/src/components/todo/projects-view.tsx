@@ -27,8 +27,19 @@ export interface ProjectsViewProps {
   onToggleArchived: (id: string, archived: boolean) => void;
 }
 
-/** How many `parentId` hops separate `project` from a top-level Project — the same "walk the ancestor chain" shape ProjectStore.setProjectParent's own cycle guard uses, bounded by `projects.length` rather than trusted to terminate on its own (a cycle should never reach the UI, but this is a display concern, not a place to also re-derive that store-side guarantee). */
-function depthOf(project: Project, byId: Map<string, Project>): number {
+/**
+ * How many `parentId` hops separate `project` from a top-level Project —
+ * the same "walk the ancestor chain" shape ProjectStore.setProjectParent's
+ * own cycle guard uses, bounded by `projects.length` rather than trusted
+ * to terminate on its own (a cycle should never reach the UI, but this is
+ * a display concern, not a place to also re-derive that store-side
+ * guarantee).
+ *
+ * Exported for `todo-sidebar.tsx` (issue #223) to reuse for its own
+ * Projects tree's indentation — the identical nesting-depth question this
+ * file already answers, not a second implementation of it.
+ */
+export function depthOf(project: Project, byId: Map<string, Project>): number {
   let depth = 0;
   let cursor: Project | undefined = project;
   const seen = new Set<string>();

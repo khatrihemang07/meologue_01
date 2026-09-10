@@ -76,6 +76,7 @@ const readyContext: EntryStoreOutletContext = {
   setTaskDate: vi.fn(),
   setTaskDeadline: vi.fn(),
   setTaskPriority: vi.fn(),
+  setTaskDateString: vi.fn(),
   setTaskLabels: vi.fn(),
   setTaskDescription: vi.fn(),
   listTasksInProject: vi.fn(async () => []),
@@ -126,6 +127,11 @@ const readyContext: EntryStoreOutletContext = {
   setFilterColour: vi.fn(),
   setFilterQuery: vi.fn(async () => {}),
   removeFilter: vi.fn(),
+  addLabel: vi.fn(),
+  renameLabel: vi.fn(),
+  setLabelColour: vi.fn(),
+  removeLabel: vi.fn(),
+  removeProject: vi.fn(),
   disabled: false,
 };
 
@@ -172,6 +178,7 @@ describe("ComposerPage", () => {
       setTaskDate: vi.fn(),
       setTaskDeadline: vi.fn(),
       setTaskPriority: vi.fn(),
+      setTaskDateString: vi.fn(),
       setTaskLabels: vi.fn(),
       setTaskDescription: vi.fn(),
       listTasksInProject: vi.fn(async () => []),
@@ -222,6 +229,11 @@ describe("ComposerPage", () => {
       setFilterColour: vi.fn(),
       setFilterQuery: vi.fn(async () => {}),
       removeFilter: vi.fn(),
+      addLabel: vi.fn(),
+      renameLabel: vi.fn(),
+      setLabelColour: vi.fn(),
+      removeLabel: vi.fn(),
+      removeProject: vi.fn(),
       disabled: true,
     });
 
@@ -258,6 +270,7 @@ describe("ComposerPage", () => {
       setTaskDate: vi.fn(),
       setTaskDeadline: vi.fn(),
       setTaskPriority: vi.fn(),
+      setTaskDateString: vi.fn(),
       setTaskLabels: vi.fn(),
       setTaskDescription: vi.fn(),
       listTasksInProject: vi.fn(async () => []),
@@ -308,6 +321,11 @@ describe("ComposerPage", () => {
       setFilterColour: vi.fn(),
       setFilterQuery: vi.fn(async () => {}),
       removeFilter: vi.fn(),
+      addLabel: vi.fn(),
+      renameLabel: vi.fn(),
+      setLabelColour: vi.fn(),
+      removeLabel: vi.fn(),
+      removeProject: vi.fn(),
       disabled: true,
       message: "meologue couldn't open its storage. Reloading may help.",
     });
@@ -351,6 +369,7 @@ describe("ComposerPage", () => {
       setTaskDate: vi.fn(),
       setTaskDeadline: vi.fn(),
       setTaskPriority: vi.fn(),
+      setTaskDateString: vi.fn(),
       setTaskLabels: vi.fn(),
       setTaskDescription: vi.fn(),
       listTasksInProject: vi.fn(async () => []),
@@ -401,6 +420,11 @@ describe("ComposerPage", () => {
       setFilterColour: vi.fn(),
       setFilterQuery: vi.fn(async () => {}),
       removeFilter: vi.fn(),
+      addLabel: vi.fn(),
+      renameLabel: vi.fn(),
+      setLabelColour: vi.fn(),
+      removeLabel: vi.fn(),
+      removeProject: vi.fn(),
       disabled: false,
     });
 
@@ -464,6 +488,7 @@ describe("ComposerPage", () => {
       setTaskDate: vi.fn(),
       setTaskDeadline: vi.fn(),
       setTaskPriority: vi.fn(),
+      setTaskDateString: vi.fn(),
       setTaskLabels: vi.fn(),
       setTaskDescription: vi.fn(),
       listTasksInProject: vi.fn(async () => []),
@@ -514,6 +539,11 @@ describe("ComposerPage", () => {
       setFilterColour: vi.fn(),
       setFilterQuery: vi.fn(async () => {}),
       removeFilter: vi.fn(),
+      addLabel: vi.fn(),
+      renameLabel: vi.fn(),
+      setLabelColour: vi.fn(),
+      removeLabel: vi.fn(),
+      removeProject: vi.fn(),
       disabled: false,
     });
 
@@ -622,6 +652,7 @@ describe("ComposerPage", () => {
         setTaskDate: vi.fn(),
         setTaskDeadline: vi.fn(),
         setTaskPriority: vi.fn(),
+        setTaskDateString: vi.fn(),
         setTaskLabels: vi.fn(),
         setTaskDescription: vi.fn(),
         listTasksInProject: vi.fn(async () => []),
@@ -672,6 +703,11 @@ describe("ComposerPage", () => {
         setFilterColour: vi.fn(),
         setFilterQuery: vi.fn(async () => {}),
         removeFilter: vi.fn(),
+        addLabel: vi.fn(),
+        renameLabel: vi.fn(),
+        setLabelColour: vi.fn(),
+        removeLabel: vi.fn(),
+        removeProject: vi.fn(),
         disabled: false,
       });
 
@@ -735,6 +771,7 @@ describe("ComposerPage", () => {
         setTaskDate: vi.fn(),
         setTaskDeadline: vi.fn(),
         setTaskPriority: vi.fn(),
+        setTaskDateString: vi.fn(),
         setTaskLabels: vi.fn(),
         setTaskDescription: vi.fn(),
         listTasksInProject: vi.fn(async () => []),
@@ -785,6 +822,11 @@ describe("ComposerPage", () => {
         setFilterColour: vi.fn(),
         setFilterQuery: vi.fn(async () => {}),
         removeFilter: vi.fn(),
+        addLabel: vi.fn(),
+        renameLabel: vi.fn(),
+        setLabelColour: vi.fn(),
+        removeLabel: vi.fn(),
+        removeProject: vi.fn(),
         disabled: false,
       });
 
@@ -851,6 +893,7 @@ describe("ComposerPage", () => {
         setTaskDate: vi.fn(),
         setTaskDeadline: vi.fn(),
         setTaskPriority: vi.fn(),
+        setTaskDateString: vi.fn(),
         setTaskLabels: vi.fn(),
         setTaskDescription: vi.fn(),
         listTasksInProject: vi.fn(async () => []),
@@ -901,6 +944,11 @@ describe("ComposerPage", () => {
         setFilterColour: vi.fn(),
         setFilterQuery: vi.fn(async () => {}),
         removeFilter: vi.fn(),
+        addLabel: vi.fn(),
+        renameLabel: vi.fn(),
+        setLabelColour: vi.fn(),
+        removeLabel: vi.fn(),
+        removeProject: vi.fn(),
         disabled: false,
       });
 
@@ -964,6 +1012,7 @@ describe("ComposerPage", () => {
           setTaskDate: vi.fn(),
           setTaskDeadline: vi.fn(),
           setTaskPriority: vi.fn(),
+          setTaskDateString: vi.fn(),
           setTaskLabels: vi.fn(),
           setTaskDescription: vi.fn(),
           listTasksInProject: vi.fn(async () => []),
@@ -1014,6 +1063,11 @@ describe("ComposerPage", () => {
           setFilterColour: vi.fn(),
           setFilterQuery: vi.fn(async () => {}),
           removeFilter: vi.fn(),
+          addLabel: vi.fn(),
+          renameLabel: vi.fn(),
+          setLabelColour: vi.fn(),
+          removeLabel: vi.fn(),
+          removeProject: vi.fn(),
           disabled: false,
         },
         "/?q=wor",
@@ -1646,7 +1700,10 @@ describe("ComposerPage", () => {
       fireEvent.click(screen.getByRole("button", { name: "buy milk" }));
 
       expect(screen.getByRole("dialog")).toBeInTheDocument();
-      expect(screen.getByDisplayValue("buy milk")).toBeInTheDocument();
+      // Issue #225: the detail title is a non-editable display element at
+      // rest (DET-02), not a form control with a `value` — a `<button>`,
+      // not `getByDisplayValue`.
+      expect(screen.getByRole("button", { name: "buy milk" })).toBeInTheDocument();
       stillOnComposer();
     });
 
@@ -1684,7 +1741,10 @@ describe("ComposerPage", () => {
       );
 
       expect(screen.getByRole("dialog")).toBeInTheDocument();
-      expect(screen.getByDisplayValue("buy milk")).toBeInTheDocument();
+      // Issue #225: the detail title is a non-editable display element at
+      // rest (DET-02), not a form control with a `value` — a `<button>`,
+      // not `getByDisplayValue`.
+      expect(screen.getByRole("button", { name: "buy milk" })).toBeInTheDocument();
     });
 
     it("shows nothing for a ?task= this Device cannot resolve", () => {

@@ -152,8 +152,8 @@ describe("promoteBareCheckboxes", () => {
       expect(task?.priority).toBe(4);
     });
 
-    it("resolves a %label token into labelNames, stripped from content", () => {
-      const result = promoteBareCheckboxes("- [ ] buy milk %Shopping", sequentialMintId(), OPTIONS);
+    it("resolves a @label token into labelNames, stripped from content", () => {
+      const result = promoteBareCheckboxes("- [ ] buy milk @Shopping", sequentialMintId(), OPTIONS);
 
       const task = result.tasks[0];
       expect(task?.content).toBe("buy milk");

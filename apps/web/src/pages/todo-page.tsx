@@ -1,29 +1,33 @@
 import type { Project, Section, Task } from "@meologue/core";
-import { today } from "@meologue/core";
+import { today, upcoming } from "@meologue/core";
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { Suspense, useMemo, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import { BackToChats } from "@/components/back-to-chats";
-import { localDayKey } from "@/components/date-picker-sheet";
 import { Shell } from "@/components/shell";
 import { ActivityFeed } from "@/components/todo/activity-feed";
 import { AddTaskForm } from "@/components/todo/add-task-form";
 import { CompletedTasks } from "@/components/todo/completed-tasks";
 import { FilterView } from "@/components/todo/filter-view";
 import { FiltersView } from "@/components/todo/filters-view";
+import { LabelsView } from "@/components/todo/labels-view";
+import { LazyTaskDetailView } from "@/components/todo/lazy-task-detail-view";
+import { LazyTaskScheduleSheet } from "@/components/todo/lazy-task-schedule-sheet";
 import { ProjectView } from "@/components/todo/project-view";
 import { ProjectsView } from "@/components/todo/projects-view";
-import { TaskDetailView } from "@/components/todo/task-detail-view";
 import { TaskList } from "@/components/todo/task-list";
 import { TaskQuickFind } from "@/components/todo/task-quick-find";
 import type { TaskDetailActions } from "@/components/todo/task-row";
-import { TaskScheduleSheet } from "@/components/todo/task-schedule-sheet";
 import { TaskSearchPage } from "@/components/todo/task-search-page";
 import { TodayView } from "@/components/todo/today-view";
+import { TodoKeyboardShortcutsOverlay } from "@/components/todo/todo-keyboard-shortcuts-overlay";
 import { TodoNav } from "@/components/todo/todo-nav";
+import { UpcomingView } from "@/components/todo/upcoming-view";
 import { ConfirmDialog } from "@/components/ui/alert-dialog";
+import { useTodoKeymap } from "@/hooks/use-todo-keymap";
 import { commentCountForTask, commentsForTask } from "@/lib/comment-counts";
+import { localDayKey } from "@/lib/local-day-key";
 import { sectionsQueryKey, tasksInProjectQueryKey } from "@/lib/query-keys";
 import type { QuickAddTaskFields } from "@/lib/quick-add-task";
 import { taskDetailPath, taskIdFromParam } from "@/lib/task-detail-route";
@@ -43,7 +47,17 @@ import { useEntryStore } from "@/pages/entry-store-layout";
  * are one per view.
  */
 interface TodoBackgroundView {
-  view: "inbox" | "today" | "projects" | "project" | "search" | "activity" | "filters" | "filter";
+  view:
+    | "inbox"
+    | "today"
+    | "upcoming"
+    | "projects"
+    | "project"
+    | "search"
+    | "activity"
+    | "filters"
+    | "filter"
+    | "labels";
   projectId: string | null;
   /**
    * The Filter this Task was opened from a result of, for `view ===
@@ -99,7 +113,17 @@ export interface TodoPageProps {
    * `/reflect/:sessionId` reads its own id — not a second prop, since the
    * id is already in the URL a bookmark or a reload has to survive.
    */
-  view?: "inbox" | "today" | "projects" | "project" | "search" | "activity" | "filters" | "filter";
+  view?:
+    | "inbox"
+    | "today"
+    | "upcoming"
+    | "projects"
+    | "project"
+    | "search"
+    | "activity"
+    | "filters"
+    | "filter"
+    | "labels";
 }
 
 /**
@@ -192,6 +216,7 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     setTaskDate,
     setTaskDeadline,
     setTaskPriority,
+    setTaskDateString,
     setTaskLabels,
     listTasksInProject,
     listTaskChildren,
@@ -205,6 +230,10 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     setTaskSection,
     setTaskDescription,
     labels,
+    addLabel,
+    renameLabel,
+    setLabelColour,
+    removeLabel,
     resolveLabelIds,
     comments,
     addComment,
@@ -213,10 +242,12 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     projects,
     addProject,
     renameProject,
+    setProjectColour,
     setProjectDescription,
     setProjectFavourite,
     archiveProject,
     unarchiveProject,
+    removeProject,
     listSections,
     addSection,
     renameSection,
@@ -279,6 +310,15 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const confirmingTask = tasks.find((task) => task.id === confirmingId) ?? null;
 
+  // Issue #228: Quick-find's own `open` state, lifted here from
+  // task-quick-find.tsx (that file's own header comment on why) — driven
+  // by `/`/`f`/⌘K through `useTodoKeymap` below, the identical "controlled
+  // from the page" shape `schedulingId`/`confirmingId` already use. The
+  // `?` shortcuts overlay gets the same treatment, one state each, since
+  // neither owns a document listener of its own any more.
+  const [quickFindOpen, setQuickFindOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+
   // Issue #184: "completed work is reached by narrowing the log to
   // completions, not from a separate destination of its own" — a plain
   // toggle above the Activity view rather than a second route.
@@ -297,6 +337,26 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   function handleOpenSchedule(taskId: string) {
     setSchedulingId(taskId);
   }
+
+  // Day-keys carrying at least one active Task, mapped to how many —
+  // TaskSchedulePopover's own doc comment on why SCHED-09's calendar dot
+  // and SCHED-04's preview subline share this one source rather than two
+  // independently-computed counts. Recomputed only when `tasks` itself
+  // changes, not on every render the schedule sheet happens to be open
+  // for — every Task in the list counts, including the one currently
+  // being scheduled, matching how a real calendar dot would read "how
+  // many Tasks land here" regardless of which one opened the picker.
+  const datesWithTasks = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const task of tasks) {
+      if (task.date === null) {
+        continue;
+      }
+      const day = task.date.slice(0, 10);
+      counts.set(day, (counts.get(day) ?? 0) + 1);
+    }
+    return counts;
+  }, [tasks]);
 
   // Completing raises the same Undo-toast affordance
   // register-service-worker.web.ts's own update prompt uses
@@ -419,6 +479,17 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
       ? null
       : ((openTaskSectionsQuery.data ?? []).find((s) => s.id === openTask.sectionId) ?? null);
 
+  // The open Task's own direct sub-tasks (issue #229) — `tasks`/
+  // `completedTasks` are already the two flat, whole-account lists
+  // `openTask` itself is resolved against just above, so narrowing them
+  // client-side by `parentId` costs nothing beyond the array walk and
+  // needs no third query the way `openTaskSectionsQuery` above does for a
+  // Section scoped to a different Project than the background view's own.
+  const openTaskSubtasks: Task[] =
+    openTask === null
+      ? []
+      : [...tasks, ...completedTasks].filter((t) => t.parentId === openTask.id);
+
   // The list `prevTask`/`nextTask` step through — whichever list the
   // background view itself renders, in the identical order that view's
   // own rendering already puts its rows in, so stepping through the
@@ -435,13 +506,16 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
           const { overdue, dueToday } = today(tasks, localDayKey(new Date()));
           return [...overdue, ...dueToday];
         })()
-      : backgroundView.view === "projects" ||
-          backgroundView.view === "search" ||
-          backgroundView.view === "activity" ||
-          backgroundView.view === "filters" ||
-          backgroundView.view === "filter"
-        ? []
-        : scopedTasks;
+      : backgroundView.view === "upcoming"
+        ? upcoming(tasks, localDayKey(new Date())).flatMap((day) => day.tasks)
+        : backgroundView.view === "projects" ||
+            backgroundView.view === "search" ||
+            backgroundView.view === "activity" ||
+            backgroundView.view === "filters" ||
+            backgroundView.view === "filter" ||
+            backgroundView.view === "labels"
+          ? []
+          : scopedTasks;
   const openTaskIndex =
     openTask === null ? -1 : backgroundTaskList.findIndex((t) => t.id === openTask.id);
   const prevTask = openTaskIndex > 0 ? (backgroundTaskList[openTaskIndex - 1] ?? null) : null;
@@ -505,6 +579,28 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     );
   }
 
+  // Issue #228's keyboard layer — the one document-level listener for the
+  // whole of Todo (`use-todo-keymap.ts`'s own header comment: "mounted
+  // once by todo-page.tsx"), which this call site satisfies simply by
+  // being inside this component's own body — `TodoPage` only ever renders
+  // for `/todo/*` (App.tsx's routes), so this hook mounts and unmounts
+  // with the route exactly the way `TodoNav`/the Todo sidebar already do.
+  // `resolveTask` mirrors `openTask`'s own two-list lookup above (`tasks`
+  // first, `completedTasks` as fallback — that lookup's own doc comment
+  // has the reason a completed Task still needs to resolve).
+  useTodoKeymap({
+    resolveTask: (taskId) =>
+      tasks.find((t) => t.id === taskId) ?? completedTasks.find((t) => t.id === taskId) ?? null,
+    onOpenTaskDetail: openTaskDetail,
+    onOpenSchedule: handleOpenSchedule,
+    onSetTaskDate: setTaskDate,
+    onSetTaskDeadline: setTaskDeadline,
+    onRequestDelete: handleRequestDelete,
+    onOpenQuickFind: () => setQuickFindOpen(true),
+    onShowShortcuts: () => setShortcutsOpen(true),
+    onNavigate: navigate,
+  });
+
   // Every row on this page renders through `TaskRow`, and every one of
   // them needs this identical bundle — see `TaskDetailActions`'s own doc
   // comment (task-row.tsx) for why it's threaded as one object rather
@@ -517,11 +613,15 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     onSetProject: setTaskProject,
     onSetLabels: setTaskLabels,
     onCopyLink: copyTaskLink,
+    // Issue #225: the row's own new inline rename reaches the identical
+    // `renameTask` door `TaskDetailView`'s own `onRename` prop below
+    // already calls — one rename path, two places to reach it.
+    onRename: renameTask,
     commentCountFor: (taskId) => commentCountForTask(comments, taskId),
   };
 
   // The add field's own parse (add-task-form.tsx, quick-add-task.ts)
-  // resolves everything except `labelIds` — a `%label` name needs a
+  // resolves everything except `labelIds` — a `@label` name needs a
   // LabelStore round trip (use-labels.ts's `resolveLabelIds`) this
   // function is what awaits before a Task literal can be built at all.
   // `fields.date` overrides `captureDate` only when the reader actually
@@ -588,12 +688,17 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
           gets its own "New Project" form instead (`ProjectsView`); the
           full search page (`view === "search"`, issue #183) is a results
           list with no "current view" for a captured Task to inherit
-          either, the identical reasoning. */}
+          either, the identical reasoning. Upcoming (issue #223) is the
+          same shape again — it spans every future day at once, so there
+          is no single date for a captured Task to inherit the way Today
+          inherits today's own. */}
       {backgroundView.view !== "projects" &&
         backgroundView.view !== "search" &&
         backgroundView.view !== "activity" &&
         backgroundView.view !== "filters" &&
-        backgroundView.view !== "filter" && <AddTaskForm onAdd={handleAdd} disabled={disabled} />}
+        backgroundView.view !== "filter" &&
+        backgroundView.view !== "labels" &&
+        backgroundView.view !== "upcoming" && <AddTaskForm onAdd={handleAdd} disabled={disabled} />}
 
       {backgroundView.view === "today" && (
         <TodayView
@@ -605,6 +710,17 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
           onOpenSchedule={handleOpenSchedule}
           onSetDate={setTaskDate}
           onPostpone={postponeTask}
+        />
+      )}
+
+      {backgroundView.view === "upcoming" && (
+        <UpcomingView
+          tasks={tasks}
+          detailActions={detailActions}
+          onComplete={handleComplete}
+          onCompleteForever={handleCompleteForever}
+          onRequestDelete={handleRequestDelete}
+          onOpenSchedule={handleOpenSchedule}
         />
       )}
 
@@ -642,6 +758,7 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
             tasks={scopedTasks}
             detailActions={detailActions}
             onRename={(name) => renameProject(currentProject.id, name)}
+            onSetColour={(colour) => setProjectColour(currentProject.id, colour)}
             onSetDescription={(description) =>
               setProjectDescription(currentProject.id, description)
             }
@@ -649,6 +766,10 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
             onToggleArchived={(archived) =>
               archived ? archiveProject(currentProject.id) : unarchiveProject(currentProject.id)
             }
+            onDeleteProject={() => {
+              removeProject(currentProject.id);
+              navigate("/todo/projects");
+            }}
             onAddSection={handleAddSection}
             onRenameSection={renameSection}
             onReorderSection={reorderSection}
@@ -679,7 +800,21 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
         />
       )}
 
-      {backgroundView.view === "filters" && <FiltersView filters={filters} />}
+      {backgroundView.view === "filters" && <FiltersView filters={filters} labels={labels} />}
+
+      {/* Issue #229's own gap: a real destination for the sidebar's
+          "Filters & Labels" row (ledger row NAV-06) — full Label
+          create/rename/recolour/delete, previously wired to no UI at
+          all. */}
+      {backgroundView.view === "labels" && (
+        <LabelsView
+          labels={labels}
+          onAdd={addLabel}
+          onRename={renameLabel}
+          onSetColour={setLabelColour}
+          onRemove={removeLabel}
+        />
+      )}
 
       {backgroundView.view === "filter" &&
         (!currentFilter && currentFilterId !== null ? (
@@ -761,18 +896,29 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
       )}
 
       {schedulingTask !== null && (
-        <TaskScheduleSheet
-          task={schedulingTask}
-          open={true}
-          onOpenChange={(open) => {
-            if (!open) {
-              setSchedulingId(null);
-            }
-          }}
-          onSetDate={setTaskDate}
-          onSetDeadline={setTaskDeadline}
-          onSetPriority={setTaskPriority}
-        />
+        // `LazyTaskScheduleSheet`'s own header comment: this and
+        // `TaskDetailView` below are the two things that moved Todo's
+        // route off its 651-byte headroom (issue #228/#229's own brief).
+        // `fallback={null}` matches `lazy-destructive-confirm-dialog.ts`'s
+        // callers — a Sheet opening from a deliberate tap tolerates one
+        // frame with nothing rendered far better than a route's first
+        // paint would.
+        <Suspense fallback={null}>
+          <LazyTaskScheduleSheet
+            task={schedulingTask}
+            open={true}
+            onOpenChange={(open) => {
+              if (!open) {
+                setSchedulingId(null);
+              }
+            }}
+            onSetDate={setTaskDate}
+            onSetDeadline={setTaskDeadline}
+            onSetPriority={setTaskPriority}
+            onSetDateString={setTaskDateString}
+            datesWithTasks={datesWithTasks}
+          />
+        </Suspense>
       )}
 
       <ConfirmDialog
@@ -782,14 +928,25 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
             setConfirmingId(null);
           }
         }}
-        title="Delete this Task?"
+        /*
+         * Todoist's own captured wording (quick-add.md § "Destructive
+         * confirmation wording"), matching the Project and Label dialogs
+         * this branch already aligned.
+         *
+         * It is worth being clear about what that costs, because the copy
+         * this replaces was not worse by accident. It said the row "stays
+         * gone on every Device, and there is no Undo (unlike completing,
+         * which you can always reverse)" — two things Todoist never has to
+         * say and this app arguably does: that deletion propagates through
+         * Sync, and that it is the one destructive act here with no undo,
+         * where completion always has one. Parity was the instruction, so
+         * parity wins; the loss is recorded in the ledger rather than
+         * quietly absorbed, so it can be reversed on purpose if the
+         * clearer copy turns out to matter more than the match.
+         */
+        title="Delete task?"
         description={
-          confirmingTask && (
-            <>
-              Deleting "{confirmingTask.content}" is permanent — the row stays gone on every Device,
-              and there is no Undo (unlike completing, which you can always reverse).
-            </>
-          )
+          confirmingTask && <>The {confirmingTask.content} task will be permanently deleted.</>
         }
         confirmLabel="Delete"
         onConfirm={() => {
@@ -807,38 +964,55 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
           background view underneath is exactly what `backgroundView`
           already computed for every other branch above. */}
       {openTask !== null && (
-        <TaskDetailView
-          task={openTask}
-          project={openTaskProject}
-          section={openTaskSection}
-          projects={projects}
-          labels={labels}
-          prevTask={prevTask}
-          nextTask={nextTask}
-          onClose={closeTaskDetail}
-          onNavigate={stepTaskDetail}
-          onRename={(content) => renameTask(openTask.id, content)}
-          // Issue #184's own gap-fix report: the detail view now resolves
-          // (and must render actionable) a completed Task too — reuses
-          // `handleComplete`'s own recurring-Task/toast handling, the
-          // identical door every other completion entry point already
-          // goes through, rather than this view's own checkbox
-          // duplicating that logic.
-          onComplete={() => handleComplete(openTask.id, openTask.content, openTask.dateString)}
-          onUncomplete={() => uncompleteTask(openTask.id)}
-          onOpenSchedule={() => handleOpenSchedule(openTask.id)}
-          onSetProject={(projectId) => setTaskProject(openTask.id, projectId)}
-          onSetLabels={(labelIds) => setTaskLabels(openTask.id, labelIds)}
-          onSetDescription={(description) => setTaskDescription(openTask.id, description)}
-          comments={commentsForTask(comments, openTask.id)}
-          onAddComment={(text) => addComment(openTask.id, text)}
-          onEditComment={editComment}
-          onRemoveComment={removeComment}
-          // Issue #184: this Task's own history, newest first — narrowed
-          // client-side from the one flat `events` list, mirroring
-          // `commentsForTask`'s identical narrowing just above.
-          events={events.filter((event) => event.taskId === openTask.id)}
-        />
+        // `LazyTaskDetailView`'s own header comment has the bundle numbers.
+        // `fallback={null}` for the same reason `LazyTaskScheduleSheet`'s
+        // own call site above gives: opening a Task is a deliberate
+        // navigation, not a route's first paint, so one frame with nothing
+        // rendered over the (still-visible) background view is the right
+        // trade, not a visible regression.
+        <Suspense fallback={null}>
+          <LazyTaskDetailView
+            task={openTask}
+            project={openTaskProject}
+            section={openTaskSection}
+            projects={projects}
+            labels={labels}
+            prevTask={prevTask}
+            nextTask={nextTask}
+            onClose={closeTaskDetail}
+            onNavigate={stepTaskDetail}
+            onRename={(content) => renameTask(openTask.id, content)}
+            // Issue #184's own gap-fix report: the detail view now resolves
+            // (and must render actionable) a completed Task too — reuses
+            // `handleComplete`'s own recurring-Task/toast handling, the
+            // identical door every other completion entry point already
+            // goes through, rather than this view's own checkbox
+            // duplicating that logic.
+            onComplete={() => handleComplete(openTask.id, openTask.content, openTask.dateString)}
+            onUncomplete={() => uncompleteTask(openTask.id)}
+            onOpenSchedule={() => handleOpenSchedule(openTask.id)}
+            onSetProject={(projectId) => setTaskProject(openTask.id, projectId)}
+            onSetLabels={(labelIds) => setTaskLabels(openTask.id, labelIds)}
+            onSetDescription={(description) => setTaskDescription(openTask.id, description)}
+            comments={commentsForTask(comments, openTask.id)}
+            onAddComment={(text) => addComment(openTask.id, text)}
+            onEditComment={editComment}
+            onRemoveComment={removeComment}
+            subtasks={openTaskSubtasks}
+            onAddSubtask={(content) => addTask(content, { parentId: openTask.id })}
+            onCompleteSubtask={(id) => {
+              const subtask = openTaskSubtasks.find((t) => t.id === id);
+              if (subtask) {
+                handleComplete(subtask.id, subtask.content, subtask.dateString);
+              }
+            }}
+            onUncompleteSubtask={(id) => uncompleteTask(id)}
+            // Issue #184: this Task's own history, newest first — narrowed
+            // client-side from the one flat `events` list, mirroring
+            // `commentsForTask`'s identical narrowing just above.
+            events={events.filter((event) => event.taskId === openTask.id)}
+          />
+        </Suspense>
       )}
 
       {/* Quick-find (issue #183) — mounted unconditionally, once, regardless
@@ -849,6 +1023,8 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
           cross-Project array this component already leans on for
           `confirmingTask`/`schedulingTask`/`openTask` above. */}
       <TaskQuickFind
+        open={quickFindOpen}
+        onOpenChange={setQuickFindOpen}
         tasks={tasks}
         projects={projects}
         onOpenTask={openTaskDetail}
@@ -857,6 +1033,11 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
         }
         onShowMoreResults={openFullSearch}
       />
+
+      {/* Issue #228's `?` overlay — `open`/`onOpenChange` mirror Quick-
+          find's own just above, toggled by the identical keyboard layer
+          (`useTodoKeymap`'s `onShowShortcuts`). */}
+      <TodoKeyboardShortcutsOverlay open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
     </Shell>
   );
 }

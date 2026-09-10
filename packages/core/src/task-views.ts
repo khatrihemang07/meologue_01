@@ -130,6 +130,163 @@ export function today(tasks: Task[], now: string): TodayView {
   return { overdue, dueToday };
 }
 
+/** One calendar day's worth of Upcoming (see upcoming()'s own doc comment) — `dayKey` is a bare `YYYY-MM-DD`, matching tasksForDay's own convention, and `tasks` is already in compareForToday order. */
+export interface UpcomingDay {
+  dayKey: string;
+  tasks: Task[];
+}
+
+/**
+ * Upcoming (issue #223's second half): today() looks backward and at the
+ * present moment (overdue, due today); this looks forward, one day-section
+ * per calendar day that actually has a dated Task, starting with today
+ * itself. Todoist's own Upcoming view groups the identical way — its day
+ * headings run "10 Sep ‧ Today ‧ Thursday," "11 Sep ‧ Tomorrow ‧ Friday,"
+ * "12 Sep ‧ Saturday" (docs/reference/todoist/scheduler-and-priority.md
+ * §9, DATE-05 in the parity ledger) — today's own section heading first,
+ * not omitted the way a calendar app might start a "forthcoming" list on
+ * tomorrow.
+ *
+ * **`date` only, never `deadline`.** today()'s own union deliberately
+ * folds a Deadline in — CONTEXT.md's point that an undated Task still has
+ * to surface once its hard cutoff arrives. Upcoming has no such rescue
+ * case to cover: it's a calendar, one section per day something is
+ * *planned* for, and a Deadline is a cutoff a Task must be done by, not a
+ * day it's scheduled on — DATE-08 in the ledger records that Deadline's
+ * own row rendering is still unobserved (Pro-gated in the captured
+ * account), so this deliberately doesn't invent a rule for it beyond
+ * "not part of this grouping."
+ *
+ * **Overdue stays in Today, not here.** A `date` before today's calendar
+ * day is excluded outright (the `dayKey < todayKey` guard below) — the
+ * exact complement of today()'s own `overdue` bucket, never doubled into
+ * both views. A Task due exactly today is the one day both views share,
+ * and it appears in both: today() calls it `dueToday`, Upcoming calls it
+ * this list's first section.
+ *
+ * Each day's Tasks are sorted with the identical compareForToday chain
+ * today() already uses (this module's own header comment: grouping never
+ * invents a second ordering), and the days themselves come back
+ * chronological — a caller renders them top to bottom and gets Upcoming's
+ * whole shape for free.
+ */
+export function upcoming(tasks: Task[], now: string): UpcomingDay[] {
+  const todayKey = now.slice(0, 10);
+  const byDay = new Map<string, Task[]>();
+
+  for (const t of tasks) {
+    if (t.date === null) {
+      continue;
+    }
+    const dayKey = t.date.slice(0, 10);
+    if (dayKey < todayKey) {
+      continue;
+    }
+    const bucket = byDay.get(dayKey);
+    if (bucket === undefined) {
+      byDay.set(dayKey, [t]);
+    } else {
+      bucket.push(t);
+    }
+  }
+
+  return [...byDay.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([dayKey, dayTasks]) => ({ dayKey, tasks: [...dayTasks].sort(compareForToday) }));
+}
+
+const WEEKDAY_NAMES = [
+  "Sunday",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+] as const;
+
+const MONTH_ABBREVIATIONS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+] as const;
+
+// U+2027 HYPHENATION POINT — the exact glyph Todoist's own Upcoming day
+// headings use as a separator (scheduler-and-priority.md §9's own
+// "separator glyph is ‧"), not the visually similar U+2022 BULLET or a
+// plain "·" (U+00B7 MIDDLE DOT) a keyboard or a font substitution could
+// easily produce instead. Getting this one character wrong is exactly the
+// kind of thing a screenshot comparison would never catch and a string
+// diff would.
+const DAY_HEADING_SEPARATOR = "‧";
+
+// Both `dayKey`s are `YYYY-MM-DD`; parsed with Date.UTC rather than the
+// bare `new Date(string)` constructor (whose ISO-string parsing is
+// UTC-anchored for a date-only string but local-anchored for a
+// date-time one — a footgun other modules in this app route around
+// explicitly, e.g. format-task-date.ts's own `parseLocalDay`) — anchoring
+// both ends at UTC noon-free midnight keeps this a pure day-count, with
+// no host timezone ever entering the calculation the way a browser's
+// `Date` constructor otherwise would.
+function daysBetween(fromKey: string, toKey: string): number {
+  const [fy, fm, fd] = fromKey.split("-").map(Number);
+  const [ty, tm, td] = toKey.split("-").map(Number);
+  const fromUtc = Date.UTC(fy ?? 0, (fm ?? 1) - 1, fd ?? 1);
+  const toUtc = Date.UTC(ty ?? 0, (tm ?? 1) - 1, td ?? 1);
+  return Math.round((toUtc - fromUtc) / 86_400_000);
+}
+
+/**
+ * The exact heading wording DATE-05 records — `upcoming()`'s own
+ * `UpcomingDay.dayKey` in, a heading string out. Deliberately a *second*
+ * function rather than folded into `upcoming()` itself: grouping is a
+ * pure question about which Tasks fall on which day, wording is a pure
+ * question about how to say a day out loud, and a caller (or a test) that
+ * wants one has no reason to also compute the other.
+ *
+ * Only today and tomorrow ever get a relative word — every other day is
+ * `{day} {month} {separator} {weekday}`, weekday-only, exactly as
+ * DATE-05's own "12 Sep ‧ Saturday" (no relative word, because Saturday
+ * is neither today nor tomorrow in that capture) already shows. No year
+ * is ever printed, for a further-out day either — DATE-05's own evidence
+ * never shows one, and CLAUDE.md's own rule against inventing evidence
+ * cuts against adding a fourth segment nothing here was ever seen to
+ * carry.
+ */
+export function upcomingDayHeading(dayKey: string, now: string): string {
+  const todayKey = now.slice(0, 10);
+  const [year, monthPart, dayPart] = dayKey.split("-");
+  const monthName = MONTH_ABBREVIATIONS[Number(monthPart) - 1] ?? monthPart;
+  const dayNumber = Number(dayPart);
+  const datePart = `${dayNumber} ${monthName}`;
+
+  // getUTCDay(), not getDay(): dayKey is a bare calendar day with no host
+  // timezone attached to it (this function's own doc comment on
+  // Date.UTC), so the weekday has to be read back off the identical UTC
+  // instant it was constructed from — reading the local accessor here
+  // would let the runtime's own timezone silently roll the day over.
+  const dow = new Date(Date.UTC(Number(year), Number(monthPart) - 1, Number(dayPart))).getUTCDay();
+  const weekdayName = WEEKDAY_NAMES[dow] ?? "";
+
+  const diff = daysBetween(todayKey, dayKey);
+  if (diff === 0) {
+    return `${datePart} ${DAY_HEADING_SEPARATOR} Today ${DAY_HEADING_SEPARATOR} ${weekdayName}`;
+  }
+  if (diff === 1) {
+    return `${datePart} ${DAY_HEADING_SEPARATOR} Tomorrow ${DAY_HEADING_SEPARATOR} ${weekdayName}`;
+  }
+  return `${datePart} ${DAY_HEADING_SEPARATOR} ${weekdayName}`;
+}
+
 /**
  * The full sort chain, exported on its own (not just used internally by
  * today()) because the web layer's grouping control needs the identical

@@ -390,6 +390,22 @@ strictly past that Date, never the Date's own computation.
 Where a Task with no Project lives. Inbox is not a container the way a Project is — it names the
 absence of one, not a place a Task is filed.
 
+### Favourite
+
+A Project the user has marked to keep close at hand. Favouriting changes nothing about where a
+Project lives or what it holds — a favourited Project is still exactly where it was, nested where it
+was nested — it only says the user reaches for it often enough to want it offered before the rest.
+It is a property of the Project itself rather than of any view, so it is the same mark wherever that
+Project appears.
+
+### Upcoming
+
+The view over Tasks forward from today, grouped by the day each falls on. Upcoming reads the same
+two independent date fields Today does, and adds nothing of its own: a Task appears in it because of
+when it is planned or due, never because of where it lives or what it says. A Task with no Date and
+no Deadline appears nowhere in it, for the same reason it appears nowhere in Today — there is no day
+to put it under.
+
 ### Occurrence
 
 One instance of a recurring Task, recorded as finished. An Occurrence is a record of work already

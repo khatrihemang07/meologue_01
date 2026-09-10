@@ -537,6 +537,11 @@ function TaskTreeRow({
       task={task}
       detailActions={detailActions}
       commentCount={detailActions.commentCountFor(task.id)}
+      // Issue #224's own "must gain" list — this query already ran, just
+      // above, to decide whether to render a nested `TaskTree` at all
+      // (`children.length > 0` below), so the row's own badge reads the
+      // identical number rather than this component fetching it twice.
+      subtaskCount={children.length}
       depth={depth}
       isDropTarget={isDropTarget}
       isNestTarget={isNestTarget}

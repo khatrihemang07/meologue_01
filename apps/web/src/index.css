@@ -5,6 +5,54 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/*
+ * Row affordances that appear on hover (issue #224, ROW-04). A named
+ * variant rather than an inline `[@media(...)]:` arbitrary one, because
+ * Tailwind scans source files as raw text: a class assembled by template
+ * interpolation — `${variant}:opacity-0` — never appears literally
+ * anywhere, so no utility is generated for it and the class lands in the
+ * DOM with no CSS behind it. That failed silently here once already, with
+ * every hover control sitting at full opacity on every row while the whole
+ * suite stayed green; it was caught by measuring the rendered page.
+ *
+ * **The `(pointer: fine)` arm below does not reach the stylesheet, and
+ * re-adding it naively makes things worse rather than better.** Both halves
+ * of that were measured, and the arm is left as-is deliberately.
+ *
+ * What the comment here used to claim: that the `(pointer: fine)` arm
+ * alongside `(hover: hover)` "keeps these reachable in a Tauri window,
+ * which can report a coarse pointer for a trackpad and would otherwise hide
+ * every row action outright." It does not, because it is not emitted. The
+ * compiled stylesheet carries `@media (hover:hover)` only — zero
+ * occurrences of `pointer:fine` anywhere in it — because this shorthand's
+ * comma list gets its second arm spliced into *selector* position instead
+ * of staying a media query. The build log says so in as many words,
+ * four times: "Invalid dangling combinator in selector", pointing at
+ * `.pointer-fine\:group-hover\:opacity-100 (pointer: fine):is(...)`. Nobody
+ * read it. So this is the same defect as the interpolated class above, one
+ * layer down — a variant that exists, reads correctly, and emits nothing.
+ *
+ * Why it is still not simply rewritten into the block-and-`@slot` form that
+ * *does* emit both arms: Tailwind gates `group-hover` behind its own,
+ * independent `@media (hover: hover)` to avoid sticky hover on touch. So
+ * with both arms live, a Device reporting `hover: none` with `pointer:
+ * fine` starts matching `pointer-fine:opacity-0` — hiding every control —
+ * while `pointer-fine:group-hover:opacity-100` stays inert inside
+ * Tailwind's own hover gate, leaving nothing but `focus-visible` to reveal
+ * them. That is precisely the "hidden outright" state the original comment
+ * feared, manufactured by fixing the arm it blamed. The present,
+ * accidentally-`(hover: hover)`-only behaviour degrades the other way
+ * instead: such a Device matches no `pointer-fine` utility at all, so the
+ * controls simply stay visible, which is the safe end to fail towards.
+ *
+ * Closing this properly means making the *reveal* side reachable without a
+ * hover media query, not widening the gate on the *hide* side. That is a
+ * design change with a real device question behind it (what Tauri actually
+ * reports, which was never measured), so it is recorded here rather than
+ * guessed at.
+ */
+@custom-variant pointer-fine (@media (hover: hover), (pointer: fine));
+
 @theme inline {
   --font-heading: var(--font-sans);
   --font-sans: "Geist Variable", sans-serif;
@@ -326,6 +374,238 @@
   --checked-list-text-color: initial;
 }
 
+/*
+ * Todoist's own palette, type and density (issue #223's first half) — a
+ * token scope keyed off `data-surface="todo"`, which `chat-shell-layout.tsx`
+ * sets on the one element every `/todo/*` route AND its left pane both sit
+ * under (see that file's own comment for why one attribute has to reach
+ * both). Every measured value below is captured live, dark theme only, and
+ * committed at docs/reference/todoist/parity-ledger.md and the sibling
+ * reference docs it points at — nothing here is recalled from memory.
+ *
+ * Two rules are the whole design, and both exist to make this scope safe to
+ * add without auditing every `shadcn` component that already exists:
+ *
+ * 1. RE-POINT, DON'T RENAME. `--background`, `--foreground`, `--border`,
+ *    `--muted`, `--muted-foreground`, `--radius` and `--font-sans` are the
+ *    exact names `Button`/`Input`/`Dialog`/etc already read (the `@theme
+ *    inline` block at the top of this file). Overriding the VALUE inside
+ *    this attribute selector repaints every existing control with no
+ *    component edit at all — the identical mechanism `[data-accent]` and
+ *    `[data-completed-style]` above already use for a narrower question.
+ * 2. New `--td-*` names for what Todoist has and this app's palette has no
+ *    token for at all: a second, deliberately different Priority red; the
+ *    Date family's tones; the recognition-match highlight; calendar and
+ *    composer/popover chrome. A new prefix, rather than reusing an existing
+ *    family like `--accent-*`, is what stops one of these leaking outside
+ *    the scope by accident — custom properties inherit down the tree, and
+ *    nothing outside `[data-surface="todo"]` ever sets a `--td-*` name, so
+ *    a component that reads one anywhere else gets nothing rather than a
+ *    silently-leaked Todoist colour.
+ *
+ * `--entry-accent` is untouched on purpose — CONTEXT.md's "parity with
+ * Todoist" mandate has never extended to this app's own one reserved
+ * accent (index.css's own comment on it, above), and the five choices in
+ * Settings keep applying to Todo's own entry points into a Session exactly
+ * as they do everywhere else; only Todo's OWN surface repaints. Likewise
+ * the three `--quick-add-*` tokens defined earlier in this file are
+ * RE-POINTED below, never redefined — `quick-add-highlight.ts`'s callers
+ * outside Todo (the Composer) read the identical values they always did.
+ *
+ * Values that do not change between the two blocks below (radii, type
+ * scale, and every accent-style hue that is not a background or a body
+ * text colour) are declared once, in the base block, and simply inherited
+ * by the dark override — the same economy `:root`/`.dark` already practise
+ * for `--radius` and the chart tokens.
+ *
+ * LIGHT THEME IS AN UNVERIFIED APPROXIMATION. Todoist was only ever
+ * observed in dark theme (docs/reference/todoist/README.md's own "How it
+ * was captured") — there is no light-mode evidence to match against, for
+ * any value below. `--background`/`--foreground`/`--border`/`--muted`/
+ * `--muted-foreground` in the base block are derived to be legible on a
+ * light ground, not measured; the ledger row this concedes is
+ * parity-ledger.md's `THEME-01`, `blocked`. The colour-bearing `--td-*`
+ * accents (priority, date, calendar, recognition, focus) are carried
+ * forward unchanged into light rather than re-invented a second time —
+ * hue-bearing accents ordinarily survive a light/dark flip in a way
+ * backgrounds and body text cannot, and inventing a second, equally
+ * unverified set of them would not be more honest than reusing the one
+ * set that was actually seen.
+ */
+[data-surface="todo"] {
+  --background: rgb(255, 255, 255);
+  --foreground: rgb(32, 32, 32);
+  --border: rgb(224, 224, 224);
+  --muted: rgb(246, 246, 246);
+  --muted-foreground: rgb(110, 110, 110);
+  /*
+   * `--card` and `--popover` are re-pointed alongside `--background`, and
+   * leaving them out was a real defect rather than an omission of detail.
+   * Every overlay in Todo — the task detail dialog, the command menu, the
+   * sheets — paints `--card` or `--popover`, never `--background`, so with
+   * these unset the whole overlay layer kept the app's own palette while
+   * the page around it repainted. Measured live once the scope reached
+   * them at all: the detail dialog still came back `oklch(0.205 0 0)`.
+   *
+   * Todoist's own detail modal was then measured directly to settle what
+   * the value should be: background `rgb(31,31,31)` — the same ground as
+   * its content pane, not a lighter raised surface — radius 10px, no
+   * border, shadow `rgba(0,0,0,.16) 0 2px 8px`. So these follow
+   * `--background` rather than being a shade of their own.
+   */
+  --card: var(--background);
+  --card-foreground: var(--foreground);
+  --popover: var(--background);
+  --popover-foreground: var(--foreground);
+  /* Matches the measured popover radius (10px) below — shadcn's Dialog and
+     Popover are the closest existing primitives to Todoist's own scheduler
+     popover, so this is the one shared `--radius` value worth re-pointing
+     to; the Composer card's own 12px is a bespoke, non-shadcn surface and
+     gets its own `--td-composer-radius` instead of bending this token to
+     fit two different numbers. */
+  --radius: 10px;
+  /*
+   * The token AND the property, because re-pointing the token alone is
+   * inert here and silently so. `@theme inline` at the top of this file
+   * means Tailwind substitutes `--font-sans`'s literal value into the
+   * `font-sans` utility at build time rather than emitting a `var()`, and
+   * `html { @apply font-sans }` in `@layer base` below is what actually
+   * sets the family — so no rule reads `--font-sans` at runtime and
+   * overriding it changes nothing at all. Caught only by measuring the
+   * rendered page: the whole suite, the linter and the typechecker were
+   * all green while Todo still rendered in Geist.
+   *
+   * The token is re-pointed anyway so anything that *does* read it inside
+   * this scope agrees with what is actually painted, and so this block
+   * stops being a lie if `@theme inline` ever becomes `@theme`.
+   */
+  --font-sans:
+    -apple-system, "system-ui", "Segoe UI", "Noto Sans", system-ui, sans-serif, "Apple Color Emoji",
+    "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+  font-family: var(--font-sans);
+
+  /* The row/checkbox ring's own default (no priority highlighted) — distinct
+     from `--td-priority-picker-4` below (PRI-05/PRI-06's own point: a row's
+     ring and the picker's swatch are two different surfaces and are not
+     assumed to share a value just because neither was contradicted). */
+  --td-checkbox-ring-default: rgb(169, 169, 169);
+  --td-focus-ring: rgb(23, 91, 194);
+
+  /* Priority picker swatches (PRI-01), all four independently measured. */
+  --td-priority-picker-1: rgb(209, 69, 59);
+  --td-priority-picker-2: rgb(235, 137, 9);
+  --td-priority-picker-3: rgb(36, 111, 224);
+  --td-priority-picker-4: rgb(102, 102, 102);
+  /* The row/checkbox ring's own P1 (PRI-05) — measured, and DELIBERATELY
+     different from `--td-priority-picker-1` above; see task-priority-
+     colors.ts's own header comment before "fixing" these into one value.
+     P2/P3's row rendering was never observed (PRI-06, blocked — no P2/P3
+     Task exists in the captured account), so those two fall back to the
+     picker's own swatch below rather than a third, wholly invented number. */
+  --td-priority-row-1: rgb(255, 112, 102);
+  --td-priority-row-2: var(--td-priority-picker-2);
+  --td-priority-row-3: var(--td-priority-picker-3);
+
+  /* The Date family's tones (DATE-01/02/03), reused verbatim by
+     `--td-date-muted` rather than a second literal — DATE-02's own point is
+     that completion mutes a Date to exactly the same grey prose already
+     uses elsewhere, not a fourth, Todo-only shade of it. */
+  --td-date-overdue: rgb(255, 112, 102);
+  --td-date-upcoming: rgb(169, 112, 255);
+  --td-date-muted: var(--muted-foreground);
+
+  /* A recognised natural-language match (README's own "one fact that
+     shapes the rebuild") — an inline-block span, not a text colour, hence
+     radius and padding tokens alongside the background. */
+  --td-recognition-background: rgb(111, 38, 37);
+  /* A token rather than the literal white the rule below carried, per ADR
+     0069's own second rule: everything Todoist has and this palette has no
+     name for gets a `--td-*` of its own. Measured white on the recognised
+     chip, and deliberately NOT `--foreground` — that follows the theme,
+     while this has to stay legible on one fixed dark red whichever theme
+     is active. */
+  --td-recognition-foreground: rgb(255, 255, 255);
+  --td-recognition-radius: 3px;
+  --td-recognition-padding-inline: 4px;
+
+  /* The scheduler's calendar (SCHED-06 through SCHED-10). */
+  --td-calendar-selected: rgb(222, 76, 74);
+  --td-calendar-today: rgb(226, 106, 96);
+  --td-calendar-busy-dot: rgb(209, 209, 209);
+
+  /* Composer chrome (QA-16) and the scheduler popover (SCHED-01) — two
+     different surfaces with two different radii, which is exactly why
+     `--radius` above is re-pointed to the popover's own value and the
+     Composer gets a bespoke token instead of contesting it. Border and
+     background both re-point to tokens already declared above rather than
+     repeating their literals a second time. */
+  --td-composer-background: rgb(255, 255, 255);
+  --td-composer-border: var(--border);
+  --td-composer-radius: 12px;
+  --td-popover-background: var(--muted);
+  --td-popover-border: var(--border);
+  --td-popover-radius: var(--radius);
+  /* SCHED-01's own two remaining measurements: the popover's fixed
+     card size and its two-layer shadow. Width is exact (a 250px card
+     never reflows); height is the calendar-only floor SCHED-01 itself
+     names ("grows if content grows") — set as `min-height` at the call
+     site, not a literal here, since a token can't express "this is a
+     floor, not a fixed value" on its own. */
+  --td-popover-width: 250px;
+  --td-popover-min-height: 525px;
+  --td-popover-shadow: 0 10px 20px 0 rgba(0, 0, 0, 0.19), 0 6px 6px 0 rgba(0, 0, 0, 0.23);
+  /* The Task detail modal's own shadow, measured directly off Todoist's
+     (DET-14) and deliberately NOT `--td-popover-shadow` above: a popover
+     floats a small card near its trigger and earns a heavy two-layer
+     shadow, while the modal is a large surface centred over a dimmed page
+     and needs far less to lift it. Two surfaces, two measurements, two
+     tokens — the radius they happen to share is `--radius`, which both
+     already read. */
+  --td-modal-shadow: 0 2px 8px rgba(0, 0, 0, 0.16);
+
+  /* Type scale (QA-20, row-and-detail.md §1) — the row's own font is
+     smaller than the rest of this app's body copy, and the Composer's
+     title is bigger again than the chrome around it; three distinct sizes
+     the existing `--font-sans`/default text size never had to distinguish
+     before Todo needed all three at once. */
+  --td-row-font-size: 14px;
+  --td-row-line-height: 21px;
+  --td-chrome-font-size: 13px;
+  --td-composer-title-font-size: 16px;
+  --td-composer-title-line-height: 23px;
+}
+
+/*
+ * BOTH forms, and the compound one is not redundant. `data-surface` is set on
+ * `documentElement`, which is the same element `.dark` is set on — so the
+ * descendant selector `.dark [data-surface="todo"]` cannot match it, and Todo
+ * silently fell back to the light block while the rest of the app stayed dark.
+ * Caught by measuring an overlay's background and reading white where the
+ * page around it was `rgb(31,31,31)`.
+ *
+ * The descendant form is kept alongside it so the scope still works if it is
+ * ever re-declared lower down — `PopoverContent` does exactly that today, to
+ * cover the window between a portal mounting and this attribute existing.
+ */
+.dark[data-surface="todo"],
+.dark [data-surface="todo"] {
+  --background: rgb(31, 31, 31);
+  --foreground: rgb(255, 255, 255);
+  --border: rgb(61, 61, 61);
+  /* The sidebar/body ground (rgb(38,38,38)) — measured as visibly LIGHTER
+     than `--background` above, which is the content pane's own, darker
+     ground; that inversion (a "muted" surface reading brighter than the
+     page, not dimmer) is Todoist's own choice, not a mistake carried over
+     from this app's usual dark/light convention. `--muted` is the correct
+     token to re-point to it anyway: it is still "the secondary surface,"
+     the sidebar/pane background rather than the primary content one — the
+     shape shadcn's own token already names, just with the two ends of the
+     usual light/dark spread swapped. */
+  --muted: rgb(38, 38, 38);
+  --muted-foreground: rgb(204, 204, 204);
+  --td-composer-background: rgb(40, 40, 40);
+}
+
 @layer base {
   /*
    * Defaults for the two custom properties Shell computes from
@@ -538,5 +818,31 @@
   .completed-sample {
     text-decoration: var(--checked-list-text-decoration);
     color: var(--checked-list-text-color, var(--foreground));
+  }
+}
+
+/*
+ * A recognised natural-language match, highlighted state (issue #226,
+ * `todo-quick-add-recognition.ts`'s own `decorationAttrs`) — the ONLY
+ * class that plugin ever applies. Withdrawn is deliberately not a second
+ * class here: docs/reference/todoist/quick-add.md's own measurement (§
+ * "The recognised-match span") is that withdrawal drops the class
+ * entirely, leaving a bare `<span>` — `display: inline`, no padding, no
+ * background, inherited colour — which is already exactly what an
+ * unclassed `<span>` renders as, so no withdrawn-specific rule is needed.
+ *
+ * `display: inline-block` plus horizontal padding is the one fact that
+ * decides this whole feature (quick-add.md's own section by that name):
+ * a real box that occupies width, not a colour painted behind text, so
+ * the glyphs after a recognised match physically shift when it fires and
+ * shift back when it's withdrawn (32.31px -> 24.31px, measured twice).
+ */
+@layer base {
+  .td-recognition-match {
+    display: inline-block;
+    padding-inline: var(--td-recognition-padding-inline);
+    border-radius: var(--td-recognition-radius);
+    background-color: var(--td-recognition-background);
+    color: var(--td-recognition-foreground);
   }
 }

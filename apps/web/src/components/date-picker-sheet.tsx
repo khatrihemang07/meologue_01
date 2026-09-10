@@ -19,78 +19,20 @@
  * by open/closed state its caller owns, with a `SheetTitle` for Dialog's
  * required accessible name.
  *
- * ## Why this file derives its own local-day key, instead of importing one
- *
- * `apps/web/src/lib/entry-day.ts` establishes the one rule this app uses
- * for "what local day does this belong to" (ADR 0018, still load-bearing
- * per ADRs 0020/0030/0036): read local calendar fields at the Device's own
- * UTC offset, never a UTC conversion — because History's day separators and
- * Export's per-day files have to agree at midnight, and the only way to
- * guarantee that is to share the rule rather than restate it.
- *
- * `entryDayKey` exists to convert an Entry's *instant* (`createdAt`, a UTC
- * timestamp with no calendar day of its own until an offset is applied)
- * into a local day — that's what the `offsetMinutes` parameter is for. A
- * day tapped in this grid is not an instant: `react-day-picker` hands back
- * a `Date` built directly from the cell's year/month/day at local midnight,
- * with no "now" or UTC timestamp involved anywhere upstream. There is no
- * offset to apply and nothing for `entryDayKey` to convert, so calling it
- * here would not be "reusing the shared rule" — it would be inventing a
- * fake instant just to hand it to a function built for a different job.
- *
- * What *does* carry over from `entry-day.ts` is the discipline, not the
- * function: read a `Date`'s local fields directly, and never let it pass
- * through a UTC accessor first. `localDayKey` below is that discipline
- * applied to a calendar-cell `Date` instead of an Entry's `createdAt`.
- * `date-fns` (added alongside `react-day-picker` for this component) is
- * used only for month arithmetic and the human-readable label on the
- * Confirm button — it is never used to derive the emitted day key, which is
- * exactly the second-source-of-truth the issue warns against.
+ * `localDayKey`/`parseDayKey` — the local-day rule this file's grid and
+ * Confirm button rely on — used to live here, but moved to
+ * `lib/local-day-key.ts` so callers that only need a day-key string don't
+ * also pay for this file's `react-day-picker`/`date-fns` imports. See that
+ * module's own header comment for the full "why a Device-local `Date`
+ * field read, not a UTC conversion" reasoning and the bundle-budget numbers
+ * behind the move.
  */
 import { format } from "date-fns";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
-
-/**
- * Turns a calendar-cell `Date` from `react-day-picker` into the same
- * YYYY-MM-DD shape `entryDayKey` (lib/entry-day.ts) produces, by reading
- * the `Date`'s *local* fields directly with `getFullYear`/`getMonth`/
- * `getDate`. The trap this avoids: `date.toISOString()` (or any `getUTC*`
- * getter) converts the instant through UTC first. A `Date` built for local
- * midnight on, say, the 1st is a *negative-offset* instant the previous day
- * in UTC for any Device east of UTC — so slicing the ISO string would
- * silently name the wrong day. Reading the local fields the `Date` was
- * actually constructed from sidesteps the conversion entirely.
- */
-export function localDayKey(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-/**
- * The inverse of `localDayKey`, for seeding the grid's initial selection
- * and visible month from a YYYY-MM-DD key. `new Date(dayKey)` — passing the
- * string straight to the `Date` constructor — parses it as UTC midnight,
- * which risks the mirror image of `localDayKey`'s trap: for a Device *west*
- * of UTC, `new Date("2026-01-01")`'s local fields read back as December
- * 31st. The three-argument numeric constructor used here always builds a
- * local-time `Date` from the fields given, so no such conversion happens.
- */
-function parseDayKey(dayKey: string | undefined): Date | undefined {
-  if (dayKey === undefined) {
-    return undefined;
-  }
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dayKey);
-  if (match === null) {
-    return undefined;
-  }
-  const [, year, month, day] = match;
-  return new Date(Number(year), Number(month) - 1, Number(day));
-}
+import { localDayKey, parseDayKey } from "@/lib/local-day-key";
 
 export interface DatePickerSheetProps {
   open: boolean;

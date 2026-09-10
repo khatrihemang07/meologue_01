@@ -1,0 +1,35 @@
+{
+  "monthHeaders": [
+    "Sep 2026"
+  ],
+  "weekdayRowText": "MTWTFSS",
+  "dayCellsSample": [
+    {
+      "text": "7",
+      "tag": "DIV",
+      "className": "calendar__spacer__weekday",
+      "color": "rgb(128, 128, 128)",
+      "background": "rgba(0, 0, 0, 0)",
+      "fontWeight": "400",
+      "hasDot": false
+    },
+    {
+      "text": "8",
+      "tag": "DIV",
+      "className": "calendar__spacer__weekday",
+      "color": "rgb(128, 128, 128)",
+      "background": "rgba(0, 0, 0, 0)",
+      "fontWeight": "400",
+      "hasDot": false
+    },
+    {
+      "text": "9",
+      "tag": "DIV",
+      "className": "calendar__spacer__weekday",
+      "color": "rgb(128, 128, 128)",
+      "background": "rgba(0, 0, 0, 0)",
+      "fontWeight": "400",
+      "hasDot": false
+    }
+  ]
+}

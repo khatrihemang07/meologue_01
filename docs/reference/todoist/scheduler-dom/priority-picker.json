@@ -1,0 +1,38 @@
+[
+  {
+    "text": "Priority 1",
+    "tag": "LI",
+    "className": "priority_picker_item",
+    "svgColor": "rgb(209, 69, 59)",
+    "pathFill": "currentColor",
+    "hasCheck": false,
+    "outerHTML": "<li data-action-hint=\"task-actions-priority-4\" class=\"priority_picker_item\" id=\"dropdown-select-9-option-4\" role=\"option\" data-value=\"4\" data-select-all=\"false\" aria-label=\"Priority 1\" aria-disabled=\"false\" aria-selected=\"false\" aria-checked=\"false\"><span aria-hidden=\"true\" class=\"priority_picker_item_priority_icon\"><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" fill=\"none\" viewBox=\"0 0 24 24\" class=\"SUxMVFy\" data-icon-name=\"priority-icon\" data-priority=\"1\"><path fill=\"currentColor\" fill-rule=\"evenodd\" d=\"M4.223 4.584A.5.5 0 0 0 4 5v14.5a.5.5 0 0 0 1 0v-5.723C5.886 13.262 7.05 "
+  },
+  {
+    "text": "Priority 2",
+    "tag": "LI",
+    "className": "priority_picker_item",
+    "svgColor": "rgb(235, 137, 9)",
+    "pathFill": "currentColor",
+    "hasCheck": false,
+    "outerHTML": "<li data-action-hint=\"task-actions-priority-3\" class=\"priority_picker_item\" id=\"dropdown-select-9-option-3\" role=\"option\" data-value=\"3\" data-select-all=\"false\" aria-label=\"Priority 2\" aria-disabled=\"false\" aria-selected=\"false\" aria-checked=\"false\"><span aria-hidden=\"true\" class=\"priority_picker_item_priority_icon\"><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" fill=\"none\" viewBox=\"0 0 24 24\" class=\"SUxMVFy\" data-icon-name=\"priority-icon\" data-priority=\"2\"><path fill=\"currentColor\" fill-rule=\"evenodd\" d=\"M4.223 4.584A.5.5 0 0 0 4 5v14.5a.5.5 0 0 0 1 0v-5.723C5.886 13.262 7.05 "
+  },
+  {
+    "text": "Priority 3",
+    "tag": "LI",
+    "className": "priority_picker_item",
+    "svgColor": "rgb(36, 111, 224)",
+    "pathFill": "currentColor",
+    "hasCheck": false,
+    "outerHTML": "<li data-action-hint=\"task-actions-priority-2\" class=\"priority_picker_item\" id=\"dropdown-select-9-option-2\" role=\"option\" data-value=\"2\" data-select-all=\"false\" aria-label=\"Priority 3\" aria-disabled=\"false\" aria-selected=\"false\" aria-checked=\"false\"><span aria-hidden=\"true\" class=\"priority_picker_item_priority_icon\"><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" fill=\"none\" viewBox=\"0 0 24 24\" class=\"SUxMVFy\" data-icon-name=\"priority-icon\" data-priority=\"3\"><path fill=\"currentColor\" fill-rule=\"evenodd\" d=\"M4.223 4.584A.5.5 0 0 0 4 5v14.5a.5.5 0 0 0 1 0v-5.723C5.886 13.262 7.05 "
+  },
+  {
+    "text": "Priority 4",
+    "tag": "LI",
+    "className": "priority_picker_item dropdown_select__option--highlighted",
+    "svgColor": "rgb(102, 102, 102)",
+    "pathFill": "currentColor",
+    "hasCheck": false,
+    "outerHTML": "<li data-action-hint=\"task-actions-priority-1\" class=\"priority_picker_item dropdown_select__option--highlighted\" id=\"dropdown-select-9-option-1\" role=\"option\" data-value=\"1\" data-select-all=\"false\" aria-label=\"Priority 4\" aria-disabled=\"false\" aria-selected=\"true\" aria-checked=\"true\"><span aria-hidden=\"true\" class=\"priority_picker_item_priority_icon\"><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" fill=\"none\" viewBox=\"0 0 24 24\" class=\"SUxMVFy\" data-icon-name=\"priority-icon\" data-priority=\"4\"><path fill=\"currentColor\" fill-rule=\"evenodd\" d=\"M4 5a.5.5 0 0 1 .223-.416C5.313 3.857 "
+  }
+]
