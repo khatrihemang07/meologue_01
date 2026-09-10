@@ -397,9 +397,25 @@
      gets its own `--td-composer-radius` instead of bending this token to
      fit two different numbers. */
   --radius: 10px;
+  /*
+   * The token AND the property, because re-pointing the token alone is
+   * inert here and silently so. `@theme inline` at the top of this file
+   * means Tailwind substitutes `--font-sans`'s literal value into the
+   * `font-sans` utility at build time rather than emitting a `var()`, and
+   * `html { @apply font-sans }` in `@layer base` below is what actually
+   * sets the family — so no rule reads `--font-sans` at runtime and
+   * overriding it changes nothing at all. Caught only by measuring the
+   * rendered page: the whole suite, the linter and the typechecker were
+   * all green while Todo still rendered in Geist.
+   *
+   * The token is re-pointed anyway so anything that *does* read it inside
+   * this scope agrees with what is actually painted, and so this block
+   * stops being a lie if `@theme inline` ever becomes `@theme`.
+   */
   --font-sans:
     -apple-system, "system-ui", "Segoe UI", "Noto Sans", system-ui, sans-serif, "Apple Color Emoji",
     "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+  font-family: var(--font-sans);
 
   /* The row/checkbox ring's own default (no priority highlighted) — distinct
      from `--td-priority-picker-4` below (PRI-05/PRI-06's own point: a row's

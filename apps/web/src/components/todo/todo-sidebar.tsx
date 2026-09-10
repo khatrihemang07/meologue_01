@@ -166,7 +166,21 @@ export function TodoSidebar() {
   const favouriteProjects = activeProjects.filter((project) => project.favourite);
 
   return (
-    <nav aria-label="Todo" className="flex h-full flex-col gap-1 overflow-y-auto p-2 text-sm">
+    /*
+      `bg-muted` and an explicit 13px, both measured rather than chosen.
+      Todoist paints its sidebar rgb(38,38,38) against a rgb(31,31,31)
+      content pane — the secondary surface reading *lighter* than the page,
+      which is the inversion index.css's `[data-surface="todo"]` block
+      records — and sets its chrome a pixel smaller than the row text
+      (`--td-chrome-font-size`, 13px) rather than sharing one body size.
+      Without the background this pane inherits the content colour and the
+      two columns melt into one; the parity ledger's THEME-02 is what that
+      would have quietly failed.
+    */
+    <nav
+      aria-label="Todo"
+      className="flex h-full flex-col gap-1 overflow-y-auto bg-muted p-2 text-[length:var(--td-chrome-font-size)]"
+    >
       <NavLink
         to="/todo/inbox"
         className="flex items-center gap-2.5 rounded-md px-2 py-1.5 hover:bg-muted"
