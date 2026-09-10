@@ -122,6 +122,11 @@ function buildOutletContext(
     setFilterColour: vi.fn(),
     setFilterQuery: vi.fn(async () => {}),
     removeFilter: vi.fn(),
+    addLabel: vi.fn(),
+    renameLabel: vi.fn(),
+    setLabelColour: vi.fn(),
+    removeLabel: vi.fn(),
+    removeProject: vi.fn(),
     disabled: false,
     ...overrides,
   };

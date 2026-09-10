@@ -12,6 +12,7 @@ import { AddTaskForm } from "@/components/todo/add-task-form";
 import { CompletedTasks } from "@/components/todo/completed-tasks";
 import { FilterView } from "@/components/todo/filter-view";
 import { FiltersView } from "@/components/todo/filters-view";
+import { LabelsView } from "@/components/todo/labels-view";
 import { LazyTaskDetailView } from "@/components/todo/lazy-task-detail-view";
 import { LazyTaskScheduleSheet } from "@/components/todo/lazy-task-schedule-sheet";
 import { ProjectView } from "@/components/todo/project-view";
@@ -55,7 +56,8 @@ interface TodoBackgroundView {
     | "search"
     | "activity"
     | "filters"
-    | "filter";
+    | "filter"
+    | "labels";
   projectId: string | null;
   /**
    * The Filter this Task was opened from a result of, for `view ===
@@ -120,7 +122,8 @@ export interface TodoPageProps {
     | "search"
     | "activity"
     | "filters"
-    | "filter";
+    | "filter"
+    | "labels";
 }
 
 /**
@@ -227,6 +230,10 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     setTaskSection,
     setTaskDescription,
     labels,
+    addLabel,
+    renameLabel,
+    setLabelColour,
+    removeLabel,
     resolveLabelIds,
     comments,
     addComment,
@@ -235,10 +242,12 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     projects,
     addProject,
     renameProject,
+    setProjectColour,
     setProjectDescription,
     setProjectFavourite,
     archiveProject,
     unarchiveProject,
+    removeProject,
     listSections,
     addSection,
     renameSection,
@@ -503,7 +512,8 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
             backgroundView.view === "search" ||
             backgroundView.view === "activity" ||
             backgroundView.view === "filters" ||
-            backgroundView.view === "filter"
+            backgroundView.view === "filter" ||
+            backgroundView.view === "labels"
           ? []
           : scopedTasks;
   const openTaskIndex =
@@ -687,6 +697,7 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
         backgroundView.view !== "activity" &&
         backgroundView.view !== "filters" &&
         backgroundView.view !== "filter" &&
+        backgroundView.view !== "labels" &&
         backgroundView.view !== "upcoming" && <AddTaskForm onAdd={handleAdd} disabled={disabled} />}
 
       {backgroundView.view === "today" && (
@@ -747,6 +758,7 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
             tasks={scopedTasks}
             detailActions={detailActions}
             onRename={(name) => renameProject(currentProject.id, name)}
+            onSetColour={(colour) => setProjectColour(currentProject.id, colour)}
             onSetDescription={(description) =>
               setProjectDescription(currentProject.id, description)
             }
@@ -754,6 +766,10 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
             onToggleArchived={(archived) =>
               archived ? archiveProject(currentProject.id) : unarchiveProject(currentProject.id)
             }
+            onDeleteProject={() => {
+              removeProject(currentProject.id);
+              navigate("/todo/projects");
+            }}
             onAddSection={handleAddSection}
             onRenameSection={renameSection}
             onReorderSection={reorderSection}
@@ -784,7 +800,21 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
         />
       )}
 
-      {backgroundView.view === "filters" && <FiltersView filters={filters} />}
+      {backgroundView.view === "filters" && <FiltersView filters={filters} labels={labels} />}
+
+      {/* Issue #229's own gap: a real destination for the sidebar's
+          "Filters & Labels" row (ledger row NAV-06) — full Label
+          create/rename/recolour/delete, previously wired to no UI at
+          all. */}
+      {backgroundView.view === "labels" && (
+        <LabelsView
+          labels={labels}
+          onAdd={addLabel}
+          onRename={renameLabel}
+          onSetColour={setLabelColour}
+          onRemove={removeLabel}
+        />
+      )}
 
       {backgroundView.view === "filter" &&
         (!currentFilter && currentFilterId !== null ? (

@@ -52,14 +52,19 @@
  * `todo-page.tsx`'s own destination already explains a failed open in its
  * own words the moment one of them is opened.
  */
-import type { Filter, Project, Task } from "@meologue/core";
+import type { Filter, Label, Project, Task } from "@meologue/core";
 import { today, upcoming } from "@meologue/core";
 import { useQuery } from "@tanstack/react-query";
 import { CalendarCheck, CalendarClock, ListFilter, ListTodo, Plus, Search } from "lucide-react";
 import { NavLink } from "react-router";
 import { localDayKey } from "@/components/date-picker-sheet";
 import { depthOf } from "@/components/todo/projects-view";
-import { FILTERS_QUERY_KEY, PROJECTS_QUERY_KEY, TASKS_QUERY_KEY } from "@/lib/query-keys";
+import {
+  FILTERS_QUERY_KEY,
+  LABELS_QUERY_KEY,
+  PROJECTS_QUERY_KEY,
+  TASKS_QUERY_KEY,
+} from "@/lib/query-keys";
 import { cn } from "@/lib/utils";
 import { entryStoreQueryOptions } from "@/pages/entry-store-layout";
 
@@ -146,10 +151,19 @@ export function TodoSidebar() {
     queryFn: (): Promise<Filter[]> => opened?.filterStore.list() ?? Promise.resolve([]),
     enabled: opened !== undefined,
   });
+  // Issue #229: NAV-06's own fix — "Filters & Labels" now has a real
+  // Labels destination (`/todo/labels`, `labels-view.tsx`) to count
+  // against, not only Filters.
+  const labelsQuery = useQuery({
+    queryKey: LABELS_QUERY_KEY,
+    queryFn: (): Promise<Label[]> => opened?.labelStore.list() ?? Promise.resolve([]),
+    enabled: opened !== undefined,
+  });
 
   const tasks = tasksQuery.data ?? [];
   const projects = projectsQuery.data ?? [];
   const filters = filtersQuery.data ?? [];
+  const labels = labelsQuery.data ?? [];
 
   const now = localDayKey(new Date());
   const inboxCount = tasks.filter((t) => t.projectId === null).length;
@@ -206,22 +220,21 @@ export function TodoSidebar() {
         <CountRow to="/todo/today" label="Today" Icon={CalendarCheck} count={todayCount} />
         <CountRow to="/todo/upcoming" label="Upcoming" Icon={CalendarClock} count={upcomingCount} />
         {/*
-          Real Todoist's "Filters & Labels" opens one combined screen —
-          meologue has no `/todo/labels` route of its own yet (todo-nav.tsx
-          carries no such row either), so this points at the nearest real
-          destination, `/todo/filters`, rather than a route that doesn't
-          exist. The count is Filters alone for the identical reason: there
-          is no Label list to count against here, and showing a number
-          that silently excludes half of what the row's own name promises
-          would be worse than a narrower, honest one. Stated as a gap, not
-          quietly rounded off — a `/todo/labels` screen is a future
-          ticket's to build, not this one's to fake.
+          Issue #229's own fix for NAV-06: real Todoist's "Filters &
+          Labels" opens one combined screen, and `/todo/filters`
+          (filters-view.tsx) now actually is one — its own Filters list
+          plus a Labels section underneath, with "Manage Labels" leading
+          to the full create/rename/recolour/delete surface
+          (`/todo/labels`, `labels-view.tsx`). The count is now Filters
+          *and* Labels together, matching what this one destination
+          actually shows, rather than the Filters-only count that used to
+          silently exclude half of what the row's own name promised.
         */}
         <CountRow
           to="/todo/filters"
           label="Filters & Labels"
           Icon={ListFilter}
-          count={filters.length}
+          count={filters.length + labels.length}
         />
       </div>
 

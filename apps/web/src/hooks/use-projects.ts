@@ -42,6 +42,8 @@ export interface UseProjectsResult {
    */
   setProjectParent: (id: string, parentId: string | null) => Promise<void>;
   reorderProject: (id: string, orderKey: string) => void;
+  /** Tombstone, never a hard delete — ProjectStore.removeProject's own doc comment. The confirmation is the caller's job (project-view.tsx's ConfirmDialog), not this hook's, mirroring deleteSection's identical split. */
+  removeProject: (id: string) => void;
   /**
    * A Project's own Sections (ProjectStore.listSections) — an async
    * function rather than eagerly-loaded flat state, mirroring
@@ -122,7 +124,7 @@ export function useProjects(
   // the fallback rather than being clobbered back to the pre-rename one.
   function recordProjectEvent(
     project: Pick<Project, "id" | "name">,
-    eventType: "added" | "updated" | "archived" | "unarchived",
+    eventType: "added" | "updated" | "archived" | "unarchived" | "deleted",
     extra: Record<string, unknown> | null = null,
   ): void {
     void recordEvent({
@@ -305,6 +307,27 @@ export function useProjects(
     reorderProjectMutation.mutate({ id, orderKey });
   }
 
+  // Issue #229's own gap: ProjectStore.removeProject existed since #171
+  // but no UI ever reached it — projects-view.tsx/project-view.tsx only
+  // offered Archive. Tombstones only (removeProject's own doc comment):
+  // deliberately does not cascade to this Project's own Tasks/Sections,
+  // which are left pointing at a removed Project's id, the same accepted
+  // dangling-reference state that field's own doc comment names.
+  const removeProjectMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const before = projects.find((p) => p.id === id) ?? (await projectStore.getProject(id));
+      await projectStore.removeProject(id);
+      if (before) {
+        recordProjectEvent(before, "deleted");
+      }
+    },
+    onSuccess: invalidateProjects,
+  });
+
+  function removeProject(id: string) {
+    removeProjectMutation.mutate(id);
+  }
+
   function listSections(projectId: string): Promise<Section[]> {
     return projectStore.listSections(projectId);
   }
@@ -454,6 +477,7 @@ export function useProjects(
     unarchiveProject,
     setProjectParent,
     reorderProject,
+    removeProject,
     listSections,
     addSection,
     renameSection,

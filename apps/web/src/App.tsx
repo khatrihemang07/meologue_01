@@ -210,6 +210,17 @@ function App() {
               <Route path="/todo/filters" element={<TodoPage view="filters" />} />
               <Route path="/todo/filters/new" element={<TodoPage view="filter" />} />
               <Route path="/todo/filters/:filterId" element={<TodoPage view="filter" />} />
+              {/* Labels (issue #229): the sidebar's "Filters & Labels" row's
+              own real destination for the Label half — `/todo/filters`
+              (above) now shows a compact Labels section too
+              (filters-view.tsx's own header comment), but full
+              create/rename/recolour/delete lives here (`labels-view.tsx`),
+              a flat list with no per-Label detail route: a Label carries
+              no query/description/Sections the way a Filter or Project
+              does, so unlike those two there is nothing for a
+              `/todo/labels/:labelId` screen to show that this list
+              doesn't already edit inline. */}
+              <Route path="/todo/labels" element={<TodoPage view="labels" />} />
               {/* A Task's own address (issue #178), still under `/todo/*` per
               ADR 0049's own constraint on where Todo's internal navigation
               may live — no `view` prop: `todo-page.tsx`'s own header

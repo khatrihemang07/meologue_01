@@ -383,7 +383,22 @@ const CHUNK_BUDGETS = {
   // the ceiling to match. Whether 6,579 bytes is enough for both of those
   // tickets is not yet knowable — neither has been built — so this is
   // reported rather than guessed at (this ticket's own report).
-  "src/pages/todo-page.tsx": { ceilingBytes: 87_600, baselineBytes: 81_021 },
+  //
+  // Issue #229's own second half (Projects/Sections/Labels/Filters
+  // management — this ticket's own brief) started from 82,948 gzip bytes
+  // against this same 87,600 ceiling (issue #228's keyboard layer having
+  // landed since this entry's own 81,021 baseline above, another instance
+  // of the "stale by a wider margin" gap the entries above already
+  // name — never carried forward at the time). This ticket landed a
+  // Project colour select and delete confirmation (project-view.tsx), a
+  // Labels section plus a "Manage Labels" link (filters-view.tsx), and
+  // the new `labels-view.tsx` screen (`/todo/labels`) with its own
+  // inline create/rename/recolour/delete, statically imported like every
+  // other Todo view rather than split behind a lazy boundary: measured
+  // 83,540 gzip bytes against the unchanged ceiling — +592 bytes over
+  // that 82,948 starting point, still 4,060 bytes of headroom to spare,
+  // so no lazy split was needed for this ticket's own surface after all.
+  "src/pages/todo-page.tsx": { ceilingBytes: 87_600, baselineBytes: 83_540 },
 };
 
 /**

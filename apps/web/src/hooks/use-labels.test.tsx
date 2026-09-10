@@ -164,4 +164,77 @@ describe("useLabels", () => {
     expect(ids).toHaveLength(1);
     expect(store.upsert).toHaveBeenCalledTimes(1);
   });
+
+  // Issue #229's own gap: LabelStore.rename/setColour/remove existed
+  // since #170 but were "wired to no UI at all" (this file's own header
+  // comment, pre-#229) — these prove the mutation surface itself, not the
+  // store mechanism (label-store-contract.ts already covers that).
+  describe("management (issue #229)", () => {
+    it("addLabel creates a Label from plain text, coloured the given colour", async () => {
+      const store = createFakeStore();
+      const { result } = await renderUseLabels(store);
+
+      act(() => result.current.addLabel("Errands", "#DC4C3E"));
+
+      await waitFor(() => expect(result.current.labels).toHaveLength(1));
+      expect(result.current.labels[0]).toMatchObject({ name: "Errands", colour: "#DC4C3E" });
+    });
+
+    it("addLabel defaults to the neutral colour when none is given", async () => {
+      const store = createFakeStore();
+      const { result } = await renderUseLabels(store);
+
+      act(() => result.current.addLabel("Errands"));
+
+      await waitFor(() => expect(result.current.labels).toHaveLength(1));
+      expect(result.current.labels[0]?.colour).toBe("#808080");
+    });
+
+    it("ignores a blank Label name without touching the store", async () => {
+      const store = createFakeStore();
+      const { result } = await renderUseLabels(store);
+
+      act(() => result.current.addLabel("   "));
+
+      expect(store.upsert).not.toHaveBeenCalled();
+    });
+
+    it("renameLabel reaches LabelStore.rename, trimmed", async () => {
+      const store = createFakeStore();
+      await store.upsert([label({ id: "l1" })]);
+      const { result } = await renderUseLabels(store);
+      await waitFor(() => expect(result.current.labels).toHaveLength(1));
+
+      act(() => result.current.renameLabel("l1", "  Home  "));
+
+      await waitFor(() => expect(store.rename).toHaveBeenCalledWith("l1", "Home"));
+    });
+
+    it("ignores a blank rename without touching the store", async () => {
+      const store = createFakeStore();
+      const { result } = await renderUseLabels(store);
+
+      act(() => result.current.renameLabel("l1", "   "));
+
+      expect(store.rename).not.toHaveBeenCalled();
+    });
+
+    it("setLabelColour reaches LabelStore.setColour", async () => {
+      const store = createFakeStore();
+      const { result } = await renderUseLabels(store);
+
+      act(() => result.current.setLabelColour("l1", "#369307"));
+
+      await waitFor(() => expect(store.setColour).toHaveBeenCalledWith("l1", "#369307"));
+    });
+
+    it("removeLabel reaches LabelStore.remove", async () => {
+      const store = createFakeStore();
+      const { result } = await renderUseLabels(store);
+
+      act(() => result.current.removeLabel("l1"));
+
+      await waitFor(() => expect(store.remove).toHaveBeenCalledWith("l1"));
+    });
+  });
 });

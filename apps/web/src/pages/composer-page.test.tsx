@@ -127,6 +127,11 @@ const readyContext: EntryStoreOutletContext = {
   setFilterColour: vi.fn(),
   setFilterQuery: vi.fn(async () => {}),
   removeFilter: vi.fn(),
+  addLabel: vi.fn(),
+  renameLabel: vi.fn(),
+  setLabelColour: vi.fn(),
+  removeLabel: vi.fn(),
+  removeProject: vi.fn(),
   disabled: false,
 };
 
@@ -224,6 +229,11 @@ describe("ComposerPage", () => {
       setFilterColour: vi.fn(),
       setFilterQuery: vi.fn(async () => {}),
       removeFilter: vi.fn(),
+      addLabel: vi.fn(),
+      renameLabel: vi.fn(),
+      setLabelColour: vi.fn(),
+      removeLabel: vi.fn(),
+      removeProject: vi.fn(),
       disabled: true,
     });
 
@@ -311,6 +321,11 @@ describe("ComposerPage", () => {
       setFilterColour: vi.fn(),
       setFilterQuery: vi.fn(async () => {}),
       removeFilter: vi.fn(),
+      addLabel: vi.fn(),
+      renameLabel: vi.fn(),
+      setLabelColour: vi.fn(),
+      removeLabel: vi.fn(),
+      removeProject: vi.fn(),
       disabled: true,
       message: "meologue couldn't open its storage. Reloading may help.",
     });
@@ -405,6 +420,11 @@ describe("ComposerPage", () => {
       setFilterColour: vi.fn(),
       setFilterQuery: vi.fn(async () => {}),
       removeFilter: vi.fn(),
+      addLabel: vi.fn(),
+      renameLabel: vi.fn(),
+      setLabelColour: vi.fn(),
+      removeLabel: vi.fn(),
+      removeProject: vi.fn(),
       disabled: false,
     });
 
@@ -519,6 +539,11 @@ describe("ComposerPage", () => {
       setFilterColour: vi.fn(),
       setFilterQuery: vi.fn(async () => {}),
       removeFilter: vi.fn(),
+      addLabel: vi.fn(),
+      renameLabel: vi.fn(),
+      setLabelColour: vi.fn(),
+      removeLabel: vi.fn(),
+      removeProject: vi.fn(),
       disabled: false,
     });
 
@@ -678,6 +703,11 @@ describe("ComposerPage", () => {
         setFilterColour: vi.fn(),
         setFilterQuery: vi.fn(async () => {}),
         removeFilter: vi.fn(),
+        addLabel: vi.fn(),
+        renameLabel: vi.fn(),
+        setLabelColour: vi.fn(),
+        removeLabel: vi.fn(),
+        removeProject: vi.fn(),
         disabled: false,
       });
 
@@ -792,6 +822,11 @@ describe("ComposerPage", () => {
         setFilterColour: vi.fn(),
         setFilterQuery: vi.fn(async () => {}),
         removeFilter: vi.fn(),
+        addLabel: vi.fn(),
+        renameLabel: vi.fn(),
+        setLabelColour: vi.fn(),
+        removeLabel: vi.fn(),
+        removeProject: vi.fn(),
         disabled: false,
       });
 
@@ -909,6 +944,11 @@ describe("ComposerPage", () => {
         setFilterColour: vi.fn(),
         setFilterQuery: vi.fn(async () => {}),
         removeFilter: vi.fn(),
+        addLabel: vi.fn(),
+        renameLabel: vi.fn(),
+        setLabelColour: vi.fn(),
+        removeLabel: vi.fn(),
+        removeProject: vi.fn(),
         disabled: false,
       });
 
@@ -1023,6 +1063,11 @@ describe("ComposerPage", () => {
           setFilterColour: vi.fn(),
           setFilterQuery: vi.fn(async () => {}),
           removeFilter: vi.fn(),
+          addLabel: vi.fn(),
+          renameLabel: vi.fn(),
+          setLabelColour: vi.fn(),
+          removeLabel: vi.fn(),
+          removeProject: vi.fn(),
           disabled: false,
         },
         "/?q=wor",

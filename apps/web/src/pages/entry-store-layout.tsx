@@ -202,6 +202,11 @@ export interface EntryStoreOutletContext {
    * real `labelIds` at all — see that hook's own doc comment.
    */
   labels: Label[];
+  /** Issue #229 — Label's own create/rename/recolour/remove surface, previously wired to no UI at all (use-labels.ts's own header comment). */
+  addLabel: (name: string, colour?: string) => void;
+  renameLabel: (id: string, name: string) => void;
+  setLabelColour: (id: string, colour: string) => void;
+  removeLabel: (id: string) => void;
   resolveLabelIds: (names: string[]) => Promise<string[]>;
   /**
    * Todo's Comments (issue #180) — the Comment-shaped sibling of `labels`
@@ -234,6 +239,8 @@ export interface EntryStoreOutletContext {
   unarchiveProject: (id: string) => void;
   setProjectParent: (id: string, parentId: string | null) => Promise<void>;
   reorderProject: (id: string, orderKey: string) => void;
+  /** Issue #229 — Project's own delete, previously wired to no UI at all (use-projects.ts's own `removeProject` doc comment). */
+  removeProject: (id: string) => void;
   listSections: (projectId: string) => Promise<Section[]>;
   addSection: (projectId: string, name: string) => Promise<void>;
   renameSection: (id: string, name: string) => void;
@@ -483,6 +490,17 @@ async function noopResolveLabelIds(_names: string[]): Promise<string[]> {
   return [];
 }
 
+// Issue #229's Label management surface — the not-ready stand-ins for
+// addLabel/renameLabel/setLabelColour/removeLabel, same reasoning as
+// noopAddProject/noopRenameProject below.
+function noopAddLabel(_name: string, _colour?: string) {}
+
+function noopRenameLabel(_id: string, _name: string) {}
+
+function noopSetLabelColour(_id: string, _colour: string) {}
+
+function noopRemoveLabel(_id: string) {}
+
 // `comments`'s own not-ready stand-ins (issue #180), mirroring
 // `noopAddTask`/`noopRemoveTask`: `comments: []` below has nothing to
 // act on regardless, but every field `EntryStoreOutletContext` declares
@@ -514,6 +532,10 @@ function noopUnarchiveProject(_id: string) {}
 async function noopSetProjectParent(_id: string, _parentId: string | null): Promise<void> {}
 
 function noopReorderProject(_id: string, _orderKey: string) {}
+
+// Issue #229 — Project's own delete, the not-ready stand-in mirroring
+// noopArchiveProject above.
+function noopRemoveProject(_id: string) {}
 
 // `listSections`'s own not-ready stand-in, mirroring `noopGetEntries`:
 // nothing can be resolved before the store opens, and an empty array is
@@ -1031,7 +1053,10 @@ export function EntryStoreLayout() {
   // `resolveLabelIds` handed in as `useHistory`'s own fourth argument
   // below, the identical LabelStore round trip `handleAdd` (further down
   // this file) already awaits for the add field's own `%label` tokens.
-  const { labels, resolveLabelIds } = useLabels(labelStore, deviceId);
+  const { labels, addLabel, renameLabel, setLabelColour, removeLabel, resolveLabelIds } = useLabels(
+    labelStore,
+    deviceId,
+  );
 
   // Issue #174, ADR 0053: the one-time History backfill, kicked off the
   // moment the real store is open — `backfillTasksFromHistory` itself is
@@ -1156,6 +1181,7 @@ export function EntryStoreLayout() {
     unarchiveProject,
     setProjectParent,
     reorderProject,
+    removeProject,
     listSections,
     addSection,
     renameSection,
@@ -1212,6 +1238,10 @@ export function EntryStoreLayout() {
               setTaskSection,
               setTaskParent,
               labels,
+              addLabel,
+              renameLabel,
+              setLabelColour,
+              removeLabel,
               resolveLabelIds,
               comments,
               addComment,
@@ -1227,6 +1257,7 @@ export function EntryStoreLayout() {
               unarchiveProject,
               setProjectParent,
               reorderProject,
+              removeProject,
               listSections,
               addSection,
               renameSection,
@@ -1284,6 +1315,10 @@ export function EntryStoreLayout() {
               setTaskSection: noopSetTaskSection,
               setTaskParent: noopSetTaskParent,
               labels: [],
+              addLabel: noopAddLabel,
+              renameLabel: noopRenameLabel,
+              setLabelColour: noopSetLabelColour,
+              removeLabel: noopRemoveLabel,
               resolveLabelIds: noopResolveLabelIds,
               comments: [],
               addComment: noopAddComment,
@@ -1299,6 +1334,7 @@ export function EntryStoreLayout() {
               unarchiveProject: noopUnarchiveProject,
               setProjectParent: noopSetProjectParent,
               reorderProject: noopReorderProject,
+              removeProject: noopRemoveProject,
               listSections: noopListSections,
               addSection: noopAddSection,
               renameSection: noopRenameSection,
