@@ -59,7 +59,10 @@ import { LazyTaskTitleEditor } from "@/components/todo/lazy-task-title-editor";
 import { ConfirmDialog } from "@/components/ui/alert-dialog";
 import { useWideLayout } from "@/hooks/use-wide-layout";
 import { formatDay, formatTaskDate } from "@/lib/format-task-date";
+import { localDayKey } from "@/lib/local-day-key";
+import { useSettingsStore } from "@/lib/settings";
 import { priorityColour } from "@/lib/task-priority-colors";
+import { quickAddRecognitionPlugin } from "@/lib/todo-quick-add-recognition";
 import { cn } from "@/lib/utils";
 
 export interface TaskDetailViewProps {
@@ -361,6 +364,31 @@ function TaskDetailBody({
   const [focusField, setFocusField] = useState<"title" | "description">("title");
   const [titleDraft, setTitleDraft] = useState(task.content);
   const [descriptionDraft, setDescriptionDraft] = useState(task.description ?? "");
+  // DET-07: the identical recognition plugin `add-task-form.tsx` passes
+  // its own field, attached to `task-title-editor.tsx`'s `extraPlugins`
+  // seam (that file's own header comment names it) so a phrase typed
+  // while renaming a Task renders the same `inline-block` span, padding
+  // and `data-match-id` the composer already produces — #225 built the
+  // seam, #226 built the plugin, and until now nothing in this view
+  // attached it. `smartDates`/`now` are read live via a ref, matching
+  // `add-task-form.tsx`'s own reasoning: `extraPlugins` is read once, at
+  // the title editor's mount, while a `smartDates` toggle or a midnight
+  // date rollover mid-rename should not need the editor itself torn down
+  // and rebuilt to see it.
+  //
+  // What this does NOT do: change what saving a recognised title does.
+  // `saveEditing` below still commits `titleText`/`titleDraft` verbatim,
+  // unparsed — the reference (lifecycle.md) is silent on whether Todoist
+  // resolves a recognised phrase in the DETAIL title into a real Date
+  // property on save, as opposed to the composer's Send, and inventing
+  // that behaviour here would be exactly the unevidenced guess the
+  // parity ledger exists to catch. That silence is also why DET-08 (the
+  // Date attribute row reads `task.date`, never the title editor's own
+  // live state) stops being vacuous the moment this plugin ships: there
+  // is now something in the title for that principle to actually ignore.
+  const smartDates = useSettingsStore((state) => state.smartDatesEnabled);
+  const titleRecognitionOptionsRef = useRef({ now: localDayKey(new Date()), smartDates });
+  titleRecognitionOptionsRef.current = { now: localDayKey(new Date()), smartDates };
   // A literal id, not `useId()`: only one `TaskDetailView` is ever mounted
   // at a time (it's a modal over the whole app), so there is no second
   // instance for a fixed id to collide with.
@@ -543,6 +571,13 @@ function TaskDetailBody({
                       // below end this form now.
                       commitOnBlur={false}
                       className="font-medium text-base"
+                      // DET-07 (this function's own comment above on the
+                      // ref this reads and what it deliberately doesn't
+                      // change): the same plugin `add-task-form.tsx`
+                      // attaches, so recognition renders identically here.
+                      extraPlugins={[
+                        quickAddRecognitionPlugin(() => titleRecognitionOptionsRef.current),
+                      ]}
                     />
                   </Suspense>
                 </div>
@@ -925,6 +960,11 @@ export function TaskDetailView(props: TaskDetailViewProps) {
         <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/50 duration-150 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0" />
         <DialogPrimitive.Content
           aria-describedby={undefined}
+          // DET-05: Todoist's own measured `data-testid` (keyboard.md
+          // §1) — `history.tsx`/`task-schedule-popover.tsx`/etc. already
+          // carry ids of their own for the identical reason, an e2e
+          // selector that doesn't depend on visible text or a11y wiring.
+          data-testid="task-details-modal"
           // Opening a Task is usually "look at this," not "rename it" —
           // on a phone, focusing the title textarea pops the soft
           // keyboard the instant the row is tapped, and the bottom sheet

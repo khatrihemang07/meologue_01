@@ -16,10 +16,11 @@ import type { Task } from "@meologue/core";
 import { today } from "@meologue/core";
 import { CheckCircle2 } from "lucide-react";
 import { useState } from "react";
-import { DatePickerSheet, localDayKey } from "@/components/date-picker-sheet";
+import { DatePickerSheet } from "@/components/date-picker-sheet";
 import { type TaskDetailActions, TaskRow } from "@/components/todo/task-row";
 import { Button } from "@/components/ui/button";
 import { groupTodayTasks, type TodayGrouping } from "@/lib/group-today-tasks";
+import { localDayKey } from "@/lib/local-day-key";
 
 export interface TodayViewProps {
   /** Every active Task (TaskStore.list()'s result) — today() does its own filtering; this component never pre-narrows it. */

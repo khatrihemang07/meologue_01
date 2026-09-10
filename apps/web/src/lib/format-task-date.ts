@@ -38,8 +38,9 @@ import { format } from "date-fns";
 // `day` is always YYYY-MM-DD here (Task.date's own all-day shape, or
 // Task.deadline, which is always date-only). Parsed with the local
 // three-argument `Date` constructor, never `new Date(day)` —
-// date-picker-sheet.tsx's own header comment names exactly the trap that
-// shortcut falls into for a Device west of UTC.
+// lib/local-day-key.ts's own header comment (home of `localDayKey`/
+// `parseDayKey`, the identical conversion pair) names exactly the trap
+// that shortcut falls into for a Device west of UTC.
 function parseLocalDay(day: string): Date | null {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
   if (match === null) {

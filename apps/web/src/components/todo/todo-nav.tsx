@@ -1,4 +1,11 @@
-import { CalendarCheck, FolderKanban, History, ListFilter, ListTodo } from "lucide-react";
+import {
+  CalendarCheck,
+  CalendarClock,
+  FolderKanban,
+  History,
+  ListFilter,
+  ListTodo,
+} from "lucide-react";
 import { NavLink } from "react-router";
 import { useWideLayout } from "@/hooks/use-wide-layout";
 import { cn } from "@/lib/utils";
@@ -40,10 +47,29 @@ import { cn } from "@/lib/utils";
  * `<header>`s. Below the breakpoint this renders exactly as it always
  * has — the load-bearing narrow-viewport constraint issue #223's own
  * brief names is that nothing here changes for it.
+ *
+ * **Two lists, not one — the miss this file's `Upcoming` row now fixes.**
+ * Issue #223 shipped `/todo/upcoming` and added it to `todo-sidebar.tsx`'s
+ * own rows in the same change, but never to `VIEWS` below: this component
+ * and the sidebar are separate lists a new destination has to be added to
+ * twice, not one shared source of truth read at two widths, and #223 only
+ * touched one of them. Above the wide breakpoint that was invisible — the
+ * sidebar carried a real link — so it shipped anyway, and `/todo/upcoming`
+ * stayed unreachable on Android and at any phone width for a full release
+ * until this paragraph's own fix. "Adding a view is adding a row to a
+ * list" (above, and again below) was never false; it just undercounted
+ * how many lists there are.
  */
 const VIEWS = [
   { to: "/todo/inbox", label: "Inbox", Icon: ListTodo },
   { to: "/todo/today", label: "Today", Icon: CalendarCheck },
+  // Issue #223 added this same destination to todo-sidebar.tsx (the wide
+  // breakpoint's own list) but not here, leaving /todo/upcoming
+  // unreachable below the wide breakpoint for a full release — see this
+  // file's own header comment. Positioned after Today, matching
+  // todo-sidebar.tsx's own Inbox/Today/Upcoming/Filters order (parity
+  // ledger NAV-01) so the two lists agree.
+  { to: "/todo/upcoming", label: "Upcoming", Icon: CalendarClock },
   { to: "/todo/projects", label: "Projects", Icon: FolderKanban },
   // Issue #184 / ADR 0056: Todo's activity log, the fourth row — exactly
   // the proof this component's own header comment already names ("a

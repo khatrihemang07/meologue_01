@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider, queryOptions } from "@tanstack/react-
 import { render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { describe, expect, it, vi } from "vitest";
-import { localDayKey } from "@/components/date-picker-sheet";
+import { localDayKey } from "@/lib/local-day-key";
 import { ENTRY_STORE_QUERY_KEY } from "@/lib/query-keys";
 import { TodoSidebar } from "./todo-sidebar";
 

@@ -70,6 +70,20 @@ describe("TodoNav", () => {
     expect(screen.getByRole("link", { name: "Inbox" })).not.toHaveAttribute("aria-current");
   });
 
+  // Issue #223 added Upcoming to todo-sidebar.tsx's own list (the wide
+  // breakpoint's replacement for this bar) but never to this one — the
+  // defect this test now holds shut the way chat-shell-layout.test.tsx's
+  // own NAV-03 row holds the bottom bar's reachability below 900px: by a
+  // test, not by an assertion left to whoever edits VIEWS next.
+  it("offers Upcoming as a real link", () => {
+    renderAt("/todo/inbox");
+
+    expect(screen.getByRole("link", { name: "Upcoming" })).toHaveAttribute(
+      "href",
+      "/todo/upcoming",
+    );
+  });
+
   // Issue #171's own proof of ADR 0049's prediction a second time — see
   // todo-nav.tsx's own comment on VIEWS.
   it("offers Projects as a third real link", () => {

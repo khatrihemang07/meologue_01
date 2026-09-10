@@ -57,8 +57,8 @@ import { today, upcoming } from "@meologue/core";
 import { useQuery } from "@tanstack/react-query";
 import { CalendarCheck, CalendarClock, ListFilter, ListTodo, Plus, Search } from "lucide-react";
 import { NavLink } from "react-router";
-import { localDayKey } from "@/components/date-picker-sheet";
 import { depthOf } from "@/components/todo/projects-view";
+import { localDayKey } from "@/lib/local-day-key";
 import {
   FILTERS_QUERY_KEY,
   LABELS_QUERY_KEY,

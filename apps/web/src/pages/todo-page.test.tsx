@@ -5,7 +5,7 @@ import { useState } from "react";
 import { Link, MemoryRouter, Outlet, Route, Routes } from "react-router";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { localDayKey } from "@/components/date-picker-sheet";
+import { localDayKey } from "@/lib/local-day-key";
 import type { EntryStoreOutletContext } from "@/pages/entry-store-layout";
 import { TodoPage } from "./todo-page";
 

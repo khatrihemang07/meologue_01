@@ -32,10 +32,10 @@
 import type { QuickAddOptions } from "@meologue/core";
 import { parseQuickAdd } from "@meologue/core";
 import { Suspense, useRef, useState } from "react";
-import { localDayKey } from "@/components/date-picker-sheet";
 import { LazyTaskTitleEditor } from "@/components/todo/lazy-task-title-editor";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { localDayKey } from "@/lib/local-day-key";
 import { type QuickAddTaskFields, taskFieldsFromQuickAdd } from "@/lib/quick-add-task";
 import { useSettingsStore } from "@/lib/settings";
 import { quickAddRecognitionPlugin } from "@/lib/todo-quick-add-recognition";

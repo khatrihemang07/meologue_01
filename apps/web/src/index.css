@@ -15,9 +15,41 @@
  * every hover control sitting at full opacity on every row while the whole
  * suite stayed green; it was caught by measuring the rendered page.
  *
- * The `(pointer: fine)` arm alongside `(hover: hover)` is what keeps these
- * reachable in a Tauri window, which can report a coarse pointer for a
- * trackpad and would otherwise hide every row action outright.
+ * **The `(pointer: fine)` arm below does not reach the stylesheet, and
+ * re-adding it naively makes things worse rather than better.** Both halves
+ * of that were measured, and the arm is left as-is deliberately.
+ *
+ * What the comment here used to claim: that the `(pointer: fine)` arm
+ * alongside `(hover: hover)` "keeps these reachable in a Tauri window,
+ * which can report a coarse pointer for a trackpad and would otherwise hide
+ * every row action outright." It does not, because it is not emitted. The
+ * compiled stylesheet carries `@media (hover:hover)` only — zero
+ * occurrences of `pointer:fine` anywhere in it — because this shorthand's
+ * comma list gets its second arm spliced into *selector* position instead
+ * of staying a media query. The build log says so in as many words,
+ * four times: "Invalid dangling combinator in selector", pointing at
+ * `.pointer-fine\:group-hover\:opacity-100 (pointer: fine):is(...)`. Nobody
+ * read it. So this is the same defect as the interpolated class above, one
+ * layer down — a variant that exists, reads correctly, and emits nothing.
+ *
+ * Why it is still not simply rewritten into the block-and-`@slot` form that
+ * *does* emit both arms: Tailwind gates `group-hover` behind its own,
+ * independent `@media (hover: hover)` to avoid sticky hover on touch. So
+ * with both arms live, a Device reporting `hover: none` with `pointer:
+ * fine` starts matching `pointer-fine:opacity-0` — hiding every control —
+ * while `pointer-fine:group-hover:opacity-100` stays inert inside
+ * Tailwind's own hover gate, leaving nothing but `focus-visible` to reveal
+ * them. That is precisely the "hidden outright" state the original comment
+ * feared, manufactured by fixing the arm it blamed. The present,
+ * accidentally-`(hover: hover)`-only behaviour degrades the other way
+ * instead: such a Device matches no `pointer-fine` utility at all, so the
+ * controls simply stay visible, which is the safe end to fail towards.
+ *
+ * Closing this properly means making the *reveal* side reachable without a
+ * hover media query, not widening the gate on the *hide* side. That is a
+ * design change with a real device question behind it (what Tauri actually
+ * reports, which was never measured), so it is recorded here rather than
+ * guessed at.
  */
 @custom-variant pointer-fine (@media (hover: hover), (pointer: fine));
 

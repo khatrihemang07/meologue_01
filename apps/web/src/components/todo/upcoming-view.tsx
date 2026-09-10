@@ -26,8 +26,8 @@
 import type { Task } from "@meologue/core";
 import { upcoming, upcomingDayHeading } from "@meologue/core";
 import { CalendarClock } from "lucide-react";
-import { localDayKey } from "@/components/date-picker-sheet";
 import { type TaskDetailActions, TaskRow } from "@/components/todo/task-row";
+import { localDayKey } from "@/lib/local-day-key";
 
 export interface UpcomingViewProps {
   /** Every active Task (TaskStore.list()'s result) — upcoming() does its own filtering; this component never pre-narrows it, mirroring TodayView's identical `tasks` prop. */

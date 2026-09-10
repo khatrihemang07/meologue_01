@@ -40,33 +40,12 @@ import { firstOccurrence, parseQuickAdd, parseRecurrence } from "@meologue/core"
 import { addDays, format, nextMonday, nextSaturday } from "date-fns";
 import { CalendarDays, CalendarRange, CircleSlash, Repeat, Sofa, Sun, X } from "lucide-react";
 import { useEffect, useId, useState } from "react";
-import { localDayKey } from "@/components/date-picker-sheet";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { localDayKey, parseDayKey } from "@/lib/local-day-key";
 import { resolveRecurrencePhrase } from "@/lib/quick-add-task";
 import { cn } from "@/lib/utils";
-
-/**
- * The inverse of `localDayKey`, local to this file the same way
- * `date-picker-sheet.tsx`'s own private `parseDayKey` and
- * `format-task-date.ts`'s own private `parseLocalDay` each are — three
- * independent, identically-shaped three-line functions rather than one
- * shared export, matching this codebase's existing precedent for this
- * exact conversion rather than introducing a fourth pattern to reconcile
- * them under.
- */
-function parseDayKey(dayKey: string | null): Date | undefined {
-  if (dayKey === null) {
-    return undefined;
-  }
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dayKey);
-  if (match === null) {
-    return undefined;
-  }
-  const [, year, month, day] = match;
-  return new Date(Number(year), Number(month) - 1, Number(day));
-}
 
 /** One resolved "Type a date" preview — either a plain date or a Recurrence, never both (mirrors quick-add-task.ts's own resolveRecurrence: "a recognised recurrence's own computed first occurrence overrides whatever plain date token also matched"). */
 interface SchedulePreview {

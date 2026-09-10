@@ -259,6 +259,12 @@ describe("TaskDetailView", () => {
     expect(screen.queryByLabelText("Task name")).not.toBeInTheDocument();
   });
 
+  it("carries DET-05's own data-testid (keyboard.md §1) on the dialog content", () => {
+    renderView({ task: task({ content: "call mum" }) });
+
+    expect(screen.getByTestId("task-details-modal")).toBe(screen.getByRole("dialog"));
+  });
+
   it("does not autofocus the title on open, so a phone doesn't pop the keyboard for a tap that's usually just a look", () => {
     renderView({ task: task({ content: "call mum" }) });
 
