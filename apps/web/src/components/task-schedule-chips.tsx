@@ -86,7 +86,16 @@ export function TaskScheduleChips({
   }
   return (
     <span className="flex flex-wrap items-center gap-x-2 text-muted-foreground text-xs">
-      {showDate && task.date !== null && <span>{formatTaskDate(task.date)}</span>}
+      {/* `.text` only — this chip sits outside `[data-surface="todo"]`
+          (it renders inside an Entry/History row, not Todo itself), so it
+          never applies `describeTaskDate`'s own `--td-date-*` colour: that
+          token family only exists inside the Todo scope (index.css's own
+          header comment on `--td-*`), and painting Todoist's palette onto
+          a journal row here would be exactly the "leaked colour" that
+          scoping was built to prevent. The wording (issue #224) still
+          flows through, since `formatTaskDate` is the one place either
+          surface reads a Task's date words from. */}
+      {showDate && task.date !== null && <span>{formatTaskDate(task.date).text}</span>}
       {task.priority !== 1 && <span>P{uiPriorityOf(task.priority)}</span>}
       {task.projectId !== null && (
         <span className="truncate">{projectNameFor(projects, task.projectId)}</span>

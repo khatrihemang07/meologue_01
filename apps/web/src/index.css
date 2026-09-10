@@ -5,6 +5,22 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/*
+ * Row affordances that appear on hover (issue #224, ROW-04). A named
+ * variant rather than an inline `[@media(...)]:` arbitrary one, because
+ * Tailwind scans source files as raw text: a class assembled by template
+ * interpolation — `${variant}:opacity-0` — never appears literally
+ * anywhere, so no utility is generated for it and the class lands in the
+ * DOM with no CSS behind it. That failed silently here once already, with
+ * every hover control sitting at full opacity on every row while the whole
+ * suite stayed green; it was caught by measuring the rendered page.
+ *
+ * The `(pointer: fine)` arm alongside `(hover: hover)` is what keeps these
+ * reachable in a Tauri window, which can report a coarse pointer for a
+ * trackpad and would otherwise hide every row action outright.
+ */
+@custom-variant pointer-fine (@media (hover: hover), (pointer: fine));
+
 @theme inline {
   --font-heading: var(--font-sans);
   --font-sans: "Geist Variable", sans-serif;

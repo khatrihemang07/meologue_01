@@ -127,6 +127,13 @@ export function TaskScheduleSheet({
                 variant="outline"
                 onClick={() => setPickingDate(true)}
               >
+                {/* Deliberately plain `formatDay`, not issue #224's own
+                    tone-aware `describeTaskDay` — this button is *setting*
+                    a value, not reading one back: a picker naming exactly
+                    which day is currently chosen ("Sep 5") is what a
+                    reader mid-edit needs, where the row/detail view's own
+                    relative wording ("Saturday") is for a reader who
+                    isn't looking at a calendar right next to it. */}
                 {dateDay === null ? "Pick a date" : formatDay(dateDay)}
               </Button>
               {dateDay !== null && (

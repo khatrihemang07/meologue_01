@@ -326,6 +326,16 @@ function TaskDetailBody({
   const [editingDescription, setEditingDescription] = useState(false);
   const [descriptionDraft, setDescriptionDraft] = useState(task.description ?? "");
   const uiPriority = uiPriorityOf(task.priority);
+  // Issue #224: computed once, not inline in the Date row's own `value`
+  // JSX below, so `text`/`colour` can't drift from calling
+  // `formatTaskDate` a second time with different `options` by accident.
+  const dateDisplay =
+    task.date === null
+      ? null
+      : formatTaskDate(task.date, {
+          completed: task.completedAt !== null,
+          recurring: task.dateString !== null,
+        });
 
   function commitTitle() {
     const trimmed = title.trim();
@@ -578,13 +588,17 @@ function TaskDetailBody({
               ))}
             </select>
           )}
-          {task.date === null ? (
+          {task.date === null || dateDisplay === null ? (
             <AttributePill label="Date" onClick={onOpenSchedule} />
           ) : (
             <AttributeRow
               icon={null}
               label="Date"
-              value={formatTaskDate(task.date)}
+              // Issue #224: the identical tone `task-row.tsx`'s own badge
+              // reads through `formatTaskDate` — `completed`/`recurring`
+              // passed the same way, so a Task overdue in the row is
+              // never merely upcoming in its own detail view.
+              value={<span style={{ color: dateDisplay.colour }}>{dateDisplay.text}</span>}
               onClick={onOpenSchedule}
             />
           )}
