@@ -577,6 +577,23 @@ export const PARITY_FIXTURE: readonly ParityRow[] = [
     source: "upnote-macos-detail.md Gap sweep #2 Group I1",
   },
   {
+    id: "soft-break-survives-conversion-to-a-list-item",
+    platform: "android",
+    context:
+      "A plain block already broken by a soft break, converted to a bullet \u2014 a toolbar gesture this fixture's keystroke vocabulary cannot drive, kept for the citation.",
+    keystrokes: [],
+    replayable: false,
+    expected: doc(
+      listBlock([item("bullet", 0, null, [[text("alpha")], [text("bravo")]], ["soft"])]),
+    ),
+    upnote: doc(textBlock("alpha"), textBlock("bravo")),
+    divergence: "deliberate",
+    reason:
+      "Gap sweep #2 Group H: on Android, converting a block that contains a soft line break into a bullet PERMANENTLY splits it into two separate blocks, and undoing the list conversion does not put it back \u2014 the break is gone for good. ADR 0072 rules that out: silently degrading what the author typed is the same class of behaviour as losing it outright, so the soft break survives here and the item stays one item. Cheap for this schema to honour, because a soft break is a literal `\\n` inside one paragraph rather than a node of its own, so a list wrap never has to decide what to do with it. Driven live in composer-commands.test.ts rather than replayed here.",
+    source:
+      "upnote-android-detail.md Gap sweep #2 Group H (round trip: plain \u2192 bullet \u2192 plain, soft-break case)",
+  },
+  {
     id: "pasted-markdown-is-parsed-into-structure-unlike-either-upnote-platform",
     context:
       "Pasting GFM Markdown ('- alpha\\n- bravo\\n') into an empty Composer — paste is not a keystroke this fixture's own script vocabulary can drive.",

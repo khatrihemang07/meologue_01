@@ -262,15 +262,17 @@ leave running (a body a Restore reintroduces still passes through it harmlessly)
 stopped being able to do anything at all, which is a stronger claim than ADR 0069's original
 "stops being load-bearing."
 
-**Glossary terms are still owed to `CONTEXT.md`, and still not paid — by either ticket this ADR
-names.** Issue #232's own acceptance criteria name three: block break, soft break, and the hard break
-encoding. `CONTEXT.md` was outside issue #232's file ownership when that was written, and stayed
-outside issue #234's: `CONTEXT.md` is explicitly owned by the project maintainer, not by an agent
-landing this ticket, so #234 does not amend it either, despite being the ticket where the hard-break
-encoding this ADR names actually starts being written. This is a real, acknowledged debt, not an
-oversight this ADR fails to notice — following ADR 0057/0067's own precedent of amending the
-glossary alongside the change that makes an old entry there stop being quite true is still the right
-call, whenever it is made by whoever holds that file's own pen.
+**The glossary terms owed to `CONTEXT.md` were paid, in this same commit.** Issue #232's own
+acceptance criteria name three: block break, soft break, and the hard break encoding. `CONTEXT.md`
+sat outside the file ownership of both #232 and #234 — it is held by whoever is integrating, not by
+an agent landing a single ticket — so neither of those tickets amended it, which is why an earlier
+draft of this section recorded the terms as an outstanding debt. They are not. **Block break** and
+**Soft break** are now defined there, and `Entry`'s own definition no longer describes ADR 0067's
+halving pass as live behaviour, since the reader absorbs what that pass used to fix. The hard break
+*encoding* deliberately did NOT become a glossary entry: `CONTEXT.md` is a glossary and nothing
+else, and how a soft break is spelled in storage is an implementation fact this ADR owns instead.
+This follows ADR 0057/0067's own precedent of amending the glossary alongside the change that makes
+an old entry there stop being quite true.
 
 **The Composer's own load/save round trip does carry a real, deliberate change from #234's own
 implementation — the opposite of what this ADR originally claimed for issue #232 alone.** That

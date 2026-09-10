@@ -62,6 +62,17 @@ export function groupEntriesIntoDayFiles(entries: Entry[], offsetMinutes: number
 }
 
 /**
+ * U+2003 EM SPACE, spelled as an escape rather than as the literal character.
+ * The Rust mirror of this function (`normalize_body_for_plain_text`,
+ * server/src/harness/tools/mod.rs) already spells it `\u{2003}`; writing the
+ * raw glyph here instead made the two halves of one rule look unrelated, and
+ * left a byte that is indistinguishable from an ordinary space in a diff — so
+ * an innocent "collapse the double space" edit could delete the rule without
+ * anyone seeing it go.
+ */
+const EM_SPACE = "\u2003";
+
+/**
  * ADR 0069/issue #234's normalization boundary. Two spellings the Composer
  * writes are Composer-internal, never meant to leak into a plain-text
  * surface outside the app: a soft break's own GFM backslash hard break
@@ -90,7 +101,7 @@ export function groupEntriesIntoDayFiles(entries: Entry[], offsetMinutes: number
  * depend on (ADR 0043's own layering).
  */
 export function normalizeBodyForPlainText(body: string): string {
-  return body.replace(/\\\n/g, "\n").replace(/ /g, " ");
+  return body.replace(/\\\n/g, "\n").split(EM_SPACE).join(" ");
 }
 
 function renderDayFile(
