@@ -168,6 +168,7 @@ function readyContext(overrides: Partial<EntryStoreOutletContext> = {}): EntrySt
     setTaskDate: vi.fn(),
     setTaskDeadline: vi.fn(),
     setTaskPriority: vi.fn(),
+    setTaskDateString: vi.fn(),
     setTaskLabels: vi.fn(),
     setTaskDescription: vi.fn(),
     listTasksInProject: vi.fn(async () => []),
@@ -364,7 +365,10 @@ describe("TodoPage", () => {
     // `location.state.from` (todo-page.tsx's own `backgroundView` doc
     // comment) — is still rendered, dimmed behind the modal/sheet.
     await waitFor(() => expect(screen.getAllByText("call mum")).not.toHaveLength(0));
-    const dialog = screen.getByRole("dialog");
+    // `LazyTaskDetailView` resolves its `import()` asynchronously
+    // (lazy-task-detail-view.ts's own header comment) — `findByRole`,
+    // not `getByRole`, tolerates the one microtask/render that takes.
+    const dialog = await screen.findByRole("dialog");
     expect(dialog).toBeInTheDocument();
     // "Inbox" appears twice inside the dialog — the breadcrumb and the
     // Project attribute row both say it, for different reasons (this
@@ -877,7 +881,10 @@ describe("TodoPage — scheduling", () => {
 
     await waitFor(() => expect(screen.getByText("call mum")).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: 'Date "call mum"' }));
-    expect(screen.getByText('Schedule "call mum"')).toBeInTheDocument();
+    // `LazyTaskScheduleSheet` resolves its `import()` asynchronously
+    // (lazy-task-schedule-sheet.ts's own header comment) — `findByText`,
+    // not `getByText`, tolerates the one microtask/render that takes.
+    expect(await screen.findByText('Schedule "call mum"')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "P1" }));
 
@@ -890,9 +897,12 @@ describe("TodoPage — scheduling", () => {
 
     await waitFor(() => expect(screen.getByText("call mum")).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: 'Date "call mum"' }));
-    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    // `LazyTaskScheduleSheet` resolves its `import()` asynchronously
+    // (lazy-task-schedule-sheet.ts's own header comment) — wait for the
+    // dialog to actually mount before dismissing it.
+    fireEvent.keyDown(await screen.findByRole("dialog"), { key: "Escape" });
 
-    expect(screen.queryByText('Schedule "call mum"')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText('Schedule "call mum"')).not.toBeInTheDocument());
   });
 });
 

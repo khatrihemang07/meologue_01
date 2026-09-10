@@ -1,7 +1,7 @@
 import type { Project, Section, Task } from "@meologue/core";
 import { today, upcoming } from "@meologue/core";
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { Suspense, useMemo, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import { BackToChats } from "@/components/back-to-chats";
@@ -12,13 +12,13 @@ import { AddTaskForm } from "@/components/todo/add-task-form";
 import { CompletedTasks } from "@/components/todo/completed-tasks";
 import { FilterView } from "@/components/todo/filter-view";
 import { FiltersView } from "@/components/todo/filters-view";
+import { LazyTaskDetailView } from "@/components/todo/lazy-task-detail-view";
+import { LazyTaskScheduleSheet } from "@/components/todo/lazy-task-schedule-sheet";
 import { ProjectView } from "@/components/todo/project-view";
 import { ProjectsView } from "@/components/todo/projects-view";
-import { TaskDetailView } from "@/components/todo/task-detail-view";
 import { TaskList } from "@/components/todo/task-list";
 import { TaskQuickFind } from "@/components/todo/task-quick-find";
 import type { TaskDetailActions } from "@/components/todo/task-row";
-import { TaskScheduleSheet } from "@/components/todo/task-schedule-sheet";
 import { TaskSearchPage } from "@/components/todo/task-search-page";
 import { TodayView } from "@/components/todo/today-view";
 import { TodoNav } from "@/components/todo/todo-nav";
@@ -211,6 +211,7 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     setTaskDate,
     setTaskDeadline,
     setTaskPriority,
+    setTaskDateString,
     setTaskLabels,
     listTasksInProject,
     listTaskChildren,
@@ -316,6 +317,26 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   function handleOpenSchedule(taskId: string) {
     setSchedulingId(taskId);
   }
+
+  // Day-keys carrying at least one active Task, mapped to how many —
+  // TaskSchedulePopover's own doc comment on why SCHED-09's calendar dot
+  // and SCHED-04's preview subline share this one source rather than two
+  // independently-computed counts. Recomputed only when `tasks` itself
+  // changes, not on every render the schedule sheet happens to be open
+  // for — every Task in the list counts, including the one currently
+  // being scheduled, matching how a real calendar dot would read "how
+  // many Tasks land here" regardless of which one opened the picker.
+  const datesWithTasks = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const task of tasks) {
+      if (task.date === null) {
+        continue;
+      }
+      const day = task.date.slice(0, 10);
+      counts.set(day, (counts.get(day) ?? 0) + 1);
+    }
+    return counts;
+  }, [tasks]);
 
   // Completing raises the same Undo-toast affordance
   // register-service-worker.web.ts's own update prompt uses
@@ -801,18 +822,29 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
       )}
 
       {schedulingTask !== null && (
-        <TaskScheduleSheet
-          task={schedulingTask}
-          open={true}
-          onOpenChange={(open) => {
-            if (!open) {
-              setSchedulingId(null);
-            }
-          }}
-          onSetDate={setTaskDate}
-          onSetDeadline={setTaskDeadline}
-          onSetPriority={setTaskPriority}
-        />
+        // `LazyTaskScheduleSheet`'s own header comment: this and
+        // `TaskDetailView` below are the two things that moved Todo's
+        // route off its 651-byte headroom (issue #228/#229's own brief).
+        // `fallback={null}` matches `lazy-destructive-confirm-dialog.ts`'s
+        // callers — a Sheet opening from a deliberate tap tolerates one
+        // frame with nothing rendered far better than a route's first
+        // paint would.
+        <Suspense fallback={null}>
+          <LazyTaskScheduleSheet
+            task={schedulingTask}
+            open={true}
+            onOpenChange={(open) => {
+              if (!open) {
+                setSchedulingId(null);
+              }
+            }}
+            onSetDate={setTaskDate}
+            onSetDeadline={setTaskDeadline}
+            onSetPriority={setTaskPriority}
+            onSetDateString={setTaskDateString}
+            datesWithTasks={datesWithTasks}
+          />
+        </Suspense>
       )}
 
       <ConfirmDialog
@@ -847,38 +879,46 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
           background view underneath is exactly what `backgroundView`
           already computed for every other branch above. */}
       {openTask !== null && (
-        <TaskDetailView
-          task={openTask}
-          project={openTaskProject}
-          section={openTaskSection}
-          projects={projects}
-          labels={labels}
-          prevTask={prevTask}
-          nextTask={nextTask}
-          onClose={closeTaskDetail}
-          onNavigate={stepTaskDetail}
-          onRename={(content) => renameTask(openTask.id, content)}
-          // Issue #184's own gap-fix report: the detail view now resolves
-          // (and must render actionable) a completed Task too — reuses
-          // `handleComplete`'s own recurring-Task/toast handling, the
-          // identical door every other completion entry point already
-          // goes through, rather than this view's own checkbox
-          // duplicating that logic.
-          onComplete={() => handleComplete(openTask.id, openTask.content, openTask.dateString)}
-          onUncomplete={() => uncompleteTask(openTask.id)}
-          onOpenSchedule={() => handleOpenSchedule(openTask.id)}
-          onSetProject={(projectId) => setTaskProject(openTask.id, projectId)}
-          onSetLabels={(labelIds) => setTaskLabels(openTask.id, labelIds)}
-          onSetDescription={(description) => setTaskDescription(openTask.id, description)}
-          comments={commentsForTask(comments, openTask.id)}
-          onAddComment={(text) => addComment(openTask.id, text)}
-          onEditComment={editComment}
-          onRemoveComment={removeComment}
-          // Issue #184: this Task's own history, newest first — narrowed
-          // client-side from the one flat `events` list, mirroring
-          // `commentsForTask`'s identical narrowing just above.
-          events={events.filter((event) => event.taskId === openTask.id)}
-        />
+        // `LazyTaskDetailView`'s own header comment has the bundle numbers.
+        // `fallback={null}` for the same reason `LazyTaskScheduleSheet`'s
+        // own call site above gives: opening a Task is a deliberate
+        // navigation, not a route's first paint, so one frame with nothing
+        // rendered over the (still-visible) background view is the right
+        // trade, not a visible regression.
+        <Suspense fallback={null}>
+          <LazyTaskDetailView
+            task={openTask}
+            project={openTaskProject}
+            section={openTaskSection}
+            projects={projects}
+            labels={labels}
+            prevTask={prevTask}
+            nextTask={nextTask}
+            onClose={closeTaskDetail}
+            onNavigate={stepTaskDetail}
+            onRename={(content) => renameTask(openTask.id, content)}
+            // Issue #184's own gap-fix report: the detail view now resolves
+            // (and must render actionable) a completed Task too — reuses
+            // `handleComplete`'s own recurring-Task/toast handling, the
+            // identical door every other completion entry point already
+            // goes through, rather than this view's own checkbox
+            // duplicating that logic.
+            onComplete={() => handleComplete(openTask.id, openTask.content, openTask.dateString)}
+            onUncomplete={() => uncompleteTask(openTask.id)}
+            onOpenSchedule={() => handleOpenSchedule(openTask.id)}
+            onSetProject={(projectId) => setTaskProject(openTask.id, projectId)}
+            onSetLabels={(labelIds) => setTaskLabels(openTask.id, labelIds)}
+            onSetDescription={(description) => setTaskDescription(openTask.id, description)}
+            comments={commentsForTask(comments, openTask.id)}
+            onAddComment={(text) => addComment(openTask.id, text)}
+            onEditComment={editComment}
+            onRemoveComment={removeComment}
+            // Issue #184: this Task's own history, newest first — narrowed
+            // client-side from the one flat `events` list, mirroring
+            // `commentsForTask`'s identical narrowing just above.
+            events={events.filter((event) => event.taskId === openTask.id)}
+          />
+        </Suspense>
       )}
 
       {/* Quick-find (issue #183) — mounted unconditionally, once, regardless

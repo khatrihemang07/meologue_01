@@ -100,6 +100,24 @@ export interface UseTasksResult {
   /** Sets a Task's stored `priority` (1-4) — callers pass `storedPriorityOf(uiPriority)`, never the UI number directly (task-types.ts's own warning against open-coding the inversion). */
   setTaskPriority: (id: string, priority: number) => void;
   /**
+   * Sets (or clears) a Task's `dateString` (issue #227) — the door
+   * task-schedule-popover.tsx's "Type a date" input goes through to give
+   * an existing Task a Recurrence, change one, or clear it back to `null`,
+   * none of which any surface could do before this ticket
+   * (TaskStore.setDateString's own doc comment carries the full
+   * reasoning, including why `date` is recomputed by the store itself
+   * rather than trusted from the caller). `now` is threaded through
+   * rather than read here, the one exception to this file's own
+   * `new Date().toISOString()`-at-the-mutation convention: the popover
+   * already reads a single `now` once per open to keep its quick options
+   * and its typed preview from disagreeing about what day "today" is,
+   * and reusing that same instant for the commit is what keeps a
+   * commit's resolved date matching the preview the reader just clicked,
+   * rather than a second, independent clock read that could in principle
+   * roll over a calendar day between the two.
+   */
+  setTaskDateString: (id: string, dateString: string | null, now: string) => void;
+  /**
    * Replaces a Task's `labelIds` wholesale — TaskStore.setLabelIds's own
    * doc comment on why "read, splice, write back the whole array" is the
    * contract rather than an add/remove pair. Issue #178's Task detail
@@ -566,6 +584,29 @@ export function useTasks(
     setPriorityMutation.mutate({ id, priority });
   }
 
+  const setDateStringMutation = useMutation({
+    mutationFn: async ({
+      id,
+      dateString,
+      now,
+    }: {
+      id: string;
+      dateString: string | null;
+      now: string;
+    }) => {
+      const before = await findTask(id);
+      await taskStore.setDateString(id, dateString, now);
+      if (before) {
+        recordTaskEvent(before, "updated", { dateString, lastDateString: before.dateString });
+      }
+    },
+    onSuccess: afterLocalWrite,
+  });
+
+  function setTaskDateString(id: string, dateString: string | null, now: string) {
+    setDateStringMutation.mutate({ id, dateString, now });
+  }
+
   const setLabelIdsMutation = useMutation({
     mutationFn: async ({ id, labelIds }: { id: string; labelIds: string[] }) => {
       const before = await findTask(id);
@@ -757,6 +798,7 @@ export function useTasks(
     setTaskDate,
     setTaskDeadline,
     setTaskPriority,
+    setTaskDateString,
     setTaskLabels,
     setTaskDescription,
     listTasksInProject,

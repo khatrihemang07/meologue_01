@@ -230,6 +230,58 @@ export interface TaskStore {
    */
   setPriority(id: string, priority: number): Promise<void>;
   /**
+   * Sets `dateString` and clears `seq` — issue #227's own gap: until this
+   * method existed, a Recurrence could only ever be given once, by typing
+   * it as the Task was created (quick-add-task.ts's `resolveRecurrence`),
+   * and could never afterwards be changed or cleared from any surface.
+   * This is that missing door, and it deliberately does the identical
+   * recomputation quick-add-task.ts's own creation path does rather than
+   * leaving a caller to pass `date` alongside `dateString` and hope the
+   * two agree: `../recurrence/`'s `firstOccurrence` (not
+   * `nextOccurrenceAfterCompletion`, which advanceRecurring() above uses)
+   * is what CONTEXT.md's Recurrence entry and issue #191 both name —
+   * "the first Date that actually matches the pattern, INCLUDING the day
+   * it was given the recurrence" — because editing a Recurrence is a
+   * fresh grant, not a completion; `firstOccurrence`'s own doc comment is
+   * the one place that distinction, and why it's a different computation
+   * rather than the same one with a relaxed floor, is fully argued.
+   *
+   * Anchors off the Task's own current `date` (mirrors advanceRecurring's
+   * `dueDate: current.date` above) — a due-anchored phrase ("every monday"
+   * typed after a date is already on the Task) resolves against that
+   * date's own phase rather than `now`; `../recurrence/`'s
+   * `RecurrenceReference.dueDate` doc comment covers the `null` case (no
+   * date yet) falling back to `now` on its own, so this method never has
+   * to special-case it.
+   *
+   * `null` clears the Recurrence and — deliberately — leaves `date`
+   * untouched: a Task that stops repeating keeps whatever due date it
+   * last carried, the same "date is left exactly as it was" rule
+   * completeForever() above already applies when a series ends
+   * deliberately rather than by running out.
+   *
+   * Throws if `dateString` doesn't parse, or parses but its own
+   * `starting`/`ending`/`for` bound has already elapsed as of `now`
+   * (`{ kind: "ended" }`) — quick-add-task.ts's `resolveRecurrence`
+   * silently discards either outcome because there's no Task yet to
+   * report an error against there; here one already exists, and the
+   * scheduler popover's own resolved-date preview (SCHED-04) is what
+   * keeps a caller from ever reaching this with unresolvable text in
+   * ordinary use. No-op against a tombstone or an unknown id, checked
+   * before either throw becomes reachable — advanceRecurring()'s own doc
+   * comment gives the identical reasoning. Clears `seq`.
+   *
+   * `now` is a full instant (`new Date().toISOString()`, the identical
+   * shape advanceRecurring's `completedAt` and postpone's `today` both
+   * take) rather than a bare day — only its first ten characters matter
+   * to `../recurrence/`'s engine, sliced off internally the same way
+   * advanceRecurring's own mechanics does, so every picker-facing caller
+   * can pass "now" the one way it already does everywhere else in this
+   * interface instead of learning a special day-only shape for this one
+   * setter.
+   */
+  setDateString(id: string, dateString: string | null, now: string): Promise<void>;
+  /**
    * Sets `labelIds` and clears `seq` — mirrors the other #169-era setters
    * above for the same reason: a caller building its own patch object
    * has no way to know it must no-op against a tombstone, and this is

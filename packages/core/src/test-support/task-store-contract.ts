@@ -490,6 +490,89 @@ export function taskStoreContract(createStore: () => TaskStore | Promise<TaskSto
     });
   });
 
+  // Issue #227: the one door onto changing or clearing a Recurrence after
+  // a Task already has one — TaskStore.setDateString's own doc comment
+  // carries the full reasoning for why this recomputes `date` via
+  // `firstOccurrence`, not `nextOccurrenceAfterCompletion` (advanceRecurring's
+  // own suite above already covers that engine wrapping; these tests are
+  // the "given," not the "completed," half of the identical pairing).
+  describe("setDateString()", () => {
+    it("sets dateString and recomputes date via firstOccurrence — inclusive of `now` itself (issue #191)", async () => {
+      await store.upsert([task({ id: "a", seq: 5 })]);
+
+      // 2026-01-05 is itself a Monday.
+      await store.setDateString("a", "every monday", "2026-01-05");
+
+      const [found] = await store.list();
+      expect(found).toMatchObject({
+        id: "a",
+        date: "2026-01-05",
+        dateString: "every monday",
+        seq: null,
+      });
+    });
+
+    it("anchors a due-anchored phrase off the Task's own current date, not `now`", async () => {
+      await store.upsert([task({ id: "a", date: "2026-01-15", seq: 5 })]);
+
+      await store.setDateString("a", "every month", "2026-01-20");
+
+      const [found] = await store.list();
+      // The 15th's own phase survives into next month, exactly as
+      // advanceRecurring's identical due-anchored case above shows —
+      // firstOccurrence and nextOccurrenceAfterCompletion share that
+      // anchor-resolution logic (../recurrence/engine.ts's computeOccurrence).
+      expect(found).toMatchObject({ date: "2026-02-15", dateString: "every month" });
+    });
+
+    it("clears the Recurrence and leaves date untouched", async () => {
+      await store.upsert([task({ id: "a", dateString: "every day", date: "2026-01-05", seq: 5 })]);
+
+      await store.setDateString("a", null, "2026-01-10");
+
+      const [found] = await store.list();
+      expect(found).toMatchObject({ id: "a", dateString: null, date: "2026-01-05", seq: null });
+    });
+
+    it("replaces an existing Recurrence with a different one", async () => {
+      await store.upsert([task({ id: "a", dateString: "every day", date: "2026-01-05", seq: 5 })]);
+
+      await store.setDateString("a", "every year", "2026-01-05");
+
+      const [found] = await store.list();
+      expect(found).toMatchObject({ dateString: "every year", date: "2026-01-05" });
+    });
+
+    it("throws when dateString doesn't parse", async () => {
+      await store.upsert([task({ id: "a", seq: 1 })]);
+
+      await expect(
+        store.setDateString("a", "not a recurrence rule", "2026-01-05"),
+      ).rejects.toThrow();
+    });
+
+    it("throws when the phrase's own ending bound has already elapsed as of `now`", async () => {
+      // Mirrors advanceRecurring's identical "ended" fixture above
+      // (dueDate 2026-01-01, the same "every day ending 8 Jan"), but
+      // `now` sits one day PAST the 8th rather than exactly on it —
+      // firstOccurrence's own floor is inclusive of `now` (issue #191),
+      // so landing `now` exactly on the boundary would still resolve as
+      // a valid occurrence there, unlike advanceRecurring's exclusive
+      // floor.
+      await store.upsert([task({ id: "a", date: "2026-01-01", seq: 1 })]);
+
+      await expect(
+        store.setDateString("a", "every day ending 8 Jan", "2026-01-09"),
+      ).rejects.toThrow();
+    });
+
+    it("no-ops against an unknown id", async () => {
+      await expect(
+        store.setDateString("never-seen", "every day", "2026-01-05"),
+      ).resolves.toBeUndefined();
+    });
+  });
+
   describe("setLabelIds()", () => {
     it("changes labelIds and clears seq", async () => {
       await store.upsert([task({ id: "a", seq: 5 })]);

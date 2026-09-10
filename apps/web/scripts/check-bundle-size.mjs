@@ -195,6 +195,45 @@ const CHUNK_BUDGETS = {
     ceilingBytes: 17_200,
     baselineBytes: 13_176,
   },
+  // Not a route — `TaskDetailView` (components/todo/task-detail-view.tsx),
+  // lazy from `todo-page.tsx` alone (issue #229 onward's own bundle-
+  // headroom ticket). Unlike every other entry in this table, this
+  // component was never a *shared* dependency of more than one caller —
+  // it renders only behind `/todo/task/:taskSlugId`, gated by the
+  // identical `openTask !== null` check that already existed before this
+  // split — so moving it doesn't amortise weight across two surfaces the
+  // way `task-title-editor.tsx` below does; it simply stops billing every
+  // Todo visit for a view a reader browsing a list never needs. Landed
+  // because Todo's route measured 86,949 gzip bytes against its 87,600
+  // ceiling right before this ticket (651 bytes of headroom — nowhere
+  // near enough for issue #228's keyboard layer or issue #229's detail
+  // modal/project/label/filter management, both still landing on this
+  // route). Measured 27,170 bytes gzip (own chunk + 11 shared)
+  // immediately after landing.
+  "src/components/todo/task-detail-view.tsx": {
+    ceilingBytes: 35_300,
+    baselineBytes: 27_170,
+  },
+  // Not a route — `TaskScheduleSheet` (components/todo/task-schedule-
+  // sheet.tsx), lazy from `todo-page.tsx` (issue #229 onward's own
+  // bundle-headroom ticket) — the identical move `task-detail-view.tsx`
+  // above makes, for the identical reason (that entry's own header
+  // comment has the numbers). This chunk carries more than its own ~9 KB
+  // of source: it statically imports `task-schedule-popover.tsx` (issue
+  // #227's Todoist-style scheduler — `date-fns` plus `ui/popover.tsx`'s
+  // Radix `Popover`) and `date-picker-sheet.tsx` (react-day-picker, for
+  // the Deadline field's unchanged picker), so both scheduler surfaces
+  // move together, in one shared lazy chunk, rather than each growing a
+  // wrapper of its own — `lazy-task-schedule-sheet.ts`'s own header
+  // comment. `composer-page.tsx` keeps its own **static** import of this
+  // same module — a separate route with its own, already large budget —
+  // so this entry measures only what `todo-page.tsx` now pays lazily.
+  // Measured 49,399 bytes gzip (own chunk + 9 shared) immediately after
+  // landing.
+  "src/components/todo/task-schedule-sheet.tsx": {
+    ceilingBytes: 64_200,
+    baselineBytes: 49_399,
+  },
   // Not a route — `TaskTitleEditor` (components/todo/task-title-editor.tsx),
   // lazy from both `task-row-content.tsx`'s inline rename and
   // `task-detail-view.tsx`'s title (issue #225) — the identical
@@ -307,7 +346,28 @@ const CHUNK_BUDGETS = {
   // table records elsewhere was never carried into this field) — a
   // correction belongs to whichever ticket next has reason to touch this
   // budget deliberately, not a side effect of landing #225.
-  "src/pages/todo-page.tsx": { ceilingBytes: 87_600, baselineBytes: 67_406 },
+  //
+  // Re-measured 2026-09-10, later the same day: a clean build measured
+  // 86,949 gzip bytes against the unchanged 87,600 ceiling — 651 bytes of
+  // headroom, with issue #228's keyboard layer and issue #229's detail
+  // modal/project/label/filter management both still due to land here.
+  // That is this ticket's own starting point, not new growth this table
+  // failed to record earlier — see the immediately preceding entry's own
+  // "stale by a wider margin" note.
+  //
+  // This ticket moved `TaskDetailView` and `TaskScheduleSheet` (plus,
+  // through it, `TaskSchedulePopover`) behind lazy boundaries —
+  // `lazy-task-detail-view.ts`/`lazy-task-schedule-sheet.ts`'s own header
+  // comments have the full reasoning — dropping this route to 81,021
+  // gzip bytes, 6,579 bytes of headroom against the same, still-unchanged
+  // 87,600 ceiling. `ceilingBytes` is deliberately NOT tightened down
+  // toward this new, lower baseline the way a fresh route's ceiling
+  // normally would be: the entire point of this ticket was reclaiming
+  // room for #228/#229 to spend, not handing it straight back by shrinking
+  // the ceiling to match. Whether 6,579 bytes is enough for both of those
+  // tickets is not yet knowable — neither has been built — so this is
+  // reported rather than guessed at (this ticket's own report).
+  "src/pages/todo-page.tsx": { ceilingBytes: 87_600, baselineBytes: 81_021 },
 };
 
 /**

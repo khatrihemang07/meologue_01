@@ -7,12 +7,22 @@ import { ENTRY_STORE_QUERY_KEY } from "@/lib/query-keys";
 import { ChatShellLayout } from "./chat-shell-layout";
 
 /**
- * Issue #223's own seam: `data-surface="todo"` on `ChatShellLayout`'s root
- * is the ENTIRE mechanism index.css's `[data-surface="todo"]` scope keys
- * off, so a route-driven test here is what stands in for "Todoist's
- * palette applies inside Todo and nowhere else" — a CSS selector matching
- * has no observable effect in jsdom (no styles are ever computed), but the
- * attribute it matches against is a plain, assertable fact.
+ * Issue #223's own seam: `data-surface="todo"` is the ENTIRE mechanism
+ * index.css's `[data-surface="todo"]` scope keys off, so a route-driven test
+ * here is what stands in for "Todoist's palette applies inside Todo and
+ * nowhere else" — a CSS selector matching has no observable effect in jsdom
+ * (no styles are ever computed), but the attribute it matches against is a
+ * plain, assertable fact.
+ *
+ * **It is asserted on `documentElement`, not on this component's own div,
+ * and that distinction is the point.** The attribute first lived on the div,
+ * and this test passed for it — while every Radix overlay in Todo rendered
+ * completely unthemed, because a Portal mounts into `document.body`, outside
+ * that div entirely. Measured live, the task detail dialog came back
+ * `insideScope: false`, painted in the app's own palette and set in Geist.
+ * The test could not see it: jsdom computes no styles, so "the attribute is
+ * on the element I chose" was never the same claim as "the scope reaches the
+ * thing being painted".
  *
  * The default (narrow) layout is exercised deliberately: `useWideLayout`
  * reads `false` unless a test stubs `matchMedia` otherwise
@@ -35,16 +45,25 @@ function renderShell(initialPath: string) {
 }
 
 describe("ChatShellLayout's data-surface attribute", () => {
-  it("is present, and reads 'todo', on a /todo/* route", () => {
-    const { container } = renderShell("/todo/inbox");
+  it("is present on documentElement, and reads 'todo', on a /todo/* route", () => {
+    renderShell("/todo/inbox");
 
-    expect(container.firstElementChild).toHaveAttribute("data-surface", "todo");
+    expect(document.documentElement).toHaveAttribute("data-surface", "todo");
   });
 
   it("is absent — not merely empty — on a non-Todo route", () => {
-    const { container } = renderShell("/composer");
+    renderShell("/composer");
 
-    expect(container.firstElementChild).not.toHaveAttribute("data-surface");
+    expect(document.documentElement).not.toHaveAttribute("data-surface");
+  });
+
+  it("is cleared when the shell unmounts, so it cannot outlive Todo", () => {
+    const { unmount } = renderShell("/todo/inbox");
+    expect(document.documentElement).toHaveAttribute("data-surface", "todo");
+
+    unmount();
+
+    expect(document.documentElement).not.toHaveAttribute("data-surface");
   });
 });
 

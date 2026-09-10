@@ -71,6 +71,7 @@ function buildOutletContext(
     setTaskDate: vi.fn(),
     setTaskDeadline: vi.fn(),
     setTaskPriority: vi.fn(),
+    setTaskDateString: vi.fn(),
     setTaskLabels: vi.fn(),
     setTaskDescription: vi.fn(),
     listTasksInProject: vi.fn(async () => []),

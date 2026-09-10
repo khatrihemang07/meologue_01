@@ -1,4 +1,4 @@
-import { type CSSProperties, lazy, Suspense } from "react";
+import { type CSSProperties, lazy, Suspense, useEffect } from "react";
 import { Outlet, useLocation } from "react-router";
 import { ChatListPane } from "@/components/chat-list-pane";
 import { PaneDivider } from "@/components/pane-divider";
@@ -40,22 +40,37 @@ const TodoSidebar = lazy(() =>
  * is corrected on every render instead of being silently rewritten in
  * storage the first time the app opens somewhere narrower.
  *
- * `data-surface="todo"` (issue #223's first half) is set here rather than
- * inside `TodoPage` itself, precisely because this element is also the one
- * ancestor the left pane sits under — `ChatListPane` above renders inside
- * this same div, outside `Shell`. Todo's own sidebar (#223's second half)
- * replaces what that pane shows while a `/todo/*` route is open, and it
- * needs the identical Todoist palette the page itself gets; one attribute
- * up here covers both without a second scope lower down. `useLocation`
- * rather than reading `window.location` directly is what keeps this
- * re-rendering on every route change rather than only on remount — this
- * layout persists across navigation (it wraps every Destination via one
- * `<Route element={<ChatShellLayout />}>` in App.tsx), so a plain read at
- * mount would freeze the attribute at whatever Destination first mounted
- * it in. The attribute is omitted, not set empty, when it doesn't apply:
- * index.css's `[data-surface="todo"]` selector matches an empty string
- * value too, so leaving it out entirely is what actually keeps every
- * non-Todo Destination unscoped.
+ * `data-surface="todo"` (issue #223) is written onto **`documentElement`**,
+ * not onto this component's own div, and that placement is the whole of what
+ * makes the token scope actually hold.
+ *
+ * It began on the div, which is the ancestor both the left pane and the open
+ * Destination share, and that looked sufficient. It was not. Radix renders
+ * every overlay through a Portal into `document.body` — the task detail
+ * dialog, the command menu, quick-find, the sheets, the confirm dialogs and
+ * the scheduler popover all land **outside** this subtree. A scope on the
+ * div therefore never reached any of them: measured live, the detail dialog
+ * came back `insideScope: false`, painted `oklch(0.205 0 0)` from the app's
+ * own palette instead of Todoist's ground, and still set in Geist. It had
+ * rendered unthemed since the scope landed, and no test could see it,
+ * because jsdom has no layout and the class names were all present and
+ * correct.
+ *
+ * Patching each overlay to re-declare the attribute would work exactly until
+ * the next overlay someone adds forgets to. `documentElement` is above every
+ * portal by construction, so nothing can escape it, and it is where this app
+ * already keeps its other whole-document switches — `lib/theme.ts` writes
+ * `data-accent`, `data-text-size` and `data-completed-style` onto the same
+ * element for the same reason.
+ *
+ * Scoping the whole document is safe precisely because of what a `/todo/*`
+ * route renders: the pane shows Todo's own sidebar and the Outlet shows Todo.
+ * There is no non-Todo surface on screen to repaint by accident.
+ *
+ * `useLocation` rather than reading `window.location` keeps this reacting to
+ * every route change rather than only to a remount — this layout persists
+ * across navigation, so a plain read at mount would freeze the attribute at
+ * whichever Destination happened to mount it first.
  */
 export function ChatShellLayout() {
   const keyboard = useKeyboardInset();
@@ -68,10 +83,25 @@ export function ChatShellLayout() {
   // is the kind of defect nobody looks for because nobody caused it.
   const isTodo = location.pathname === "/todo" || location.pathname.startsWith("/todo/");
 
+  useEffect(() => {
+    const root = document.documentElement;
+    if (isTodo) {
+      root.dataset.surface = "todo";
+    } else {
+      // Removed rather than set to an empty string: `[data-surface="todo"]`
+      // would not match `""`, but a stray empty attribute on the document
+      // root is the kind of thing a later selector starts matching by
+      // accident, and there is nothing to gain by leaving one behind.
+      delete root.dataset.surface;
+    }
+    return () => {
+      delete root.dataset.surface;
+    };
+  }, [isTodo]);
+
   return (
     <div
       className="flex h-[calc(100svh-var(--keyboard-inset))] w-full overflow-hidden bg-background [padding-left:env(safe-area-inset-left)] [padding-right:env(safe-area-inset-right)]"
-      data-surface={isTodo ? "todo" : undefined}
       style={
         {
           "--keyboard-inset": `${keyboard.inset}px`,

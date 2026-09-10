@@ -175,6 +175,8 @@ export interface EntryStoreOutletContext {
   setTaskDate: (id: string, date: string | null) => void;
   setTaskDeadline: (id: string, deadline: string | null) => void;
   setTaskPriority: (id: string, priority: number) => void;
+  /** Sets or clears a Task's Recurrence (issue #227) — use-tasks.ts's own `setTaskDateString` doc comment. */
+  setTaskDateString: (id: string, dateString: string | null, now: string) => void;
   /** Replaces a Task's Labels wholesale — use-tasks.ts's own `setTaskLabels` doc comment. */
   setTaskLabels: (id: string, labelIds: string[]) => void;
   /** Sets a Task's Description (issue #180) — use-tasks.ts's own `setTaskDescription` doc comment. */
@@ -428,6 +430,10 @@ function noopSetTaskDeadline(_id: string, _deadline: string | null) {}
 
 function noopSetTaskPriority(_id: string, _priority: number) {}
 
+// Issue #227 — the not-ready stand-in for `setTaskDateString`, same
+// reasoning as the three setters just above.
+function noopSetTaskDateString(_id: string, _dateString: string | null, _now: string) {}
+
 // Issue #178's Task detail view — the not-ready stand-in for `setTaskLabels`,
 // same reasoning as the four setters just above.
 function noopSetTaskLabels(_id: string, _labelIds: string[]) {}
@@ -675,6 +681,11 @@ const TASK_STORE_METHODS: StoreMethodNames<TaskStore> = {
   setDate: true,
   setDeadline: true,
   setPriority: true,
+  // Issue #227 — the identical compile-time checkpoint: `setDateString`
+  // added to TaskStore alongside the other setters above, so a caller
+  // forgetting it here fails `tsc -b` rather than resolving to
+  // `undefined` through `deferStore`.
+  setDateString: true,
   // Issue #170 adds setLabelIds alongside the Labels feature itself, and
   // its recurrence engine adds three more (../../packages/core/
   // src/task-store.ts's own doc comments have the full reasoning for
@@ -1113,6 +1124,7 @@ export function EntryStoreLayout() {
     setTaskDate,
     setTaskDeadline,
     setTaskPriority,
+    setTaskDateString,
     setTaskLabels,
     setTaskDescription,
     listTasksInProject,
@@ -1186,6 +1198,7 @@ export function EntryStoreLayout() {
               setTaskDate,
               setTaskDeadline,
               setTaskPriority,
+              setTaskDateString,
               setTaskLabels,
               setTaskDescription,
               listTasksInProject,
@@ -1257,6 +1270,7 @@ export function EntryStoreLayout() {
               setTaskDate: noopSetTaskDate,
               setTaskDeadline: noopSetTaskDeadline,
               setTaskPriority: noopSetTaskPriority,
+              setTaskDateString: noopSetTaskDateString,
               setTaskLabels: noopSetTaskLabels,
               setTaskDescription: noopSetTaskDescription,
               listTasksInProject: noopListTasksInProject,

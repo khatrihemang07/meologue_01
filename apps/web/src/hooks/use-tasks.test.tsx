@@ -8,7 +8,7 @@ import type {
   Task,
   TaskStore,
 } from "@meologue/core";
-import { nextOccurrenceAfterCompletion, tomorrowOf } from "@meologue/core";
+import { firstOccurrence, nextOccurrenceAfterCompletion, tomorrowOf } from "@meologue/core";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
@@ -149,6 +149,26 @@ function createFakeStore(): TaskStore {
     }),
     setPriority: vi.fn(async (id: string, priority: number) => {
       active = active.map((t) => (t.id === id ? { ...t, priority, seq: null } : t));
+    }),
+    // Issue #227's setDateString — mirrored against packages/core's own
+    // real mechanics (../../packages/core/src/sqlite/sqlite-task-store.ts's
+    // setDateString), the identical fidelity advanceRecurring below
+    // already gets, since this suite's own recurrence tests exercise real
+    // `firstOccurrence` behaviour through it.
+    setDateString: vi.fn(async (id: string, dateString: string | null, now: string) => {
+      const found = active.find((t) => t.id === id);
+      if (found === undefined) return;
+      if (dateString === null) {
+        active = active.map((t) => (t.id === id ? { ...t, dateString: null, seq: null } : t));
+        return;
+      }
+      const outcome = firstOccurrence(dateString, { dueDate: found.date, now: now.slice(0, 10) });
+      if (outcome.kind !== "occurrence") {
+        throw new Error(`setDateString: "${dateString}" has no occurrence as of ${now}`);
+      }
+      active = active.map((t) =>
+        t.id === id ? { ...t, date: outcome.date, dateString, seq: null } : t,
+      );
     }),
     setLabelIds: vi.fn(async (id: string, labelIds: string[]) => {
       active = active.map((t) => (t.id === id ? { ...t, labelIds, seq: null } : t));
@@ -697,6 +717,37 @@ describe("useTasks", () => {
 
       await waitFor(() => expect(store.postpone).toHaveBeenCalledWith("a", expect.any(String)));
       await waitFor(() => expect(result.current.tasks[0]?.date).not.toBe("2020-01-01"));
+    });
+
+    // Issue #227: the one door onto changing or clearing a Recurrence a
+    // Task already has — see TaskStore.setDateString's own doc comment
+    // (packages/core/src/task-store.ts) for why `now` is threaded straight
+    // through rather than read inside this hook.
+    it("setTaskDateString gives a Task its first Recurrence", async () => {
+      const store = createFakeStore();
+      await store.upsert([task({ id: "a" })]);
+      const { result } = await renderUseTasks(store);
+      await waitFor(() => expect(result.current.tasks).toHaveLength(1));
+
+      act(() => result.current.setTaskDateString("a", "every day", "2026-01-05T00:00:00.000Z"));
+
+      await waitFor(() =>
+        expect(store.setDateString).toHaveBeenCalledWith("a", "every day", expect.any(String)),
+      );
+      await waitFor(() => expect(result.current.tasks[0]?.dateString).toBe("every day"));
+      expect(result.current.tasks[0]?.date).toBe("2026-01-05");
+    });
+
+    it("setTaskDateString(id, null, now) clears an existing Recurrence and leaves date untouched", async () => {
+      const store = createFakeStore();
+      await store.upsert([task({ id: "a", date: "2026-01-05", dateString: "every day" })]);
+      const { result } = await renderUseTasks(store);
+      await waitFor(() => expect(result.current.tasks).toHaveLength(1));
+
+      act(() => result.current.setTaskDateString("a", null, "2026-01-10T00:00:00.000Z"));
+
+      await waitFor(() => expect(result.current.tasks[0]?.dateString).toBeNull());
+      expect(result.current.tasks[0]?.date).toBe("2026-01-05");
     });
   });
 

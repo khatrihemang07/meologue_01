@@ -1,5 +1,5 @@
 import type { Entry, Task } from "@meologue/core";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
 import { toast } from "sonner";
 import { BackToChats } from "@/components/back-to-chats";
@@ -96,6 +96,7 @@ export function ComposerPage() {
     setTaskDate,
     setTaskDeadline,
     setTaskPriority,
+    setTaskDateString,
     setTaskProject,
     setTaskLabels,
     setTaskDescription,
@@ -267,6 +268,21 @@ export function ComposerPage() {
         completedTasks.find((t) => t.id === openTaskId) ??
         null)
       : null;
+
+  // Mirrors todo-page.tsx's own identical `datesWithTasks` — see that
+  // file's doc comment for the full reasoning (TaskSchedulePopover's own
+  // SCHED-09/SCHED-04 dot-and-subline source).
+  const datesWithTasks = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const task of tasks) {
+      if (task.date === null) {
+        continue;
+      }
+      const day = task.date.slice(0, 10);
+      counts.set(day, (counts.get(day) ?? 0) + 1);
+    }
+    return counts;
+  }, [tasks]);
   const openTaskProject =
     openTask === null ? null : (projects.find((p) => p.id === openTask.projectId) ?? null);
 
@@ -514,6 +530,8 @@ export function ComposerPage() {
           onSetDate={setTaskDate}
           onSetDeadline={setTaskDeadline}
           onSetPriority={setTaskPriority}
+          onSetDateString={setTaskDateString}
+          datesWithTasks={datesWithTasks}
         />
       )}
     </Shell>

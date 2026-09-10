@@ -406,6 +406,25 @@
   --border: rgb(224, 224, 224);
   --muted: rgb(246, 246, 246);
   --muted-foreground: rgb(110, 110, 110);
+  /*
+   * `--card` and `--popover` are re-pointed alongside `--background`, and
+   * leaving them out was a real defect rather than an omission of detail.
+   * Every overlay in Todo — the task detail dialog, the command menu, the
+   * sheets — paints `--card` or `--popover`, never `--background`, so with
+   * these unset the whole overlay layer kept the app's own palette while
+   * the page around it repainted. Measured live once the scope reached
+   * them at all: the detail dialog still came back `oklch(0.205 0 0)`.
+   *
+   * Todoist's own detail modal was then measured directly to settle what
+   * the value should be: background `rgb(31,31,31)` — the same ground as
+   * its content pane, not a lighter raised surface — radius 10px, no
+   * border, shadow `rgba(0,0,0,.16) 0 2px 8px`. So these follow
+   * `--background` rather than being a shade of their own.
+   */
+  --card: var(--background);
+  --card-foreground: var(--foreground);
+  --popover: var(--background);
+  --popover-foreground: var(--foreground);
   /* Matches the measured popover radius (10px) below — shadcn's Dialog and
      Popover are the closest existing primitives to Todoist's own scheduler
      popover, so this is the one shared `--radius` value worth re-pointing
@@ -487,6 +506,15 @@
   --td-popover-background: var(--muted);
   --td-popover-border: var(--border);
   --td-popover-radius: var(--radius);
+  /* SCHED-01's own two remaining measurements: the popover's fixed
+     card size and its two-layer shadow. Width is exact (a 250px card
+     never reflows); height is the calendar-only floor SCHED-01 itself
+     names ("grows if content grows") — set as `min-height` at the call
+     site, not a literal here, since a token can't express "this is a
+     floor, not a fixed value" on its own. */
+  --td-popover-width: 250px;
+  --td-popover-min-height: 525px;
+  --td-popover-shadow: 0 10px 20px 0 rgba(0, 0, 0, 0.19), 0 6px 6px 0 rgba(0, 0, 0, 0.23);
 
   /* Type scale (QA-20, row-and-detail.md §1) — the row's own font is
      smaller than the rest of this app's body copy, and the Composer's
@@ -500,6 +528,19 @@
   --td-composer-title-line-height: 23px;
 }
 
+/*
+ * BOTH forms, and the compound one is not redundant. `data-surface` is set on
+ * `documentElement`, which is the same element `.dark` is set on — so the
+ * descendant selector `.dark [data-surface="todo"]` cannot match it, and Todo
+ * silently fell back to the light block while the rest of the app stayed dark.
+ * Caught by measuring an overlay's background and reading white where the
+ * page around it was `rgb(31,31,31)`.
+ *
+ * The descendant form is kept alongside it so the scope still works if it is
+ * ever re-declared lower down — `PopoverContent` does exactly that today, to
+ * cover the window between a portal mounting and this attribute existing.
+ */
+.dark[data-surface="todo"],
 .dark [data-surface="todo"] {
   --background: rgb(31, 31, 31);
   --foreground: rgb(255, 255, 255);
