@@ -486,6 +486,13 @@
      shapes the rebuild") — an inline-block span, not a text colour, hence
      radius and padding tokens alongside the background. */
   --td-recognition-background: rgb(111, 38, 37);
+  /* A token rather than the literal white the rule below carried, per ADR
+     0069's own second rule: everything Todoist has and this palette has no
+     name for gets a `--td-*` of its own. Measured white on the recognised
+     chip, and deliberately NOT `--foreground` — that follows the theme,
+     while this has to stay legible on one fixed dark red whichever theme
+     is active. */
+  --td-recognition-foreground: rgb(255, 255, 255);
   --td-recognition-radius: 3px;
   --td-recognition-padding-inline: 4px;
 
@@ -515,6 +522,14 @@
   --td-popover-width: 250px;
   --td-popover-min-height: 525px;
   --td-popover-shadow: 0 10px 20px 0 rgba(0, 0, 0, 0.19), 0 6px 6px 0 rgba(0, 0, 0, 0.23);
+  /* The Task detail modal's own shadow, measured directly off Todoist's
+     (DET-14) and deliberately NOT `--td-popover-shadow` above: a popover
+     floats a small card near its trigger and earns a heavy two-layer
+     shadow, while the modal is a large surface centred over a dimmed page
+     and needs far less to lift it. Two surfaces, two measurements, two
+     tokens — the radius they happen to share is `--radius`, which both
+     already read. */
+  --td-modal-shadow: 0 2px 8px rgba(0, 0, 0, 0.16);
 
   /* Type scale (QA-20, row-and-detail.md §1) — the row's own font is
      smaller than the rest of this app's body copy, and the Composer's
@@ -796,6 +811,6 @@
     padding-inline: var(--td-recognition-padding-inline);
     border-radius: var(--td-recognition-radius);
     background-color: var(--td-recognition-background);
-    color: rgb(255, 255, 255);
+    color: var(--td-recognition-foreground);
   }
 }

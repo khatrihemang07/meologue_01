@@ -1052,7 +1052,7 @@ export function EntryStoreLayout() {
   // `#Shopping` resolution (`upsertPromotedTasks`, use-history.ts) needs
   // `resolveLabelIds` handed in as `useHistory`'s own fourth argument
   // below, the identical LabelStore round trip `handleAdd` (further down
-  // this file) already awaits for the add field's own `%label` tokens.
+  // this file) already awaits for the add field's own `@label` tokens.
   const { labels, addLabel, renameLabel, setLabelColour, removeLabel, resolveLabelIds } = useLabels(
     labelStore,
     deviceId,

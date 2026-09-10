@@ -136,10 +136,10 @@ export interface BackfillTasksOptions {
   /** Defaults to `@meologue/core`'s real `mintId` — overridable so a test can supply a deterministic sequence, the same reason `promoteBareCheckboxes` itself takes one as a parameter rather than calling it directly. */
   mintId?: () => string;
   /**
-   * `%label` name resolution (promote-tasks.ts's own `PromotedTask.labelNames`)
+   * `@label` name resolution (promote-tasks.ts's own `PromotedTask.labelNames`)
    * — defaults to "nothing resolves," the identical fallback
    * `useHistory`'s own default takes, on the same reasoning: old checkbox
-   * text overwhelmingly carries no `%label` at all (the sigil postdates
+   * text overwhelmingly carries no `@label` at all (the sigil postdates
    * every Entry this backfill is reaching for), and a caller with a real
    * LabelStore to resolve against passes the real thing.
    */

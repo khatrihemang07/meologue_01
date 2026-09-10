@@ -79,6 +79,27 @@ export interface TaskRowContentProps {
   onCommandMenuOpenChange: (open: boolean) => void;
 }
 
+/**
+ * The classes that reveal a row affordance on hover (ROW-04), named once
+ * rather than repeated at each of the six sites that need them.
+ *
+ * **Written out in full here, never assembled.** Tailwind scans source as
+ * raw text, so a class built by interpolation — `${variant}:opacity-0` —
+ * is never emitted at all and the name reaches the DOM with no rule behind
+ * it. That failed silently in this very file once, leaving every drag
+ * handle and action icon at full opacity on every row while the whole
+ * suite stayed green. A `const` holding the *complete, literal* strings is
+ * safe for exactly the reason the interpolated variant was not: the
+ * scanner can see them.
+ *
+ * The `pointer-fine` variant itself (index.css) is `(hover: hover)` OR
+ * `(pointer: fine)` — the second arm is what keeps these reachable in a
+ * Tauri window, which can report a coarse pointer for a trackpad and would
+ * otherwise hide every row action outright.
+ */
+const HOVER_REVEAL_CLASSES =
+  "pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:focus-visible:opacity-100";
+
 /** One resolved Label as a compact row badge — a dot in the Label's own colour plus its name, mirroring the detail view's identical dot-plus-name pairing (`task-detail-view.tsx`'s Labels attribute) at a size that fits this row's single metadata line rather than that view's own full-width picker row. */
 function LabelBadge({ label }: { label: Label }) {
   return (
@@ -287,7 +308,10 @@ export function TaskRowContent({
           // is the keyboard reorder target (arrow keys to move, Alt+arrows
           // to indent), so it has to become visible when tabbed to or the
           // whole reordering path is invisible to a keyboard reader.
-          className="flex size-6 shrink-0 touch-none cursor-grab items-center justify-center rounded text-muted-foreground pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:focus-visible:opacity-100 active:cursor-grabbing"
+          className={cn(
+            "flex size-6 shrink-0 touch-none cursor-grab items-center justify-center rounded text-muted-foreground active:cursor-grabbing",
+            HOVER_REVEAL_CLASSES,
+          )}
         >
           <GripVertical aria-hidden="true" className="size-4" />
         </button>
@@ -448,7 +472,7 @@ export function TaskRowContent({
           onClick={onCompleteForever}
           className={cn(
             "flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
-            "pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:focus-visible:opacity-100",
+            HOVER_REVEAL_CLASSES,
           )}
         >
           <CheckCheck aria-hidden="true" className="size-4" />
@@ -472,7 +496,7 @@ export function TaskRowContent({
         </select>
       )}
       {/* Edit/Date/Comment: hidden by default, revealed on a device this
-          file's own `hoverRevealClass` (above) judges capable of hover —
+          file's own `HOVER_REVEAL_CLASSES` (above) judges capable of hover —
           see that constant's own doc comment for why the condition
           widened beyond plain `(hover: hover)`. More stays unconditional:
           it is the one door onto Edit/Date/Comment's own actions (via the
@@ -494,7 +518,7 @@ export function TaskRowContent({
         onClick={() => setEditingTitle(true)}
         className={cn(
           "hidden pointer-fine:flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
-          "pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:focus-visible:opacity-100",
+          HOVER_REVEAL_CLASSES,
         )}
       >
         <Pencil aria-hidden="true" className="size-4" />
@@ -505,7 +529,7 @@ export function TaskRowContent({
         onClick={onOpenSchedule}
         className={cn(
           "hidden pointer-fine:flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
-          "pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:focus-visible:opacity-100",
+          HOVER_REVEAL_CLASSES,
         )}
       >
         <CalendarClock aria-hidden="true" className="size-4" />
@@ -516,7 +540,7 @@ export function TaskRowContent({
         onClick={() => detailActions.onOpenDetail(task)}
         className={cn(
           "hidden pointer-fine:flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
-          "pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:focus-visible:opacity-100",
+          HOVER_REVEAL_CLASSES,
         )}
       >
         <MessageSquare aria-hidden="true" className="size-4" />
@@ -533,7 +557,8 @@ export function TaskRowContent({
             aria-label={`More actions for "${task.content}"`}
             className={cn(
               "flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
-              "pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:focus-visible:opacity-100 aria-expanded:opacity-100",
+              HOVER_REVEAL_CLASSES,
+              "aria-expanded:opacity-100",
             )}
           >
             <MoreHorizontal aria-hidden="true" className="size-4" />

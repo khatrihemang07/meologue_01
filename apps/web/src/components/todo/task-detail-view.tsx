@@ -969,7 +969,7 @@ export function TaskDetailView(props: TaskDetailViewProps) {
             // against a background identical to the page behind it reads as
             // a seam rather than an edge, which is presumably why Todoist
             // leans on the shadow alone to lift it.
-            "fixed z-50 flex flex-col overflow-hidden bg-popover text-popover-foreground shadow-[0_2px_8px_rgba(0,0,0,0.16)] outline-hidden duration-150",
+            "fixed z-50 flex flex-col overflow-hidden bg-popover text-popover-foreground shadow-[var(--td-modal-shadow)] outline-hidden duration-150",
             wide
               ? // DET-14: measured directly against the live Todoist modal —
                 // radius 10px, not Tailwind's own 14px `rounded-xl` this
@@ -980,7 +980,7 @@ export function TaskDetailView(props: TaskDetailViewProps) {
                 // which is what made the two columns feel cramped where
                 // Todoist's breathe. Both stay clamped so a smaller window
                 // still gets a modal that fits inside it.
-                "top-1/2 left-1/2 h-[min(48.25rem,85vh)] w-[min(54rem,calc(100%-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-[10px] data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95"
+                "top-1/2 left-1/2 h-[min(48.25rem,85vh)] w-[min(54rem,calc(100%-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-lg data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95"
               : "inset-x-0 bottom-0 max-h-[85vh] rounded-t-xl data-open:animate-in data-open:slide-in-from-bottom data-closed:animate-out data-closed:slide-out-to-bottom",
           )}
           style={wide ? undefined : { paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))" }}

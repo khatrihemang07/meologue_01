@@ -30,7 +30,7 @@ export interface UseLabelsResult {
    */
   removeLabel: (id: string) => void;
   /**
-   * Turns issue #170's quick-add parser's `labelNames` (a Task's `%label`
+   * Turns issue #170's quick-add parser's `labelNames` (a Task's `@label`
    * tokens, resolved to plain strings — see packages/core/src/quick-add/
    * types.ts's own doc comment on why the parser itself never resolves a
    * name to an id: it carries no LabelStore) into the `labelIds` a Task
@@ -52,7 +52,7 @@ export interface UseLabelsResult {
    * Returns ids in `names`' own order, de-duplicated — a Task's
    * `labelIds` is an ordered array (../../packages/core/src/task-types.ts's
    * own doc comment on why: "the order Labels were added in" is preserved
-   * for free), and typing the same `%label` twice in one line should not
+   * for free), and typing the same `@label` twice in one line should not
    * duplicate it in that order.
    */
   resolveLabelIds: (names: string[]) => Promise<string[]>;
@@ -154,7 +154,7 @@ export function useLabels(labelStore: LabelStore, deviceId: string): UseLabelsRe
       return [];
     }
     // Read fresh off the query cache rather than the `labels` closed over
-    // above: two `%label` tokens resolved back-to-back in the same call
+    // above: two `@label` tokens resolved back-to-back in the same call
     // (this function's own loop below) must see a Label the first one just
     // minted, or the second would create a duplicate instead of reusing
     // it — `labels` from the render that triggered this call is a snapshot

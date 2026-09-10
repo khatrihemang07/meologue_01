@@ -137,7 +137,7 @@ export interface QuickAddTaskFields {
   priority: number;
   /** `../../packages/core/src/task-types.ts`'s `Task.dateString` — the canonical recurrence phrase (see `RECURRENCE_WORD_TO_PHRASE` above), or `null` for a Task that doesn't repeat. */
   dateString: string | null;
-  /** `%label` names, not yet resolved to ids — use-labels.ts's `resolveLabelIds` is the async second half of turning these into `Task.labelIds`, which is why this function itself stays synchronous. */
+  /** `@label` names, not yet resolved to ids — use-labels.ts's `resolveLabelIds` is the async second half of turning these into `Task.labelIds`, which is why this function itself stays synchronous. */
   labelNames: string[];
 }
 

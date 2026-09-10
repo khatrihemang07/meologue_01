@@ -172,7 +172,7 @@ export type QuickAddHighlightState = "resolved" | "pending" | "unresolved";
  * `label` is deliberately NOT in this set even though it shares the
  * `#`/`%` sigil shape with `project`/`section`: `use-labels.ts`'s
  * `resolveLabelIds` is a real find-or-create door onto a live Label, so a
- * completed `%label` token always resolves to something real by the time
+ * completed `@label` token always resolves to something real by the time
  * Add is pressed — it only ever reads `"pending"` while the caret is
  * still inside it, exactly like every other supported kind.
  */

@@ -621,7 +621,7 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   };
 
   // The add field's own parse (add-task-form.tsx, quick-add-task.ts)
-  // resolves everything except `labelIds` — a `%label` name needs a
+  // resolves everything except `labelIds` — a `@label` name needs a
   // LabelStore round trip (use-labels.ts's `resolveLabelIds`) this
   // function is what awaits before a Task literal can be built at all.
   // `fields.date` overrides `captureDate` only when the reader actually
@@ -928,14 +928,25 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
             setConfirmingId(null);
           }
         }}
-        title="Delete this Task?"
+        /*
+         * Todoist's own captured wording (quick-add.md § "Destructive
+         * confirmation wording"), matching the Project and Label dialogs
+         * this branch already aligned.
+         *
+         * It is worth being clear about what that costs, because the copy
+         * this replaces was not worse by accident. It said the row "stays
+         * gone on every Device, and there is no Undo (unlike completing,
+         * which you can always reverse)" — two things Todoist never has to
+         * say and this app arguably does: that deletion propagates through
+         * Sync, and that it is the one destructive act here with no undo,
+         * where completion always has one. Parity was the instruction, so
+         * parity wins; the loss is recorded in the ledger rather than
+         * quietly absorbed, so it can be reversed on purpose if the
+         * clearer copy turns out to matter more than the match.
+         */
+        title="Delete task?"
         description={
-          confirmingTask && (
-            <>
-              Deleting "{confirmingTask.content}" is permanent — the row stays gone on every Device,
-              and there is no Undo (unlike completing, which you can always reverse).
-            </>
-          )
+          confirmingTask && <>The {confirmingTask.content} task will be permanently deleted.</>
         }
         confirmLabel="Delete"
         onConfirm={() => {

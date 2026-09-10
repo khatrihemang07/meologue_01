@@ -509,7 +509,7 @@ describe("TodoPage", () => {
 
     // handleAdd (todo-page.tsx) awaits resolveLabelIds before calling
     // addTask — issue #170's own async label-resolution step, invisible
-    // here since "call mum" carries no `%label` token to resolve, but
+    // here since "call mum" carries no `@label` token to resolve, but
     // still a real microtask this assertion has to wait past.
     await waitFor(() =>
       expect(addTask).toHaveBeenCalledWith(

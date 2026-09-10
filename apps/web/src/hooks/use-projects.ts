@@ -356,7 +356,7 @@ export function useProjects(
     // hand: two Sections added back-to-back (a reader typing "Add
     // Section" twice quickly) must each see the other's own orderKey, the
     // same "read fresh off the query cache" reasoning use-labels.ts's
-    // `resolveLabelIds` gives for the identical race with a `%label`
+    // `resolveLabelIds` gives for the identical race with a `@label`
     // token typed twice in one line.
     const current =
       queryClient.getQueryData<Section[]>(sectionsQueryKey(projectId)) ??

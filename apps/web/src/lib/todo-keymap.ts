@@ -285,7 +285,13 @@ export function chordFor(event: {
   ctrlKey: boolean;
   shiftKey: boolean;
 }): string {
-  const key = event.key.length === 1 ? event.key.toLowerCase() : event.key.toLowerCase();
+  // Lower-cased unconditionally. This carried a ternary whose two branches
+  // were byte-identical — presumably a half-finished thought about treating
+  // single characters differently from named keys like "Escape". They do not
+  // need different treatment: `toLowerCase()` leaves a named key alone as
+  // far as chord matching is concerned, because every chord in the table
+  // spells those keys in lower case too.
+  const key = event.key.toLowerCase();
   const mod = event.metaKey || event.ctrlKey;
   const shift = event.shiftKey && !BAKED_SHIFT_KEYS.has(event.key);
   return `${mod ? "mod+" : ""}${shift ? "shift+" : ""}${key}`;

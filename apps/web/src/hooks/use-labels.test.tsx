@@ -149,7 +149,7 @@ describe("useLabels", () => {
     expect(ids).toHaveLength(1);
   });
 
-  it("a second %label resolved in the same call reuses the Label the first one just minted", async () => {
+  it("a second @label resolved in the same call reuses the Label the first one just minted", async () => {
     // The regression this guards: reading `labels` from the render that
     // triggered the call (a stale snapshot) instead of the query cache
     // fresh would create "Work" twice here instead of once.

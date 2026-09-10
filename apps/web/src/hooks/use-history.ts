@@ -222,7 +222,7 @@ export function useHistory(
   deviceId: string,
   /**
    * `use-labels.ts`'s own `resolveLabelIds` (issue #170) — Promotion's
-   * `#Shopping` needs the identical `%label`-name-to-id round trip
+   * `#Shopping` needs the identical `@label`-name-to-id round trip
    * `todo-page.tsx`'s own `handleAdd` already awaits for the add field,
    * and this hook has no LabelStore of its own to do that resolution with
    * directly. Defaulted to "no labels resolve to anything" rather than
