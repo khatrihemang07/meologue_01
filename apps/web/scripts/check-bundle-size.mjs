@@ -195,6 +195,21 @@ const CHUNK_BUDGETS = {
     ceilingBytes: 17_200,
     baselineBytes: 13_176,
   },
+  // Not a route — `TodoSidebar` (components/todo/todo-sidebar.tsx), lazy
+  // from chat-shell-layout.tsx (issue #223, ADR 0070). It has to be lazy
+  // for the reason that file's own comment gives: the layout renders on
+  // every route including `/`, so a static import would drag the Entry
+  // store onto the one path App.tsx's cold-start boundary exists to keep
+  // clear, for a reader who may never open Todo at all. Measured 37,838
+  // bytes gzip (own chunk + 7 shared) immediately after landing; the
+  // ceiling carries roughly the same ~30% headroom the route budgets
+  // below do, which is what leaves room for the Projects tree to grow
+  // real per-Project counts and controls (#229) without a budget edit
+  // being the first thing that ticket has to do.
+  "src/components/todo/todo-sidebar.tsx": {
+    ceilingBytes: 49_000,
+    baselineBytes: 37_838,
+  },
   // ComposerPage carries ProseMirror plus the markdown-blocks/WYSIWYG
   // composer (issues #148-#166) — much the largest route in the app, and
   // expected to stay that way. Measured 128,032 bytes gzip across its own
