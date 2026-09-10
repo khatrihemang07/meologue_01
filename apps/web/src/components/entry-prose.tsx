@@ -9,14 +9,22 @@
  * Issue #148 put this seam here for exactly this reason, before there was
  * anything on the other side of it to diverge into.
  *
- * `parseEntryMarkdown` (inline-markdown.ts) is the only thing that changed:
- * an Entry's body can now contain a bullet list, an ordered list, and a
+ * `parseEntryMarkdown` (inline-markdown.ts) is most of what changed: an
+ * Entry's body can now contain a bullet list, an ordered list, and a
  * task-list checkbox, on top of everything `parseInlineMarkdown` already
- * recognised. This file turns that block tree into React, reusing
- * `inlineProse`'s own `renderNodes` for every stretch of inline content —
- * marks, References, Search highlighting all behave identically whether
- * they sit in a list item or plain prose, because it is the same function
- * either way, not a second copy that could drift from it.
+ * recognised, and — since ADR 0069/issue #234 — a bare `\n` is a block
+ * break and `\` immediately followed by `\n` is a soft break within one.
+ * `parseEntryMarkdown` is also `entryMarkdownToDocument`'s (entry-document.ts,
+ * the Composer's own load path) reader — the two used to disagree, through
+ * a display-only sibling this file alone called, but that parallel parser
+ * is gone (ADR 0069's own Decision, amended): every reader of a stored
+ * body goes through this one function now, so History and the Composer
+ * never show two different shapes for the same body. This file turns that
+ * block tree into React,
+ * reusing `inlineProse`'s own `renderNodes` for every stretch of inline
+ * content — marks, References, Search highlighting all behave identically
+ * whether they sit in a list item or plain prose, because it is the same
+ * function either way, not a second copy that could drift from it.
  *
  * No wrapper element of its own, same as `inlineProse`: this returns a
  * `Fragment` of sibling block elements (a `<p>` per prose run, a `<ul>`/
@@ -32,24 +40,37 @@ import { entryBlocksToText, parseEntryMarkdown, referencedTaskOf } from "@/lib/i
 import { cn } from "@/lib/utils";
 
 /**
- * A tap on a rendered checkbox (issue #153) — `markerFrom`/`markerTo` are
- * handed straight through from the `EntryTaskMarker` the item carries, so
- * the caller (entry-row.tsx's `entryBodyContent`) can splice the source
- * string (`toggleTaskAt`, toggle-task.ts) with no re-parse of its own.
- * Optional everywhere it's threaded below: `undefined` is what keeps a
- * checkbox disabled rather than merely unwired — see `renderListItem`'s
- * own comment for which callers pass one and which deliberately don't.
+ * A *bare* checkbox — `- [ ]`/`- [x]` with no `[[task:id|label]]` mark
+ * behind it — is rendered permanently disabled, and has been since issue
+ * #231 (ADR 0074). It used to be clickable (issue #153) and ticking it
+ * spliced the marker characters directly into the Entry's body
+ * (`toggleTaskAt`, toggle-task.ts) — ADR 0043's "a checkbox is clickable,
+ * and ticking it splices the stored string." ADR 0074 retired that: Todo
+ * is now the only place completion is handled, so a checkbox that reaches
+ * a Task opens it there instead (`TaskReferenceItem`, entry-row.tsx,
+ * below `referencedTaskOf`'s branch in `renderListItem`) rather than
+ * ticking in place.
  *
- * `toggleTaskAt` retires for a *referenced* checkbox line (issue #173,
- * ADR 0048's "ticking writes the Task") — this handler is never invoked
- * for one; see `renderListItem`'s own comment for where that branch
- * happens. A bare checkbox with no reference behind it keeps working
- * through this handler exactly as it did before this ticket, on purpose:
- * issue #174's backfill turns an existing bare checkbox into a reference
- * eventually, not on this ticket's own timeline, so this code must not
- * assume every checkbox it ever sees already has a Task behind it.
+ * A *bare* checkbox specifically has no Task to open, by construction —
+ * ADR 0053 made every checkbox a Task, but the association is recorded
+ * nowhere except the `[[task:id|label]]` mark itself (`Task`'s own type,
+ * packages/core/src/task-types.ts, carries no back-reference to the Entry
+ * it came from). A checkbox that hasn't been rewritten into that shape
+ * yet — Promotion (`promoteBareCheckboxes`) hasn't reached it, or issue
+ * #174's backfill hasn't finished this Device's one-time pass over old
+ * History — genuinely has no Task behind it yet, so there is nothing this
+ * renderer could open. Rather than invent a fallback (guessing a Task by
+ * matching text, the exact "out-of-band matching" ADR 0048's own
+ * Alternatives Considered section rejected for the identical reason),
+ * this stays read-only until Promotion or the backfill turns it into a
+ * reference — the same moment it becomes a live, clickable
+ * `TaskReferenceItem` on its very next render.
+ *
+ * This is therefore the same "no renderer, no interactivity" stance
+ * `defaultTaskReferenceItem` below already takes for an unresolved
+ * reference — a bare checkbox is just a reference that hasn't been minted
+ * yet.
  */
-type ToggleTaskHandler = (markerFrom: number, markerTo: number) => void;
 
 /**
  * What `renderListItem` hands a referenced checkbox line's own renderer
@@ -100,14 +121,22 @@ export type TaskReferenceRenderer = (props: TaskReferenceProps, key: string) => 
 
 /**
  * Vertical rhythm shared by every top-level block this file renders —
- * `<p>`, `<ul>`, `<ol>` alike. `first:mt-0` is what makes the overwhelming
- * common case (an Entry with no list at all, one `"prose"` block) render
- * with no margin of its own, identical to the single `<p>` this used to be
- * before this ticket; `mt-1` only shows up once there is more than one
- * sibling block to separate, whether that's two list-interrupted stretches
- * of prose or a list following one.
+ * `<p>`, `<ul>`, `<ol>` alike. Zero margin, on every block, not only the
+ * first (ADR 0069) — UpNote's own block separator is a bare `<div>` with no
+ * margin of its own (`docs/reference/upnote-editor-behaviour.md`, "The one
+ * fact that explains the reported defect"), so the gap between two blocks
+ * is exactly one line-height and nothing more: one Enter looks like one new
+ * line, the same as it would have looked inside a single `pre-wrap` `<p>`
+ * before `collectBlocks` (inline-markdown.ts) started splitting a body into
+ * real blocks at every bare `\n`. Before this ticket this was `"first:mt-0
+ * mt-1"` — `mt-1` was the extra gap a block boundary used to add, which is
+ * exactly the blank line ADR 0066 was written to stop and ADR 0069 removes
+ * for good; `"mt-0"` is written out explicitly rather than left to
+ * Tailwind's own preflight reset (which already zeroes `<p>`/`<ul>`/`<ol>`
+ * margins) so that zero is this file's own stated intent, not an
+ * accident of what the reset happens to do.
  */
-const BLOCK_SPACING = "first:mt-0 mt-1";
+const BLOCK_SPACING = "mt-0";
 
 /**
  * The disc → circle → square cascade for a NESTED bullet list, issue #162
@@ -177,7 +206,6 @@ function renderBlocks(
   query: string,
   refs: ReferenceRenderers,
   keyPrefix: string,
-  onToggleTask: ToggleTaskHandler | undefined,
   renderTaskReference: TaskReferenceRenderer,
   depth: number,
 ): ReactNode[] {
@@ -185,8 +213,19 @@ function renderBlocks(
     const key = `${keyPrefix}${index}`;
     switch (block.kind) {
       case "prose":
+        // No `whitespace-pre-wrap` of its own (ADR 0069's prefactor) — every
+        // caller of `entryProse` wraps it in an element that already sets
+        // that (`EntryBody`, entry-row.tsx; the bubble body, entry-bubble.tsx),
+        // and `white-space` is an inherited CSS property, so repeating it
+        // here would be the third, fully redundant copy this ticket exists
+        // to collapse away. Still needed somewhere in the ancestor chain,
+        // even now that a block boundary is a real element rather than a
+        // literal `\n`: a soft break (`walkEntryInline`'s "HardBreak" case,
+        // inline-markdown.ts) is still a literal `\n` character sitting
+        // inside this `<p>`'s own text, and multiple consecutive spaces are
+        // still exactly what the author typed.
         return (
-          <p key={key} className={cn("whitespace-pre-wrap", BLOCK_SPACING)}>
+          <p key={key} className={BLOCK_SPACING}>
             {renderNodes(block.children, query, refs, `${key}-`)}
           </p>
         );
@@ -203,7 +242,6 @@ function renderBlocks(
                 query,
                 refs,
                 `${key}-${itemIndex}`,
-                onToggleTask,
                 renderTaskReference,
                 listDepth,
               ),
@@ -225,7 +263,6 @@ function renderBlocks(
                 query,
                 refs,
                 `${key}-${itemIndex}`,
-                onToggleTask,
                 renderTaskReference,
                 listDepth,
               ),
@@ -264,11 +301,65 @@ const defaultTaskReferenceItem: TaskReferenceRenderer = ({ label, checked, conte
       className="mt-[0.2em] shrink-0 accent-current"
     />
     <div className="min-w-0 flex-1">
-      <p className={cn("whitespace-pre-wrap", BLOCK_SPACING)}>{label}</p>
+      {/* No `whitespace-pre-wrap` here either — see the "prose" case in
+          `renderBlocks` above for why an ancestor wrapper already owns it. */}
+      <p className={BLOCK_SPACING}>{label}</p>
       {content}
     </div>
   </li>
 );
+
+/**
+ * The empty PARENT item ADR 0071 names — a `list_item` whose only reason to
+ * exist is to hold a nested list one level deeper (`sinkFirstListItem`,
+ * composer-commands.ts, reached from Tab on a list's first item, the one
+ * case plain `sinkListItem` refuses). ADR 0071's own "Consequences" section
+ * left this half deliberately open: issue #233 did the Composer's own
+ * `.ProseMirror` rendering (index.css, near this file's own module
+ * comment), and named the read-only half — this function — as a known,
+ * temporary gap for a later ticket (issue #236) to close, so a Sent Entry
+ * built through that Tab press stopped showing a bullet beside an empty
+ * line the Composer itself never showed one beside.
+ *
+ * Detected structurally, the same way index.css's own selector is —
+ * "no prose, only a nested list" — but in TypeScript against `EntryBlockNode`
+ * rather than a CSS `:has()` chain, because this file already has the exact
+ * parsed shape in hand and a DOM selector would have nothing to match
+ * against (this file's own module comment: `entryProse` returns a bare
+ * `Fragment`, and `renderListItem`'s own output here has no wrapping `<div>`
+ * around an item's content the way `composer-editor.ts`'s NodeView does, so
+ * the two-`:has()` selector index.css needs for the identical shape would
+ * not even apply to this file's own markup).
+ *
+ * `item.content[0]` is checked, not `item.content` as a whole: `collectBlocks`
+ * (inline-markdown.ts) never pushes a `"prose"` block for a genuinely empty
+ * paragraph — confirmed directly against a real parse of the exact markdown
+ * `entryDocumentToMarkdown` (entry-document.ts) writes for a sunk-first-item
+ * (`"- \n  - alpha\n- bravo"`), not assumed — so an item with no text of its
+ * own has NO `"prose"` entry in `content` at all, and whatever block comes
+ * first is unconditionally what the parser found there. A `bulletList`/
+ * `orderedList` sitting first therefore means "this item's own words are
+ * empty," full stop; a `content` that is empty altogether (`[]`, a plain
+ * blank line pressed twice with no nested list following it — ADR 0071's own
+ * "an ORDINARY empty list item... still shows its marker") has no `[0]` to
+ * match this check at all, so it falls straight through to the normal,
+ * marker-bearing branch below, exactly matching ADR 0071's own
+ * `index.css` selector's scope.
+ *
+ * Task items are excluded up front (`item.task !== undefined` guard) purely
+ * because `sinkFirstListItem` only ever wraps a `bullet_list`/`ordered_list`
+ * item, never a checklist one — nothing observed needs this to cover a
+ * checkbox too, and `renderListItem`'s own checkbox branch already has a
+ * different, unrelated reason to render `list-none` (replacing the bullet
+ * with a real `<input>`, not hiding a wrapper's marker).
+ */
+function isMarkerlessParentItem(item: EntryListItem): boolean {
+  if (item.task !== undefined) {
+    return false;
+  }
+  const first = item.content[0];
+  return first !== undefined && (first.kind === "bulletList" || first.kind === "orderedList");
+}
 
 /**
  * One `<li>`. A task item drops the marker entirely — no bullet, no literal
@@ -278,22 +369,16 @@ const defaultTaskReferenceItem: TaskReferenceRenderer = ({ label, checked, conte
  * `list-none` and the negative left margin below undo — a task item earns
  * its own indicator instead of competing with a bullet for the same space.
  *
- * `onToggleTask === undefined` is what makes the checkbox disabled rather
- * than merely un-wired (issue #153) — `entryProse`'s own doc comment on
- * `ToggleTaskHandler` names the one caller that deliberately never passes
- * one: `entry-row.tsx`'s `EntryBody`, Reflection's Grounding disclosure,
- * which CONTEXT.md requires to stay a read-only view of what an Answer was
- * based on. A tickable box there would let editing a past Answer relied on
- * look possible, exactly the thing `EntryRowProps.actions`'s own comment
- * already refuses for Edit/Delete/Refer — this follows the same rule for
- * the same reason, just for a control embedded in the body instead of a
- * button beside the row.
- *
- * Toggling calls `onToggleTask` with the item's own `markerFrom`/
- * `markerTo` on `onChange` (not `onClick`): a checkbox `<input>` already
- * fires `onChange` for both a pointer click and a Space press while
- * focused, so this is keyboard-operable for free rather than needing a
- * second handler wired to satisfy that separately.
+ * Permanently `disabled` (issue #231, ADR 0074) — see this file's own
+ * module comment on why a bare checkbox has no Task to open and,
+ * therefore, nothing left for a click to do: it used to splice
+ * `[ ]`/`[x]` in place (`toggleTaskAt`, toggle-task.ts) and now does
+ * nothing at all rather than take over Todo's own job of completion.
+ * `entry-row.tsx`'s `EntryBody` (Reflection's Grounding disclosure) and
+ * History's own thread (`entry-bubble.tsx`) render this identically now —
+ * before this ticket only Grounding disabled it, which is the read-only
+ * rule `EntryRowProps.actions`'s own comment already states for
+ * Edit/Delete/Refer, applied here for the same reason.
  *
  * The accessible name is the item's own words (issue #153's own
  * requirement), not a generic "Checked"/"Unchecked" — `entryBlocksToText`
@@ -314,21 +399,17 @@ const defaultTaskReferenceItem: TaskReferenceRenderer = ({ label, checked, conte
  * when it finds one this function hands off to `renderTaskReference`
  * entirely instead, with the item's own checkbox marker as the cached
  * fallback `checked` and everything AFTER the reference's own line (a
- * nested list, most likely)
- * still rendered through the ordinary path below and passed through as
- * `content`. `toggleTaskAt`'s own splice retires for exactly this
- * branch — `onToggleTask` is never invoked for it, on purpose: ticking a
- * reference has to write the Task (ADR 0048), not re-splice the Entry's
- * own marker, and this file has no Task store to write to (this file's
- * own module comment). A caller that can write one supplies its own
- * `renderTaskReference` and wires ticking there instead.
+ * nested list, most likely) still rendered through the ordinary path below
+ * and passed through as `content`. A referenced line's own interactivity —
+ * ticking it, or opening its Task (ADR 0074) — is entirely
+ * `renderTaskReference`'s own business; this file has no Task store to act
+ * through (this file's own module comment) for either gesture.
  */
 function renderListItem(
   item: EntryListItem,
   query: string,
   refs: ReferenceRenderers,
   key: string,
-  onToggleTask: ToggleTaskHandler | undefined,
   renderTaskReference: TaskReferenceRenderer,
   depth: number,
 ): ReactNode {
@@ -340,7 +421,6 @@ function renderListItem(
         query,
         refs,
         `${key}-`,
-        onToggleTask,
         renderTaskReference,
         depth,
       );
@@ -357,27 +437,22 @@ function renderListItem(
       );
     }
   }
-  const content = renderBlocks(
-    item.content,
-    query,
-    refs,
-    `${key}-`,
-    onToggleTask,
-    renderTaskReference,
-    depth,
-  );
+  const content = renderBlocks(item.content, query, refs, `${key}-`, renderTaskReference, depth);
   if (item.task === undefined) {
-    return <li key={key}>{content}</li>;
+    return (
+      <li key={key} className={isMarkerlessParentItem(item) ? "list-none" : undefined}>
+        {content}
+      </li>
+    );
   }
-  const { checked, markerFrom, markerTo } = item.task;
+  const { checked } = item.task;
   const label = entryBlocksToText(item.content).trim() || (checked ? "Checked" : "Unchecked");
   return (
     <li key={key} className="-ml-5 flex list-none items-baseline gap-1.5">
       <input
         type="checkbox"
         checked={checked}
-        disabled={onToggleTask === undefined}
-        onChange={onToggleTask === undefined ? undefined : () => onToggleTask(markerFrom, markerTo)}
+        disabled
         aria-label={label}
         className="mt-[0.2em] shrink-0 accent-current"
       />
@@ -393,25 +468,18 @@ function renderListItem(
  * and anywhere else that renders an Entry's body with no Task store in
  * reach. `entry-row.tsx`'s `entryBodyContent` is the one caller that
  * supplies a live one.
+ *
+ * `parseEntryMarkdown` (inline-markdown.ts) — ADR 0069/issue #234's shared
+ * reader, so a bare `\n` in `body` renders as a block break and `\`
+ * immediately followed by `\n` as a soft break within one, the identical
+ * shape `entryMarkdownToDocument` (entry-document.ts, the Composer's own
+ * load path) builds a ProseMirror document from.
  */
 export function entryProse(
   body: string,
   query = "",
   refs: ReferenceRenderers = {},
-  onToggleTask?: ToggleTaskHandler,
   renderTaskReference: TaskReferenceRenderer = defaultTaskReferenceItem,
 ): ReactNode {
-  return (
-    <>
-      {renderBlocks(
-        parseEntryMarkdown(body),
-        query,
-        refs,
-        "",
-        onToggleTask,
-        renderTaskReference,
-        0,
-      )}
-    </>
-  );
+  return <>{renderBlocks(parseEntryMarkdown(body), query, refs, "", renderTaskReference, 0)}</>;
 }

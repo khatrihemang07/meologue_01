@@ -61,6 +61,38 @@ export function groupEntriesIntoDayFiles(entries: Entry[], offsetMinutes: number
   return { files, fileForEntry };
 }
 
+/**
+ * ADR 0069/issue #234's normalization boundary. Two spellings the Composer
+ * writes are Composer-internal, never meant to leak into a plain-text
+ * surface outside the app: a soft break's own GFM backslash hard break
+ * (`\` immediately followed by `\n`, `insertSoftBreak`/`walkEntryInline`'s
+ * own encoding, composer-commands.ts / inline-markdown.ts) and a
+ * Tab-inserted U+2003 EM SPACE (`insertEmSpace`, composer-commands.ts).
+ * `renderDayFile` (below) keeps a body's own newlines rather than
+ * reflowing it into one flattened line (this file's own module comment on
+ * why) — the day file is meant to read like the journal, not like a
+ * search-result snippet — so it cannot route through a block parser the
+ * way `entrySnippet` (entry-row.tsx) does; this is what a lower-level seam
+ * that only strips the two markers themselves, character by character,
+ * gives it instead. A `\` + `\n` becomes a bare `\n` (the visual line
+ * break survives, only the backslash goes); a ` ` becomes an ordinary
+ * space. Every other character, including a body's own genuine `\n\n`
+ * block break, passes through untouched.
+ *
+ * This is a best-effort, character-level guard, not a parse: it cannot
+ * distinguish a genuine soft break from the rare case of a body whose own
+ * typed text ends a line with an escaped literal backslash (serialized as
+ * `\\`, ADR-unrelated) immediately followed by a real block break — that
+ * one character sequence reads the same at this level as a soft break, and
+ * this function strips it the same way. Accepted rather than solved here:
+ * a correct disambiguation needs `parseEntryMarkdown`'s own parser
+ * (inline-markdown.ts), which this package does not, and should not,
+ * depend on (ADR 0043's own layering).
+ */
+export function normalizeBodyForPlainText(body: string): string {
+  return body.replace(/\\\n/g, "\n").replace(/ /g, " ");
+}
+
 function renderDayFile(
   date: string,
   offsetLabel: string,
@@ -71,7 +103,7 @@ function renderDayFile(
   for (const entry of dayEntries) {
     const { time } = toLocalParts(entry.createdAt, offsetMinutes);
     lines.push(`[${time}]`);
-    lines.push(entry.body);
+    lines.push(normalizeBodyForPlainText(entry.body));
     lines.push("");
   }
   return lines.join("\n");

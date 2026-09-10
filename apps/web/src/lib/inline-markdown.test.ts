@@ -626,8 +626,11 @@ describe("parseEntryMarkdown", () => {
   // of these has a block parser in stock CommonMark, and each one is
   // removed from `entryParser` rather than filtered after the fact — see
   // that parser's own comment. What survives should be exactly the
-  // characters typed, merged into ordinary prose runs the same way a plain
-  // paragraph would be.
+  // characters typed, read back as ordinary prose. Two of these bodies
+  // (the fenced code block, the Setext heading) contain a bare `\n` of
+  // their own, which ADR 0069 now reads as a block break the same as any
+  // other prose — `entryBlocksToText` still recovers every word, just not
+  // the exact whitespace, which is checked separately, further below.
   describe("structure that is not in the mark set — still the literal characters typed", () => {
     const blockLooking = [
       "# heading",
@@ -648,8 +651,11 @@ describe("parseEntryMarkdown", () => {
       }
     });
 
-    it("reconstructs the exact characters typed, not just their kind", () => {
+    it("reconstructs the exact characters typed, not just their kind, for bodies with no embedded newline of their own", () => {
       for (const body of blockLooking) {
+        if (body.includes("\n")) {
+          continue;
+        }
         expect(entryBlocksToText(parseEntryMarkdown(body))).toBe(body);
       }
     });
@@ -674,18 +680,19 @@ describe("parseEntryMarkdown", () => {
     });
 
     it("does not swallow indentation on a second paragraph inside a list item either", () => {
-      // Both lines merge into one prose run (collectBlocks' own comment:
-      // consecutive Paragraph siblings in one item are never split apart),
-      // so the blank line and the second line's own six-space indent both
-      // land in that one run's text, verbatim.
+      // A blank line is a block break (ADR 0069) even inside a list item:
+      // "item" and the six-space-indented second line become two separate
+      // `"prose"` blocks, not one merged run — and `pushProseRuns`'s own
+      // running `cursor` (`collectBlocks`) is what keeps the second block's
+      // leading six spaces from being swallowed the way a `Paragraph`
+      // node's own `.from` would otherwise swallow them.
       const [block] = parseEntryMarkdown("- item\n\n      six spaces before the second paragraph");
       if (block?.kind !== "bulletList") throw new Error("expected bulletList");
       expect(block.items[0]?.content).toEqual([
+        { kind: "prose", children: [{ kind: "text", text: "item" }] },
         {
           kind: "prose",
-          children: [
-            { kind: "text", text: "item\n\n      six spaces before the second paragraph" },
-          ],
+          children: [{ kind: "text", text: "      six spaces before the second paragraph" }],
         },
       ]);
     });
@@ -698,6 +705,108 @@ describe("parseEntryMarkdown", () => {
         { kind: "prose", children: [{ kind: "text", text: body }] },
       ]);
     });
+  });
+});
+
+// ADR 0069/issue #234: Enter splits a block, Shift+Enter is a soft break
+// encoded as a backslash hard break, and a bare `\n` is tolerated as a block
+// break forever (it is exactly what ADR 0066's model wrote into storage for
+// one Enter, and there is deliberately no migration for it). Both readers of
+// a stored body — `entryProse` (entry-prose.tsx) and `entryMarkdownToDocument`
+// (entry-document.ts, the Composer's own load path) — go through this same
+// function; there is no separate display-only parser any more (ADR 0069's
+// own Decision, amended by this ticket).
+describe("parseEntryMarkdown — block break / soft break splitting (ADR 0069)", () => {
+  it("splits outside a list on a bare \\n — one Enter, one block break", () => {
+    expect(parseEntryMarkdown("alpha\nbravo")).toEqual([
+      { kind: "prose", children: [{ kind: "text", text: "alpha" }] },
+      { kind: "prose", children: [{ kind: "text", text: "bravo" }] },
+    ]);
+  });
+
+  it("splits outside a list on \\n\\n exactly the same way, with no extra blank block", () => {
+    // CommonMark's own block parser already treats any blank-line run as
+    // ONE paragraph boundary, consuming it entirely as the gap between two
+    // `Paragraph` siblings — `collectBlocks` never merges them back
+    // together, so a genuine blank line renders identically to a single
+    // bare `\n`: the blank line these authors never asked for (ADR 0066's
+    // own defect) does not come back.
+    expect(parseEntryMarkdown("alpha\n\nbravo")).toEqual([
+      { kind: "prose", children: [{ kind: "text", text: "alpha" }] },
+      { kind: "prose", children: [{ kind: "text", text: "bravo" }] },
+    ]);
+  });
+
+  it("keeps a longer run of bare newlines to the same one block break", () => {
+    expect(parseEntryMarkdown("alpha\n\n\n\nbravo")).toEqual([
+      { kind: "prose", children: [{ kind: "text", text: "alpha" }] },
+      { kind: "prose", children: [{ kind: "text", text: "bravo" }] },
+    ]);
+  });
+
+  it("keeps `\\` + newline inside the SAME block, as a soft break, with the backslash gone", () => {
+    expect(parseEntryMarkdown("alpha\\\nbravo")).toEqual([
+      { kind: "prose", children: [{ kind: "text", text: "alpha\nbravo" }] },
+    ]);
+  });
+
+  it("keeps a soft break inside a list item, not splitting the item", () => {
+    expect(parseEntryMarkdown("- alpha\\\nbravo")).toEqual([
+      {
+        kind: "bulletList",
+        items: [
+          {
+            task: undefined,
+            content: [{ kind: "prose", children: [{ kind: "text", text: "alpha\nbravo" }] }],
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("mixes all three forms in one body — soft break, then a block break, then another", () => {
+    const body = "alpha\\\nbravo\ncharlie\n\ndelta";
+    expect(parseEntryMarkdown(body)).toEqual([
+      { kind: "prose", children: [{ kind: "text", text: "alpha\nbravo" }] },
+      { kind: "prose", children: [{ kind: "text", text: "charlie" }] },
+      { kind: "prose", children: [{ kind: "text", text: "delta" }] },
+    ]);
+  });
+
+  it("keeps a soft break's own \\n in search-flattened text, same as any other text character", () => {
+    // A soft break becomes a literal `\n` in the node stream (this file's
+    // own `walkEntryInline` comment on why — an ordinary text character,
+    // not a dedicated node kind), so it survives `entryBlocksToText`
+    // exactly the way any other character would, unlike the space
+    // `entryBlocksToText` inserts BETWEEN two separate blocks or list
+    // items, which is a join this function adds, not a character the
+    // parser produced.
+    expect(entryBlocksToText(parseEntryMarkdown("alpha\\\nbravo"))).toBe("alpha\nbravo");
+  });
+
+  it("splits a blank line inside a list item into two blocks, neither losing its own indentation", () => {
+    // A blank line is a block break (ADR 0069) even inside a list item —
+    // covered again here (see also the "does not swallow indentation on a
+    // second paragraph" case above) because it is the same property this
+    // whole describe block exists to pin down.
+    const [block] = parseEntryMarkdown("- item\n\n      six spaces before the second paragraph");
+    if (block?.kind !== "bulletList") throw new Error("expected bulletList");
+    expect(block.items[0]?.content).toEqual([
+      { kind: "prose", children: [{ kind: "text", text: "item" }] },
+      {
+        kind: "prose",
+        children: [{ kind: "text", text: "      six spaces before the second paragraph" }],
+      },
+    ]);
+  });
+
+  // A construct removed from the block-level mark set (ADR 0043) still
+  // falls through to ordinary paragraph text, subject to the identical
+  // block-break splitting any other prose is.
+  it("keeps every word across a block break for structure that isn't in the mark set, just not the exact whitespace", () => {
+    for (const body of ["```\nfenced code\n```", "Setext heading\n==="]) {
+      expect(entryBlocksToText(parseEntryMarkdown(body))).toBe(body.replace(/\n/g, " "));
+    }
   });
 });
 

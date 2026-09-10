@@ -190,13 +190,24 @@ export interface EntryBubbleProps {
    */
   highlighted?: boolean;
   /**
-   * Toggles one of this Entry's task checkboxes (issue #153). Takes the
-   * whole Entry, not just the marker offsets, matching `EntryRowActions`'
-   * callbacks above — history.tsx (via composer-page.tsx) needs `entry.id`
-   * and `entry.body` to splice and commit the edit, and this bubble is
-   * where both already live, so closing over them here rather than making
-   * every caller thread the marker offsets back up to an id and a body it
-   * would otherwise have to re-look-up.
+   * Whether this bubble sits in an interactive (read-write) surface —
+   * history.tsx's own thread, via composer-page.tsx — rather than a
+   * read-only one. Kept as `(entry, markerFrom, markerTo) => void` rather
+   * than a plain boolean because `history.tsx`'s own `onToggleTask` prop
+   * (unowned by this ticket) still declares and forwards that shape
+   * unchanged; this component now only ever reads whether it is
+   * `undefined`, never calls it.
+   *
+   * Used to also splice a tapped checkbox's marker directly into the
+   * Entry's body (issue #153, `toggleTaskAt`, toggle-task.ts) — retired by
+   * issue #231 (ADR 0074): Todo is now the only place completion happens,
+   * so a checkbox that reaches a Task opens it there instead
+   * (`onOpenTask` below), and a *bare* checkbox with no Task to open
+   * renders permanently disabled rather than ticking in place
+   * (entry-prose.tsx's own module comment has the full argument).
+   * `composer-page.tsx`'s own `handleToggleTask` is consequently a no-op
+   * now, kept only so this prop stays non-`undefined` for History's
+   * thread — see that function's own doc comment.
    *
    * Undefined by default, the same "no actions" shape `actions` above
    * already follows: Grounding never renders `EntryBubble` at all (it
@@ -209,10 +220,10 @@ export interface EntryBubbleProps {
   /**
    * Opens a referenced Task over the Composer (issue #181) — passed
    * straight through to `entryBodyContent`'s own `onOpenTask`, unwrapped:
-   * unlike `onToggleTask`, opening needs only the Task's own id, never
-   * this Entry's `id`/`body`, so there is nothing here to close over.
-   * Undefined by default, the same "no door, no affordance" shape
-   * `onToggleTask` above already follows.
+   * opening needs only the Task's own id, never this Entry's `id`/`body`,
+   * so there is nothing here to close over. Undefined by default, the
+   * same "no door, no affordance" shape `onToggleTask` above already
+   * follows.
    */
   onOpenTask?: (taskId: string) => void;
 }
@@ -285,10 +296,14 @@ export const EntryBubble = memo(function EntryBubble({
         A `<div>`, not a `<p>` (issue #152): `entryBodyContent` can now
         render a `<ul>`/`<ol>` alongside its own `<p>`s when the body holds
         a list, and a list cannot validly nest inside a `<p>`. The
-        `whitespace-pre-wrap` here is redundant with the one `entryProse`
-        already puts on each generated `<p>` — kept anyway so nothing about
-        this element's own behaviour depends on which of its children
-        happens to carry it.
+        `whitespace-pre-wrap` here is this surface's own single owner of it
+        (ADR 0069's prefactor) — `entryProse` no longer repeats it on each
+        generated `<p>`, `EntryBody` (entry-row.tsx) is Grounding's
+        equivalent owner for its own wrapper, and `white-space` inherits, so
+        every `<p>`/`<button>` underneath (a `"prose"` block, a referenced
+        Task's own label) still preserves multiple spaces and a soft
+        break's own literal `\n` (`inline-markdown.ts`'s `walkEntryInline`
+        "HardBreak" case) with nothing further to set.
       */}
       {/*
         The one thing text size scales (#128). `BubbleMeta` below, the day
@@ -303,15 +318,7 @@ export const EntryBubble = memo(function EntryBubble({
         data-slot="bubble-body"
         className="min-w-0 whitespace-pre-wrap text-[calc(0.875rem*var(--entry-text-scale,1))]"
       >
-        {entryBodyContent(
-          entry.body,
-          query,
-          onToggleTask === undefined
-            ? undefined
-            : (markerFrom, markerTo) => onToggleTask(entry, markerFrom, markerTo),
-          entry.id,
-          onOpenTask,
-        )}
+        {entryBodyContent(entry.body, query, onToggleTask !== undefined, entry.id, onOpenTask)}
       </div>
       <BubbleMeta
         createdAt={entry.createdAt}

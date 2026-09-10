@@ -12,7 +12,6 @@ import { useHistorySearch } from "@/hooks/use-history-search";
 import { commentsForTask } from "@/lib/comment-counts";
 import type { ComposerPromotionContext } from "@/lib/promote-tasks";
 import { useSyncEnabled } from "@/lib/settings";
-import { toggleTaskAt } from "@/lib/toggle-task";
 import { useEntryStore } from "@/pages/entry-store-layout";
 
 // A date Reference's own destination (issue #142): `?d=YYYY-MM-DD`, a query
@@ -70,7 +69,6 @@ export function ComposerPage() {
     pagination,
     sendEntry,
     search,
-    editEntry,
     commitEntryEdit,
     removeEntry,
     disabled,
@@ -223,12 +221,12 @@ export function ComposerPage() {
   // composer.tsx's own `editingEntry` doc comment for why.
   const [editingEntry, setEditingEntry] = useState<Entry | null>(null);
 
-  // `commitEntryEdit`, not `editEntry` (issue #173) — a genuine Composer
-  // edit-commit is where Promotion also has to fire (ADR 0048: a bare
-  // checkbox the reader just added while editing becomes a Task too, not
-  // only one Sent fresh), unlike `handleToggleTask` below, which stays on
-  // plain `editEntry` on purpose — see that function's own comment for why
-  // a tick must never risk minting a Task mid-click.
+  // `commitEntryEdit`, not plain `editEntry` (issue #173) — a genuine
+  // Composer edit-commit is where Promotion also has to fire (ADR 0048: a
+  // bare checkbox the reader just added while editing becomes a Task too,
+  // not only one Sent fresh). `handleToggleTask` below used to be the one
+  // caller that deliberately stayed on plain `editEntry` instead — see
+  // that function's own comment for why it no longer calls either at all.
   function handleCommitEdit(id: string, body: string, promotion: ComposerPromotionContext) {
     commitEntryEdit(id, body, promotion);
     setEditingEntry(null);
@@ -238,19 +236,28 @@ export function ComposerPage() {
     setEditingEntry(null);
   }
 
-  // Issue #153: a tapped checkbox. Splices only the marker characters
-  // (`toggleTaskAt`, toggle-task.ts) and commits through plain `editEntry`
-  // — ADR 0043's "a tick is an ordinary Entry edit," not a second write
-  // path — deliberately NOT `commitEntryEdit` (issue #173): that door also
-  // runs Promotion, and a tap on an EXISTING checkbox must never risk
-  // minting a Task mid-click the reader never asked to create (a bare
-  // checkbox with no Task behind it "keeps working exactly as it does
-  // today," this ticket's own brief). Reads `entry.body` fresh off the
-  // tap's own `entry` argument rather than looking it up in `entries`, so
-  // this is correct even if `entries` has moved on since the checkbox was
-  // rendered.
-  function handleToggleTask(entry: Entry, markerFrom: number, markerTo: number) {
-    editEntry(entry.id, toggleTaskAt(entry.body, markerFrom, markerTo));
+  // Issue #231 (ADR 0074): a checkbox in History no longer ticks by
+  // splicing the Entry's body — it used to (issue #153: `toggleTaskAt`,
+  // toggle-task.ts, committed through plain `editEntry`, ADR 0043's "a
+  // tick is an ordinary Entry edit"). Todo is now the single place
+  // completion happens: a *referenced* checkbox opens its Task instead
+  // (`openTaskOverlay` below, wired as History's own `onOpenTask`), and a
+  // *bare* checkbox — one Promotion or issue #174's backfill hasn't
+  // reached yet — has no Task to open at all, so entry-prose.tsx renders
+  // it permanently disabled rather than guessing one (see that file's own
+  // module comment for why no fallback was invented here).
+  //
+  // This function is consequently never actually called any more —
+  // `entry-prose.tsx`'s bare checkbox no longer wires an `onChange` to
+  // anything. It stays, deliberately non-`undefined`, only because
+  // `History`'s own `onToggleTask` prop (history.tsx) is also what
+  // `entry-bubble.tsx`/`entry-row.tsx` read (`onToggleTask !== undefined`)
+  // to decide whether a *referenced* checkbox's own tick is permitted —
+  // see `EntryBubble`'s own doc comment on `onToggleTask`. `toggleTaskAt`
+  // itself (toggle-task.ts) is dead code now — nothing in the app calls it
+  // — left in place per this ticket's own instruction.
+  function handleToggleTask() {
+    // Intentionally empty — see comment above.
   }
 
   // Issue #181: the Task detail overlay's own target — see `TASK_PARAM`'s

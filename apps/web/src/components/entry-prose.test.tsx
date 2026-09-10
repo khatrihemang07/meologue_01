@@ -16,20 +16,14 @@ function Harness({
   body,
   query,
   refs,
-  onToggleTask,
   renderTaskReference,
 }: {
   body: string;
   query?: string;
   refs?: ReferenceRenderers;
-  onToggleTask?: (markerFrom: number, markerTo: number) => void;
   renderTaskReference?: TaskReferenceRenderer;
 }): ReactNode {
-  return (
-    <div data-testid="prose">
-      {entryProse(body, query, refs, onToggleTask, renderTaskReference)}
-    </div>
-  );
+  return <div data-testid="prose">{entryProse(body, query, refs, renderTaskReference)}</div>;
 }
 
 describe("entryProse", () => {
@@ -79,6 +73,46 @@ describe("entryProse", () => {
       const nestedList = outerItems[0]?.querySelector("ul");
       expect(nestedList).not.toBeNull();
       expect(nestedList).toHaveTextContent("nested");
+    });
+
+    // ADR 0071's "empty parent item" — a `list_item` with no text of its
+    // own, whose only content is the nested list `sinkFirstListItem`
+    // (composer-commands.ts) built it to hold. Issue #233 rendered this
+    // markerless in the Composer (`.ProseMirror` rule, index.css); issue
+    // #236 is what closes the matching gap here, on the READ side. The
+    // exact markdown below is what `entryDocumentToMarkdown` (entry-
+    // document.ts) actually writes for a sunk first item — verified
+    // directly against that function's own `writeListItem`, not invented —
+    // rather than a shape this test merely assumes is equivalent.
+    it("renders an empty parent item markerless, with its nested list still visible", () => {
+      const { container } = render(<Harness body={"- \n  - alpha\n- bravo"} />);
+
+      const outerList = container.querySelector("ul");
+      expect(outerList).not.toBeNull();
+      const outerItems = outerList?.querySelectorAll(":scope > li") ?? [];
+      expect(outerItems).toHaveLength(2);
+      const [parentItem, bravoItem] = Array.from(outerItems);
+      expect(parentItem?.classList.contains("list-none")).toBe(true);
+      expect(parentItem?.querySelector("ul")).toHaveTextContent("alpha");
+      // The following sibling item is an ordinary one — untouched by the
+      // wrapper's own markerless rule.
+      expect(bravoItem?.classList.contains("list-none")).toBe(false);
+      expect(bravoItem).toHaveTextContent("bravo");
+    });
+
+    // ADR 0071 is explicit that this rule must not over-fire: a plain empty
+    // item a reader left blank by pressing Enter twice, with no nested list
+    // following it, keeps its ordinary marker.
+    it("still shows the marker on an ordinary empty item with no nested list", () => {
+      const { container } = render(<Harness body={"- one\n- \n- three"} />);
+
+      const list = container.querySelector("ul");
+      expect(list).not.toBeNull();
+      const items = list?.querySelectorAll(":scope > li") ?? [];
+      expect(items).toHaveLength(3);
+      for (const item of Array.from(items)) {
+        expect(item.classList.contains("list-none")).toBe(false);
+      }
     });
 
     // Issue #162: the read side's own disc/circle/square cascade —
@@ -179,75 +213,41 @@ describe("entryProse", () => {
         expect(screen.getByText("plain")).toBeInTheDocument();
       });
 
-      // Issue #153: with a handler wired up, the checkbox stops being
-      // merely a rendered state and becomes a live control.
-      it("enables the checkbox once a toggle handler is supplied", () => {
-        render(<Harness body="- [ ] call mum" onToggleTask={vi.fn()} />);
-
-        expect(screen.getByRole("checkbox")).not.toBeDisabled();
-      });
-
       // The accessible name is the item's own words (issue #153's own
       // accessibility requirement), not a generic "Checked"/"Unchecked" —
       // the checked/unchecked state is already carried by the checkbox
       // role's own native semantics.
       it("names the checkbox after the item's own text", () => {
-        render(<Harness body="- [ ] call mum" onToggleTask={vi.fn()} />);
+        render(<Harness body="- [ ] call mum" />);
 
         expect(screen.getByRole("checkbox", { name: "call mum" })).toBeInTheDocument();
       });
 
-      it("calls the toggle handler with the marker's own source offsets on click", () => {
-        const onToggleTask = vi.fn();
-        const body = "- [ ] call mum";
-        render(<Harness body={body} onToggleTask={onToggleTask} />);
-
-        fireEvent.click(screen.getByRole("checkbox"));
-
-        expect(onToggleTask).toHaveBeenCalledTimes(1);
-        const [markerFrom, markerTo] = onToggleTask.mock.calls[0] ?? [];
-        expect(body.slice(markerFrom, markerTo)).toBe("[ ]");
-      });
-
-      it("toggles the right item when several checkboxes share one body", () => {
-        const onToggleTask = vi.fn();
+      // Issue #231, ADR 0074: a bare checkbox used to become a live
+      // control once a caller wired a toggle handler (issue #153) and
+      // ticking it spliced the marker directly into the Entry's body. It
+      // is now permanently disabled, unconditionally — `entryProse` no
+      // longer accepts any handler for it at all, because a bare checkbox
+      // has no Task to open (ADR 0053 made every checkbox a Task, but the
+      // association lives only in the `[[task:id|label]]` mark a bare
+      // checkbox, by definition, doesn't have yet — see entry-prose.tsx's
+      // own module comment).
+      it("stays disabled and inert no matter how many checkboxes share one body", () => {
         const body = "- [ ] first\n- [ ] second\n- [ ] third";
-        render(<Harness body={body} onToggleTask={onToggleTask} />);
+        render(<Harness body={body} />);
+
+        const checkboxes = screen.getAllByRole("checkbox");
+        expect(checkboxes).toHaveLength(3);
+        for (const checkbox of checkboxes) {
+          expect(checkbox).toBeDisabled();
+        }
 
         fireEvent.click(screen.getByRole("checkbox", { name: "third" }));
 
-        const [markerFrom, markerTo] = onToggleTask.mock.calls[0] ?? [];
-        // The offset the third checkbox reports must land on its own
-        // marker, not the first or second item's.
-        expect(body.slice(markerFrom, markerTo)).toBe("[ ]");
-        expect(body.slice(0, markerFrom)).toBe("- [ ] first\n- [ ] second\n- ");
-      });
-
-      // A checkbox `<input>` fires `onChange` for a Space press while
-      // focused, same as a click — no separate keyboard handler needed for
-      // this to be keyboard-operable.
-      it("stays keyboard-operable — a Space press fires the same handler as a click", () => {
-        const onToggleTask = vi.fn();
-        render(<Harness body="- [ ] call mum" onToggleTask={onToggleTask} />);
-
-        const checkbox = screen.getByRole("checkbox");
-        checkbox.focus();
-        expect(checkbox).toHaveFocus();
-        fireEvent.keyDown(checkbox, { key: " ", code: "Space" });
-        fireEvent.click(checkbox);
-
-        expect(onToggleTask).toHaveBeenCalledTimes(1);
-      });
-
-      it("does not call anything when disabled (no handler wired)", () => {
-        render(<Harness body="- [ ] call mum" />);
-
-        fireEvent.click(screen.getByRole("checkbox"));
-
-        // Nothing to assert a call against — this just documents that a
-        // disabled checkbox has no handler at all, not one that silently
-        // no-ops.
-        expect(screen.getByRole("checkbox")).toBeDisabled();
+        // A click on a disabled checkbox never flips its own checked prop
+        // (jsdom's own native behaviour, not this component's), which is
+        // the DOM-level proof that nothing here is listening for one.
+        expect(screen.getByRole("checkbox", { name: "third" })).not.toBeChecked();
       });
 
       // Issue #163. jsdom applies no external stylesheet, so this cannot
@@ -306,34 +306,26 @@ describe("entryProse", () => {
       // this file has no store to resolve against at all, which is the
       // same state a Device that hasn't Synced the Task yet would see, so
       // `entryProse`'s own default renderer is a faithful stand-in for it.
-      it("stays disabled — toggleTaskAt's own handler is never invoked for a referenced line", () => {
-        const onToggleTask = vi.fn();
-        render(
-          <Harness
-            body={`- [ ] ${formatTaskReference(TASK_ID, "buy milk")}`}
-            onToggleTask={onToggleTask}
-          />,
-        );
+      it("stays disabled — the default renderer has no Task store to open one through", () => {
+        render(<Harness body={`- [ ] ${formatTaskReference(TASK_ID, "buy milk")}`} />);
 
         const checkbox = screen.getByRole("checkbox");
         expect(checkbox).toBeDisabled();
         fireEvent.click(checkbox);
-        expect(onToggleTask).not.toHaveBeenCalled();
+        expect(checkbox).not.toBeChecked();
       });
 
-      it("keeps working as a bare checkbox once a reference sits alongside other text on the same line", () => {
-        // Not Promotion's own shape — a reference plus trailing text on one
-        // line. `referencedTaskOf` (entry-prose.tsx) only recognises the
-        // reference when it is the item's *entire* content, so this falls
-        // back to the ordinary bare-checkbox branch instead of guessing.
-        const onToggleTask = vi.fn();
+      // Issue #231, ADR 0074: falling back to the bare-checkbox branch
+      // used to mean "still tickable, still splices the body." A bare
+      // checkbox is now permanently disabled instead (see this file's own
+      // describe block above), and this line falls back to exactly that
+      // branch — `referencedTaskOf` (entry-prose.tsx) only recognises the
+      // reference when it is the item's *entire* content.
+      it("falls back to the (now permanently disabled) bare checkbox once a reference sits alongside other text on the same line", () => {
         const body = `- [ ] ${formatTaskReference(TASK_ID, "buy milk")} plus more`;
-        render(<Harness body={body} onToggleTask={onToggleTask} />);
+        render(<Harness body={body} />);
 
-        const checkbox = screen.getByRole("checkbox");
-        expect(checkbox).not.toBeDisabled();
-        fireEvent.click(checkbox);
-        expect(onToggleTask).toHaveBeenCalledTimes(1);
+        expect(screen.getByRole("checkbox")).toBeDisabled();
       });
 
       it("still renders a nested list beneath a referenced line", () => {

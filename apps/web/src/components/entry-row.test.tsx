@@ -8,7 +8,7 @@ import * as entryDayModule from "@/lib/entry-day";
 import { formatTaskReference } from "@/lib/inline-markdown";
 import { entryReferenceQueryKey } from "@/lib/query-keys";
 import type { EntryStoreOutletContext } from "@/pages/entry-store-layout";
-import { EntryRow, entryBodyContent } from "./entry-row";
+import { EntryRow, entryBodyContent, entrySnippet } from "./entry-row";
 
 function entry(overrides: Partial<Entry>): Entry {
   return {
@@ -190,6 +190,31 @@ function renderTaskReferenceLine(
   );
 }
 
+// ADR 0069/issue #234's normalization boundary: a History snippet must
+// never leak a soft break's backslash or a Tab-inserted U+2003 em space.
+// `entrySnippet`'s own `.replace(/\s+/g, " ")` already existed before this
+// ticket (issue #144) and turns out to already cover both cases with no
+// code change needed — pinned down here so a future edit to that regex
+// cannot silently regress it: `walkEntryInline`'s own `"HardBreak"` case
+// (inline-markdown.ts) already turns a stored `\` + `\n` into a bare `\n`
+// character, with the backslash itself dropped before `entrySnippet` ever
+// sees it, and JavaScript's `\s` class already includes U+2003 (it falls
+// inside the built-in U+2000-U+200A whitespace range) alongside the
+// ordinary space Tab also produces.
+describe("entrySnippet", () => {
+  it("collapses a stored soft break to a plain space, with no backslash", () => {
+    expect(entrySnippet("alpha\\\nbravo")).toBe("alpha bravo");
+  });
+
+  it("collapses a Tab-inserted em space to a plain space", () => {
+    expect(entrySnippet("alpha bravo")).toBe("alpha bravo");
+  });
+
+  it("collapses a block break (a real paragraph split) to a plain space too", () => {
+    expect(entrySnippet("alpha\n\nbravo")).toBe("alpha bravo");
+  });
+});
+
 describe("EntryRow", () => {
   it("renders an Entry's body plain when no query is given", () => {
     render(<EntryRow entry={entry({ body: "a recurring task" })} syncEnabled={false} />);
@@ -201,9 +226,11 @@ describe("EntryRow", () => {
   // Issue #153: Grounding renders through EntryRow/EntryBody, and CONTEXT.md
   // requires it to stay a read-only view of what an Answer was based on — a
   // tickable checkbox there would let editing a past Answer relied on look
-  // possible. entry-row.tsx's own EntryBody never passes onToggleTask to
-  // entryBodyContent, which is what keeps this true; this is the
-  // regression test for that decision.
+  // possible. entry-row.tsx's own EntryBody never passes `interactive: true`
+  // to entryBodyContent, which is what keeps this true; this is the
+  // regression test for that decision. (Since issue #231/ADR 0074, a bare
+  // checkbox — the one this test renders — stays disabled everywhere,
+  // Grounding included; see the next test for that.)
   it("renders a task checkbox disabled — Grounding stays read-only", () => {
     render(<EntryRow entry={entry({ body: "- [ ] call mum" })} syncEnabled={false} />);
 

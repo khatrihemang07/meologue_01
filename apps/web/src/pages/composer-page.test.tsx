@@ -1080,13 +1080,15 @@ describe("ComposerPage", () => {
     });
   });
 
-  // Issue #153: the real, end-to-end wiring for a checkbox tap — History's
-  // rendered checkbox, into this page's own `handleToggleTask`, into the
-  // same `editEntry` an ordinary Composer edit commits through (ADR 0043's
-  // "a tick is an ordinary Entry edit"). `toggle-task.test.ts` and
-  // `entry-prose.test.tsx` already cover the splice and the rendering; this
-  // is the one place that proves a real tap ends up calling `editEntry`
-  // with the right, spliced body.
+  // Issue #153, retired by issue #231 (ADR 0074): a checkbox tap used to
+  // wire straight through — History's rendered checkbox, into this page's
+  // own `handleToggleTask`, into the same `editEntry` an ordinary Composer
+  // edit commits through (ADR 0043's "a tick is an ordinary Entry edit")
+  // — and `toggle-task.test.ts`/`entry-prose.test.tsx` covered the splice
+  // and the rendering. A *bare* checkbox (no `[[task:id|label]]` mark
+  // behind it) now has nothing to tick or open — see entry-prose.tsx's own
+  // module comment — so this proves the end-to-end path from a real tap
+  // through this page never reaches `editEntry` any more.
   describe("Tapping a checkbox", () => {
     const withTask: EntryStoreOutletContext["entries"] = [
       {
@@ -1101,14 +1103,16 @@ describe("ComposerPage", () => {
       },
     ];
 
-    it("commits the toggle through editEntry, spliced, leaving the rest of the body untouched", () => {
+    it("renders a bare checkbox disabled, and a tap never calls editEntry", () => {
       const editEntry = vi.fn();
       renderComposerPage({ ...readyContext, entries: withTask, editEntry });
 
-      fireEvent.click(screen.getByRole("checkbox", { name: "call mum" }));
+      const checkbox = screen.getByRole("checkbox", { name: "call mum" });
+      expect(checkbox).toBeDisabled();
+      fireEvent.click(checkbox);
 
-      expect(editEntry).toHaveBeenCalledTimes(1);
-      expect(editEntry).toHaveBeenCalledWith("1", "- [x] call mum\n- [ ] buy milk");
+      expect(editEntry).not.toHaveBeenCalled();
+      expect(checkbox).not.toBeChecked();
     });
 
     it("reading the page without tapping calls editEntry not at all", () => {

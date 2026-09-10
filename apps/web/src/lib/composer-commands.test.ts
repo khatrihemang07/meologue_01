@@ -16,10 +16,17 @@
  * implementation detail of `blocksToPM`/`inlineNodesToPM`, not something
  * this file should have to keep in sync with by hand.
  */
+import { chainCommands } from "prosemirror-commands";
 import { history, redo, undo } from "prosemirror-history";
 import type { Node as PMNode } from "prosemirror-model";
 import type { Transaction } from "prosemirror-state";
-import { EditorState, NodeSelection, TextSelection } from "prosemirror-state";
+import {
+  AllSelection,
+  EditorState,
+  NodeSelection,
+  Selection,
+  TextSelection,
+} from "prosemirror-state";
 import { describe, expect, it } from "vitest";
 import {
   bold,
@@ -28,11 +35,14 @@ import {
   code,
   composerCommands,
   indent,
+  insertEmSpace,
   italic,
   orderedList,
   outdent,
+  outdentEmSpaceOrExit,
   redoCommand,
   reference,
+  sinkFirstListItem,
   softBreak,
   splitListItemUnchecked,
   strikethrough,
@@ -62,6 +72,86 @@ function stateAt(
     selection: TextSelection.create(doc, selection.from, selection.to ?? selection.from),
     plugins: withHistory ? [history()] : [],
   });
+}
+
+/**
+ * An `EditorState` whose selection spans the ENTIRE document — the
+ * multi-block tests below (issue #235) all start from the same "Cmd+A,
+ * then run the chord" shape the gap-sweep docs themselves use. Built with
+ * `Selection.atStart`/`Selection.atEnd` rather than `TextSelection.create(doc,
+ * 0, doc.content.size)`: a raw `0`/`content.size` pair is only valid when
+ * the doc's OUTERMOST content is itself a textblock, and every multi-block
+ * fixture below wraps its content in `bullet_list`/`ordered_list` nodes at
+ * some point in its own round trip — `Selection.atStart`/`atEnd` are
+ * `prosemirror-state`'s own documented way to find the nearest valid
+ * selectable position instead, regardless of what sits at the top.
+ */
+function selectAllState(doc: PMNode): EditorState {
+  const from = Selection.atStart(doc).from;
+  const to = Selection.atEnd(doc).to;
+  return EditorState.create({
+    schema: entrySchema,
+    doc,
+    selection: TextSelection.create(doc, from, to),
+  });
+}
+
+/**
+ * An `EditorState` whose selection is a REAL `AllSelection` — what a
+ * genuine Cmd+A/Ctrl+A keypress actually produces in the live Composer
+ * (`prosemirror-commands`' own `selectAll`), NOT a `TextSelection` that
+ * merely happens to span the whole document the way `selectAllState` above
+ * builds. The distinction is load-bearing, found live against a real
+ * browser, not assumed: an `AllSelection`'s own `$from`/`$to` resolve to
+ * `doc.resolve(0)`/`doc.resolve(doc.content.size)` — DEPTH 0, genuinely
+ * outside any textblock or list structurally — which broke this module's
+ * OWN single-item ancestor-walking checks (`hasListAncestor`,
+ * `nearestListItem`) in a way `selectAllState`'s `TextSelection` never
+ * could, since THAT selection's `$from` still resolves to a normal,
+ * depth-appropriate position inside the first textblock. Every fixture
+ * below that specifically exercises the `AllSelection` branches
+ * (`selectionSpansMultipleBlocks`'s own `instanceof AllSelection` check,
+ * and `bulletListActive`/`orderedListActive`/`checklistActive`'s matching
+ * guards) uses THIS helper, not `selectAllState` — the two are not
+ * interchangeable, and a fixture that silently used the wrong one would
+ * pass without ever having tested the real gesture at all.
+ */
+function realAllSelectionState(doc: PMNode): EditorState {
+  return EditorState.create({
+    schema: entrySchema,
+    doc,
+    selection: new AllSelection(doc),
+  });
+}
+
+/** Node-type constants for the multi-block fixtures below (issue #235) — a non-null accessor, matching composer-commands.ts's own `requireNodeType` pattern, rather than the bare `entrySchema.nodes.x?.create(...)` optional-chaining `emptyCheckedItemDoc` (above) uses: these are reused across many fixtures below, so one throw-on-typo lookup each beats re-deciding how to handle `undefined` at every call site. */
+function requireNodeType(name: string) {
+  const type = entrySchema.nodes[name];
+  if (type === undefined) {
+    throw new Error(`entrySchema has no "${name}" node type`);
+  }
+  return type;
+}
+
+const bulletListNodeType = requireNodeType("bullet_list");
+const orderedListNodeType = requireNodeType("ordered_list");
+const listItemNodeType = requireNodeType("list_item");
+const paragraphNodeType = requireNodeType("paragraph");
+const taskReferenceNodeType = requireNodeType("task_reference");
+
+/** A plain top-level `paragraph` node, the schema-level building block every "N plain blocks" fixture below is made of — built directly rather than through `entryMarkdownToDocument`, since typing Enter in the live Composer today is a soft break everywhere (issue #234, not yet shipped — ADR 0069's own Status section), so N separate top-level blocks currently have no Markdown source string this helper could round-trip through either. */
+function paragraph(text: string): PMNode {
+  return paragraphNodeType.create(null, text.length > 0 ? [entrySchema.text(text)] : []);
+}
+
+/** A `list_item` node — `checked: null` for a plain bullet, `true`/`false` for a task — used by the nested-list and checklist-safety fixtures below to build shapes `entryMarkdownToDocument` cannot produce directly (a multi-level nested list, or a `task_reference`-bearing item with no real Task behind it in this test). */
+function listItem(checked: boolean | null, ...content: PMNode[]): PMNode {
+  return listItemNodeType.create({ checked }, content);
+}
+
+/** A `task_reference` atom — Promotion's own output shape (ADR 0048) — standing in for a real Task without needing a live `EntryStore`; only its NODE TYPE matters to `multiBlockChecklistRun`'s own safety guard, never its actual attrs. */
+function taskReference(taskId: string, label: string, checked: boolean): PMNode {
+  return taskReferenceNodeType.create({ taskId, label, checked });
 }
 
 /** The `[from, to)` range of the first text run carrying `markName` — `strong`/`em`/`code` never appear more than once per test fixture below. */
@@ -387,14 +477,23 @@ describe("indent", () => {
     );
   });
 
-  it("is enabled on a list item with a preceding sibling, disabled on the first item", () => {
+  it("is enabled both on a list item with a preceding sibling AND on the first item — issue #233 adds sinkFirstListItem as indent.run's own second fallback", () => {
     const doc = docFor("- first\n- second");
     const firstParaPos = caretInFirstParagraph(doc);
-    expect(indent.isEnabled(stateAt(doc, { from: firstParaPos }))).toBe(false);
+    // The first item has no PRECEDING sibling for plain sinkListItem to
+    // sink it under, but it DOES have a following one for
+    // sinkFirstListItem to wrap into an empty parent — see that command's
+    // own describe block below for the resulting shape.
+    expect(indent.isEnabled(stateAt(doc, { from: firstParaPos }))).toBe(true);
 
-    // The second item's own paragraph, not the first — only an item with a
-    // PRECEDING sibling can be sunk under it.
+    // The second item's own paragraph — plain sinkListItem already
+    // handles this case; sinkFirstListItem never even runs for it.
     expect(indent.isEnabled(stateAt(doc, { from: caretInNthParagraph(doc, 2) }))).toBe(true);
+  });
+
+  it("is disabled outside any list — neither sinkListItem nor sinkFirstListItem has anything to sink", () => {
+    const doc = docFor("just text");
+    expect(indent.isEnabled(stateAt(doc, { from: caretInFirstParagraph(doc) }))).toBe(false);
   });
 
   it("sinks the item under its preceding sibling on run", () => {
@@ -407,6 +506,37 @@ describe("indent", () => {
     // Sinking "second" under "first" creates a nested bullet_list inside
     // "first"'s own list_item — two bullet_lists total where there was one.
     expect(countNodesOfType(next.doc, "bullet_list")).toBe(2);
+  });
+
+  it("wraps a first item with no preceding sibling under a new empty markerless parent on run — sinkFirstListItem's own fallback", () => {
+    const doc = docFor("- first\n- second");
+    const state = stateAt(doc, { from: caretInFirstParagraph(doc) });
+
+    const { applied, next } = runCommand(indent, state);
+    expect(applied).toBe(true);
+    // "first" nests under a brand-new empty parent item; "second" stays a
+    // top-level sibling of that parent, untouched — three list_items total
+    // (empty parent, first, second) where there were two, two bullet_lists
+    // (the original outer one, plus the new nested one) where there was
+    // one.
+    expect(countNodesOfType(next.doc, "list_item")).toBe(3);
+    expect(countNodesOfType(next.doc, "bullet_list")).toBe(2);
+    const outerItems = next.doc.firstChild;
+    if (outerItems === null || outerItems.type.name !== "bullet_list") {
+      throw new Error("expected the outer bullet_list to survive");
+    }
+    const emptyParent = outerItems.firstChild;
+    if (emptyParent === null) {
+      throw new Error("expected an empty parent list_item");
+    }
+    expect(emptyParent.type.name).toBe("list_item");
+    expect(emptyParent.attrs.checked).toBeNull();
+    expect(emptyParent.childCount).toBe(2);
+    expect(emptyParent.child(0).type.name).toBe("paragraph");
+    expect(emptyParent.child(0).content.size).toBe(0);
+    expect(emptyParent.child(1).type.name).toBe("bullet_list");
+    expect(emptyParent.child(1).firstChild?.textContent).toBe("first");
+    expect(outerItems.child(1).textContent).toBe("second");
   });
 });
 
@@ -439,6 +569,162 @@ describe("outdent", () => {
     expect(applied).toBe(true);
     expect(countNodesOfType(next.doc, "bullet_list")).toBe(0);
     expect(countNodesOfType(next.doc, "list_item")).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// sinkFirstListItem — issue #233 / ADR 0071, indent.run's own second
+// fallback for the one case plain sinkListItem always refuses.
+// ---------------------------------------------------------------------------
+
+describe("sinkFirstListItem", () => {
+  it("returns false outside any list — nothing to sink", () => {
+    const doc = docFor("just text");
+    const state = stateAt(doc, { from: caretInFirstParagraph(doc) });
+    expect(sinkFirstListItem(state)).toBe(false);
+  });
+
+  it("returns false on an item WITH a preceding sibling — plain sinkListItem already owns that case", () => {
+    const doc = docFor("- first\n- second");
+    const state = stateAt(doc, { from: caretInNthParagraph(doc, 2) });
+    expect(sinkFirstListItem(state)).toBe(false);
+  });
+
+  it("wraps a truly LONE item (no siblings at all) under a new empty markerless parent", () => {
+    const doc = docFor("- solo");
+    const state = stateAt(doc, { from: caretInFirstParagraph(doc) });
+    expect(countNodesOfType(doc, "list_item")).toBe(1);
+
+    const { applied, next } = runCommand({ run: sinkFirstListItem }, state);
+    expect(applied).toBe(true);
+    expect(countNodesOfType(next.doc, "list_item")).toBe(2);
+    expect(countNodesOfType(next.doc, "bullet_list")).toBe(2);
+
+    const outerList = next.doc.firstChild;
+    if (outerList === null || outerList.type.name !== "bullet_list") {
+      throw new Error("expected the outer bullet_list to survive");
+    }
+    expect(outerList.childCount).toBe(1);
+    const emptyParent = outerList.firstChild;
+    if (emptyParent === null) {
+      throw new Error("expected an empty parent list_item");
+    }
+    expect(emptyParent.attrs.checked).toBeNull();
+    expect(emptyParent.child(0).content.size).toBe(0);
+    expect(emptyParent.child(1).type.name).toBe("bullet_list");
+    expect(emptyParent.child(1).firstChild?.textContent).toBe("solo");
+  });
+
+  it("preserves an ordered list's own type in the newly nested list", () => {
+    const doc = docFor("1. solo");
+    const state = stateAt(doc, { from: caretInFirstParagraph(doc) });
+
+    const { applied, next } = runCommand({ run: sinkFirstListItem }, state);
+    expect(applied).toBe(true);
+    const outerList = next.doc.firstChild;
+    if (outerList === null) {
+      throw new Error("expected an outer list");
+    }
+    expect(outerList.type.name).toBe("ordered_list");
+    const nested = outerList.firstChild?.child(1);
+    expect(nested?.type.name).toBe("ordered_list");
+  });
+
+  it("lands the caret back inside the sunk item's own text, not at the new parent's empty paragraph", () => {
+    const doc = docFor("- solo");
+    const original = caretInFirstParagraph(doc) + "solo".length; // end of "solo"
+    const state = stateAt(doc, { from: original });
+
+    const { applied, next } = runCommand({ run: sinkFirstListItem }, state);
+    expect(applied).toBe(true);
+    const $sel = next.selection.$from;
+    expect($sel.parent.type.name).toBe("paragraph");
+    expect($sel.parent.textContent).toBe("solo");
+  });
+
+  it("supports a dry run with no dispatch", () => {
+    const doc = docFor("- solo");
+    const state = stateAt(doc, { from: caretInFirstParagraph(doc) });
+    expect(sinkFirstListItem(state)).toBe(true);
+    expect(countNodesOfType(state.doc, "list_item")).toBe(1); // untouched
+  });
+
+  it("returns false on a non-empty selection", () => {
+    const doc = docFor("- solo");
+    const start = caretInFirstParagraph(doc);
+    const state = stateAt(doc, { from: start, to: start + 2 });
+    expect(sinkFirstListItem(state)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// insertEmSpace / outdentEmSpaceOrExit — Tab/Shift-Tab outside any list,
+// issue #233 / ADR 0070.
+// ---------------------------------------------------------------------------
+
+describe("insertEmSpace", () => {
+  it("inserts a literal U+2003 EM SPACE at the caret and keeps returning true (never a native focus move)", () => {
+    const doc = docFor("abcd");
+    const state = stateAt(doc, { from: caretInFirstParagraph(doc) + 2 }); // between "ab" and "cd"
+
+    const { applied, next } = runCommand({ run: insertEmSpace }, state);
+    expect(applied).toBe(true);
+    expect(next.doc.textContent).toBe("ab cd");
+  });
+
+  it("supports a dry run with no dispatch", () => {
+    const doc = docFor("abcd");
+    const state = stateAt(doc, { from: caretInFirstParagraph(doc) });
+    expect(insertEmSpace(state)).toBe(true);
+    expect(state.doc.textContent).toBe("abcd"); // untouched
+  });
+});
+
+describe("outdentEmSpaceOrExit", () => {
+  it("deletes exactly one preceding U+2003 EM SPACE and reports handled", () => {
+    const doc = docFor("ab cd");
+    const pos = caretInFirstParagraph(doc) + "ab ".length;
+    const state = stateAt(doc, { from: pos });
+
+    const { applied, next } = runCommand({ run: outdentEmSpaceOrExit }, state);
+    expect(applied).toBe(true);
+    expect(next.doc.textContent).toBe("abcd");
+  });
+
+  it("returns false with nothing to undo — a bare-prose caret with no preceding em space — letting focus move backward", () => {
+    const doc = docFor("plain text here");
+    const state = stateAt(doc, {
+      from: caretInFirstParagraph(doc) + "plain text here".length,
+    });
+    expect(outdentEmSpaceOrExit(state)).toBe(false);
+  });
+
+  it("returns false at the very start of a block — nothing precedes the caret at all", () => {
+    const doc = docFor("abcd");
+    const state = stateAt(doc, { from: caretInFirstParagraph(doc) });
+    expect(outdentEmSpaceOrExit(state)).toBe(false);
+  });
+
+  it("returns false when the preceding character is an ordinary space, not an em space", () => {
+    const doc = docFor("ab cd");
+    const pos = caretInFirstParagraph(doc) + "ab ".length;
+    const state = stateAt(doc, { from: pos });
+    expect(outdentEmSpaceOrExit(state)).toBe(false);
+  });
+
+  it("returns false on a non-empty selection", () => {
+    const doc = docFor("ab cd");
+    const from = caretInFirstParagraph(doc) + "ab ".length;
+    const state = stateAt(doc, { from, to: from + 1 });
+    expect(outdentEmSpaceOrExit(state)).toBe(false);
+  });
+
+  it("supports a dry run with no dispatch", () => {
+    const doc = docFor("ab cd");
+    const pos = caretInFirstParagraph(doc) + "ab ".length;
+    const state = stateAt(doc, { from: pos });
+    expect(outdentEmSpaceOrExit(state)).toBe(true);
+    expect(state.doc.textContent).toBe("ab cd"); // untouched
   });
 });
 
@@ -729,5 +1015,464 @@ describe("splitListItemUnchecked", () => {
     expect(splitListItemUnchecked(state)).toBe(true);
     // Untouched — a dry run must not mutate the document.
     expect(countNodesOfType(state.doc, "list_item")).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Multi-block selections — issue #235, ADR 0072. "Converting existing text
+// into a list, nesting it, and converting it back — without losing any of
+// it." Everything above this point tests typing INTO a structure; this
+// section tests converting content INTO and OUT OF one.
+//
+// Every fixture below builds its own document directly with `paragraph`/
+// `listItem`/`taskReference` (this file's own helpers, above) rather than
+// through `entryMarkdownToDocument` — see `paragraph`'s own comment: issue
+// #234 (Enter actually splitting a block outside a list) has not shipped
+// yet, so there is currently no Markdown source string, and no live
+// keystroke sequence, that produces N separate top-level plain blocks at
+// all in the real Composer. Direct node construction sidesteps that gap:
+// every command under test here reads `state.doc`/`state.selection` alone,
+// and none of them cares how the document it was handed was built.
+// ---------------------------------------------------------------------------
+
+describe("bulletList/orderedList: N plain blocks -> N items, and back (issue #235)", () => {
+  it("wraps N separate plain blocks in N separate list items, never one item holding all of them", () => {
+    const doc = entrySchema.node("doc", null, [
+      paragraph("alpha"),
+      paragraph("bravo"),
+      paragraph("charlie"),
+    ]);
+    const state = selectAllState(doc);
+
+    const { applied, next } = runCommand(bulletList, state);
+
+    expect(applied).toBe(true);
+    expect(findNodePositions(next.doc, "list_item")).toHaveLength(3);
+    expect(
+      findNodePositions(next.doc, "paragraph").map((pos) => next.doc.nodeAt(pos)?.textContent),
+    ).toEqual(["alpha", "bravo", "charlie"]);
+  });
+
+  it("un-lists back to N separate plain blocks with every item's text unchanged — the non-lossy, Android-matching divergence from macOS's own <br>-joined collapse (ADR 0072, Gap sweep #2 Group G3)", () => {
+    const doc = entrySchema.node("doc", null, [
+      bulletListNodeType.create(null, [
+        listItem(null, paragraph("alpha")),
+        listItem(null, paragraph("bravo")),
+        listItem(null, paragraph("charlie")),
+      ]),
+    ]);
+    const state = selectAllState(doc);
+
+    const { applied, next } = runCommand(bulletList, state);
+
+    expect(applied).toBe(true);
+    expect(findNodePositions(next.doc, "list_item")).toHaveLength(0);
+    expect(
+      findNodePositions(next.doc, "paragraph").map((pos) => next.doc.nodeAt(pos)?.textContent),
+    ).toEqual(["alpha", "bravo", "charlie"]);
+  });
+
+  it("does the identical N-items -> N-blocks round trip for orderedList", () => {
+    const doc = entrySchema.node("doc", null, [
+      orderedListNodeType.create(null, [
+        listItem(null, paragraph("first")),
+        listItem(null, paragraph("second")),
+      ]),
+    ]);
+    const state = selectAllState(doc);
+
+    const { applied, next } = runCommand(orderedList, state);
+
+    expect(applied).toBe(true);
+    expect(findNodePositions(next.doc, "list_item")).toHaveLength(0);
+    expect(
+      findNodePositions(next.doc, "paragraph").map((pos) => next.doc.nodeAt(pos)?.textContent),
+    ).toEqual(["first", "second"]);
+  });
+});
+
+describe("un-listing a nested selection flattens one level per press, not UpNote's own alternation (issue #235, ADR 0072, Gap sweep #2 Group I1)", () => {
+  it("takes exactly 3 presses to fully flatten a 3-level nested bullet list, each press outdenting whatever is still nested by exactly one level", () => {
+    const level3 = bulletListNodeType.create(null, [listItem(null, paragraph("three"))]);
+    const level2 = bulletListNodeType.create(null, [listItem(null, paragraph("two"), level3)]);
+    const level1 = bulletListNodeType.create(null, [listItem(null, paragraph("one"), level2)]);
+    let state = selectAllState(entrySchema.node("doc", null, [level1]));
+
+    // Press 1: "one" had only one level to lose -> fully plain; "two" and
+    // "three" both shift up one level, keeping their own relative nesting.
+    const press1 = runCommand(bulletList, state);
+    expect(press1.applied).toBe(true);
+    expect(
+      findNodePositions(press1.next.doc, "paragraph").map(
+        (pos) => press1.next.doc.nodeAt(pos)?.textContent,
+      ),
+    ).toEqual(["one", "two", "three"]);
+    expect(findNodePositions(press1.next.doc, "list_item")).toHaveLength(2);
+
+    // Press 2: "two" now has only one level to lose -> plain; "three"
+    // shifts up one more level. UpNote's own alternation would instead
+    // re-nest everything back to 3 levels here (Gap sweep #2 Group I1,
+    // press 2) — this Composer keeps outdenting instead.
+    state = selectAllState(press1.next.doc);
+    const press2 = runCommand(bulletList, state);
+    expect(press2.applied).toBe(true);
+    expect(findNodePositions(press2.next.doc, "list_item")).toHaveLength(1);
+    expect(
+      findNodePositions(press2.next.doc, "paragraph").map(
+        (pos) => press2.next.doc.nodeAt(pos)?.textContent,
+      ),
+    ).toEqual(["one", "two", "three"]);
+
+    // Press 3: fully flat.
+    state = selectAllState(press2.next.doc);
+    const press3 = runCommand(bulletList, state);
+    expect(press3.applied).toBe(true);
+    expect(findNodePositions(press3.next.doc, "list_item")).toHaveLength(0);
+    expect(
+      findNodePositions(press3.next.doc, "paragraph").map(
+        (pos) => press3.next.doc.nodeAt(pos)?.textContent,
+      ),
+    ).toEqual(["one", "two", "three"]);
+
+    // A 4th press starts the ordinary create-a-list cycle over — the same
+    // toggle direction the very first fixture in this describe block
+    // exercises (no list touched at all -> wrap), not a special case of
+    // "nothing left to outdent." Confirms `rangeTouchesListType` correctly
+    // reports "no" once every list is really gone, rather than getting
+    // stuck reporting "yes" from stale state.
+    state = selectAllState(press3.next.doc);
+    const press4 = runCommand(bulletList, state);
+    expect(press4.applied).toBe(true);
+    expect(findNodePositions(press4.next.doc, "list_item")).toHaveLength(3);
+  });
+
+  it("leaves a completely untouched top-level plain sibling alone", () => {
+    const level2 = bulletListNodeType.create(null, [listItem(null, paragraph("two"))]);
+    const level1 = bulletListNodeType.create(null, [listItem(null, paragraph("one"), level2)]);
+    const doc = entrySchema.node("doc", null, [paragraph("already plain"), level1]);
+    const state = selectAllState(doc);
+
+    const { applied, next } = runCommand(bulletList, state);
+
+    expect(applied).toBe(true);
+    expect(
+      findNodePositions(next.doc, "paragraph").map((pos) => next.doc.nodeAt(pos)?.textContent),
+    ).toEqual(["already plain", "one", "two"]);
+  });
+});
+
+describe("Tab never destroys a selection's content (issue #235, ADR 0072 — UpNote's own multi-block Tab destroys text, Gap sweep #2 Group K1)", () => {
+  const tabChain = { run: chainCommands(indent.run, insertEmSpace) };
+
+  it("indents EVERY plain block a multi-block selection touches, leaving each block's own text completely intact — the chosen reading of 'indenting every selected block'", () => {
+    const doc = entrySchema.node("doc", null, [paragraph("alpha"), paragraph("bravo")]);
+    const state = selectAllState(doc);
+
+    const { applied, next } = runCommand(tabChain, state);
+
+    expect(applied).toBe(true);
+    expect(
+      findNodePositions(next.doc, "paragraph").map((pos) => next.doc.nodeAt(pos)?.textContent),
+    ).toEqual([" alpha", " bravo"]);
+  });
+
+  it("never destroys a genuine text SELECTION within a single plain block either — Tab prepends an em space rather than replacing the selected text", () => {
+    const doc = entrySchema.node("doc", null, [paragraph("select me")]);
+    const state = stateAt(doc, { from: 1, to: 1 + "select me".length });
+
+    const { applied, next } = runCommand(tabChain, state);
+
+    expect(applied).toBe(true);
+    expect(next.doc.textBetween(0, next.doc.content.size)).toBe(" select me");
+  });
+
+  it("still swallows Tab unconditionally on a collapsed caret — ADR 0070's own invariant, unaffected by this ticket's multi-block fix", () => {
+    const doc = entrySchema.node("doc", null, [paragraph("abcd")]);
+    const state = stateAt(doc, { from: 3 });
+
+    const { applied, next } = runCommand(tabChain, state);
+
+    expect(applied).toBe(true);
+    expect(next.doc.textBetween(0, next.doc.content.size)).toBe("ab cd");
+  });
+
+  it("falls back to one collapsed em space, never a deletion, when a multi-item list selection has nothing sinkable (starts at a list's own first item, with no preceding sibling for the whole range)", () => {
+    const doc = entrySchema.node("doc", null, [
+      bulletListNodeType.create(null, [
+        listItem(null, paragraph("top")),
+        listItem(null, paragraph("mid")),
+      ]),
+    ]);
+    const state = selectAllState(doc);
+
+    const { applied, next } = runCommand(tabChain, state);
+
+    expect(applied).toBe(true);
+    // Neither item's own text is gone — a documented, disclosed limitation
+    // (insertEmSpace's own comment): this specific shape does not get
+    // genuinely indented, but it is never destroyed either.
+    const text = next.doc.textBetween(0, next.doc.content.size, "|");
+    expect(text).toContain("top");
+    expect(text).toContain("mid");
+  });
+});
+
+describe("a block containing a soft break survives conversion to a list item and back (issue #235, ADR 0072 — Android permanently splits it instead, Gap sweep #2 Group H2)", () => {
+  it("keeps the embedded newline inside ONE list item, never splitting into two — and restores it byte-for-byte on un-list", () => {
+    const text = "line one\nline two";
+    const doc = entrySchema.node("doc", null, [paragraph(text)]);
+    const state = stateAt(doc, { from: 1, to: 1 + text.length });
+
+    const wrapped = runCommand(bulletList, state);
+    expect(wrapped.applied).toBe(true);
+    expect(findNodePositions(wrapped.next.doc, "list_item")).toHaveLength(1);
+    expect(wrapped.next.doc.textBetween(0, wrapped.next.doc.content.size)).toBe(text);
+
+    const restored = runCommand(
+      bulletList,
+      stateAt(wrapped.next.doc, { from: caretInFirstParagraph(wrapped.next.doc) }),
+    );
+    expect(restored.applied).toBe(true);
+    expect(findNodePositions(restored.next.doc, "list_item")).toHaveLength(0);
+    expect(restored.next.doc.textBetween(0, restored.next.doc.content.size)).toBe(text);
+  });
+});
+
+describe("checklist multi-block: cannot be un-listed, a second press flips every item's checked state, narrowed pre-Send (issue #235, ADR 0053, ADR 0072)", () => {
+  it("wraps N plain blocks in a fresh checklist, N unchecked items — matching UpNote's own N-blocks-to-N-items behaviour (Gap sweep #2 Group G2, both platforms)", () => {
+    const doc = entrySchema.node("doc", null, [paragraph("milk"), paragraph("eggs")]);
+    const state = selectAllState(doc);
+
+    const { applied, next } = runCommand(checklist, state);
+
+    expect(applied).toBe(true);
+    const items = findNodePositions(next.doc, "list_item").map((pos) => next.doc.nodeAt(pos));
+    expect(items).toHaveLength(2);
+    expect(items.map((item) => item?.attrs.checked)).toEqual([false, false]);
+  });
+
+  it("a second press flips every item's checked state uniformly — never un-lists, matching UpNote's own checklist toggle exactly (Gap sweep #2 Group G3/I3)", () => {
+    const doc = entrySchema.node("doc", null, [
+      bulletListNodeType.create(null, [
+        listItem(false, paragraph("milk")),
+        listItem(false, paragraph("eggs")),
+      ]),
+    ]);
+    const state = selectAllState(doc);
+
+    const { applied, next } = runCommand(checklist, state);
+
+    expect(applied).toBe(true);
+    // Still a checklist — never un-listed.
+    expect(findNodePositions(next.doc, "list_item")).toHaveLength(2);
+    expect(
+      findNodePositions(next.doc, "list_item").map((pos) => next.doc.nodeAt(pos)?.attrs.checked),
+    ).toEqual([true, true]);
+  });
+
+  it("a third press flips back to unchecked, matching UpNote's own true<->false cycle once uniform", () => {
+    const doc = entrySchema.node("doc", null, [
+      bulletListNodeType.create(null, [
+        listItem(true, paragraph("milk")),
+        listItem(true, paragraph("eggs")),
+      ]),
+    ]);
+    const state = selectAllState(doc);
+
+    const { applied, next } = runCommand(checklist, state);
+
+    expect(applied).toBe(true);
+    expect(
+      findNodePositions(next.doc, "list_item").map((pos) => next.doc.nodeAt(pos)?.attrs.checked),
+    ).toEqual([false, false]);
+  });
+
+  it("a MIXED selection (some checked, some not) activates every item to checked — UpNote's own 'any inactive -> activate all' rule", () => {
+    const doc = entrySchema.node("doc", null, [
+      bulletListNodeType.create(null, [
+        listItem(true, paragraph("milk")),
+        listItem(false, paragraph("eggs")),
+      ]),
+    ]);
+    const state = selectAllState(doc);
+
+    const { applied, next } = runCommand(checklist, state);
+
+    expect(applied).toBe(true);
+    expect(
+      findNodePositions(next.doc, "list_item").map((pos) => next.doc.nodeAt(pos)?.attrs.checked),
+    ).toEqual([true, true]);
+  });
+
+  // ---- Safety: the flip-all can never reach a sent Entry's real Task ----
+
+  it("skips a promoted, task_reference-backed item entirely — its cached checked attribute is never flipped", () => {
+    const doc = entrySchema.node("doc", null, [
+      bulletListNodeType.create(null, [
+        listItem(false, paragraph("bare item")),
+        listItem(false, paragraphNodeType.create(null, [taskReference("t1", "real task", false)])),
+      ]),
+    ]);
+    const state = selectAllState(doc);
+
+    const { applied, next } = runCommand(checklist, state);
+
+    expect(applied).toBe(true);
+    const items = findNodePositions(next.doc, "list_item").map((pos) => next.doc.nodeAt(pos));
+    expect(items[0]?.attrs.checked).toBe(true); // bare item flips
+    expect(items[1]?.attrs.checked).toBe(false); // task-referenced item untouched
+  });
+
+  it("refuses outright — applies nothing — when EVERY checklist item touched is task_reference-backed; there is nothing safe left to flip", () => {
+    const doc = entrySchema.node("doc", null, [
+      paragraph("plain, untouched"),
+      bulletListNodeType.create(null, [
+        listItem(false, paragraphNodeType.create(null, [taskReference("t1", "real task", false)])),
+      ]),
+    ]);
+    const state = selectAllState(doc);
+
+    const { applied, next } = runCommand(checklist, state);
+
+    expect(applied).toBe(false);
+    expect(next).toBe(state);
+  });
+
+  it("also refuses on a SINGLE-CARET selection inside a promoted item — the checklist chord's OTHER, pre-existing code path (checklistRun's own 'turn the task off' case), reachable via the editable whitespace immediately beside a re-opened Entry's reference chip even though the chip itself is uneditable", () => {
+    // The same shape `commitEntryEdit` (use-history.ts) re-opens this
+    // command's own document against once an Entry has been Sent and
+    // edited again — built directly here rather than by exercising
+    // Send/edit through a live view, which this module's own header
+    // comment says never belongs in this file (ADR 0044). Only ONE
+    // top-level paragraph exists in this fixture (deliberately, unlike
+    // every OTHER fixture in this describe block): a single-item selection
+    // never reaches `multiBlockChecklistRun` at all
+    // (`selectionSpansMultipleBlocks` needs more than one), so this proves
+    // the SAME guard is needed — and present — on `checklistRun`'s
+    // original three-case single-item logic too, not only on the new
+    // multi-block branch this ticket adds.
+    const referencedParagraph = paragraphNodeType.create(null, [
+      entrySchema.text(" "),
+      taskReference("t1", "buy milk", false),
+    ]);
+    const doc = entrySchema.node("doc", null, [
+      bulletListNodeType.create(null, [listItem(false, referencedParagraph)]),
+    ]);
+    const state = selectAllState(doc);
+
+    const { applied, next } = runCommand(checklist, state);
+
+    expect(applied).toBe(false);
+    expect(next.doc.eq(doc)).toBe(true);
+  });
+});
+
+describe("a real AllSelection (Cmd+A/Ctrl+A) is handled correctly, not just a TextSelection spanning the whole doc (issue #235 — caught live, against a real browser)", () => {
+  it("bulletList: un-lists a SINGLE already-wrapped item under a real AllSelection — the toolbar button went disabled here before this fix, since $from's own depth is 0 for an AllSelection", () => {
+    const doc = entrySchema.node("doc", null, [
+      bulletListNodeType.create(null, [listItem(null, paragraph("solo"))]),
+    ]);
+    const state = realAllSelectionState(doc);
+
+    expect(bulletList.isEnabled(state)).toBe(true);
+    expect(bulletList.isActive(state)).toBe(true);
+
+    const { applied, next } = runCommand(bulletList, state);
+    expect(applied).toBe(true);
+    expect(findNodePositions(next.doc, "list_item")).toHaveLength(0);
+    expect(next.doc.textBetween(0, next.doc.content.size)).toBe("solo");
+  });
+
+  it("bulletList: N plain blocks -> N items under a real AllSelection", () => {
+    const doc = entrySchema.node("doc", null, [paragraph("alpha"), paragraph("bravo")]);
+    const state = realAllSelectionState(doc);
+
+    const { applied, next } = runCommand(bulletList, state);
+    expect(applied).toBe(true);
+    expect(findNodePositions(next.doc, "list_item")).toHaveLength(2);
+  });
+
+  it("bulletList: flattens a 3-level nested list one press at a time under a real AllSelection", () => {
+    const level3 = bulletListNodeType.create(null, [listItem(null, paragraph("three"))]);
+    const level2 = bulletListNodeType.create(null, [listItem(null, paragraph("two"), level3)]);
+    const level1 = bulletListNodeType.create(null, [listItem(null, paragraph("one"), level2)]);
+    let state = realAllSelectionState(entrySchema.node("doc", null, [level1]));
+
+    const press1 = runCommand(bulletList, state);
+    expect(press1.applied).toBe(true);
+    expect(findNodePositions(press1.next.doc, "list_item")).toHaveLength(2);
+
+    state = realAllSelectionState(press1.next.doc);
+    const press2 = runCommand(bulletList, state);
+    expect(press2.applied).toBe(true);
+    expect(findNodePositions(press2.next.doc, "list_item")).toHaveLength(1);
+
+    state = realAllSelectionState(press2.next.doc);
+    const press3 = runCommand(bulletList, state);
+    expect(press3.applied).toBe(true);
+    expect(findNodePositions(press3.next.doc, "list_item")).toHaveLength(0);
+  });
+
+  it("checklist: converts an EXISTING plain bullet list (built from typed '- ' markers, no checklist yet) under a real AllSelection — found live: wrapAsChecklist alone left the Checklist toolbar button disabled here, since wrapInList refuses a range that is already the list type it's trying to build", () => {
+    const doc = entrySchema.node("doc", null, [
+      bulletListNodeType.create(null, [
+        listItem(null, paragraph("milk")),
+        listItem(null, paragraph("eggs")),
+      ]),
+    ]);
+    const state = realAllSelectionState(doc);
+
+    expect(checklist.isEnabled(state)).toBe(true);
+
+    const { applied, next } = runCommand(checklist, state);
+    expect(applied).toBe(true);
+    const items = findNodePositions(next.doc, "list_item").map((pos) => next.doc.nodeAt(pos));
+    expect(items).toHaveLength(2);
+    expect(items.map((item) => item?.attrs.checked)).toEqual([false, false]);
+    // In place -- still ONE bullet_list, not rebuilt into two nested ones.
+    expect(findNodePositions(next.doc, "bullet_list")).toHaveLength(1);
+  });
+
+  it("checklist: converts a MIX of an existing plain list item and a top-level plain paragraph, in the same selection, under a real AllSelection", () => {
+    const doc = entrySchema.node("doc", null, [
+      paragraph("plain block"),
+      bulletListNodeType.create(null, [listItem(null, paragraph("already listed"))]),
+    ]);
+    const state = realAllSelectionState(doc);
+
+    const { applied, next } = runCommand(checklist, state);
+    expect(applied).toBe(true);
+    const items = findNodePositions(next.doc, "list_item").map((pos) => next.doc.nodeAt(pos));
+    expect(items).toHaveLength(2);
+    expect(items.every((item) => item?.attrs.checked === false)).toBe(true);
+    expect(
+      findNodePositions(next.doc, "paragraph").map((pos) => next.doc.nodeAt(pos)?.textContent),
+    ).toEqual(["plain block", "already listed"]);
+  });
+
+  it("checklist: flip-all still applies under a real AllSelection, with the task_reference guard intact", () => {
+    const doc = entrySchema.node("doc", null, [
+      bulletListNodeType.create(null, [
+        listItem(false, paragraph("bare")),
+        listItem(false, paragraphNodeType.create(null, [taskReference("t1", "real task", false)])),
+      ]),
+    ]);
+    const state = realAllSelectionState(doc);
+
+    const { applied, next } = runCommand(checklist, state);
+    expect(applied).toBe(true);
+    const items = findNodePositions(next.doc, "list_item").map((pos) => next.doc.nodeAt(pos));
+    expect(items[0]?.attrs.checked).toBe(true);
+    expect(items[1]?.attrs.checked).toBe(false);
+  });
+
+  it("Tab (insertEmSpace): never destroys a plain paragraph's text under a real AllSelection, and never leaves focus with nothing dispatched", () => {
+    const tabChain = { run: chainCommands(indent.run, insertEmSpace) };
+    const doc = entrySchema.node("doc", null, [paragraph("alpha bravo")]);
+    const state = realAllSelectionState(doc);
+
+    const { applied, next } = runCommand(tabChain, state);
+    expect(applied).toBe(true);
+    expect(next.doc.textBetween(0, next.doc.content.size)).toBe(" alpha bravo");
   });
 });

@@ -108,8 +108,37 @@ pub fn render_entry(created_at: DateTime<Utc>, body: &str, utc_offset_minutes: i
     format!(
         "[{}] {}",
         local.format("%Y-%m-%d"),
-        indent_continuation_lines(body)
+        indent_continuation_lines(&normalize_body_for_plain_text(body))
     )
+}
+
+/// ADR 0069/issue #234's normalization boundary — the Rust side of the
+/// identical seam `packages/core/src/export/day-file.ts`'s own
+/// `normalizeBodyForPlainText` implements for the export `.txt`; the two
+/// cannot literally share one function across languages, so this is kept
+/// in step with that one by hand, same markers, same reasoning. A soft
+/// break's own GFM backslash hard break (`\` immediately followed by
+/// `\n`, `insertSoftBreak`/`walkEntryInline`'s own encoding on the web
+/// client) and a Tab-inserted U+2003 EM SPACE (`insertEmSpace`) are
+/// Composer-internal spelling that must never reach a Question/Answer
+/// transcript or a Digest prompt: a model reading a stray backslash has
+/// no way to know it is punctuation rather than content, and an em space
+/// reads to a model as content-bearing whitespace, not as "this used to
+/// be a Tab."
+///
+/// A `\` + `\n` becomes a bare `\n` — the line break survives, only the
+/// backslash goes, and it runs BEFORE `indent_continuation_lines` (below)
+/// so a soft-broken line gets the identical two-space continuation indent
+/// a real block break already gets, rather than leaving a model to guess
+/// whether a lone backslash matters. An em space becomes an ordinary
+/// space. Nothing else in `body` is touched — this is a plain character
+/// substitution, not a parse, mirroring the same accepted imprecision
+/// `normalizeBodyForPlainText`'s own doc comment names for the identical
+/// reason: a correct disambiguation from a genuinely escaped, typed
+/// backslash needs the web client's own Markdown parser, which this
+/// Server does not have and should not grow one of just for this.
+pub(crate) fn normalize_body_for_plain_text(body: &str) -> String {
+    body.replace("\\\n", "\n").replace('\u{2003}', " ")
 }
 
 /// Indents every line of `body` after the first by two spaces (issue
@@ -371,6 +400,48 @@ mod tests {
     fn crlf_line_endings_keep_the_carriage_return_on_the_line_it_ends() {
         let rendered = render_entry(at(2026, 6, 30, 12, 0), "first\r\nsecond\r\n", 0);
         assert_eq!(rendered, "[2026-06-30] first\r\n  second\r\n  ");
+    }
+
+    // ADR 0069/issue #234's normalization boundary.
+    #[test]
+    fn normalize_body_for_plain_text_turns_a_backslash_hard_break_into_a_bare_newline() {
+        assert_eq!(
+            normalize_body_for_plain_text("alpha\\\nbravo"),
+            "alpha\nbravo"
+        );
+    }
+
+    #[test]
+    fn normalize_body_for_plain_text_turns_an_em_space_into_an_ordinary_space() {
+        assert_eq!(
+            normalize_body_for_plain_text("alpha\u{2003}bravo"),
+            "alpha bravo"
+        );
+    }
+
+    #[test]
+    fn normalize_body_for_plain_text_leaves_a_genuine_block_break_untouched() {
+        assert_eq!(
+            normalize_body_for_plain_text("alpha\n\nbravo"),
+            "alpha\n\nbravo"
+        );
+    }
+
+    /// A soft-broken continuation line gets the identical two-space indent
+    /// a real block break already gets — `render_entry` runs
+    /// `normalize_body_for_plain_text` BEFORE `indent_continuation_lines`,
+    /// so the backslash is gone by the time the indent step ever counts
+    /// lines.
+    #[test]
+    fn render_entry_indents_a_soft_broken_continuation_line_and_drops_its_backslash() {
+        let rendered = render_entry(at(2026, 6, 30, 12, 0), "alpha\\\nbravo", 0);
+        assert_eq!(rendered, "[2026-06-30] alpha\n  bravo");
+    }
+
+    #[test]
+    fn render_entry_replaces_an_em_space_with_an_ordinary_space() {
+        let rendered = render_entry(at(2026, 6, 30, 12, 0), "alpha\u{2003}bravo", 0);
+        assert_eq!(rendered, "[2026-06-30] alpha bravo");
     }
 
     /// The scenario the issue names directly: two multi-line Entries on

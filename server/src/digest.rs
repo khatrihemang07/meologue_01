@@ -1358,17 +1358,21 @@ fn build_messages(
 /// be shown to the model labelled with the UTC day before or after it.
 ///
 /// The body itself is passed through
-/// `harness::tools::indent_continuation_lines` (issue #151) so a
-/// multi-line body's lines after the first are indented two spaces — the
-/// one piece of this rendering that has nothing to do with which
-/// "local" a Period or a Device resolves, and so is shared rather than
-/// copied a third time; see that function's own doc comment.
+/// `harness::tools::normalize_body_for_plain_text` (ADR 0069/issue #234)
+/// and then `harness::tools::indent_continuation_lines` (issue #151) so a
+/// multi-line body's lines after the first are indented two spaces and a
+/// soft break's backslash / a Tab's em space never reach the prompt — the
+/// one piece of this rendering that has nothing to do with which "local"
+/// a Period or a Device resolves, and so is shared rather than copied a
+/// third time; see each function's own doc comment.
 fn render_entry(entry: &DigestEntry, tz: Tz) -> String {
     let local_date = entry.created_at.with_timezone(&tz).date_naive();
     format!(
         "[{}] {}",
         local_date.format("%Y-%m-%d"),
-        crate::harness::tools::indent_continuation_lines(&entry.body)
+        crate::harness::tools::indent_continuation_lines(
+            &crate::harness::tools::normalize_body_for_plain_text(&entry.body)
+        )
     )
 }
 
@@ -2048,6 +2052,24 @@ mod tests {
         assert_eq!(
             render_entry(&entry("first\r\nsecond\r\n"), Tz::UTC),
             "[2026-06-30] first\r\n  second\r\n  "
+        );
+    }
+
+    // ADR 0069/issue #234's normalization boundary — a Digest prompt must
+    // never carry a soft break's backslash or a Tab's em space.
+    #[test]
+    fn a_soft_broken_continuation_line_is_indented_with_its_backslash_dropped() {
+        assert_eq!(
+            render_entry(&entry("alpha\\\nbravo"), Tz::UTC),
+            "[2026-06-30] alpha\n  bravo"
+        );
+    }
+
+    #[test]
+    fn an_em_space_becomes_an_ordinary_space() {
+        assert_eq!(
+            render_entry(&entry("alpha\u{2003}bravo"), Tz::UTC),
+            "[2026-06-30] alpha bravo"
         );
     }
 

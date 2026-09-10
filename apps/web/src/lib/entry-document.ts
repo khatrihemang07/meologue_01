@@ -134,10 +134,11 @@ function inlineNodesToPM(
 /**
  * An `EntryBlockNode`'s content sits directly under `doc` or under a
  * `list_item`; both accept the same `"block+"`-ish shape, so one function
- * builds either. A `"prose"` run becomes one `paragraph` — `entryParser`
- * already merges consecutive lines of plain text into a single run (see
- * `inline-markdown.ts`'s `collectBlocks`), so there is exactly one
- * `paragraph` per run here too, never one per source line.
+ * builds either. A `"prose"` run becomes exactly one `paragraph` —
+ * `collectBlocks` (`inline-markdown.ts`) already splits a source body at
+ * every block break (a bare `\n`, ADR 0069) into one `"prose"` `EntryBlockNode`
+ * per resulting run, so this function's own job is a straight 1:1 mapping,
+ * never a merge or a further split of its own.
  *
  * `taskChecked` defaults `false` for `entryMarkdownToDocument`'s own
  * top-level call, where there is no enclosing item at all — a
@@ -396,8 +397,25 @@ const LINE_START_ORDERED = /^\d+[.)](?=[ \t\n]|$)/;
  * parser left to reintroduce them, so nothing here needs to escape `#`,
  * `>`, `` ``` ``, `---`, or leading indentation at all).
  *
- * Five things get escaped:
+ * Six things get escaped:
  *
+ * - `\n` itself (ADR 0069/issue #234) — a literal newline character embedded
+ *   in one text leaf's own content is, after this ticket, always exactly one
+ *   thing: a **soft break** (`insertSoftBreak`, composer-commands.ts, or the
+ *   identical bare `\n` `walkEntryInline`'s own `"HardBreak"` case pushes
+ *   when reading one back, inline-markdown.ts). It is never a block
+ *   separator any more — a block break is now always two sibling `paragraph`
+ *   nodes, never characters sitting inside one text run (`collectBlocks`,
+ *   inline-markdown.ts, splits on every bare `\n` rather than merging across
+ *   one) — so escaping it unconditionally to `\` immediately followed by a
+ *   real `\n` (GFM's own backslash hard break, which `entryParser`'s
+ *   `HardBreak` inline parser recognises on the next read) is what makes a
+ *   soft break round-trip as itself rather than silently reading back as a
+ *   lazy continuation or, worse, a second stored paragraph the writer would
+ *   need `\n\n` to separate. This is the one escape whose replacement is
+ *   *longer* than the source character, not merely backslash-prefixed with
+ *   the same character repeated — see this function's own loop for why that
+ *   still keeps `lineStart` tracking correct.
  * - `\` itself, so a literal backslash never reads back as the start of an
  *   escape sequence.
  * - `*`, unconditionally — it is `entryParser`'s only emphasis/strong
@@ -428,26 +446,17 @@ const LINE_START_ORDERED = /^\d+[.)](?=[ \t\n]|$)/;
  *   `parse`), so a lone `[` is never ambiguous and only the first of a pair
  *   needs the backslash.
  *
- * A sixth case is conditional on position: a `-`/`+` or a digit run
+ * A seventh case is conditional on position: a `-`/`+` or a digit run
  * followed by `.`/`)` — CommonMark's bullet and ordered list markers — only
  * mean list structure at the *start of a line*, so only those are escaped,
- * and only there. This is reachable: `parseEntryMarkdown` only ever
- * produces a `"prose"` block whose text starts a line with what reads as a
- * list marker when the source escaped it (`\- text`, `1\. text`) — a
- * genuine, unescaped `- text` at the start of a line becomes a real list at
- * parse time, never prose — so a prose run's own leading `-`/digit-marker
- * is possible only via an escape this function has to reproduce, on every
- * line the run's embedded `\n`s create, not only its first.
- *
- * `atLineStart` seeds this correctly for both places a prose run's text can
- * begin: at the true start of a container (nothing came before it) and
- * immediately after a list block that has none of its own leading
- * whitespace (`writeBlocks`'s own comment covers why a prose run's *own*
- * text already carries whatever blank line preceded it in the first case,
- * but never in the second) — in both cases the run's text starts with the
- * newline itself when one is needed, so this function does not need to know
- * which case it is in, only where the line boundary actually falls once its
- * own scan reaches it.
+ * and only there. This is reachable even though a prose run's own text
+ * never begins a line (`atLineStart` only ever seeds `true` at the very
+ * start of a container — `writeBlocks`, below — never mid-run): a soft
+ * break's own escaped `\` + `\n` (the first bullet above) starts a fresh
+ * line immediately after it, inside the SAME text run, so `bravo` typed
+ * right after a soft break in `alpha\nbravo` still needs this check if it
+ * happens to read like a marker — `lineStart` is what `\n`'s own escape
+ * branch, just above, sets back to `true` for exactly that reason.
  */
 function escapeUserText(text: string, atLineStart: boolean): string {
   let result = "";
@@ -479,6 +488,19 @@ function escapeUserText(text: string, atLineStart: boolean): string {
       }
     }
     const ch = text[i] as string;
+    if (ch === "\n") {
+      // ADR 0069/issue #234's soft break — escape to GFM's own backslash
+      // hard break (`\` immediately followed by the real `\n`) rather than
+      // writing the bare character through. `lineStart` still becomes
+      // `true`, exactly as an unescaped `\n` would have left it: visually,
+      // and for every check above this one, the next character IS at the
+      // start of a new line, regardless of the extra `\` that now precedes
+      // the newline itself.
+      result += "\\\n";
+      lineStart = true;
+      i += 1;
+      continue;
+    }
     if (ch === "\\" || ch === "*" || ch === "`" || ch === "~") {
       result += `\\${ch}`;
       i += 1;
@@ -492,7 +514,7 @@ function escapeUserText(text: string, atLineStart: boolean): string {
       continue;
     }
     result += ch;
-    lineStart = ch === "\n";
+    lineStart = false;
     i += 1;
   }
   return result;
@@ -673,20 +695,44 @@ function writeBlocks(
       // round-trip property test passed straight through it — both passes
       // produce the same glued output, so a fixpoint check cannot see it.
       //
-      // The separator is conditional because the two ways a document can
-      // come into being disagree about where a blank line lives. Parsing
-      // keeps it inside the paragraph's own text — `"- a\n\nb"` comes back
-      // as `[bullet_list, paragraph("\n\nb")]`, newlines and all, because
-      // an Entry's body has always been one string and the reader renders
-      // it `whitespace-pre-wrap`. Live editing does not: ProseMirror's
-      // Enter splits the block, so the new paragraph's text is bare. Adding
-      // a separator unconditionally therefore doubles the blank line on
-      // every parsed document, compounding it on each round trip; adding
-      // none at all glues the live-edited ones together. Writing it only
-      // when the paragraph does not already begin with a newline is what
-      // makes both shapes serialize to the same thing and stay there.
-      if (needsSeparator && !block.textContent.startsWith("\n")) {
-        w.write(`\n\n${indent}`);
+      // The separator used to be conditional on the paragraph's own
+      // `textContent` not already starting with `\n` — before ADR
+      // 0069/issue #234, a PARSED document's paragraph could carry a
+      // leading blank line inside its own merged text (`collectBlocks` used
+      // to fold consecutive paragraph siblings into one run, gap included),
+      // while a LIVE-EDITED one never did (`splitBlock`'s new paragraph
+      // starts bare). That asymmetry is gone: `collectBlocks` now splits at
+      // every block break instead of merging across one, so a freshly
+      // parsed paragraph's own text never carries a leading separator
+      // either — every embedded `\n` a paragraph's text can still contain
+      // is a SOFT break (`insertSoftBreak`, or a `HardBreak` read back by
+      // `walkEntryInline`), which `writeInline`/`writeText` below escapes to
+      // `\` + `\n` unconditionally, never a bare character `startsWith`
+      // could mistake for an already-written separator. The separator
+      // between two sibling paragraphs is therefore unconditional now: two
+      // real ProseMirror siblings always need one, whichever path produced
+      // them.
+      //
+      // No `${indent}` in that separator, unlike the list branch just
+      // below — a paragraph sibling never needs one written explicitly,
+      // because its OWN text already supplies whatever leading whitespace
+      // belongs there. At the top level `indent` is always `""` anyway
+      // (`entryDocumentToMarkdown` only ever calls this with `""`), so this
+      // never mattered there; inside a `list_item`'s own continuation
+      // content (`writeListItem`'s `writeBlocks(rest, childIndent, w,
+      // true)`), it matters a great deal — `collectBlocks`'s `pushProseRuns`
+      // (inline-markdown.ts) recovers a continuation paragraph's own
+      // leading indentation as literal characters in its text (the same
+      // "anchor on `cursor`, not the node's own `.from`" mechanism that
+      // recovers indentation after a blank line anywhere else), so that
+      // indentation is already exactly `childIndent`'s own width. Adding
+      // `${indent}` here on top of it would double it — and keep doubling
+      // it every further round trip, since the next parse recovers
+      // whatever this function just wrote as the block's own new leading
+      // text. This was caught by `entry-document.test.ts`'s own stability
+      // check, not reasoned out ahead of time.
+      if (needsSeparator) {
+        w.write("\n\n");
       }
       writeInline(block, w);
       return;
