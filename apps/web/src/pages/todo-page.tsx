@@ -538,6 +538,10 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     onSetProject: setTaskProject,
     onSetLabels: setTaskLabels,
     onCopyLink: copyTaskLink,
+    // Issue #225: the row's own new inline rename reaches the identical
+    // `renameTask` door `TaskDetailView`'s own `onRename` prop below
+    // already calls — one rename path, two places to reach it.
+    onRename: renameTask,
     commentCountFor: (taskId) => commentCountForTask(comments, taskId),
   };
 

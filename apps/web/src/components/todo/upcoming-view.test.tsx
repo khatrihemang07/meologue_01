@@ -40,6 +40,7 @@ function renderUpcomingView(overrides: Partial<Parameters<typeof UpcomingView>[0
       onSetProject: vi.fn(),
       onSetLabels: vi.fn(),
       onCopyLink: vi.fn(),
+      onRename: vi.fn(),
       commentCountFor: vi.fn(() => 0),
     },
     onComplete: vi.fn(),

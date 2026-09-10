@@ -1646,7 +1646,10 @@ describe("ComposerPage", () => {
       fireEvent.click(screen.getByRole("button", { name: "buy milk" }));
 
       expect(screen.getByRole("dialog")).toBeInTheDocument();
-      expect(screen.getByDisplayValue("buy milk")).toBeInTheDocument();
+      // Issue #225: the detail title is a non-editable display element at
+      // rest (DET-02), not a form control with a `value` — a `<button>`,
+      // not `getByDisplayValue`.
+      expect(screen.getByRole("button", { name: "buy milk" })).toBeInTheDocument();
       stillOnComposer();
     });
 
@@ -1684,7 +1687,10 @@ describe("ComposerPage", () => {
       );
 
       expect(screen.getByRole("dialog")).toBeInTheDocument();
-      expect(screen.getByDisplayValue("buy milk")).toBeInTheDocument();
+      // Issue #225: the detail title is a non-editable display element at
+      // rest (DET-02), not a form control with a `value` — a `<button>`,
+      // not `getByDisplayValue`.
+      expect(screen.getByRole("button", { name: "buy milk" })).toBeInTheDocument();
     });
 
     it("shows nothing for a ?task= this Device cannot resolve", () => {

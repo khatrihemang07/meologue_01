@@ -25,6 +25,17 @@ export interface TaskDetailActions {
   onSetLabels: (id: string, labelIds: string[]) => void;
   onCopyLink: (task: Task) => void;
   /**
+   * Renames this Task (issue #225) — reached by double-clicking the row's
+   * own title, which swaps it from the display `<button>` into
+   * `TaskTitleEditor` in place (`task-row-content.tsx`'s own doc comment
+   * on why this is a *new* affordance, not a Todoist-measured one: the
+   * reference docs never drove a row-level rename, only the detail
+   * view's). The same door `task-detail-view.tsx`'s own title already
+   * calls `renameTask` through — this is not a second rename path with
+   * its own rules, just a second place to reach the existing one.
+   */
+  onRename: (id: string, content: string) => void;
+  /**
    * A Task's own comment count (issue #180) — `TaskRow`'s own
    * `commentCount` doc comment. Bundled here rather than a sixth prop on
    * every intermediate component for the identical reason every field

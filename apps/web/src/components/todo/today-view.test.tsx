@@ -47,6 +47,7 @@ function renderTodayView(overrides: Partial<Parameters<typeof TodayView>[0]> = {
       onSetProject: vi.fn(),
       onSetLabels: vi.fn(),
       onCopyLink: vi.fn(),
+      onRename: vi.fn(),
       commentCountFor: vi.fn(() => 0),
     },
     onComplete: vi.fn(),

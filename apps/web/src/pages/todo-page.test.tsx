@@ -304,7 +304,7 @@ describe("TodoPage", () => {
   // for the "bad/typo'd address must not break nav scoping" case.
   const DETAIL_TASK_ID = "11111111-1111-7111-8111-111111111111";
 
-  it("opens a Task's own view over its background, with a breadcrumb and an editable title", async () => {
+  it("opens a Task's own view over its background, with a breadcrumb and its own title", async () => {
     renderTodoPage(
       inboxContext([task({ id: DETAIL_TASK_ID, content: "call mum" })]),
       `/todo/task/call-mum-${DETAIL_TASK_ID}`,
@@ -323,7 +323,11 @@ describe("TodoPage", () => {
     // scopes to the breadcrumb's own `<header>` specifically rather than
     // an unscoped match that would resolve to both.
     expect(dialog.querySelector("header")).toHaveTextContent("Inbox");
-    expect(within(dialog).getByLabelText("Task title")).toHaveValue("call mum");
+    // Issue #225: the title is a non-editable display element at rest
+    // (DET-02) — a `<button>`, not a labelled textbox — until a reader
+    // activates it (task-detail-view.test.tsx's own suite covers that
+    // activation and the shared editor it swaps in).
+    expect(within(dialog).getByRole("button", { name: "call mum" })).toBeInTheDocument();
   });
 
   // The coordinator's own gap-fix report: `openTask` used to be looked up
@@ -348,7 +352,7 @@ describe("TodoPage", () => {
     await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
     const dialog = screen.getByRole("dialog");
     expect(within(dialog).getByLabelText('Mark "call mum" not done')).toBeChecked();
-    expect(within(dialog).getByLabelText("Task title")).toHaveClass("line-through");
+    expect(within(dialog).getByRole("button", { name: "call mum" })).toHaveClass("line-through");
   });
 
   it("un-completing from a completed Task's own detail view calls uncompleteTask", async () => {

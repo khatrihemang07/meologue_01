@@ -56,6 +56,7 @@ function renderProjectView(overrides: Partial<Parameters<typeof ProjectView>[0]>
       onSetProject: vi.fn(),
       onSetLabels: vi.fn(),
       onCopyLink: vi.fn(),
+      onRename: vi.fn(),
       commentCountFor: vi.fn(() => 0),
     },
     onRename: vi.fn(),

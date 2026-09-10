@@ -34,7 +34,9 @@ import {
   Pencil,
 } from "lucide-react";
 import type { MouseEvent, PointerEvent } from "react";
+import { Suspense, useState } from "react";
 import { inlineProse } from "@/components/inline-prose";
+import { LazyTaskTitleEditor } from "@/components/todo/lazy-task-title-editor";
 import { TaskCommandMenu } from "@/components/todo/task-command-menu";
 import type { TaskDetailActions } from "@/components/todo/task-row";
 import { formatDay, formatTaskDate } from "@/lib/format-task-date";
@@ -116,6 +118,44 @@ export function TaskRowContent({
   commandMenuOpen,
   onCommandMenuOpenChange,
 }: TaskRowContentProps) {
+  // Issue #225: inline row editing, which did not exist before this
+  // ticket. Driven on the live app after the ticket's first pass shipped
+  // a guessed gesture (a double-click, since removed): Todoist's own
+  // hover controls — Complete, **Edit**, Date, Comment, More actions, in
+  // that order — already include a pencil that activates the shared
+  // `tiptap ProseMirror` editor in place, no dialog, no URL change. The
+  // "Edit" button below (`aria-label={"Edit \"" + task.content + "\""}`,
+  // this file's own pre-existing hover action) is that measured
+  // affordance, not a new one — it used to call `onOpenDetail` the same
+  // as the title itself; it now activates `editingTitle` instead. A
+  // single click on the title keeps its one unambiguous meaning from
+  // before this ticket — this app's own row title has always been a
+  // `<button>` that opens the detail route — unchanged now that
+  // activation has its own dedicated control. No timing heuristic needed.
+  //
+  // One real structural divergence, recorded in the ledger (ROW-11) rather
+  // than silently absorbed: Todoist swaps the whole row out for an edit
+  // form at the same position in the list (`editorInsideRow` measured
+  // `false` — the editor is a sibling of `li.task_list_item`, not a
+  // descendant). This component mounts `TaskTitleEditor` *inside* the
+  // existing row instead, alongside the checkbox and metadata line that
+  // stay visible underneath it. Matching Todoist's own swap would mean a
+  // second row-shaped host rendered outside this `<li>` entirely — a
+  // bigger structural change than this ticket's own brief asked for, and
+  // not worth it for a divergence with no observed behavioural
+  // consequence (the same editor, the same commit/cancel keys, land
+  // either way).
+  const [editingTitle, setEditingTitle] = useState(false);
+
+  function commitTitle(next: string) {
+    setEditingTitle(false);
+    const trimmed = next.trim();
+    if (trimmed === "" || trimmed === task.content) {
+      return;
+    }
+    detailActions.onRename(task.id, trimmed);
+  }
+
   const isRecurring = task.dateString !== null;
   const isCompleted = task.completedAt !== null;
   // Resolved once, not inline in the JSX below, so the metadata line's
@@ -297,22 +337,56 @@ export function TaskRowContent({
         />
       </label>
       <span className="flex min-w-0 flex-1 flex-col">
-        <button
-          type="button"
-          onClick={() => detailActions.onOpenDetail(task)}
-          // ROW-05: long titles wrap and clamp after 4 lines — they do
-          // NOT truncate to one (the user's own complaint this ticket
-          // names). `line-clamp-4` replaces the old `truncate`; ROW-06
-          // needs no code of its own; `task.content` was already a plain
-          // string interpolated as text, never run through a markdown
-          // renderer, so it already stayed literal before this ticket.
-          className={cn(
-            "line-clamp-4 block w-full text-left hover:underline",
-            "text-[length:var(--td-row-font-size)] leading-[length:var(--td-row-line-height)]",
-          )}
-        >
-          {task.content}
-        </button>
+        {editingTitle ? (
+          // Todoist's own display/edit split (row-and-detail.md §2,
+          // DET-06): the row hosts the shared editor only while actually
+          // editing, never permanently — `<Suspense fallback={...}>` is
+          // what keeps ProseMirror out of Todo's own eager chunk even
+          // though this row renders synchronously (`lazy-task-title-
+          // editor.ts`'s own header comment has the bundle numbers). The
+          // fallback repeats the display button's own text rather than a
+          // spinner, so the one frame before the lazy chunk resolves
+          // shows the same words the reader just double-clicked, not a
+          // flash of empty space.
+          <Suspense
+            fallback={
+              <span
+                className={cn(
+                  "line-clamp-4 block w-full text-left",
+                  "text-[length:var(--td-row-font-size)] leading-[length:var(--td-row-line-height)]",
+                )}
+              >
+                {task.content}
+              </span>
+            }
+          >
+            <LazyTaskTitleEditor
+              value={task.content}
+              onCommit={commitTitle}
+              onCancel={() => setEditingTitle(false)}
+              className={cn(
+                "text-[length:var(--td-row-font-size)] leading-[length:var(--td-row-line-height)]",
+              )}
+            />
+          </Suspense>
+        ) : (
+          <button
+            type="button"
+            onClick={() => detailActions.onOpenDetail(task)}
+            // ROW-05: long titles wrap and clamp after 4 lines — they do
+            // NOT truncate to one (the user's own complaint this ticket
+            // names). `line-clamp-4` replaces the old `truncate`; ROW-06
+            // needs no code of its own; `task.content` was already a plain
+            // string interpolated as text, never run through a markdown
+            // renderer, so it already stayed literal before this ticket.
+            className={cn(
+              "line-clamp-4 block w-full text-left hover:underline",
+              "text-[length:var(--td-row-font-size)] leading-[length:var(--td-row-line-height)]",
+            )}
+          >
+            {task.content}
+          </button>
+        )}
         {/* ROW-07: a Description previews as real HTML from markdown, one
             line, beneath the title — `inlineProse` (not the block-level
             `entryProse`) because a "first line" preview is exactly the
@@ -403,11 +477,21 @@ export function TaskRowContent({
           widened beyond plain `(hover: hover)`. More stays unconditional:
           it is the one door onto Edit/Date/Comment's own actions (via the
           command menu) that a touch reader — genuinely coarse, not merely
-          misreported — can always reach. */}
+          misreported — can always reach.
+
+          Edit is issue #225's own measured inline-rename trigger — driven
+          on Todoist directly: hovering a row mounts Complete, Edit, Date,
+          Comment, More actions in that order, and clicking Edit activates
+          the shared `tiptap ProseMirror` editor in place, no dialog, no
+          URL change. This button used to call `onOpenDetail`, the same
+          destination the title and Comment still open; it now activates
+          `editingTitle` instead — the title's own single click keeps
+          meaning "open the detail view," unchanged from before this
+          ticket. */}
       <button
         type="button"
         aria-label={`Edit "${task.content}"`}
-        onClick={() => detailActions.onOpenDetail(task)}
+        onClick={() => setEditingTitle(true)}
         className={cn(
           "hidden pointer-fine:flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
           "pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:focus-visible:opacity-100",

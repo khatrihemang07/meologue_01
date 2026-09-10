@@ -51,9 +51,10 @@ import { uiPriorityOf } from "@meologue/core";
 import { ChevronLeft, ChevronRight, Pencil, Trash2, X } from "lucide-react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import type * as React from "react";
-import { useRef, useState } from "react";
+import { Suspense, useRef, useState } from "react";
 import { entryProse } from "@/components/entry-prose";
 import { ActivityFeed } from "@/components/todo/activity-feed";
+import { LazyTaskTitleEditor } from "@/components/todo/lazy-task-title-editor";
 import { useWideLayout } from "@/hooks/use-wide-layout";
 import { formatDay, formatTaskDate } from "@/lib/format-task-date";
 import { priorityColour } from "@/lib/task-priority-colors";
@@ -320,7 +321,18 @@ function TaskDetailBody({
 }: Omit<TaskDetailViewProps, "onClose"> & {
   wide: boolean;
 }) {
-  const [title, setTitle] = useState(task.content);
+  // Issue #225: the pre-#225 title was always an editable `<textarea>`,
+  // with no rest state at all — the DET-04 gap this ticket's own brief
+  // names as answered ("what does the detail title become once
+  // activated"). `editingTitle` is the display/edit split DET-02/DET-06
+  // describe: a non-editable display element at rest, `TaskTitleEditor`
+  // mounted only once a reader activates it, exactly as `editingTitle` in
+  // `task-row-content.tsx` mirrors for the row's own new inline rename.
+  const [editingTitle, setEditingTitle] = useState(false);
+  // A literal id, not `useId()`: only one `TaskDetailView` is ever mounted
+  // at a time (it's a modal over the whole app), so there is no second
+  // instance for a fixed id to collide with.
+  const titleHintId = "task-detail-title-hint";
   const [pickingProject, setPickingProject] = useState(false);
   const [pickingLabels, setPickingLabels] = useState(false);
   const [editingDescription, setEditingDescription] = useState(false);
@@ -337,10 +349,15 @@ function TaskDetailBody({
           recurring: task.dateString !== null,
         });
 
-  function commitTitle() {
-    const trimmed = title.trim();
+  // `TaskTitleEditor`'s own `onCommit` hands back the current text
+  // directly (its own doc comment on why: this component owns no
+  // mirrored `title` state to read instead) — trimming and comparing
+  // against `task.content` here is the identical guard the pre-#225
+  // version already applied, just fed from a parameter instead of state.
+  function commitTitle(next: string) {
+    setEditingTitle(false);
+    const trimmed = next.trim();
     if (trimmed === "" || trimmed === task.content) {
-      setTitle(task.content);
       return;
     }
     onRename(trimmed);
@@ -409,12 +426,10 @@ function TaskDetailBody({
 
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-3 sm:flex-row">
         <div className="flex min-w-0 flex-1 flex-col gap-3">
-          {/* The title, editable in place (issue #178's own acceptance
-              criterion) — commits on blur or Enter, mirroring
-              project-view.tsx's identical `commitRename` shape for its
-              own name field. Editable regardless of completion state:
-              nothing about this view's own scope refuses a rename of a
-              completed Task, and task-row.tsx's own checkbox doesn't
+          {/* The title (issue #225's display/edit split — `editingTitle`'s
+              own doc comment above). Editable regardless of completion
+              state: nothing about this view's own scope refuses a rename
+              of a completed Task, and task-row.tsx's own checkbox doesn't
               either — completing something is not "locking" it. */}
           <div className="flex items-start gap-2">
             {/* Completes/un-completes this Task (issue #184's own
@@ -436,28 +451,62 @@ function TaskDetailBody({
               className="mt-1.5 size-4 shrink-0 accent-current"
             />
             <DialogPrimitive.Title asChild>
-              <textarea
-                aria-label="Task title"
-                value={title}
-                onChange={(event) => setTitle(event.target.value)}
-                onBlur={commitTitle}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" && !event.shiftKey) {
-                    event.preventDefault();
-                    event.currentTarget.blur();
-                  }
-                  if (event.key === "Escape") {
-                    setTitle(task.content);
-                  }
-                }}
-                rows={1}
-                className={cn(
-                  "w-full resize-none border-none bg-transparent p-0 font-medium text-base outline-none",
-                  task.completedAt !== null && "text-muted-foreground line-through",
-                )}
-              />
+              {editingTitle ? (
+                // `<Suspense>` is what keeps ProseMirror out of Todo's own
+                // eager chunk (`lazy-task-title-editor.ts`'s own header
+                // comment has the bundle numbers) even though this view
+                // itself is not lazy — the boundary is on the editor, not
+                // on the dialog that hosts it. The fallback repeats the
+                // plain title text rather than a spinner, matching
+                // `task-row-content.tsx`'s identical choice for its own
+                // inline rename.
+                <div className="w-full">
+                  <Suspense
+                    fallback={
+                      <p
+                        className={cn(
+                          "font-medium text-base",
+                          task.completedAt !== null && "text-muted-foreground line-through",
+                        )}
+                      >
+                        {task.content}
+                      </p>
+                    }
+                  >
+                    <LazyTaskTitleEditor
+                      value={task.content}
+                      onCommit={commitTitle}
+                      onCancel={() => setEditingTitle(false)}
+                      className="font-medium text-base"
+                    />
+                  </Suspense>
+                </div>
+              ) : (
+                // DET-02/DET-03: Todoist's own detail title at rest is a
+                // non-editable `div.task_content`, paired with a
+                // visually-hidden "Activate to edit the task name" label
+                // (`titleHintId` below) — a real `<button>`, not a bare
+                // `<div>`, is this app's own choice for how "activate" is
+                // reached without a pointer (Tab, then Enter/Space), which
+                // the reference docs never had to specify since a click
+                // was the only gesture driven.
+                <button
+                  type="button"
+                  onClick={() => setEditingTitle(true)}
+                  aria-describedby={titleHintId}
+                  className={cn(
+                    "w-full text-left font-medium text-base",
+                    task.completedAt !== null && "text-muted-foreground line-through",
+                  )}
+                >
+                  {task.content}
+                </button>
+              )}
             </DialogPrimitive.Title>
           </div>
+          <span id={titleHintId} className="sr-only">
+            Activate to edit the task name
+          </span>
 
           {/* Description (issue #180) — directly under the title, not in
               the sidebar (this file's own header comment). Pill until it

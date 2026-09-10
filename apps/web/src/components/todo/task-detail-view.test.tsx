@@ -1,7 +1,49 @@
 import type { Comment, Label, Project, Section, Task } from "@meologue/core";
 import { fireEvent, render, screen } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TaskDetailView } from "./task-detail-view";
+
+/**
+ * Stands in for the real `TaskTitleEditor` — see `task-title-editor.tsx`'s
+ * own header comment for why no test mounts that component directly (it
+ * wraps a real ProseMirror `EditorView`, which jsdom cannot usefully
+ * mount). `task-row.test.tsx` mocks the identical module the identical
+ * way, for the identical reason.
+ */
+function StubTaskTitleEditor({
+  value,
+  onCommit,
+  onCancel,
+  ariaLabel,
+}: {
+  value: string;
+  onCommit: (value: string) => void;
+  onCancel: () => void;
+  ariaLabel?: string;
+}) {
+  const [text, setText] = useState(value);
+  return (
+    <input
+      aria-label={ariaLabel ?? "Task name"}
+      value={text}
+      onChange={(event) => setText(event.target.value)}
+      onBlur={() => onCommit(text)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          onCommit(text);
+        }
+        if (event.key === "Escape") {
+          onCancel();
+        }
+      }}
+    />
+  );
+}
+
+vi.mock("@/components/todo/task-title-editor", () => ({
+  TaskTitleEditor: StubTaskTitleEditor,
+}));
 
 function task(overrides: Partial<Task> = {}): Task {
   return {
@@ -128,18 +170,31 @@ function renderView(overrides: Partial<Parameters<typeof TaskDetailView>[0]> = {
 }
 
 describe("TaskDetailView", () => {
-  it("renders as a dialog, carrying the Task's own title", () => {
+  it("renders as a dialog, carrying the Task's own title as a display element, not an editor, at rest", () => {
+    // DET-02: Todoist's own detail title at rest is a non-editable
+    // display component, not the composer's editor — a `<button>` here,
+    // not `getByLabelText("Task name")`, which only exists once
+    // `editingTitle` is activated (below).
     renderView({ task: task({ content: "call mum" }) });
 
     expect(screen.getByRole("dialog")).toBeInTheDocument();
-    expect(screen.getByLabelText("Task title")).toHaveValue("call mum");
+    expect(screen.getByRole("button", { name: "call mum" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Task name")).not.toBeInTheDocument();
   });
 
   it("does not autofocus the title on open, so a phone doesn't pop the keyboard for a tap that's usually just a look", () => {
-    renderView();
+    renderView({ task: task({ content: "call mum" }) });
 
-    expect(screen.getByLabelText("Task title")).not.toHaveFocus();
+    expect(screen.getByRole("button", { name: "call mum" })).not.toHaveFocus();
     expect(document.activeElement).toBe(screen.getByRole("dialog"));
+  });
+
+  it("clicking the title activates the shared editor, seeded with the current content", async () => {
+    renderView({ task: task({ content: "call mum" }) });
+
+    fireEvent.click(screen.getByRole("button", { name: "call mum" }));
+
+    expect(await screen.findByLabelText("Task name")).toHaveValue("call mum");
   });
 
   it("the breadcrumb reads Inbox for a Task with no Project", () => {
@@ -159,46 +214,57 @@ describe("TaskDetailView", () => {
     );
   });
 
-  it("renaming commits on blur, trimmed", () => {
+  it("renaming commits on blur, trimmed", async () => {
     const onRename = vi.fn();
     renderView({ task: task({ content: "old title" }), onRename });
 
-    const titleField = screen.getByLabelText("Task title");
+    fireEvent.click(screen.getByRole("button", { name: "old title" }));
+    const titleField = await screen.findByLabelText("Task name");
     fireEvent.change(titleField, { target: { value: "  new title  " } });
     fireEvent.blur(titleField);
 
     expect(onRename).toHaveBeenCalledWith("new title");
   });
 
-  it("does not commit a rename when the title is unchanged or blank", () => {
+  it("does not commit a rename when the title is unchanged or blank", async () => {
     const onRename = vi.fn();
     renderView({ task: task({ content: "old title" }), onRename });
 
-    const titleField = screen.getByLabelText("Task title");
+    fireEvent.click(screen.getByRole("button", { name: "old title" }));
+    let titleField = await screen.findByLabelText("Task name");
     fireEvent.blur(titleField);
     expect(onRename).not.toHaveBeenCalled();
 
+    fireEvent.click(await screen.findByRole("button", { name: "old title" }));
+    titleField = await screen.findByLabelText("Task name");
     fireEvent.change(titleField, { target: { value: "   " } });
     fireEvent.blur(titleField);
     expect(onRename).not.toHaveBeenCalled();
   });
 
-  it("Enter commits the title without adding a newline", () => {
+  it("Enter commits the title without adding a newline", async () => {
     const onRename = vi.fn();
     renderView({ task: task({ content: "old title" }), onRename });
 
-    const titleField = screen.getByLabelText("Task title");
-    // The field no longer autofocuses on open (a phone would pop its
-    // keyboard for a tap that's usually just a look), so this test
-    // focuses it itself — a real edit starts with a tap, which focuses
-    // the field the same way. Without this, jsdom's `.blur()` inside the
-    // component's own Enter handler is a no-op against an element that
-    // was never the `document.activeElement`, and `onRename` never fires.
-    titleField.focus();
+    fireEvent.click(screen.getByRole("button", { name: "old title" }));
+    const titleField = await screen.findByLabelText("Task name");
     fireEvent.change(titleField, { target: { value: "new title" } });
     fireEvent.keyDown(titleField, { key: "Enter" });
 
     expect(onRename).toHaveBeenCalledWith("new title");
+  });
+
+  it("Escape cancels the in-progress edit and returns to the display title, without renaming", async () => {
+    const onRename = vi.fn();
+    renderView({ task: task({ content: "old title" }), onRename });
+
+    fireEvent.click(screen.getByRole("button", { name: "old title" }));
+    const titleField = await screen.findByLabelText("Task name");
+    fireEvent.change(titleField, { target: { value: "discard me" } });
+    fireEvent.keyDown(titleField, { key: "Escape" });
+
+    expect(onRename).not.toHaveBeenCalled();
+    expect(await screen.findByRole("button", { name: "old title" })).toBeInTheDocument();
   });
 
   it("prev/next chevrons are disabled when there's nothing further, and call onNavigate when there is", () => {
@@ -462,7 +528,7 @@ describe("TaskDetailView", () => {
 
       const checkbox = screen.getByLabelText('Mark "call mum" not done');
       expect(checkbox).toBeChecked();
-      expect(screen.getByLabelText("Task title")).toHaveClass("line-through");
+      expect(screen.getByRole("button", { name: "call mum" })).toHaveClass("line-through");
     });
 
     it("clicking the checkbox calls onUncomplete", () => {
@@ -477,11 +543,12 @@ describe("TaskDetailView", () => {
       expect(onUncomplete).toHaveBeenCalled();
     });
 
-    it("the title remains editable", () => {
+    it("the title remains editable", async () => {
       const onRename = vi.fn();
       renderView({ task: task({ completedAt: "2026-01-02T00:00:00.000Z" }), onRename });
 
-      const field = screen.getByLabelText("Task title");
+      fireEvent.click(screen.getByRole("button", { name: "buy milk" }));
+      const field = await screen.findByLabelText("Task name");
       fireEvent.change(field, { target: { value: "changed" } });
       fireEvent.blur(field);
 
@@ -495,7 +562,7 @@ describe("TaskDetailView", () => {
 
       const checkbox = screen.getByLabelText('Complete "call mum"');
       expect(checkbox).not.toBeChecked();
-      expect(screen.getByLabelText("Task title")).not.toHaveClass("line-through");
+      expect(screen.getByRole("button", { name: "call mum" })).not.toHaveClass("line-through");
     });
 
     it("clicking the checkbox calls onComplete", () => {

@@ -195,6 +195,38 @@ const CHUNK_BUDGETS = {
     ceilingBytes: 17_200,
     baselineBytes: 13_176,
   },
+  // Not a route — `TaskTitleEditor` (components/todo/task-title-editor.tsx),
+  // lazy from both `task-row-content.tsx`'s inline rename and
+  // `task-detail-view.tsx`'s title (issue #225) — the identical
+  // "keep it out of the eager chunk" move `destructive-confirm-dialog.tsx`
+  // above already made, for the identical reason: Todo's own route
+  // measured 81,251 gzip bytes against an 87,600 ceiling right before this
+  // ticket (issue #225's own GitHub comment), 6,349 bytes of headroom —
+  // nowhere near enough for ProseMirror
+  // (`prosemirror-state`/`-view`/`-model`/`-keymap`/`-history`), even
+  // though every one of those packages already ships in this app for the
+  // Composer. A static import of `task-title-editor.tsx` from anywhere
+  // Todo's own route reaches would have landed that whole weight on Todo's
+  // number in full. Measured 1,088 bytes gzip (own chunk, no shared chunk
+  // of its own) immediately after landing — this file's own module
+  // comment on why the schema is deliberately smaller than `entrySchema`
+  // is most of why that number is this small. Ceiling carries the same
+  // ~30%+ headroom every budget in this table does.
+  //
+  // One open question this ticket's own report names rather than hides:
+  // `composer-page.tsx`'s own entry below is separately already known to
+  // read roughly half its recorded baseline (a discrepancy an earlier
+  // ticket's own GitHub comment already flagged and left open — "either
+  // chunking changed materially or that baseline is stale"), which raises
+  // the possibility that some ProseMirror-adjacent vendor weight is
+  // landing in a chunk neither route's own number currently walks. This
+  // entry is measured with the identical methodology every other one in
+  // this table uses; it has not been separately audited against that open
+  // question.
+  "src/components/todo/task-title-editor.tsx": {
+    ceilingBytes: 1_500,
+    baselineBytes: 1_088,
+  },
   // Not a route — `TodoSidebar` (components/todo/todo-sidebar.tsx), lazy
   // from chat-shell-layout.tsx (issue #223, ADR 0070). It has to be lazy
   // for the reason that file's own comment gives: the layout renders on
@@ -262,6 +294,19 @@ const CHUNK_BUDGETS = {
   // an increase this ticket's own report already names as expected
   // ("Todo's route budget will grow," the identical prediction #171's own
   // comment above already made good on once).
+  // Re-measured 2026-09-10 immediately after issue #225's inline rename
+  // and detail-title editing landed: 81,251 (this ticket's own GitHub
+  // comment, taken right after #223) grew to 82,590 bytes gzip — +1,339
+  // bytes, from the activation state/`<Suspense>` wiring `task-row-
+  // content.tsx` and `task-detail-view.tsx` gained, not from ProseMirror
+  // itself (`task-title-editor.tsx`'s own CHUNK_BUDGETS entry above shows
+  // that landed in its own 1,088-byte lazy chunk, uncounted here). Left
+  // at 87,600/67,406 rather than bumped: the ceiling still holds with
+  // 5,010 bytes of headroom, and `baselineBytes` here is stale by a wider
+  // margin than just this ticket accounts for (a prior re-measurement this
+  // table records elsewhere was never carried into this field) — a
+  // correction belongs to whichever ticket next has reason to touch this
+  // budget deliberately, not a side effect of landing #225.
   "src/pages/todo-page.tsx": { ceilingBytes: 87_600, baselineBytes: 67_406 },
 };
 
