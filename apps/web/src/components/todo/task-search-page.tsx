@@ -225,9 +225,7 @@ export function TaskSearchPage({
                     onClick={() => onOpenTask(task)}
                     className="flex min-w-0 flex-1 flex-col items-start text-left"
                   >
-                    <span
-                      className={cn("truncate", completed && "text-muted-foreground line-through")}
-                    >
+                    <span className={cn("truncate", completed && "completed-task-text")}>
                       {task.content}
                     </span>
                     <span className="truncate text-muted-foreground text-xs">

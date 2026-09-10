@@ -191,6 +191,27 @@ describe("FilterView — opening a saved Filter (criterion 1)", () => {
     expect(onOpenTask).toHaveBeenCalledWith(dueToday);
   });
 
+  // Issue #237: this preview used to key its own strikethrough off
+  // `task.completedAt !== null` directly, bypassing the "Completed
+  // checklist item" setting (`data-completed-style`, index.css) that
+  // History/Composer already honour. `.completed-task-text` is the shared
+  // class index.css's one rule now also reads. jsdom applies no real
+  // cascade, so this only proves the class is present/absent, not the
+  // resulting decoration or colour.
+  it("gives a completed Task's own text the shared completed-style class instead of hardcoding line-through", () => {
+    const doneToday = task({
+      id: "done-today",
+      date: "2026-09-10",
+      completedAt: "2026-09-10T08:00:00.000Z",
+      content: "call mum",
+    });
+    renderFilterView({ filter: filter({ query: "today" }), tasks: [doneToday] });
+
+    const text = screen.getByText("call mum");
+    expect(text).toHaveClass("completed-task-text");
+    expect(text).not.toHaveClass("line-through");
+  });
+
   it("offers Remove Filter, opening a confirmation before calling onRemove (criterion-adjacent management, not a listed criterion but reachable)", () => {
     const onRemove = vi.fn();
     renderFilterView({ filter: filter(), onRemove });

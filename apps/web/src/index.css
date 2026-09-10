@@ -612,10 +612,25 @@
  * a Reference chip, Search highlighting, all of it — without this rule
  * needing to reach inside `renderNodes`' own output to restyle any of them
  * individually.
+ *
+ * `.completed-task-text` (issue #237) is this rule's other consumer,
+ * alongside `.completed-sample` — the day-tasks widget (`history.tsx`'s
+ * `DayTasksRow`) and Todo's own surfaces (`completed-tasks.tsx`,
+ * `filter-view.tsx`, `task-search-page.tsx`, `task-detail-view.tsx`) render
+ * a completed Task's own words outside the checkbox-plus-sibling-`<div>`
+ * shape the structural selector above matches — a `<button>` or `<span>`,
+ * not a `<div>` beside a checked `<input>` — so each puts this one class on
+ * whichever element wraps the Task's own text instead of hand-writing
+ * `line-through`/`text-muted-foreground` a fifth, sixth, seventh time. It
+ * resolves the exact same two custom properties from the exact same
+ * nearest `data-completed-style` ancestor (`<html>` in the running app),
+ * so these surfaces cannot drift from History/Composer, or from each
+ * other, the way hardcoding independently let them.
  */
 @layer base {
   li.list-none input[type="checkbox"]:checked ~ div,
-  .completed-sample {
+  .completed-sample,
+  .completed-task-text {
     text-decoration: var(--checked-list-text-decoration);
     color: var(--checked-list-text-color, var(--foreground));
   }

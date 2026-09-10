@@ -348,7 +348,12 @@ describe("TodoPage", () => {
     await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
     const dialog = screen.getByRole("dialog");
     expect(within(dialog).getByLabelText('Mark "call mum" not done')).toBeChecked();
-    expect(within(dialog).getByLabelText("Task title")).toHaveClass("line-through");
+    // Issue #237: `.completed-task-text` is the shared class the
+    // completed-style setting drives (index.css) — `line-through` was the
+    // bug this surface used to hardcode regardless of that setting.
+    const title = within(dialog).getByLabelText("Task title");
+    expect(title).toHaveClass("completed-task-text");
+    expect(title).not.toHaveClass("line-through");
   });
 
   it("un-completing from a completed Task's own detail view calls uncompleteTask", async () => {

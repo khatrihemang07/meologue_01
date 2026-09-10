@@ -443,7 +443,7 @@ function TaskDetailBody({
                 rows={1}
                 className={cn(
                   "w-full resize-none border-none bg-transparent p-0 font-medium text-base outline-none",
-                  task.completedAt !== null && "text-muted-foreground line-through",
+                  task.completedAt !== null && "completed-task-text",
                 )}
               />
             </DialogPrimitive.Title>

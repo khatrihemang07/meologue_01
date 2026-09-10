@@ -457,12 +457,23 @@ describe("TaskDetailView", () => {
   // render actionable) a completed Task, not only an active one — "do
   // not make it read-only."
   describe("a completed Task", () => {
-    it("shows the checkbox checked and the title struck through", () => {
+    // Issue #237: the title used to hardcode `text-muted-foreground
+    // line-through` unconditionally on a completed Task, bypassing the
+    // "Completed checklist item" setting (`data-completed-style`,
+    // index.css) that History/Composer already honour.
+    // `.completed-task-text` is the shared class index.css's one rule now
+    // also reads — asserting it (and that the old hardcoded class is gone)
+    // is what would catch a regression back to hardcoding. jsdom applies
+    // no real cascade, so this only proves the class is present/absent,
+    // not the resulting decoration or colour.
+    it("shows the checkbox checked and gives the title the shared completed-style class", () => {
       renderView({ task: task({ completedAt: "2026-01-02T00:00:00.000Z", content: "call mum" }) });
 
       const checkbox = screen.getByLabelText('Mark "call mum" not done');
       expect(checkbox).toBeChecked();
-      expect(screen.getByLabelText("Task title")).toHaveClass("line-through");
+      const title = screen.getByLabelText("Task title");
+      expect(title).toHaveClass("completed-task-text");
+      expect(title).not.toHaveClass("line-through");
     });
 
     it("clicking the checkbox calls onUncomplete", () => {
@@ -495,7 +506,9 @@ describe("TaskDetailView", () => {
 
       const checkbox = screen.getByLabelText('Complete "call mum"');
       expect(checkbox).not.toBeChecked();
-      expect(screen.getByLabelText("Task title")).not.toHaveClass("line-through");
+      const title = screen.getByLabelText("Task title");
+      expect(title).not.toHaveClass("line-through");
+      expect(title).not.toHaveClass("completed-task-text");
     });
 
     it("clicking the checkbox calls onComplete", () => {
