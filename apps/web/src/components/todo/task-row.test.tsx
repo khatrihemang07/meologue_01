@@ -1,7 +1,8 @@
 import type { Label, Project, Task } from "@meologue/core";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
+import { OPEN_COMMAND_MENU_EVENT } from "@/lib/todo-keymap";
 import { TaskRow } from "./task-row";
 
 /**
@@ -471,7 +472,7 @@ describe("TaskRow", () => {
     expect(more).toHaveClass("flex");
   });
 
-  it('opens the full command menu on right-click, and on the "." key', () => {
+  it("opens the full command menu on right-click", () => {
     renderRow({ task: task({ content: "call mum" }) });
 
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
@@ -486,9 +487,33 @@ describe("TaskRow", () => {
     // until the menu closes again.
     fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
 
-    fireEvent.keyDown(screen.getByRole("listitem"), { key: "." });
+  // Issue #228: the `.` key itself moved off this row entirely, onto
+  // `use-todo-keymap.ts`'s one document-level listener — this row's own
+  // remaining job is reacting to *that* hook's event, which is what this
+  // test drives directly rather than a raw "." keydown (there's no keydown
+  // handler left on this row to receive one).
+  it("opens the full command menu when use-todo-keymap.ts's own event names this Task", () => {
+    renderRow({ task: task({ id: "1", content: "call mum" }) });
+
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+
+    act(() => {
+      document.dispatchEvent(new CustomEvent(OPEN_COMMAND_MENU_EVENT, { detail: { taskId: "1" } }));
+    });
     expect(screen.getByRole("menu")).toBeInTheDocument();
+  });
+
+  it("ignores use-todo-keymap.ts's own event when it names a different Task", () => {
+    renderRow({ task: task({ id: "1", content: "call mum" }) });
+
+    act(() => {
+      document.dispatchEvent(
+        new CustomEvent(OPEN_COMMAND_MENU_EVENT, { detail: { taskId: "other-task" } }),
+      );
+    });
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 
   it("shows no schedule summary for a Task with no date, deadline or priority set", () => {

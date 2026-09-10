@@ -21,9 +21,11 @@ import { TaskQuickFind } from "@/components/todo/task-quick-find";
 import type { TaskDetailActions } from "@/components/todo/task-row";
 import { TaskSearchPage } from "@/components/todo/task-search-page";
 import { TodayView } from "@/components/todo/today-view";
+import { TodoKeyboardShortcutsOverlay } from "@/components/todo/todo-keyboard-shortcuts-overlay";
 import { TodoNav } from "@/components/todo/todo-nav";
 import { UpcomingView } from "@/components/todo/upcoming-view";
 import { ConfirmDialog } from "@/components/ui/alert-dialog";
+import { useTodoKeymap } from "@/hooks/use-todo-keymap";
 import { commentCountForTask, commentsForTask } from "@/lib/comment-counts";
 import { sectionsQueryKey, tasksInProjectQueryKey } from "@/lib/query-keys";
 import type { QuickAddTaskFields } from "@/lib/quick-add-task";
@@ -299,6 +301,15 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const confirmingTask = tasks.find((task) => task.id === confirmingId) ?? null;
 
+  // Issue #228: Quick-find's own `open` state, lifted here from
+  // task-quick-find.tsx (that file's own header comment on why) — driven
+  // by `/`/`f`/⌘K through `useTodoKeymap` below, the identical "controlled
+  // from the page" shape `schedulingId`/`confirmingId` already use. The
+  // `?` shortcuts overlay gets the same treatment, one state each, since
+  // neither owns a document listener of its own any more.
+  const [quickFindOpen, setQuickFindOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+
   // Issue #184: "completed work is reached by narrowing the log to
   // completions, not from a separate destination of its own" — a plain
   // toggle above the Activity view rather than a second route.
@@ -546,6 +557,28 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
       () => toast.error("Couldn't copy the link"),
     );
   }
+
+  // Issue #228's keyboard layer — the one document-level listener for the
+  // whole of Todo (`use-todo-keymap.ts`'s own header comment: "mounted
+  // once by todo-page.tsx"), which this call site satisfies simply by
+  // being inside this component's own body — `TodoPage` only ever renders
+  // for `/todo/*` (App.tsx's routes), so this hook mounts and unmounts
+  // with the route exactly the way `TodoNav`/the Todo sidebar already do.
+  // `resolveTask` mirrors `openTask`'s own two-list lookup above (`tasks`
+  // first, `completedTasks` as fallback — that lookup's own doc comment
+  // has the reason a completed Task still needs to resolve).
+  useTodoKeymap({
+    resolveTask: (taskId) =>
+      tasks.find((t) => t.id === taskId) ?? completedTasks.find((t) => t.id === taskId) ?? null,
+    onOpenTaskDetail: openTaskDetail,
+    onOpenSchedule: handleOpenSchedule,
+    onSetTaskDate: setTaskDate,
+    onSetTaskDeadline: setTaskDeadline,
+    onRequestDelete: handleRequestDelete,
+    onOpenQuickFind: () => setQuickFindOpen(true),
+    onShowShortcuts: () => setShortcutsOpen(true),
+    onNavigate: navigate,
+  });
 
   // Every row on this page renders through `TaskRow`, and every one of
   // them needs this identical bundle — see `TaskDetailActions`'s own doc
@@ -929,6 +962,8 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
           cross-Project array this component already leans on for
           `confirmingTask`/`schedulingTask`/`openTask` above. */}
       <TaskQuickFind
+        open={quickFindOpen}
+        onOpenChange={setQuickFindOpen}
         tasks={tasks}
         projects={projects}
         onOpenTask={openTaskDetail}
@@ -937,6 +972,11 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
         }
         onShowMoreResults={openFullSearch}
       />
+
+      {/* Issue #228's `?` overlay — `open`/`onOpenChange` mirror Quick-
+          find's own just above, toggled by the identical keyboard layer
+          (`useTodoKeymap`'s `onShowShortcuts`). */}
+      <TodoKeyboardShortcutsOverlay open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
     </Shell>
   );
 }

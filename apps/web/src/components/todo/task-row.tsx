@@ -1,7 +1,8 @@
 import type { Label, Project, Task } from "@meologue/core";
-import type { KeyboardEvent, PointerEvent, ReactNode } from "react";
-import { useState } from "react";
+import type { PointerEvent, ReactNode } from "react";
+import { useEffect, useState } from "react";
 import { TaskRowContent } from "@/components/todo/task-row-content";
+import { OPEN_COMMAND_MENU_EVENT, type OpenCommandMenuDetail } from "@/lib/todo-keymap";
 
 /**
  * Every door onto the Task detail view and its own command set (issue
@@ -281,59 +282,66 @@ export function TaskRow({
   children,
 }: TaskRowProps) {
   // The full command set's own open state (issue #178) — right-click
-  // anywhere on the row, the `.` key while any of the row's own controls
-  // has focus, or clicking the "More actions" button below all just flip
-  // this one flag, and TaskCommandMenu (its own header comment) renders
-  // the identical menu regardless of which of the three opened it.
-  // Owned here, not in `TaskRowContent` (issue #224's own visual/
-  // interaction split, that file's header comment): both this `<li>`'s
-  // `onContextMenu`/`onKeyDown` below AND that file's trigger button need
-  // to flip the identical flag, and a `<li>` reaching *down* into a
-  // child's state would invert the ownership this file already has of
-  // everything the `<li>` itself does.
+  // anywhere on the row, the `.` key while a Task row has focus (issue
+  // #228's own `use-todo-keymap.ts`, listening once at the document level
+  // rather than here — see the `useEffect` below), or clicking the "More
+  // actions" button below all just flip this one flag, and TaskCommandMenu
+  // (its own header comment) renders the identical menu regardless of
+  // which of the three opened it. Owned here, not in `TaskRowContent`
+  // (issue #224's own visual/interaction split, that file's header
+  // comment): both this `<li>`'s `onContextMenu` below AND that file's
+  // trigger button need to flip the identical flag, and a `<li>` reaching
+  // *down* into a child's state would invert the ownership this file
+  // already has of everything the `<li>` itself does.
   const [commandMenuOpen, setCommandMenuOpen] = useState(false);
+
+  // Issue #228: supersedes this row's own former `.`-key `onKeyDown` —
+  // `use-todo-keymap.ts`'s one document-level listener resolves "which
+  // Task" from `document.activeElement` and dispatches this event rather
+  // than every row keeping a keydown handler of its own (that file's own
+  // header comment on why centralising this is a real simplification, not
+  // just relocation: the old per-row handler needed `stopPropagation()`
+  // solely to keep a nested sub-task's `.` press from also popping its
+  // parent's menu, issue #192's own nesting — a single listener keyed off
+  // focus is never ambiguous between ancestor and descendant rows, so
+  // that guard has nothing left to do).
+  useEffect(() => {
+    function onOpenCommandMenu(event: Event) {
+      const detail = (event as CustomEvent<OpenCommandMenuDetail>).detail;
+      if (detail.taskId === task.id) {
+        setCommandMenuOpen(true);
+      }
+    }
+    document.addEventListener(OPEN_COMMAND_MENU_EVENT, onOpenCommandMenu);
+    return () => document.removeEventListener(OPEN_COMMAND_MENU_EVENT, onOpenCommandMenu);
+  }, [task.id]);
+
   return (
     <li
       data-task-id={task.id}
       // The full command set, reached from anywhere on the row — issue
       // #178's own reference behaviour ("the full command set lives
-      // behind right-click and the `.` key, not on the row"). `.` is read
-      // here, on the `<li>` itself, rather than on any one control inside
-      // it: a keydown on the checkbox, the content, or an action button
-      // all bubble up to this handler, so the reader doesn't have to land
-      // focus on one specific element first. Ignored while a modifier is
-      // held, or while the event's own target is the Section `<select>`
-      // below — a reader typing to jump that combobox to an option
-      // starting with "." (vanishingly unlikely, but this guard costs
-      // nothing) must not also pop this menu open underneath it.
+      // behind right-click and the `.` key, not on the row"). Right-click
+      // is still read here, on the `<li>` itself: a click anywhere on the
+      // row bubbles up to this handler, so the reader doesn't have to land
+      // on one specific element first. `.` itself moved off this element
+      // entirely (issue #228) — the `useEffect` above listens for the
+      // centralised hook's own event instead.
       //
       // `stopPropagation()` here is new with issue #192, not incidental:
       // that ticket nested a row's own sub-task `<ul>` *inside* its own
-      // `<li>` (this file's own header comment), which means a click or
-      // keypress on a *child* row's `<li>` now bubbles up through every
-      // ancestor row's `<li>` too, not just through the outer `<ul>` the
-      // way it did when the two were siblings. Without stopping it here,
-      // right-clicking a sub-task would pop that sub-task's own menu
-      // *and* its parent's, both reading the identical event — silently
-      // impossible before #192, since nothing this handler could bubble
-      // through belonged to another row's own `<li>` at all.
+      // `<li>` (this file's own header comment), which means a click on a
+      // *child* row's `<li>` now bubbles up through every ancestor row's
+      // `<li>` too, not just through the outer `<ul>` the way it did when
+      // the two were siblings. Without stopping it here, right-clicking a
+      // sub-task would pop that sub-task's own menu *and* its parent's,
+      // both reading the identical event — silently impossible before
+      // #192, since nothing this handler could bubble through belonged to
+      // another row's own `<li>` at all.
       onContextMenu={(event) => {
         event.preventDefault();
         event.stopPropagation();
         setCommandMenuOpen(true);
-      }}
-      onKeyDown={(event: KeyboardEvent<HTMLLIElement>) => {
-        if (
-          event.key === "." &&
-          !event.metaKey &&
-          !event.ctrlKey &&
-          !event.altKey &&
-          (event.target as HTMLElement).tagName !== "SELECT"
-        ) {
-          event.preventDefault();
-          event.stopPropagation();
-          setCommandMenuOpen(true);
-        }
       }}
     >
       {/*

@@ -26,6 +26,17 @@
  * own header comment already refuses elsewhere in this file's neighbours
  * — this ticket's own report names the trim explicitly rather than
  * leaving it to look like an oversight.
+ *
+ * **Issue #228:** the hint characters this file used to hand-write next to
+ * each command (`⌘E`, `T`, `Y`, `D`, `V`, `⌘⌫`) were "purely a legend" —
+ * wired to nothing at all, this file's own former comment admitted. They
+ * now come from `hintForId()` (`@/lib/todo-keymap`), the same table
+ * `use-todo-keymap.ts` actually matches keydowns against, so a hint can no
+ * longer exist unless its binding does. `hintForId` returns `null` for
+ * "Move to…" (`V`) on purpose — that binding was deliberately left
+ * unimplemented (todo-keymap.ts's own header comment has the reason: no
+ * controlled way to open this exact submenu pre-expanded), so this menu
+ * renders no hint there at all rather than a false one.
  */
 import type { Label, Project, Task } from "@meologue/core";
 import { storedPriorityOf, uiPriorityOf } from "@meologue/core";
@@ -33,6 +44,7 @@ import { CalendarClock, CalendarX2, Copy, FolderInput, Pencil, Tag, Trash2 } fro
 import { DropdownMenu } from "radix-ui";
 import type * as React from "react";
 import { priorityPickerColour } from "@/lib/task-priority-colors";
+import { hintForId } from "@/lib/todo-keymap";
 import { cn } from "@/lib/utils";
 
 export interface TaskCommandMenuProps {
@@ -55,9 +67,13 @@ export interface TaskCommandMenuProps {
 const itemClassName =
   "flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none data-highlighted:bg-muted data-highlighted:text-foreground";
 
-/** Renders after every command's own words — the reference layout's own hint characters (Edit ⌘E, Date (T), etc.). Purely a legend: none of these is bound as a real keyboard shortcut (this file's own header comment on what this ticket trims), so it never claims a binding that doesn't exist beyond the `.` key that opens this menu at all. */
-function Hint({ children }: { children: React.ReactNode }) {
-  return <span className="ml-auto text-muted-foreground text-xs">{children}</span>;
+/** Renders after every command's own words — issue #228's own table-derived hint (`hintForId`, `@/lib/todo-keymap`), `null` when nothing is wired for that id (this file's own header comment on why "Move to…" renders none). */
+function Hint({ id }: { id: string }) {
+  const hint = hintForId(id);
+  if (hint === null) {
+    return null;
+  }
+  return <span className="ml-auto text-muted-foreground text-xs">{hint}</span>;
 }
 
 export function TaskCommandMenu({
@@ -93,13 +109,13 @@ export function TaskCommandMenu({
           <DropdownMenu.Item className={itemClassName} onSelect={onOpenDetail}>
             <Pencil aria-hidden="true" className="size-3.5" />
             Edit
-            <Hint>⌘E</Hint>
+            <Hint id="edit-task" />
           </DropdownMenu.Item>
 
           <DropdownMenu.Item className={itemClassName} onSelect={onOpenSchedule}>
             <CalendarClock aria-hidden="true" className="size-3.5" />
             Date…
-            <Hint>T</Hint>
+            <Hint id="set-date" />
           </DropdownMenu.Item>
 
           <DropdownMenu.Sub>
@@ -114,7 +130,7 @@ export function TaskCommandMenu({
                 style={{ borderColor: priorityPickerColour(uiPriority) }}
               />
               Priority
-              <Hint>Y</Hint>
+              <Hint id="set-priority" />
             </DropdownMenu.SubTrigger>
             <DropdownMenu.Portal>
               <DropdownMenu.SubContent className="z-50 flex w-40 flex-col gap-0.5 rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-lg">
@@ -140,7 +156,7 @@ export function TaskCommandMenu({
           <DropdownMenu.Item className={itemClassName} onSelect={onOpenSchedule}>
             <CalendarX2 aria-hidden="true" className="size-3.5" />
             Deadline…
-            <Hint>D</Hint>
+            <Hint id="set-deadline" />
           </DropdownMenu.Item>
 
           {labels.length > 0 && (
@@ -189,7 +205,7 @@ export function TaskCommandMenu({
             <DropdownMenu.SubTrigger className={itemClassName}>
               <FolderInput aria-hidden="true" className="size-3.5" />
               Move to…
-              <Hint>V</Hint>
+              <Hint id="move-to" />
             </DropdownMenu.SubTrigger>
             <DropdownMenu.Portal>
               <DropdownMenu.SubContent className="z-50 flex max-h-64 w-48 flex-col gap-0.5 overflow-y-auto rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-lg">
@@ -232,7 +248,7 @@ export function TaskCommandMenu({
           >
             <Trash2 aria-hidden="true" className="size-3.5" />
             Delete
-            <Hint>⌘⌫</Hint>
+            <Hint id="delete-task" />
           </DropdownMenu.Item>
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
