@@ -266,6 +266,22 @@ const CHUNK_BUDGETS = {
     ceilingBytes: 1_500,
     baselineBytes: 1_088,
   },
+  // Not a route — `TaskDescriptionEditor` (components/todo/task-description-
+  // editor.tsx), lazy from `task-detail-view.tsx` alone (issue #229,
+  // DET-11/DET-12) — this file's own header comment on why it is a
+  // bespoke, minimal ProseMirror schema rather than `entrySchema`
+  // (`composer-editor.ts`'s ~69 KB gzip would have blown
+  // `task-detail-view.tsx`'s own budget many times over). Reuses
+  // `prosemirror-state`/`-view`/`-model`/`-keymap`/`-history` already
+  // shared with `task-title-editor.tsx` above; its own marginal weight is
+  // just its schema, its two hand-written mark input rules, its own
+  // bullet-list input rule, and `prosemirror-inputrules`. Measured 1,703
+  // bytes gzip (own chunk, no shared chunk of its own) immediately after
+  // landing.
+  "src/components/todo/task-description-editor.tsx": {
+    ceilingBytes: 2_300,
+    baselineBytes: 1_703,
+  },
   // Not a route — `TodoSidebar` (components/todo/todo-sidebar.tsx), lazy
   // from chat-shell-layout.tsx (issue #223, ADR 0070). It has to be lazy
   // for the reason that file's own comment gives: the layout renders on

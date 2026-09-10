@@ -100,7 +100,7 @@ describe("ActivityFeed", () => {
     );
     const rows = screen.getAllByRole("listitem");
     expect(rows).toHaveLength(1);
-    expect(rows[0]?.textContent).toContain("Completed");
+    expect(rows[0]?.textContent).toContain("You completed");
   });
 
   // The coordinator's own gap-fix report: an activity row must name its
@@ -112,7 +112,7 @@ describe("ActivityFeed", () => {
       { wrapper: MemoryRouter },
     );
     const row = screen.getByRole("listitem");
-    expect(row.textContent).toContain("Completed");
+    expect(row.textContent).toContain("You completed");
     expect(row.textContent).toContain("Buy milk");
   });
 
@@ -163,7 +163,7 @@ describe("ActivityFeed", () => {
       { wrapper: MemoryRouter },
     );
     const row = screen.getByRole("listitem");
-    expect(row.textContent).toContain("Completed");
+    expect(row.textContent).toContain("You completed");
     expect(row.textContent).not.toContain("Buy milk");
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });
@@ -219,7 +219,7 @@ describe("ActivityFeed", () => {
       { wrapper: MemoryRouter },
     );
     const row = screen.getByRole("listitem");
-    expect(row.textContent).toContain("Commented on");
+    expect(row.textContent).toContain("You commented");
     expect(row.textContent).toContain("Buy milk");
   });
 });

@@ -54,7 +54,9 @@ import type * as React from "react";
 import { Suspense, useRef, useState } from "react";
 import { entryProse } from "@/components/entry-prose";
 import { ActivityFeed } from "@/components/todo/activity-feed";
+import { LazyTaskDescriptionEditor } from "@/components/todo/lazy-task-description-editor";
 import { LazyTaskTitleEditor } from "@/components/todo/lazy-task-title-editor";
+import { ConfirmDialog } from "@/components/ui/alert-dialog";
 import { useWideLayout } from "@/hooks/use-wide-layout";
 import { formatDay, formatTaskDate } from "@/lib/format-task-date";
 import { priorityColour } from "@/lib/task-priority-colors";
@@ -106,6 +108,19 @@ export interface TaskDetailViewProps {
   onAddComment: (text: string) => void;
   onEditComment: (id: string, text: string) => void;
   onRemoveComment: (id: string) => void;
+  /**
+   * This Task's own direct sub-tasks (issue #229) — already scoped by the
+   * caller (`TaskStore.listChildren`), the identical "the caller scopes
+   * it, this view only renders" split `comments`/`events` above already
+   * take. Both active and completed children render here (a completed
+   * sub-task still shows, struck through) — there is no separate
+   * "completed sub-tasks" surface the way the main Task list has one.
+   */
+  subtasks: Task[];
+  /** Creates a new sub-task directly under this Task (`AddTaskOverrides.parentId`, use-tasks.ts). */
+  onAddSubtask: (content: string) => void;
+  onCompleteSubtask: (id: string) => void;
+  onUncompleteSubtask: (id: string) => void;
   /**
    * This Task's own history (issue #184), newest first — already scoped
    * to this Task by the caller (`listEventsByTask`), the identical split
@@ -177,11 +192,12 @@ function AttributeRow({
 function CommentRow({
   comment,
   onEdit,
-  onRemove,
+  onRequestRemove,
 }: {
   comment: Comment;
   onEdit: (text: string) => void;
-  onRemove: () => void;
+  /** CMT-03: deleting a Comment confirms first — this row never removes directly; it only asks its caller (`TaskDetailBody`'s own `ConfirmDialog`) to start that confirmation. */
+  onRequestRemove: () => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(comment.text);
@@ -236,7 +252,7 @@ function CommentRow({
       <button
         type="button"
         aria-label="Delete comment"
-        onClick={onRemove}
+        onClick={onRequestRemove}
         className="flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100"
       >
         <Trash2 aria-hidden="true" className="size-3.5" />
@@ -247,10 +263,16 @@ function CommentRow({
 
 /**
  * The always-visible "Add a comment" composer (issue #180's own
- * reference-behaviour note — never hidden behind an icon). Enter submits,
- * Shift+Enter inserts a newline, mirroring the title field's identical
- * Enter-commits convention above; submitting clears the field for the
- * next Comment rather than leaving what was just sent sitting in the box.
+ * reference-behaviour note — never hidden behind an icon).
+ *
+ * **CMT-01: Ctrl/Cmd+Enter or the "Comment" button submits — Enter and
+ * Shift+Enter both insert a newline.** This is the deliberate *opposite*
+ * of the title field's own Enter-commits convention above
+ * (`lifecycle.md`'s own header comment: "Two editors, two rules — do not
+ * unify them"), so this composer's own `onKeyDown` only ever intercepts
+ * the Mod+Enter chord, never plain Enter. Submitting clears the field for
+ * the next Comment rather than leaving what was just sent sitting in the
+ * box.
  */
 function CommentComposer({ onSubmit }: { onSubmit: (text: string) => void }) {
   const [text, setText] = useState("");
@@ -278,7 +300,7 @@ function CommentComposer({ onSubmit }: { onSubmit: (text: string) => void }) {
         value={text}
         onChange={(event) => setText(event.target.value)}
         onKeyDown={(event) => {
-          if (event.key === "Enter" && !event.shiftKey) {
+          if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
             event.preventDefault();
             submit();
           }
@@ -316,27 +338,41 @@ function TaskDetailBody({
   onAddComment,
   onEditComment,
   onRemoveComment,
+  subtasks,
+  onAddSubtask,
+  onCompleteSubtask,
+  onUncompleteSubtask,
   events,
   wide,
 }: Omit<TaskDetailViewProps, "onClose"> & {
   wide: boolean;
 }) {
-  // Issue #225: the pre-#225 title was always an editable `<textarea>`,
-  // with no rest state at all — the DET-04 gap this ticket's own brief
-  // names as answered ("what does the detail title become once
-  // activated"). `editingTitle` is the display/edit split DET-02/DET-06
-  // describe: a non-editable display element at rest, `TaskTitleEditor`
-  // mounted only once a reader activates it, exactly as `editingTitle` in
-  // `task-row-content.tsx` mirrors for the row's own new inline rename.
-  const [editingTitle, setEditingTitle] = useState(false);
+  // DET-09: editing is task-wide, not field-wide — clicking either the
+  // title or the description puts BOTH into edit together, sharing one
+  // Cancel/Save pair (below), replacing the pre-#229 shape where each
+  // field owned its own `editingTitle`/`editingDescription` flag and
+  // committed independently on blur. `focusField` is DET-10's own focus
+  // trap, reproduced deliberately: the description's own click target
+  // (the pill, or the rendered block) is the only entry point that lands
+  // focus on the description; every other entry point into this form —
+  // today, only the title's own display button — lands on the title, the
+  // identical hazard lifecycle.md's own "Focus trap" finding names.
+  const [editing, setEditing] = useState(false);
+  const [focusField, setFocusField] = useState<"title" | "description">("title");
+  const [titleDraft, setTitleDraft] = useState(task.content);
+  const [descriptionDraft, setDescriptionDraft] = useState(task.description ?? "");
   // A literal id, not `useId()`: only one `TaskDetailView` is ever mounted
   // at a time (it's a modal over the whole app), so there is no second
   // instance for a fixed id to collide with.
   const titleHintId = "task-detail-title-hint";
   const [pickingProject, setPickingProject] = useState(false);
   const [pickingLabels, setPickingLabels] = useState(false);
-  const [editingDescription, setEditingDescription] = useState(false);
-  const [descriptionDraft, setDescriptionDraft] = useState(task.description ?? "");
+  const [subtaskDraft, setSubtaskDraft] = useState("");
+  // CMT-03: deleting a Comment confirms first (ours used to delete with no
+  // confirmation at all) — one dialog for the whole thread, named by which
+  // Comment it's currently open for, mirroring `todo-page.tsx`'s own
+  // `confirmingId`/`ConfirmDialog` pair for deleting a Task.
+  const [confirmingCommentId, setConfirmingCommentId] = useState<string | null>(null);
   const uiPriority = uiPriorityOf(task.priority);
   // Issue #224: computed once, not inline in the Date row's own `value`
   // JSX below, so `text`/`colour` can't drift from calling
@@ -349,37 +385,52 @@ function TaskDetailBody({
           recurring: task.dateString !== null,
         });
 
-  // `TaskTitleEditor`'s own `onCommit` hands back the current text
-  // directly (its own doc comment on why: this component owns no
-  // mirrored `title` state to read instead) — trimming and comparing
-  // against `task.content` here is the identical guard the pre-#225
-  // version already applied, just fed from a parameter instead of state.
-  function commitTitle(next: string) {
-    setEditingTitle(false);
-    const trimmed = next.trim();
-    if (trimmed === "" || trimmed === task.content) {
+  function startEditing(field: "title" | "description") {
+    setTitleDraft(task.content);
+    setDescriptionDraft(task.description ?? "");
+    setFocusField(field);
+    setEditing(true);
+  }
+
+  function cancelEditing() {
+    setEditing(false);
+  }
+
+  // The one door both the title's own `onCommit` (Enter, or the Save
+  // button below) and the description's own Save button go through —
+  // DET-09's "one Cancel/Save pair" means one commit, not two. `titleText`
+  // is `TaskTitleEditor`'s own just-committed value when Enter fired
+  // (that component's own doc comment on why it hands the text back
+  // directly rather than this view reading mirrored state); the Save
+  // button below has no such value in hand, so it passes nothing and this
+  // reads `titleDraft` instead — `onChange` from both editors keeps that
+  // state current the whole time this form is open.
+  function saveEditing(titleText?: string) {
+    setEditing(false);
+    const trimmedTitle = (titleText ?? titleDraft).trim();
+    if (trimmedTitle !== "" && trimmedTitle !== task.content) {
+      onRename(trimmedTitle);
+    }
+    // Trims only — the identical "never reflows a body, only trims it"
+    // convention normalizeEntryBody (entry-text.ts) already follows for an
+    // Entry's own body, applied here for the identical reason: a
+    // Description is Markdown text, and internal newlines are part of
+    // what was typed, not incidental whitespace this view gets to
+    // discard.
+    const trimmedDescription = descriptionDraft.trim();
+    const nextDescription = trimmedDescription === "" ? null : trimmedDescription;
+    if (nextDescription !== task.description) {
+      onSetDescription(nextDescription);
+    }
+  }
+
+  function submitSubtask() {
+    const trimmed = subtaskDraft.trim();
+    if (trimmed === "") {
       return;
     }
-    onRename(trimmed);
-  }
-
-  function openDescriptionEditor() {
-    setDescriptionDraft(task.description ?? "");
-    setEditingDescription(true);
-  }
-
-  // Trims only — the identical "never reflows a body, only trims it"
-  // convention normalizeEntryBody (entry-text.ts) already follows for an
-  // Entry's own body, applied here for the identical reason: a
-  // Description is Markdown text, and internal newlines are part of what
-  // was typed, not incidental whitespace this view gets to discard.
-  function commitDescription() {
-    setEditingDescription(false);
-    const trimmed = descriptionDraft.trim();
-    const next = trimmed === "" ? null : trimmed;
-    if (next !== task.description) {
-      onSetDescription(next);
-    }
+    onAddSubtask(trimmed);
+    setSubtaskDraft("");
   }
 
   return (
@@ -451,7 +502,7 @@ function TaskDetailBody({
               className="mt-1.5 size-4 shrink-0 accent-current"
             />
             <DialogPrimitive.Title asChild>
-              {editingTitle ? (
+              {editing ? (
                 // `<Suspense>` is what keeps ProseMirror out of Todo's own
                 // eager chunk (`lazy-task-title-editor.ts`'s own header
                 // comment has the bundle numbers) even though this view
@@ -460,6 +511,12 @@ function TaskDetailBody({
                 // plain title text rather than a spinner, matching
                 // `task-row-content.tsx`'s identical choice for its own
                 // inline rename.
+                //
+                // DET-09: BOTH the title and the description become real
+                // editors together the instant either is activated — only
+                // which one holds the caret differs, via `autoFocus`
+                // below (DET-10's own `focusField`), never whether it's
+                // editable at all.
                 <div className="w-full">
                   <Suspense
                     fallback={
@@ -475,8 +532,16 @@ function TaskDetailBody({
                   >
                     <LazyTaskTitleEditor
                       value={task.content}
-                      onCommit={commitTitle}
-                      onCancel={() => setEditingTitle(false)}
+                      onChange={setTitleDraft}
+                      onCommit={saveEditing}
+                      onCancel={cancelEditing}
+                      autoFocus={focusField === "title"}
+                      // DET-09: blur no longer means "done" — moving focus
+                      // from the title into the description (still inside
+                      // this same combined form) must not close it. Only
+                      // Enter, Escape or the explicit Save/Cancel pair
+                      // below end this form now.
+                      commitOnBlur={false}
                       className="font-medium text-base"
                     />
                   </Suspense>
@@ -492,7 +557,7 @@ function TaskDetailBody({
                 // was the only gesture driven.
                 <button
                   type="button"
-                  onClick={() => setEditingTitle(true)}
+                  onClick={() => startEditing("title")}
                   aria-describedby={titleHintId}
                   className={cn(
                     "w-full text-left font-medium text-base",
@@ -508,33 +573,53 @@ function TaskDetailBody({
             Activate to edit the task name
           </span>
 
-          {/* Description (issue #180) — directly under the title, not in
-              the sidebar (this file's own header comment). Pill until it
-              has words, then a rendered, click-to-edit block — the
-              identical promotion Project/Date/Deadline/Priority/Labels
-              use below, extended to cover this attribute too. */}
-          {task.description === null && !editingDescription ? (
-            <AttributePill label="Description" onClick={openDescriptionEditor} />
-          ) : editingDescription ? (
-            <textarea
-              aria-label="Task description"
-              value={descriptionDraft}
-              onChange={(event) => setDescriptionDraft(event.target.value)}
-              onBlur={commitDescription}
-              onKeyDown={(event) => {
-                if (event.key === "Escape") {
-                  setDescriptionDraft(task.description ?? "");
-                  event.currentTarget.blur();
+          {/* Description (issue #180, DET-09 onward) — directly under the
+              title, not in the sidebar (this file's own header comment).
+              At rest: a pill until it has words, then a rendered,
+              click-to-edit block, the identical promotion
+              Project/Date/Deadline/Priority/Labels use below. While
+              `editing`, this renders `TaskDescriptionEditor`
+              (DET-11/DET-12) regardless of which field the reader
+              activated — DET-09's own "task-wide, not field-wide" rule —
+              sharing the one Cancel/Save pair below with the title. */}
+          {editing ? (
+            <div className="flex flex-col gap-2">
+              <Suspense
+                fallback={
+                  <div className="[&_p]:my-0 [&_ul]:my-0">{entryProse(task.description ?? "")}</div>
                 }
-              }}
-              placeholder="Add a description…"
-              rows={4}
-              className="w-full resize-none rounded-md border border-border bg-transparent p-2 text-sm outline-none"
-            />
+              >
+                <LazyTaskDescriptionEditor
+                  value={task.description ?? ""}
+                  onChange={setDescriptionDraft}
+                  onCancel={cancelEditing}
+                  autoFocus={focusField === "description"}
+                  className="text-sm"
+                />
+              </Suspense>
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={cancelEditing}
+                  className="rounded-md border border-border px-2.5 py-1 text-sm transition hover:bg-muted"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => saveEditing()}
+                  className="rounded-md border border-border px-2.5 py-1 text-sm transition hover:bg-muted"
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+          ) : task.description === null ? (
+            <AttributePill label="Description" onClick={() => startEditing("description")} />
           ) : (
             <button
               type="button"
-              onClick={openDescriptionEditor}
+              onClick={() => startEditing("description")}
               className="w-full rounded-md p-2 text-left text-sm transition hover:bg-muted"
             >
               {/* `[&_p]:my-0` — entryProse's own `<p>` carries margin
@@ -546,6 +631,76 @@ function TaskDetailBody({
               <div className="[&_p]:my-0 [&_ul]:my-0">{entryProse(task.description ?? "")}</div>
             </button>
           )}
+
+          {/* Sub-tasks (issue #229) — the detail view had no such section
+              at all before this ticket, despite `Task.parentId`,
+              `listChildren` and `listDescendants` already existing in the
+              store (this ticket's own brief). Create, display, complete —
+              reordering/reparenting a sub-task from inside this view is
+              out of scope; `task-tree.tsx`'s own drag/keyboard reorder
+              already covers that from Inbox/a Project's own list.
+              Completing the *parent* still completes every sub-task
+              (CONTEXT.md's Sub-task entry) — already true for free, since
+              `onComplete` above routes to the identical `TaskStore.complete`
+              that already cascades to `listChildren` (sqlite-task-store.ts). */}
+          <div className="flex flex-col gap-2">
+            <h2 className="text-muted-foreground text-xs">
+              Sub-tasks{subtasks.length > 0 ? ` (${subtasks.length})` : ""}
+            </h2>
+            {subtasks.length > 0 && (
+              <ul className="flex flex-col gap-1">
+                {subtasks.map((subtask) => (
+                  <li key={subtask.id} className="flex items-center gap-2 rounded-md p-1.5 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={subtask.completedAt !== null}
+                      onChange={() =>
+                        subtask.completedAt !== null
+                          ? onUncompleteSubtask(subtask.id)
+                          : onCompleteSubtask(subtask.id)
+                      }
+                      aria-label={
+                        subtask.completedAt !== null
+                          ? `Mark "${subtask.content}" not done`
+                          : `Complete "${subtask.content}"`
+                      }
+                      className="size-4 shrink-0 accent-current"
+                    />
+                    <span
+                      className={cn(
+                        "min-w-0 flex-1 truncate",
+                        subtask.completedAt !== null && "text-muted-foreground line-through",
+                      )}
+                    >
+                      {subtask.content}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                submitSubtask();
+              }}
+              className="flex items-center gap-2"
+            >
+              <input
+                type="text"
+                aria-label="Add sub-task"
+                placeholder="Add sub-task"
+                value={subtaskDraft}
+                onChange={(event) => setSubtaskDraft(event.target.value)}
+                className="min-w-0 flex-1 rounded-md border border-border bg-transparent p-2 text-sm outline-none"
+              />
+              <button
+                type="submit"
+                className="shrink-0 rounded-md border border-border px-2.5 py-1.5 text-sm transition hover:bg-muted"
+              >
+                Add
+              </button>
+            </form>
+          </div>
 
           {/* Comments (issue #180) — a thread below the description, an
               always-visible composer, the most recent Comment simply the
@@ -562,13 +717,32 @@ function TaskDetailBody({
                     key={comment.id}
                     comment={comment}
                     onEdit={(text) => onEditComment(comment.id, text)}
-                    onRemove={() => onRemoveComment(comment.id)}
+                    onRequestRemove={() => setConfirmingCommentId(comment.id)}
                   />
                 ))}
               </ul>
             )}
             <CommentComposer onSubmit={onAddComment} />
           </div>
+
+          {/* CMT-03: deleting a Comment confirms first, verbatim wording
+              matching Todoist's own (`lifecycle.md` §2). */}
+          <ConfirmDialog
+            open={confirmingCommentId !== null}
+            onOpenChange={(open) => {
+              if (!open) {
+                setConfirmingCommentId(null);
+              }
+            }}
+            title="Delete comment?"
+            description="This comment will be permanently deleted."
+            confirmLabel="Delete"
+            onConfirm={() => {
+              if (confirmingCommentId !== null) {
+                onRemoveComment(confirmingCommentId);
+              }
+            }}
+          />
 
           {/* Activity (issue #184, ADR 0056) — collapsed by default,
               mirroring CompletedTasks' own disclosure shape (this file's
@@ -789,9 +963,24 @@ export function TaskDetailView(props: TaskDetailViewProps) {
             contentRef.current?.focus();
           }}
           className={cn(
-            "fixed z-50 flex flex-col overflow-hidden border border-border bg-popover text-popover-foreground shadow-lg outline-hidden duration-150",
+            // No border, and Todoist's own measured shadow rather than
+            // shadow-lg (DET-14): the modal was measured directly at
+            // `border: none` with `rgba(0,0,0,.16) 0 2px 8px`. A 1px border
+            // against a background identical to the page behind it reads as
+            // a seam rather than an edge, which is presumably why Todoist
+            // leans on the shadow alone to lift it.
+            "fixed z-50 flex flex-col overflow-hidden bg-popover text-popover-foreground shadow-[0_2px_8px_rgba(0,0,0,0.16)] outline-hidden duration-150",
             wide
-              ? "top-1/2 left-1/2 h-[min(32rem,80vh)] w-[min(40rem,calc(100%-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95"
+              ? // DET-14: measured directly against the live Todoist modal —
+                // radius 10px, not Tailwind's own 14px `rounded-xl` this
+                // used to carry.
+                // 54rem x 48.25rem is Todoist's own measured 864 x 772 at
+                // desktop width (DET-14), against the 40rem x 32rem this
+                // carried before — a third narrower and a third shorter,
+                // which is what made the two columns feel cramped where
+                // Todoist's breathe. Both stay clamped so a smaller window
+                // still gets a modal that fits inside it.
+                "top-1/2 left-1/2 h-[min(48.25rem,85vh)] w-[min(54rem,calc(100%-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-[10px] data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95"
               : "inset-x-0 bottom-0 max-h-[85vh] rounded-t-xl data-open:animate-in data-open:slide-in-from-bottom data-closed:animate-out data-closed:slide-out-to-bottom",
           )}
           style={wide ? undefined : { paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))" }}

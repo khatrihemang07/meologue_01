@@ -89,6 +89,7 @@ export function ComposerPage() {
     labels,
     comments,
     events,
+    addTask,
     completeTask,
     uncompleteTask,
     advanceRecurringTask,
@@ -285,6 +286,12 @@ export function ComposerPage() {
   }, [tasks]);
   const openTaskProject =
     openTask === null ? null : (projects.find((p) => p.id === openTask.projectId) ?? null);
+  // Issue #229: the identical `openTaskSubtasks` narrowing `todo-page.tsx`
+  // already does for its own Task detail overlay.
+  const openTaskSubtasks =
+    openTask === null
+      ? []
+      : [...tasks, ...completedTasks].filter((t) => t.parentId === openTask.id);
 
   function openTaskOverlay(taskId: string) {
     setSearchParams((previous) => {
@@ -518,6 +525,15 @@ export function ComposerPage() {
           onAddComment={(text) => addComment(openTask.id, text)}
           onEditComment={editComment}
           onRemoveComment={removeComment}
+          subtasks={openTaskSubtasks}
+          onAddSubtask={(content) => addTask(content, { parentId: openTask.id })}
+          onCompleteSubtask={(id) => {
+            const subtask = openTaskSubtasks.find((t) => t.id === id);
+            if (subtask) {
+              handleCompleteTask(subtask);
+            }
+          }}
+          onUncompleteSubtask={(id) => uncompleteTask(id)}
           events={events.filter((event) => event.taskId === openTask.id)}
         />
       )}

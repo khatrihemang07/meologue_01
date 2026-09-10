@@ -470,6 +470,17 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
       ? null
       : ((openTaskSectionsQuery.data ?? []).find((s) => s.id === openTask.sectionId) ?? null);
 
+  // The open Task's own direct sub-tasks (issue #229) — `tasks`/
+  // `completedTasks` are already the two flat, whole-account lists
+  // `openTask` itself is resolved against just above, so narrowing them
+  // client-side by `parentId` costs nothing beyond the array walk and
+  // needs no third query the way `openTaskSectionsQuery` above does for a
+  // Section scoped to a different Project than the background view's own.
+  const openTaskSubtasks: Task[] =
+    openTask === null
+      ? []
+      : [...tasks, ...completedTasks].filter((t) => t.parentId === openTask.id);
+
   // The list `prevTask`/`nextTask` step through — whichever list the
   // background view itself renders, in the identical order that view's
   // own rendering already puts its rows in, so stepping through the
@@ -946,6 +957,15 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
             onAddComment={(text) => addComment(openTask.id, text)}
             onEditComment={editComment}
             onRemoveComment={removeComment}
+            subtasks={openTaskSubtasks}
+            onAddSubtask={(content) => addTask(content, { parentId: openTask.id })}
+            onCompleteSubtask={(id) => {
+              const subtask = openTaskSubtasks.find((t) => t.id === id);
+              if (subtask) {
+                handleComplete(subtask.id, subtask.content, subtask.dateString);
+              }
+            }}
+            onUncompleteSubtask={(id) => uncompleteTask(id)}
             // Issue #184: this Task's own history, newest first — narrowed
             // client-side from the one flat `events` list, mirroring
             // `commentsForTask`'s identical narrowing just above.

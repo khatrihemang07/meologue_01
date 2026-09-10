@@ -233,11 +233,36 @@ export function describeEventLine(
       : resolveTaskSubject(event.taskId ?? event.objectId, extra.taskContent, context);
     switch (event.eventType) {
       case "updated":
+        // Not one of CMT-06's own nine verbatim templates — Todoist's own
+        // activity log never records a comment edit at all (lifecycle.md's
+        // "Edited marker: None" finding), so this wording is this app's
+        // own deliberate divergence, unchanged by issue #229.
         return { lead: onThisTask ? "Edited a comment" : "Edited a comment on", subject };
       case "deleted":
-        return { lead: onThisTask ? "Deleted a comment" : "Deleted a comment on", subject };
-      default:
-        return { lead: onThisTask ? "Commented" : "Commented on", subject };
+        // CMT-06: `You deleted a comment from {task}` — the comment body
+        // is never shown (lifecycle.md's own parenthetical), and `{task}`
+        // lands at the END via `from`, not right after the lead the way
+        // every other branch in this module puts its primary subject.
+        return onThisTask
+          ? { lead: "You deleted a comment" }
+          : { lead: "You deleted a comment", trailingLead: "from", trailingSubject: subject };
+      default: {
+        // CMT-06: `You commented {content} on {task}` — `{content}` (the
+        // Comment's own text, cached at record time the same way every
+        // other event's own subject label is) sits between the lead and
+        // `{task}`, so it rides in `detail` rather than `subject`, which
+        // this module's own EventLine shape always renders immediately
+        // after `lead`.
+        const text = typeof extra.text === "string" ? extra.text : "";
+        return onThisTask
+          ? { lead: "You commented", detail: `"${text}"` }
+          : {
+              lead: "You commented",
+              detail: `"${text}"`,
+              trailingLead: "on",
+              trailingSubject: subject,
+            };
+      }
     }
   }
 
@@ -287,10 +312,15 @@ export function describeEventLine(
   switch (event.eventType) {
     case "deleted":
       return { lead: "Deleted", subject };
+    // CMT-06: `You completed {task}` / `You uncompleted {task}` — plain
+    // lead-then-subject, the shape this module already had; only the
+    // wording itself changes (and, for uncompleted, the "not done"
+    // detail this branch used to add — CMT-06's own template carries no
+    // second clause at all).
     case "completed":
-      return { lead: "Completed", subject };
+      return { lead: "You completed", subject };
     case "uncompleted":
-      return { lead: "Marked", subject, detail: "not done" };
+      return { lead: "You uncompleted", subject };
     case "moved":
       if ("projectId" in extra) {
         return {
@@ -327,10 +357,45 @@ export function describeEventLine(
       // would misroute every date/deadline/priority/label change into
       // this branch too.
       if ("lastContent" in extra) {
+        // CMT-06: `You changed the name of {task}` — the chip shows only
+        // the resulting name (already true: `subject` always resolves the
+        // *live*, current Task), never the old→new pair this branch used
+        // to render as its own `detail`.
+        return { lead: onThisTask ? "You changed the name" : "You changed the name of", subject };
+      }
+      if ("description" in extra) {
+        // CMT-06's three Description templates — the one attribute this
+        // module never had a branch for before issue #229 (use-tasks.ts's
+        // `setDescriptionMutation` recorded no Event at all until this
+        // ticket). `content`/`removedContent` read the cached text the
+        // identical way `lastContent` above already does for a rename.
+        const content = typeof extra.description === "string" ? extra.description : "";
+        if (extra.description === null) {
+          const removedContent =
+            typeof extra.lastDescription === "string" ? extra.lastDescription : "";
+          return onThisTask
+            ? { lead: "You removed the description", detail: `"${removedContent}"` }
+            : {
+                lead: "You removed the description",
+                detail: `"${removedContent}"`,
+                trailingLead: "from",
+                trailingSubject: subject,
+              };
+        }
+        if (extra.lastDescription == null) {
+          return onThisTask
+            ? { lead: "You added a description", detail: `"${content}"` }
+            : {
+                lead: "You added a description",
+                detail: `"${content}"`,
+                trailingLead: "to",
+                trailingSubject: subject,
+              };
+        }
         return {
-          lead: "Renamed",
+          lead: onThisTask ? "You changed the description" : "You changed the description of",
           subject,
-          detail: `from "${extra.lastContent}" to "${extra.content}"`,
+          detail: `to "${content}"`,
         };
       }
       if ("date" in extra) {
@@ -361,6 +426,7 @@ export function describeEventLine(
       }
       return { lead: "Updated", subject };
     default:
-      return { lead: "Added", subject };
+      // CMT-06: `You added {task}`.
+      return { lead: "You added", subject };
   }
 }

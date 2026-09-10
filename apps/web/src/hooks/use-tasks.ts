@@ -59,6 +59,24 @@ export interface AddTaskOverrides {
    * `null` the same way it leaves `parentId` below `null`.
    */
   sectionId?: string | null;
+  /**
+   * Nests the new Task directly under `parentId` at creation (issue #229's
+   * "Sub-tasks" section — `task-detail-view.tsx`'s own "Add sub-task"
+   * field is the one caller that sets this). `undefined`/`null` by
+   * default, matching every other field above: a Task added anywhere else
+   * in Todo is never nested on its own. This is a narrower carve-out of
+   * the reasoning `addTask`'s own body comment on `parentId: null` used to
+   * state unconditionally ("nesting is a deliberate, separate act reached
+   * after the Task already exists") — that reasoning is still exactly
+   * right for *retrofitting* an existing Task under a sibling (drag,
+   * keyboard indent), which still goes through `setTaskParent` alone, but
+   * it never covered a field whose entire purpose from the moment it's
+   * typed into is "this is a sub-task of that Task" — creating it
+   * top-level and reparenting it a beat later would record a spurious
+   * "moved under another Task" activity line for a Task that was never
+   * meaningfully top-level to begin with.
+   */
+  parentId?: string | null;
 }
 
 export interface UseTasksResult {
@@ -403,16 +421,14 @@ export function useTasks(
       // what decides which, the same way it already decides `captureDate`.
       // `sectionId` mirrors it for a Section's own add affordance.
       //
-      // `parentId` is always `null` here, never an override — a new Task
-      // is never minted as anyone's sub-task directly. Nesting one under
-      // an existing Task is a deliberate, separate act (keyboard
-      // indent/outdent onto TaskStore.setParent, todo-page.tsx) reached
-      // after the Task already exists, exactly as dragging a freshly
-      // added Task under a sibling is a second gesture in Todoist itself,
-      // never something the add field predicts on a reader's behalf.
+      // `parentId` defaults to `null` — a new Task is not anyone's
+      // sub-task unless a caller says so explicitly (`AddTaskOverrides.parentId`'s
+      // own doc comment above has the full account of the one caller that
+      // does, and why this is narrower than "nesting is always a separate
+      // act reached after the Task exists").
       projectId: overrides.projectId ?? null,
       sectionId: overrides.sectionId ?? null,
-      parentId: null,
+      parentId: overrides.parentId ?? null,
       // No Description yet (issue #180) — the same "nothing chosen yet"
       // state every other never-overridden field above starts in; there
       // is no AddTaskOverrides field for it, mirroring `parentId` above:
@@ -623,8 +639,18 @@ export function useTasks(
   }
 
   const setDescriptionMutation = useMutation({
-    mutationFn: ({ id, description }: { id: string; description: string | null }) =>
-      taskStore.setDescription(id, description),
+    // Issue #229: recorded on the activity log (format-event.ts's own
+    // `"description" in extra` branch reads `description`/`lastDescription`
+    // the identical way `date`/`deadline` above already do) — before this
+    // ticket, a Description edit left no trace at all, the one Task
+    // attribute this hook silently didn't log.
+    mutationFn: async ({ id, description }: { id: string; description: string | null }) => {
+      const before = await findTask(id);
+      await taskStore.setDescription(id, description);
+      if (before) {
+        recordTaskEvent(before, "updated", { description, lastDescription: before.description });
+      }
+    },
     onSuccess: afterLocalWrite,
   });
 
