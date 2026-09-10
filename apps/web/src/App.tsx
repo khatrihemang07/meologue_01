@@ -171,6 +171,12 @@ function App() {
               <Route path="/todo" element={<Navigate to="/todo/inbox" replace />} />
               <Route path="/todo/inbox" element={<TodoPage />} />
               <Route path="/todo/today" element={<TodoPage view="today" />} />
+              {/* Upcoming (issue #223's second half) — the sibling ADR 0049
+              already predicted for Today, reached from TodoSidebar
+              (chat-shell-layout.tsx) rather than from TodoNav's bottom bar:
+              it's a wide-breakpoint-only destination, since the sidebar is
+              the one place it's reachable from at all. */}
+              <Route path="/todo/upcoming" element={<TodoPage view="upcoming" />} />
               <Route path="/todo/projects" element={<TodoPage view="projects" />} />
               <Route path="/todo/projects/:projectId" element={<TodoPage view="project" />} />
               {/* The full search page (issue #183) — Quick-find's

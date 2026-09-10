@@ -32,7 +32,7 @@ import { storedPriorityOf, uiPriorityOf } from "@meologue/core";
 import { CalendarClock, CalendarX2, Copy, FolderInput, Pencil, Tag, Trash2 } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
 import type * as React from "react";
-import { priorityColour } from "@/lib/task-priority-colors";
+import { priorityPickerColour } from "@/lib/task-priority-colors";
 import { cn } from "@/lib/utils";
 
 export interface TaskCommandMenuProps {
@@ -107,7 +107,11 @@ export function TaskCommandMenu({
               <span
                 aria-hidden="true"
                 className="size-3.5 shrink-0 rounded-full border"
-                style={{ borderColor: priorityColour(uiPriority) }}
+                // The picker's own swatch colour, not the row ring's — this
+                // preview sits inside the Priority picker itself, and
+                // PRI-05 (parity-ledger.md) is explicit that the two are
+                // genuinely different values for P1.
+                style={{ borderColor: priorityPickerColour(uiPriority) }}
               />
               Priority
               <Hint>Y</Hint>
@@ -124,7 +128,7 @@ export function TaskCommandMenu({
                     <span
                       aria-hidden="true"
                       className="size-3.5 shrink-0 rounded-full"
-                      style={{ backgroundColor: priorityColour(ui) }}
+                      style={{ backgroundColor: priorityPickerColour(ui) }}
                     />
                     {`P${ui}`}
                   </DropdownMenu.Item>

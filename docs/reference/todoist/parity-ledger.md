@@ -49,6 +49,7 @@ look alike while the behaviour differs.
 | `KBD-` | Keyboard shortcuts, focus movement, focus appearance |
 | `NAV-` | Sidebar, destinations, counts |
 | `STR-` | Projects, Sections, Labels, Filters |
+| `THEME-` | The design-token scope itself: palette, type, density, radii |
 
 ## Ledger
 
@@ -144,3 +145,15 @@ _Rows are appended as each reference doc in this directory is written._
 | CMT-06 | Activity wording: `You added {task}`, `You completed {task}`, `You uncompleted {task}`, `You commented {content} on {task}`, `You added a description {content} to {task}`, `You changed the description of {task} to {content}`, `You removed the description {content} from {task}`, `You deleted a comment from {task}`, `You changed the name of {task}` | lifecycle.md §4 | — | `todoist-captured` | A rename shows only the new name, never old→new |
 | CMT-07 | The activity list has **no filters** and ends with "That's it. No more history to load." | lifecycle.md §4 | — | `todoist-captured` | |
 | CMT-08 | Italics, strikethrough, headings, numbered lists, blockquotes, fenced code blocks | — | — | `blocked` | Not exercised in the write session |
+| THEME-01 | Todoist's light-theme palette, type and density | — | — | `blocked` | Todoist was only ever observed in dark theme (README's own "How it was captured"); `index.css`'s `[data-surface="todo"]` base block (issue #223) derives a legible light approximation, not a match — no light-mode row here can read `matched` until Todoist's own light theme is captured |
+| THEME-02 | Dark palette: content pane `rgb(31,31,31)`, sidebar/body ground `rgb(38,38,38)` — the secondary surface reads **lighter** than the page | scheduler-and-priority.md, measured directly | `index.css` `[data-surface="todo"]` | `built` | An inversion of this app's own convention; kept deliberately |
+| THEME-03 | Borders `rgb(61,61,61)`, muted text `rgb(204,204,204)`, focus ring `rgb(23,91,194)` | corpus | `index.css` | `built` | |
+| THEME-04 | Type scale: row 14px/21px, chrome 13px, composer title 16px/23px | row-and-detail.md, quick-add.md | `index.css` `--td-*-font-size` | `built` | Three sizes this app never had to distinguish |
+| THEME-05 | The system font stack, not Geist, inside Todo | quick-add.md § fonts | `index.css` `--font-sans` | `built` | |
+| NAV-01 | Sidebar order: Add task · Search · Inbox / Today / Upcoming / Filters & Labels with counts · Favourites · Projects tree | row-and-detail.md, live sidebar | `todo-sidebar.tsx` | `built` | |
+| NAV-02 | The sidebar renders only inside `/todo/*`, at ≥900px, in the pane the shell already has | ADR 0070 | `chat-shell-layout.tsx` | `built` | No second pane, divider or width mechanism |
+| NAV-03 | Below 900px there is no sidebar and the bottom bar remains | ADR 0070 | `chat-shell-layout.test.tsx` | `built` | Held by a test, not an assertion — this is what keeps Android intact |
+| NAV-04 | Scoped `<nav aria-label="Todo">` with real hrefs and `aria-current` | `chat-list.tsx` precedent | `todo-sidebar.tsx` | `built` | |
+| NAV-05 | Upcoming day headings read `10 Sep ‧ Today ‧ Thursday`; only today and tomorrow get a relative word | scheduler-and-priority.md §9 | `task-views.ts` `upcomingDayHeading()` | `built` | |
+| NAV-06 | "Filters & Labels" is one destination covering both, with a combined count | live sidebar | `todo-sidebar.tsx` links to `/todo/filters` only | `divergent` | No Labels destination exists yet; #229 owns it. Count is Filters only |
+| NAV-07 | "Add task" in the sidebar opens the composer from anywhere | live sidebar | links to `/todo/inbox` | `divergent` | No global composer exists yet; #226 owns it |

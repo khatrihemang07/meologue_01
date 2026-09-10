@@ -1,5 +1,5 @@
 import type { Project, Section, Task } from "@meologue/core";
-import { today } from "@meologue/core";
+import { today, upcoming } from "@meologue/core";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router";
@@ -22,6 +22,7 @@ import { TaskScheduleSheet } from "@/components/todo/task-schedule-sheet";
 import { TaskSearchPage } from "@/components/todo/task-search-page";
 import { TodayView } from "@/components/todo/today-view";
 import { TodoNav } from "@/components/todo/todo-nav";
+import { UpcomingView } from "@/components/todo/upcoming-view";
 import { ConfirmDialog } from "@/components/ui/alert-dialog";
 import { commentCountForTask, commentsForTask } from "@/lib/comment-counts";
 import { sectionsQueryKey, tasksInProjectQueryKey } from "@/lib/query-keys";
@@ -43,7 +44,16 @@ import { useEntryStore } from "@/pages/entry-store-layout";
  * are one per view.
  */
 interface TodoBackgroundView {
-  view: "inbox" | "today" | "projects" | "project" | "search" | "activity" | "filters" | "filter";
+  view:
+    | "inbox"
+    | "today"
+    | "upcoming"
+    | "projects"
+    | "project"
+    | "search"
+    | "activity"
+    | "filters"
+    | "filter";
   projectId: string | null;
   /**
    * The Filter this Task was opened from a result of, for `view ===
@@ -99,7 +109,16 @@ export interface TodoPageProps {
    * `/reflect/:sessionId` reads its own id — not a second prop, since the
    * id is already in the URL a bookmark or a reload has to survive.
    */
-  view?: "inbox" | "today" | "projects" | "project" | "search" | "activity" | "filters" | "filter";
+  view?:
+    | "inbox"
+    | "today"
+    | "upcoming"
+    | "projects"
+    | "project"
+    | "search"
+    | "activity"
+    | "filters"
+    | "filter";
 }
 
 /**
@@ -435,13 +454,15 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
           const { overdue, dueToday } = today(tasks, localDayKey(new Date()));
           return [...overdue, ...dueToday];
         })()
-      : backgroundView.view === "projects" ||
-          backgroundView.view === "search" ||
-          backgroundView.view === "activity" ||
-          backgroundView.view === "filters" ||
-          backgroundView.view === "filter"
-        ? []
-        : scopedTasks;
+      : backgroundView.view === "upcoming"
+        ? upcoming(tasks, localDayKey(new Date())).flatMap((day) => day.tasks)
+        : backgroundView.view === "projects" ||
+            backgroundView.view === "search" ||
+            backgroundView.view === "activity" ||
+            backgroundView.view === "filters" ||
+            backgroundView.view === "filter"
+          ? []
+          : scopedTasks;
   const openTaskIndex =
     openTask === null ? -1 : backgroundTaskList.findIndex((t) => t.id === openTask.id);
   const prevTask = openTaskIndex > 0 ? (backgroundTaskList[openTaskIndex - 1] ?? null) : null;
@@ -588,12 +609,16 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
           gets its own "New Project" form instead (`ProjectsView`); the
           full search page (`view === "search"`, issue #183) is a results
           list with no "current view" for a captured Task to inherit
-          either, the identical reasoning. */}
+          either, the identical reasoning. Upcoming (issue #223) is the
+          same shape again — it spans every future day at once, so there
+          is no single date for a captured Task to inherit the way Today
+          inherits today's own. */}
       {backgroundView.view !== "projects" &&
         backgroundView.view !== "search" &&
         backgroundView.view !== "activity" &&
         backgroundView.view !== "filters" &&
-        backgroundView.view !== "filter" && <AddTaskForm onAdd={handleAdd} disabled={disabled} />}
+        backgroundView.view !== "filter" &&
+        backgroundView.view !== "upcoming" && <AddTaskForm onAdd={handleAdd} disabled={disabled} />}
 
       {backgroundView.view === "today" && (
         <TodayView
@@ -605,6 +630,17 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
           onOpenSchedule={handleOpenSchedule}
           onSetDate={setTaskDate}
           onPostpone={postponeTask}
+        />
+      )}
+
+      {backgroundView.view === "upcoming" && (
+        <UpcomingView
+          tasks={tasks}
+          detailActions={detailActions}
+          onComplete={handleComplete}
+          onCompleteForever={handleCompleteForever}
+          onRequestDelete={handleRequestDelete}
+          onOpenSchedule={handleOpenSchedule}
         />
       )}
 

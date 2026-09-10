@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { TodoNav } from "./todo-nav";
 
 function renderAt(path: string) {
@@ -9,6 +9,31 @@ function renderAt(path: string) {
       <TodoNav />
     </MemoryRouter>,
   );
+}
+
+// Mirrors use-wide-layout.test.ts's own stand-in ("jsdom implements no
+// matchMedia at all") — every test above renders with no stub at all,
+// which use-wide-layout.ts's own default (narrow) already covers; this is
+// the one test in this file that needs the query to answer wide.
+function installWideMatchMedia() {
+  Object.defineProperty(window, "matchMedia", {
+    value: vi.fn(() => ({
+      matches: true,
+      media: "",
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })),
+    configurable: true,
+    writable: true,
+  });
+}
+
+function removeMatchMedia() {
+  Object.defineProperty(window, "matchMedia", {
+    value: undefined,
+    configurable: true,
+    writable: true,
+  });
 }
 
 describe("TodoNav", () => {
@@ -74,5 +99,23 @@ describe("TodoNav", () => {
     renderAt("/todo/filters/some-filter-id");
 
     expect(screen.getByRole("link", { name: "Filters" })).toHaveAttribute("aria-current", "page");
+  });
+
+  // Issue #223's second half: TodoSidebar takes over this bar's own role
+  // at the wide breakpoint, and this component's own header comment
+  // explains why both can't stay mounted at once (two identically-named
+  // "Todo" nav landmarks). This is the complement of that ticket's
+  // load-bearing narrow-viewport test (chat-shell-layout.test.tsx) — this
+  // one proves the wide side of the same claim.
+  describe("at the wide breakpoint", () => {
+    afterEach(removeMatchMedia);
+
+    it("renders nothing at all", () => {
+      installWideMatchMedia();
+
+      renderAt("/todo/inbox");
+
+      expect(screen.queryByRole("navigation")).not.toBeInTheDocument();
+    });
   });
 });
