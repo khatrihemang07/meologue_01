@@ -7,7 +7,15 @@
   },
   "files": {
     "ignoreUnknown": true,
-    "includes": ["**", "!server", "!**/dist", "!**/generated", "!**/public"]
+    "includes": [
+      "**",
+      "!server",
+      "!**/dist",
+      "!**/generated",
+      "!**/public",
+      "!docs/reference/**/*-dom",
+      "!docs/reference/**/*-shots"
+    ]
   },
   "formatter": {
     "enabled": true,

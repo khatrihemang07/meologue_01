@@ -29,6 +29,9 @@ describe("dates", () => {
     ["buy milk tod", "2026-09-02"],
     ["buy milk tomorrow", "2026-09-03"],
     ["buy milk tom", "2026-09-03"],
+    // `tmr` — docs/reference/todoist/quick-add.md's own recognised-vocabulary
+    // table (issue #226), alongside `tom` above.
+    ["buy milk tmr", "2026-09-03"],
     // Weekdays — bare resolves to the nearest occurrence on or after
     // today, including today itself when today already is that weekday.
     ["buy milk monday", "2026-09-07"],
@@ -42,6 +45,10 @@ describe("dates", () => {
     // Date arithmetic.
     ["buy milk in 3 days", "2026-09-05"],
     ["buy milk in 2 weeks", "2026-09-16"],
+    // `next week` — issue #226's own recognised-vocabulary evidence;
+    // see ./date-rules.ts's matchNextWeek doc comment for why this stays
+    // narrow to "week" rather than generalising to every arithmetic unit.
+    ["buy milk next week", "2026-09-09"],
     // Weekday + arithmetic combined: advance the reference point first, then find that weekday.
     ["buy milk monday in 2 weeks", "2026-09-21"],
     // Absolute, worded, no year — rolls forward to next year once the date has already passed this year.
@@ -117,19 +124,23 @@ describe("tokens", () => {
     });
   });
 
-  describe("%label — never the retiring @", () => {
+  // Issue #226 reverses issue #170's choice of `%`: Todoist's own
+  // verified quick-add uses `@` for labels (docs/reference/todoist/
+  // quick-add.md), and this parser now matches it. `%` is not kept as an
+  // alias — see rules.ts's matchLabel doc comment for why.
+  describe("@label — the sigil issue #226 restored", () => {
     it("recognises a single label", () => {
-      expect(parse("buy milk %urgent").labelNames).toEqual(["urgent"]);
+      expect(parse("buy milk @urgent").labelNames).toEqual(["urgent"]);
     });
 
     it("recognises multiple labels, in the order typed", () => {
-      expect(parse("buy milk %urgent %home").labelNames).toEqual(["urgent", "home"]);
+      expect(parse("buy milk @urgent @home").labelNames).toEqual(["urgent", "home"]);
     });
 
-    it("does not recognise @ as a label sigil — it's retired", () => {
-      const result = parse("buy milk @urgent");
+    it("does not recognise % as a label sigil — it was retired by issue #226", () => {
+      const result = parse("buy milk %urgent");
       expect(result.labelNames).toEqual([]);
-      expect(result.content).toBe("buy milk @urgent");
+      expect(result.content).toBe("buy milk %urgent");
     });
   });
 
@@ -444,7 +455,7 @@ describe("smart date recognition can be turned off entirely", () => {
 
 describe("offsets", () => {
   it("every token's raw text is exactly input.slice(start, end)", () => {
-    const input = "* Buy milk #Home /Chores %urgent p1 !5pm tomorrow //don't forget bags";
+    const input = "* Buy milk #Home /Chores @urgent p1 !5pm tomorrow //don't forget bags";
     const result = parse(input);
     expect(result.tokens.length).toBeGreaterThan(0);
     for (const token of result.tokens) {
@@ -480,7 +491,7 @@ describe("offsets", () => {
 
 describe("a fully-loaded input — every non-colliding token family at once", () => {
   it("recognises every piece and strips it all from content", () => {
-    const input = "* Buy milk #Home /Chores %urgent p1 //don't forget bags";
+    const input = "* Buy milk #Home /Chores @urgent p1 //don't forget bags";
     const result = parse(input);
 
     expect(result.uncompletable).toBe(true);

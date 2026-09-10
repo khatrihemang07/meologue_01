@@ -63,6 +63,10 @@ export const englishQuickAddLanguage: QuickAddLanguage = {
     tod: 0,
     tomorrow: 1,
     tom: 1,
+    // `tmr` — docs/reference/todoist/quick-add.md § Recognised vocabulary
+    // verifies this abbreviation alongside `tom`; both resolve identically
+    // and neither is preferred over the other.
+    tmr: 1,
   },
 
   // Defaults chosen for a plausible clock time under each word, not a

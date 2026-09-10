@@ -135,7 +135,7 @@ describe("useHistory", () => {
     taskStore: TaskStore = createFakeTaskStore(),
     deviceId = "device-a",
     // Every test but Promotion's own label-resolution one has no
-    // `%label` token to resolve — this default mirrors `useHistory`'s own
+    // `@label` token to resolve — this default mirrors `useHistory`'s own
     // "no labels resolve to anything" fallback rather than duplicating it.
     resolveLabelIds: (names: string[]) => Promise<string[]> = async () => [],
   ) {
@@ -455,7 +455,7 @@ describe("useHistory", () => {
         );
       });
 
-      it("resolves a %label token through the injected resolveLabelIds, the same round trip Todo's own add field uses", async () => {
+      it("resolves a @label token through the injected resolveLabelIds, the same round trip Todo's own add field uses", async () => {
         const store = createFakeStore();
         const resolveLabelIds = vi.fn(async (names: string[]) => names.map((n) => `label-${n}`));
         const { result, taskStore } = await renderUseHistory(
@@ -466,7 +466,7 @@ describe("useHistory", () => {
         );
         await waitFor(() => expect(result.current.entries).toEqual([]));
 
-        act(() => result.current.sendEntry("- [ ] buy milk %Shopping", PROMOTION));
+        act(() => result.current.sendEntry("- [ ] buy milk @Shopping", PROMOTION));
 
         await waitFor(() => expect(taskStore.upsert).toHaveBeenCalledTimes(1));
         expect(resolveLabelIds).toHaveBeenCalledWith(["Shopping"]);

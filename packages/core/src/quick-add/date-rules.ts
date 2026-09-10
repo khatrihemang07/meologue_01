@@ -226,6 +226,40 @@ export function matchArithmeticDate(input: string, ctx: DateRuleContext): QuickA
 }
 
 /**
+ * `next week` — docs/reference/todoist/quick-add.md § Recognised
+ * vocabulary verifies exactly this phrase resolving to "in 1 week" from
+ * `now` (10 Sep -> 14 Sep, a Monday). It is deliberately *not*
+ * generalised to `next day`/`next month`/`next year`: only `week` is
+ * evidenced, and stretching one verified case across the rest of
+ * `ctx.language.arithmeticUnits` would be inventing forms nobody has
+ * actually seen Todoist recognise (this parser's own house rule — see
+ * ./en.ts's header comment). Narrowed to the `week`/`weeks` entries of
+ * that same table rather than a hard-coded string, so a future language
+ * pack's own word for "week" is picked up for free without this rule
+ * needing to know what it is.
+ */
+export function matchNextWeek(input: string, ctx: DateRuleContext): QuickAddToken[] {
+  const weekWords = Object.keys(ctx.language.arithmeticUnits).filter(
+    (word) => ctx.language.arithmeticUnits[word] === "weeks",
+  );
+  const regex = new RegExp(
+    `\\b${escapeRegExp(ctx.language.nextWord)}\\s+(${alternation(weekWords)})\\b`,
+    "gi",
+  );
+  const tokens: QuickAddToken[] = [];
+  for (const match of input.matchAll(regex)) {
+    tokens.push({
+      kind: "date",
+      start: match.index,
+      end: match.index + match[0].length,
+      raw: match[0],
+      date: addByUnit(ctx.now, 1, "weeks"),
+    });
+  }
+  return tokens;
+}
+
+/**
  * `monday in 2 weeks` — date arithmetic applied to a weekday. Reads as
  * "advance the reference point by the offset, then find that weekday on
  * or after it" (not "find the weekday first, then shift it") — matched
@@ -484,6 +518,7 @@ export function matchDateForms(input: string, ctx: DateRuleContext): QuickAddTok
     ...matchRelativeDate(input, ctx),
     ...matchWeekday(input, ctx),
     ...matchArithmeticDate(input, ctx),
+    ...matchNextWeek(input, ctx),
   ];
 }
 

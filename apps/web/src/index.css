@@ -732,3 +732,29 @@
     color: var(--checked-list-text-color, var(--foreground));
   }
 }
+
+/*
+ * A recognised natural-language match, highlighted state (issue #226,
+ * `todo-quick-add-recognition.ts`'s own `decorationAttrs`) — the ONLY
+ * class that plugin ever applies. Withdrawn is deliberately not a second
+ * class here: docs/reference/todoist/quick-add.md's own measurement (§
+ * "The recognised-match span") is that withdrawal drops the class
+ * entirely, leaving a bare `<span>` — `display: inline`, no padding, no
+ * background, inherited colour — which is already exactly what an
+ * unclassed `<span>` renders as, so no withdrawn-specific rule is needed.
+ *
+ * `display: inline-block` plus horizontal padding is the one fact that
+ * decides this whole feature (quick-add.md's own section by that name):
+ * a real box that occupies width, not a colour painted behind text, so
+ * the glyphs after a recognised match physically shift when it fires and
+ * shift back when it's withdrawn (32.31px -> 24.31px, measured twice).
+ */
+@layer base {
+  .td-recognition-match {
+    display: inline-block;
+    padding-inline: var(--td-recognition-padding-inline);
+    border-radius: var(--td-recognition-radius);
+    background-color: var(--td-recognition-background);
+    color: rgb(255, 255, 255);
+  }
+}

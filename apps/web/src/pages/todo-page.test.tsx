@@ -1,6 +1,7 @@
 import type { Event, Task } from "@meologue/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { useState } from "react";
 import { Link, MemoryRouter, Outlet, Route, Routes } from "react-router";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -19,6 +20,55 @@ vi.mock("sonner", () => {
   (toast as any).error = vi.fn();
   return { toast };
 });
+
+/**
+ * Stands in for the real `TaskTitleEditor` — issue #226 converted
+ * `AddTaskForm`'s own Quick Add field onto it, so this page mounts one
+ * unconditionally now, not only once a Task row enters rename mode.
+ * task-title-editor.tsx's own header comment explains why no test mounts
+ * that component directly (a real ProseMirror `EditorView`, which jsdom
+ * cannot usefully mount); task-detail-view.test.tsx and task-row.test.tsx
+ * mock the identical module the identical way. `onChange` is wired here
+ * (theirs isn't) because add-task-form.tsx's own `commit` reads Quick
+ * Add's live text from it, not from `onCommit` alone the way a rename
+ * does.
+ */
+function StubTaskTitleEditor({
+  value,
+  onChange,
+  onCommit,
+  ariaLabel,
+  placeholder,
+}: {
+  value: string;
+  onChange?: (value: string) => void;
+  onCommit: (value: string) => void;
+  onCancel: () => void;
+  ariaLabel?: string;
+  placeholder?: string;
+}) {
+  const [text, setText] = useState(value);
+  return (
+    <input
+      aria-label={ariaLabel ?? "Task name"}
+      placeholder={placeholder}
+      value={text}
+      onChange={(event) => {
+        setText(event.target.value);
+        onChange?.(event.target.value);
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          onCommit(text);
+        }
+      }}
+    />
+  );
+}
+
+vi.mock("@/components/todo/task-title-editor", () => ({
+  TaskTitleEditor: StubTaskTitleEditor,
+}));
 
 function task(overrides: Partial<Task> = {}): Task {
   return {
@@ -445,7 +495,7 @@ describe("TodoPage", () => {
     const addTask = vi.fn();
     renderTodoPage(inboxContext([], { addTask }));
 
-    fireEvent.change(screen.getByLabelText("Add a Task"), { target: { value: "call mum" } });
+    fireEvent.change(await screen.findByLabelText("Add a Task"), { target: { value: "call mum" } });
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
 
     // handleAdd (todo-page.tsx) awaits resolveLabelIds before calling
@@ -470,7 +520,7 @@ describe("TodoPage", () => {
     const addTask = vi.fn();
     renderTodoPage(readyContext({ addTask }), "/todo/today");
 
-    fireEvent.change(screen.getByLabelText("Add a Task"), { target: { value: "call mum" } });
+    fireEvent.change(await screen.findByLabelText("Add a Task"), { target: { value: "call mum" } });
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
 
     await waitFor(() =>
@@ -488,7 +538,7 @@ describe("TodoPage", () => {
     const addTask = vi.fn();
     renderTodoPage(readyContext({ addTask }), "/todo/today");
 
-    fireEvent.change(screen.getByLabelText("Add a Task"), {
+    fireEvent.change(await screen.findByLabelText("Add a Task"), {
       target: { value: "call mum tomorrow" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
@@ -777,7 +827,14 @@ describe("TodoPage — Today", () => {
   it("still offers the Add form and Todo's own nav from Today", () => {
     renderTodoPage(readyContext(), "/todo/today");
 
-    expect(screen.getByLabelText("Add a Task")).toBeInTheDocument();
+    // The "Add" button, not the field itself: this describe block runs
+    // under fake timers (this file's own `beforeEach` above), and the
+    // field is behind a `React.lazy` boundary (`add-task-form.tsx`'s own
+    // header comment) whose resolution `findByLabelText`'s internal
+    // polling can't observe without the timers being advanced — the
+    // button sits outside that boundary and is always present
+    // synchronously, which is all "still offers the Add form" needs.
+    expect(screen.getByRole("button", { name: "Add" })).toBeInTheDocument();
     expect(screen.getByRole("navigation", { name: "Todo" })).toBeInTheDocument();
   });
 
@@ -941,7 +998,7 @@ describe("TodoPage — Projects", () => {
     const addTask = vi.fn();
     renderTodoPage(readyContext({ projects: [project], addTask }), "/todo/projects/p1");
 
-    fireEvent.change(screen.getByLabelText("Add a Task"), { target: { value: "buy milk" } });
+    fireEvent.change(await screen.findByLabelText("Add a Task"), { target: { value: "buy milk" } });
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
 
     await waitFor(() =>
