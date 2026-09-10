@@ -403,3 +403,368 @@ this session took.
 - **Whether tags render as chips/pills on desktop** (for comparison against Android's plain-text
   tag rendering found in §1) — this investigation only covered Android.
 
+
+## Gap sweep — Enter/soft-break/indent/backspace and list metrics (2026-09-10)
+
+**Different device from the rest of this document.** This sweep was run on `ZD222P9VZC`
+(`motorola_edge_50_neo`), physical size **1200×2670px**, density **450** (`adb shell wm density`) —
+not the `10BD8H0UM50004X` / 1080×2400 / density-440 device used for the sections above. Raw
+coordinates quoted below are **not** comparable to raw coordinates quoted elsewhere in this
+document; only the visual/behavioural findings are.
+
+Work was done in a scratch notebook `meologue-probe`, in one note titled `ZZTEST-GapA-Enter`
+(prefixed `ZZTEST` per this repo's convention for this investigation). **Cleanup**: the note was
+moved to trash then permanently deleted from Trash; the notebook (and one duplicate
+`meologue-probe` notebook + one accidental untitled note, both produced by this session's own
+misfired taps — see method note below) were deleted via the sidebar's long-press → Delete Notebook.
+Final sidebar state shows only the pre-existing `Memoir_1` notebook — cleanup succeeded. One
+unrelated note titled "onetwo" appeared in Trash during this session and was **not** touched —
+consistent with the "concurrent live sync" phenomenon already logged elsewhere in this document
+(another session's test activity syncing to this device); it was left exactly as found.
+
+**Method notes (read before the tables):**
+- `adb shell input text "- "` **silently drops a trailing space** — the space must be sent as a
+  separate `adb shell input keyevent 62` or the `- `/`1. `/`[] ` input rule never fires. This bit
+  this session repeatedly; every table row below was re-verified after discovering it.
+- No reliable synthetic Shift+Enter or Tab chord exists via `adb shell input`. Per the brief, the
+  soft-line-break **toolbar button** was used as Android's Shift+Enter equivalent (§C) and no Tab
+  claims are made (§D uses the toolbar indent button only, matching how a real user must operate
+  on Android per the existing `KEYCODE_TAB` finding in §4 above).
+- Ground truth throughout is **screenshot only**. An `Export → Export to Markdown` was attempted
+  specifically to get literal-text ground truth for §C's plain-text soft-break case (to distinguish
+  a `<br>` from a new block, the way the macOS notes distinguish them via the raw HTML), but the
+  share sheet on this device offered no "save to local file" / Files-app target — only send-to-app
+  targets (Gmail, Drive, Quick Share, etc.) that this session declined to use to avoid sending test
+  content off-device. That one sub-finding is therefore marked **unverified** below, not asserted.
+- The FAB (new-note button) and long-press context menus were intermittently unresponsive to a
+  single `input tap`/`input swipe` — a real device-interaction quirk of this session, not a UpNote
+  finding, logged here only so the raw coordinates in earlier screenshots aren't mistaken for a
+  documented tap target.
+
+### A. Enter on an EMPTY item, by list type
+
+| List type | Before | Enter → After | Result | Status | Screenshot |
+|---|---|---|---|---|---|
+| Bullet, top-level | empty `•` item | bullet removed, empty plain paragraph | **List closes entirely** | verified | [before](screenshots/upnote-android/gapA-bullet-empty-before.png) / [after](screenshots/upnote-android/gapA-bullet-empty-after.png) |
+| Numbered, top-level | empty `1.` item | number removed, empty plain paragraph | **List closes entirely** | verified | [before](screenshots/upnote-android/gapA-numbered-empty-before.png) / [after](screenshots/upnote-android/gapA-numbered-empty-after.png) |
+| Checkbox, top-level | empty `☐` item | checkbox removed, empty plain paragraph | **List closes entirely** | verified | [before](screenshots/upnote-android/gapA-checkbox-empty-before.png) / [after](screenshots/upnote-android/gapA-checkbox-empty-after.png) |
+| Bullet, **nested** (level 2) | empty `◦` item | **outdents one level** to a filled `•` at level 1 — stays in the list | **Outdents, does not close** | verified | [before](screenshots/upnote-android/gapA-nested-empty-before.png) / [after](screenshots/upnote-android/gapA-nested-empty-after.png) |
+
+The nested-item row **matches** the macOS row already on file ("⏎ on an empty **nested** item
+outdents **one level**; does not exit the list"). The three top-level rows have no macOS
+counterpart in `upnote-editor-behaviour.md` to compare against — logged here as new information,
+not a divergence claim.
+
+### B. Enter mid-text / Enter on an item that has nested children
+
+| Case | Before | After | Result | Status | Screenshot |
+|---|---|---|---|---|---|
+| Enter mid-text in a non-empty bullet item | `midtext` (cursor after "midt") | two sibling bullets: `midt` / `ext` | **Splits into new sibling item**, same as any block split | verified | [before](screenshots/upnote-android/gapB-midtext-before.png) / [after](screenshots/upnote-android/gapB-midtext-after.png) |
+| Enter at end of a parent item that has a nested child below it | `Parent` (bullet) → nested `midt` (child) | new **empty level-1 item** inserted between `Parent` and `midt`; `midt` stays nested (now under the new empty item) | **Inserts sibling before the children**, does not merge into or split the child | verified | [before](screenshots/upnote-android/gapB-nested-parent-before.png) / [after](screenshots/upnote-android/gapB-nested-parent-after.png) |
+
+Both rows match ordinary rich-text-editor expectations and are consistent with (not contradicted
+by) the macOS "⏎ on a non-empty item → new sibling item" row. Neither scenario is spelled out
+verbatim on the macOS side, so treat these as new confirmations, not corrections.
+
+### C. Soft line break (toolbar button) — list item vs. plain text
+
+| Context | Action | Result | Status | Screenshot |
+|---|---|---|---|---|
+| Inside a bullet item (`itemA`, cursor at end) | tap soft-break toolbar button, type `itemB` | `itemB` appears as a second line **inside the same `•` item**, indented to the text column, **no new bullet** | verified | [screenshot](screenshots/upnote-android/gapC-softbreak-listitem.png) |
+| Plain paragraph (`plainA`, cursor at end) | tap soft-break toolbar button, type `plainB` | `plainB` appears as a visually separate line below `plainA` | **verified on screen; unverified whether it is a `<br>` or a new block** | [screenshot](screenshots/upnote-android/gapC-softbreak-plaintext.png) |
+
+The list-item case is a clean, unambiguous confirmation of the existing Android toolbar finding
+("the soft-break button starts a new line inside the same `<li>` with no bullet marker"). The
+plain-text case is the one genuine gap in this sweep: per the macOS notes, UpNote's block
+separator contributes **zero** vertical space, so a `<br>` and two sibling `<div>`s are visually
+*identical* on screen — screenshots cannot tell them apart. The Export-to-Markdown attempt to get
+literal text (see method notes above) hit a dead end on this device's share sheet. **Unverified —
+flagged, not guessed.**
+
+### D. Indent / outdent on the FIRST item of a list
+
+| Action | Before | After | Result | Status | Screenshot |
+|---|---|---|---|---|---|
+| Tap indent with cursor in `One`, the first item of a 3-item bullet list (`One`, `Two`, `three`) | `One` at level 1 (filled `•`), siblings `Two`/`three` still level 1 | `One` nests to level 2 (hollow `◦`); `Two`/`three` unaffected | **Nests — does not refuse** | verified | [before](screenshots/upnote-android/gapD-first-item-before.png) / [after](screenshots/upnote-android/gapD-first-item-after-indent.png) |
+
+This **matches macOS exactly**: "⇥ on the **first** item of a list | also nests, producing
+`<ul><ul><li>…`". No divergence.
+
+### E. Numbered-list nesting glyphs
+
+| Level | Marker | Notes | Status | Screenshot |
+|---|---|---|---|---|
+| 1 | `1.` (Arabic numeral + period) | literal number, blue-tinted in this theme | verified | [screenshot](screenshots/upnote-android/gapE-numbered-level1.png) |
+| 2 (indented once) | `◦` hollow circle | **not** `a.`/`i.` — reuses the bullet-list level-2 glyph | verified | [screenshot](screenshots/upnote-android/gapE-numbered-level2.png) |
+| 3 (indented twice) | `▪` small filled square | reuses the bullet-list level-3 glyph | verified | [screenshot](screenshots/upnote-android/gapE-numbered-level3.png) |
+
+**Noteworthy finding**: nesting a numbered list on Android does **not** produce a lettered/roman
+sub-numbering scheme. Only the top level is a real number; every deeper level silently switches to
+the exact same glyph cascade (`◦` then `▪`, repeating) documented for bullet lists in §9 above.
+`upnote-editor-behaviour.md` does not document ordered-list nesting on macOS at all, so this is
+logged as new information — **worth checking on desktop**, not asserted as a divergence.
+
+### F. Backspace (`KEYCODE_DEL`) at the start of an item, by context
+
+| Context | Before | After | Result | Status | Screenshot |
+|---|---|---|---|---|---|
+| Level-1 bullet item, non-empty (`bstest`) | cursor at start of text, bullet present | bullet removed, `bstest` becomes a plain paragraph | **Unwraps to plain block**, text preserved | verified | [before](screenshots/upnote-android/gapF-level1-before2.png) / [after](screenshots/upnote-android/gapF-level1-after.png) |
+| Nested (level-2) bullet item, non-empty | cursor at start of text, hollow `◦` | item becomes level-1 filled `•`, text preserved | **Outdents one level** — does not unwrap on the first press | verified | [before](screenshots/upnote-android/gapF-nested-before.png) / [after](screenshots/upnote-android/gapF-nested-after.png) |
+| Checkbox item, non-empty (`checkbstest`) | cursor at start of text, `☐` present | checkbox removed, becomes a plain paragraph | **Unwraps to plain block**, text preserved | verified | [before](screenshots/upnote-android/gapF-checkbox-before2.png) / [after](screenshots/upnote-android/gapF-checkbox-after.png) |
+| Empty level-1 bullet item | empty `•`, cursor implicitly at start | bullet removed, becomes an **empty** plain paragraph — does **not** merge into the item above (`itemA` stays untouched, a blank line remains where the empty item was) | **Unwraps, no merge** | verified | [before](screenshots/upnote-android/gapF-empty-before-final.png) / [after](screenshots/upnote-android/gapF-empty-after.png) |
+
+All four rows **match** the macOS table exactly: "⌫ at start of an item unwraps that item to a
+plain block; does not merge into the item above" and "repeated ⌫ at start outdents one level per
+press, nested → level 1 → plain block." No divergence found in this sweep for backspace.
+
+### H. Rendering metrics
+
+Device density: **450** (`adb shell wm density` → `Physical density: 450`), physical size
+1200×2670px (`adb shell wm size`).
+
+| Metric | Value | Method | Status |
+|---|---|---|---|
+| Bullet/numbered glyph cascade | Level 1 `•`/`1.` → level 2 `◦` → level 3 `▪` (repeats) | screenshot, §E above and §9 above | verified |
+| Checked-item styling | Solid checkbox fill with white checkmark; item text dimmed to a lower-contrast gray; **no strikethrough** | screenshot, before/after tap | verified — [unchecked](screenshots/upnote-android/46-checkbox-unchecked.png) / [checked](screenshots/upnote-android/gapH-checked-styling.png) |
+| Indent width per nesting level | Roughly **27–36dp** per level (measured by eye from screenshot pixel positions of the level-1/2/3 markers in §E, converted at this device's 450 density: 160/450 ≈ 0.356 dp/px) | screenshot pixel-reading, **not** a pixel-perfect tool measurement | **approximate — margin of error acknowledged, not a precise figure** |
+| Block-to-block vertical gap vs. line height | Paragraph-to-paragraph gap (`plainA`→`plainB`) and soft-break line-to-line gap (`itemA`→`itemB`) measured visually indistinguishable in screenshots (~68–69px display-scale in both cases) | screenshot comparison only | **inferred, not confirmed** — consistent with the macOS finding that UpNote's block `<div>` has zero margin, but Android's underlying markup was not read (see §C's Export dead-end) |
+
+### I. Where this sweep found Android and macOS to differ, and where it did not
+
+**No new behavioural divergences from `upnote-editor-behaviour.md` were found in this sweep.**
+Every Enter/indent/outdent/backspace case that has a macOS row on file **matched** it:
+- Enter on empty nested item → outdents one level (match)
+- Indent on the first item of a list → nests, doesn't refuse (match)
+- Backspace at start of an item → unwraps to plain block, no merge upward (match)
+- Repeated backspace outdents one level per press (match, confirmed across bullet nesting)
+- Soft line break inside a list item → same `<li>`, no new bullet (match, re-confirmed)
+
+The only items worth flagging are **new Android information with no macOS counterpart to compare
+against** (not claimed divergences):
+1. Enter on an **empty top-level** item (bullet, numbered, or checkbox) closes the list outright,
+   reverting to a plain empty paragraph — `upnote-editor-behaviour.md`'s macOS table only documents
+   this for a **nested** empty item (which outdents instead of closing). Whether macOS closes the
+   list the same way on a top-level empty item is **unverified** — not tested there.
+2. Numbered-list nesting reuses the **bullet** glyph cascade (`◦`, `▪`) at levels 2+ instead of a
+   lettered/roman sub-scheme — macOS ordered-list nesting is not documented at all, so this cannot
+   be compared. **Worth checking on desktop.**
+3. Whether Android's soft-line-break inside a **plain paragraph** (not a list item) writes a `<br>`
+   or a new sibling block is genuinely **unverified** — screenshots cannot distinguish the two given
+   UpNote's zero-margin block model, and the Export flow had no local-save path on this device.
+
+### What could not be determined, and why (this sweep)
+
+- **§C plain-text soft-break, `<br>` vs. new block** — screen-only evidence is ambiguous by
+  construction (see above); Export-to-Markdown was attempted and abandoned because the share sheet
+  offered no local-file/Files-app target on this device, only send-to-app targets this session
+  declined to use.
+- **Precise indent-per-level in dp** — reported as an approximate range (27–36dp) read by eye from
+  screenshot marker positions, not measured with pixel-level tooling. Treat as a rough estimate.
+- **Whether a real hardware/Bluetooth keyboard's Shift+Enter or Tab produces different results** —
+  out of scope per the brief; no such keyboard was attached this session.
+- **Whether macOS's empty-top-level-item Enter behavior matches Android's "closes the list"
+  finding** — not tested on macOS in this sweep; `upnote-editor-behaviour.md` only covers the
+  nested-item case.
+
+## Gap sweep #2 — selection, conversion, un-listing, multi-block (2026-09-10)
+
+Same device as the previous "Gap sweep" section (`ZD222P9VZC`, motorola edge 50 neo, 1200×2670px,
+density 450), different session. Work was done in a new scratch notebook `meologue-probe2`
+(distinct from the earlier session's now-deleted `meologue-probe`), in a note titled `ZZTEST-Gap2`
+and, for two sub-tests, two further notes `ZZTEST-Gap2K2` / `ZZTEST-Gap2K3` (prefixed `ZZTEST` per
+convention). All coordinates below are raw device pixels; screenshots referenced are in
+`screenshots/upnote-android/`, filenames prefixed `gap2-`.
+
+**Method note — a persistent selection-handle bug in this session.** Long-pressing a word inside
+the body reliably snapped the selection to the **title** line instead of the word under the
+finger, on every note tested this session (reproduced on three separate notes). The workaround
+used throughout: long-press anywhere in the body → tap **Select all** (selects title + full body)
+→ drag the **start handle** down past the title to land just before the first body block. This
+reliably produced a clean body-only selection and is *why* every screenshot below starts from a
+"select all, trimmed" state rather than a direct word-drag. This is logged as a session/device
+interaction quirk, not a documented UpNote behavior — not asserted as something a normal user would
+hit.
+
+### G. Multi-block selection → list
+
+Built three blocks (`alpha` ⏎ `bravo` ⏎ `charlie`; auto-capitalized on commit to `Alpha`/`Bravo` —
+consistent with the auto-capitalize-at-block-start finding already on file), selected all three,
+then exercised the list toolbar buttons.
+
+| Case | Result | Status | Screenshot |
+|---|---|---|---|
+| G1. Select 3 plain blocks, tap bullet-list | **Three separate bullets** (`• Alpha`, `• Bravo`, `• charlie`), not one bullet containing everything | verified | [before](screenshots/upnote-android/gap2-G-blocks-before.png) / [after](screenshots/upnote-android/gap2-G1-bullet-after.png) |
+| G2. Same selection, checklist button | **Three separate checkboxes**, same pattern as bullet | verified | [after](screenshots/upnote-android/gap2-G2-checklist-multiblock.png) |
+| G3. With the three bullet items still selected, tap bullet-list again (toggle off) | **Three plain blocks restored**, text unchanged, no merge | verified | [after](screenshots/upnote-android/gap2-G3-bullet-toggle-off.png) |
+| G4. Select 3 bullet items, tap numbered-list | **Converts in place** — `1. Alpha`, `2. Bravo`, `3. charlie`; no nesting | verified | [after](screenshots/upnote-android/gap2-G4-bullet-to-numbered.png) |
+| G5. Mixed selection (1 plain block `Alpha` + 2 bullet items `Bravo`/`charlie`), tap bullet-list | **Uniform conversion** — all three become bullets; the previously-plain block joins the list, the already-bulleted items are unaffected | verified | [after](screenshots/upnote-android/gap2-G5-mixed-to-bullet.png) |
+
+### H. Round trip: plain → bullet → plain
+
+| Case | Result | Status | Screenshot |
+|---|---|---|---|
+| H1. Plain block `roundtriptext` → bullet → plain | **Text survives unchanged** byte-for-byte through the round trip | verified | [before](screenshots/upnote-android/gap2-H1-plain-before.png) / [mid](screenshots/upnote-android/gap2-H1-bullet-mid.png) / [after](screenshots/upnote-android/gap2-H1-plain-after.png) |
+| H2. Block with a **soft line break** (`softA` [soft-break] `softB`) → bullet → plain | **Structure does NOT survive.** Converting to bullet **splits** the block: `softA` becomes the bullet item, `softB` splits off as a separate plain block. Toggling the bullet back off leaves two permanent plain blocks (`softA`, `softB`) — the original single-block-with-soft-break structure is **not restored**. Text content is preserved (no data loss), only the block/soft-break structure is lost. | verified | [before](screenshots/upnote-android/gap2-H2-softbreak-before.png) / [bullet-mid, showing the split](screenshots/upnote-android/gap2-H2-softbreak-bullet-mid.png) / [after](screenshots/upnote-android/gap2-H2-softbreak-after.png) |
+| H3. Block with **bold** text (`boldword`, fully bolded) → bullet → plain | **Text and bold formatting both survive unchanged** through the round trip | verified | [before](screenshots/upnote-android/gap2-H3-bold-before.png) / [after](screenshots/upnote-android/gap2-H3-bold-after.png) |
+
+H2 is the standout finding of this group: a soft line break is **not** preserved by a list
+conversion round trip — it is silently converted into a hard block boundary the first time the
+containing block becomes a list item, and that boundary is permanent even after un-listing.
+
+### I. Un-listing a NESTED list
+
+Built a 3-level nested bullet list (`Lvl1` → indent → `Lvl2` → indent → `lvl3`), matching the
+existing §9 glyph cascade (`•` → `◦` → `▪`).
+
+**I1. Select all three levels, tap bullet-list off (toggle) repeatedly — does it flatten in one tap?**
+
+**No — it does not flatten in one tap, and it does not monotonically lift one level per tap
+either.** It took **5 taps**, alternating between two distinct behaviors depending on whether the
+selection is *uniformly* listed or *mixed*:
+
+| Tap | Selection state before tap | Result | Screenshot |
+|---|---|---|---|
+| 1 | All 3 uniformly bulleted (•/◦/▪) | **Outdents every item one level**: Lvl1 (was level 1) unwraps to plain; Lvl2 outdents to level 1 (•); lvl3 outdents to level 2 (◦) → now a **mixed** state | [tap1](screenshots/upnote-android/gap2-I1-toggle-off-tap1.png) |
+| 2 | Mixed (plain + • + ◦) | Toggle button **re-bullets the whole selection instead of continuing to outdent**: all three become bulleted again (Lvl1/Lvl2 at level 1, lvl3 at level 2) — still mixed depths, but uniformly "in the list" | [tap2](screenshots/upnote-android/gap2-I1-toggle-off-tap2.png) |
+| 3 | Uniformly bulleted (mixed depths) | Outdents every item one level again: Lvl1 & Lvl2 unwrap to plain, lvl3 outdents to level 1 (•) → mixed again | [tap3](screenshots/upnote-android/gap2-I1-toggle-off-tap3.png) |
+| 4 | Mixed (plain + plain + •) | Re-bullets the whole selection: all three become level-1 bullets, now uniform | [tap4](screenshots/upnote-android/gap2-I1-toggle-off-tap4.png) |
+| 5 | Uniformly bulleted, uniform depth (all level 1) | Outdents all three to plain — **fully flat** | [tap5](screenshots/upnote-android/gap2-I1-toggle-off-tap5.png) |
+
+**Verified conclusion:** un-nesting a nested list via the toolbar toggle is not a simple "one tap
+flattens" or "one level per tap" operation. The button's effect depends on whether the current
+selection is uniformly listed: a **uniform** list selection outdents every item one level; a
+**mixed** (partially-listed) selection re-lists everything instead of continuing to outdent. This
+alternation repeats until the whole selection reaches level 1 and finally flattens.
+
+**I2. Select only levels 2–3 (`Lvl2` + `lvl3`, not `Lvl1`), toggle bullet off — what happens to the untouched `Lvl1` parent?**
+
+**The untouched parent also un-lists**, even though it was never part of the selection. Selecting
+`Lvl2`+`lvl3` and toggling bullet off produced: `Lvl2` outdents to level-1 bullet, `lvl3` outdents
+to level-2 bullet (the expected "outdent children" result) — **but `Lvl1`, not selected, lost its
+bullet entirely and became a plain paragraph.** This is a genuinely surprising result: a list
+item's bullet-ness on Android is not purely a per-item property independent of its (former)
+children's state — un-nesting only the children collapsed the parent's list membership too.
+
+Screenshot: [nested list built](screenshots/upnote-android/gap2-I2-nested-build.png) /
+[after toggling off with only Lvl2+lvl3 selected](screenshots/upnote-android/gap2-I2-partial-toggle-off.png)
+— verified.
+
+**I3. Same for a checklist — do checked states survive?**
+
+Built a checklist (`Chk1` checked ✓, `chk2` nested one level, `chk2` also checked ✓), selected
+both, toggled the checklist button off:
+
+- **`Chk1` (the parent) unwrapped completely to plain text — its checkmark is lost entirely** (no
+  checkbox remains, plain unstyled text).
+- **`chk2` (the child) outdented one level and remained a checklist item — and its checked state
+  survived** (still shown checked, ✓, after the outdent).
+
+Same parent-unwraps/child-outdents pattern as bullet-list I2, plus the added finding that a
+**checked state survives only for an item that remains a checklist item** — it is unconditionally
+lost for an item that unwraps to plain text (there is no "strikethrough" or other memory of the
+check once the checkbox itself is gone).
+
+Screenshot: [checklist built, nested + checked](screenshots/upnote-android/gap2-I3-checklist-nested.png)
+/ [after toggle off](screenshots/upnote-android/gap2-I3-checklist-toggle-off.png) — verified.
+
+### J. THE PRIORITY ROW — re-verified, numbered-list nesting glyphs
+
+Built a numbered list slowly, one indent at a time, screenshotting after each level, on a clean
+note with no other content in view:
+
+| Level | Marker observed | Screenshot |
+|---|---|---|
+| 1 | `1.` (Arabic numeral) | [level 1](screenshots/upnote-android/gap2-J-numbered-level1.png) |
+| 2 (indented once) | `◦` (hollow circle — the **bullet-list** level-2 glyph, not `a.` or `i.`) | [level 2](screenshots/upnote-android/gap2-J-numbered-level2.png) |
+| 3 (indented twice) | `▪` (small filled square — the bullet-list level-3 glyph) | [level 3](screenshots/upnote-android/gap2-J-numbered-level3.png) |
+
+**This confirms — does not contradict — this session's own earlier Android finding** (§E above,
+from the 2026-09-10 gap sweep earlier in this document): Android numbered-list nesting switches to
+the **bullet** glyph cascade at levels 2+; only the top level is a real number. Re-verified from
+scratch, slowly, with a clean screenshot at each level — the earlier Android finding was correct
+and is reproducible.
+
+**On the reported contradiction with macOS:** the brief for this sweep states a "parallel macOS
+pass reported `1.` at every level." This document (`upnote-editor-behaviour.md`) does not currently
+contain a macOS ordered-list-nesting row to compare against — its Lists table only documents a
+bullet glyph cascade, with no numbered-list nesting entry. This session has no macOS access and
+cannot verify or resolve that side. What this sweep **can** state plainly: the Android glyph
+cascade (`1.` → `◦` → `▪`) is real, reproducible, and was not a mistake in the earlier Android
+write-up. If a macOS pass truly found `1.` persisting at every level, that is a genuine
+cross-platform divergence worth recording once macOS is re-checked — it is not evidence that the
+Android finding was wrong.
+
+### K. Multi-block
+
+**K1. Select two plain blocks (`blockA`, `blockB`), tap indent — do both indent?**
+
+**No — and the result is a real defect, not merely "no-op."** Tapping indent on a selection
+spanning two **plain** (non-list) blocks did not indent either block. Instead it **deleted the
+text of the earlier block** (`blockA`), leaving an empty paragraph in its place; `blockB` was left
+untouched, unindented, at the original left margin. Reproduced twice with identical results
+(confirmed via undo restoring `blockA`, then repeating the exact same selection + indent tap with
+freshly-verified toolbar-icon coordinates). **Verified, reproducible (2/2).**
+
+Screenshot: [before](screenshots/upnote-android/gap2-K1-plainblocks-before.png) /
+[after — blockA text gone](screenshots/upnote-android/gap2-K1-plainblocks-indent.png) /
+[reproduced](screenshots/upnote-android/gap2-K1-plainblocks-indent-retry.png) /
+[undo restores blockA, confirming it really was deleted](screenshots/upnote-android/gap2-K1-after-undo.png)
+
+**K2. Paste multi-line text into an empty note — multiple blocks, or one block with line breaks?**
+
+Copied three lines (`Chunk1`, `Chunk2`, `chunk3`) from a source note, pasted into an empty body
+line of a different note (via the long-press context menu's **Paste**, not "Paste as plain text").
+
+- **Result: multiple separate blocks**, not one block with line breaks. Confirmed structurally (not
+  just visually) by placing the cursor at the start of the second pasted line and pressing
+  Backspace once: the two lines **merged onto one line** (`Chunk1|Chunk2`) — the classic
+  "backspace-at-start-of-block merges into the block above" behavior already documented for
+  ordinary blocks, which only happens across a real block boundary, not within a single
+  soft-broken block. **Verified.**
+- **A secondary, unexplained anomaly**: only **two** of the three copied lines (`Chunk1`,
+  `Chunk2`) appeared after paste — `chunk3` did not appear anywhere in the result, confirmed by
+  probing the cursor position after paste (it sat immediately after `Chunk2`, not on a further
+  empty third line). The selection that was copied did visibly include all three lines
+  (screenshot-verified before the copy). Given repeated clipboard-interaction accidents earlier in
+  this session (see method note above), this could be a stale-clipboard artifact rather than a
+  genuine paste truncation — **marked unverified, flagged rather than asserted**, since the root
+  cause could not be isolated within this session's time budget.
+
+Screenshot: [paste result](screenshots/upnote-android/gap2-K2-paste-result-clean.png) /
+[backspace-merge proof](screenshots/upnote-android/gap2-K2-blocktest.png)
+
+**K3. Select two blocks, press Enter (keyevent 66) to replace the selection — what remains?**
+
+**Unverified.** This session was unable to reliably produce a clean selection spanning exactly two
+plain blocks on this note (see the "persistent selection-handle bug" method note above — long-press
+repeatedly snapped to the title, and handle-drag attempts landed inconsistently between the two
+target blocks despite multiple corrected-coordinate retries). One attempt produced a selection that
+appeared, from the on-screen handles, to span from inside `blockX` to inside `blockY`; pressing
+Enter in that state left **both `blockX` and `blockY` fully intact** and inserted a new empty block
+between the title and `blockX` — which strongly suggests the actual selection at the moment Enter
+was pressed was empty or mis-positioned, not a genuine two-block selection. **Not asserted as the
+answer to K3** — flagged as unverified rather than guessed, per the brief's instruction.
+
+Screenshot (for the record, not as a confirmed answer): [gap2-K3-enter-replace.png](screenshots/upnote-android/gap2-K3-enter-replace.png)
+
+### Cleanup
+
+Four notes were created for this sweep, all prefixed `ZZTEST` (`ZZTEST-Gap2`, `ZZTEST-Gap2K2`,
+`ZZTEST-Gap2K3`, and one accidental empty duplicate title `zZZTEST-Gap2` produced by a mistap) —
+all four were moved to Trash via long-press → **Move to trash**, one at a time, verified empty
+afterward. The scratch notebook `meologue-probe2` (this session's own, confirmed empty of notes
+first) was then deleted via the sidebar's long-press → **Delete Notebook**.
+
+**Important, and logged rather than silently corrected:** the sidebar showed **two** notebooks
+both named `meologue-probe2` throughout this session — this session's own (created fresh at the
+start, ended up empty and was deleted) and a **second, pre-existing one** containing one note
+titled `alphabet` (body `bravostar`), timestamped `8:23 am` — earlier than or concurrent with this
+session's own notebook-creation time. That note's content (generic alphabetic filler words) matches
+the "concurrent live sync" pattern already documented elsewhere in this file (another session's
+test activity, likely the Mac-side agent, syncing to this device). **Neither that notebook nor its
+note were created by this session, and neither was opened, edited, or deleted** — left exactly as
+found, per the safety constraints for this sweep.
+
+Final state: this session's own notebook and all four of its test notes are gone (notes in Trash,
+notebook deleted); the pre-existing `Memoir_1` notebook and the other, not-mine `meologue-probe2`
+notebook (with its one `alphabet` note) are untouched.

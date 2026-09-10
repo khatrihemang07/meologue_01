@@ -485,3 +485,339 @@ This is a point where copying UpNote exactly would be a *regression* for this re
 body IS Markdown, so pasted GFM is parsed into a list on the way in — and ADR 0045 argued
 that deliberately, on the grounds that a person pasting ordinary GFM should not watch their
 list flatten into a paragraph with no error and no explanation.
+
+---
+
+## Gap sweep — Enter/Shift-Enter/Tab/Backspace and list metrics (2026-09-10)
+
+Method: same rig as above (UpNote 9.22.2, macOS, `osascript ... keystroke` for text,
+`osascript ... key code 36`/`48`/`51` for Enter/Tab/Backspace — these proved more reliable
+this session than `cliclick kp:return`/`kp:tab`/`kp:delete`, which intermittently no-op'd
+with no error; see new environment note below), ground truth read from a WAL-inclusive copy
+of `upnote.sqlite3`. Every finding below was cross-checked with at least two DB reads several
+seconds apart (this session found the on-disk save can lag the visible editor state by
+5-10s, longer than the 1-2s assumed earlier in this document — see note below) plus a
+screenshot. All work happened in a single scratch note inside a notebook named
+`meologue-probe`, reset with Cmd+A + repeated Backspace between cases (or a fresh File ▸
+New Note when reset left stray content — both are noted inline where used). Screenshots are
+in `screenshots/upnote-macos/gap-*.png`.
+
+### New environment/method notes this session
+
+- **Save latency is longer than assumed**: the earlier "cross-check 2-5s apart" guidance in
+  this document undersells it. This session repeatedly saw the on-disk `html` column lag the
+  true editor state by 5-10s (once observed effectively lost after 20s+ when the note was
+  navigated away from before the debounced save fired — see "Not determined" below). Every
+  reading in the tables below used a ≥3.5s wait, usually two waits with a re-read.
+- **`cliclick kp:return` / `kp:tab` / `kp:delete` are not reliable on this machine this
+  session** — they silently no-op on an unpredictable fraction of presses (no error, no
+  stolen focus, just nothing happens). Switching to `osascript ... key code 36` (Return),
+  `key code 48` (Tab), `key code 51` (Backspace) was 100% reliable in every retry this
+  session. `cliclick kp:arrow-*` and `cliclick c:x,y` (click) were fine throughout.
+  Single-key `cliclick kp:` primitives besides return/tab/delete were not re-tested for this
+  same flakiness; treat any silently-no-op result on this machine with suspicion and retry
+  via `key code` before concluding a chord is dead.
+- **This machine had a live concurrent human user and a second Claude Code session during
+  this sweep** (confirmed via screenshots showing live Brave/VS Code activity unrelated to
+  this task, and stray contamination — a stray word appeared in the probe note once, and
+  once ~26 minutes of typed content reverted to an earlier state after navigating to a
+  different note before its save had landed). Every reading in the tables below was the
+  *second* independent read (or later), and any run that looked contaminated was discarded
+  and redone from a fresh `File ▸ New Note` rather than trusted.
+- Window/toolbar coordinates from this document's rig section were **not** reusable
+  unmodified this session — the UpNote window had moved to a second, higher-resolution
+  display with a different on-screen position (though the same 1126×613pt size). All clicks
+  this session first re-read the window's live position via System Events, then applied the
+  same point-space deltas documented in the rig section.
+
+### Group A — Enter / Shift+Enter on lists
+
+| Case | Setup HTML | Action | Result HTML | Status |
+|---|---|---|---|---|
+| A1 — empty top-level **bullet** | `<ul><li><br></li></ul>` | ⏎ | `<br>` — list exits entirely, no leftover `<li>` | verified (2 reads, ~9s apart) |
+| A1 — empty top-level **numbered** | `<ol><li><br></li></ol>` | ⏎ | `<br>` — same | verified |
+| A1 — empty top-level **checkbox** | `<ul><li data-checked="false"><br></li></ul>` | ⏎ | `<br>` — same | verified |
+| A1 — empty top-level **checked** checkbox (= A8) | `<ul><li data-checked="true"><br></li></ul>` | ⏎ | `<br>` — same; checked-ness has no effect on this rule | verified |
+| A2 — empty **level-3** nested bullet | `<ul><li>one</li><ul><li>two</li><ul><li><br></li></ul></ul></ul>` | ⏎ | outdents **one level**: `<ul><li>one</li><ul><li>two</li><li><br></li></ul></ul>` | verified |
+| A2 — (continuing) empty **level-2** | (above result) | ⏎ | outdents to level-1: `<ul><li>one</li><ul><li>two</li></ul><li><br></li></ul>` | verified |
+| A2 — (continuing) empty **level-1** | (above result) | ⏎ | **exits the list entirely**, new plain sibling block: `<ul><li>one</li><ul><li>two</li></ul></ul><div><br></div>` | verified — one level outdented per press, all the way out, matches A1 |
+| A3 — mid-text | `<ul><li>alphabravo</li></ul>`, caret between "alpha"/"bravo" | ⏎ | tail moves to a new sibling item: `<ul><li>alpha</li><li>bravo</li></ul>` | verified |
+| A4 — start of non-empty item | `<ul><li>hello</li></ul>`, caret before "h" | ⏎ | blank item inserted **above**, original text unaffected below it: `<ul><li><br></li><li>hello</li></ul>` | verified — Home key did NOT reliably move caret to start on this build; `arrow-left` × (length) did |
+| A5 — item with nested children | `<ul><li>one</li><ul><li>child</li></ul></ul>`, caret at end of "one" | ⏎ | new **empty sibling item inserted between** the parent and its children (children do **not** move into the new item, they stay right after it): `<ul><li>one</li><li><br></li><ul><li>child</li></ul></ul>` | verified |
+| A6 — Shift+Enter inside a bullet item | `<ul><li>alpha</li></ul>` | ⇧⏎ then type "bravo" | `<br>` inside the **same** `<li>`: `<ul><li>alpha<br>bravo</li></ul>` | verified **at the raw byte (hex) level**: `...616c7068613c62723e627261766f...` = "alpha" + `<br>` + "bravo" |
+| A7 — Shift+Enter inside a checkbox item | `<ul><li data-checked="false">alpha</li></ul>` | ⇧⏎ then type "bravo" | `<br>` inside the same `<li>`, `data-checked` untouched: `<ul><li data-checked="false">alpha<br>bravo</li></ul>` | verified |
+
+Screenshots: `gap-a1-empty-item-enter-exits-list.png`, `gap-a2-level3-nested-empty-item.png`
+(glyph `▪` confirms level 3 before the outdent sequence), `gap-a4-enter-at-start-blank-above.png`,
+`gap-a5-enter-on-item-with-children.png`.
+
+### Group B — Tab / Shift+Tab
+
+| Case | Setup | Action | Result | Status |
+|---|---|---|---|---|
+| B1 — Tab in the **middle** of an item's text | `<ul><li>alphabravo</li></ul>`, caret between "alpha"/"bravo" | ⇥ | **indents the whole item** (does not split, does not insert em-space): `<ul><ul><li>alphabravo</li></ul></ul>` | verified — caret position within the item's text does not matter for Tab, only that the caret is inside a list item at all |
+| B2 — Shift+Tab on a **level-1** item | `<ul><li>alpha</li></ul>` | ⇧⇥ | **exits the list entirely**, bare text at root: `alpha` (confirmed at hex level, no wrapping tag) | verified |
+| B3 — Shift+Tab on plain prose (no em-space) | `plain text here` (bare, not a list) | ⇧⇥ | **no-op**, byte-for-byte unchanged | verified |
+| B4 — Tab on a 3-item multi-line selection | `<ul><li>one</li><li>two</li><li>three</li></ul>`, Cmd+A | ⇥ | **all three indent together** into one orphan nested `<ul>`: `<ul><ul><li>one</li><li>two</li><li>three</li></ul></ul>` | verified — extends the 2-item finding already in §9 above to 3 items, same rule |
+| B5 — numbered item nested under a bullet parent | `<ul><li>one</li></ul>`, Enter, Tab (empty level-2 item), then Cmd+8 to convert that item to numbered | — | `<ul><li>one</li><ol><li><br></li></ol></ul>` — the `<ol>` is a **sibling of the bullet's `<li>`**, same orphan-list pattern as bullet/bullet nesting. Rendered marker: `1.` at the level-2 indent | verified |
+| B6 — Tab at the very end of an empty note | `<br>` (empty note) | ⇥ | Focus **stays in UpNote** (confirmed via `System Events` frontmost-process check immediately after the keypress) and inserts a **U+2003 em-space**, exactly the already-documented plain-text Tab rule — Tab never does OS/browser-style focus traversal in this editor | verified |
+
+Screenshot: `gap-b2-shifttab-level1-exits-list.png`, `gap-b5-numbered-nested-under-bullet.png`.
+
+**Correction/clarification to the existing "Tab / Shift+Tab" table** in this document
+(§"Tab on plain (non-list) text inserts a literal U+2003 EM SPACE"): that finding is
+correct and B6 above reproduces it exactly for the empty-note case, so no contradiction —
+just confirming it also holds with nothing before or after the caret.
+
+### Group C — Numbered lists
+
+| Case | Finding | Status |
+|---|---|---|
+| C1 — marker glyph at levels 1/2/3 | **`1.` at every level** — numbers do **not** cascade to `a.`/`i.` the way bullets cascade `•`/`○`/`▪`. Only the indent changes; the glyph stays a plain arabic numeral + period at all three levels tested | verified, screenshot `gap-c1-numbered-marker-all-levels.png` |
+| C2 — numbering continuation across an indent/outdent | Built `1. item1`, `2. item2`, indented a 3rd item (auto-converts to a **bullet**, not a numbered sub-item, matching the general "Tab always produces `<ul>` unless explicitly re-converted" rule from B5), then outdented a 4th item back to level 1 | The 4th item, back at level 1, renders **`3.`** — the top-level sequence counts only its own level's items and **skips over** the nested bullet, i.e. 1, 2, [bullet, uncounted], 3 | verified, screenshot `gap-c2-numbering-continuation.png` |
+| C3 — plain block interleaved between two numbered lists | `<ol>` (1,2) → exit list → plain paragraph → new `1. charlie` | Second `<ol>` **restarts at `1.`** — no shared counter across the two separate `<ol>` elements | verified, screenshot `gap-c3-numbering-restarts-after-plain-block.png` |
+
+Also newly observed and worth recording: once a numbered list reaches **10 or more items**,
+UpNote stamps the `<ol>` itself with `data-upnote-marker-digit-count="2"` (verified in the
+stored HTML for an 11-item list). This is the mechanism behind the marker alignment in E4
+below — UpNote tracks how many digits the widest marker in the list needs and uses that to
+lay the list out, rather than leaving it to native browser/CSS list-marker layout.
+
+### Group D — Backspace
+
+| Case | Setup | Action | Result | Status |
+|---|---|---|---|---|
+| D1 — start of **empty** level-1 item | `<ul><li><br></li></ul>` | ⌫ | `<br>` — exits list, same as Enter (A1) | verified |
+| D1 — start of **non-empty** level-1 item | `<ul><li>hello</li></ul>`, caret before "h" | ⌫ | `hello` (bare) — **same unwrap-to-plain-block rule**, the only difference is whether the surviving content is empty or not | verified — confirms the existing doc's "does not merge into the item above" rule holds identically for empty and non-empty items |
+| D2 — start of an item that **has nested children** | `<ul><li>one</li><ul><li>child</li></ul></ul>`, caret before "one" | ⌫ | `one` unwraps to a plain `<div>`, and the children are **orphaned in place at their original depth** (not promoted to level 1): `<div>one</div><ul><ul><li>child</li></ul></ul>` | verified |
+| D3 — start of a **checked** checkbox item | `<ul><li data-checked="true">task</li></ul>`, caret before "t" | ⌫ | `task` (bare text) — **`data-checked` is dropped entirely**, no trace of the checked state survives on the resulting plain block | verified, screenshot `gap-d3-checkbox-backspace-drops-checked.png` |
+| D4 — joining two plain `<div>` blocks | `<div>alpha</div><div>bravo</div>`, caret before "bravo" | ⌫ | `alphabravo` — direct concatenation, no space/`<br>`/wrapper inserted, single bare root block (only block left) | verified |
+| D5 — Backspace **immediately** after the `- ` input rule fires | type `- ` (fires the rule → `<ul><li><br></li></ul>`), then Backspace with **no settling delay** | ⌫ | `<br>` — **does not** restore the literal `- ` text. This is the ordinary "empty-item Backspace" unwrap (same as D1-empty), a genuinely different code path from Cmd+Z, which — per the Undo section above — **does** restore the literal `-&nbsp;` | verified at hex level (`3c62723e` = exactly `<br>`, nothing else) |
+
+### Group E — Rendering measurements
+
+Measured by taking a full-resolution screenshot (`screencapture -x -D2`, native pixels — this
+session's display was 2560×1664 physical px at a 2:1 Retina scale, i.e. 1280×832 pt logical
+— UpNote's own window/zoom was the default, untouched 100%) and locating glyph bounding boxes
+with Pillow (`PIL`) rather than eyeballing. All px figures below are **device pixels**; the pt
+figure divides by the 2× Retina scale factor confirmed for this display.
+
+| Measurement | Finding | Status |
+|---|---|---|
+| E1 — line-height / inter-block gap | Two consecutive plain one-line blocks: text-top-to-text-top pitch = **60px = 30pt**. Per the existing "zero margin" finding, this single 30pt figure **is** both the line-height and the full inter-block gap — there is no additional block margin on top of it | verified, screenshot `gap-e1-line-height-measurement.png` |
+| E2 — list left indent per level, and glyph-to-text gap | Bullet glyph left edge moved right by **~54-56px (~27-28pt) per nesting level** (level1→2 and level2→3 increments were consistent within a few px). The gap between a glyph's right edge and its item's text start was **~20-21px (~10-10.5pt), consistent across bullet levels 1-3** (level-2's hollow `○` needed a lower brightness threshold to detect — its outline anti-aliases much fainter than the solid level-1 `•` and level-3 `▪`, which is itself worth knowing for anyone re-measuring this) | verified, screenshot `gap-e2-list-indent-levels.png` |
+| E3 — checkbox glyph size, offset, checked rendering | Checkbox glyph bounding box: **31×30px (~15.5×15pt) square**. Glyph-to-text gap: **20px (~10pt)** — matches the bullet gap in E2. Checked state: box fills solid with a checkmark, and **the item's text dims from peak brightness 224/255 to 144/255 (≈36% dimmer)** — confirmed **no strikethrough** (no horizontal bright line was found bisecting the checked text's glyph height) | verified, screenshot `gap-e3-checkbox-checked-rendering.png` |
+| E4 — numbered marker alignment at 10+ items | **Right-aligned.** In an 11-item list, every item's text ("item") starts at the identical left x-coordinate regardless of whether its marker is `1.`-`9.` (1 digit) or `10.`/`11.` (2 digits) — the single-digit markers sit indented one digit-width to the right of the double-digit ones. Confirmed both visually and by the `data-upnote-marker-digit-count="2"` attribute UpNote stamps onto the `<ol>` once a 2-digit marker appears (see Group C) | verified, screenshot `gap-e4-numbered-marker-alignment.png` |
+
+### Not determined this session
+
+- Whether the on-disk save ever has a hard flush trigger (note switch, app blur, explicit
+  Save menu item) — this session observed **File ▸ Save**, navigating to a different note,
+  and returning all fail to guarantee a flush of a very recent edit; one ~26-minute-old
+  two-line edit was lost this way (reverted to its previous saved state) after navigating
+  away before waiting long enough. The exact debounce/flush trigger was not isolated — budget
+  every future scripted session generous (10s+) settle time before trusting a "final" read,
+  and avoid navigating away from a note immediately after editing it.
+- Numbered-list nesting was only exercised via Tab (which defaults to `<ul>` at the next
+  level) plus an explicit Cmd+8 re-conversion per level (per B5/C1). Whether there is a
+  *direct* keyboard path to a numbered child (e.g. typing `1. ` inside an already-list
+  context) was tried and found **not** to fire the input rule (stays literal text) — this is
+  itself a finding but the underlying reason (input rules disabled inside any list vs.
+  disabled only for `<ol>`-inside-`<ul>`) was not isolated further.
+- E1-E4 measurements were taken at this session's ambient window size/zoom (default 100%,
+  1126×613pt window) on one specific display; a different zoom level or display would shift
+  the absolute px/pt figures proportionally, though the *ratios* (e.g. indent-per-level ≈
+  bullet-glyph-width, checkbox gap ≈ bullet gap) should hold.
+
+---
+
+## Gap sweep #2 — selection, conversion, un-listing, multi-block (2026-09-10)
+
+Method: UpNote 9.22.2 on macOS, driven from a scratch notebook named `meologue-probe2`
+(created fresh this session via File ▸ New Notebook…, since the prior session's
+`meologue-probe` notebook no longer exists — it was never a persisted `notebooks` row when
+checked at the start of this session). One scratch note, id `01a08921-a86c-7362-8b03-3c6a33cc1984`,
+reused and reset with Cmd+A + repeated `key code 51` (Backspace) between cases. Text entry via
+`osascript ... keystroke`; Enter/Tab/Backspace/arrows via `osascript ... key code` (36/48/51/
+123-126) — both were reliable this session. Mouse clicks via `cliclick c:`/`dc:`/`kd:shift
+c: ku:shift`, with click coordinates derived from the live window position+size (read fresh via
+System Events each time the window moved) rather than fixed pixel constants, because the window
+was relocated/resized by outside interference partway through the session (see below). Ground
+truth read from a WAL-inclusive copy of `upnote.sqlite3`, every finding cross-checked with two
+reads ≥4s apart via a `settle_read` helper; hex (`select hex(html)`) pulled wherever byte-exact
+confirmation mattered. Screenshots are in `screenshots/upnote-macos/gap2-*.png`.
+
+**Environment interference recurred this session, consistent with the hazard already
+documented above.** Twice, an action landed on the wrong target: (1) a click on the sidebar
+"+" next to Notebooks was followed, one screenshot later, by the window having relocated to a
+different position/size and frontmost app having changed to `Code` — something else took focus
+immediately after the click landed (the click itself worked; a follow-on interference event
+moved focus away before the next command). (2) On two separate occasions a `Tab` keypress
+landed while a stale `select_all` selection was still active instead of the single collapsed
+caret a preceding click was meant to leave, producing a multi-item-indent result instead of the
+single-item indent intended (visible in the resulting HTML as an implausible jump — e.g. the
+wrong item nesting). Both were caught immediately by reading the HTML/screenshot straight after
+and were corrected with Cmd+Z before the real test was re-run with a verified (screenshotted)
+selection state. No finding below was accepted without a screenshot or hex confirmation of the
+actual selection/state immediately beforehand.
+
+### Group G — Multi-block selection → list conversion
+
+All conversions below used the **Cmd accelerator** (Cmd+7 bullet, Cmd+8 numbered, Cmd+Shift+9
+checklist) — the same chords already verified alive earlier in this document — rather than the
+toolbar or Format menu, for consistency and reliability.
+
+| Case | Setup | Action | Result HTML | Status |
+|---|---|---|---|---|
+| G1 — three blocks → bullet | `alpha` ⏎ `bravo` ⏎ `charlie` (3 blocks), Cmd+A | Cmd+7 | `<ul><li>alpha</li><li>bravo</li><li>charlie</li></ul>` — **three separate `<li>`s**, not one `<li>` with all the text | verified |
+| G2 — same, numbered | rebuild 3 blocks, Cmd+A | Cmd+8 | `<ol><li>alpha</li><li>bravo</li><li>charlie</li></ol>` — three separate `<li>`s | verified |
+| G2 — same, checklist | rebuild 3 blocks, Cmd+A | Cmd+Shift+9 | `<ul><li data-checked="false">alpha</li><li data-checked="false">bravo</li><li data-checked="false">charlie</li></ul>` — three separate `<li>`s | verified |
+| G3 — toggle bullet off | (G1 result), Cmd+A | Cmd+7 again | `alpha<br>bravo<br>charlie` — **one single block, joined by `<br>`, NOT three separate `<div>`s.** Confirmed at hex level: `616C7068613C62723E627261766F3C62723E636861726C6965` | verified — **the flatten-to-plain step re-merges into one block, unlike Enter on a selection (§9) which leaves N empty divs** |
+| G3 — toggle numbered off | (G2 bullet result), Cmd+A | Cmd+8 again | `alpha<br>bravo<br>charlie` — same one-block-with-`<br>` collapse | verified |
+| G3 — checklist "toggle off" | (G2 checklist result, all `data-checked="false"`), Cmd+A | Cmd+Shift+9 again | `<ul><li data-checked="true">alpha</li><li data-checked="true">bravo</li><li data-checked="true">charlie</li></ul>` — **does NOT un-list.** It flips `data-checked` false→true on all items instead | verified — **checklist fundamentally does not use this chord to exit the list; a third press flips true→false again (see i3-checklist-toggle screenshots), cycling forever** |
+| G4 — bullet → numbered (different type) | 3-item bullet list, Cmd+A | Cmd+8 | `<ol><li>alpha</li><li>bravo</li><li>charlie</li></ol>` | verified — **converts cleanly in place, no nesting introduced** |
+| G5 — mixed selection (1 plain + 2 list items), precise mouse selection | `plain` (plain block) + `<ul><li>item1</li><li>item2</li></ul>`, select all 3 via click+shift-click (verified by screenshot: all 3 highlighted) | Cmd+7 | `<ul><li>plain</li><li>item1</li><li>item2</li></ul>` — **"plain" becomes a list item too; all three end up bulleted** (same "any inactive → activate all" rule already established for inline marks in §1, now confirmed at block-list granularity) | verified |
+
+**Selection-boundary gotcha found while setting up G5** (not part of the G5 answer itself, but
+a real, reproduced trap): building the "2 items only" selection with `Shift+Up ×2` from the end
+of `item2` — where `plain`, `item1`, `item2` all happened to be exactly 5 characters — put the
+selection anchor exactly at the END of the `plain` block (same column, one line up). The
+highlight rendered as covering only `item1`+`item2` (visually correct), but applying Cmd+7 to
+that selection **also converted `plain`** into a list item, even though zero characters of it
+were visibly selected. Re-doing the identical 2-item selection via mouse click+shift-click (not
+touching `plain`'s line at all) gave the expected `plain<ul><li>item1</li><li>item2</li></ul>`
+with `plain` untouched. **Conclusion: a keyboard selection whose anchor lands exactly on a
+block boundary can pull the adjacent block into a block-level command even when nothing in it
+is visibly highlighted — a mouse-verified selection is the only trustworthy one for this class
+of test.** Screenshots: `gap2-g1-three-blocks-to-bullet.png`, `gap2-g3-bullet-toggle-off-
+collapses-to-one-block.png`, `gap2-g3-checklist-second-press-toggles-checked.png`, `gap2-g3-
+checklist-third-press-unchecked.png`, `gap2-g4-bullet-to-numbered-inplace.png`, `gap2-g5-mixed-
+selection-after-bullet.png`.
+
+### Group H — Single block ↔ list round trip
+
+| Case | Before | After bullet | After toggle back | Byte-identical to original? | Status |
+|---|---|---|---|---|---|
+| H1 — plain text | `hello world` (hex `68656C6C6F20776F726C64`) | `<ul><li>hello world</li></ul>` | `hello world` | **Yes** — hex matches exactly | verified |
+| H2 — block with a `<br>` soft break | `line one<br>line two` (hex `6C696E65206F6E653C62723E6C696E652074776F`) | `<ul><li>line one</li><li>line two</li></ul>` — **the `<br>` does NOT survive as a soft break inside one `<li>`; it gets promoted to a real list-item boundary (2 items), not `<li>line one<br>line two</li>`** | `line one<br>line two` — merged back into one block with `<br>` | **Yes**, end-to-end — but the intermediate representation is not what most people would guess | verified |
+| H3 — inline marks (bold, italic) | `<b>bold</b> <i>italic</i> plain` (hex `3C623E626F6C643C2F623E203C693E6974616C69633C2F693E20706C61696E`) | `<ul><li><b>bold</b> <i>italic</i> plain</li></ul>` | `<b>bold</b> <i>italic</i> plain` | **Yes** — hex matches exactly | verified |
+
+### Group I — Un-listing a NESTED list (the key case)
+
+I1 — 3-level bullet list `<ul><li>one</li><ul><li>two</li><ul><li>three</li></ul></ul></ul>`
+(glyphs `•`/`○`/`▪`, screenshot `gap2-i1-3level-bullet-built.png`), Cmd+A + Cmd+7 pressed
+**repeatedly**, exact HTML after each press:
+
+| Press | Result HTML | What happened |
+|---|---|---|
+| 1 | `one<br><ul><li>two</li><ul><li>three</li></ul></ul>` | Selection was **fully list-active** → toggle-off fires. Only the outermost `<li>` ("one") unwraps to plain text; the nested sub-list (two/three) is **not flattened**, just shifts up one level as a whole (loses its outer wrapper) |
+| 2 | `<ul><li>one</li><li>two</li><ul><li>three</li></ul></ul>` | Selection was now **mixed** (one=plain, two/three=list) → the "any inactive → activate all" rule fires instead of continuing to strip: "one" gets **re-listified**, flattened to the same level as "two" |
+| 3 | `one<br>two<br><ul><li>three</li></ul>` | Selection fully list-active again → toggle-off strips one more level: "one" and "two" unwrap to plain (joined by `<br>`), "three" survives alone as its own single-item list |
+| 4 | `<ul><li>one</li><li>two</li><li>three</li></ul>` | Mixed again → activate-all re-listifies everything **flat** (relative nesting is not restored) |
+| 5 | `one<br>two<br>three` | Fully active → toggle-off flattens completely to one plain block, `<br>`-joined |
+
+**Answer: neither "flatten all at once" nor a clean "one level lifts per press" — it alternates
+between stripping one level (when the selection is uniformly list-active) and re-normalizing to
+flat (when the previous strip left a mixed selection), converging to fully-flat plain text after
+5 presses for a 3-level list.** This is the same "any inactive → activate all, else remove all"
+rule already documented for inline marks in §1, now shown to govern list-unwrapping too, and it
+means **naive repeated Cmd+7 does not monotonically de-nest** — it can re-nest on alternating
+presses. Screenshots: `gap2-i1-press1.png` … `gap2-i1-press5-final-flat.png`.
+
+I2 — same 3-level list rebuilt; this time selecting **only the level-2 and level-3 items**
+(`two`+`three`, confirmed by screenshot — `one` NOT highlighted) and pressing Cmd+7 once:
+
+`<ul><li>one</li><li>two</li><ul><li>three</li></ul></ul>` — **the level-1 parent ("one") is
+completely unaffected** (still a normal `<li>`, same position); only the selected sub-range has
+one level stripped (two moves from level-2 to level-1 of what remains, three stays nested one
+level under it). **verified**, screenshot `gap2-i2-scoped-toggle-parent-untouched.png`.
+
+I3 — numbered: rebuilding the same 3-level structure via Tab always produces `<ul>` at each
+nested level regardless of the root being `<ol>` (matches the already-documented "Tab always
+nests as `<ul>`" rule) — so the first Cmd+8 on a select-all of a `<ol>`/`<ul>`/`<ul>` mix is a
+**mixed selection** and activates all to `<ol>` first (`<ol><li>one</li><ol><li>two</li><ol>
+<li>three</li></ol></ol></ol>`), and only the *second* press begins the same strip/re-normalize
+alternation seen in I1 (`one<br><ol><li>two</li><ol><li>three</li></ol></ol>`). **Same
+underlying rule as bullet, just requires one extra "normalize the mixed ol/ul" press first when
+the nesting was built via Tab.** verified.
+
+I3 — checklist: built a 3-level nested checklist (`<ul><li data-checked="false">one</li><ul>
+<li data-checked="false">two</li><ul><li data-checked="false">three</li></ul></ul></ul>`,
+screenshot `gap2-i3-checklist-3level-built.png`), checked "two" via a verified checkbox click
+(`data-checked="true"`), then Cmd+A + Cmd+Shift+9 **repeatedly**:
+
+| Press | Result | 
+|---|---|
+| 1 | `<ul><li data-checked="true">one</li><ul><li data-checked="true">two</li><ul><li data-checked="true">three</li></ul></ul></ul>` — mixed checked-state → **activates all to checked=true**. Nesting **completely unchanged** |
+| 2 | `<ul><li data-checked="false">one</li><ul><li data-checked="false">two</li><ul><li data-checked="false">three</li></ul></ul></ul>` — uniform → flips to false. Nesting **still completely unchanged** |
+
+**Answer: for checklist, Cmd+Shift+9 on a nested selection NEVER un-lists, at any press —
+it only ever toggles `data-checked` uniformly (mixed→true, then true↔false thereafter). The
+`data-checked` attribute and the full nesting structure both survive indefinitely; there is no
+"peel a level" behavior for checklists via this chord at all**, in sharp contrast to bullet and
+numbered lists. verified, screenshots `gap2-i3-checklist-toggle-activates-all-checked.png`,
+`gap2-i3-checklist-toggle-back-unchecked.png`.
+
+### Group J — Nested-list conversion
+
+J1 — flat 3-item bullet list, indented item 2 and item 3 to level 2 only (`<ul><li>one</li>
+<ul><li>two</li><li>three</li></ul></ul>`), select all, Cmd+8:
+
+`<ol><li>one</li><ol><li>two</li><li>three</li></ol></ol>` — converts cleanly in place at both
+levels (`<ul>`→`<ol>`), no extra nesting. Rendered markers: level 1 = `1.`, level 2's own
+counter restarts independently at `1.`/`2.` (matches the already-documented "each separate
+`<ol>` restarts at 1" rule, here applied to a nested-but-sibling `<ol>`). **verified**,
+screenshot `gap2-j1-2level-numbered.png`.
+
+### J2 — the marker-glyph question, settled
+
+Built a genuine 3-level **numbered** list — level 1 `one`, level 2 `two`, level 3 `three`, each
+level explicitly converted to `<ol>` (not left as the `<ul>` that Tab produces by default) —
+and read both the DOM and a full-resolution screenshot:
+
+**DOM (verified via hex-checked `select html`):**
+```html
+<ol><li>one</li><ol><li>two</li><ol><li>three</li></ol></ol></ol>
+```
+Three independently-nested `<ol>` elements, each restarting its own counter at 1.
+
+**Screenshot** (`gap2-j2-3level-numbered-all-markers-are-1.png`) shows, unambiguously:
+```
+1. one
+   1. two
+      1. three
+```
+
+**Answer: on macOS, the marker is a plain arabic numeral + period — "1." — at every nesting
+level, level 1 through level 3. There is no cascade to `a.`/`i.` and no substitution to bullet
+glyphs (`◦`/`▪`) at levels 2-3.** This **reconfirms** (does not contradict) the existing
+"Group C1" finding earlier in this document ("`1.` at every level... only the indent changes").
+It directly **contradicts the parallel Android-pass report** of bullet glyphs appearing at
+levels 2-3 of a numbered list — that is a genuine **macOS ≠ Android platform difference**, not
+a mistake in either report: this session verified the macOS side at both the DOM level and the
+pixel level, from a freshly-built, explicitly-all-`<ol>` 3-level list, with no ambiguity.
+
+### Group K — Multi-paragraph behaviour
+
+| Case | Setup | Action | Result HTML | Status |
+|---|---|---|---|---|
+| K1 — Tab on two selected **plain** blocks | `alpha` ⏎ `bravo` (2 plain blocks), Cmd+A (verified selected via screenshot) | Tab | `<space>` — hex `E28083` = **a single U+2003 EM SPACE**. **Both blocks' text is destroyed**; the selection is deleted and replaced by one em-space in one remaining block, exactly like the already-documented "Tab on plain text inserts an em-space" rule, but here it nukes a whole multi-block selection first | verified — **reproduced twice from a fresh rebuild, confirmed by screenshot (both words visibly gone) and by hex both times. This is destructive and easy to trigger by accident (e.g. muscle-memory Tab while intending to indent) — worth flagging prominently for anyone building similar behavior** |
+| K2 — cross-block-boundary **partial** selection (`alpha`**bet**‖**bravo**star, only "bet"+"bravo" actually selected across the boundary, confirmed by screenshot) + bullet | `alphabet` ⏎ `bravostar`, partial mouse selection spanning the boundary | Cmd+7 | `<ul><li>alphabet</li><li>bravostar</li></ul>` — **both blocks convert in full**, even though only part of each was selected | verified — list conversion operates at block granularity; partial in-block selection is enough to pull the whole block in |
+| K3 — paste multi-line plain text | — | — | Already answered by the existing "Paste behaviour" section above (§10): newlines become `<br>` inside **one** block, never a block split | **already verified — not re-tested** |
+| K4 — select two blocks, press Enter | — | — | Already answered by the existing §9 "Selection-spanning destructive operations": `<div><br></div><div><br></div>` — **two** empty blocks remain, not one (note the contrast with K1: Enter's selection-delete leaves N empty divs, but Tab's selection-delete-then-em-space leaves exactly ONE block — different destructive paths, different residue) | **already verified — not re-tested** |
+
+Screenshots: `gap2-k1-before-tab-two-blocks-selected.png`, `gap2-k1-after-tab-destroyed-to-
+emspace.png`, `gap2-k2-cross-boundary-partial-selection.png`, `gap2-k2-after-bullet-both-full-
+blocks.png`.
+
+### Safety diff (required by task rules)
+
+Pre-session snapshot: 373 notes (WAL-inclusive copy of `upnote.sqlite3`, taken before any GUI
+action this session). Post-session snapshot: 374 notes, taken after a ≥5s settle at the end of
+the sweep. Diffing `id|title|trashed|deleted` for every note between the two snapshots: **the
+only difference is the addition of exactly one new row** — `01a08921-a86c-7362-8b03-
+3c6a33cc1984` (`alphabet`, trashed=0, deleted=0), the scratch note created and reused
+throughout this session via File ▸ New Note. **Every one of the 373 pre-existing notes has an
+identical `trashed`/`deleted` value before and after — none were touched, trashed, or
+deleted.** No multi-select or batch action was used at any point; no note besides the one
+scratch note above was created, and no note was deleted.
