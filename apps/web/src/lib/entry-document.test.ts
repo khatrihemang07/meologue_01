@@ -556,4 +556,104 @@ describe("documents built by editing, not by parsing", () => {
     expect(leaf?.marks.some((mark) => mark.type.name === "strikethrough")).toBe(true);
     expect(roundTrip(written)).toBe(written);
   });
+
+  // Issue #239/ADR 0069's Consequences: "a deliberately authored blank
+  // line still cannot be told apart from the same defect this ADR fixes."
+  // `alpha` Enter Enter `bravo` in the Composer is exactly `doc(p("alpha"),
+  // p(""), p("bravo"))` — the empty middle paragraph `splitBlock` leaves
+  // behind for a second Enter — and before this ticket,
+  // `entryDocumentToMarkdown` had no way to write that middle paragraph
+  // back out as anything other than nothing, so the blank line vanished on
+  // reload. The blank-line marker (`BLANK_LINE_MARKER`, entry-document.ts)
+  // is what closes that gap.
+  describe("a deliberately blank line (issue #239)", () => {
+    const blankLineDoc = doc(para("alpha"), para(""), para("bravo"));
+
+    it("writes the empty middle paragraph as the blank-line marker, not nothing", () => {
+      const written = entryDocumentToMarkdown(blankLineDoc);
+      expect(written).toBe("alpha\n\n\u00A0\n\nbravo");
+    });
+
+    it("survives Send and reload: document -> markdown -> document keeps three paragraphs, the middle one empty", () => {
+      const written = entryDocumentToMarkdown(blankLineDoc);
+      const reparsed = entryMarkdownToDocument(written);
+      expect(reparsed.childCount).toBe(3);
+      expect(reparsed.child(0).type.name).toBe("paragraph");
+      expect(reparsed.child(0).textContent).toBe("alpha");
+      expect(reparsed.child(1).type.name).toBe("paragraph");
+      expect(reparsed.child(1).childCount).toBe(0);
+      expect(reparsed.child(2).type.name).toBe("paragraph");
+      expect(reparsed.child(2).textContent).toBe("bravo");
+    });
+
+    it("is a distinct shape from a single block break — alpha/bravo with no blank line between", () => {
+      const withBlankLine = entryDocumentToMarkdown(blankLineDoc);
+      const withoutBlankLine = entryDocumentToMarkdown(doc(para("alpha"), para("bravo")));
+      expect(withBlankLine).not.toBe(withoutBlankLine);
+      expect(withoutBlankLine).toBe("alpha\n\nbravo");
+
+      const reparsedWithBlankLine = entryMarkdownToDocument(withBlankLine);
+      const reparsedWithoutBlankLine = entryMarkdownToDocument(withoutBlankLine);
+      expect(reparsedWithBlankLine.childCount).toBe(3);
+      expect(reparsedWithoutBlankLine.childCount).toBe(2);
+    });
+
+    it("is stable: writing, reading, and writing again produces the identical body", () => {
+      const written = entryDocumentToMarkdown(blankLineDoc);
+      expect(roundTrip(written)).toBe(written);
+    });
+
+    it("does not mark the sole empty paragraph of an untouched Entry — that one still writes as nothing", () => {
+      // The one empty paragraph in a brand-new Entry (or one whose only
+      // content was deleted back to nothing) has no siblings at all — it
+      // is not a deliberate blank line between two others, it is the
+      // entire document, and must keep writing "" (this file's own "emits
+      // an empty document as an empty string" test already covers the
+      // `entryMarkdownToDocument("")` path; this covers the equivalent
+      // document built directly, the way the Composer would leave it).
+      expect(entryDocumentToMarkdown(doc(para("")))).toBe("");
+    });
+  });
+});
+
+/**
+ * Issue #239/ADR 0069: the reader-tolerance half of the acceptance
+ * criteria — "a body written before this change still reads correctly
+ * (reader tolerance, no migration — ADR-0069)". A body already on disk
+ * before this ticket landed was written by the OLD `entryDocumentToMarkdown`,
+ * which had no marker at all — a run of newlines with nothing between them
+ * is exactly what that old writer (and, further back, ADR 0066's model)
+ * produced for what a person meant as a blank line, and it is
+ * indistinguishable, once written, from the forced separator ADR 0066's own
+ * Context names as the original defect. `collectBlocks`'s "any non-empty
+ * run of bare `\n` is exactly one block boundary" rule (ADR 0069's own
+ * Decision) is untouched by this ticket — no migration walks old bodies
+ * looking for this shape and rewrites them, per ADR 0069's own Consequences
+ * ("a migration cannot retire an ambiguity that a Backup file can
+ * resurrect at any later date; only the reader can").
+ */
+describe("a pre-#239 body (a run of newlines, no marker) still collapses to one block break — no migration", () => {
+  it("four newlines between two paragraphs still reads as exactly two blocks, not three", () => {
+    const legacyBody = "alpha\n\n\n\nbravo";
+    const doc = entryMarkdownToDocument(legacyBody);
+    expect(doc.childCount).toBe(2);
+    expect(doc.child(0).textContent).toBe("alpha");
+    expect(doc.child(1).textContent).toBe("bravo");
+  });
+
+  it("still round-trips (and re-saves) to the collapsed two-block shape, unchanged from before this ticket", () => {
+    // This is the documented, accepted lossiness this ticket does NOT fix
+    // for old data — ADR 0069's Consequences names it explicitly, and this
+    // ticket only adds a way for a FRESH blank line to survive; it does not
+    // retroactively recover one a pre-#239 client already lost on write.
+    expect(roundTrip("alpha\n\n\n\nbravo")).toBe("alpha\n\nbravo");
+  });
+
+  it("a single already-blank paragraph line (one plain space, ADR 0069's own pre-existing tolerance) still round-trips byte-identical — unaffected by the new marker", () => {
+    // Not this ticket's marker (that is U+00A0, not U+0020) — this is the
+    // OTHER shape ADR 0069's reader already tolerated before this ticket
+    // touched anything, named explicitly in this ticket's own brief: proof
+    // that adding the U+00A0 marker didn't disturb it.
+    expect(roundTrip("alpha\n\n \n\nbravo")).toBe("alpha\n\n \n\nbravo");
+  });
 });

@@ -112,6 +112,22 @@ pub fn render_entry(created_at: DateTime<Utc>, body: &str, utc_offset_minutes: i
     )
 }
 
+/// U+00A0 NO-BREAK SPACE, spelled as an escape rather than as the literal
+/// character, for the identical reason the em space above is: the raw glyph
+/// is indistinguishable from an ordinary space in a diff, so an innocent
+/// whitespace tidy-up could delete the rule with nobody seeing it go. The
+/// TypeScript mirror (`BLANK_LINE_MARKER`, apps/web/src/lib/entry-document.ts
+/// and packages/core/src/export/day-file.ts) spells it `\u00A0` for the same
+/// reason.
+///
+/// Issue #239/ADR 0075's blank-line encoding. A deliberately blank line is
+/// stored as a paragraph holding nothing but this one character — U+00A0
+/// specifically because CommonMark's blank-line rule counts a line of only
+/// spaces or tabs as blank, and a no-break space is neither, so a line
+/// holding only it survives being written down and read back as a real
+/// paragraph rather than collapsing into the block break either side of it.
+const BLANK_LINE_MARKER: &str = "\u{00A0}";
+
 /// ADR 0069/issue #234's normalization boundary — the Rust side of the
 /// identical seam `packages/core/src/export/day-file.ts`'s own
 /// `normalizeBodyForPlainText` implements for the export `.txt`; the two
@@ -131,14 +147,27 @@ pub fn render_entry(created_at: DateTime<Utc>, body: &str, utc_offset_minutes: i
 /// so a soft-broken line gets the identical two-space continuation indent
 /// a real block break already gets, rather than leaving a model to guess
 /// whether a lone backslash matters. An em space becomes an ordinary
-/// space. Nothing else in `body` is touched — this is a plain character
-/// substitution, not a parse, mirroring the same accepted imprecision
+/// space. A line consisting of exactly the blank-line marker and nothing
+/// else (issue #239) becomes an empty line — a blank line should export
+/// and prompt as a blank line, not as a stray no-break space a model has
+/// to guess the meaning of. That rule is scoped to a WHOLE line on
+/// purpose: a body may legitimately contain a no-break space inside a
+/// sentence ("10 km", a name that must not wrap), and replacing those
+/// would be quiet data loss, so only a line that is nothing but the marker
+/// is touched. Nothing else in `body` is changed — this is a plain
+/// character substitution plus one whole-line rule, not a parse, mirroring
+/// the same accepted imprecision
 /// `normalizeBodyForPlainText`'s own doc comment names for the identical
 /// reason: a correct disambiguation from a genuinely escaped, typed
 /// backslash needs the web client's own Markdown parser, which this
 /// Server does not have and should not grow one of just for this.
 pub(crate) fn normalize_body_for_plain_text(body: &str) -> String {
-    body.replace("\\\n", "\n").replace('\u{2003}', " ")
+    let substituted = body.replace("\\\n", "\n").replace('\u{2003}', " ");
+    substituted
+        .split('\n')
+        .map(|line| if line == BLANK_LINE_MARKER { "" } else { line })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Indents every line of `body` after the first by two spaces (issue
@@ -417,6 +446,61 @@ mod tests {
             normalize_body_for_plain_text("alpha\u{2003}bravo"),
             "alpha bravo"
         );
+    }
+
+    // ADR 0075/issue #239's blank-line marker. Kept in step by hand with
+    // `normalizeBodyForPlainText` (packages/core/src/export/day-file.ts),
+    // which asserts the identical four cases against the identical marker.
+
+    #[test]
+    fn normalize_body_for_plain_text_turns_a_marker_only_line_into_an_empty_line() {
+        assert_eq!(
+            normalize_body_for_plain_text("alpha\n\u{00A0}\n\nbravo"),
+            "alpha\n\n\nbravo"
+        );
+    }
+
+    /// The whole-line scoping, which is the entire reason this is a line
+    /// rule and not another `replace`. A no-break space a person actually
+    /// typed inside a sentence -- "10 km", a name that must not wrap --
+    /// is content, and deleting it would be silent data loss.
+    #[test]
+    fn normalize_body_for_plain_text_leaves_a_no_break_space_inside_a_line_alone() {
+        assert_eq!(
+            normalize_body_for_plain_text("ran 10\u{00A0}km today"),
+            "ran 10\u{00A0}km today"
+        );
+    }
+
+    #[test]
+    fn normalize_body_for_plain_text_leaves_a_marker_sharing_its_line_alone() {
+        assert_eq!(
+            normalize_body_for_plain_text("alpha\n\u{00A0}x\nbravo"),
+            "alpha\n\u{00A0}x\nbravo"
+        );
+        assert_eq!(
+            normalize_body_for_plain_text("alpha\n\u{00A0} \nbravo"),
+            "alpha\n\u{00A0} \nbravo"
+        );
+    }
+
+    /// The marker's line becomes empty, and then
+    /// `indent_continuation_lines` gives it the same two-space prefix it
+    /// already gives the empty line inside any ordinary `\n\n` block break
+    /// (that function's own doc comment: "every line after the first gets
+    /// the two-space prefix, including a blank one, so the boundary rule
+    /// has no silent exception"). So a deliberate blank line reaches a
+    /// model looking exactly like the blank line a block break already
+    /// produces -- which is the point -- rather than as a stray no-break
+    /// space. Asserted rather than described, because the two-space line
+    /// looks like a mistake until you know it predates this ticket.
+    #[test]
+    fn render_entry_renders_a_deliberate_blank_line_like_an_ordinary_block_break() {
+        let deliberate = render_entry(at(2026, 6, 30, 12, 0), "alpha\n\n\u{00A0}\n\nbravo", 0);
+        assert_eq!(deliberate, "[2026-06-30] alpha\n  \n  \n  \n  bravo");
+
+        let ordinary = render_entry(at(2026, 6, 30, 12, 0), "alpha\n\nbravo", 0);
+        assert_eq!(ordinary, "[2026-06-30] alpha\n  \n  bravo");
     }
 
     #[test]

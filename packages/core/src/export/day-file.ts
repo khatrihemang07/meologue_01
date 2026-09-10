@@ -73,22 +73,63 @@ export function groupEntriesIntoDayFiles(entries: Entry[], offsetMinutes: number
 const EM_SPACE = "\u2003";
 
 /**
- * ADR 0069/issue #234's normalization boundary. Two spellings the Composer
+ * U+00A0 NO-BREAK SPACE, spelled as an escape for the identical
+ * diff-visibility reason `EM_SPACE` above is. This is the blank-line
+ * marker `entryDocumentToMarkdown` (apps/web/src/lib/entry-document.ts,
+ * issue #239/ADR 0069) writes for a deliberately blank line: a paragraph
+ * sitting between two others whose entire text content is this one
+ * character and nothing else — the Composer's own shape for `alpha` Enter
+ * Enter `bravo`. This package does not, and should not, depend on the web
+ * client's own module (ADR 0043's own layering, restated in
+ * `normalizeBodyForPlainText`'s own comment below), so the character is
+ * duplicated here rather than imported, the same way this file already
+ * duplicates the soft-break/em-space encoding instead of reaching into
+ * `apps/web`.
+ */
+const BLANK_LINE_MARKER = "\u00A0";
+
+/**
+ * ADR 0069/issue #234/#239's normalization boundary. Three spellings the Composer
  * writes are Composer-internal, never meant to leak into a plain-text
  * surface outside the app: a soft break's own GFM backslash hard break
  * (`\` immediately followed by `\n`, `insertSoftBreak`/`walkEntryInline`'s
  * own encoding, composer-commands.ts / inline-markdown.ts) and a
- * Tab-inserted U+2003 EM SPACE (`insertEmSpace`, composer-commands.ts).
- * `renderDayFile` (below) keeps a body's own newlines rather than
+ * Tab-inserted U+2003 EM SPACE (`insertEmSpace`, composer-commands.ts), and
+ * — issue #239 — a deliberately blank line's own U+00A0 marker
+ * (`BLANK_LINE_MARKER` above). `renderDayFile` (below) keeps a body's own newlines rather than
  * reflowing it into one flattened line (this file's own module comment on
  * why) — the day file is meant to read like the journal, not like a
  * search-result snippet — so it cannot route through a block parser the
  * way `entrySnippet` (entry-row.tsx) does; this is what a lower-level seam
- * that only strips the two markers themselves, character by character,
+ * that only strips the markers themselves, character by character,
  * gives it instead. A `\` + `\n` becomes a bare `\n` (the visual line
  * break survives, only the backslash goes); a ` ` becomes an ordinary
  * space. Every other character, including a body's own genuine `\n\n`
  * block break, passes through untouched.
+ *
+ * The blank-line marker becomes an actual empty line, not a single
+ * space, and never a blanket substitution of every U+00A0 the body might
+ * contain: a person can legitimately type a no-break space in the middle
+ * of a sentence (a unit like `10 km`, say), and replacing every
+ * occurrence the way `EM_SPACE`'s own substitution does would silently
+ * delete that character everywhere it appears, real content lost with no
+ * way to tell it apart from the marker afterward. This rule is scoped to
+ * a whole line: the body is split into lines at each newline character,
+ * and only a line whose ENTIRE content is the marker and nothing else —
+ * no other character beside it, not even surrounding spaces — becomes
+ * empty. A blank paragraph in storage is exactly that shape
+ * (`entryDocumentToMarkdown` never writes the marker beside other text
+ * on its own line, only alone, the same way `isBlankLineMarker`,
+ * entry-document.ts, only ever reads it back that way), so this cannot
+ * mistake a sentence containing the marker for a blank line — the
+ * marker would need to be the line's ONLY character, which a sentence
+ * around it never is. A blank line becoming an empty line reads, once
+ * printed (surrounded by the body's own block-break separators either
+ * side of it), exactly like the visible gap it was in the Composer —
+ * whereas turning it into a literal single space sitting alone on its
+ * own line would leave a line of trailing whitespace, indistinguishable
+ * on the page from nothing at all but a strange thing for a plain-text
+ * export to contain on purpose.
  *
  * This is a best-effort, character-level guard, not a parse: it cannot
  * distinguish a genuine soft break from the rare case of a body whose own
@@ -101,7 +142,11 @@ const EM_SPACE = "\u2003";
  * depend on (ADR 0043's own layering).
  */
 export function normalizeBodyForPlainText(body: string): string {
-  return body.replace(/\\\n/g, "\n").split(EM_SPACE).join(" ");
+  const withoutSoftBreaksAndEmSpaces = body.replace(/\\\n/g, "\n").split(EM_SPACE).join(" ");
+  return withoutSoftBreaksAndEmSpaces
+    .split("\n")
+    .map((line) => (line === BLANK_LINE_MARKER ? "" : line))
+    .join("\n");
 }
 
 function renderDayFile(

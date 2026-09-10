@@ -109,8 +109,22 @@ describe("groupEntriesIntoDayFiles", () => {
     expect(files[0]?.contents).not.toContain(" ");
   });
 
-  it("still preserves a genuine \\n\\n block break — only the two markers are stripped, nothing else", () => {
+  it("still preserves a genuine \\n\\n block break — only the markers are stripped, nothing else", () => {
     expect(normalizeBodyForPlainText("alpha\n\nbravo")).toBe("alpha\n\nbravo");
+  });
+
+  // Issue #239/ADR 0069: a deliberately blank line (`entryDocumentToMarkdown`'s
+  // own U+00A0 marker, entry-document.ts) must not leak into the exported
+  // .txt as a literal no-break space — it should read like the blank line
+  // it represents.
+  it("renders a deliberately blank line as an actual empty line, not a literal no-break space", () => {
+    const body = `alpha\n\n${"\u00A0"}\n\nbravo`;
+    const entries = [entry({ createdAt: "2026-08-16T11:42:03.000Z", body })];
+
+    const { files } = groupEntriesIntoDayFiles(entries, OFFSET_IST);
+
+    expect(files[0]?.contents).toContain("alpha\n\n\n\nbravo");
+    expect(files[0]?.contents).not.toContain("\u00A0");
   });
 });
 
@@ -127,5 +141,48 @@ describe("normalizeBodyForPlainText", () => {
     expect(normalizeBodyForPlainText("plain text, nothing to strip")).toBe(
       "plain text, nothing to strip",
     );
+  });
+
+  // Issue #239: the export half of the blank-line encoding decision. A line
+  // consisting of exactly the U+00A0 marker becomes an empty line — the way
+  // a blank line reads in plain text — never a literal space sitting alone
+  // on its own line (that would just be invisible trailing whitespace).
+  describe("issue #239's blank-line marker", () => {
+    it("turns a line that is exactly the marker into an empty line", () => {
+      const body = `alpha\n\n${"\u00A0"}\n\nbravo`;
+      expect(normalizeBodyForPlainText(body)).toBe("alpha\n\n\n\nbravo");
+    });
+
+    it("turns a body that is only the marker into an empty string", () => {
+      expect(normalizeBodyForPlainText("\u00A0")).toBe("");
+    });
+
+    it("turns every blank-line marker line in a body with several", () => {
+      const nbsp = "\u00A0";
+      const body = `a\n\n${nbsp}\n\nb\n\n${nbsp}\n\nc`;
+      expect(normalizeBodyForPlainText(body)).toBe("a\n\n\n\nb\n\n\n\nc");
+    });
+
+    // The whole-line scoping this ticket's own brief calls out by name: a
+    // no-break space is legitimate ordinary content in the middle of a
+    // sentence (a unit like "10 km"), and deleting every occurrence the
+    // way EM_SPACE's own blanket substitution does would be silent data
+    // loss. Only a line whose ENTIRE content is the marker qualifies.
+    it("leaves a no-break space embedded in a sentence untouched — not a whole-line match", () => {
+      const body = `the distance is 10${"\u00A0"}km today`;
+      expect(normalizeBodyForPlainText(body)).toBe(body);
+    });
+
+    it("leaves a line untouched when the marker shares it with other text", () => {
+      const body = `a${"\u00A0"}\n\nbravo`;
+      expect(normalizeBodyForPlainText(body)).toBe(body);
+    });
+
+    it("leaves a line untouched when the marker sits beside ordinary whitespace on the same line", () => {
+      // Not a whole-line match: the line is the marker PLUS a trailing
+      // space, two characters, not the marker alone.
+      const body = `alpha\n\n${"\u00A0"} \n\nbravo`;
+      expect(normalizeBodyForPlainText(body)).toBe(body);
+    });
   });
 });
