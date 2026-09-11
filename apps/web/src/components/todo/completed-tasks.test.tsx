@@ -62,4 +62,21 @@ describe("CompletedTasks", () => {
 
     expect(onUncomplete).toHaveBeenCalledWith("a");
   });
+
+  // Issue #237: this surface used to hardcode `line-through` unconditionally
+  // instead of reading the "Completed checklist item" setting
+  // (`data-completed-style`, index.css) the way History/Composer already
+  // do — so the same completed Task struck through here and merely dimmed
+  // there. `.completed-task-text` is the shared class index.css's one rule
+  // reads (alongside `.completed-sample`); asserting it, and asserting
+  // `line-through` is gone, is what would catch a regression back to the
+  // hardcoded class. jsdom applies no real cascade, so this only proves the
+  // class is present/absent, not the resulting decoration or colour.
+  it("gives a completed Task's own text the shared completed-style class instead of hardcoding line-through", () => {
+    render(<CompletedTasks tasks={[task()]} onUncomplete={vi.fn()} />);
+
+    const text = screen.getByText("buy milk");
+    expect(text).toHaveClass("completed-task-text");
+    expect(text).not.toHaveClass("line-through");
+  });
 });

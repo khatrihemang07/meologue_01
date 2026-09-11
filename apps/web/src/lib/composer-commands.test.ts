@@ -926,6 +926,73 @@ describe("toggleCheckboxDone", () => {
     const uncheckedItemPos = findNodePos(unchecked.next.doc, "list_item");
     expect(unchecked.next.doc.nodeAt(uncheckedItemPos)?.attrs.checked).toBe(false);
   });
+
+  // ---- Safety: Mod-Shift-Enter can never reach a sent Entry's real Task
+  // (issue #238) — the same guard checklistRun's single-item "turn the task
+  // off" path already has (issue #235), applied here too. Fixture and
+  // selection shape match that sibling test exactly: the same
+  // `bullet_list > list_item > paragraph[" ", task_reference]` doc
+  // `commitEntryEdit` (use-history.ts) re-opens a sent Entry's checklist
+  // item against, with the caret resolved into the editable whitespace
+  // immediately before the (uneditable) reference chip via `selectAllState`.
+
+  it("is disabled, and a no-op on run, on a promoted task_reference-backed item — the sent-Entry case", () => {
+    const referencedParagraph = paragraphNodeType.create(null, [
+      entrySchema.text(" "),
+      taskReference("t1", "buy milk", false),
+    ]);
+    const doc = entrySchema.node("doc", null, [
+      bulletListNodeType.create(null, [listItem(false, referencedParagraph)]),
+    ]);
+    const state = selectAllState(doc);
+
+    expect(toggleCheckboxDone.isEnabled(state)).toBe(false);
+
+    const { applied, next } = runCommand(toggleCheckboxDone, state);
+    expect(applied).toBe(false);
+    // No transaction was ever dispatched, so `next` is the exact same
+    // EditorState/doc object `state` already was — stronger than structural
+    // equality, and the closest this unit-test level (no live EntryStore or
+    // persisted body bytes, per ADR-0044) can get to "body byte-identical."
+    expect(next).toBe(state);
+    expect(next.doc.eq(doc)).toBe(true);
+
+    // The reference's own cached `checked` — standing in for the real
+    // Task's completion state at this unit-test level — is untouched too.
+    const referenced = findNodePositions(next.doc, "task_reference").map((pos) =>
+      next.doc.nodeAt(pos),
+    );
+    expect(referenced[0]?.attrs.checked).toBe(false);
+  });
+
+  // The sibling fixture above (and the #235 one it copies) uses
+  // `selectAllState`, a selection SPANNING the item. The gesture this
+  // ticket actually describes is a caret — someone re-opens a sent Entry,
+  // clicks into the editable whitespace beside the reference chip, and
+  // presses the chord with nothing selected. `nearestListItem` reads
+  // `$from`, so the two resolve to the same item here, which is precisely
+  // why a spanning fixture alone would pass while never exercising the
+  // real gesture. `stateAt` puts the caret at position 4: doc(0) >
+  // bullet_list(1) > list_item(2) > paragraph(3) > the single space that
+  // `taskReferenceNodeView`'s uneditable atom sits after.
+  it("refuses a bare caret parked beside the reference chip, not just a selection spanning it", () => {
+    const referencedParagraph = paragraphNodeType.create(null, [
+      entrySchema.text(" "),
+      taskReference("t1", "buy milk", false),
+    ]);
+    const doc = entrySchema.node("doc", null, [
+      bulletListNodeType.create(null, [listItem(false, referencedParagraph)]),
+    ]);
+    const state = stateAt(doc, { from: 4 });
+    expect(state.selection.empty).toBe(true);
+
+    expect(toggleCheckboxDone.isEnabled(state)).toBe(false);
+
+    const { applied, next } = runCommand(toggleCheckboxDone, state);
+    expect(applied).toBe(false);
+    expect(next).toBe(state);
+    expect(next.doc.eq(doc)).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------

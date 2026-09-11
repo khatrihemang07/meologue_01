@@ -263,7 +263,10 @@ export function FilterView({
                         className="flex w-full flex-col items-start gap-0.5 rounded-md px-2 py-2 text-left text-sm hover:bg-muted"
                       >
                         <span
-                          className={cn("truncate", task.completedAt !== null && "line-through")}
+                          className={cn(
+                            "truncate",
+                            task.completedAt !== null && "completed-task-text",
+                          )}
                         >
                           {task.content}
                         </span>

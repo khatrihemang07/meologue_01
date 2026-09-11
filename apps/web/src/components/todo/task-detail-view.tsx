@@ -551,7 +551,7 @@ function TaskDetailBody({
                       <p
                         className={cn(
                           "font-medium text-base",
-                          task.completedAt !== null && "text-muted-foreground line-through",
+                          task.completedAt !== null && "completed-task-text",
                         )}
                       >
                         {task.content}
@@ -596,7 +596,7 @@ function TaskDetailBody({
                   aria-describedby={titleHintId}
                   className={cn(
                     "w-full text-left font-medium text-base",
-                    task.completedAt !== null && "text-muted-foreground line-through",
+                    task.completedAt !== null && "completed-task-text",
                   )}
                 >
                   {task.content}
@@ -704,7 +704,7 @@ function TaskDetailBody({
                     <span
                       className={cn(
                         "min-w-0 flex-1 truncate",
-                        subtask.completedAt !== null && "text-muted-foreground line-through",
+                        subtask.completedAt !== null && "completed-task-text",
                       )}
                     >
                       {subtask.content}

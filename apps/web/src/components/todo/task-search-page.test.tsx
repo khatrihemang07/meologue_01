@@ -158,6 +158,30 @@ describe("TaskSearchPage", () => {
     expect(screen.getByText("uniqzetaword")).toBeInTheDocument();
   });
 
+  // Issue #237: this result row used to key its own strikethrough off
+  // `completed` directly, bypassing the "Completed checklist item" setting
+  // (`data-completed-style`, index.css) that History/Composer already
+  // honour. `.completed-task-text` is the shared class index.css's one
+  // rule now also reads. jsdom applies no real cascade, so this only
+  // proves the class is present/absent, not the resulting decoration or
+  // colour.
+  it("gives a completed result's own text the shared completed-style class instead of hardcoding line-through", () => {
+    renderPage(
+      {
+        completedTasks: [
+          task({ id: "a", content: "uniqzetaword", completedAt: "2026-01-05T00:00:00.000Z" }),
+        ],
+      },
+      ["/todo/search?q=uniqzetaword"],
+    );
+
+    fireEvent.click(screen.getByLabelText("Show completed"));
+
+    const text = screen.getByText("uniqzetaword");
+    expect(text).toHaveClass("completed-task-text");
+    expect(text).not.toHaveClass("line-through");
+  });
+
   it("switches to whole-word matching once Show completed is on, for every result", () => {
     renderPage({ tasks: [task({ id: "a", content: "uniqzetaword" })] }, [
       "/todo/search?q=zetaword",

@@ -31,6 +31,51 @@ import { entrySchema } from "./entry-schema";
 import type { EntryBlockNode, EntryListItem, InlineNode } from "./inline-markdown";
 import { formatTaskReference, parseEntryMarkdown } from "./inline-markdown";
 
+/**
+ * Issue #239/ADR 0069's blank-line encoding: a deliberately blank line —
+ * the middle of the three paragraphs `doc(p("alpha"), p(""), p("bravo"))`
+ * the Composer's own `splitBlock` produces for `alpha` Enter Enter `bravo`
+ * (ADR 0069's own Consequences names this exact gap as left open) — is
+ * stored as a paragraph whose entire text content is this one U+00A0
+ * NO-BREAK SPACE character, and nothing else.
+ *
+ * Not an ordinary space: a run of bare `\n` with nothing between two of
+ * them already collapses to a single block break on read
+ * (`pushProseRuns`/`collectBlocks`, inline-markdown.ts — CommonMark's own
+ * blank-line rule, which treats a line of only spaces/tabs as blank the
+ * same as a truly empty one) — that collapse is exactly the ADR 0069
+ * mechanism this ticket's bug report is about, and it is also why an
+ * ordinary space cannot be the marker: a line holding only one would
+ * still read back as "no line at all" rather than as a deliberate,
+ * distinct paragraph. U+00A0 is not whitespace to CommonMark's blank-line
+ * rule (spec: "no characters, or only spaces or tabs" — U+00A0 is neither),
+ * so a line holding only it survives as genuine paragraph content, the way
+ * `pushProseRuns`'s own comment already describes real indentation
+ * surviving. This was verified empirically against this exact reader
+ * before any code here changed: `"alpha\n\n \n\nbravo"` already
+ * round-trips byte-identical today, and already parses to three `"prose"`
+ * blocks, not two — the reader and writer already tolerate this shape:
+ * what was missing is `entryDocumentToMarkdown` ever choosing to WRITE it
+ * for a genuinely empty paragraph, and `blocksToPM` ever choosing to READ
+ * it back as one, rather than as one character of literal text.
+ */
+const BLANK_LINE_MARKER = "\u00A0";
+
+/**
+ * True exactly when a `"prose"` `EntryBlockNode`'s own `children` are the
+ * blank-line marker above and *only* the marker — one bare `"text"` leaf,
+ * un-nested in any `emphasis`/`strong`/`strikethrough` ancestor (this
+ * writer never wraps the marker in a mark, so a marked run of the same
+ * character, however unlikely, is left as literal text rather than
+ * mistaken for the marker) and carrying no other character beside it.
+ * `blocksToPM` (below) is this predicate's only caller, and its own
+ * comment has the rest of the reasoning.
+ */
+function isBlankLineMarker(children: readonly InlineNode[]): boolean {
+  const only = children.length === 1 ? children[0] : undefined;
+  return only !== undefined && only.kind === "text" && only.text === BLANK_LINE_MARKER;
+}
+
 // ---------------------------------------------------------------------------
 // markdown -> document
 // ---------------------------------------------------------------------------
@@ -138,7 +183,15 @@ function inlineNodesToPM(
  * `collectBlocks` (`inline-markdown.ts`) already splits a source body at
  * every block break (a bare `\n`, ADR 0069) into one `"prose"` `EntryBlockNode`
  * per resulting run, so this function's own job is a straight 1:1 mapping,
- * never a merge or a further split of its own.
+ * never a merge or a further split of its own — except for the one case
+ * `isBlankLineMarker` exists to catch (issue #239): a `"prose"` run whose
+ * own text is nothing but the blank-line marker becomes a genuinely EMPTY
+ * `paragraph`, not one holding a stray U+00A0 a person could put a caret
+ * after and wonder what it is. This is the reader half of the encoding —
+ * `entryDocumentToMarkdown`'s `writeBlocks` (below) is the writer half that
+ * produces the marker in the first place, only for an empty paragraph that
+ * actually needs one to survive being written down at all (that function's
+ * own comment has the reasoning for when that is).
  *
  * `taskChecked` defaults `false` for `entryMarkdownToDocument`'s own
  * top-level call, where there is no enclosing item at all — a
@@ -155,7 +208,9 @@ function blocksToPM(blocks: readonly EntryBlockNode[], taskChecked = false): PMN
     switch (block.kind) {
       case "prose":
         out.push(
-          entrySchema.node("paragraph", null, inlineNodesToPM(block.children, [], taskChecked)),
+          isBlankLineMarker(block.children)
+            ? entrySchema.node("paragraph")
+            : entrySchema.node("paragraph", null, inlineNodesToPM(block.children, [], taskChecked)),
         );
         break;
       case "bulletList":
@@ -674,6 +729,22 @@ function writeBlocks(
   w: Writer,
   continuesLine = false,
 ): void {
+  // The one case an empty `paragraph` here is NOT a deliberate blank line
+  // (issue #239/ADR 0069): a brand-new or never-edited Entry is a single
+  // empty paragraph with nothing else in its container at all
+  // (`entryMarkdownToDocument`'s own empty-body contract) — writing nothing
+  // for that one keeps `roundTrip("")` at `""`, exactly as before this
+  // ticket. Every OTHER empty paragraph reaching this function has at
+  // least one sibling — either another entry in `blocks` itself, or
+  // (`continuesLine`) the list item's own leading paragraph `writeListItem`
+  // already wrote before calling this for the rest of that item's content —
+  // so writing nothing for it would silently delete it: two sibling
+  // `paragraph`s split by a bare `\n\n` (this branch's own comment below)
+  // read back as ONE block boundary, not two, the instant it has nothing
+  // of its own between the two separators to survive on. See
+  // `BLANK_LINE_MARKER`'s own comment for the marker and why it, not an
+  // ordinary space, is what closes that gap.
+  const isSoleBlock = blocks.length === 1 && !continuesLine;
   blocks.forEach((block, i) => {
     const needsSeparator = i > 0 || continuesLine;
     if (block.type.name === "paragraph") {
@@ -734,7 +805,17 @@ function writeBlocks(
       if (needsSeparator) {
         w.write("\n\n");
       }
-      writeInline(block, w);
+      if (block.childCount === 0 && !isSoleBlock) {
+        // A genuinely empty paragraph with at least one sibling — the
+        // Composer's own shape for `alpha` Enter Enter `bravo`
+        // (issue #239). Writing nothing here is exactly the bug this
+        // ticket exists to fix: two bare `\n\n` separators around nothing
+        // read back as a single block boundary, not two, and the blank
+        // line the user asked for is gone the moment the Entry reloads.
+        w.write(BLANK_LINE_MARKER);
+      } else {
+        writeInline(block, w);
+      }
       return;
     }
     if (needsSeparator) {
@@ -817,10 +898,12 @@ function writeList(list: PMNode, indent: string, w: Writer): void {
  *
  * `doc`'s own children are handed to `writeBlocks` as the top-level
  * container, with `indent` starting at `""`. A document holding nothing but
- * the single
- * empty paragraph `entryMarkdownToDocument` inserts for an empty body
- * writes back out to `""` — `writeInline` of an empty paragraph writes
- * nothing, and there is nothing else in the document to write.
+ * the single empty paragraph `entryMarkdownToDocument` inserts for an empty
+ * body writes back out to `""` — `writeBlocks`'s own `isSoleBlock` case
+ * (issue #239) leaves that one paragraph alone precisely so this stays
+ * true; any OTHER empty paragraph, one with at least one sibling, writes
+ * the blank-line marker instead (`BLANK_LINE_MARKER`'s own comment has the
+ * encoding).
  */
 export function entryDocumentToMarkdown(doc: PMNode): string {
   const w = new Writer();

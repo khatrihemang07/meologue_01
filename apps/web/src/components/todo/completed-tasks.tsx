@@ -43,7 +43,7 @@ export function CompletedTasks({ tasks, onUncomplete }: CompletedTasksProps) {
             key={task.id}
             className="flex items-center gap-2 border-border border-b px-3 py-2 last:border-b-0"
           >
-            <span className="min-w-0 flex-1 truncate text-muted-foreground text-sm line-through">
+            <span className="completed-task-text min-w-0 flex-1 truncate text-sm">
               {task.content}
             </span>
             <button

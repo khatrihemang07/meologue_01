@@ -698,13 +698,13 @@ function DayTasksRow({
                     onClick={() => onOpenTask(task.id)}
                     className={cn(
                       "truncate text-left hover:underline",
-                      done && "text-muted-foreground line-through",
+                      done && "completed-task-text",
                     )}
                   >
                     {task.content}
                   </button>
                 ) : (
-                  <span className={cn("truncate", done && "text-muted-foreground line-through")}>
+                  <span className={cn("truncate", done && "completed-task-text")}>
                     {task.content}
                   </span>
                 )}

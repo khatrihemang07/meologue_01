@@ -1,6 +1,10 @@
 import { expect, test } from "@playwright/test";
+import { entryDocumentToMarkdown, entryMarkdownToDocument } from "../../web/src/lib/entry-document";
 import { entrySchema } from "../../web/src/lib/entry-schema";
-import { entryDocumentToCanonical } from "../../web/src/lib/parity/canonical";
+import {
+  entryDocumentToCanonical,
+  entryMarkdownToCanonical,
+} from "../../web/src/lib/parity/canonical";
 import { PARITY_FIXTURE } from "../../web/src/lib/parity/parity-fixture";
 import { composerField } from "./helpers";
 
@@ -165,6 +169,18 @@ async function replay(
   }
 }
 
+/**
+ * Whether a row's expected document contains a checkbox item at all — the
+ * one shape whose stored form canonicalises differently from the live
+ * document, for the documented separator reason spelled out at the call
+ * site below.
+ */
+function hasCheckbox(expected: (typeof PARITY_FIXTURE)[number]["expected"]): boolean {
+  return expected.blocks.some(
+    (block) => block.kind === "list" && block.items.some((item) => item.checked !== null),
+  );
+}
+
 test.describe("composer / UpNote parity", () => {
   const replayableRows = PARITY_FIXTURE.filter((row) => row.replayable !== false);
   const skippedRows = PARITY_FIXTURE.filter((row) => row.replayable === false);
@@ -175,9 +191,53 @@ test.describe("composer / UpNote parity", () => {
       await replay(page, row.keystrokes);
 
       const json = await readComposerDocJSON(page);
-      const actual = entryDocumentToCanonical(entrySchema.nodeFromJSON(json));
+      const document = entrySchema.nodeFromJSON(json);
+      const actual = entryDocumentToCanonical(document);
 
       expect(actual).toEqual(row.expected);
+
+      // Issue #239's own closing requirement. Everything above reads the
+      // LIVE Composer document and never writes it down, so a row could
+      // pass here while the shape it proves is lost the moment the Entry
+      // is Sent and re-opened — which is exactly the defect #239 was
+      // filed for: `alpha` Enter Enter `bravo` showed a blank line in the
+      // Composer and lost it on reload, and this suite could not see
+      // that, because a break surviving the Composer and a break
+      // surviving STORAGE are two different claims.
+      //
+      // Asserting the round trip against the same `expected` makes them
+      // one claim. It runs for every row, not just the blank-line one:
+      // any future encoding that renders correctly but cannot be written
+      // down and read back fails here, at the row that introduced it,
+      // rather than surfacing later as "my note changed after I sent it".
+      const stored = entryDocumentToMarkdown(document);
+      if (hasCheckbox(row.expected)) {
+        // Exempt, and NOT because the assertion is inconvenient. A
+        // checkbox's mandatory separator space (`entry-document.ts`'s
+        // `needsTaskSeparator`) survives parsing as a leading whitespace
+        // text node by design — inline-markdown.ts's `referencedTaskOf`
+        // says so outright ("not itself typed content ... so it is
+        // stripped before checking what remains") and several call sites
+        // strip it by hand. So a checkbox row's stored form canonicalises
+        // with a leading " " the live document never had, and asserting
+        // equality here would fail on that separator rather than on
+        // anything #239 is about.
+        //
+        // That separator reaching the Composer's own load path as real
+        // text is a genuine defect, filed separately — it is not fixed
+        // here because it predates this ticket and lives in
+        // composer-parity's own files. When it is fixed, DELETE this
+        // branch rather than adjusting it: every row should assert the
+        // round trip.
+        expect(
+          entryMarkdownToCanonical(entryDocumentToMarkdown(entryMarkdownToDocument(stored))),
+          `${row.id} storage is not idempotent`,
+        ).toEqual(entryMarkdownToCanonical(stored));
+      } else {
+        expect(entryMarkdownToCanonical(stored), `${row.id} did not survive storage`).toEqual(
+          row.expected,
+        );
+      }
     });
   }
 

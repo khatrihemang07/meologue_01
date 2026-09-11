@@ -138,6 +138,12 @@ function buildTaskReferenceContext(
     reorderTaskToday: vi.fn(),
     removeTask: vi.fn(),
     setTaskDate: vi.fn(),
+    setTaskDateString: vi.fn(),
+    addLabel: vi.fn(),
+    renameLabel: vi.fn(),
+    setLabelColour: vi.fn(),
+    removeLabel: vi.fn(),
+    removeProject: vi.fn(),
     setTaskDeadline: vi.fn(),
     setTaskPriority: vi.fn(),
     setTaskLabels: vi.fn(),
@@ -1574,6 +1580,64 @@ describe("History", () => {
       expect(screen.getByText("buy milk")).toBeInTheDocument();
       expect(screen.getByText("renew passport")).toBeInTheDocument();
       expect(screen.getByText("1/2 done")).toBeInTheDocument();
+    });
+
+    // Issue #237: this widget used to hardcode `text-muted-foreground
+    // line-through` on a done row's own words regardless of the "Completed
+    // checklist item" setting (`data-completed-style`, index.css) — so a
+    // Task struck through here while dimming only, per the SAME setting, in
+    // its History entry below it. `.completed-task-text` is the shared
+    // class index.css's one rule now also reads. Covers the not-openable
+    // `<span>` branch (no `onOpenTask`); the sibling test below covers the
+    // `<button>` branch. jsdom applies no real cascade, so this only proves
+    // the class is present/absent, not the resulting decoration or colour.
+    it("gives a done Task's own text the shared completed-style class instead of hardcoding line-through, span branch", () => {
+      render(
+        <History
+          entries={[entry({ id: "1", createdAt: "2026-08-28T10:00:00.000Z" })]}
+          syncEnabled={false}
+          tasks={[task({ id: "undone", content: "buy milk", date: "2026-08-28" })]}
+          completedTasks={[
+            task({
+              id: "done",
+              content: "renew passport",
+              date: "2026-08-28",
+              completedAt: "2026-08-28T09:00:00.000Z",
+            }),
+          ]}
+        />,
+      );
+
+      const done = screen.getByText("renew passport");
+      const undone = screen.getByText("buy milk");
+      expect(done).toHaveClass("completed-task-text");
+      expect(done).not.toHaveClass("line-through");
+      expect(undone).not.toHaveClass("completed-task-text");
+    });
+
+    it("gives a done Task's own text the shared completed-style class instead of hardcoding line-through, button branch", () => {
+      render(
+        <History
+          entries={[entry({ id: "1", createdAt: "2026-08-28T10:00:00.000Z" })]}
+          syncEnabled={false}
+          tasks={[task({ id: "undone", content: "buy milk", date: "2026-08-28" })]}
+          completedTasks={[
+            task({
+              id: "done",
+              content: "renew passport",
+              date: "2026-08-28",
+              completedAt: "2026-08-28T09:00:00.000Z",
+            }),
+          ]}
+          onOpenTask={vi.fn()}
+        />,
+      );
+
+      const done = screen.getByRole("button", { name: "renew passport" });
+      const undone = screen.getByRole("button", { name: "buy milk" });
+      expect(done).toHaveClass("completed-task-text");
+      expect(done).not.toHaveClass("line-through");
+      expect(undone).not.toHaveClass("completed-task-text");
     });
 
     it("ticks an undone Task from the day block via onCompleteTask (criterion 7)", () => {

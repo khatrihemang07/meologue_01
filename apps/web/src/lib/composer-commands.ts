@@ -873,10 +873,22 @@ export const checklist: ComposerCommand = {
  * `Mod-Shift-Enter` in a plain paragraph therefore does exactly nothing,
  * rather than e.g. turning it into a checked task — that's `checklist`'s
  * job, reached a different way, and this command must not quietly do it.
+ *
+ * Also a no-op on a promoted, `task_reference`-backed item (issue #238,
+ * found while implementing #235, which guarded `checklistRun` and
+ * `multiBlockChecklistRun` against the identical hazard but left this
+ * chord out of scope). Re-opening a sent Entry for editing loads the exact
+ * same ProseMirror document this command runs against, so this chord can
+ * reach a checked item whose `checked` is a CACHE of a real Task's
+ * completion (see `isReferencedChecklistItem`'s own comment above) —
+ * without the guard, `Mod-Shift-Enter` would flip that cache directly,
+ * bypassing `completeTask`/`uncompleteTask` entirely: the second
+ * competing write ADR-0048 exists to rule out, and exactly the class of
+ * bug ADR-0053/ADR-0074 push completion into Todo to prevent.
  */
 const toggleCheckboxDoneRun: Command = (state, dispatch) => {
   const item = nearestListItem(state);
-  if (item === null || item.attrs.checked === null) {
+  if (item === null || item.attrs.checked === null || isReferencedChecklistItem(item)) {
     return false;
   }
   return setCheckedOnEnclosingItem(state, dispatch, !item.attrs.checked);
@@ -885,14 +897,23 @@ const toggleCheckboxDoneRun: Command = (state, dispatch) => {
 export const toggleCheckboxDone: ComposerCommand = {
   id: "toggleCheckboxDone",
   label: "Toggle checkbox done",
+  // Reports the item's CURRENT checked state as a plain fact, same as
+  // `checklistActive`/`bulletListActive` just above — neither of those
+  // special-cases a referenced item either, since "is this item currently
+  // checked" is a different question from "can this command safely act on
+  // it here" (that second question is `isEnabled`'s job, immediately
+  // below). A referenced item's `checked` is a real cache of a real Task's
+  // state, so reporting it here is still reporting the truth; this command
+  // merely refuses to be the one that changes it.
   isActive: (state) => {
     const item = nearestListItem(state);
     return item !== null && item.attrs.checked === true;
   },
-  isEnabled: (state) => {
-    const item = nearestListItem(state);
-    return item !== null && item.attrs.checked !== null;
-  },
+  // Dry-runs `toggleCheckboxDoneRun` itself (`dispatch` omitted), the same
+  // "isEnabled asks run" idiom `checklist.isEnabled` uses just above — so
+  // isEnabled can never drift from what `run` actually does, including the
+  // `isReferencedChecklistItem` guard added for issue #238.
+  isEnabled: (state) => toggleCheckboxDoneRun(state),
   run: toggleCheckboxDoneRun,
 };
 
