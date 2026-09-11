@@ -103,9 +103,70 @@ marked healthy on numbers nobody re-measured.
   area against a 23px line-height, confirmed by computed style — but `overflow-y: visible` means
   nothing clips, and at 1px there is no crowding or cut glyph in a tight crop. Not worth a fix.
 
-## What remains unverified after this pass
+## Issue #253 — anchoring measured, and one entry point broken
 
-- **Everything in issue #253** — the anchored scheduler popover, its 250×525 geometry and 10px
-  radius, and above all *whether it anchors under its trigger at all*. That failure mode is
-  invisible to the test suite by construction and has shipped broken here once before.
-- **Android and macOS.** This was measured in a desktop browser only.
+Taken after #253 landed, against a rebuilt bundle. **Anchoring is confirmed**, with both rects read
+rather than eyeballed — the failure mode here is a popover rendering at the viewport origin, which
+no test in this repo can observe:
+
+| Entry point | Trigger rect | Popover rect | Anchored |
+|---|---|---|---|
+| Row hover Date button | 1123, 84 | 1123, **132** | yes |
+| More-actions → "Date…" | 1227, 84 | 1123, 132 | yes (shared row instance) |
+| `T` shortcut | 1123, 143 | 1123, **191** | yes |
+| Detail view Date attribute | 931, 159.7 | 931, **196** | yes |
+
+Measured 250×525 at 10px radius. The bottom sheet offers only Deadline and Priority. Setting a
+date, clearing it and setting a recurrence all worked from two different entry points.
+
+**But the More-actions item does not reliably open it by mouse — filed as issue #255.** Measured
+**2 of 10** mouse attempts against **3 of 3** by keyboard, and the failure is *deterministic by row
+position* (bottom rows open, upper rows never do), unchanged by a 900ms pause before the click. Two
+fixes were attempted and both reverted; the second failed informatively, ruling out the
+focus-return theory both had assumed. #255 carries the evidence.
+
+## macOS (Tauri) — 5 of 6 checks passed on screen
+
+Driven against `build/sandbox/meologue-sandbox.app`, launched **by explicit path** (several
+meologue processes can coexist and all report the name "meologue"; `open -b <bundle-id>` can raise
+a stale one). Freshness proven against `dist/macos/assets/todo-page-DREeNhsq.js`, which carries the
+`max-w-[800px]` cap — not against the binary, which is brotli-compressed and greps clean either way.
+
+Passed, each backed by a screenshot: the in-column `<h1>` with no app bar (#254); the column capped
+and centred at 1360px and proportional at 700px (#254); today green / tomorrow orange (#250); the
+add field below the list and unboxed at rest (#252); **the scheduler popover anchored under its
+control** (#253); and a rename of `… tom` stripping the phrase and setting Tomorrow (#247).
+
+**Not confirmed on macOS: a completed row showing strikethrough *and* its date together.** That run
+found strikethrough only via Search, whose rows render through a different component that never
+showed a date and was never in #250's scope. `completed-tasks.tsx` does render the date
+(`formatTaskDate(task.date, { completed: true })`), and the browser pass measured it at
+`rgb(204,204,204)` — so this is a gap in what the macOS run looked at, not a native divergence.
+
+## Android — built and installed, on-device UI not verified
+
+Bundle passes both corrected budgets (`check-bundle-size.mjs` exits 0, no `exceeds` lines). APK
+built and installed, confirmed on the device as `com.meologue.app.sandbox`, versionName 0.4.0,
+`lastUpdateTime=2026-09-11 18:48:52`, packaging `todo-page-bpfj1-CD.js` — the same chunk hash the
+budget check measured.
+
+**The on-device UI was NOT driven.** The phone reports `deviceLocked=1`, and `scripts/unlock_adb.sh`
+carries the previous device's PIN and swipe coordinates, so running it risks a lockout for no gain.
+Building and installing never needed an unlocked screen; driving the UI does. This leg is therefore
+build-and-install verified only, and says so rather than implying more.
+
+## A divergence the spec review surfaced, recorded here
+
+Issue #252's criterion reads "renders as a quiet 14px row in the muted grey, with no border box."
+The border is gone, and the **resting** row is 14px — but that 14px lives on the placeholder widget
+alone. Typed content renders at 16px through the Quick Add title tokens the same field shares. So
+the row is 14px only while empty. That follows directly from deferring the click-to-reveal composer
+(NAV-12), which is what would otherwise separate the two surfaces and let each carry its own scale.
+On screen the step is a non-event, because line-height stays 23px throughout — but the criterion as
+literally worded is not met, and that is worth stating rather than reading the word "row" loosely.
+
+## What remains unverified
+
+- **The Android on-device UI**, pending an unlocked screen.
+- **A completed row's strikethrough and date together on macOS**, per the note above.
+- **Light theme everywhere** — the corpus is Dark-theme only by decision (`THEME-01`, `divergent`).

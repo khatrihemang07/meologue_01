@@ -448,8 +448,6 @@ function TaskDetailBody({
   // clear one the reader didn't touch) is still this app's own
   // conservative choice, not something that capture proves Todoist does
   // too.
-  // the Task the store hands back down, not from anything this file
-  // parsed itself.
   const smartDates = useSettingsStore((state) => state.smartDatesEnabled);
   const titleRecognitionOptionsRef = useRef({ now: localDayKey(new Date()), smartDates });
   titleRecognitionOptionsRef.current = { now: localDayKey(new Date()), smartDates };
