@@ -60,7 +60,30 @@ This was captured against the author's own live Todoist, which constrains the me
 | `lifecycle.md` | Description and comment CRUD, completion and undo, activity-log wording |
 | `parity-ledger.md` | **The checklist.** One row per nuance; a ticket lands when its rows read `matched` |
 
-Raw evidence sits beside each document in `*-dom/` and `*-shots/`.
+## Where the raw evidence sits
+
+Four kinds of directory, and the distinction between them is the point — a driver script is not a
+measurement, and filing one as if it were is how an unverifiable claim starts looking verified.
+
+| Directory | Holds | Is it evidence? |
+|---|---|---|
+| `*-dom/` | `getComputedStyle` reads and DOM captures, as JSON/HTML | **Yes.** This is what a row cites |
+| `*-shots/` | Screenshots of Todoist | **Yes**, for human review — never the pass criterion |
+| `verification-shots/` | Screenshots of **meologue**, backing `verification-*.md` | **Yes**, same caveat |
+| `<date>-session/` | `drivers/`, `logs/`, `notes/` from one capture session | **No.** Reproducibility material |
+
+`2026-09-11-session/` is the first of the fourth kind. Its 115 driver scripts and 106 run logs are
+committed so a reader can re-run what produced a number, not because they establish anything on
+their own. Before it existed, the four `2026-09-11` documents cited measurements whose artifacts had
+been left in a session scratchpad and never committed — see
+[ADR 0077](../../adr/0077-parity-is-proved-live-not-against-a-dated-capture.md) for the two false
+claims that escaped through that gap, and for the rule that now requires artifacts beside the prose.
+
+**Trap: these directory names are load-bearing for the lint gate.** `biome.json`'s `files.includes`
+excludes exactly `**/*-dom`, `**/*-shots`, `**/drivers` and `**/logs`. Scratch capture scripts are
+not written to repo lint standards, so a new evidence folder under any *other* name puts them back
+in front of `biome check` — which is how committing `drivers/` first time turned a clean gate into
+70 errors. Reuse these names, or add the new one to that list in the same change.
 
 ## What could not be established
 
