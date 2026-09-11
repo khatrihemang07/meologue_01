@@ -1,0 +1,60 @@
+{
+  "cssVars": {
+    "today": "#e26a60",
+    "busyDot": "#d1d1d1",
+    "selected": "#de4c4a",
+    "mutedFg": "#ccc"
+  },
+  "day12_today_weekend_busy": {
+    "tdClass": "relative flex-1 p-0 text-center text-sm focus-within:relative focus-within:z-20 [&>button]:font-bold [&>button]:text-[color:var(--td-calendar-today)] [&>button]:text-muted-foreground before:absolute before:bottom-0.5 before:left-1/2 before:size-[3px] before:-translate-x-1/2 before:rounded-full before:bg-[color:var(--td-calendar-busy-dot)] before:content-['']",
+    "beforeContent": "\"\"",
+    "beforeWidth": "3px",
+    "beforeHeight": "3px",
+    "beforeBackground": "rgb(209, 209, 209)",
+    "beforeBorderRadius": "3.35544e+07px",
+    "beforePosition": "absolute",
+    "btnColor": "rgb(204, 204, 204)",
+    "btnFontWeight": "700",
+    "btnAriaCurrent": null,
+    "btnAriaSelected": null
+  },
+  "day15_busy_weekday": {
+    "tdClass": "relative flex-1 p-0 text-center text-sm focus-within:relative focus-within:z-20 before:absolute before:bottom-0.5 before:left-1/2 before:size-[3px] before:-translate-x-1/2 before:rounded-full before:bg-[color:var(--td-calendar-busy-dot)] before:content-['']",
+    "beforeContent": "\"\"",
+    "beforeWidth": "3px",
+    "beforeHeight": "3px",
+    "beforeBackground": "rgb(209, 209, 209)",
+    "beforeBorderRadius": "3.35544e+07px",
+    "beforePosition": "absolute",
+    "btnColor": "rgb(255, 255, 255)",
+    "btnFontWeight": "400",
+    "btnAriaCurrent": null,
+    "btnAriaSelected": null
+  },
+  "day14_weekday_plain": {
+    "tdClass": "relative flex-1 p-0 text-center text-sm focus-within:relative focus-within:z-20",
+    "beforeContent": "none",
+    "beforeWidth": "auto",
+    "beforeHeight": "auto",
+    "beforeBackground": "rgba(0, 0, 0, 0)",
+    "beforeBorderRadius": "0px",
+    "beforePosition": "static",
+    "btnColor": "rgb(255, 255, 255)",
+    "btnFontWeight": "400",
+    "btnAriaCurrent": null,
+    "btnAriaSelected": null
+  },
+  "day6_weekend_plain": {
+    "tdClass": "relative flex-1 p-0 text-center text-sm focus-within:relative focus-within:z-20 [&>button]:text-muted-foreground",
+    "beforeContent": "none",
+    "beforeWidth": "auto",
+    "beforeHeight": "auto",
+    "beforeBackground": "rgba(0, 0, 0, 0)",
+    "beforeBorderRadius": "0px",
+    "beforePosition": "static",
+    "btnColor": "rgb(204, 204, 204)",
+    "btnFontWeight": "400",
+    "btnAriaCurrent": null,
+    "btnAriaSelected": null
+  }
+}

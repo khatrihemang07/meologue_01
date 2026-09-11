@@ -1,0 +1,20 @@
+{
+  "probe": {
+    "ok": true,
+    "steps": 3,
+    "hasTaskStore": true,
+    "storeKeys": [
+      "store",
+      "taskStore",
+      "labelStore",
+      "projectStore",
+      "commentStore",
+      "eventStore",
+      "filterStore",
+      "deviceId",
+      "driver"
+    ],
+    "queryDataError": null,
+    "deviceId": "01a091c4-89e6-72b5-b391-73774f19d3e2"
+  }
+}

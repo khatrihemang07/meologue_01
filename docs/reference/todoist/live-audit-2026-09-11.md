@@ -378,3 +378,110 @@ Read back from `parity-ledger.md`.
 
 Six rows reached `matched` (ROW-07, ROW-13, ROW-15, DATE-02, DATE-05, NAV-05) and one left it
 (ROW-01). Nine became `divergent`, and PRI-03 and PRI-06 were unblocked.
+
+## Flow 3 — the scheduler, and closing flow 2's one-sided rows
+
+SCHED-01 to SCHED-14, plus DATE-06/09/10 (Todoist's rows had been virtualized out of view in flow 2)
+and PRI-01/02/03 (meologue's picker had not been driven). Driven on **Saturday 12 Sep 2026** — which
+turned out to matter. Artifacts: the `flow3-*` files in `live-audit-dom/`.
+
+### Method
+
+- **meologue** re-seeded through its own store (the flow-2 method) with fresh relative dates, since the
+  previous day's fixtures now read a day stale.
+- **Todoist**: six disposable `ZZ probe` tasks for the date rows; every scheduler reading was then taken
+  from an **unsaved Quick Add draft**, discarded afterwards, so the scheduler itself required no writes.
+- Every Todoist row was scrolled into view and re-queried before being read.
+
+### Results
+
+| Row | Todoist | meologue | Result |
+|---|---|---|---|
+| DATE-06 / 09 | "Today" `rgb(37,184,76)`, "Tomorrow" `rgb(255,154,20)` | identical | `matched` — was `built` |
+| DATE-07 / 10 | **"Tomorrow 9:30 AM"** | **"Tomorrow, 9:30 AM"** | **`divergent`** — DATE-07 unblocked |
+| SCHED-01 | 250×525, radius 10px, `rgb(38,38,38)`, same two-layer shadow | identical; anchored under its trigger | `built` — Todoist anchoring not captured, #255 open |
+| SCHED-02 | Today · Tomorrow · **Next week · Next weekend** | Today · Tomorrow · **This weekend · Next week** | **`divergent`** |
+| SCHED-03 | "No Date" only once a date is set; **Today option dropped** when the date is today | not established (openings not tied to a task) | `built` |
+| SCHED-04 | `next friday` → Fri 25 Sep · `every monday` → Mon 14 Sep → Forever · `in 3 days` → Tue 15 Sep | identical | `matched` — was `built` |
+| SCHED-06 | `M T W T F S S` | identical | `matched` — was `built` |
+| SCHED-07 | today on a weekend: **red** `rgb(226,106,96)`, bold | **grey** `rgb(204,204,204)`, bold | **`divergent`** |
+| SCHED-08 | selected: `rgb(222,76,74)` 24×24 circle | identical | `matched` — was `built` |
+| SCHED-09 | busy: `::before` 3×3 `rgb(209,209,209)` | identical | `matched` — was `built` |
+| SCHED-10 | weekend `rgb(204,204,204)`/400, weekday white/400 | identical | `matched` — was `built` |
+| SCHED-11 | separate "Select start and end time" dialog, 306×216 | inline "Add a time" checkbox + time input (source) | **`divergent`** — structural |
+| SCHED-14 | Repeat menu, 282×206; options track the date | none | `todoist-captured` |
+| PRI-01 | swatches P1–P4 | identical | `matched` — was `built` |
+| PRI-02 | listbox, `data-value` 4→1, `aria-selected` | menu, `aria-pressed`, **no `data-value`** | **`divergent`** — structural |
+| PRI-03 | P4 pre-selected, swatch `rgb(102,102,102)` | identical | `matched` — was `built` |
+
+### Defects found
+
+10. **Timed dates carry a comma.** meologue renders "Tomorrow, 9:30 AM"; Todoist "Tomorrow 9:30 AM".
+11. **Quick options, slots 3–4.** Todoist offers Next week · Next weekend; meologue still offers This
+    weekend · Next week, and on a Saturday its "This weekend" hint just repeats Today's.
+12. **Today loses its colour on a weekend.** meologue's today cell receives both the today and the
+    weekend utilities, and the weekend one wins, so today renders grey. Todoist keeps it red. The
+    corpus was captured on a Thursday, so no earlier pass could have seen this — a reminder that a
+    capture date is itself a test condition.
+
+### Claims from the run that were not recorded
+
+- **SCHED-02 as "environmental drift".** The run excused the quick-option difference as the two apps
+  having been read a session apart. They were read on the same day, and ADR 0077 makes Todoist's live
+  product the reference. Recorded as a divergence.
+- **"The priority picker is byte-identical to meologue's."** The swatches are identical; the structure
+  is not (listbox with `data-value` against a menu with `aria-pressed`). Recorded as PRI-01 `matched`,
+  PRI-02 `divergent`.
+- **"No Time control exists anywhere in meologue."** That came from a case-sensitive search for
+  `Time`, which cannot match meologue's "Add a time" checkbox (`task-schedule-popover.tsx:444`).
+  Recorded from source as a structural difference instead.
+- **Quick Add at 348×39.6px** (`flow3-quickadd-identity-todoist.json`) is the same pre-layout
+  transition read `quick-add.md` already flagged. Not geometry.
+
+### Incident: probe tasks left in the real account
+
+This run is recorded in full because it put the user's real data at risk.
+
+1. After creating its six Todoist fixtures, **the run hit a usage limit and terminated**, before any
+   cleanup. Six `ZZ probe` tasks were left in the user's live Inbox — two with titles truncated by
+   Todoist's own date recognition ("ZZ probe", "ZZ probe t").
+2. Resumed and told to clean up first, **it stalled three times in a row**, each time putting a script
+   in the background and ending its turn to "wait for a monitor notification". A subagent that ends its
+   turn cannot be woken, so each wait ended the run. An explicit instruction not to do this did not stop
+   the third stall.
+3. One of those background scripts, a read-only title collector, **hung while still attached to the
+   Inbox tab**. It was stopped so it could not scroll rows under the deletions, and the parent did not
+   take over the browser, because the resumed agent was by then driving it in the foreground — a second
+   driver on a live account is how a real task was once completed during capture.
+4. **Cleanup then completed and is verified in the artifacts**: five deletions each record the title
+   read back, the confirmation dialog's own text and that the task was gone afterwards; the bare
+   "ZZ probe" was deleted first, with its dialog text quoted; no deletion errors; and the Inbox, collected
+   by scroll-and-union, is **16 titles before and after, set-equal**. A later check after the scheduler
+   draft was discarded matched again. The "search is empty" check read Quick Find's suggestion list
+   rather than a results page, which is weaker, but every fixture lived in the Inbox.
+
+The lesson for any future run that writes to a real account: **a browser agent must do its work, and
+especially its cleanup, in the foreground**, and a cleanup that has not produced its own artifact has
+not happened.
+
+### Still open from this flow
+
+- SCHED-01: Todoist's trigger rect was not captured, so anchoring is compared on meologue only.
+- SCHED-03: meologue's two openings were not tied to a task, and whether meologue also drops the quick
+  option matching the current date is untested.
+- #255 (More-actions → Date by mouse) is untouched.
+
+### Tally after flow 3
+
+Read back from `parity-ledger.md`.
+
+| Status | Session start | After Quick Add | After flow 2 | Now |
+|---|---|---|---|---|
+| `matched` | 17 | 23 | 28 | **37** |
+| `built` | 74 | 65 | 53 | **41** |
+| `todoist-captured` | 13 | 13 | 13 | **11** |
+| `divergent` | 10 | 13 | 22 | **28** |
+| `blocked` | 11 | 11 | 9 | **8** |
+
+Nine rows reached `matched` (DATE-06, DATE-09, SCHED-04, SCHED-06, SCHED-08, SCHED-09, SCHED-10,
+PRI-01, PRI-03). Six became `divergent` (DATE-07, DATE-10, SCHED-02, SCHED-07, SCHED-11, PRI-02).

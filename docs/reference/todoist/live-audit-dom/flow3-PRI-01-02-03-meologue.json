@@ -1,0 +1,67 @@
+{
+  "role": "menu",
+  "ariaLabel": null,
+  "itemCount": 4,
+  "items": [
+    {
+      "role": "menuitem",
+      "text": "P1",
+      "dataValue": null,
+      "ariaChecked": null,
+      "ariaSelected": null,
+      "ariaPressed": "false",
+      "dataState": null,
+      "color": "rgb(255, 255, 255)",
+      "swatch": {
+        "kind": "bg",
+        "backgroundColor": "rgb(209, 69, 59)"
+      },
+      "outerHTML": "<div role=\"menuitem\" class=\"flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none data-highlighted:bg-muted data-highlighted:text-foreground\" aria-pressed=\"false\" tabindex=\"-1\" data-orientation=\"vertical\" data-radix-collection-item=\"\"><span aria-hidden=\"true\" class=\"size-3.5 shrink-0 rounded-full\" style=\"background-color: var(--td-priority-picker-1);\"></span>P1</div>"
+    },
+    {
+      "role": "menuitem",
+      "text": "P2",
+      "dataValue": null,
+      "ariaChecked": null,
+      "ariaSelected": null,
+      "ariaPressed": "false",
+      "dataState": null,
+      "color": "rgb(255, 255, 255)",
+      "swatch": {
+        "kind": "bg",
+        "backgroundColor": "rgb(235, 137, 9)"
+      },
+      "outerHTML": "<div role=\"menuitem\" class=\"flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none data-highlighted:bg-muted data-highlighted:text-foreground\" aria-pressed=\"false\" tabindex=\"-1\" data-orientation=\"vertical\" data-radix-collection-item=\"\"><span aria-hidden=\"true\" class=\"size-3.5 shrink-0 rounded-full\" style=\"background-color: var(--td-priority-picker-2);\"></span>P2</div>"
+    },
+    {
+      "role": "menuitem",
+      "text": "P3",
+      "dataValue": null,
+      "ariaChecked": null,
+      "ariaSelected": null,
+      "ariaPressed": "false",
+      "dataState": null,
+      "color": "rgb(255, 255, 255)",
+      "swatch": {
+        "kind": "bg",
+        "backgroundColor": "rgb(36, 111, 224)"
+      },
+      "outerHTML": "<div role=\"menuitem\" class=\"flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none data-highlighted:bg-muted data-highlighted:text-foreground\" aria-pressed=\"false\" tabindex=\"-1\" data-orientation=\"vertical\" data-radix-collection-item=\"\"><span aria-hidden=\"true\" class=\"size-3.5 shrink-0 rounded-full\" style=\"background-color: var(--td-priority-picker-3);\"></span>P3</div>"
+    },
+    {
+      "role": "menuitem",
+      "text": "P4",
+      "dataValue": null,
+      "ariaChecked": null,
+      "ariaSelected": null,
+      "ariaPressed": "true",
+      "dataState": null,
+      "color": "rgb(255, 255, 255)",
+      "swatch": {
+        "kind": "bg",
+        "backgroundColor": "rgb(102, 102, 102)"
+      },
+      "outerHTML": "<div role=\"menuitem\" class=\"flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none data-highlighted:bg-muted data-highlighted:text-foreground\" aria-pressed=\"true\" tabindex=\"-1\" data-orientation=\"vertical\" data-radix-collection-item=\"\"><span aria-hidden=\"true\" class=\"size-3.5 shrink-0 rounded-full\" style=\"background-color: var(--td-priority-picker-4);\"></span>P4</div>"
+    }
+  ]
+}
