@@ -10,8 +10,10 @@ import { TaskDetailView } from "@/components/todo/task-detail-view";
 import { TaskScheduleSheet } from "@/components/todo/task-schedule-sheet";
 import { useHistorySearch } from "@/hooks/use-history-search";
 import { commentsForTask } from "@/lib/comment-counts";
+import { localDayKey } from "@/lib/local-day-key";
 import type { ComposerPromotionContext } from "@/lib/promote-tasks";
-import { useSyncEnabled } from "@/lib/settings";
+import { useSettingsStore, useSyncEnabled } from "@/lib/settings";
+import { commitTaskTitle } from "@/lib/task-title-commit";
 import { useEntryStore } from "@/pages/entry-store-layout";
 
 // A date Reference's own destination (issue #142): `?d=YYYY-MM-DD`, a query
@@ -99,6 +101,11 @@ export function ComposerPage() {
     setTaskProject,
     setTaskLabels,
     setTaskDescription,
+    // Issue #247: already on this context (entry-store-layout.tsx's own
+    // `resolveLabelIds`, use-labels.ts's find-or-create) but not pulled in
+    // here before now — `commitRename` below is the first thing on this
+    // page that needs it.
+    resolveLabelIds,
     addComment,
     editComment,
     removeComment,
@@ -367,6 +374,33 @@ export function ComposerPage() {
     uncompleteTask(task.id);
   }
 
+  // Issue #247: the Task detail overlay's own `onRename` below reaches
+  // this rather than `renameTask` directly — `commitTaskTitle`
+  // (task-title-commit.ts) carries the actual resolve-and-guard logic,
+  // matching todo-page.tsx's own identically-named wrapper; this function
+  // is only what binds it to this page's own Task list and store setters.
+  const smartDates = useSettingsStore((state) => state.smartDatesEnabled);
+  function commitRename(id: string, content: string) {
+    const task = tasks.find((t) => t.id === id) ?? completedTasks.find((t) => t.id === id);
+    if (task === undefined) {
+      return;
+    }
+    void commitTaskTitle(
+      task,
+      content,
+      { now: localDayKey(new Date()), smartDates },
+      {
+        renameTask,
+        setTaskDate,
+        setTaskDeadline,
+        setTaskPriority,
+        setTaskDateString,
+        setTaskLabels,
+        resolveLabelIds,
+      },
+    );
+  }
+
   // Issue #144's "Refer" action (entry-actions.tsx, reached through
   // History's sheet or hover row) needs to reach into whichever Composer
   // is live on screen — see ComposerHandle's own comment (composer.tsx)
@@ -521,7 +555,7 @@ export function ComposerPage() {
           nextTask={null}
           onClose={closeTaskOverlay}
           onNavigate={() => {}}
-          onRename={(content) => renameTask(openTask.id, content)}
+          onRename={(content) => commitRename(openTask.id, content)}
           onComplete={() => handleCompleteTask(openTask)}
           onUncomplete={() => uncompleteTask(openTask.id)}
           onOpenSchedule={() => setSchedulingOpen(true)}

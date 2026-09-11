@@ -1,6 +1,7 @@
 import type { Task } from "@meologue/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { useState } from "react";
 import { MemoryRouter, Outlet, Route, Routes, useNavigate, useSearchParams } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatTaskReference } from "@/lib/inline-markdown";
@@ -8,6 +9,45 @@ import { useSettingsStore } from "@/lib/settings";
 import type { EntryStoreOutletContext } from "@/pages/entry-store-layout";
 import { swipeLeft } from "@/test/swipe";
 import { ComposerPage } from "./composer-page";
+
+/**
+ * Stands in for the real `TaskTitleEditor` — mirrors todo-page.test.tsx's
+ * own identical stub, the same reason it exists there: task-title-
+ * editor.tsx's own header comment explains why no test mounts that
+ * component directly (a real ProseMirror `EditorView`, which jsdom cannot
+ * usefully drive keystroke-by-keystroke). Every other test in this file
+ * only reads the detail title's own display `<button>`, never edits it —
+ * issue #247's own rename tests below are the first to need typed input,
+ * so this mock is scoped to exactly what they need.
+ */
+function StubTaskTitleEditor({
+  value,
+  onCommit,
+  ariaLabel,
+}: {
+  value: string;
+  onCommit: (value: string) => void;
+  onCancel: () => void;
+  ariaLabel?: string;
+}) {
+  const [text, setText] = useState(value);
+  return (
+    <input
+      aria-label={ariaLabel ?? "Task name"}
+      value={text}
+      onChange={(event) => setText(event.target.value)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          onCommit(text);
+        }
+      }}
+    />
+  );
+}
+
+vi.mock("@/components/todo/task-title-editor", () => ({
+  TaskTitleEditor: StubTaskTitleEditor,
+}));
 
 // Stand-in for surfacing the current "?q=..." from MemoryRouter's own
 // in-memory history.
@@ -1818,5 +1858,123 @@ describe("ComposerPage", () => {
 
       expect(completeTask).toHaveBeenCalledWith(taskId);
     });
+  });
+});
+
+// Issue #247: the Task detail overlay's own rename now resolves a
+// recognised phrase through `commitTaskTitle` (task-title-commit.ts),
+// reached by composer-page.tsx's own `commitRename` wrapper — the
+// identical door todo-page.tsx's row and detail view both reach.
+describe("ComposerPage — rename resolves recognised phrases (issue #247)", () => {
+  const taskId = "0192abcd-1234-7890-abcd-0123456789ae";
+
+  function taskFixture(overrides: Partial<Task> = {}): Task {
+    return {
+      id: taskId,
+      deviceId: "device-a",
+      content: "buy milk",
+      completedAt: null,
+      orderKey: "V",
+      dayOrder: "V",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      seq: null,
+      syncedAt: null,
+      deletedAt: null,
+      date: null,
+      deadline: null,
+      priority: 1,
+      labelIds: [],
+      dateString: null,
+      projectId: null,
+      sectionId: null,
+      parentId: null,
+      description: null,
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    // `toFake: ["Date"]` only — matching task-detail-view-recognition.
+    // test.tsx's own reasoning: the title editor sits behind
+    // `LazyTaskTitleEditor`'s `Suspense` boundary, whose resolution
+    // `findByLabelText`'s internal polling needs a real `setTimeout` to
+    // observe.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 8, 2, 12, 0)); // Sep 2, 2026 (Wed), local noon
+    useSettingsStore.setState({ smartDatesEnabled: true });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("resolves date and priority on Enter, stripping the phrase from the stored content", async () => {
+    const renameTask = vi.fn();
+    const setTaskDate = vi.fn();
+    const setTaskPriority = vi.fn();
+    renderComposerPage(
+      {
+        ...readyContext,
+        tasks: [taskFixture({ content: "buy milk" })],
+        renameTask,
+        setTaskDate,
+        setTaskPriority,
+      },
+      `/?task=${taskId}`,
+    );
+
+    const titleButton = await screen.findByRole("button", { name: "buy milk" });
+    fireEvent.click(titleButton);
+    const titleEditor = await screen.findByLabelText("Task name");
+    fireEvent.change(titleEditor, { target: { value: "buy oat milk tomorrow p1" } });
+    fireEvent.keyDown(titleEditor, { key: "Enter" });
+
+    // Resolution is async (commitTaskTitle's own await) — renameTask's own
+    // resolved value is what proves the phrase was actually stripped, not
+    // merely recognised.
+    await waitFor(() => expect(renameTask).toHaveBeenCalledWith(taskId, "buy oat milk"));
+    expect(setTaskDate).toHaveBeenCalledWith(taskId, "2026-09-03");
+    expect(setTaskPriority).toHaveBeenCalledWith(taskId, 4); // p1 UI == stored 4.
+  });
+
+  it("leaves an existing Date, Deadline, Priority and Labels untouched when a rename contains no recognised phrase", async () => {
+    const renameTask = vi.fn();
+    const setTaskDate = vi.fn();
+    const setTaskDeadline = vi.fn();
+    const setTaskPriority = vi.fn();
+    const setTaskLabels = vi.fn();
+    renderComposerPage(
+      {
+        ...readyContext,
+        tasks: [
+          taskFixture({
+            content: "buy oat milk",
+            date: "2026-09-10",
+            deadline: "2026-09-15",
+            priority: 3,
+            labelIds: ["label-existing"],
+          }),
+        ],
+        renameTask,
+        setTaskDate,
+        setTaskDeadline,
+        setTaskPriority,
+        setTaskLabels,
+      },
+      `/?task=${taskId}`,
+    );
+
+    const titleButton = await screen.findByRole("button", { name: "buy oat milk" });
+    fireEvent.click(titleButton);
+    const titleEditor = await screen.findByLabelText("Task name");
+    fireEvent.change(titleEditor, { target: { value: "buy plain oat milk" } });
+    fireEvent.keyDown(titleEditor, { key: "Enter" });
+
+    await waitFor(() => expect(renameTask).toHaveBeenCalledWith(taskId, "buy plain oat milk"));
+    expect(setTaskDate).not.toHaveBeenCalled();
+    expect(setTaskDeadline).not.toHaveBeenCalled();
+    expect(setTaskPriority).not.toHaveBeenCalled();
+    expect(setTaskLabels).not.toHaveBeenCalled();
   });
 });

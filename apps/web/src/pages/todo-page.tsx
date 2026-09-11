@@ -30,7 +30,9 @@ import { commentCountForTask, commentsForTask } from "@/lib/comment-counts";
 import { localDayKey } from "@/lib/local-day-key";
 import { sectionsQueryKey, tasksInProjectQueryKey } from "@/lib/query-keys";
 import type { QuickAddTaskFields } from "@/lib/quick-add-task";
+import { useSettingsStore } from "@/lib/settings";
 import { taskDetailPath, taskIdFromParam } from "@/lib/task-detail-route";
+import { commitTaskTitle } from "@/lib/task-title-commit";
 import { useEntryStore } from "@/pages/entry-store-layout";
 
 /**
@@ -601,6 +603,35 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     onNavigate: navigate,
   });
 
+  // Issue #247: both rename surfaces resolve a typed phrase through this
+  // one wrapper — the row's `detailActions.onRename` below and the detail
+  // view's own `onRename` prop (~:984) both call it, exactly the
+  // composition `handleAdd` already does for the add field just below.
+  // `commitTaskTitle` (task-title-commit.ts) carries the actual guards; this
+  // function is only what binds it to this page's own Task lists and store
+  // setters.
+  const smartDates = useSettingsStore((state) => state.smartDatesEnabled);
+  function commitRename(id: string, content: string) {
+    const task = tasks.find((t) => t.id === id) ?? completedTasks.find((t) => t.id === id);
+    if (task === undefined) {
+      return;
+    }
+    void commitTaskTitle(
+      task,
+      content,
+      { now: localDayKey(new Date()), smartDates },
+      {
+        renameTask,
+        setTaskDate,
+        setTaskDeadline,
+        setTaskPriority,
+        setTaskDateString,
+        setTaskLabels,
+        resolveLabelIds,
+      },
+    );
+  }
+
   // Every row on this page renders through `TaskRow`, and every one of
   // them needs this identical bundle — see `TaskDetailActions`'s own doc
   // comment (task-row.tsx) for why it's threaded as one object rather
@@ -613,10 +644,11 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     onSetProject: setTaskProject,
     onSetLabels: setTaskLabels,
     onCopyLink: copyTaskLink,
-    // Issue #225: the row's own new inline rename reaches the identical
-    // `renameTask` door `TaskDetailView`'s own `onRename` prop below
-    // already calls — one rename path, two places to reach it.
-    onRename: renameTask,
+    // Issue #225 built this door; issue #247 is what made it resolve a
+    // recognised phrase rather than commit verbatim — see `commitRename`
+    // just above, the identical door `TaskDetailView`'s own `onRename`
+    // prop below already calls.
+    onRename: commitRename,
     commentCountFor: (taskId) => commentCountForTask(comments, taskId),
   };
 
@@ -981,7 +1013,7 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
             nextTask={nextTask}
             onClose={closeTaskDetail}
             onNavigate={stepTaskDetail}
-            onRename={(content) => renameTask(openTask.id, content)}
+            onRename={(content) => commitRename(openTask.id, content)}
             // Issue #184's own gap-fix report: the detail view now resolves
             // (and must render actionable) a completed Task too — reuses
             // `handleComplete`'s own recurring-Task/toast handling, the

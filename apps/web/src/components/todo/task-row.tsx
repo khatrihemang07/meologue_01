@@ -26,14 +26,19 @@ export interface TaskDetailActions {
   onSetLabels: (id: string, labelIds: string[]) => void;
   onCopyLink: (task: Task) => void;
   /**
-   * Renames this Task (issue #225) — reached by double-clicking the row's
-   * own title, which swaps it from the display `<button>` into
+   * Renames this Task (issue #225) — reached by clicking the row's own
+   * Edit pencil, which swaps the title from the display `<button>` into
    * `TaskTitleEditor` in place (`task-row-content.tsx`'s own doc comment
    * on why this is a *new* affordance, not a Todoist-measured one: the
    * reference docs never drove a row-level rename, only the detail
-   * view's). The same door `task-detail-view.tsx`'s own title already
-   * calls `renameTask` through — this is not a second rename path with
-   * its own rules, just a second place to reach the existing one.
+   * view's). `task-row-content.tsx`'s own `commitTitle` still hands this
+   * raw, verbatim text — since issue #247, it no longer reaches
+   * `renameTask` directly: whichever page builds this bundle
+   * (todo-page.tsx's/composer-page.tsx's own `commitRename`) resolves it
+   * through `commitTaskTitle` (task-title-commit.ts) first, the identical
+   * door `task-detail-view.tsx`'s own title already reaches through that
+   * same wrapper. This is not a second rename path with its own rules,
+   * just a second place to reach the one shared one.
    */
   onRename: (id: string, content: string) => void;
   /**

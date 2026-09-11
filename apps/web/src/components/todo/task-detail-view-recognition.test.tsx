@@ -167,7 +167,15 @@ describe("DET-07 — recognition in the detail title", () => {
     const matches = titleEditor.querySelectorAll('[data-testid="natural-language-match"]');
     expect(matches).toHaveLength(2);
     const matchIds = Array.from(matches).map((el) => el.getAttribute("data-match-id"));
-    expect(matchIds).toEqual(["2026-09-10", "P4"]);
+    // `P1`, not `P4`: the seeded content types `p1`, and issue #251 fixed
+    // `matchIdForToken` (todo-quick-add-recognition.ts) to cross the
+    // storage inversion (`storedPriorityOf = 5 - ui`) back to the UI scale
+    // before building the identifier. This assertion read `P4` until then —
+    // pinning the very bug #251 names, on the same typed input, from a
+    // second file. Neither ticket's own test run could catch the clash:
+    // #251 ran only its two files, and this file was last run before that
+    // fix existed. It surfaced on the first combined run of both.
+    expect(matchIds).toEqual(["2026-09-10", "P1"]);
     for (const el of matches) {
       expect(el.getAttribute("data-highlighted-match")).toBe("true");
       expect(el.className).toBe("td-recognition-match");
@@ -192,10 +200,16 @@ describe("DET-07 — recognition in the detail title", () => {
     // (`extraPlugins={[quickAddRecognitionPlugin(...)]}`) — this exercises
     // `task-title-editor.tsx`'s own `commit()`, which hands back
     // `titleTextFromDoc(view.state.doc)`, the plain document text with no
-    // knowledge of decorations at all. The reference is silent on
-    // whether Todoist resolves a recognised detail-title phrase into a
-    // real Date on save; this test only pins what THIS app does today
-    // (nothing), not a guess about what Todoist does.
+    // knowledge of decorations at all, and always has. Issue #247 is what
+    // made a rename actually resolve a recognised phrase — but that
+    // resolution now lives one layer up, in task-title-commit.ts's
+    // `commitTaskTitle`, called by whichever page builds `TaskDetailView`'s
+    // own `onRename` prop (todo-page.tsx's/composer-page.tsx's own
+    // `commitRename`). `TaskTitleEditor` mounted bare, as it is right here,
+    // has no `onRename` prop and no page above it to resolve anything — its
+    // own contract is still exactly "hand back the plain text," untouched
+    // by #247, which is why this assertion stays as it is even though what
+    // THIS APP does with a rename, one layer up, no longer is.
     const onCommit = vi.fn();
     const { getByRole } = render(
       <TaskTitleEditor

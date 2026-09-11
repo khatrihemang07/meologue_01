@@ -22,7 +22,7 @@
  * a direct child of the `<li>`, sibling to `children`, never a level
  * deeper.
  */
-import type { Label, Task } from "@meologue/core";
+import type { Label, QuickAddOptions, Task } from "@meologue/core";
 import { uiPriorityOf } from "@meologue/core";
 import {
   CalendarClock,
@@ -34,14 +34,17 @@ import {
   Pencil,
 } from "lucide-react";
 import type { MouseEvent, PointerEvent } from "react";
-import { Suspense, useState } from "react";
+import { Suspense, useRef, useState } from "react";
 import { inlineProse } from "@/components/inline-prose";
 import { LazyTaskTitleEditor } from "@/components/todo/lazy-task-title-editor";
 import { TaskCommandMenu } from "@/components/todo/task-command-menu";
 import type { TaskDetailActions } from "@/components/todo/task-row";
 import { formatDay, formatTaskDate } from "@/lib/format-task-date";
+import { localDayKey } from "@/lib/local-day-key";
 import { projectNameFor } from "@/lib/project-name";
+import { useSettingsStore } from "@/lib/settings";
 import { priorityColour } from "@/lib/task-priority-colors";
+import { quickAddRecognitionPlugin } from "@/lib/todo-quick-add-recognition";
 import { cn } from "@/lib/utils";
 
 export interface TaskRowContentProps {
@@ -167,6 +170,22 @@ export function TaskRowContent({
   // consequence (the same editor, the same commit/cancel keys, land
   // either way).
   const [editingTitle, setEditingTitle] = useState(false);
+
+  // Issue #247: the identical recognition plugin add-task-form.tsx and
+  // task-detail-view.tsx already attach to their own title editors — this
+  // row had none at all before now, so a phrase typed while renaming here
+  // highlighted nothing even though the rename itself has, since this
+  // ticket, started resolving it (task-title-commit.ts, wired one layer up
+  // by whichever page builds `detailActions.onRename`). A ref, not plain
+  // state, matching both of those files' own reasoning: `extraPlugins` is
+  // read once, at the editor's mount, while `smartDates`/`now` are read
+  // live on every decoration pass through `getOptions` below. A ref PER
+  // ROW is correct here and must not be hoisted above this component: the
+  // editor only mounts while `editingTitle` is true, so each edit is a
+  // fresh mount with nothing stale to carry over from the last one.
+  const smartDates = useSettingsStore((state) => state.smartDatesEnabled);
+  const optionsRef = useRef<QuickAddOptions>({ now: localDayKey(new Date()), smartDates });
+  optionsRef.current = { now: localDayKey(new Date()), smartDates };
 
   function commitTitle(next: string) {
     setEditingTitle(false);
@@ -391,6 +410,7 @@ export function TaskRowContent({
               className={cn(
                 "text-[length:var(--td-row-font-size)] leading-[length:var(--td-row-line-height)]",
               )}
+              extraPlugins={[quickAddRecognitionPlugin(() => optionsRef.current)]}
             />
           </Suspense>
         ) : (

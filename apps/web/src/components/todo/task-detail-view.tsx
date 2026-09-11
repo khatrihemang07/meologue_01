@@ -376,16 +376,38 @@ function TaskDetailBody({
   // date rollover mid-rename should not need the editor itself torn down
   // and rebuilt to see it.
   //
-  // What this does NOT do: change what saving a recognised title does.
-  // `saveEditing` below still commits `titleText`/`titleDraft` verbatim,
-  // unparsed — the reference (lifecycle.md) is silent on whether Todoist
-  // resolves a recognised phrase in the DETAIL title into a real Date
-  // property on save, as opposed to the composer's Send, and inventing
-  // that behaviour here would be exactly the unevidenced guess the
-  // parity ledger exists to catch. That silence is also why DET-08 (the
-  // Date attribute row reads `task.date`, never the title editor's own
-  // live state) stops being vacuous the moment this plugin ships: there
-  // is now something in the title for that principle to actually ignore.
+  // What this file still does NOT do: `saveEditing` below still commits
+  // `titleText`/`titleDraft` verbatim, unparsed, and hands that string
+  // straight to its own `onRename` prop unaware anything downstream might
+  // read it differently — this plugin only decorates what the reader sees
+  // while typing. Issue #247 is what moved resolution into the picture at
+  // all, and deliberately one layer up: todo-page.tsx's and
+  // composer-page.tsx's own `commitRename` wrappers are what `onRename`
+  // actually is now, each reaching `commitTaskTitle` (task-title-commit.ts)
+  // to resolve the same phrase this plugin already highlighted into real
+  // Date/Deadline/Priority/recurrence/Label fields before ever touching
+  // the store. This view's own contract — `onRename: (content: string) =>
+  // void`, a plain string in, nothing back out — is exactly why that
+  // seam works: it never needed to know resolution was about to start
+  // happening on the other side of it. DET-08 (the Date attribute row
+  // reads `task.date`, never the title editor's own live state) is what
+  // that seam makes possible — the field this view shows still comes from
+  // the Task the store hands back down, not from anything this file
+  // parsed itself.
+  //
+  // The reference is no longer silent on this either, as an earlier
+  // version of this comment said: `docs/reference/todoist/rename-capture-
+  // 2026-09-11.md` drove both of Todoist's own rename surfaces directly
+  // and found both resolve a recognised phrase, stripping it from the
+  // stored title exactly as Quick Add does — the parity ledger's own
+  // DET-07 row cites it. That capture did not exercise a phrase that
+  // fails to resolve, or a rename with no phrase at all, so the guard
+  // below (only ever *set* a field a phrase actually resolved, never
+  // clear one the reader didn't touch) is still this app's own
+  // conservative choice, not something that capture proves Todoist does
+  // too.
+  // the Task the store hands back down, not from anything this file
+  // parsed itself.
   const smartDates = useSettingsStore((state) => state.smartDatesEnabled);
   const titleRecognitionOptionsRef = useRef({ now: localDayKey(new Date()), smartDates });
   titleRecognitionOptionsRef.current = { now: localDayKey(new Date()), smartDates };

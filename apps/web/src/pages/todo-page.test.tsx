@@ -816,6 +816,109 @@ describe("TodoPage", () => {
   });
 });
 
+// Issue #247: both rename surfaces now resolve a recognised phrase through
+// `commitTaskTitle` (task-title-commit.ts), reached by `commitRename`
+// (todo-page.tsx). `toFake: ["Date"]` only, matching task-detail-view-
+// recognition.test.tsx's own reasoning — the row/detail title editors sit
+// behind `LazyTaskTitleEditor`'s `Suspense` boundary, whose resolution
+// `findByLabelText`'s internal polling needs a real `setTimeout` to observe.
+describe("TodoPage — rename resolves recognised phrases (issue #247)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 8, 2, 12, 0)); // Sep 2, 2026 (Wed), local noon
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("resolves date and priority through the row editor, stripping them from the stored content", async () => {
+    const renameTask = vi.fn();
+    const setTaskDate = vi.fn();
+    const setTaskPriority = vi.fn();
+    renderTodoPage(
+      inboxContext([task({ id: "a", content: "buy milk" })], {
+        renameTask,
+        setTaskDate,
+        setTaskPriority,
+      }),
+    );
+
+    await waitFor(() => expect(screen.getByText("buy milk")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: 'Edit "buy milk"' }));
+    const editor = await screen.findByLabelText("Task name");
+    fireEvent.change(editor, { target: { value: "buy oat milk tomorrow p1" } });
+    fireEvent.keyDown(editor, { key: "Enter" });
+
+    // Resolution is async (commitTaskTitle awaits before the last setter
+    // it needs could possibly fire) — renameTask is the one whose own
+    // resolved value proves the phrase was actually stripped, not just
+    // recognised.
+    await waitFor(() => expect(renameTask).toHaveBeenCalledWith("a", "buy oat milk"));
+    expect(setTaskDate).toHaveBeenCalledWith("a", "2026-09-03");
+    expect(setTaskPriority).toHaveBeenCalledWith("a", 4); // p1 UI == stored 4.
+  });
+
+  it("resolves date and priority through the detail view's own rename", async () => {
+    const detailTaskId = "22222222-2222-7222-8222-222222222222";
+    const renameTask = vi.fn();
+    const setTaskDate = vi.fn();
+    const setTaskPriority = vi.fn();
+    renderTodoPage(
+      inboxContext([task({ id: detailTaskId, content: "buy milk" })], {
+        renameTask,
+        setTaskDate,
+        setTaskPriority,
+      }),
+      `/todo/task/buy-milk-${detailTaskId}`,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "buy milk" }));
+    const editor = await screen.findByLabelText("Task name");
+    fireEvent.change(editor, { target: { value: "buy oat milk tomorrow p1" } });
+    fireEvent.keyDown(editor, { key: "Enter" });
+
+    await waitFor(() => expect(renameTask).toHaveBeenCalledWith(detailTaskId, "buy oat milk"));
+    expect(setTaskDate).toHaveBeenCalledWith(detailTaskId, "2026-09-03");
+    expect(setTaskPriority).toHaveBeenCalledWith(detailTaskId, 4);
+  });
+
+  it("leaves an existing Date, Deadline, Priority and Labels untouched when a rename contains no recognised phrase", async () => {
+    const renameTask = vi.fn();
+    const setTaskDate = vi.fn();
+    const setTaskDeadline = vi.fn();
+    const setTaskPriority = vi.fn();
+    const setTaskLabels = vi.fn();
+    renderTodoPage(
+      inboxContext(
+        [
+          task({
+            id: "a",
+            content: "buy milk",
+            date: "2026-09-10",
+            deadline: "2026-09-15",
+            priority: 3,
+            labelIds: ["label-existing"],
+          }),
+        ],
+        { renameTask, setTaskDate, setTaskDeadline, setTaskPriority, setTaskLabels },
+      ),
+    );
+
+    await waitFor(() => expect(screen.getByText("buy milk")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: 'Edit "buy milk"' }));
+    const editor = await screen.findByLabelText("Task name");
+    fireEvent.change(editor, { target: { value: "buy oat milk" } });
+    fireEvent.keyDown(editor, { key: "Enter" });
+
+    await waitFor(() => expect(renameTask).toHaveBeenCalledWith("a", "buy oat milk"));
+    expect(setTaskDate).not.toHaveBeenCalled();
+    expect(setTaskDeadline).not.toHaveBeenCalled();
+    expect(setTaskPriority).not.toHaveBeenCalled();
+    expect(setTaskLabels).not.toHaveBeenCalled();
+  });
+});
+
 // Issue #169: `view="today"` is the same lazy chunk rendering a second,
 // co-equal view over the same Tasks — TodoPage's own doc comment on its
 // `view` prop explains why this is a prop rather than a second page

@@ -142,6 +142,24 @@ export interface QuickAddTaskFields {
 }
 
 /**
+ * `QuickAddTaskFields`, except `priority` distinguishes "no p[1-4] token
+ * was typed" from "one was" — a distinction issue #247's rename door
+ * (task-title-commit.ts) needs and Quick Add's own `addTask` path never
+ * did. `QuickAddResult.priority` (../../packages/core/src/quick-add/
+ * types.ts's own doc comment) "Defaults to 1 … matching `Task.priority`'s
+ * own default," and `storedPriorityOf` maps the degenerate `p4` onto that
+ * identical stored `1` — so the resolved number alone can't tell "nothing
+ * typed" apart from "p4, typed" the way a rename must: renaming a Task
+ * that's already `p1` to `... p4` has to overwrite that `p1`, not read as
+ * a no-op because `1` happens to equal `Task.priority`'s own untouched
+ * default too.
+ */
+export interface QuickAddRenameFields extends Omit<QuickAddTaskFields, "priority"> {
+  /** `null` when no `p[1-4]` token was typed; a stored 1-4 when one was, including the degenerate `p4` -> `1` case, which still must overwrite whatever priority the Task already had. */
+  priority: number | null;
+}
+
+/**
  * Mirrors ../../packages/core/src/quick-add/parse-quick-add.ts's own
  * `buildContent` algorithm — walk `tokens` in order, removing each one's
  * span from `input` and collapsing the surrounding whitespace — except a
@@ -267,4 +285,25 @@ export function taskFieldsFromQuickAdd(
     dateString: recurrence.dateString,
     labelNames: result.labelNames,
   };
+}
+
+/**
+ * `taskFieldsFromQuickAdd`, with `priority` corrected for a rename's own
+ * use (see `QuickAddRenameFields`'s own doc comment for why the plain
+ * number isn't enough): `null` when `result.tokens` holds no `"priority"`
+ * entry at all, the same stored value `taskFieldsFromQuickAdd` already
+ * computed otherwise. Every other field is identical — a rename resolves
+ * a date, a deadline, a recurrence and `@label`s exactly the way adding a
+ * Task does, task-title-commit.ts's own guards are what decide whether a
+ * `null` here (or on any other field) means "leave the Task's existing
+ * value alone," not this function.
+ */
+export function taskFieldsForRename(
+  input: string,
+  result: QuickAddResult,
+  options: QuickAddOptions,
+): QuickAddRenameFields {
+  const fields = taskFieldsFromQuickAdd(input, result, options);
+  const priorityTyped = result.tokens.some((token) => token.kind === "priority");
+  return { ...fields, priority: priorityTyped ? fields.priority : null };
 }

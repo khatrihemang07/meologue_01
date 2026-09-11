@@ -1,6 +1,6 @@
 import { parseQuickAdd } from "@meologue/core";
 import { describe, expect, it } from "vitest";
-import { taskFieldsFromQuickAdd } from "./quick-add-task";
+import { taskFieldsForRename, taskFieldsFromQuickAdd } from "./quick-add-task";
 
 const NOW = "2026-09-02"; // Wednesday.
 
@@ -8,6 +8,12 @@ function fields(input: string, options: { smartDates?: boolean } = {}) {
   const parseOptions = { now: NOW, ...options };
   const result = parseQuickAdd(input, parseOptions);
   return taskFieldsFromQuickAdd(input, result, parseOptions);
+}
+
+function renameFields(input: string, options: { smartDates?: boolean } = {}) {
+  const parseOptions = { now: NOW, ...options };
+  const result = parseQuickAdd(input, parseOptions);
+  return taskFieldsForRename(input, result, parseOptions);
 }
 
 describe("taskFieldsFromQuickAdd", () => {
@@ -205,5 +211,48 @@ describe("taskFieldsFromQuickAdd", () => {
       expect(result.labelNames).toEqual(["Shopping"]);
       expect(result.content).toBe("buy milk");
     });
+  });
+});
+
+describe("taskFieldsForRename", () => {
+  it("leaves every field null or empty on plain text with no recognised token", () => {
+    const result = renameFields("buy milk");
+
+    expect(result.content).toBe("buy milk");
+    expect(result.date).toBeNull();
+    expect(result.deadline).toBeNull();
+    expect(result.priority).toBeNull();
+    expect(result.dateString).toBeNull();
+    expect(result.labelNames).toEqual([]);
+  });
+
+  it("resolves priority: null when no p-token was typed", () => {
+    const result = renameFields("buy milk tomorrow");
+
+    expect(result.priority).toBeNull();
+    expect(result.date).toBe("2026-09-03");
+  });
+
+  // The sharpest case: `taskFieldsFromQuickAdd`'s own `priority` is
+  // already `1` here (storedPriorityOf's degenerate p4 -> 1 mapping,
+  // ../../packages/core/src/quick-add/types.ts's own doc comment on
+  // `QuickAddResult.priority` — "Defaults to 1 … matching `Task.priority`'s
+  // own default"), the exact same `1` a Task that never had ANY priority
+  // token typed also carries. `taskFieldsForRename` is what tells the two
+  // apart: `result.tokens` holds a real `"priority"` entry for `p4`, so
+  // this resolves to `1`, not `null` — a rename to "... p4" must still
+  // overwrite an existing `p1`/`p2`/`p3`, which a `null` here would wrongly
+  // read as "nothing to change."
+  it("resolves priority: 1 (not null) when p4 is explicitly typed", () => {
+    const result = renameFields("buy milk p4");
+
+    expect(result.priority).toBe(1);
+    expect(result.content).toBe("buy milk");
+  });
+
+  it("resolves priority to the stored value for an ordinary p-token, exactly as taskFieldsFromQuickAdd does", () => {
+    const result = renameFields("buy milk p1");
+
+    expect(result.priority).toBe(4);
   });
 });
