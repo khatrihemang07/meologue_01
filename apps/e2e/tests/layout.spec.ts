@@ -206,6 +206,27 @@ test("the chat list pins beside the open destination only at the wide breakpoint
   await expect(page.getByRole("link", { name: "Back to chats" })).toHaveCount(0);
 });
 
+// Issue #248 / ADR 0076: Todo's own pane shows TodoSidebar instead of the
+// chat list at the wide breakpoint — unlike Composer above, that pane never
+// shows the root screen, and TodoSidebar carries no link back to it. So
+// Back has to keep rendering there even though it disappears for every
+// other Destination at this width, and it has to be a real link that works
+// with no history entry (a fresh page load, not a navigation).
+test("Back stays reachable from Todo at the wide breakpoint, unlike every other destination", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1200, height: 900 });
+  await page.goto("/todo/inbox");
+
+  await expect(page.getByRole("navigation", { name: "Todo" })).toBeVisible();
+  const back = page.getByRole("link", { name: "Back to chats" });
+  await expect(back).toBeVisible();
+  await expect(back).toHaveAttribute("href", "/");
+
+  await back.click();
+  await expect(page).toHaveURL("/");
+});
+
 // The divider is draggable and its width is remembered per Device, on every
 // platform. Keyboard stepping is what this asserts rather than a pointer
 // drag: it exercises the same clamp and the same persistence through a route

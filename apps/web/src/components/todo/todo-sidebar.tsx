@@ -55,7 +55,15 @@
 import type { Filter, Label, Project, Task } from "@meologue/core";
 import { today, upcoming } from "@meologue/core";
 import { useQuery } from "@tanstack/react-query";
-import { CalendarCheck, CalendarClock, ListFilter, ListTodo, Plus, Search } from "lucide-react";
+import {
+  CalendarCheck,
+  CalendarClock,
+  History,
+  ListFilter,
+  ListTodo,
+  Plus,
+  Search,
+} from "lucide-react";
 import { NavLink } from "react-router";
 import { depthOf } from "@/components/todo/projects-view";
 import { localDayKey } from "@/lib/local-day-key";
@@ -236,6 +244,17 @@ export function TodoSidebar() {
           Icon={ListFilter}
           count={filters.length + labels.length}
         />
+        {/*
+          Issue #248: `todo-nav.tsx` has carried Activity since ADR 0056,
+          but that bar hides itself at this same breakpoint (ADR 0076)
+          and nothing ever added the identical row here — the same "two
+          lists, not one" miss `todo-nav.tsx`'s own header comment records
+          for Upcoming, reappearing for Activity instead. `count={0}`
+          always: Activity is a log, not something with a pending count the
+          way Inbox/Today/Upcoming/Filters have one, so the badge above
+          simply never shows for it.
+        */}
+        <CountRow to="/todo/activity" label="Activity" Icon={History} count={0} />
       </div>
 
       {favouriteProjects.length > 0 && (

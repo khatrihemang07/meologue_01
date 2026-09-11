@@ -92,6 +92,23 @@ test("the pinned list marks the open destination as current, and only that one",
   await expect(chats.getByRole("link", { name: "Settings" })).not.toHaveAttribute("aria-current");
 });
 
+// Issue #248: `/todo/activity` was linked only from `todo-nav.tsx` (which
+// hides itself at the wide breakpoint) and from inside a Project —
+// `todo-sidebar.tsx`, the nav that replaces `todo-nav` at that width, had
+// no Activity entry at all, the identical defect class Upcoming (#223)
+// shipped with for a full release.
+test("Activity is reachable from the wide-breakpoint Todo sidebar", async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 900 });
+  await page.goto("/todo/inbox");
+
+  await page
+    .getByRole("navigation", { name: "Todo" })
+    .getByRole("link", { name: "Activity" })
+    .click();
+
+  await expect(page).toHaveURL("/todo/activity");
+});
+
 // Unit tests already cover applyTheme/watchSystemTheme in isolation; what
 // only a real page load can prove is that the class survives past a hard
 // reload of the actual production build, from real localStorage rather than

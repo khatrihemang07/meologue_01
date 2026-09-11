@@ -6,7 +6,7 @@ Accepted. Narrows the palette rule stated in `index.css`'s own `--entry-accent` 
 plus one reserved accent — to everywhere *except* `/todo/*`. Depends on
 [0005](0005-one-vite-application-build-time-platform-seam.md), since one Vite application means one
 stylesheet and therefore one place this carve-out can live. Read alongside
-[0070](0070-todos-navigation-is-what-the-shells-existing-pane-renders.md), which takes the same
+[0076](0076-todos-navigation-is-what-the-shells-existing-pane-renders.md), which takes the same
 destination further.
 
 ## Context
@@ -43,7 +43,7 @@ Three ways to hold both:
 checkable mechanism rather than a convention.**
 
 The attribute is set in `chat-shell-layout.tsx`, on the one element that is an ancestor of both the
-open destination *and* the left pane. That placement is load-bearing: ADR 0070's sidebar renders in
+open destination *and* the left pane. That placement is load-bearing: ADR 0076's sidebar renders in
 that pane, outside `Shell`, and must inherit the identical palette. One attribute reaches both; an
 attribute on `Shell` would have reached only the page.
 

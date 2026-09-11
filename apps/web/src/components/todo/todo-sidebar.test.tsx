@@ -182,6 +182,20 @@ describe("TodoSidebar", () => {
     expect(await screen.findByRole("link", { name: "Inbox" })).toHaveTextContent(/^Inbox$/);
   });
 
+  // Issue #248: `/todo/activity` was reachable from `todo-nav.tsx` (which
+  // hides itself at this same breakpoint) and from inside a Project, but
+  // never from this sidebar — the identical defect class Upcoming shipped
+  // with for a full release (todo-nav.tsx's own header comment). No count
+  // badge: Activity is a log, not a pending-work count.
+  it("offers Activity as a real link, with no count badge", async () => {
+    renderSidebar("/todo/inbox");
+
+    expect(await screen.findByRole("link", { name: "Activity" })).toHaveAttribute(
+      "href",
+      "/todo/activity",
+    );
+  });
+
   it("marks the open route's row aria-current, and no other row", async () => {
     renderSidebar("/todo/today");
 

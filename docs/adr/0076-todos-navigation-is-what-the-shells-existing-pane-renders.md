@@ -1,4 +1,4 @@
-# 0070: Todo's navigation is what the shell's existing pane renders
+# 0076: Todo's navigation is what the shell's existing pane renders
 
 ## Status
 
@@ -8,6 +8,15 @@ a full-bleed push" stops being true for Todo at desktop width** — see *What th
 Builds on [0036](0036-the-shell-is-a-chat-list-and-a-thread-is-a-chat-thread.md), whose pane this
 reuses rather than adds to, and on [0069](0069-todo-renders-through-its-own-token-scope.md), which
 is what lets the pane repaint without the rest of the shell repainting with it.
+
+**Renumbered from 0070 to 0076 by issue #248**, which found this file sharing its number with
+[0070](0070-the-composer-keeps-tab-and-shift-tab-in-bare-prose-is-the-keyboard-exit.md) (an
+unrelated Composer-keyboard decision — every "ADR 0070" citation in `composer-commands.ts` and
+elsewhere means that one, not this one). This file moved rather than the other, since it has far
+fewer citations to correct; every citation of this ADR across the repo (`docs/adr/0069-…`,
+`docs/reference/todoist/parity-ledger.md`, `check-bundle-size.mjs`) was updated in the same change.
+**Also amended by issue #248**, which built the Back control *What this does take* below had only
+asserted — see that section for what changed and why.
 
 ## Context
 
@@ -58,8 +67,19 @@ which is precisely the kind of decision 0049 says a Destination is free to make 
 is a flat list of rows the reader leaves by a full-bleed push, and at desktop width a reader who
 enters Todo no longer has that list beside them — they have Todo's own navigation instead. That is a
 real amendment and it is stated here rather than smoothed over. The root screen is still how the
-reader *arrives*, and Back still returns them to it; what changes is that the pane stops showing it
-while they are inside this one Destination.
+reader *arrives*, and Back still returns them to it — but not, the way it does for every other
+Destination at this breakpoint, because the root screen is already visible in the pane and Back can
+therefore render nothing (`back-to-chats.tsx`'s own rule, unchanged for Composer, Reflection, Digest
+and Settings). Todo's pane never shows the root screen at this breakpoint; it shows `TodoSidebar`,
+which is navigation *within* Todo and carries no link to the other four Destinations. That gap
+shipped unnoticed until issue #248: `back-to-chats.tsx` rendered nothing at the wide breakpoint on
+`/todo/*` too, exactly as it does everywhere else, which left this paragraph's claim false in the
+one place it mattered — a reader at desktop width had no way out of Todo at all except the browser's
+own back button or typing a URL. #248 fixed it the direct way: `back-to-chats.tsx` now keeps
+rendering its `<Link to="/">` on `/todo/*` regardless of width, the one route where that link does
+not disappear at ≥900px. What changes at this breakpoint, accurately stated, is only that the pane
+stops *showing* the root screen while the reader is inside Todo — Back returning them to it is a
+control this ADR now actually builds, not a fact the pane's own presence used to make true for free.
 
 Below the breakpoint, none of this applies: there is no pane, the root screen is the whole screen,
 and `TodoNav` is still the answer. So 0049 is amended at one breakpoint, not replaced — and the
@@ -76,6 +96,13 @@ one breakpoint.
 Because ADR 0069 scopes the palette to the same subtree, the pane also repaints while Todo is open
 and returns to the app's own palette when it is not — one attribute, set on the element both the
 pane and the page already share.
+
+Todo also gained a second, independent case of the same "two navigations, one list of destinations"
+gap this ADR's own Decision section already names for `TodoNav` vs. `TodoSidebar`: `/todo/activity`
+was added to `TodoNav`'s `VIEWS` (ADR 0056) but never to `TodoSidebar`, so it was unreachable from
+the wide-breakpoint sidebar for the life of the branch — the identical defect class Upcoming shipped
+with (issue #223), fixed the same way issue #248 fixed Back: by adding the missing row to the list
+that was missing it.
 
 ## Alternatives considered
 

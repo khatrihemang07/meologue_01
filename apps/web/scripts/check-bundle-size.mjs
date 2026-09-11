@@ -283,7 +283,7 @@ const CHUNK_BUDGETS = {
     baselineBytes: 1_703,
   },
   // Not a route — `TodoSidebar` (components/todo/todo-sidebar.tsx), lazy
-  // from chat-shell-layout.tsx (issue #223, ADR 0070). It has to be lazy
+  // from chat-shell-layout.tsx (issue #223, ADR 0076). It has to be lazy
   // for the reason that file's own comment gives: the layout renders on
   // every route including `/`, so a static import would drag the Entry
   // store onto the one path App.tsx's cold-start boundary exists to keep
