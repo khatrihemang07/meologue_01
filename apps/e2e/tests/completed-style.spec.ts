@@ -1,4 +1,4 @@
-import type { Locator, Page } from "@playwright/test";
+import type { Locator } from "@playwright/test";
 import { SERVER_A_DATABASE } from "../servers";
 import { expect, test } from "./fixtures";
 import { entryRow, sendEntry, uniqueEntryBody, waitForTaskCompleted } from "./helpers";
@@ -107,16 +107,37 @@ async function renderedStyle(locator: Locator): Promise<RenderedStyle> {
  * point is to go through the SAME computed-style resolution every real
  * surface's `color` does, not to compare a raw custom-property string
  * against a browser-normalised one (which can differ in notation even when
- * they name the same colour). The probe is a child of `<html>`, exactly
- * where every real surface's own nearest `data-completed-style` ancestor
- * sits, though `--muted-foreground`/`--foreground` themselves are plain
- * `:root`/`.dark` values, unaffected by that attribute either way.
+ * they name the same colour).
+ *
+ * The probe is appended INSIDE the surface being checked, not to `<html>`,
+ * and that is load-bearing rather than incidental. Todo carries its own
+ * token scope — `[data-surface="todo"]` (index.css, set by
+ * `chat-shell-layout.tsx` on every `/todo/*` route), where
+ * `--muted-foreground` is deliberately a different grey to match
+ * Todoist's own palette. So the SAME completed Task genuinely does render
+ * a different literal colour in Todo than in History, by design, and a
+ * document-level probe would call that a failure.
+ *
+ * That is exactly what `index.css`'s completed-style rule was built to do:
+ * it resolves its two custom properties "from whichever ancestor carries
+ * the attribute nearest to a given checked item". The claim this spec can
+ * honestly make, then, is not "every surface paints the same bytes" but
+ * "every surface paints what ITS OWN scope says the token is" — each one
+ * obeying the reader's setting inside the palette it lives in.
+ *
+ * The cross-surface claim has not been given up; it moved to
+ * `text-decoration-line`, which no palette scopes, and which is where the
+ * original defect actually lived: a surface hardcoding `line-through`
+ * fails under `gray` and `none` no matter whose grey it uses.
  */
-async function resolvedVarColor(page: Page, cssVar: "--muted-foreground" | "--foreground") {
-  return page.evaluate((varName) => {
-    const probe = document.createElement("div");
+async function resolvedVarColor(
+  scope: Locator,
+  cssVar: "--muted-foreground" | "--foreground",
+): Promise<string> {
+  return scope.evaluate((el, varName) => {
+    const probe = document.createElement("span");
     probe.style.color = `var(${varName})`;
-    document.documentElement.appendChild(probe);
+    el.appendChild(probe);
     const value = window.getComputedStyle(probe).color;
     probe.remove();
     return value;
@@ -197,8 +218,8 @@ test("a completed Task's look — decoration and colour — agrees across every 
   // the two custom properties the whole test hinges on telling apart must
   // actually differ, in dark theme, or every "matches muted-foreground
   // instead of foreground" assertion below would pass vacuously.
-  const mutedForeground = await resolvedVarColor(page, "--muted-foreground");
-  const foreground = await resolvedVarColor(page, "--foreground");
+  const mutedForeground = await resolvedVarColor(page.locator("body"), "--muted-foreground");
+  const foreground = await resolvedVarColor(page.locator("body"), "--foreground");
   expect(
     mutedForeground,
     "muted-foreground and foreground must differ for this spec to mean anything",
@@ -211,7 +232,6 @@ test("a completed Task's look — decoration and colour — agrees across every 
       "aria-pressed",
       "true",
     );
-    const expectedColor = await resolvedVarColor(page, variant.colorVar);
 
     // 1. The reference path: the Entry bubble's own checklist item in
     // History — `entry-row.tsx`'s TaskReferenceItem, the unchanged
@@ -221,6 +241,7 @@ test("a completed Task's look — decoration and colour — agrees across every 
     const referenceDiv = entryRow(page, body).locator("li.list-none > div").first();
     await expect(referenceDiv).toBeVisible();
     const reference = await renderedStyle(referenceDiv);
+    const referenceExpected = await resolvedVarColor(referenceDiv, variant.colorVar);
 
     // 2. The day-tasks summary widget — history.tsx's DayTasksRow.
     const dayBlockWords = page
@@ -229,6 +250,7 @@ test("a completed Task's look — decoration and colour — agrees across every 
       .getByRole("button", { name: body });
     await expect(dayBlockWords).toBeVisible();
     const dayBlock = await renderedStyle(dayBlockWords);
+    const dayBlockExpected = await resolvedVarColor(dayBlockWords, variant.colorVar);
 
     // 3. task-detail-view.tsx's own title — opened from the Day block's
     // words, the same door composer.spec.ts's "opens a Task from the Day
@@ -242,6 +264,7 @@ test("a completed Task's look — decoration and colour — agrees across every 
     // completed Task's title as a person sees it before touching it.
     const titleField = dialog.getByRole("button", { name: body });
     const taskDetail = await renderedStyle(titleField);
+    const taskDetailExpected = await resolvedVarColor(titleField, variant.colorVar);
     await page.keyboard.press("Escape");
     await expect(dialog).toHaveCount(0);
 
@@ -251,6 +274,7 @@ test("a completed Task's look — decoration and colour — agrees across every 
     const completedDisclosure = page.locator(".completed-task-text");
     await expect(completedDisclosure).toBeVisible();
     const disclosure = await renderedStyle(completedDisclosure);
+    const disclosureExpected = await resolvedVarColor(completedDisclosure, variant.colorVar);
 
     // 5. task-search-page.tsx, "Show completed" on — reached directly by
     // URL (its own `?q=`/`completed=1` params) rather than driving the
@@ -259,19 +283,30 @@ test("a completed Task's look — decoration and colour — agrees across every 
     const searchResult = page.locator(".completed-task-text");
     await expect(searchResult).toBeVisible();
     const search = await renderedStyle(searchResult);
+    const searchExpected = await resolvedVarColor(searchResult, variant.colorVar);
 
-    const surfaces: Record<string, RenderedStyle> = {
-      "Entry bubble / History (reference)": reference,
-      "Day-tasks summary widget": dayBlock,
-      "Task detail dialog title": taskDetail,
-      "Todo Completed disclosure": disclosure,
-      "Task search page": search,
-    };
+    // Each surface's expected colour was resolved while its own page was
+    // still loaded — a Locator does not outlive the navigation that found
+    // it, and resolving them all here instead would only ever measure the
+    // last page.
+    const surfaces: [string, RenderedStyle, string][] = [
+      ["Entry bubble / History (reference)", reference, referenceExpected],
+      ["Day-tasks summary widget", dayBlock, dayBlockExpected],
+      ["Task detail dialog title", taskDetail, taskDetailExpected],
+      ["Todo Completed disclosure", disclosure, disclosureExpected],
+      ["Task search page", search, searchExpected],
+    ];
 
-    for (const [name, style] of Object.entries(surfaces)) {
+    for (const [name, style, expectedColor] of surfaces) {
+      // Decoration is the cross-surface claim, and the one the original
+      // defect broke: no palette scopes `text-decoration-line`, so every
+      // surface must agree with every other AND with the setting.
       expect(style.decoration, `${name} text-decoration-line, ${variant.id}`).toBe(
         variant.decorationLine,
       );
+      // Colour is checked against what this surface's OWN scope resolves
+      // the token to — see `resolvedVarColor` above for why Todo's
+      // deliberately differs from History's.
       expect(style.color, `${name} color, ${variant.id}`).toBe(expectedColor);
     }
   }
