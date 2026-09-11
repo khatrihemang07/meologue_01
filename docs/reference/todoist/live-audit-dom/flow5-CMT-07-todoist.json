@@ -1,0 +1,129 @@
+{
+  "url": "https://app.todoist.com/app/activity",
+  "headingText": "Todoist couldn't load the required files.",
+  "bodyTextSnippet": "\n\t\t\t<iframe src=\"https://googletagmanager.com/ns.html?id=GTM-KW4J5DNZ\"\n\t\t\t\theight=\"0\" width=\"0\" style=\"display:none;visibility:hidden\" id=\"tag-manager\"></iframe>Todoist couldn't load the required files.Please check your network connection, or contact support if the problem persists./**\n * Brands the static loading screen after the `app` search param before the app bundle runs.\n *\n * Only sets `data-app`; `loading-screen.css` picks the logo and spinner colors from it.\n *\n * `loading-screen.html` inlines this file as-is into the HTML templates, so keep it plain JS,\n * free of imports and exports, and limited to syntax the project browserslist supports.\n */\n;(() => {\n    const searchParams = new URLSearchParams(window.location.search)\n    const app = searchParams.get('app') ?? searchParams.ge",
+  "filterCandidates": [
+    {
+      "tag": "BUTTON",
+      "text": "Hemang",
+      "ariaLabel": "Settings"
+    },
+    {
+      "tag": "BUTTON",
+      "text": "",
+      "ariaLabel": "Open/close sidebar"
+    },
+    {
+      "tag": "BUTTON",
+      "text": "Add task",
+      "ariaLabel": null
+    },
+    {
+      "tag": "BUTTON",
+      "text": "",
+      "ariaLabel": "Dictate tasks with Ramble"
+    },
+    {
+      "tag": "BUTTON",
+      "text": "Search",
+      "ariaLabel": "Search"
+    },
+    {
+      "tag": "BUTTON",
+      "text": "",
+      "ariaLabel": "My projects menu"
+    },
+    {
+      "tag": "BUTTON",
+      "text": "",
+      "ariaLabel": "Toggle list of My Projects"
+    },
+    {
+      "tag": "BUTTON",
+      "text": "",
+      "ariaLabel": "More actions"
+    },
+    {
+      "tag": "BUTTON",
+      "text": "Help & resources",
+      "ariaLabel": null
+    },
+    {
+      "tag": "BUTTON",
+      "text": "Export",
+      "ariaLabel": null
+    },
+    {
+      "tag": "BUTTON",
+      "text": "Reporting: All",
+      "ariaLabel": null
+    },
+    {
+      "tag": "BUTTON",
+      "text": "All workspaces",
+      "ariaLabel": null
+    },
+    {
+      "tag": "INPUT",
+      "text": "",
+      "ariaLabel": "Filter by workspace"
+    },
+    {
+      "tag": "BUTTON",
+      "text": "All projects",
+      "ariaLabel": null
+    },
+    {
+      "tag": "INPUT",
+      "text": "",
+      "ariaLabel": "Filter by project"
+    },
+    {
+      "tag": "BUTTON",
+      "text": "Everyone",
+      "ariaLabel": null
+    },
+    {
+      "tag": "INPUT",
+      "text": "",
+      "ariaLabel": "Search"
+    },
+    {
+      "tag": "BUTTON",
+      "text": "All actions",
+      "ariaLabel": null
+    },
+    {
+      "tag": "INPUT",
+      "text": "",
+      "ariaLabel": "Filter by action"
+    },
+    {
+      "tag": "BUTTON",
+      "text": "Any date",
+      "ariaLabel": null
+    }
+  ],
+  "entries": {
+    "entryCount": 29,
+    "firstFive": [
+      "You uncompleted ZZ probe completeZZ probe completeInbox1 minute ago",
+      "You completed ZZ probe completeZZ probe completeInbox1 minute ago",
+      "You uncompleted ZZ probe completeZZ probe completeInbox1 minute ago",
+      "You completed ZZ probe completeZZ probe completeInbox2 minutes ago",
+      "You deleted a comment from ZZ probe commentsZZ probe commentsInbox5 minutes ago"
+    ],
+    "lastFive": [
+      "You added ZZ probe busy AZZ probe busy AInbox2 hours ago",
+      "You added ZZ probe undatedZZ probe undatedInbox2 hours ago",
+      "You added ZZ probe timedZZ probe timedInbox2 hours ago",
+      "You added ZZ probe tZZ probe tInbox2 hours ago",
+      "You added ZZ probeZZ probeInbox2 hours ago"
+    ]
+  },
+  "scrollAttempt": {
+    "scrolledContainerFound": true,
+    "bodyTextTail": "ript('body')(\"/assets/7531.07ea7f585614ba02.js\");\n            \n                cdnLoadScript('body')(\"/assets/1637.4b0b40eebd1ee1e6.js\");\n            \n                cdnLoadScript('body')(\"/assets/5821.56aa2ad8cbee0782.js\");\n            \n                cdnLoadScript('body')(\"/assets/1773.50598295e14b5920.js\");\n            \n                cdnLoadScript('body')(\"/assets/app.c4bd968b33426fa5.js\");"
+  },
+  "note": "Reporting is a full-account analytics-style log (spans real history, not scoped to the two probe tasks), unlike the per-task Task activity dialog (CMT-06) which has no filters and ends with the literal terminal line \"That's it. No more history to load.\" This Reporting page has rich filter controls (workspace, project, actor \"Everyone\", action type, date range) and uses its own infinite-scroll; scrolling attempted but the detected scrollable container was not the entry list itself, so the true oldest entry (real end of this account's history) was not reached \u2014 not claiming a terminal line exists or does not for this page, only that filters exist and were not found in the per-task dialog."
+}

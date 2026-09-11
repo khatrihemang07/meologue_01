@@ -1,0 +1,92 @@
+{
+  "dialogCheck": {
+    "found": true,
+    "ariaLabel": "Quick Add"
+  },
+  "fieldCheck": {
+    "found": true,
+    "tag": "DIV",
+    "ariaLabel": "Task name",
+    "currentText": ""
+  },
+  "focusCheck1": {
+    "activeInDialog": true,
+    "activeTag": "DIV",
+    "activeText": "",
+    "activeAriaLabel": "Task name"
+  },
+  "typedChars": [
+    {
+      "ch": "Z",
+      "textSoFar": "Z"
+    },
+    {
+      "ch": "Z",
+      "textSoFar": "ZZ"
+    },
+    {
+      "ch": " ",
+      "textSoFar": "ZZ "
+    },
+    {
+      "ch": "p",
+      "textSoFar": "ZZ p"
+    },
+    {
+      "ch": "r",
+      "textSoFar": "ZZ pr"
+    },
+    {
+      "ch": "o",
+      "textSoFar": "ZZ pro"
+    },
+    {
+      "ch": "b",
+      "textSoFar": "ZZ prob"
+    },
+    {
+      "ch": "e",
+      "textSoFar": "ZZ probe"
+    },
+    {
+      "ch": " ",
+      "textSoFar": "ZZ probe "
+    },
+    {
+      "ch": "c",
+      "textSoFar": "ZZ probe c"
+    },
+    {
+      "ch": "o",
+      "textSoFar": "ZZ probe co"
+    },
+    {
+      "ch": "m",
+      "textSoFar": "ZZ probe com"
+    },
+    {
+      "ch": "m",
+      "textSoFar": "ZZ probe comm"
+    },
+    {
+      "ch": "e",
+      "textSoFar": "ZZ probe comme"
+    },
+    {
+      "ch": "n",
+      "textSoFar": "ZZ probe commen"
+    },
+    {
+      "ch": "t",
+      "textSoFar": "ZZ probe comment"
+    },
+    {
+      "ch": "s",
+      "textSoFar": "ZZ probe comments"
+    }
+  ],
+  "beforeSubmit": {
+    "finalText": "ZZ probe comments",
+    "dialogStillOpen": true
+  }
+}

@@ -579,3 +579,84 @@ Read back from `parity-ledger.md`. Two rows were added (DET-15, DET-16), so ther
 
 Eight rows reached `matched` (DET-01, 04, 05, 07, 08, 09, 11, 12). DET-02 and DET-03 became
 `divergent`, the two new rows start there, and DET-04 was unblocked.
+
+## Flow 5 — comments, the completion toast and activity
+
+CMT-01 to CMT-08, plus re-tests of DET-10 and DET-14. Two disposable Todoist tasks under the stricter
+rules; no stall. Artifacts: the `flow5-*` files in `live-audit-dom/`.
+
+### Results
+
+| Row | Todoist | meologue | Result |
+|---|---|---|---|
+| CMT-01 | Enter and Shift+Enter add a newline; Cmd+Enter and the button submit | identical | `matched` — was `built` |
+| CMT-02 | `**bold**` → `<strong>`; URL is a real link **plus an unfurl card** | URL stays plain text, **not a link**, no card | **`divergent`** |
+| CMT-03 | delete confirmation "Delete comment?" …; edit has explicit **Cancel / Update** | same confirmation; edit **saves on blur** | **`divergent`** — was `built` |
+| CMT-04 | "1 task completed" + Undo, `role="alert"`, gone at **~11s** | `Completed "<task>"` + Undo, **no `role="alert"`**, gone at **~4.5s** | `divergent` |
+| CMT-05 | Cmd+Z undoes a completion | does not (store confirms still completed) | `divergent` |
+| CMT-06 | "You commented {content} on {task}", "You deleted a comment from {task}"; no event for edits | quoted content, no task names, extra "Edited a comment" | **`divergent`** — was `built` |
+| CMT-07 | per-task activity: no filters, ends "That's it. No more history to load." | app-wide view has a "Completed only" filter, no end line | `divergent` — app-wide Todoist not established |
+| CMT-08 | headings, quotes, fenced code render; `1.` stays literal | `1.` renders; headings, quotes, fenced code stay literal | **`divergent`** — was `blocked` |
+| DET-10 | click at the gap between editors → **dialog** | → **Task name** | **`divergent`** |
+| DET-14 | at rest 864 × 708 | at rest 864 × 710.594 (animation finished) | **`divergent`** — 2.6px height |
+
+### Defects found
+
+16. **Comment URLs are not links**, and there is no unfurl card.
+17. **A comment edit cannot be cancelled** — meologue commits on blur; Todoist has Cancel and Update.
+18. **The completion toast** says `Completed "<task>"` rather than "1 task completed", carries no
+    `role="alert"`, and lasts ~4.5s against Todoist's ~11s.
+19. **Cmd+Z does not undo a completion.**
+20. **Activity wording**: quoted content, no task names in per-task entries, and an "Edited a comment"
+    event Todoist does not record.
+21. **Headings, blockquotes and fenced code** stay literal in comments.
+22. **A generic click in the edit form** focuses the title; Todoist focuses neither field.
+23. **Detail dialog height** uses a different formula (708 against 710.594 at an 836px viewport).
+
+### Claims from the run that were not recorded
+
+- **CMT-03 "matched".** Deletion wording is identical; editing is not, and that is a real difference.
+- **CMT-04 "an ancestor carries `role=alert`".** The artifact records `null`.
+- **CMT-07 "Reporting has rich filters (workspace, project, actor, action, date)".** That appears only as
+  prose in the artifact's own `note` field. The saved page heading is the error "Todoist couldn't load
+  the required files.", its filter candidates are the sidebar's buttons, and the end of history was
+  never reached. A value written into an artifact's note is not a value read from the page.
+
+### Corrections to the corpus
+
+- `lifecycle.md` §3: the completion toast lasts about **11 seconds**, not 6–8. The original range came
+  from coarse polling.
+- `lifecycle.md` §1: "a generic click in the edit block focuses Task name" did not reproduce in two runs
+  at a DOM-located gap, and is marked contested rather than struck, since the original click point was
+  never recorded.
+
+### Two measurement traps
+
+- **Frozen animations.** meologue's dialog animation sat at `currentTime` 0 in the automated tab, which
+  is what made flow 4 read it 5% narrow. Finishing the animation and requiring `transform: none` gave
+  864 × 710.594, exactly as flow 4's arithmetic predicted.
+- **A self-wiping store.** meologue's device id changed twice during the run and its seeded tasks
+  vanished after a reload that followed the origin-storage clear. The affected rows were re-seeded and
+  re-read, and the run switched to in-app navigation only.
+
+### Safety log
+
+- Todoist Inbox: 16 before, 16 after, **set-equal**, nothing only in one list.
+- `ZZ probe comments` and `ZZ probe complete` deleted, each via a confirmation dialog naming it.
+- Todoist's app-wide activity history now holds entries for the disposable tasks from flows 3 to 5, as
+  accepted when writes were approved.
+
+### Tally after flow 5
+
+Read back from `parity-ledger.md`.
+
+| Status | Session start | After flow 4 | Now |
+|---|---|---|---|
+| `matched` | 17 | 45 | **46** |
+| `built` | 74 | 32 | **26** |
+| `todoist-captured` | 13 | 11 | 11 |
+| `divergent` | 10 | 32 | **38** |
+| `blocked` | 11 | 7 | **6** |
+
+CMT-01 reached `matched`. CMT-02, CMT-03, CMT-06, DET-10 and DET-14 became `divergent`, and CMT-08 was
+unblocked into `divergent`.

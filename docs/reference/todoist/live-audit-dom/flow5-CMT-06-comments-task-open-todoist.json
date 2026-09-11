@@ -1,0 +1,17 @@
+{
+  "menuItems": [
+    "Duplicate",
+    "Copy link to task⇧⌘C",
+    "Add comments via email",
+    "View activity",
+    "Print",
+    "Delete⌘⌫"
+  ],
+  "viewActivityClicked": true,
+  "activityDialog": {
+    "found": true,
+    "ariaLabel": null,
+    "headingText": "Task activity",
+    "fullTextSnippet": "Task activity"
+  }
+}

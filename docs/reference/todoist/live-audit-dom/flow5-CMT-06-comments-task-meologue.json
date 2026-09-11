@@ -1,0 +1,16 @@
+{
+  "allHeadings": [
+    "Sub-tasks",
+    "Comments (3)",
+    "Today"
+  ],
+  "activityHeadingText": "Today",
+  "items": [
+    "You deleted a commentless than a minute ago",
+    "Edited a commentless than a minute ago",
+    "You commented \"*italic*\n~~strike~~\n# heading\n1. first\n> quote\n```\ncode block\n```\"1 minute ago",
+    "You commented \"**bold** and https://example.com\"1 minute ago",
+    "You commented \"via button\"3 minutes ago",
+    "You commented \"line one\"3 minutes ago"
+  ]
+}

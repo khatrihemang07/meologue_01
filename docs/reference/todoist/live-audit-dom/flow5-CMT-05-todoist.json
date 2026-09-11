@@ -1,0 +1,20 @@
+{
+  "before": {
+    "rowFound": true,
+    "checkboxAriaLabel": "Mark task as incomplete"
+  },
+  "afterReset": {
+    "checkboxAriaLabel": "Mark task as complete"
+  },
+  "midState": {
+    "toastPresent": true,
+    "toastText": "1 task completedUndo"
+  },
+  "afterCmdZ": {
+    "checkboxAriaLabelAfter": "Mark task as complete",
+    "toastStillPresent": false
+  },
+  "interpretation": {
+    "cmdZUndoesCompletion": true
+  }
+}

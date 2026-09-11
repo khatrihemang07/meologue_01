@@ -1,0 +1,13 @@
+{
+  "headingText": "Comments (4)",
+  "inputSubmitted": null,
+  "contentInnerHTML": "<p class=\"mt-0\"><em class=\"italic\">italic</em></p><p class=\"mt-0\"><s class=\"line-through\">strike</s></p><p class=\"mt-0\"># heading</p><ol start=\"1\" class=\"list-decimal space-y-0.5 pl-5 mt-0\"><li><p class=\"mt-0\">first</p></li></ol><p class=\"mt-0\">&gt; quote</p><p class=\"mt-0\">```</p><p class=\"mt-0\">code block</p><p class=\"mt-0\">```</p>",
+  "contentTextContent": "italicstrike# headingfirst> quote```code block```",
+  "hasEm": true,
+  "hasDel": true,
+  "hasH1": false,
+  "hasOl": true,
+  "hasBlockquote": false,
+  "hasPreCode": false,
+  "textareaValueBeforeSubmit": "*italic*\n~~strike~~\n# heading\n1. first\n> quote\n```\ncode block\n```"
+}
