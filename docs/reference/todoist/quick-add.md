@@ -32,10 +32,23 @@ The 8px difference is exactly the horizontal padding appearing and disappearing.
 it cannot reproduce this. A layer behind text can recolour it; it cannot move it. Faithful
 replication requires a real contenteditable with inline-block spans.
 
-**And a simplification that goes the other way:** the span is *not* created and destroyed around
+~~**And a simplification that goes the other way:** the span is *not* created and destroyed around
 recognition. It is **one element in two visual states**, removed only when the underlying text
-changes. So the model is one span per match, a two-state style, and a delete-on-edit rule — not
+changes.~~ So the model is one span per match, a two-state style, and a delete-on-edit rule — not
 three separate representations.
+
+> **Corrected 2026-09-11 (`live-audit-2026-09-11.md`, ledger QA-06).** The struck claim is **false
+> for Todoist's DOM**, though it was marked verified. A `MutationObserver` watching the editor
+> through one Backspace, with a unique token set on the recognised span, showed in 3 of 3 runs that
+> **Todoist removes the recognised span and inserts a new one** (plus a text node): the held node
+> ends detached and the span now in the editor lacks the token. It *looks* like one element in two
+> states because the replacement carries the same text and `data-match-id`, which is almost
+> certainly how the original capture read it.
+>
+> What survives is the **model**, not the DOM claim: one match, two visual states, removed when the
+> text changes is still a sound way to *implement* this, and it is what meologue does — its span
+> keeps its identity through withdrawal. That is a structural divergence with no user-visible
+> effect (QA-06, `divergent`, pending a decision on whether to keep it).
 
 ## The recognised-match span
 
@@ -130,8 +143,15 @@ start date.
 
 ## Quick Add chrome (verified)
 
-- Opened by the sidebar's global **Add task** button (`button.plus_add_button`), giving
-  `role="dialog"`, `aria-label="Quick Add"`, `data-testid="quick-add"`.
+- Opened by the sidebar's global **Add task** button, giving `role="dialog"`,
+  `aria-label="Quick Add"`, `data-testid="quick-add"`.
+  > **Corrected 2026-09-11 (`live-audit-2026-09-11.md`).** This line used to name that button
+  > `button.plus_add_button`. On the captured account that selector is the **in-list inline**
+  > add-task trigger (a single instance inside `ul.items`), which opens an inline composer row, not
+  > this dialog. The global opener is the sidebar's "Add task" button, which carries **no
+  > aria-label** — find it by its text, excluding `.plus_add_button`, with the sidebar expanded.
+  > A driver that followed the old selector measured the inline row and reported it as Quick Add.
+  > Always assert `[role="dialog"][aria-label="Quick Add"]` before measuring.
 - The title field is the **only** `[contenteditable="true"]` in the dialog at rest, `aria-label="Task
   name"`. **There is no separate description input by default.**
 - Footer row: More actions · Select project (shows current, e.g. "Inbox") · Set date (shows "Date"
@@ -139,7 +159,11 @@ start date.
   Set priority (shows "Priority", then "P1" once recognised, with "Remove priority" alongside) · Add
   labels · then Cancel and Add task.
 - Below the footer: "Attach to task" and "Scan for tasks", each with a helper caption.
-- Geometry at rest: **580 × 97px**, padding 16px, border `1px solid rgb(61,61,61)`, radius **12px**,
+- **Corrected 2026-09-11:** re-measured on the asserted dialog, it is **580 × 66px with an empty
+  draft** and **580 × 97px once a date is recognised** (the footer grows). The "at rest" figure
+  below was a recognised-state reading, as `pass2-2026-09-11.md` §4 had already found. Every other
+  value below re-measured identically. Artifact: `live-audit-dom/quickadd-dialog-todoist.json`.
+- Geometry ~~at rest~~ with a date recognised: **580 × 97px**, padding 16px, border `1px solid rgb(61,61,61)`, radius **12px**,
   shadow `rgba(0,0,0,0.2) 0 4px 8px`, background `rgb(40,40,40)` (dark theme). An earlier read of the
   same selector returned 348 × 39.6px; that was a pre-layout read and is superseded — **flagged, not
   fully resolved**.

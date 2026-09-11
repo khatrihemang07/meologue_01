@@ -184,3 +184,83 @@ cells that had been described as changed but were not.
 | `blocked` | 11 | 12 |
 
 Seven rows reached `matched` (QA-01, 07, 08, 11, 12, 17, 20) and one left it (QA-06).
+
+## Settling what the Quick Add flow left open
+
+A second, narrower run. Every value below was checked in its artifact before being written here —
+the rule adopted after QA-16's prose-only numbers.
+
+### QA-06 — Todoist replaces the span; meologue keeps it
+
+Method: set a unique expando token on the recognised span, hold a JS reference, attach a
+`MutationObserver` (`childList`, `attributes`, `subtree`) to the editor, press Backspace once.
+
+| | Todoist (3 of 3 runs) | meologue (3 of 3 runs) |
+|---|---|---|
+| Held span still connected | **no** | yes |
+| Current span `===` held span | **no** | yes |
+| Current span carries the token | **no** | yes |
+| Mutations | `childList` + new `SPAN[natural-language-match]`, + text node, − old span; `class` attribute | `attributes` only: `data-highlighted-match`, `class` |
+
+**QA-06 → `divergent`, structural only.** Nothing user-visible differs. `quick-add.md`'s verified
+claim of "one element in two visual states" is false for Todoist and is corrected there. Keeping
+meologue's node identity is a recommendation awaiting the user's decision.
+Artifacts: `qa06-tiebreak-todoist.json`, `qa06-tiebreak-meologue.json`.
+
+### QA-15 / QA-16 / QA-18 — on the real Quick Add dialog
+
+Identity asserted first: `role="dialog"`, `aria-label="Quick Add"`, `data-testid="quick-add"`,
+exactly one match.
+
+| Property | Empty draft | `tod` recognised |
+|---|---|---|
+| Size | **580 × 66px** | **580 × 97px** |
+| Radius | 12px | 12px |
+| Padding | 16px all sides | 16px all sides |
+| Border | `1px solid rgb(61,61,61)` | same |
+| Background | `rgb(40,40,40)` | same |
+| Shadow | `rgba(0,0,0,0.2) 0 4px 8px` | same |
+
+- **QA-16**: the ledger's "580×97 at rest" was a recognised-state figure; corrected in the ledger
+  and in `quick-add.md`. Still `todoist-captured` — meologue has no dialog (NAV-12).
+- **QA-15**: aria-labelled footer buttons, in order, **More actions · Remove date · Cancel · Add
+  task**. That read cannot see unlabelled controls, so it does *not* show that project, priority or
+  label controls were removed. It does correct an earlier ledger note, which wrongly treated the
+  four-button footer as proof the first run was on the inline row.
+- **QA-18**: `Tab` from the empty title focuses `BUTTON[aria-label="More actions"]` — now confirmed
+  on the dialog as well as the inline row.
+
+Artifact: `quickadd-dialog-todoist.json`. Every keystroke in it records a focus and text check.
+
+### Why the first attempt measured the wrong surface
+
+`quick-add.md` named the global opener `button.plus_add_button`. On this account that selector is
+the **in-list inline add trigger**; the global opener is the sidebar's "Add task" button, which has
+no aria-label and sits off-screen while the sidebar is collapsed. The earlier run followed the
+corpus and measured the inline row. The error originated in the reference, not the driver — which is
+exactly why a reference's own selectors need re-verifying, not trusting. Corrected in `quick-add.md`.
+
+### Safety log
+
+- Todoist Inbox canary **16 → 16**, with the full title list saved (`canary-final-todoist.json`).
+- **A third near-miss.** A stray click on `body` landed on the task "naukri photo update" and opened
+  its detail modal. Nothing inside it was touched; it was closed with its own Close button and the
+  canary re-checked before continuing.
+- meologue's single-window lock appeared again with no other tab holding it, cleared with a second
+  origin-scoped storage clear and an `about:blank` bounce.
+- No screenshot: CDP `captureScreenshot` timed out again.
+
+### Tally after settling Quick Add
+
+Read back from `parity-ledger.md` after the edits.
+
+| Status | Session start | After Quick Add flow | Now |
+|---|---|---|---|
+| `matched` | 17 | 23 | **23** |
+| `built` | 74 | 65 | 65 |
+| `todoist-captured` | 13 | 13 | 13 |
+| `divergent` | 10 | 12 | **13** |
+| `blocked` | 11 | 12 | **11** |
+
+The only status change is QA-06, `blocked` → `divergent`. QA-15, QA-16 and QA-18 gained verified
+dialog evidence without changing status, because meologue has no Quick Add dialog to compare.
