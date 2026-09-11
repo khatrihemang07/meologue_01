@@ -22,6 +22,18 @@
  * slightly different answer to "is this overdue" the way three
  * independent `date < today` comparisons eventually would.
  *
+ * Issue #250, driving both apps side by side, DARK theme only
+ * (docs/reference/todoist/pass2-2026-09-11.md §1), measured Today and
+ * Tomorrow as two more distinct colours, not a shared "upcoming" purple —
+ * closing DATE-09 (parity-ledger.md), which had recorded the Today colour
+ * as an explicit, flagged guess that this measurement falsifies. Tomorrow
+ * gained a tone of its own (`"tomorrow"`, below) rather than folding into
+ * `"upcoming"` the way it used to — pass2 §1 is also explicit that these
+ * two colours are NOT fixed across Todoist's own themes (the "Todoist"
+ * named theme reads `rgb(113,250,149)`/`rgb(255,180,83)` for the identical
+ * two states), so `TONE_COLOUR` below is a Dark-theme replica only —
+ * DATE-12 (parity-ledger.md) tracks the un-closed theme-dependence gap.
+ *
  * `formatDay` stays exactly what it was: a plain, tone-less `MMM d`
  * formatter. It still backs `Task.deadline` everywhere that field
  * renders (task-row.tsx's "Due …", task-detail-view.tsx's Deadline
@@ -57,31 +69,35 @@ export function formatDay(day: string): string {
 }
 
 /**
- * The four states DATE-01/02/03 (parity-ledger.md) name, plus `"none"` for
+ * The five states DATE-01/03/09 (parity-ledger.md) name, plus `"none"` for
  * every date this reference corpus never put a colour on — either a Date
- * over a week out (DATE-06's "further out" row is `blocked`: no such Task
- * existed in the captured account) or a completed Task's own muting
- * (DATE-02: completion overrides tone, it doesn't erase the row). Kept as
- * a named union, not inlined into `describeTaskDate`'s return shape alone,
- * so a caller that only cares about the *state* (not the resolved colour)
- * has something to switch on — task-schedule-sheet.tsx's Date button does
+ * over a week out (DATE-11's "further out" row: unverified, matched only
+ * against indirect evidence) or a completed Task's own muting (DATE-02:
+ * completion overrides tone, it doesn't erase the row). Kept as a named
+ * union, not inlined into `describeTaskDate`'s return shape alone, so a
+ * caller that only cares about the *state* (not the resolved colour) has
+ * something to switch on — task-schedule-sheet.tsx's Date button does
  * exactly that, below.
+ *
+ * `"tomorrow"` is issue #250's own addition — before it, `describeDay`
+ * folded `diffDays === 1` into `"upcoming"`, the same tone the next five
+ * days share, so Tomorrow could never be styled separately from a Task due
+ * next Thursday even though pass2-2026-09-11.md §1 measured Todoist
+ * painting the two in different colours entirely (green vs. orange,
+ * neither the shared purple).
  */
-export type DateTone = "overdue" | "today" | "upcoming" | "none";
+export type DateTone = "overdue" | "today" | "tomorrow" | "upcoming" | "none";
 
 const TONE_COLOUR: Record<DateTone, string> = {
   overdue: "var(--td-date-overdue)",
-  // No Task in the captured account was due exactly today (DATE-06,
-  // `blocked`), so there is no measured "today" colour to point at.
-  // Reusing the upcoming purple rather than inventing a fourth literal —
-  // Today is the diffDays === 0 edge of the identical "due soon, not yet
-  // late" window the next six days already share a colour for, and this
-  // module's own rule (see index.css's `[data-surface="todo"]` header
-  // comment) is new tokens for what was actually measured, not for a gap.
-  // Flagged here, not silently matched, so a future capture that finds
-  // Todoist using a THIRD colour for Today specifically has one line to
-  // change rather than a guess to first discover.
-  today: "var(--td-date-upcoming)",
+  // DATE-09 (parity-ledger.md): measured `rgb(37,184,76)` green, Dark
+  // theme, pass2-2026-09-11.md §1 — replacing the flagged guess this
+  // token used to carry (reusing `--td-date-upcoming`, falsified by the
+  // same capture).
+  today: "var(--td-date-today)",
+  // Same capture, same section: measured `rgb(255,154,20)` orange, a
+  // fourth colour distinct from both `today` and `upcoming`.
+  tomorrow: "var(--td-date-tomorrow)",
   upcoming: "var(--td-date-upcoming)",
   none: "var(--td-date-muted)",
 };
@@ -102,7 +118,9 @@ export interface TaskDateDisplay {
  * against "today," never duplicated between a timed and an all-day path.
  *
  * Only "Yesterday" (exactly one day overdue) and "Tomorrow"/a weekday
- * name (one to six days out) are DATE-01/03's own measured wording.
+ * name (one to six days out) are DATE-01/03/06's own measured wording —
+ * "Tomorrow" carries its own tone since issue #250 (see `DateTone`'s own
+ * doc comment above), distinct from the five days after it.
  * Everything past that edge — further overdue, or seven-plus days out —
  * falls back to `formatDay`'s plain `MMM d`: DATE-06/07 (parity-ledger.md)
  * mark both "further out" and "with a time" as `blocked`, no such Task
@@ -129,7 +147,7 @@ function describeDay(day: string, today: Date): { text: string; tone: DateTone }
     return { text: "Today", tone: "today" };
   }
   if (diffDays === 1) {
-    return { text: "Tomorrow", tone: "upcoming" };
+    return { text: "Tomorrow", tone: "tomorrow" };
   }
   if (diffDays <= 6) {
     return { text: format(parsed, "EEEE"), tone: "upcoming" };

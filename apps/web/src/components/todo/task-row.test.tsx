@@ -258,6 +258,22 @@ describe("TaskRow", () => {
     expect(screen.queryByRole("button", { name: /Complete and archive/ })).not.toBeInTheDocument();
   });
 
+  // ROW-03 (parity-ledger.md), issue #250: pass2-2026-09-11.md §2 measured
+  // the checkbox ring at 2px for P1, 1px at every other priority — this
+  // used to hardcode 1px everywhere. `priority: 4` is the STORED value for
+  // UI "P1" (task-types.ts's own `uiPriorityOf`'s `5 - x` inversion).
+  it("thickens the checkbox ring to 2px at P1", () => {
+    renderRow({ task: task({ priority: 4 }) });
+
+    expect(screen.getByRole("checkbox").style.boxShadow).toContain("2px");
+  });
+
+  it("keeps the checkbox ring at 1px for every other priority", () => {
+    renderRow({ task: task({ priority: 1 }) });
+
+    expect(screen.getByRole("checkbox").style.boxShadow).toContain("1px");
+  });
+
   it("shows the recurrence exactly as typed, not a paraphrase", () => {
     renderRow({ task: task({ dateString: "every other monday" }) });
 

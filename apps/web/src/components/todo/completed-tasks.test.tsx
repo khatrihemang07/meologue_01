@@ -79,4 +79,26 @@ describe("CompletedTasks", () => {
     expect(text).toHaveClass("completed-task-text");
     expect(text).not.toHaveClass("line-through");
   });
+
+  // ROW-15 (parity-ledger.md), issue #250: this surface used to drop a
+  // completed Task's own date entirely — the second of ROW-15's two
+  // divergences (the first, strikethrough always rendering regardless of
+  // Settings, is index.css's own `[data-surface="todo"]` re-point of
+  // `--checked-list-text-decoration`/`-color`, not something jsdom's own
+  // lack of a real cascade can pin from a test).
+  it("shows a completed Task's own date, muted through DATE-02's completion rule", () => {
+    // Far enough in the past, relative to whatever day this suite actually
+    // runs on, to fall past DATE-11's "further out" edge and land on the
+    // plain absolute `formatDay` wording ("Jan 2") rather than a relative
+    // word this test would then have to compute for itself.
+    render(<CompletedTasks tasks={[task({ date: "2020-01-02" })]} onUncomplete={vi.fn()} />);
+
+    expect(screen.getByText("Jan 2")).toBeInTheDocument();
+  });
+
+  it("renders no date at all for a completed Task that never had one", () => {
+    render(<CompletedTasks tasks={[task({ date: null })]} onUncomplete={vi.fn()} />);
+
+    expect(screen.queryByText("Jan 2")).not.toBeInTheDocument();
+  });
 });

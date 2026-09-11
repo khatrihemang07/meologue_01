@@ -212,6 +212,8 @@ export interface TaskRowProps {
    * `TaskTree` once `children.length > 0` is already true.
    */
   children?: ReactNode;
+  /** Threaded straight through to `TaskRowContent` — see that prop's own doc comment (task-row-content.tsx). Defaults to `false` there when omitted. */
+  suppressDateBadge?: boolean;
 }
 
 /**
@@ -285,6 +287,7 @@ export function TaskRow({
   sectionOptions,
   onMoveToSection,
   children,
+  suppressDateBadge,
 }: TaskRowProps) {
   // The full command set's own open state (issue #178) — right-click
   // anywhere on the row, the `.` key while a Task row has focus (issue
@@ -387,6 +390,7 @@ export function TaskRow({
         onMoveToSection={onMoveToSection}
         commandMenuOpen={commandMenuOpen}
         onCommandMenuOpenChange={setCommandMenuOpen}
+        suppressDateBadge={suppressDateBadge}
       />
       {/*
         This row's own sub-tasks, if any — `TaskTreeRow` (task-tree.tsx)

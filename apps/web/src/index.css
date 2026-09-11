@@ -439,6 +439,28 @@
   --muted: rgb(246, 246, 246);
   --muted-foreground: rgb(110, 110, 110);
   /*
+   * A completed row's own look (issue #250, ROW-15) — re-pointing the
+   * identical pair `[data-completed-style]` above resolves
+   * (`--checked-list-text-decoration`/`-color`), the same "RE-POINT,
+   * DON'T RENAME" move this scope already makes for `--background` et al.
+   * Todo's own completed rows are NOT one of the four Settings-driven
+   * looks that pair otherwise names: pass2-2026-09-11.md §1 measured
+   * Todoist always striking a completed title through, in its own grey
+   * `rgb(128,128,128)` — distinct from `--muted-foreground` above, which
+   * is Todoist's DATE colour, not its title colour — regardless of any
+   * app preference, so this scope overrides both custom properties
+   * unconditionally rather than reading whichever of the four
+   * `data-completed-style` resolved on `<html>`. Doing it here, on the
+   * nearer ancestor, is what wins over `<html>`'s own value without
+   * touching `data-completed-style` itself: History and the Composer,
+   * outside this scope, keep obeying the Settings option exactly as
+   * before — only Todo's own completed rows (`completed-tasks.tsx`,
+   * `task-detail-view.tsx`, `filter-view.tsx`, `task-search-page.tsx`, all
+   * consumers of `.completed-task-text`) always render struck-through.
+   */
+  --checked-list-text-decoration: line-through;
+  --checked-list-text-color: rgb(128, 128, 128);
+  /*
    * `--card` and `--popover` are re-pointed alongside `--background`, and
    * leaving them out was a real defect rather than an omission of detail.
    * Every overlay in Todo — the task detail dialog, the command menu, the
@@ -513,6 +535,22 @@
   --td-date-overdue: rgb(255, 112, 102);
   --td-date-upcoming: rgb(169, 112, 255);
   --td-date-muted: var(--muted-foreground);
+  /*
+   * Today/Tomorrow (issue #250, DATE-09) — closing the falsified guess
+   * that Today reused `--td-date-upcoming` above. Measured live,
+   * pass2-2026-09-11.md §1: green for Today, orange for Tomorrow, neither
+   * the overdue red nor the upcoming purple. **Dark theme only** — that
+   * same section measured these two as theme-dependent (the "Todoist"
+   * named theme reads `rgb(113,250,149)`/`rgb(255,180,83)` for the
+   * identical two states), unlike every other `--td-*` colour above,
+   * which pass2 never re-checked under a second theme. DATE-12
+   * (parity-ledger.md) tracks that un-closed gap; carried into the light
+   * block below unchanged anyway, the same "carried forward, not
+   * re-invented" call this whole block already makes for every other
+   * hue-bearing accent (see this scope's own header comment).
+   */
+  --td-date-today: rgb(37, 184, 76);
+  --td-date-tomorrow: rgb(255, 154, 20);
 
   /* A recognised natural-language match (README's own "one fact that
      shapes the rebuild") — an inline-block span, not a text colour, hence

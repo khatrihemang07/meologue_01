@@ -80,6 +80,20 @@ export interface TaskRowContentProps {
   /** The full command set's own open state — owned by `task-row.tsx` (its `<li>`'s own `onContextMenu`/`onKeyDown` also set it), threaded down here only because the trigger button lives in this file. */
   commandMenuOpen: boolean;
   onCommandMenuOpenChange: (open: boolean) => void;
+  /**
+   * ROW-13 (parity-ledger.md), issue #250: Today's own "Due today" section
+   * shows every row due today, so the tone-coloured date badge below says
+   * nothing there a reader doesn't already know from the section heading.
+   * pass2-2026-09-11.md §3 measured Todoist omitting the date control from
+   * the DOM entirely on such a row, not merely hiding it with CSS — this
+   * prop is that same suppression, threaded down from whichever caller
+   * knows it is rendering a "due today, and only today" list (today-view.tsx's
+   * own `dueToday` section; its `overdue` section leaves this unset, since
+   * an overdue Task's own date is not redundant there). Defaults to
+   * `false` — every other caller (Inbox, a Project's own view, Today's own
+   * Overdue section) keeps the badge exactly as before.
+   */
+  suppressDateBadge?: boolean;
 }
 
 /**
@@ -141,6 +155,7 @@ export function TaskRowContent({
   onMoveToSection,
   commandMenuOpen,
   onCommandMenuOpenChange,
+  suppressDateBadge = false,
 }: TaskRowContentProps) {
   // Issue #225: inline row editing, which did not exist before this
   // ticket. Driven on the live app after the ticket's first pass shipped
@@ -223,7 +238,7 @@ export function TaskRowContent({
   // Date/Deadline/Priority/recurrence/comment checks, so a plain Task
   // with none of these still renders no empty, gap-holding line.
   const hasMetadata =
-    task.date !== null ||
+    (dateDisplay !== null && !suppressDateBadge) ||
     task.deadline !== null ||
     task.priority !== 1 ||
     isRecurring ||
@@ -345,6 +360,12 @@ export function TaskRowContent({
         itself is still the box-shadow `priorityColour` already produced
         pre-#224 (issue #223's own token work) — only the two sizes
         changed to match the measured pair.
+
+        The ring's own WIDTH (issue #250, ROW-03's own "dimensionally
+        incomplete" caveat) is a second axis pass2-2026-09-11.md §2
+        measured and this used to flatten: 2px at P1, 1px at every other
+        priority — not a fixed 1px everywhere. The colour was already
+        right; only the box-shadow's spread was hardcoded.
       */}
       <label className="flex size-6 shrink-0 cursor-pointer items-center justify-center">
         <input
@@ -364,7 +385,9 @@ export function TaskRowContent({
             }
           }}
           aria-label={task.content}
-          style={{ boxShadow: `0 0 0 1px ${priorityColour(uiPriorityOf(task.priority))}` }}
+          style={{
+            boxShadow: `0 0 0 ${uiPriorityOf(task.priority) === 1 ? "2px" : "1px"} ${priorityColour(uiPriorityOf(task.priority))}`,
+          }}
           // `appearance-none` is what makes `rounded-full` mean anything at
           // all here (ROW-03). A native checkbox paints the platform widget
           // and ignores border-radius entirely, so this rendered as a square
@@ -453,7 +476,7 @@ export function TaskRowContent({
           // than inventing a comma/pipe/dot the reference never showed
           // for the two fields it did observe (date, comment count).
           <span className="flex flex-wrap items-center gap-x-2 text-muted-foreground text-xs">
-            {dateDisplay !== null && (
+            {dateDisplay !== null && !suppressDateBadge && (
               <span style={{ color: dateDisplay.colour }}>{dateDisplay.text}</span>
             )}
             {task.deadline !== null && <span>Due {formatDay(task.deadline)}</span>}

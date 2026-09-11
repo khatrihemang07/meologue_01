@@ -105,6 +105,29 @@ describe("TodayView", () => {
     expect(screen.getByText("today task")).toBeInTheDocument();
   });
 
+  // ROW-13 (parity-ledger.md), issue #250: every row in Due today is due
+  // today by construction, so its own date badge says nothing a reader
+  // doesn't already know from the section heading — Todoist omits the
+  // control from the DOM there entirely (pass2-2026-09-11.md §3). Overdue
+  // keeps its own badge: an overdue row's date is never redundant.
+  it("renders no date badge on a due-today row, but keeps one on an overdue row", () => {
+    renderTodayView({
+      tasks: [
+        task({ id: "late", content: "late task", date: "2026-09-01" }),
+        task({ id: "today", content: "today task", date: "2026-09-02" }),
+      ],
+    });
+
+    const overdueRow = screen.getByText("late task").closest("li");
+    const dueTodayRow = screen.getByText("today task").closest("li");
+    expect(overdueRow).not.toBeNull();
+    expect(dueTodayRow).not.toBeNull();
+    // biome-ignore lint/style/noNonNullAssertion: asserted non-null above
+    expect(within(overdueRow!).getByText("Yesterday")).toBeInTheDocument();
+    // biome-ignore lint/style/noNonNullAssertion: asserted non-null above
+    expect(within(dueTodayRow!).queryByText("Today")).not.toBeInTheDocument();
+  });
+
   // The union rule task-views.ts's own today() implements: an undated Task
   // whose deadline has already passed still surfaces, in Overdue.
   it("surfaces an undated Task once its deadline has arrived, in Overdue", () => {

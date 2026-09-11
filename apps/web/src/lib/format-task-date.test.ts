@@ -37,17 +37,23 @@ describe("formatTaskDate — DATE-01/02/03/04 (parity-ledger.md)", () => {
     expect(display.colour).toBe("var(--td-date-overdue)");
   });
 
-  it("due today reads 'Today' — DATE-06 is blocked for row wording, so this is this ticket's own reasonable default, not a replay of a measured value", () => {
+  // DATE-09 (parity-ledger.md): measured `rgb(37,184,76)` green, Dark
+  // theme, pass2-2026-09-11.md §1 — falsifies the earlier guess that Today
+  // reused the upcoming purple.
+  it("due today reads 'Today', toned today, in the measured green — DATE-09 (Dark theme)", () => {
     const display = formatTaskDate("2026-09-10", { now: NOW });
     expect(display.text).toBe("Today");
     expect(display.tone).toBe("today");
+    expect(display.colour).toBe("var(--td-date-today)");
   });
 
-  it("due tomorrow reads 'Tomorrow', toned upcoming", () => {
+  // Same capture: measured `rgb(255,154,20)` orange — a tone of its own,
+  // no longer folded into "upcoming".
+  it("due tomorrow reads 'Tomorrow', toned tomorrow, in the measured orange — DATE-09 (Dark theme)", () => {
     const display = formatTaskDate("2026-09-11", { now: NOW });
     expect(display.text).toBe("Tomorrow");
-    expect(display.tone).toBe("upcoming");
-    expect(display.colour).toBe("var(--td-date-upcoming)");
+    expect(display.tone).toBe("tomorrow");
+    expect(display.colour).toBe("var(--td-date-tomorrow)");
   });
 
   it("DATE-03: two to six days out reads the weekday name alone, toned upcoming", () => {
@@ -93,7 +99,7 @@ describe("formatTaskDate — DATE-01/02/03/04 (parity-ledger.md)", () => {
     // returns a real DateTone, so a caller that omits `now` (every
     // production call site) still gets a usable result.
     const display = formatTaskDate("2026-09-11");
-    expect(["overdue", "today", "upcoming", "none"]).toContain(display.tone);
+    expect(["overdue", "today", "tomorrow", "upcoming", "none"]).toContain(display.tone);
   });
 });
 
