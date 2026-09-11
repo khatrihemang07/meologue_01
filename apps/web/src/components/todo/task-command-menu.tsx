@@ -124,6 +124,30 @@ export function TaskCommandMenu({
             <Hint id="edit-task" />
           </DropdownMenu.Item>
 
+          {/*
+            **Known broken by mouse — issue #255.** This item is the one
+            entry point of #253's four that does not reliably open the
+            anchored popover: measured 2 of 10 mouse attempts, against 3 of
+            3 by keyboard, and the failure is deterministic by row position
+            (bottom rows open, upper rows never do) rather than flaky.
+
+            Left as an ordinary `onSelect` deliberately. Two fixes were
+            tried here and both are reverted: `preventDefault()` on this
+            item's own `onSelect` (which also suppressed the menu's
+            auto-close, so the menu stayed open needing two Escapes), and
+            an `onCloseAutoFocus` on the Content scoped to this item (clean,
+            and it did remove that regression, but it did not move the
+            mouse tally at all). The second result is the informative one:
+            **the cause is not this menu returning focus to its trigger**,
+            which is what both attempts assumed. #255 carries the evidence
+            and the next hypothesis.
+
+            Nothing in this repo's test suite can see any of this — jsdom
+            lays out no popover and reproduces neither focus restoration
+            nor pointer dismissal — so a fix is only ever confirmed by
+            driving a real browser, with a tally across upper AND bottom
+            rows. One successful attempt proves nothing here.
+          */}
           <DropdownMenu.Item className={itemClassName} onSelect={onOpenDate}>
             <CalendarClock aria-hidden="true" className="size-3.5" />
             Date…
