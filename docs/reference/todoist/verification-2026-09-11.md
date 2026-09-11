@@ -125,35 +125,73 @@ position* (bottom rows open, upper rows never do), unchanged by a 900ms pause be
 fixes were attempted and both reverted; the second failed informatively, ruling out the
 focus-return theory both had assumed. #255 carries the evidence.
 
-## macOS (Tauri) — 5 of 6 checks passed on screen
+## macOS (Tauri) — 6 of 6 checks passed on screen
 
-Driven against `build/sandbox/meologue-sandbox.app`, launched **by explicit path** (several
-meologue processes can coexist and all report the name "meologue"; `open -b <bundle-id>` can raise
-a stale one). Freshness proven against `dist/macos/assets/todo-page-DREeNhsq.js`, which carries the
-`max-w-[800px]` cap — not against the binary, which is brotli-compressed and greps clean either way.
+Driven against `build/sandbox/meologue-sandbox.app` (binary stamped 18:46). Freshness proven
+against `dist/macos/assets/todo-page-DREeNhsq.js`, which carries the `max-w-[800px]` cap — not
+against the binary, which Tauri brotli-compresses, so `strings` finds no UI text either way.
 
 Passed, each backed by a screenshot: the in-column `<h1>` with no app bar (#254); the column capped
 and centred at 1360px and proportional at 700px (#254); today green / tomorrow orange (#250); the
 add field below the list and unboxed at rest (#252); **the scheduler popover anchored under its
 control** (#253); and a rename of `… tom` stripping the phrase and setting Tomorrow (#247).
 
-**Not confirmed on macOS: a completed row showing strikethrough *and* its date together.** That run
-found strikethrough only via Search, whose rows render through a different component that never
-showed a date and was never in #250's scope. `completed-tasks.tsx` does render the date
-(`formatTaskDate(task.date, { completed: true })`), and the browser pass measured it at
-`rgb(204,204,204)` — so this is a gap in what the macOS run looked at, not a native divergence.
+The sixth: **a completed row showing strikethrough *and* its date together**, found in the Inbox's
+collapsed `Completed` disclosure — the surface `completed-tasks.tsx` renders — with colours sampled
+from the capture rather than eyeballed: title `rgb(128,128,128)` struck through, date
+`rgb(204,204,204)`. An earlier attempt had looked in **Search**, whose rows render through a
+different component that shows no date and was never in #250's scope; that was a gap in where it
+looked, not a native divergence.
 
-## Android — built and installed, on-device UI not verified
+### `open` cannot be trusted to launch the build you name
+
+Recorded because it silently produced a wrong measurement before it was caught.
+`open build/sandbox/meologue-sandbox.app` was **redirected by LaunchServices** to
+`/Applications/meologue.app` — a build eight days older, different SHA256 — with no visible sign.
+The fix is to launch the executable directly
+(`…/Contents/MacOS/meologue`), bypassing `open`, and then prove which binary is live by comparing
+`shasum -a 256` against the one you meant to test. **A process start time "consistent with" the
+build stamp proves nothing**, since both binaries can start at the same moment.
+
+This also raises the question of whether the earlier five checks measured the right build, since
+they used `open` too. They did: every feature they verified landed the same day, and an
+eight-day-old binary cannot render any of it. That inference rescues a finished run only because
+the features were new — it would prove nothing about a run verifying older behaviour.
+
+## Android — 6 of 6 checks passed on a real device
 
 Bundle passes both corrected budgets (`check-bundle-size.mjs` exits 0, no `exceeds` lines). APK
-built and installed, confirmed on the device as `com.meologue.app.sandbox`, versionName 0.4.0,
+installed and confirmed on the device as `com.meologue.app.sandbox`, versionName 0.4.0,
 `lastUpdateTime=2026-09-11 18:48:52`, packaging `todo-page-bpfj1-CD.js` — the same chunk hash the
-budget check measured.
+budget check measured. Driven on a **motorola edge 50 neo (ZD222P9VZC), 1200×2670 @ density 450**.
 
-**The on-device UI was NOT driven.** The phone reports `deviceLocked=1`, and `scripts/unlock_adb.sh`
-carries the previous device's PIN and swipe coordinates, so running it risks a lockout for no gain.
-Building and installing never needed an unlocked screen; driving the UI does. This leg is therefore
-build-and-install verified only, and says so rather than implying more.
+Passed, each backed by a screenshot actually read: the view name as a single large heading with no
+separate toolbar beneath the status bar, on Inbox and Activity both (#254); the column at **full
+device width with no 800px cap** and the bottom nav present, which is the correct behaviour below
+the 900px breakpoint, with Activity reachable from it (#254/#248); today green and tomorrow orange
+as distinct colours, and a completed row struck through with its date still shown inside the
+`Completed (1)` disclosure (#250); the add field below the list as a quiet borderless row (#252);
+the scheduler anchored to its Date control (#253); and a rename resolving `Buy milk tom` (#247).
+
+**#247 was confirmed at the data layer, not just on screen** — logcat showed the SQLite row's
+`content` staying `"Buy milk"` while `date` became `"2026-09-12"`. That is the strongest evidence
+in this file for the rename door: the phrase is stripped from what is stored, not merely from what
+is displayed.
+
+Three observations recorded rather than smoothed over:
+
+- **The scheduler popover opened *upward*** from the Date control, sharing its left edge, because
+  the control sat near the bottom of the detail sheet with no room below. Still anchored to its
+  trigger — a flip to stay on screen is the sensible fallback, and is a narrow-screen difference
+  rather than the viewport-origin failure #253 exists to prevent.
+- **The software keyboard was visible behind the popover on first capture**, with no text field
+  intentionally focused — likely residual focus from the sheet's own sub-task/comment fields. It
+  did not obscure the calendar and produced no console errors. Not confirmed as a regression; noted
+  so it is not rediscovered as a surprise.
+- **One transient landscape capture at first launch**, self-corrected within two seconds, on a
+  device whose rotation lock is off. Not attributable to the app with any confidence.
+
+`Capacitor/Console` carried only routine SQLite-plugin debug lines — no errors or warnings.
 
 ## A divergence the spec review surfaced, recorded here
 
@@ -167,6 +205,17 @@ literally worded is not met, and that is worth stating rather than reading the w
 
 ## What remains unverified
 
-- **The Android on-device UI**, pending an unlocked screen.
-- **A completed row's strikethrough and date together on macOS**, per the note above.
+All three platforms are now driven and measured. What is left is scoped and named:
+
+- **Issue #255** — the More-actions "Date…" item opens the scheduler on roughly 2 of 10 mouse
+  clicks in a desktop browser. Unfixed, filed with evidence. Note the Android run reached the
+  scheduler through the detail sheet rather than that menu, so it neither reproduces nor clears
+  this; the defect is recorded against the browser, where it was measured.
+- **Issue #251's chip width** — 36.14px against Todoist's 32.31px, a glyph-width difference between
+  typefaces. Unreachable without matching font stacks; see QA-01.
+- **Issue #252's "14px row"** — true of the resting placeholder, not of typed content, which
+  renders at 16px through the shared Quick Add tokens.
 - **Light theme everywhere** — the corpus is Dark-theme only by decision (`THEME-01`, `divergent`).
+
+Test data left behind by these runs: a completed "pay rent" on the macOS sandbox, and "Buy milk"
+plus a completed "Walk dog" in the Android sandbox app. Both are Sandbox instances, not Production.
