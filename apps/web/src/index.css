@@ -611,6 +611,25 @@
   --td-chrome-font-size: 13px;
   --td-composer-title-font-size: 16px;
   --td-composer-title-line-height: 23px;
+
+  /* A fourth size, and the one that makes the three above insufficient
+     (NAV-10, issue #252). Todoist has TWO add-task surfaces at two sizes:
+     a quiet "+ Add task" row resting at the end of the list, 14px, and the
+     Quick Add dialog's own title editor at the 16px/23px pair above. This
+     app collapses both into one always-mounted field, because the
+     click-to-reveal composer that would separate them is deliberately
+     deferred (NAV-12) — so the single widget has to be 14px at rest and
+     16px once there is text in it, which is exactly what the two tokens
+     describe.
+
+     The consequence, recorded rather than discovered later: typing into an
+     empty add field steps the text from 14px to 16px, because the
+     placeholder widget and the document it sits over are styled
+     independently. Todoist has the same two sizes, but hides the step
+     behind a click; here it happens on the first keystroke. That is the
+     honest cost of deferring the composer, and it is the thing to look at
+     first if the field ever reads as jumpy. */
+  --td-add-task-font-size: 14px;
 }
 
 /*

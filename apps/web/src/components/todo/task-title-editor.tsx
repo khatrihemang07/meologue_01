@@ -122,12 +122,30 @@ function transformPasted(slice: Slice): Slice {
  * Shown only over a genuinely empty document — a plain decoration widget,
  * not a native `placeholder` attribute (a contenteditable root has no
  * such rendering of its own; `composer-editor.ts`'s own `placeholderPlugin`
- * makes the identical choice for the same reason). None of this ticket's
- * three call sites ever activates this editor on an empty title (a rename
- * always seeds real content, and Quick Add is not converted by this
- * ticket — see `lazy-task-title-editor.ts`'s own header comment for why),
- * so nothing exercises this today; it exists so a future caller — #226's
- * own seam, or a later Quick Add conversion — doesn't have to invent it.
+ * makes the identical choice for the same reason).
+ *
+ * **This is live, and its own older comment saying otherwise was wrong.**
+ * That comment read "nothing exercises this today", on the grounds that a
+ * rename always seeds real content and the add field was not yet built on
+ * this editor. The second half stopped being true: `add-task-form.tsx`
+ * mounts this component with `value=""` and `placeholder="Add a Task"`, so
+ * the add field renders this widget every time the list is not being typed
+ * into — the single most visible instance of it in the app. The claim was
+ * left standing long enough to be believed, which is why it is corrected
+ * here rather than deleted.
+ *
+ * The size is the add row's own token, not the editor's (`index.css`'s
+ * `--td-add-task-font-size`, 14px, whose comment carries the full
+ * reasoning): Todoist rests its "+ Add task" affordance at 14px and only
+ * shows the 16px title scale once the composer is open, and this app has
+ * no open/closed distinction yet (NAV-12), so the placeholder is where that
+ * resting size has to live. Deliberately NOT a hardcoded `text-sm` beside
+ * the token — that is the dead-token defect issue #251 spent a ticket
+ * removing from the very component this widget renders inside.
+ *
+ * The two remaining callers never see it: `task-row-content.tsx` and
+ * `task-detail-view.tsx` both seed a Task's existing content, so their
+ * documents are never empty and this decoration never renders there.
  */
 function placeholderPlugin(text: string | undefined): Plugin {
   return new Plugin({
@@ -137,7 +155,8 @@ function placeholderPlugin(text: string | undefined): Plugin {
           return DecorationSet.empty;
         }
         const widget = document.createElement("span");
-        widget.className = "pointer-events-none select-none text-muted-foreground";
+        widget.className =
+          "pointer-events-none select-none text-[length:var(--td-add-task-font-size)] text-muted-foreground";
         widget.textContent = text;
         return DecorationSet.create(state.doc, [Decoration.widget(0, widget)]);
       },
