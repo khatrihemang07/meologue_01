@@ -54,7 +54,7 @@ export interface AddTaskFormProps {
 }
 
 // The box-model classes `Input`'s own default className carries (the
-// border, radius, height, padding), reading its type scale from the
+// radius, height, padding), reading its type scale from the
 // `--td-composer-title-font-size`/`--td-composer-title-line-height` tokens
 // (index.css, QA-20's Quick Add row) the same way task-row-content.tsx
 // reads `--td-row-font-size`/`--td-row-line-height` — 16px/23px at every
@@ -69,8 +69,28 @@ export interface AddTaskFormProps {
 // corrupting the text ("tod p1" -> "todp1"). Centring vertically with the
 // line-height (rather than `flex`/`items-center`) is why that matters
 // here.
+//
+// Issue #252 dropped the resting **border** (`border-input` → `border-
+// transparent`, the box kept rather than removed so focus doesn't shift
+// layout) — Todoist's own end-of-list affordance is borderless (NAV-10,
+// parity ledger). It deliberately did **not** touch the type-scale
+// tokens above: those are #251's fix for a *different* Todoist surface
+// (Quick Add's own dialog title, measured 16px/23px) reusing tokens that
+// had zero consumers before it. This field plays both surfaces' roles at
+// once — Todoist's quiet "+ Add task" row *and* its Quick Add title — only
+// because the click-to-reveal composer that would separate them is
+// deferred (NAV-12, parity ledger); reintroducing a hardcoded font-size
+// beside `--td-composer-title-font-size` here would restore the exact
+// dead-token defect #251 fixed. The placeholder text itself already
+// renders in `text-muted-foreground` (task-title-editor.tsx's own
+// `placeholderPlugin` widget), so "muted grey" already holds; the
+// composed 14px figure from quick-add.md is Todoist's measurement of its
+// *static, pre-click* label, which this field has no separate state for —
+// see this ticket's own report for why narrowing the placeholder alone to
+// 14px was left undone rather than hacked around a file outside this
+// ticket's scope.
 const EDITOR_BOX_CLASSES =
-  "h-8 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1 text-[length:var(--td-composer-title-font-size)] leading-[length:var(--td-composer-title-line-height)] outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50";
+  "h-8 w-full min-w-0 rounded-lg border border-transparent bg-transparent px-2.5 py-1 text-[length:var(--td-composer-title-font-size)] leading-[length:var(--td-composer-title-line-height)] outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50";
 
 export function AddTaskForm({ onAdd, disabled }: AddTaskFormProps) {
   const [value, setValue] = useState("");
@@ -116,14 +136,24 @@ export function AddTaskForm({ onAdd, disabled }: AddTaskFormProps) {
   }
 
   return (
-    <div className="flex gap-2 border-t border-border p-3">
+    // Issue #252: was `border-t border-border p-3` — a boxed panel sitting
+    // above the list. Now a quiet, borderless row (Todoist's own end-of-
+    // list "+ Add task" affordance, NAV-10) sitting after it instead; see
+    // `EDITOR_BOX_CLASSES`'s own header comment above for what did and
+    // didn't change about the field's own type scale.
+    <div className="flex items-center gap-2 px-3 py-2">
       <div className="relative flex-1">
         {disabled ? (
           // No point mounting a live editor (and its recognition plugin)
           // while there is nowhere yet to send what it would parse —
           // matching `todo-page.tsx`'s own "store hasn't opened yet"
           // posture.
-          <Input placeholder="Add a Task" aria-label="Add a Task" disabled />
+          <Input
+            placeholder="Add a Task"
+            aria-label="Add a Task"
+            disabled
+            className="border-transparent"
+          />
         ) : (
           <Suspense
             // No `aria-label` here, deliberately: the real editor below
@@ -133,7 +163,15 @@ export function AddTaskForm({ onAdd, disabled }: AddTaskFormProps) {
             // awaiting "the field is ready" would resolve on this
             // fallback the instant it mounts, before the lazy import
             // settles, rather than actually waiting.
-            fallback={<Input placeholder="Add a Task" aria-hidden="true" disabled tabIndex={-1} />}
+            fallback={
+              <Input
+                placeholder="Add a Task"
+                aria-hidden="true"
+                disabled
+                tabIndex={-1}
+                className="border-transparent"
+              />
+            }
           >
             <LazyTaskTitleEditor
               key={resetKey}

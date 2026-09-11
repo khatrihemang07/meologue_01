@@ -165,7 +165,15 @@ export interface TodoPageProps {
  * know which scope it came from.
  *
  * The Add form is shared too, but it is **not** context-free — see
- * `captureDate`/`captureProjectId` below.
+ * `captureDate`/`captureProjectId` below. It renders once, but not first:
+ * issue #252 moved its render to just before `CompletedTasks` (near the
+ * bottom of the JSX below) so it lands after whichever list is on screen
+ * rather than above it, matching Todoist's own end-of-list "+ Add task"
+ * row (NAV-10, parity ledger) — position only. The elements themselves are
+ * unchanged: the field stays always-mounted and the Add button stays
+ * rendered-but-disabled rather than either unmounting until a click, the
+ * click-to-reveal composer with its own pickers being a deliberately
+ * deferred, separate ticket (NAV-12, parity ledger).
  */
 export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   const {
@@ -715,23 +723,6 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
 
   return (
     <Shell title="Todo" back={<BackToChats />} message={message} composerSlot={<TodoNav />}>
-      {/* Shared by Inbox, Today and a Project's own view — the Projects
-          list (`view === "projects"`) has nothing to add a Task to, and
-          gets its own "New Project" form instead (`ProjectsView`); the
-          full search page (`view === "search"`, issue #183) is a results
-          list with no "current view" for a captured Task to inherit
-          either, the identical reasoning. Upcoming (issue #223) is the
-          same shape again — it spans every future day at once, so there
-          is no single date for a captured Task to inherit the way Today
-          inherits today's own. */}
-      {backgroundView.view !== "projects" &&
-        backgroundView.view !== "search" &&
-        backgroundView.view !== "activity" &&
-        backgroundView.view !== "filters" &&
-        backgroundView.view !== "filter" &&
-        backgroundView.view !== "labels" &&
-        backgroundView.view !== "upcoming" && <AddTaskForm onAdd={handleAdd} disabled={disabled} />}
-
       {backgroundView.view === "today" && (
         <TodayView
           tasks={tasks}
@@ -913,6 +904,28 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
           />
         </div>
       )}
+
+      {/* Issue #252: moved here, from before the view switch above, so it
+          renders *after* whichever list is showing rather than above every
+          one of them — Todoist's own "+ Add task" affordance sits at the
+          end of the list (NAV-10, parity ledger), not above it. Inbox,
+          Today and a Project's own view are mutually exclusive branches
+          (only one of the blocks above ever actually renders something),
+          so one render, placed once here, lands after the list in all
+          three with no per-view duplication — the identical trick this
+          file's own header comment already relies on for `AddTaskForm`
+          being "shared... once." Guard condition is unchanged from
+          before the move: the Projects list, full search, Activity,
+          Filters, a saved Filter, Labels and Upcoming still get none (this
+          component's own next paragraph explains why each one specifically
+          has no "current view" for a captured Task to inherit). */}
+      {backgroundView.view !== "projects" &&
+        backgroundView.view !== "search" &&
+        backgroundView.view !== "activity" &&
+        backgroundView.view !== "filters" &&
+        backgroundView.view !== "filter" &&
+        backgroundView.view !== "labels" &&
+        backgroundView.view !== "upcoming" && <AddTaskForm onAdd={handleAdd} disabled={disabled} />}
 
       {/* The Completed disclosure is Inbox-specific — Today's own Tasks
           are never completed *from* Today in a way that would need a
