@@ -4,8 +4,8 @@ Captured 2026-09-10 by driving the shipped web application, `app.todoist.com`, d
 plan, against the user's own Inbox.
 
 **The single most consequential finding is in §2:** the detail view's title is a plain,
-non-editable `div.task_content` — the *same display component the list row uses*, not the
-composer's `contenteditable`. It carries the hint "Activate to edit the task name". So Todoist
+non-editable `div.task_content` — the *same display component the list row uses*, not Quick
+Add's `contenteditable`. It carries the hint "Activate to edit the task name". So Todoist
 splits display from editing, and what is shared with creating a task is the **editor**, not the
 element sitting there at rest. **What the activated editor becomes was not verified** — that would
 have meant typing into a real task — and it is the open question for the ticket that unifies the
@@ -191,7 +191,7 @@ returns the URL to `.../app/inbox`.
 ### Title element — answers the sibling-ticket question
 
 **The detail-view title, at rest, is a plain non-editable `<div>`, the same
-`task_content` component class used in the list row — not the composer's
+`task_content` component class used in the list row — not Quick Add's
 contenteditable, and not a `<textarea>`.**
 
 Verified directly:
@@ -205,11 +205,11 @@ title becomes editable only after an explicit activation step (a click or
 Enter-to-edit), which was **not performed** (per the "never type into it"
 rule), so what it turns into on activation is a **gap**.
 
-For contrast, the Quick Add composer's title field (opened separately,
+For contrast, Quick Add's title field (opened separately,
 never typed into, then closed with Escape) is a different component
 entirely: `<div role="textbox" contenteditable="true" aria-label="Task
 name">` — always-editable, `role="textbox"`. So: **the detail-view title at
-rest is the row's display component, not the composer's input component.**
+rest is the row's display component, not Quick Add's input component.**
 Whether they converge into the same editable widget once the detail title
 is activated is unverified (gap).
 
@@ -247,7 +247,7 @@ instead renders the description's markdown content as-is (verified in
 `<button data-testid="open-comment-editor-button" aria-label="Open comment
 editor">` showing the text "Comment" next to the current user's avatar and a
 paperclip (attachment) icon. There is no separate "No comments yet" heading
-above it in this state; the collapsed composer button *is* the empty state.
+above it in this state; the collapsed comment button *is* the empty state.
 Not clicked (would open a live comment editor).
 
 ## Files
@@ -268,5 +268,5 @@ Not clicked (would open a live comment editor).
 - `row-shots/detail_view_01.png` — detail view, task with description.
 - `row-shots/detail_no_description.png` — detail view, task with no
   description (shows the "Description" placeholder).
-- `row-shots/composer_open.png` — Quick Add composer, opened for inspection
+- `row-shots/composer_open.png` — Quick Add, opened for inspection
   only, closed without typing.

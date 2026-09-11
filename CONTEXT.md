@@ -487,3 +487,14 @@ the app you are building — because the cost of a slightly wrong word is a note
 paid once, while the cost of a coined word is translating between two vocabularies every time the
 two are compared, paid forever. So "Project" stays "Project," not because it is the right word for
 a personal list, but because it is the wrong word that saves the most future work.
+
+### "composer" — not for Todoist's Quick Add
+
+"Composer" names one thing in this app: the Destination where the user writes an Entry (see
+above). Todoist's own task-creation dialog is a different product entirely, and it is called
+"Quick Add" — that name is Todoist's own, not a coinage here. Referring to it as "the composer"
+cost a full round of confusion in a real session, once the Todoist reference docs
+(`docs/reference/todoist/`) had reused meologue's own term for a Todoist surface that shares none
+of its properties. Write "Quick Add" for Todoist's
+dialog, "Composer" only for meologue's own Destination, and name the product explicitly wherever
+a sentence could be read either way.

@@ -11,7 +11,7 @@ Screenshots in `lifecycle-shots/`, raw DOM in `lifecycle-dom/`.
 **Three findings a replicator will otherwise get wrong:**
 
 1. **Comments do not submit on Enter.** Enter *and* Shift+Enter both insert a newline; only
-   Ctrl/Cmd+Enter or the "Comment" button posts. This is the **opposite** of the task composer,
+   Ctrl/Cmd+Enter or the "Comment" button posts. This is the **opposite** of Quick Add,
    where Shift+Enter submits. Two editors, two rules — do not unify them.
 2. **Editing is task-wide, not field-wide.** Clicking the description puts the *whole task* into
    edit mode: title and description become editors together, sharing one Cancel/Save pair. And
@@ -45,11 +45,11 @@ Screenshots in `lifecycle-shots/`, raw DOM in `lifecycle-dom/`.
 | Behaviour | Finding | Status |
 |---|---|---|
 | Affordance | Below "Add sub-task": a row with avatar + a control labelled **"Comment"** (`aria-label="Open comment editor"`) | Verified |
-| Composer at rest (idle row) | Text **"Comment"** next to avatar, paperclip icon | Verified |
-| Composer placeholder (focused, empty) | Verbatim placeholder text: **"Comment"** | Verified |
-| Composer toolbar (focused) | Icons: attach file (`aria-label="Attach file"`), record audio (`aria-label="Record audio"`), insert emoji (`aria-label="Insert emoji"`), insert-from-integration (`aria-label="Insert from integration"`). Buttons: **Cancel**, and submit button literally labelled **"Comment"** (not "Post"/"Send") | Verified |
+| Comment box at rest (idle row) | Text **"Comment"** next to avatar, paperclip icon | Verified |
+| Comment box placeholder (focused, empty) | Verbatim placeholder text: **"Comment"** | Verified |
+| Comment box toolbar (focused) | Icons: attach file (`aria-label="Attach file"`), record audio (`aria-label="Record audio"`), insert emoji (`aria-label="Insert emoji"`), insert-from-integration (`aria-label="Insert from integration"`). Buttons: **Cancel**, and submit button literally labelled **"Comment"** (not "Post"/"Send") | Verified |
 | Enter | Inserts a newline; does **not** submit | Verified |
-| Shift+Enter | Inserts a newline; does **not** submit — **different from the task composer**, where Shift+Enter submits | Verified |
+| Shift+Enter | Inserts a newline; does **not** submit — **different from Quick Add**, where Shift+Enter submits | Verified |
 | Ctrl/Cmd+Enter | **Submits** the comment | Verified |
 | Clicking "Comment" button | Also submits | Verified |
 | Posted comment layout | Avatar (`img`), author `span.user_name` ("Hemang"), timestamp as a clickable anchor `href="#comment-<id>"` with text format **"Today 1:25 AM"** (day-word + 12h clock time; not tested how it reads after "Today" ages out) | Verified |
@@ -60,7 +60,7 @@ Screenshots in `lifecycle-shots/`, raw DOM in `lifecycle-dom/`.
 | "Edited" marker | None. Inspected the comment's outer HTML after an edit — no "edited"/"Edited" text or marker anywhere | Verified |
 | Deleting a comment | "…" → Delete opens a confirm dialog, verbatim: title **"Delete comment?"**, body **"This comment will be permanently deleted."**, buttons **Cancel** / **Delete** | Verified |
 | Ordering | **Oldest first** — new comments are appended at the bottom | Verified |
-| Empty state | When the last comment is deleted, the **"Comments N" header disappears entirely** — no header, no empty-state message; only the composer box remains | Verified |
+| Empty state | When the last comment is deleted, the **"Comments N" header disappears entirely** — no header, no empty-state message; only the comment box remains | Verified |
 | Comments header | Collapsible: **"Comments N"** with a disclosure chevron (collapse/expand not exercised) | Verified (count/label) / Gap (toggle behaviour) |
 
 ## 3. Completion and Undo

@@ -18,7 +18,7 @@ rather than filled in with something plausible.
 **A recognised match is a real inline-block box that occupies width.** It is not a colour painted
 behind the text. When recognition fires, the glyphs after the match physically shift.
 
-Verified twice, driving `tod` in the composer:
+Verified twice, driving `tod` in Quick Add:
 
 | State | Editor text | Span | `display` | padding L/R | Rendered width |
 |---|---|---|---|---|---|
@@ -91,7 +91,7 @@ So withdrawal is per-occurrence and one edit deep. It is not remembered against 
 
 ## Recognised vocabulary (verified)
 
-Each term typed alone into a freshly opened composer. "Recognised" = the span is present and
+Each term typed alone into a freshly opened Quick Add. "Recognised" = the span is present and
 highlighted; the value is its `data-match-id`. Today = 10 Sep 2026.
 
 | Term | Parsed as | | Term | Parsed as |
@@ -128,7 +128,7 @@ start date.
   still held text. Whether that is genuinely two presses or one under-captured press is **not
   certain**.
 
-## Composer chrome (verified)
+## Quick Add chrome (verified)
 
 - Opened by the sidebar's global **Add task** button (`button.plus_add_button`), giving
   `role="dialog"`, `aria-label="Quick Add"`, `data-testid="quick-add"`.
@@ -147,7 +147,7 @@ start date.
 
 ## Fonts (verified)
 
-One stack throughout — Todoist does not swap fonts between chrome and composer:
+One stack throughout — Todoist does not swap fonts between chrome and Quick Add:
 
 ```
 -apple-system, "system-ui", "Segoe UI", "Noto Sans", system-ui, sans-serif,
@@ -157,13 +157,13 @@ One stack throughout — Todoist does not swap fonts between chrome and composer
 | Element | size | weight | line-height |
 |---|---|---|---|
 | `body` | 13px | 400 | normal |
-| composer title input | **16px** | 400 | **23px** |
+| Quick Add title input | **16px** | 400 | **23px** |
 | task-list row title | 13px | 400 | normal |
 
-The recognised span matches the composer input exactly (16px / 23px), confirming it lives inside the
+The recognised span matches the Quick Add input exactly (16px / 23px), confirming it lives inside the
 title editor rather than in a separate overlay.
 
-## `Shift+Enter` submits the composer
+## `Shift+Enter` submits Quick Add
 
 **Verified, accidentally.** Typing a title, pressing `Shift+Enter`, then typing again closed the
 dialog and **created the task**. Shift+Enter does not insert a newline in the title field.
@@ -198,7 +198,7 @@ Buttons read **Cancel** and **Delete**.
 
 ## Not established
 
-- Deadline syntax in the composer.
+- Deadline syntax in Quick Add.
 - Plain `Enter` behaviour in the title, isolated from `Shift+Enter`.
 - How title and description separate once multi-line content exists.
 - Growth behaviour with a 300+ character title.

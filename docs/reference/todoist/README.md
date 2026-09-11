@@ -5,6 +5,13 @@ What Todoist's web app actually does, established by driving it rather than by r
 gets checked against Todoist's own help center and developer docs"), and this directory is what that
 checking reads from.
 
+## A word this directory reserves
+
+In this directory, **"Quick Add"** means Todoist's own task-creation dialog (`role="dialog"
+aria-label="Quick Add"`, opened by its global "Add task" affordance). **"Composer"** is reserved
+for meologue's own Entry-writing Destination as defined in `CONTEXT.md`, and is never used here for
+Todoist's dialog — the two got confused with each other once already.
+
 ## How it was captured
 
 - **Todoist web**, `app.todoist.com`, **dark theme**, **Free plan**, captured 2026-09-10 with
@@ -36,7 +43,7 @@ This was captured against the author's own live Todoist, which constrains the me
   Todoist's live sync re-renders the list under a click and it lands somewhere else. This is how a
   real task got completed during capture.
 - **Read-only wherever possible.** Almost everything here was observed without writing: recognition
-  states, pickers and the shortcut overlay are all visible in an unsaved composer draft, discarded
+  states, pickers and the shortcut overlay are all visible in an unsaved Quick Add draft, discarded
   afterwards.
 - **`lifecycle.md` is the exception** — completion, comments, descriptions and activity wording
   cannot be seen without mutating. That was confined to one disposable task, deleted afterwards,
@@ -46,7 +53,7 @@ This was captured against the author's own live Todoist, which constrains the me
 
 | File | Covers |
 |---|---|
-| `quick-add.md` | Recognition and withdrawal, the token vocabulary, autocomplete popups, composer chrome, fonts |
+| `quick-add.md` | Recognition and withdrawal, the token vocabulary, autocomplete popups, Quick Add chrome, fonts |
 | `scheduler-and-priority.md` | The scheduler popover, quick options, calendar, time, recurrence, date rendering, priority |
 | `row-and-detail.md` | Task row anatomy, hover, metadata, the detail view's structure |
 | `keyboard.md` | The 80-shortcut map, focus movement, focus appearance, accessibility semantics |
@@ -74,5 +81,5 @@ A recognised natural-language match is an **`inline-block` span carrying 4px of 
 shifts when recognition fires. A highlight painted *behind* a plain input cannot reproduce that.
 
 And the editor it lives in is **ProseMirror (Tiptap)**, `aria-label="Task name"` — the *same
-component* in the quick-add composer and in the detail view's edit mode, with recognition firing
+component* in the Quick Add dialog and in the detail view's edit mode, with recognition firing
 identically in both. Creating a task and renaming one really are the same input.
