@@ -1,0 +1,11 @@
+{
+  "found": true,
+  "liHTML": "<li class=\"flex items-center gap-2 border-border border-b px-3 py-2 last:border-b-0\"><span class=\"completed-task-text min-w-0 flex-1 truncate text-sm\">naukri photo update</span><button type=\"button\" aria-label=\"Restore &quot;naukri photo update&quot;\" class=\"flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground\"><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=",
+  "leafTag": "SPAN",
+  "leafText": "naukri photo update",
+  "leafColor": "rgb(204, 204, 204)",
+  "leafTextDecoration": "none",
+  "hasCheckboxInCompleted": false,
+  "dateSpanTexts": []
+}
+

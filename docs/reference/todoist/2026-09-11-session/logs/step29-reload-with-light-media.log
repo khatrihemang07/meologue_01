@@ -1,0 +1,9 @@
+{
+  "matchesDark": false,
+  "matchesLight": true,
+  "htmlClass": "theme_todoist todoist_loaded",
+  "colorScheme": "dark",
+  "bodyBg": "rgb(40, 28, 17)",
+  "bodyColor": "rgb(212, 208, 202)"
+}
+

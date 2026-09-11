@@ -14,7 +14,9 @@
       "!**/generated",
       "!**/public",
       "!docs/reference/**/*-dom",
-      "!docs/reference/**/*-shots"
+      "!docs/reference/**/*-shots",
+      "!docs/reference/**/drivers",
+      "!docs/reference/**/logs"
     ]
   },
   "formatter": {

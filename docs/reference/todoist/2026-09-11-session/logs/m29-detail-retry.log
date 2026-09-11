@@ -1,0 +1,155 @@
+[p1 "meologue" | space "measure meologue todo UI vs todoist"(32): 1 managed, 0 untracked — p1* "meologue"]
+root
+  container "Todo"
+    anchor [ref=1, url=http://127.0.0.1:5188/todo/inbox]
+      svg_root
+      text "Add task"
+    anchor [ref=2, loc=href:/todo/search, url=http://127.0.0.1:5188/todo/search]
+      svg_root
+      text "Search"
+    anchor [ref=3, url=http://127.0.0.1:5188/todo/inbox]
+      svg_root
+      text "Inbox"
+      text "4"
+    anchor [ref=4, loc=href:/todo/today, url=http://127.0.0.1:5188/todo/today]
+      svg_root
+      text "Today"
+      text "1"
+    anchor [ref=5, loc=href:/todo/upcoming, url=http://127.0.0.1:5188/todo/upcoming]
+      svg_root
+      text "Upcoming"
+      text "2"
+    anchor [ref=6, loc=href:/todo/filters, url=http://127.0.0.1:5188/todo/filters]
+      svg_root
+      text "Filters & Labels"
+    heading
+      text "Projects"
+    paragraph
+      text "No Projects yet — add one from the Projects list."
+  text "Todo"
+  container
+    textfield "Add a Task" [ref=7]
+      text "Add a Task"
+    button [ref=8]
+      text "Add"
+    unordered_list
+      list_item
+        button "Reorder or reparent "Room clean" — arrow keys to move, Alt+arrow keys to indent or outdent" [ref=9]
+          svg_root
+        checkbox "Room clean" [ref=10, loc=css:input[aria-label="Room clean"]]
+        button [ref=11]
+          text "Room clean"
+        text "Today"
+        button "Edit "Room clean"" [ref=12, loc=css:button[aria-label="Edit \"Room clean\""]]
+          svg_root
+        button "Date "Room clean"" [ref=13, loc=css:button[aria-label="Date \"Room clean\""]]
+          svg_root
+        button "Comment on "Room clean"" [ref=14, loc=css:button[aria-label="Comment on \"Room clean\""]]
+          svg_root
+        button "More actions for "Room clean"" [ref=15, loc=css:button[aria-label="More actions for \"Room clean\""]]
+          svg_root
+      list_item
+        button "Reorder or reparent "hair wash" — arrow keys to move, Alt+arrow keys to indent or outdent" [ref=16]
+          svg_root
+        checkbox "hair wash" [ref=17, loc=css:input[aria-label="hair wash"]]
+        button [ref=18]
+          text "hair wash"
+        text "Use the new shampoo and condition well."
+        text "Tomorrow"
+        text "P"
+        text "1"
+        button "Edit "hair wash"" [ref=19, loc=css:button[aria-label="Edit \"hair wash\""]]
+          svg_root
+        button "Date "hair wash"" [ref=20, loc=css:button[aria-label="Date \"hair wash\""]]
+          svg_root
+        button "Comment on "hair wash"" [ref=21, loc=css:button[aria-label="Comment on \"hair wash\""]]
+          svg_root
+        button "More actions for "hair wash"" [ref=22, loc=css:button[aria-label="More actions for \"hair wash\""]]
+          svg_root
+      list_item
+        button "Reorder or reparent "This is an extremely long task title that should wrap across multiple lines in the row when the column is not wide enough to fit it on one single line of text" — arrow keys to m..." [ref=23]
+          svg_root
+        checkbox "This is an extremely long task title that should wrap across multiple lines in the row when the column is not wide enough to fit it on one single line of text" [ref=24]
+        button [ref=25]
+          text "This is an extremely long task title that should wrap across multiple lines in the row when the column is not wide enough to fit it on one single line of text"
+        button "Edit "This is an extremely long task title that should wrap across multiple lines in the row when the column is not wide enough to fit it on one single line of text"" [ref=26]
+          svg_root
+        button "Date "This is an extremely long task title that should wrap across multiple lines in the row when the column is not wide enough to fit it on one single line of text"" [ref=27]
+          svg_root
+        button "Comment on "This is an extremely long task title that should wrap across multiple lines in the row when the column is not wide enough to fit it on one single line of text"" [ref=28]
+          svg_root
+        button "More actions for "This is an extremely long task title that should wrap across multiple lines in the row when the column is not wide enough to fit it on one single line of text"" [ref=29]
+          svg_root
+      list_item
+        button "Reorder or reparent "Alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu alpha bravo cha..." [ref=30, loc=unstable]
+          svg_root
+        checkbox "Alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu alpha bravo charlie delta echo foxtr..." [ref=31]
+        button [ref=32]
+          text "Alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu alpha bravo charlie delta echo foxtr..."
+        button "Edit "Alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu alpha bravo charlie delta echo..." [ref=33, loc=unstable]
+          svg_root
+        button "Date "Alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu alpha bravo charlie delta echo..." [ref=34, loc=unstable]
+          svg_root
+        button "Comment on "Alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu alpha bravo charlie delt..." [ref=35, loc=unstable]
+          svg_root
+        button "More actions for "Alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu alpha bravo charli..." [ref=36, loc=unstable]
+          svg_root
+      list_item
+    text "Completed ("
+    text "1"
+    text ")"
+  dialog "hair wash" [ref=37, loc=role:dialog[name="hair wash"]]
+    container
+      paragraph
+        text "Inbox"
+      button "Previous Task" [ref=38, loc=css:button[aria-label="Previous Task"]]
+        svg_root
+      button "Next Task" [ref=39, loc=css:button[aria-label="Next Task"]]
+        svg_root
+      button "Close" [ref=40, loc=css:button[aria-label="Close"]]
+        svg_root
+    container
+      container
+        container
+          checkbox "Complete "hair wash"" [ref=41, loc=css:input[aria-label="Complete \"hair wash\""]]
+          button [ref=42]
+            text "hair wash"
+        button [ref=43]
+          paragraph
+            text "Use the new shampoo and condition well."
+        container
+          heading
+            text "Sub-tasks"
+          form
+            textbox "Add sub-task" [ref=44, loc=css:input[placeholder="Add sub-task"]]
+              text "Add sub-task"
+            button [ref=45]
+              text "Add"
+        container
+          heading
+            text "Comments"
+          form
+            textbox "Add a comment" [ref=46, loc=css:textarea[placeholder="Add a comment"]]
+              text "Add a comment"
+            button [ref=47]
+              text "Comment"
+        container [ref=48]
+          text "Activity ("
+          text "2"
+          text ")"
+      container
+        button [ref=49]
+          text "Project"
+          text "Inbox"
+        button [ref=50]
+          text "Date"
+          text "Tomorrow"
+        button [ref=51]
+          text "Deadline"
+        button [ref=52]
+          text "Priority"
+          text "P1"
+        button [ref=53]
+          text "Labels"
+
+

@@ -44,6 +44,14 @@ there.
 
 ## What a status is pinned to
 
+> **Superseded by [ADR 0077](../../adr/0077-parity-is-proved-live-not-against-a-dated-capture.md).**
+> Rows are now established by driving **both** applications in the same session, against Todoist's
+> live behaviour, with the raw artifacts committed beside the prose. The rule below is kept because
+> its reasoning was weighed and overridden rather than found wrong — read it as the argument on the
+> other side, not as current practice. The short version of why it lost: pinning defended against
+> drift, which never actually bit, while the real failure was pinned prose whose evidence nobody
+> could re-open. Two false claims propagated out of that gap — see the ADR.
+
 **Rows are pinned to a dated capture, never to the live product.** Todoist ships changes; this
 ledger is a definition-of-done for a rebuild, and a definition-of-done cannot chase a moving
 target — "done" would never be reachable.

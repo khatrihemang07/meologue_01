@@ -1,0 +1,40 @@
+cleared Emulation.setEmulatedMedia
+URL: https://app.todoist.com/app/settings/theme
+html.class : theme_dark todoist_loaded
+bodyBg     : rgb(38, 38, 38) | colorScheme: dark
+prefers dark: true | prefers light: false
+bodyText   : Skip to task list | Hemang | Add task | Search | Inbox | 7 | 11 | Today | 2 | Upcoming | Filters & Labels | Reporting | My Projects | Getting Started 👋 | 14 | Help & resources | Connect calendar | Display | Today | 2 tasks | Task:  | Room clean | Inbox | Task:  | Roller thigh pain | Inbox | Add task | Settings | Account | General | Subscription | Theme | Sidebar | Quick Add | Productivity | Reminders | Notifications | Backups | Integrations | Calendars | Add team | Theme | Personalize your Todoist with colors to match your style, mood, and personality. Learn more | Sync theme | Auto Dark Mode | Automatically switch between light and dark themes when your system does. | Your themes | Todoist | Dark | Moonstone | Tangerine | Pro themes | Unlock more themes | Upgrade to personalize your Todoist 
+--- controls on the theme settings page ---
+  <button> role=null type=button checked=null sel=null theme=null :: "Settings"
+  <button> role=null type=button checked=null sel=null theme=null :: "Open/close sidebar"
+  <button> role=null type=button checked=null sel=null theme=null :: "Add task"
+  <button> role=null type=button checked=null sel=null theme=null :: "Dictate tasks with Ramble"
+  <button> role=null type=button checked=null sel=null theme=null :: "Search"
+  <button> role=null type=button checked=null sel=null theme=null :: "My projects menu"
+  <button> role=null type=button checked=null sel=null theme=null :: "Toggle list of My Projects"
+  <button> role=null type=button checked=null sel=null theme=null :: "More actions"
+  <button> role=null type=button checked=null sel=null theme=null :: "Help & resources"
+  <button> role=null type=button checked=null sel=null theme=null :: "Connect calendar"
+  <button> role=null type=button checked=null sel=null theme=null :: "Dismiss"
+  <button> role=null type=button checked=null sel=null theme=null :: "View Options Menu"
+  <button> role=checkbox type=button checked=false sel=null theme=null :: "Mark task as complete"
+  <button> role=checkbox type=button checked=false sel=null theme=null :: "Mark task as complete"
+  <button> role=null type=button checked=null sel=null theme=null :: "Add task"
+  <button> role=null type=button checked=null sel=null theme=null :: "Close sidebar"
+  <input> role=combobox type=text checked=false sel=null theme=null :: "Search"
+  <button> role=null type=button checked=null sel=null theme=null :: "Add team"
+  <button> role=null type=button checked=null sel=null theme=null :: "Open sidebar"
+  <button> role=null type=button checked=null sel=null theme=null :: "Close settings"
+  <input> role=null type=checkbox checked=true sel=null theme=null :: "on"
+  <input> role=null type=checkbox checked=false sel=null theme=null :: "on"
+  <button> role=radio type=button checked=false sel=null theme=null :: "Todoist"
+  <button> role=radio type=button checked=true sel=null theme=null :: "Dark"
+  <button> role=radio type=button checked=false sel=null theme=null :: "Moonstone"
+  <button> role=radio type=button checked=false sel=null theme=null :: "Tangerine"
+  <button> role=null type=button checked=null sel=null theme=null :: "Upgrade"
+  <button> role=radio type=button checked=false sel=null theme=null :: "Kale"
+  <button> role=radio type=button checked=false sel=null theme=null :: "Blueberry"
+  <button> role=radio type=button checked=false sel=null theme=null :: "Lavender"
+  <button> role=radio type=button checked=false sel=null theme=null :: "Raspberry"
+wrote td-theme-settings.png
+

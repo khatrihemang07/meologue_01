@@ -1,0 +1,60 @@
+pre-check: {
+ "tag": "before",
+ "htmlClass": "theme_dark todoist_loaded",
+ "prefersLight": true,
+ "bodyBg": "rgb(38, 38, 38)",
+ "bodyColor": "rgb(255, 255, 255)",
+ "contentBg": "rgba(0, 0, 0, 0)",
+ "rowBg": "rgb(31, 31, 31)",
+ "rowBorderBottom": "1px solid rgb(61, 61, 61)",
+ "titleColor": "rgb(255, 255, 255)",
+ "dateText": null,
+ "dateColor": null
+}
+
+=== Todoist ===
+{
+ "tag": "Todoist",
+ "htmlClass": "theme_todoist todoist_loaded",
+ "prefersLight": true,
+ "bodyBg": "rgb(40, 28, 17)",
+ "bodyColor": "rgb(212, 208, 202)",
+ "contentBg": "rgba(0, 0, 0, 0)",
+ "rowBg": "rgb(24, 26, 27)",
+ "rowBorderBottom": "1px solid rgb(53, 57, 59)",
+ "titleColor": "rgb(212, 208, 202)",
+ "dateText": "Today",
+ "dateColor": "rgb(113, 250, 149)"
+}
+
+=== Moonstone ===
+{
+ "tag": "Moonstone",
+ "htmlClass": "theme_moonstone todoist_loaded",
+ "prefersLight": true,
+ "bodyBg": "rgb(27, 29, 30)",
+ "bodyColor": "rgb(212, 208, 202)",
+ "contentBg": "rgba(0, 0, 0, 0)",
+ "rowBg": "rgb(24, 26, 27)",
+ "rowBorderBottom": "1px solid rgb(53, 57, 59)",
+ "titleColor": "rgb(212, 208, 202)",
+ "dateText": "Today",
+ "dateColor": "rgb(113, 250, 149)"
+}
+
+=== RESTORE CHECK ===
+{
+ "tag": "restored",
+ "htmlClass": "theme_dark todoist_loaded",
+ "prefersLight": false,
+ "bodyBg": "rgb(38, 38, 38)",
+ "bodyColor": "rgb(255, 255, 255)",
+ "contentBg": "rgba(0, 0, 0, 0)",
+ "rowBg": "rgb(31, 31, 31)",
+ "rowBorderBottom": "1px solid rgb(61, 61, 61)",
+ "titleColor": "rgb(255, 255, 255)",
+ "dateText": "Today",
+ "dateColor": "rgb(37, 184, 76)"
+}
+RESTORE OK
+

@@ -1,0 +1,199 @@
+{
+  "sync": {
+    "rowText": "Personalize your Todoist with colors to match your style, mood, and personality. Learn more\nSync theme\nAuto Dark Mode\n\nAutomatically switch between li",
+    "controls": [
+      {
+        "tag": "INPUT",
+        "role": null,
+        "ariaChecked": null,
+        "ariaLabel": null,
+        "type": "checkbox",
+        "checked": true
+      },
+      {
+        "tag": "INPUT",
+        "role": null,
+        "ariaChecked": null,
+        "ariaLabel": null,
+        "type": "checkbox",
+        "checked": false
+      },
+      {
+        "tag": "DIV",
+        "role": "radiogroup",
+        "ariaChecked": null,
+        "ariaLabel": null,
+        "type": null
+      },
+      {
+        "tag": "BUTTON",
+        "role": "radio",
+        "ariaChecked": "false",
+        "ariaLabel": "Todoist",
+        "type": "button"
+      },
+      {
+        "tag": "BUTTON",
+        "role": "radio",
+        "ariaChecked": "true",
+        "ariaLabel": "Dark",
+        "type": "button"
+      },
+      {
+        "tag": "BUTTON",
+        "role": "radio",
+        "ariaChecked": "false",
+        "ariaLabel": "Moonstone",
+        "type": "button"
+      },
+      {
+        "tag": "BUTTON",
+        "role": "radio",
+        "ariaChecked": "false",
+        "ariaLabel": "Tangerine",
+        "type": "button"
+      },
+      {
+        "tag": "DIV",
+        "role": "status",
+        "ariaChecked": null,
+        "ariaLabel": null,
+        "type": null
+      },
+      {
+        "tag": "BUTTON",
+        "role": null,
+        "ariaChecked": null,
+        "ariaLabel": null,
+        "type": "button"
+      },
+      {
+        "tag": "BUTTON",
+        "role": "radio",
+        "ariaChecked": "false",
+        "ariaLabel": "Kale",
+        "type": "button"
+      },
+      {
+        "tag": "BUTTON",
+        "role": "radio",
+        "ariaChecked": "false",
+        "ariaLabel": "Blueberry",
+        "type": "button"
+      },
+      {
+        "tag": "BUTTON",
+        "role": "radio",
+        "ariaChecked": "false",
+        "ariaLabel": "Lavender",
+        "type": "button"
+      },
+      {
+        "tag": "BUTTON",
+        "role": "radio",
+        "ariaChecked": "false",
+        "ariaLabel": "Raspberry",
+        "type": "button"
+      }
+    ]
+  },
+  "autoDark": {
+    "rowText": "Personalize your Todoist with colors to match your style, mood, and personality. Learn more\nSync theme\nAuto Dark Mode\n\nAutomatically switch between li",
+    "controls": [
+      {
+        "tag": "INPUT",
+        "role": null,
+        "ariaChecked": null,
+        "ariaLabel": null,
+        "type": "checkbox",
+        "checked": true
+      },
+      {
+        "tag": "INPUT",
+        "role": null,
+        "ariaChecked": null,
+        "ariaLabel": null,
+        "type": "checkbox",
+        "checked": false
+      },
+      {
+        "tag": "DIV",
+        "role": "radiogroup",
+        "ariaChecked": null,
+        "ariaLabel": null,
+        "type": null
+      },
+      {
+        "tag": "BUTTON",
+        "role": "radio",
+        "ariaChecked": "false",
+        "ariaLabel": "Todoist",
+        "type": "button"
+      },
+      {
+        "tag": "BUTTON",
+        "role": "radio",
+        "ariaChecked": "true",
+        "ariaLabel": "Dark",
+        "type": "button"
+      },
+      {
+        "tag": "BUTTON",
+        "role": "radio",
+        "ariaChecked": "false",
+        "ariaLabel": "Moonstone",
+        "type": "button"
+      },
+      {
+        "tag": "BUTTON",
+        "role": "radio",
+        "ariaChecked": "false",
+        "ariaLabel": "Tangerine",
+        "type": "button"
+      },
+      {
+        "tag": "DIV",
+        "role": "status",
+        "ariaChecked": null,
+        "ariaLabel": null,
+        "type": null
+      },
+      {
+        "tag": "BUTTON",
+        "role": null,
+        "ariaChecked": null,
+        "ariaLabel": null,
+        "type": "button"
+      },
+      {
+        "tag": "BUTTON",
+        "role": "radio",
+        "ariaChecked": "false",
+        "ariaLabel": "Kale",
+        "type": "button"
+      },
+      {
+        "tag": "BUTTON",
+        "role": "radio",
+        "ariaChecked": "false",
+        "ariaLabel": "Blueberry",
+        "type": "button"
+      },
+      {
+        "tag": "BUTTON",
+        "role": "radio",
+        "ariaChecked": "false",
+        "ariaLabel": "Lavender",
+        "type": "button"
+      },
+      {
+        "tag": "BUTTON",
+        "role": "radio",
+        "ariaChecked": "false",
+        "ariaLabel": "Raspberry",
+        "type": "button"
+      }
+    ]
+  }
+}
+

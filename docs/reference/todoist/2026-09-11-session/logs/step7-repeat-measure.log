@@ -1,0 +1,27 @@
+{
+  "repeat": {
+    "found": true,
+    "ariaLabel": null,
+    "size": "282x206",
+    "radius": "10px",
+    "bg": "rgb(40, 40, 40)",
+    "border": "1px solid rgb(61, 61, 61)",
+    "shadow": "rgba(0, 0, 0, 0.12) 0px 0px 8px 0px",
+    "zIndex": "1000",
+    "position": "relative",
+    "items": [
+      "Every day",
+      "Every week on Friday",
+      "Every weekday (Mon - Fri)",
+      "Every month on the 11th",
+      "Every year on September 11th",
+      "Custom…"
+    ]
+  },
+  "afterEscape": {
+    "repeatMenuGone": true,
+    "schedulerStillOpen": false,
+    "quickAddStillOpen": true
+  }
+}
+

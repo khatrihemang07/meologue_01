@@ -1,0 +1,10 @@
+const task = await taskSpace("measure meologue todo UI vs todoist");
+const page = task.page("p1");
+await page.goto("http://127.0.0.1:5188/todo/inbox");
+await page.waitForLoadState("networkidle").catch(() => {});
+await page.waitForTimeout(1500);
+console.log("spaceId:", task.spaceId);
+console.log("url:", await page.url());
+const bodyText = await page.evaluate(() => document.body.innerText.slice(0, 2000));
+console.log("bodyText snippet:", bodyText);
+console.log(await page.snapshot());

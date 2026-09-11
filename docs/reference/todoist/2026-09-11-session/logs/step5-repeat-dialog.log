@@ -1,0 +1,19 @@
+{
+  "repeat": {
+    "found": true,
+    "testid": "recurrence-menu-button",
+    "role": null,
+    "size": "224x32",
+    "radius": "5px",
+    "bg": "rgba(255, 255, 255, 0.1)",
+    "border": "1px solid rgb(61, 61, 61)",
+    "shadow": "none",
+    "zIndex": "auto",
+    "fullText": "Repeat"
+  },
+  "afterEscape": {
+    "schedulerStillOpen": false,
+    "quickAddStillOpen": true
+  }
+}
+

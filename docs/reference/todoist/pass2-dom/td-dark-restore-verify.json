@@ -1,0 +1,48 @@
+{
+  "pre": {
+    "radios": [
+      {
+        "label": "Todoist",
+        "checked": "true"
+      },
+      {
+        "label": "Dark",
+        "checked": "false"
+      },
+      {
+        "label": "Moonstone",
+        "checked": "false"
+      },
+      {
+        "label": "Tangerine",
+        "checked": "false"
+      },
+      {
+        "label": "Kale",
+        "checked": "false"
+      },
+      {
+        "label": "Blueberry",
+        "checked": "false"
+      },
+      {
+        "label": "Lavender",
+        "checked": "false"
+      },
+      {
+        "label": "Raspberry",
+        "checked": "false"
+      }
+    ],
+    "htmlClass": "theme_todoist todoist_loaded"
+  },
+  "postImmediate": {
+    "htmlClass": "todoist_loaded theme_dark",
+    "bodyBg": "rgb(38, 38, 38)"
+  },
+  "final": {
+    "htmlClass": "theme_dark todoist_loaded",
+    "bodyBg": "rgb(38, 38, 38)",
+    "bodyColor": "rgb(255, 255, 255)"
+  }
+}

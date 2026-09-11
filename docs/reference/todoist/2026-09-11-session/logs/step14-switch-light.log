@@ -1,0 +1,3 @@
+theme class after clicking Todoist: todoist_loaded theme_todoist
+theme class on inbox: theme_todoist todoist_loaded
+

@@ -1,0 +1,15 @@
+[
+  {
+    "i": 0,
+    "checked": true,
+    "rect": "445,163",
+    "rowText": "Sync theme"
+  },
+  {
+    "i": 1,
+    "checked": false,
+    "rect": "445,192",
+    "rowText": "Auto Dark Mode"
+  }
+]
+

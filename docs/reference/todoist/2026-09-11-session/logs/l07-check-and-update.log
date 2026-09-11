@@ -1,0 +1,52 @@
+PRE-UPDATE: {
+  "radios": [
+    {
+      "label": "Mark task as complete",
+      "checked": "false"
+    },
+    {
+      "label": "Mark task as complete",
+      "checked": "false"
+    },
+    {
+      "label": "Todoist",
+      "checked": "true"
+    },
+    {
+      "label": "Dark",
+      "checked": "false"
+    },
+    {
+      "label": "Moonstone",
+      "checked": "false"
+    },
+    {
+      "label": "Tangerine",
+      "checked": "false"
+    },
+    {
+      "label": "Kale",
+      "checked": "false"
+    },
+    {
+      "label": "Blueberry",
+      "checked": "false"
+    },
+    {
+      "label": "Lavender",
+      "checked": "false"
+    },
+    {
+      "label": "Raspberry",
+      "checked": "false"
+    }
+  ],
+  "htmlClass": "todoist_loaded theme_todoist",
+  "bodyBg": "rgb(252, 250, 248)"
+}
+POST-CLICK (pre-reload): {
+  "htmlClass": "todoist_loaded theme_todoist",
+  "bodyBg": "rgb(252, 250, 248)",
+  "bodyColor": "rgb(32, 32, 32)"
+}
+

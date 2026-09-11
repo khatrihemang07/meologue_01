@@ -1,0 +1,6 @@
+ElementResolutionError: page.click timed out after 3000ms: Locator input[type="checkbox"] >> nth=0 matched 1 elements, but none can receive input; dialog "Setting" intercepts pointer events
+    at #retryElementAction (file:////[eval1]:18814:27)
+    at async file:////[eval1]:18903:29
+    at async file:////[eval1]:16705:28
+
+ego's nodejs process exited with code 1.
