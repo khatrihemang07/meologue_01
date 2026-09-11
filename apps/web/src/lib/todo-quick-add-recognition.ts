@@ -51,7 +51,7 @@ import type {
   QuickAddToken,
   QuickAddTokenKind,
 } from "@meologue/core";
-import { parseQuickAdd } from "@meologue/core";
+import { parseQuickAdd, uiPriorityOf } from "@meologue/core";
 import { Plugin, PluginKey } from "prosemirror-state";
 import { Decoration, DecorationSet } from "prosemirror-view";
 
@@ -133,7 +133,12 @@ export function matchIdForToken(token: QuickAddToken): string {
     case "deadline":
       return token.deadline;
     case "priority":
-      return `P${token.priority}`;
+      // `token.priority` is the STORED 1-4 (../../packages/core/src/quick-add/
+      // types.ts's own doc comment on `priority`); the identifier is meant
+      // to read as Todoist's own p1-p4, which is the UI scale, so this
+      // crosses the inversion via `uiPriorityOf` rather than emitting the
+      // stored number directly.
+      return `P${uiPriorityOf(token.priority)}`;
     case "project":
       return token.name;
     case "section":

@@ -54,24 +54,23 @@ export interface AddTaskFormProps {
 }
 
 // The box-model classes `Input`'s own default className carries (the
-// border, radius, height, padding, text size), centred vertically with
-// `leading-[22px]` (line-height) rather than `flex`/`items-center` — a
-// real-browser defect this file's own first pass shipped: `className`
-// here lands directly on the ProseMirror mount node, which for
-// `taskTitleSchema` (`doc` holding `text*` directly, task-title-
-// editor.tsx's own header comment) is the very element whose children are
-// the raw text nodes and this module's own recognition decorations. CSS
+// border, radius, height, padding), reading its type scale from the
+// `--td-composer-title-font-size`/`--td-composer-title-line-height` tokens
+// (index.css, QA-20's Quick Add row) the same way task-row-content.tsx
+// reads `--td-row-font-size`/`--td-row-line-height` — 16px/23px at every
+// width, matching Todoist's own Quick Add title (issue #251); no `md:`
+// override here because the token is not itself width-dependent. CSS
 // blockifies a flex item's own `display` — an `inline-block` decoration
 // span, once a direct child of a `display: flex` root, computes as
 // `block` regardless of what its own class says, and stray text runs
 // between flex-item children get placed in anonymous flex items rather
 // than flowing inline, which is what actually broke typing: a character
 // typed right at a match's own boundary landed at the wrong offset,
-// corrupting the text ("tod p1" -> "todp1"). `leading-[22px]` plus `py-1`
-// plus the 1px border sums to exactly `h-8`'s 32px, keeping the box the
-// same size without making its content a flex layout at all.
+// corrupting the text ("tod p1" -> "todp1"). Centring vertically with the
+// line-height (rather than `flex`/`items-center`) is why that matters
+// here.
 const EDITOR_BOX_CLASSES =
-  "h-8 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1 text-base leading-[22px] outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 md:text-sm md:leading-[22px]";
+  "h-8 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1 text-[length:var(--td-composer-title-font-size)] leading-[length:var(--td-composer-title-line-height)] outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50";
 
 export function AddTaskForm({ onAdd, disabled }: AddTaskFormProps) {
   const [value, setValue] = useState("");

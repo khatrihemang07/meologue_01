@@ -75,8 +75,14 @@ describe("matchIdForToken", () => {
     ).toBe("2026-09-10");
   });
 
-  it("renders a priority as P<n>", () => {
+  it("renders a priority as P<n>, crossing the stored/ui inversion — typed p1 stores 4, renders P1", () => {
     expect(matchIdForToken({ kind: "priority", start: 0, end: 2, raw: "p1", priority: 4 })).toBe(
+      "P1",
+    );
+  });
+
+  it("renders the degenerate p4 the same way — typed p4 stores 1, renders P4", () => {
+    expect(matchIdForToken({ kind: "priority", start: 0, end: 2, raw: "p4", priority: 1 })).toBe(
       "P4",
     );
   });
