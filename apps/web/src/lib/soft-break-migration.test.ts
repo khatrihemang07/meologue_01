@@ -9,7 +9,7 @@ import type {
 } from "@meologue/core";
 import { BODY_SOFT_BREAK_CUTOFF } from "@meologue/core";
 import { describe, expect, it } from "vitest";
-import { entryDocumentToMarkdown } from "./entry-document";
+import { entryDocumentToMarkdown, entryMarkdownToDocument } from "./entry-document";
 import { entrySchema } from "./entry-schema";
 import {
   halveDocument,
@@ -17,6 +17,8 @@ import {
   halveSoftBreaksInHistory,
   runSoftBreakMigrationOnce,
 } from "./soft-break-migration";
+
+const roundTrip = (body: string) => entryDocumentToMarkdown(entryMarkdownToDocument(body));
 
 function entry(overrides: Partial<Entry>): Entry {
   return {
@@ -36,64 +38,105 @@ function entry(overrides: Partial<Entry>): Entry {
 // halveSoftBreakRuns — the pure transform
 // ---------------------------------------------------------------------------
 
+// ADR 0069/issue #234 changed what these cases actually assert, not merely
+// their expected strings. `halveSoftBreakRuns` still runs the identical
+// code it always has (Status, above: "the pass still runs, still does
+// exactly what it always did" — ADR 0069's own Consequences) — walk
+// `entryMarkdownToDocument(body)`, halve an even-length `\n` run found
+// inside a top-level paragraph LEAF's own text, skip lists/code/references,
+// serialize back. What changed is what `entryMarkdownToDocument` itself now
+// hands that walk: `collectBlocks` (inline-markdown.ts) no longer merges
+// consecutive paragraph siblings into one run with the gap between them
+// copied into its text — it SPLITS at every bare `\n`, of any run length,
+// into separate top-level `paragraph` SIBLINGS, each starting with clean
+// text of its own. A top-level paragraph leaf can therefore no longer hold
+// an "old Enter" `\n` run at all by the time `halveDocument` ever sees it —
+// that run was already consumed as a block boundary at PARSE time, before
+// this function's own walk begins. `halveSoftBreakRuns` is consequently now
+// equal to the plain round trip (`roundTrip`, below) for every body this
+// suite could construct — proven directly, not merely asserted, by the
+// last test in this describe block. The individual cases above that line
+// are kept (not deleted) because they still pin down real, distinct
+// behaviour: what a legacy body's bare-newline runs now mean once read
+// through ADR 0069's reader, with `halveSoftBreakRuns` incidentally along
+// for the ride.
 describe("halveSoftBreakRuns", () => {
-  it("halves a run of two newlines to one", () => {
-    expect(halveSoftBreakRuns("a\n\nb")).toBe("a\nb");
+  it("collapses a run of two newlines to the one block boundary ADR 0069's reader already reads it as", () => {
+    expect(halveSoftBreakRuns("a\n\nb")).toBe("a\n\nb");
   });
 
-  it("halves a run of four newlines to two", () => {
+  it("collapses a run of four newlines the identical way — no more halving to a run-length-dependent count", () => {
+    // Before this ticket, this run's own EVEN length meant "two old
+    // Enters," and halved to "a\n\nb" for that reason. Now every non-empty
+    // run of bare `\n`, whatever its length, is ONE block boundary
+    // (ADR 0069) — `collectBlocks` never had a count to recover in the
+    // first place, so the output here is the same "a\n\nb", but for an
+    // entirely different reason: nothing was ever halved, because nothing
+    // survived parsing as a `\n` run to halve.
     expect(halveSoftBreakRuns("a\n\n\n\nb")).toBe("a\n\nb");
   });
 
-  it("halves a run of six newlines to three", () => {
-    expect(halveSoftBreakRuns("a\n\n\n\n\n\nb")).toBe("a\n\n\nb");
+  it("collapses a run of six newlines the same way too, not to three", () => {
+    // The clearest proof the two models disagree: the old, run-length-aware
+    // halving would have produced "a\n\n\nb" (three newlines) here. The
+    // block-boundary reader produces "a\n\nb" (ADR 0069's own single,
+    // fixed-cost separator) regardless of how many bare newlines the
+    // original run held.
+    expect(halveSoftBreakRuns("a\n\n\n\n\n\nb")).toBe("a\n\nb");
   });
 
-  it("leaves an odd run alone", () => {
-    expect(halveSoftBreakRuns("a\n\n\nb")).toBe("a\n\n\nb");
+  it("collapses even an ODD run to the identical one block boundary — odd runs are no longer special-cased", () => {
+    // The old model left an odd run alone, on the reasoning that no Enter
+    // sequence could ever have produced one. ADR 0069's reader has no such
+    // reasoning to make: an odd run of bare `\n` is still a non-empty run,
+    // still exactly one block boundary, the same as an even one.
+    expect(halveSoftBreakRuns("a\n\n\nb")).toBe("a\n\nb");
   });
 
-  it("leaves a leading odd run alone, at the very first top-level child", () => {
-    expect(halveSoftBreakRuns("\n\n\nhello")).toBe("\n\n\nhello");
+  it("drops a leading run entirely, at the very first top-level child — there is no preceding block to separate from", () => {
+    // Leading blank lines before a document's first real content carry no
+    // meaning CommonMark's own block parser preserves — there is nothing
+    // for them to be a separator FROM. "hello", not "\n\n\nhello".
+    expect(halveSoftBreakRuns("\n\n\nhello")).toBe("hello");
   });
 
-  it("halves a leading run at the very first top-level child (index 0) — this is an Enter, not a separator", () => {
-    expect(halveSoftBreakRuns("\n\nhello")).toBe("\nhello");
+  it("drops a shorter leading run identically", () => {
+    expect(halveSoftBreakRuns("\n\nhello")).toBe("hello");
   });
 
-  // Acceptance criterion, named directly: a blanket string replace would
-  // fold "after" into the list item, because a lone `\n` is a lazy
-  // continuation under CommonMark and only a genuine blank line keeps the
-  // paragraph a sibling of the list rather than part of its last item.
-  it("leaves `- item\\n\\nafter` unchanged — that blank line is the block separator, not an Enter", () => {
+  it("leaves `- item\\n\\nafter` unchanged — that blank line is still the block separator, not an Enter", () => {
+    // Still true under the new model, for the same underlying reason as
+    // before: a lone `\n` is a CommonMark lazy continuation, so the
+    // paragraph after the list needs a genuine blank line to survive as a
+    // sibling rather than folding into the list's last item — and
+    // `entryDocumentToMarkdown` writes exactly one blank line for that,
+    // same as it always has.
     expect(halveSoftBreakRuns("- item\n\nafter")).toBe("- item\n\nafter");
   });
 
-  // Acceptance criterion, named directly: halving this blank line would
-  // make `5. five` lose the separator CommonMark requires for a
-  // non-1-starting ordered list to interrupt a preceding paragraph at all,
-  // and it would stop being a list.
-  it("leaves `a\\n\\n5. five` unchanged — that blank line is required for the list to parse as a list at all", () => {
+  it("leaves `a\\n\\n5. five` unchanged — that blank line is still required for the list to parse as a list at all", () => {
     expect(halveSoftBreakRuns("a\n\n5. five")).toBe("a\n\n5. five");
   });
 
-  it("leaves newlines inside a list item untouched — Enter has always been splitListItem there, never a block split", () => {
-    const body = "- a\n  b\n\n  c";
-    expect(halveSoftBreakRuns(body)).toBe(body);
+  it("splits newlines inside a list item into separate blocks too, matching outside-list behaviour", () => {
+    // ADR 0069's block-break splitting applies inside a list item exactly
+    // as it does outside one now (`collectBlocks` uses one collector for
+    // both) — "a", "b" and "c" become three separate `"prose"` blocks
+    // inside the same item, each written back with its own `\n\n` and its
+    // own recovered indentation.
+    expect(halveSoftBreakRuns("- a\n  b\n\n  c")).toBe("- a\n\n  b\n\n  c");
   });
 
-  it("leaves newlines inside a checklist item's own nested paragraph untouched, for the identical reason", () => {
-    const body = "- [ ] t\n\n  tail";
-    expect(halveSoftBreakRuns(body)).toBe(body);
+  it("splits newlines inside a checklist item's own nested paragraph identically", () => {
+    expect(halveSoftBreakRuns("- [ ] t\n\n  tail")).toBe("- [ ] t\n\n  tail");
   });
 
-  it("preserves a block separator ahead of a paragraph while halving that same paragraph's own interior", () => {
-    // "- item" is a list; "\n\nfirst\n\nsecond" is the paragraph sibling
-    // that follows it — its OWN leading "\n\n" is the separator
-    // `writeBlocks` inserts ahead of a paragraph sibling and must survive
-    // verbatim, but the "\n\n" between "first" and "second", typed inside
-    // that same merged prose run, is an old Enter and must halve.
-    expect(halveSoftBreakRuns("- item\n\nfirst\n\nsecond")).toBe("- item\n\nfirst\nsecond");
+  it("keeps a block separator ahead of a paragraph, and now also splits that paragraph's own interior into further blocks", () => {
+    // "- item" is a list; "first" and "second" are two more block-broken
+    // siblings that follow it, each written with its own `\n\n` ahead of
+    // it — not one merged paragraph with an internal run halved, the way
+    // the pre-0069 model would have produced.
+    expect(halveSoftBreakRuns("- item\n\nfirst\n\nsecond")).toBe("- item\n\nfirst\n\nsecond");
   });
 
   it("is a no-op on a body with nothing to halve, beyond the plain round trip", () => {
@@ -109,6 +152,39 @@ describe("halveSoftBreakRuns", () => {
   it("still applies the ordinary round trip's own normalisation to a body with nothing to halve", () => {
     expect(halveSoftBreakRuns("1) a\n2) b")).toBe("1. a\n2. b");
     expect(halveSoftBreakRuns("before ~ after")).toBe("before \\~ after");
+  });
+
+  // The load-bearing finding of this ticket's own convergence (Part 2 of
+  // issue #234's own brief): `halveSoftBreakRuns` is now, for every body
+  // this suite constructs, IDENTICAL to the plain round trip. Not "usually
+  // agrees" — every case above this one is individually a witness of the
+  // same fact. This is why `halveSoftBreaksInHistory`, further below, now
+  // reports `rewritten: 0` for every Entry it scans: `halveDocument`'s own
+  // walk still runs, and its own invariant ("only ever removes `\n`
+  // characters," ADR 0067's own safety argument) still holds — vacuously,
+  // since ADR 0069's reader already consumed every "old Enter" `\n` run as
+  // a block boundary before this function's own walk ever begins, leaving
+  // nothing inside a top-level paragraph leaf for it to find.
+  it("equals the plain round trip for every case in this file", () => {
+    const bodies = [
+      "a\n\nb",
+      "a\n\n\n\nb",
+      "a\n\n\n\n\n\nb",
+      "a\n\n\nb",
+      "\n\n\nhello",
+      "\n\nhello",
+      "- item\n\nafter",
+      "a\n\n5. five",
+      "- a\n  b\n\n  c",
+      "- [ ] t\n\n  tail",
+      "- item\n\nfirst\n\nsecond",
+      "hello world",
+      "1) a\n2) b",
+      "before ~ after",
+    ];
+    for (const body of bodies) {
+      expect(halveSoftBreakRuns(body)).toBe(roundTrip(body));
+    }
   });
 });
 
@@ -155,7 +231,17 @@ describe("halveDocument", () => {
     });
     const built = doc(para(entrySchema.text("a\n\nb "), reference, entrySchema.text(" c\n\nd")));
     const halved = halveDocument(built);
-    expect(entryDocumentToMarkdown(halved)).toBe("a\nb [[2026-08-28]] c\nd");
+    // `halveParagraph`'s own halving still runs unchanged on this
+    // hand-built leaf text (never reachable through the real parser after
+    // ADR 0069 — see this describe block's own header comment — but still
+    // exercised directly here to prove the primitive itself): "a\n\nb "
+    // halves to "a\nb ", " c\n\nd" halves to " c\nd". What changed is what
+    // `entryDocumentToMarkdown` does with the ONE remaining `\n` each side
+    // is left with — issue #234's writer now escapes every embedded `\n`
+    // in a text leaf to `\` + `\n` unconditionally (`escapeUserText`'s own
+    // comment, entry-document.ts), because an embedded `\n` in real text
+    // is always a soft break now, never a bare block-separator character.
+    expect(entryDocumentToMarkdown(halved)).toBe("a\\\nb [[2026-08-28]] c\\\nd");
   });
 
   it("never rewrites a task_reference atom's own cached label", () => {
@@ -210,12 +296,21 @@ function fakeEntryStore(seed: Entry[]): Pick<EntryStore, "list" | "edit"> & { en
   };
 }
 
+// ADR 0069/issue #234: every case below that used to report `rewritten: 1`
+// now reports `rewritten: 0`, for the reason the `halveSoftBreakRuns`
+// describe block above proves directly — `halved === normalized` for every
+// body this migration's own eligibility gate lets through, since ADR 0069's
+// reader already consumed any "old Enter" newline run as a block boundary
+// before `halveSoftBreaksInHistory`'s own comparison ever runs. The scan
+// itself, the cutoff guard, and the cheap `"\n\n"` pre-check are all
+// unchanged code, still exercised by every case here; only the write
+// outcome differs.
 describe("halveSoftBreaksInHistory", () => {
-  it("halves an eligible Entry's body and reports it as scanned and rewritten", async () => {
+  it("scans an eligible Entry but no longer rewrites it — the plain round trip already normalises it", async () => {
     const store = fakeEntryStore([entry({ id: "e1", body: "a\n\n\n\nb" })]);
     const report = await halveSoftBreaksInHistory({ store });
-    expect(report).toEqual({ scanned: 1, rewritten: 1 });
-    expect(store.entries[0]?.body).toBe("a\n\nb");
+    expect(report).toEqual({ scanned: 1, rewritten: 0 });
+    expect(store.entries[0]?.body).toBe("a\n\n\n\nb");
   });
 
   it("skips a tombstone entirely — it is never even counted as scanned", async () => {
@@ -292,22 +387,18 @@ describe("halveSoftBreaksInHistory", () => {
     expect(store.entries[0]?.body).toBe("before ~ after");
   });
 
-  it("running the pass twice performs exactly one write per affected Entry", async () => {
+  it("running the pass twice stays a no-op both times, not merely stable after one write", async () => {
     const store = fakeEntryStore([entry({ id: "e1", body: "a\n\n\n\nb" })]);
     const first = await halveSoftBreaksInHistory({ store });
-    expect(first).toEqual({ scanned: 1, rewritten: 1 });
-    expect(store.entries[0]?.body).toBe("a\n\nb");
+    expect(first).toEqual({ scanned: 1, rewritten: 0 });
+    expect(store.entries[0]?.body).toBe("a\n\n\n\nb");
 
-    // The fake store's own `edit` stamped `updatedAt` past the cutoff, the
-    // same way the real stores do — this is what makes the second pass a
-    // no-op by construction, not merely because the body already looks
-    // halved.
     const second = await halveSoftBreaksInHistory({ store });
     expect(second).toEqual({ scanned: 1, rewritten: 0 });
-    expect(store.entries[0]?.body).toBe("a\n\nb");
+    expect(store.entries[0]?.body).toBe("a\n\n\n\nb");
   });
 
-  it("processes every eligible Entry, one at a time, independently of the others", async () => {
+  it("processes every eligible Entry, one at a time, independently of the others — none of them get rewritten", async () => {
     const store = fakeEntryStore([
       entry({ id: "e1", body: "one\n\n\n\ntwo" }),
       entry({ id: "e2", body: "already fine" }),
@@ -315,8 +406,8 @@ describe("halveSoftBreaksInHistory", () => {
       entry({ id: "e4", body: "", deletedAt: "2026-01-02T00:00:00.000Z" }),
     ]);
     const report = await halveSoftBreaksInHistory({ store });
-    expect(report).toEqual({ scanned: 3, rewritten: 1 });
-    expect(store.entries[0]?.body).toBe("one\n\ntwo");
+    expect(report).toEqual({ scanned: 3, rewritten: 0 });
+    expect(store.entries[0]?.body).toBe("one\n\n\n\ntwo");
     expect(store.entries[1]?.body).toBe("already fine");
     expect(store.entries[2]?.body).toBe("three\n\n\n\n\n\nfour");
   });
@@ -375,10 +466,10 @@ describe("runSoftBreakMigrationOnce", () => {
     expect((await store.list())[0]?.body).toBe("a\n\n\n\nb");
   });
 
-  it("runs the scan and records completion when the marker has not yet been set", async () => {
+  it("runs the scan and records completion when the marker has not yet been set — the scan runs, but rewrites nothing (ADR 0069)", async () => {
     const store = fakeFullEntryStore([entry({ id: "e1", body: "a\n\n\n\nb" })]);
     await runSoftBreakMigrationOnce(fakeSyncStores(store), "device-a");
-    expect((await store.list())[0]?.body).toBe("a\n\nb");
+    expect((await store.list())[0]?.body).toBe("a\n\n\n\nb");
     expect(await store.hasCompletedSoftBreakMigration()).toBe(true);
   });
 

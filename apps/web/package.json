@@ -9,6 +9,7 @@
     "build:web": "tsc -b && vite build --mode web",
     "build:android": "tsc -b && vite build --mode android && node scripts/check-bundle-size.mjs android",
     "check:bundle-size": "node scripts/check-bundle-size.mjs",
+    "generate:parity-doc": "node scripts/generate-parity-doc.mjs",
     "build:macos": "tsc -b && vite build --mode macos",
     "build:sandbox": "tsc -b && vite build --mode sandbox",
     "preview": "vite preview",

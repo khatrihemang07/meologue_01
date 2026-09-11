@@ -10,12 +10,14 @@ import {
   waitFor,
 } from "@testing-library/react";
 import type { ReactElement, ReactNode } from "react";
-import { MemoryRouter, useLocation } from "react-router";
+import { MemoryRouter, Outlet, Route, Routes, useLocation } from "react-router";
 import { toast } from "sonner";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { copyText } from "@/lib/clipboard";
 import * as entryDayModule from "@/lib/entry-day";
+import { formatTaskReference } from "@/lib/inline-markdown";
 import { dayReferrersQueryKey } from "@/lib/query-keys";
+import type { EntryStoreOutletContext } from "@/pages/entry-store-layout";
 import { swipeLeft, tap } from "@/test/swipe";
 import { History } from "./history";
 
@@ -99,6 +101,111 @@ function task(overrides: Partial<Task>): Task {
     description: null,
     ...overrides,
   };
+}
+
+/**
+ * A *referenced* checkbox (`[[task:id|label]]`, issue #173) renders through
+ * `EntryBubble` -> `entryBodyContent`'s `TaskReferenceItem` (entry-row.tsx),
+ * which reads `tasks`/`completedTasks`/`projects` off `useEntryStore()` —
+ * unlike every other test in this file, which never puts a Task reference
+ * in a body and so never needs one. `render()` above only ever wraps a bare
+ * `MemoryRouter`; this stands up the same `<Outlet context>` wiring
+ * `entry-bubble.test.tsx`'s own "a task reference" describe block already
+ * uses for `EntryBubble` directly, one level up through `History` instead.
+ * A full object, not a partial: `EntryStoreOutletContext` has no optional
+ * fields, the same reason every other file in this codebase that needs one
+ * builds it in full rather than casting a subset.
+ */
+function buildTaskReferenceContext(
+  overrides: Partial<EntryStoreOutletContext> = {},
+): EntryStoreOutletContext {
+  return {
+    entries: [],
+    pagination: { hasMore: false, fetching: false, fetchMore: vi.fn() },
+    sendEntry: vi.fn(),
+    search: vi.fn(async () => []),
+    getEntries: vi.fn(async () => []),
+    editEntry: vi.fn(),
+    commitEntryEdit: vi.fn(),
+    removeEntry: vi.fn(),
+    tasks: [],
+    completedTasks: [],
+    addTask: vi.fn(),
+    completeTask: vi.fn(),
+    uncompleteTask: vi.fn(),
+    renameTask: vi.fn(),
+    reorderTask: vi.fn(),
+    reorderTaskToday: vi.fn(),
+    removeTask: vi.fn(),
+    setTaskDate: vi.fn(),
+    setTaskDeadline: vi.fn(),
+    setTaskPriority: vi.fn(),
+    setTaskLabels: vi.fn(),
+    setTaskDescription: vi.fn(),
+    listTasksInProject: vi.fn(async () => []),
+    listTaskChildren: vi.fn(async () => []),
+    listTasksInSection: vi.fn(async () => []),
+    listTaskDescendants: vi.fn(async () => []),
+    advanceRecurringTask: vi.fn(),
+    completeForeverTask: vi.fn(),
+    postponeTask: vi.fn(),
+    setTaskProject: vi.fn(),
+    setTaskSection: vi.fn(),
+    setTaskParent: vi.fn(async () => {}),
+    labels: [],
+    resolveLabelIds: vi.fn(async () => []),
+    comments: [],
+    addComment: vi.fn(),
+    editComment: vi.fn(),
+    removeComment: vi.fn(),
+    projects: [],
+    addProject: vi.fn(),
+    renameProject: vi.fn(),
+    setProjectColour: vi.fn(),
+    setProjectDescription: vi.fn(),
+    setProjectFavourite: vi.fn(),
+    archiveProject: vi.fn(),
+    unarchiveProject: vi.fn(),
+    setProjectParent: vi.fn(async () => {}),
+    reorderProject: vi.fn(),
+    listSections: vi.fn(async () => []),
+    addSection: vi.fn(async () => {}),
+    renameSection: vi.fn(),
+    setSectionDescription: vi.fn(),
+    reorderSection: vi.fn(),
+    deleteSection: vi.fn(),
+    archiveSection: vi.fn(),
+    unarchiveSection: vi.fn(),
+    events: [],
+    listEventsByTask: vi.fn(async () => []),
+    listEventsByProject: vi.fn(async () => []),
+    filters: [],
+    addFilter: vi.fn(() => "filter-1"),
+    renameFilter: vi.fn(),
+    setFilterColour: vi.fn(),
+    setFilterQuery: vi.fn(async () => {}),
+    removeFilter: vi.fn(),
+    disabled: false,
+    ...overrides,
+  };
+}
+
+function renderHistoryWithTaskReference(
+  ui: ReactElement,
+  context: EntryStoreOutletContext,
+): RenderResult {
+  const queryClient = new QueryClient();
+  return rtlRender(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter>
+        <Routes>
+          <Route element={<Outlet context={context} />}>
+            <Route path="/" element={ui} />
+          </Route>
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
 }
 
 // Pins "now" and the Device's UTC offset for the grouping/separator tests
@@ -207,31 +314,72 @@ describe("History", () => {
     expect(mark.parentElement).toHaveTextContent("a recurring task");
   });
 
-  // Issue #153: History threads `onToggleTask` straight through to every
-  // `EntryBubble` unchanged — entry-bubble.test.tsx's own `onToggleTask`
-  // suite covers the marker-offset/Entry wiring that closure builds; this
-  // only proves History itself passes the callback down, and leaves a
-  // checkbox disabled when no caller supplies one at all (every render in
-  // this file that doesn't opt in, and history.tsx's own doc comment on
-  // why that's a real, supported shape rather than an oversight).
+  // Issue #153, retired by issue #231 (ADR 0074): a *bare* checkbox (no
+  // `[[task:id|label]]` mark behind it) has no Task to open — there is
+  // nothing `onToggleTask` being wired could ever change about it, so this
+  // stays disabled unconditionally regardless of that prop (entry-
+  // prose.tsx's own module comment has the full argument). `History`
+  // threads `onToggleTask` straight through to every `EntryBubble`
+  // unchanged, but nothing downstream reads it as a live handler any more.
   it("renders a checkbox disabled when no onToggleTask is wired", () => {
     render(<History entries={[entry({ body: "- [ ] call mum" })]} syncEnabled={false} />);
 
     expect(screen.getByRole("checkbox")).toBeDisabled();
   });
 
-  it("calls onToggleTask, wired through to the checkbox that rendered it", () => {
-    const onToggleTask = vi.fn();
-    const body = "- [ ] call mum";
+  it("stays disabled even once onToggleTask is wired — a bare checkbox has no Task to open", () => {
+    render(
+      <History
+        entries={[entry({ body: "- [ ] call mum" })]}
+        syncEnabled={false}
+        onToggleTask={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("checkbox")).toBeDisabled();
+  });
+
+  // Issue #231 (ADR 0074): a *referenced* checkbox's click used to splice
+  // the tick straight into the Entry's body through `onToggleTask` (issue
+  // #153) — `entry-bubble.test.tsx`'s own "a task reference" describe
+  // block covers the full rule this exercises (disabled/resolved/
+  // recurring, `completeTask`/`uncompleteTask`/`advanceRecurringTask`
+  // never called) for `EntryBubble` directly; this is History's own
+  // end-to-end proof that a click reaches `onOpenTask`, not
+  // `onToggleTask`, and leaves the Entry's body untouched.
+  it("opens a referenced Task when its checkbox is clicked, not onToggleTask, and leaves the Entry's body untouched", () => {
+    const taskId = "0192abcd-1234-7890-abcd-0123456789ac";
+    const body = `- [ ] ${formatTaskReference(taskId, "buy milk")}`;
     const target = entry({ body });
-    render(<History entries={[target]} syncEnabled={false} onToggleTask={onToggleTask} />);
+    const onOpenTask = vi.fn();
+    const onToggleTask = vi.fn();
+    const editEntry = vi.fn();
+    const completeTask = vi.fn();
+    const uncompleteTask = vi.fn();
+    const context = buildTaskReferenceContext({
+      tasks: [task({ id: taskId, content: "buy milk" })],
+      editEntry,
+      completeTask,
+      uncompleteTask,
+    });
 
-    fireEvent.click(screen.getByRole("checkbox"));
+    renderHistoryWithTaskReference(
+      <History
+        entries={[target]}
+        syncEnabled={false}
+        onToggleTask={onToggleTask}
+        onOpenTask={onOpenTask}
+      />,
+      context,
+    );
 
-    expect(onToggleTask).toHaveBeenCalledTimes(1);
-    const [calledEntry, markerFrom, markerTo] = onToggleTask.mock.calls[0] ?? [];
-    expect(calledEntry).toBe(target);
-    expect(body.slice(markerFrom, markerTo)).toBe("[ ]");
+    fireEvent.click(screen.getByRole("checkbox", { name: "buy milk" }));
+
+    expect(onOpenTask).toHaveBeenCalledWith(taskId);
+    expect(onToggleTask).not.toHaveBeenCalled();
+    expect(editEntry).not.toHaveBeenCalled();
+    expect(completeTask).not.toHaveBeenCalled();
+    expect(uncompleteTask).not.toHaveBeenCalled();
   });
 
   it("shows a not-found message, distinct from the empty-History message, once a search matches nothing", () => {

@@ -26,19 +26,39 @@ characters simply follow along afterward.
 What the user typed is what is stored, until the user edits it. Editing rewrites the body from the
 document the Composer was showing, and that normalizes formatting — one way of writing emphasis
 can come back as another. The characters change; what the Entry says does not. An Entry that is
-never edited keeps the exact characters it was captured with, with two deliberate, bounded
-exceptions: the backfill that turned every checkbox already in History into a Task (ADR 0053) once
+never edited keeps the exact characters it was captured with, with one deliberate, bounded
+exception: the backfill that turned every checkbox already in History into a Task (ADR 0053) once
 rewrote a checkbox line into a task reference the first time this app modelled a checkbox as a Task
-at all, and a one-time pass (ADR 0067) halves a run of newlines written before Enter meant one line
-per press, so old writing renders the way it was meant to rather than with a spurious blank line.
-Each runs at most once per Entry, never as an ordinary consequence of Syncing or of opening the app
-on an Entry it has already reached.
+at all. It runs at most once per Entry, never as an ordinary consequence of Syncing or of opening
+the app on an Entry it has already reached.
+
+Writing written before a Block break and a Soft break were told apart is not rewritten to catch up.
+It is read the way its author meant it instead, permanently — a restored Backup can reintroduce that
+older writing at any time, so understanding it is not a phase this app passes through.
 
 It is identified by an id minted on the Device that created it, so an Entry's identity does not
 depend on ever reaching another Device or a server. Its body can change after the fact, and an
 Entry can be removed from History altogether. What never changes is its identity and when it was
 captured: editing an Entry does not move it in History, no matter how long ago it was captured or
 how recently it was last edited.
+
+### Block break
+
+The end of one block of an Entry's body and the start of the next — what pressing Enter leaves
+behind. It reads as one new line, no more: a block sits directly against its neighbour and
+contributes no gap of its own, so a person who pressed Enter once sees one new line and not a blank
+one. Pressing Enter twice is how a blank line gets asked for.
+
+### Soft break
+
+A new line *within* one block, which leaves that block whole — what pressing Shift+Enter leaves
+behind. The distinction from a Block break is not cosmetic: a list item broken by a Soft break is
+still one item, where a Block break there would have started the next one. This is the difference a
+person is reaching for when they want a second line of the same thought rather than a second
+thought.
+
+A deliberately blank line does not currently survive being Sent and read back. That is a known gap,
+not a decision.
 
 ### Device
 

@@ -449,14 +449,14 @@ export function inlineNodesToText(nodes: readonly InlineNode[]): string {
 /**
  * An Entry's block structure (issue #152) — a bullet list, an ordered list,
  * or a run of the same inline prose `parseInlineMarkdown` already produces.
- * Everything that is not a list is one `"prose"` run: consecutive lines of
- * plain text, including whatever used to be a heading, a blockquote, a
- * fenced or indented code block, or a thematic break before its block
- * parser was removed below, since all of those now fall through to
- * ordinary paragraph text. Merging them into one run rather than one block
- * per original paragraph is deliberate — an Entry's non-list text has never
- * had paragraph spacing, and this ticket does not give it any; only a list
- * earns a block boundary.
+ * `collectBlocks` (`parseEntryMarkdown`, below) is the one collector that
+ * builds this shape: a `"prose"` run covers whatever used to be a heading, a
+ * blockquote, a fenced or indented code block, or a thematic break before
+ * its block parser was removed below, and is split at every block break
+ * (a bare `\n`, ADR 0069 — `pushProseRuns`'s own comment). Every other
+ * reader in this file — `entryBlocksToText`, `referencedTaskOf`, the
+ * task-reference fan-out below — is agnostic to that splitting; they walk
+ * whatever `EntryBlockNode[]` they're handed the same way regardless.
  */
 export type EntryBlockNode =
   | { kind: "prose"; children: InlineNode[] }
@@ -518,6 +518,39 @@ export interface EntryListItem {
  * `Strikethrough` (issue #211) adds the other: `~~x~~`, recognised the same
  * way `inlineParser` above recognises it — both configure calls carry it,
  * which is what keeps the two parsers agreeing (ADR 0043, ADR 0045).
+ *
+ * `HardBreak` is left ENABLED here, unlike `inlineParser` above — this is
+ * the one place the two dialects deliberately diverge, and it is ADR
+ * 0069/issue #234's own change, made once both halves of that ADR's ticket
+ * pair (issue #232's reader, issue #234's writer) could move together.
+ *
+ * An earlier version of this ticket pair (issue #232) tried leaving this
+ * parser's `HardBreak` removed and instead stood up a second,
+ * display-only `configure()` call (`entryDisplayParser`) plus a second
+ * collector (`collectDisplayBlocks`) that `entryProse` alone called,
+ * specifically because `entryParser`/`collectBlocks` are not only
+ * `parseEntryMarkdown`'s own parser — they are `entryMarkdownToDocument`'s
+ * (`entry-document.ts`) too, and splitting a merged paragraph into several
+ * blocks would have changed how many `paragraph` nodes `blocksToPM` built
+ * from an unedited legacy body, which the then-unchanged writer
+ * (`writeBlocks`, entry-document.ts) would have serialized back out with an
+ * extra `\n\n` — doubling every bare newline the instant the Composer
+ * opened and re-saved an Entry nobody had touched. That risk is real only
+ * as long as the writer stays unchanged. Issue #234 changes the writer too
+ * (see `escapeUserText`'s own comment, entry-document.ts): a soft break
+ * now serializes as `\` + `\n`, a block break as `\n\n`, and a parsed
+ * paragraph never carries a leading `\n` of its own (`pushProseRuns`,
+ * below, never includes a boundary character in either side's text) — so
+ * `entryDocumentToMarkdown(entryMarkdownToDocument(body))` is a genuine
+ * fixpoint for a body already written under this model (`"a\n\nb"` →
+ * `[p(a), p(b)]` → `"a\n\nb"`), and a legacy body written under ADR 0066's
+ * old one changes its bytes exactly ONCE, on the first re-save
+ * (`"a\nb"` → `[p(a), p(b)]` → `"a\n\nb"`), never again after that —
+ * `CONTEXT.md`'s own Entry definition already permits an edit normalising
+ * a body's formatting. That is what retired the coupling the first attempt
+ * found: `entryParser`/`collectBlocks` are a single pair again, reused by
+ * both `parseEntryMarkdown` and `entryProse` alike, and there is no second,
+ * display-only parser left in this file.
  */
 const entryParser = commonmark.configure([
   {
@@ -528,7 +561,6 @@ const entryParser = commonmark.configure([
       "Image",
       "HTMLTag",
       "Entity",
-      "HardBreak",
       "ATXHeading",
       "SetextHeading",
       "Blockquote",
@@ -613,6 +645,20 @@ function walkEntryInline(
       case "Escape":
         pushText(result, body.slice(node.from + 1, node.to));
         break;
+      case "HardBreak":
+        // ADR 0069's soft break — `\` immediately followed by `\n` (or, for
+        // free, two-or-more trailing spaces then `\n`; see `entryParser`'s
+        // own comment on why that spelling is left enabled). The backslash
+        // itself must not render, so this pushes a bare `\n` rather than
+        // the node's raw span — and pushing it as ordinary text rather than
+        // a dedicated node kind is deliberate: every surface this renders
+        // through keeps `white-space: pre-wrap` on an ancestor
+        // (`EntryBody`, `entry-bubble.tsx`'s bubble body), which already
+        // turns a literal `\n` character into one visual line break with no
+        // help from a `<br>` element or a fourth mark kind `renderNodes`
+        // (inline-prose.tsx) would otherwise need to learn.
+        pushText(result, "\n");
+        break;
       case "DateReference": {
         const raw = body.slice(node.from, node.to);
         result.push({ kind: "dateReference", date: raw.slice(2, -2), raw });
@@ -693,70 +739,22 @@ function itemContentStart(item: SyntaxNode, body: string): number {
 }
 
 /**
- * Turns one container's direct children — `Document`'s, or a `ListItem`'s —
- * into `EntryBlockNode`s, starting from `containerStart` (see
- * `itemContentStart`'s own comment for why that has to be a container-level
- * position rather than anything read off an individual child node). A
- * container's children are always some mix of `Paragraph`/`Task` (content)
- * and `BulletList`/`OrderedList` (nested structure), plus a leading
- * `ListMark` when the container is itself a list item; that marker is
- * structural and never reaches the output as text.
- *
- * Consecutive `Paragraph`/`Task` siblings are merged into one `"prose"` run
- * rather than one per node: `walkEntryInline` is handed their combined
- * inline children (a `Task`'s own `TaskMarker` child included — it is
- * excluded from the *rendered* text by being in `PUNCTUATION`, the same
- * mechanism that already hides `EmphasisMark`/`CodeMark`, not by being cut
- * from this list) and the full span from `containerStart` (or wherever the
- * previous list in this same container ended) to the last node's end, so
- * whatever sits between the merged nodes — a blank line, a second line of
- * the same paragraph, the gap before a checkbox marker — is filled in as
- * ordinary text the same way any other gap is. `cursor` only ever moves
- * forward when a list is flushed; it is never reset to a content node's own
- * `.from`, which is the property that keeps this lossless.
+ * A container's direct children — `Document`'s, or a `ListItem`'s — turned
+ * into `EntryBlockNode`s. `listToBlock` (above) takes a collector as a
+ * parameter, rather than calling `collectBlocks` (below) by name directly,
+ * purely to sidestep the forward reference between the two functions —
+ * `collectBlocks` recurses into `listToBlock`, which needs to recurse back
+ * into `collectBlocks` for each item's own content. There was, before ADR
+ * 0069/issue #234 converged the two parsers, a second collector
+ * (`collectDisplayBlocks`) that also took this shape; it no longer exists,
+ * and this type is kept anyway because the forward-reference problem it
+ * solves is unrelated to how many collectors there are.
  */
-function collectBlocks(
+type BlockCollector = (
   children: readonly SyntaxNode[],
   body: string,
   containerStart: number,
-): EntryBlockNode[] {
-  const blocks: EntryBlockNode[] = [];
-  let cursor = containerStart;
-  let proseTo = cursor;
-  let hasProse = false;
-  let proseSources: SyntaxNode[] = [];
-
-  const flushProse = () => {
-    if (hasProse) {
-      const nodes = walkEntryInline(proseSources, body, cursor, proseTo);
-      if (nodes.length > 0) {
-        blocks.push({ kind: "prose", children: nodes });
-      }
-    }
-    hasProse = false;
-    proseSources = [];
-  };
-
-  for (const child of children) {
-    const name = child.type.name;
-    if (name === "ListMark") {
-      continue;
-    }
-    if (name === "BulletList" || name === "OrderedList") {
-      flushProse();
-      blocks.push(listToBlock(child, body));
-      cursor = child.to;
-      continue;
-    }
-    // The two remaining content types after the removals above: Paragraph,
-    // and Task (a paragraph-shaped leaf that also carries a TaskMarker).
-    hasProse = true;
-    proseTo = child.to;
-    proseSources.push(...childNodes(child));
-  }
-  flushProse();
-  return blocks;
-}
+) => EntryBlockNode[];
 
 /** The leading run of digits off a `ListMark`, for an `OrderedList`'s start number — `"1."` and `"1)"` both give `1`. */
 function orderedListStart(firstItem: SyntaxNode | undefined, body: string): number {
@@ -768,7 +766,7 @@ function orderedListStart(firstItem: SyntaxNode | undefined, body: string): numb
   return digits !== null ? Number(digits[0]) : 1;
 }
 
-function listToBlock(list: SyntaxNode, body: string): EntryBlockNode {
+function listToBlock(list: SyntaxNode, body: string, collect: BlockCollector): EntryBlockNode {
   const itemNodes = childNodes(list).filter((c) => c.type.name === "ListItem");
   const items = itemNodes.map((item): EntryListItem => {
     const itemChildren = childNodes(item);
@@ -777,7 +775,7 @@ function listToBlock(list: SyntaxNode, body: string): EntryBlockNode {
       firstContent !== undefined && firstContent.type.name === "Task"
         ? taskMarkerOf(firstContent, body)
         : undefined;
-    return { task, content: collectBlocks(itemChildren, body, itemContentStart(item, body)) };
+    return { task, content: collect(itemChildren, body, itemContentStart(item, body)) };
   });
   return list.type.name === "OrderedList"
     ? { kind: "orderedList", start: orderedListStart(itemNodes.at(0), body), items }
@@ -785,9 +783,150 @@ function listToBlock(list: SyntaxNode, body: string): EntryBlockNode {
 }
 
 /**
- * Parses an Entry's body into block nodes (issue #152) — the entry point
- * `entryProse` (entry-prose.tsx) renders, and the only caller of
- * `entryParser` above. Same empty-body contract as `parseInlineMarkdown`.
+ * Splits one `Paragraph`/`Task` node's own content into one or more
+ * `"prose"` blocks at every **block break** (ADR 0069) — a bare `\n`
+ * character, tolerated forever rather than migrated: it is exactly what
+ * ADR 0066's model wrote into storage for a single Enter, and ADR 0067's
+ * one-time halving pass never reached every row (clock skew, a stale
+ * pre-0066 client past its own cutoff, per that ADR's own Consequences),
+ * so this reader has to keep rendering whatever is actually on disk, not
+ * what it should say. `\` immediately followed by `\n` is not a bare `\n`
+ * at all — it is a `HardBreak` node (`entryParser`'s own comment on why it
+ * now stays enabled), which `walkEntryInline`'s own case turns into a soft
+ * break that stays inside the block it sits in — so this function only
+ * ever looks for a literal `\n` sitting in the GAP between `children` (or
+ * before the first / after the last), never inside one of them: a `\n`
+ * that happens to fall inside a mark's own span (a nested emphasis
+ * spanning a lazy-continuation line, say) is left exactly where CommonMark
+ * put it rather than torn in half by a split that has no markdown able to
+ * close the mark on either side of it.
+ *
+ * `from`/`to` are handed in rather than read off `children` directly because
+ * `collectBlocks` always passes its own running `cursor` — wherever the
+ * PREVIOUS block actually ended — as `from`, never this node's own `.from`.
+ * That is deliberate, not incidental: a `Paragraph`'s own `.from` skips
+ * leading whitespace on its first line (`itemContentStart`'s own comment
+ * names the identical swallowing for a list item's marker), so anchoring on
+ * it here would silently drop real, typed indentation on a paragraph that
+ * follows a blank line. Anchoring on `cursor` instead means this function's
+ * own scan crosses the gap ahead of `children` too — every `\n` in a `\n\n`
+ * (or longer) run between two `Paragraph` siblings gets `flush`ed exactly
+ * like any other bare `\n`, and each of those flushes lands on an empty
+ * range and is dropped by the `nodes.length > 0` check below, so the run
+ * collapses to nothing rather than an empty block per newline. That
+ * collapse is what makes a blank line and a single `\n` render identically
+ * — the change this ADR makes visible without touching a single stored
+ * body — and it is also what recovers the real leading whitespace
+ * `Paragraph.from` would have swallowed: the actual content is simply
+ * whatever text survives after every empty flush, spaces included.
+ */
+function pushProseRuns(
+  blocks: EntryBlockNode[],
+  children: readonly SyntaxNode[],
+  body: string,
+  from: number,
+  to: number,
+): void {
+  let runFrom = from;
+  let runChildren: SyntaxNode[] = [];
+
+  const flush = (end: number) => {
+    const nodes = walkEntryInline(runChildren, body, runFrom, end);
+    if (nodes.length > 0) {
+      blocks.push({ kind: "prose", children: nodes });
+    }
+    runChildren = [];
+  };
+
+  const scanGap = (gapFrom: number, gapTo: number) => {
+    for (let pos = gapFrom; pos < gapTo; pos += 1) {
+      if (body[pos] === "\n") {
+        flush(pos);
+        runFrom = pos + 1;
+      }
+    }
+  };
+
+  let cursor = from;
+  for (const child of children) {
+    scanGap(cursor, child.from);
+    runChildren.push(child);
+    cursor = child.to;
+  }
+  scanGap(cursor, to);
+  flush(to);
+}
+
+/**
+ * Turns one container's direct children into `EntryBlockNode`s, starting
+ * from `containerStart` (see `itemContentStart`'s own comment for why that
+ * has to be a container-level position rather than anything read off an
+ * individual child node). `parseEntryMarkdown`'s own collector, and
+ * therefore `entryMarkdownToDocument`'s (`entry-document.ts`) too —
+ * `blocksToPM` builds one ProseMirror `paragraph` node per `"prose"`
+ * `EntryBlockNode` this hands it.
+ *
+ * Consecutive `Paragraph`/`Task` siblings are never merged into one
+ * `"prose"` block (ADR 0069's own reversal of the pre-0069 model): each is
+ * handed to `pushProseRuns` on its own call, which further splits it
+ * wherever a bare `\n` sits inside its own text (the lazy continuation a
+ * single `Paragraph` node's own span can hold — see that function's own
+ * comment for why a genuine blank line never reaches it as a literal
+ * character either). `cursor` threads across every child — starting at
+ * `containerStart` and advancing to each child's own `.to` in turn,
+ * whether that child was a list or a prose node — and is what
+ * `pushProseRuns` is handed as `from`, never a child's own `.from`; that is
+ * what lets a *later* `Paragraph` recover leading whitespace its own
+ * `.from` would otherwise have swallowed (`pushProseRuns`'s own comment has
+ * the full argument), so the fix ADR 0067 already named for a container's
+ * first child — "a leading run there is itself content, not a separator" —
+ * holds for every child here, not only the first.
+ *
+ * This function used to merge consecutive siblings into one block instead
+ * of splitting them (`entryMarkdownToDocument`'s own paragraph-count
+ * coupling to `entryDocumentToMarkdown`'s then-unescaped writer made that
+ * necessary at the time — see `entryParser`'s own module comment for the
+ * full account of why that coupling no longer holds now that issue #234
+ * changed the writer too). `collectBlocks` and `pushProseRuns` are a single
+ * pair again: every caller of `parseEntryMarkdown` — `entryMarkdownToDocument`,
+ * `entryProse`, `refreshTaskReferenceLabel`, Promotion — sees the same,
+ * split shape.
+ */
+function collectBlocks(
+  children: readonly SyntaxNode[],
+  body: string,
+  containerStart: number,
+): EntryBlockNode[] {
+  const blocks: EntryBlockNode[] = [];
+  let cursor = containerStart;
+
+  for (const child of children) {
+    const name = child.type.name;
+    if (name === "ListMark") {
+      continue;
+    }
+    if (name === "BulletList" || name === "OrderedList") {
+      blocks.push(listToBlock(child, body, collectBlocks));
+      cursor = child.to;
+      continue;
+    }
+    // The two remaining content types after the removals above: Paragraph,
+    // and Task (a paragraph-shaped leaf that also carries a TaskMarker).
+    pushProseRuns(blocks, childNodes(child), body, cursor, child.to);
+    cursor = child.to;
+  }
+  return blocks;
+}
+
+/**
+ * Parses an Entry's body into block nodes (issue #152; block-break/soft-break
+ * splitting per ADR 0069/issue #234) — `entryMarkdownToDocument`'s
+ * (`entry-document.ts`) own reader, and the only caller of `entryParser`
+ * above. Also `entryProse`'s (entry-prose.tsx) reader, and
+ * `refreshTaskReferenceLabel`'s, further below — every reader of a stored
+ * body in this app goes through this one function, so History and the
+ * Composer never disagree about what the same body means. Same empty-body
+ * contract as `parseInlineMarkdown`.
  */
 export function parseEntryMarkdown(body: string): EntryBlockNode[] {
   if (body === "") {

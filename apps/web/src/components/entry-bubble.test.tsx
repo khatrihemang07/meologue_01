@@ -166,11 +166,14 @@ describe("EntryBubble", () => {
     });
   });
 
-  // Issue #153: EntryBubble is where an id and a body land together, so
-  // this is where `onToggleTask`'s per-Entry closure gets built —
-  // `entry-prose.test.tsx` already covers the checkbox rendering and
-  // marker-offset behaviour this wraps; these tests only cover the wiring
-  // this file itself owns.
+  // Issue #153, retired by issue #231 (ADR 0074): a bare checkbox used to
+  // become a live, tickable control once `onToggleTask` was supplied, and
+  // clicking it called back with the Entry and the marker's own source
+  // offsets so the caller could splice the body. It is now permanently
+  // disabled no matter what — a bare checkbox has no Task to open (this
+  // file's own doc comment on `EntryBubbleProps.onToggleTask`,
+  // entry-prose.tsx's module comment) — so `onToggleTask` being supplied
+  // or not no longer changes anything about how a bare checkbox renders.
   describe("onToggleTask", () => {
     it("renders the checkbox disabled with no handler wired", () => {
       render(
@@ -180,7 +183,7 @@ describe("EntryBubble", () => {
       expect(screen.getByRole("checkbox")).toBeDisabled();
     });
 
-    it("calls the handler with the Entry and the marker's own offsets", () => {
+    it("stays disabled, and never calls the handler, even once one is supplied", () => {
       const onToggleTask = vi.fn();
       const body = "- [ ] call mum";
       const withTask = entry({ body });
@@ -188,22 +191,22 @@ describe("EntryBubble", () => {
         <EntryBubble entry={withTask} syncEnabled={false} side="out" onToggleTask={onToggleTask} />,
       );
 
-      fireEvent.click(screen.getByRole("checkbox"));
+      const checkbox = screen.getByRole("checkbox");
+      expect(checkbox).toBeDisabled();
+      fireEvent.click(checkbox);
 
-      expect(onToggleTask).toHaveBeenCalledTimes(1);
-      const [calledEntry, markerFrom, markerTo] = onToggleTask.mock.calls[0] ?? [];
-      expect(calledEntry).toBe(withTask);
-      expect(body.slice(markerFrom, markerTo)).toBe("[ ]");
+      expect(onToggleTask).not.toHaveBeenCalled();
     });
   });
 
-  // Issue #173, ADR 0048's write half — `TaskReferenceItem` (entry-row.tsx),
-  // rendered here through History's own interactive path (`EntryBubble`,
-  // reached via `entryBodyContent`'s fourth argument, `entry.id`). Needs
-  // `useEntryStore()`, unlike every other test above in this file, so this
-  // describe block alone stands the component up inside the router/query
-  // wiring `entry-row.test.tsx`'s own `renderEntryRow` already established
-  // for the identical reason.
+  // Issue #173 — `TaskReferenceItem` (entry-row.tsx), rendered here through
+  // History's own thread (`EntryBubble`). Needs `useEntryStore()`, unlike
+  // every other test above in this file, so this describe block alone
+  // stands the component up inside the router/query wiring
+  // `entry-row.test.tsx`'s own `renderEntryRow` already established for
+  // the identical reason. Since issue #231 (ADR 0074), a click here opens
+  // the Task (`onOpenTask`) rather than writing it — see each test's own
+  // comment for the write calls it now proves never happen.
   describe("a task reference", () => {
     const taskId = "0192abcd-1234-7890-abcd-0123456789ac";
 
@@ -237,6 +240,13 @@ describe("EntryBubble", () => {
     function renderEntryBubble(
       target: Entry,
       overrides: Partial<EntryStoreOutletContext> = {},
+      // Issue #231 (ADR 0074): every test below now clicks the checkbox
+      // expecting it to open the Task, not tick it — `onOpenTask` needs to
+      // be a real, assertable spy in most of them, so it's threaded
+      // through here rather than hardcoded the way `onToggleTask` still
+      // is a few lines down (that one is never called any more, so which
+      // function it is doesn't matter to anything below).
+      onOpenTask: (taskId: string) => void = vi.fn(),
       queryClient = new QueryClient(),
     ) {
       const context: EntryStoreOutletContext = {
@@ -328,15 +338,24 @@ describe("EntryBubble", () => {
                         entry={target}
                         syncEnabled={false}
                         side="out"
-                        // A defined handler is what `entryBodyContent`
-                        // reads as "ticking is permitted here" — the exact
-                        // gate `TaskReferenceItem`'s own `interactive` prop
-                        // is built from (entry-row.tsx). Its own body is
-                        // irrelevant to every test below: a REFERENCED
-                        // line never calls it (toggleTaskAt's own splice
-                        // retires there — a bare checkbox, not exercised
-                        // in this describe block, is what would).
+                        // Never called any more (issue #231, ADR 0074) —
+                        // a REFERENCED line's checkbox below opens the
+                        // Task through `onOpenTask` instead, exactly like
+                        // its words already do, and a bare checkbox, not
+                        // exercised in this describe block, is
+                        // permanently disabled regardless of this prop
+                        // (entry-prose.tsx's own module comment). Kept
+                        // non-`undefined` only because that's what
+                        // `entryBodyContent`'s own `interactive` argument
+                        // still reads off it (entry-bubble.tsx's own doc
+                        // comment on `EntryBubbleProps.onToggleTask`) —
+                        // `interactive` itself no longer gates anything a
+                        // referenced line's checkbox does either
+                        // (entry-row.tsx's own `TaskReferenceItem`
+                        // comment), so this is inert two layers deep, not
+                        // one.
                         onToggleTask={() => {}}
+                        onOpenTask={onOpenTask}
                       />
                     }
                   />
@@ -348,40 +367,62 @@ describe("EntryBubble", () => {
       };
     }
 
-    it("ticks a non-recurring Task through completeTask, not a body splice", () => {
+    // Issue #231 (ADR 0074): a referenced checkbox's click used to write
+    // the Task directly (issue #173, ADR 0048's "ticking writes the
+    // Task") — `completeTask`/`uncompleteTask` below. Todo is now the
+    // only place completion happens; History's own checkbox opens the
+    // Task instead, exactly like its words already do (`onOpenTask`,
+    // issue #181), and touches neither the Task nor this Entry's body.
+    it("opens a non-recurring Task instead of ticking it, and never calls completeTask/uncompleteTask", () => {
       const completeTask = vi.fn();
-      renderEntryBubble(entry({ body: `- [ ] ${formatTaskReference(taskId, "buy milk")}` }), {
-        tasks: [taskFixture()],
-        completeTask,
-      });
-
-      fireEvent.click(screen.getByRole("checkbox"));
-
-      expect(completeTask).toHaveBeenCalledWith(taskId);
-    });
-
-    it("un-ticks a completed non-recurring Task through uncompleteTask", () => {
       const uncompleteTask = vi.fn();
-      renderEntryBubble(entry({ body: `- [x] ${formatTaskReference(taskId, "buy milk")}` }), {
-        completedTasks: [taskFixture({ completedAt: "2026-08-28T00:00:00.000Z" })],
-        uncompleteTask,
-      });
+      const onOpenTask = vi.fn();
+      renderEntryBubble(
+        entry({ body: `- [ ] ${formatTaskReference(taskId, "buy milk")}` }),
+        { tasks: [taskFixture()], completeTask, uncompleteTask },
+        onOpenTask,
+      );
 
       fireEvent.click(screen.getByRole("checkbox"));
 
-      expect(uncompleteTask).toHaveBeenCalledWith(taskId);
+      expect(onOpenTask).toHaveBeenCalledWith(taskId);
+      expect(completeTask).not.toHaveBeenCalled();
+      expect(uncompleteTask).not.toHaveBeenCalled();
     });
 
-    it("stays disabled while the Task hasn't resolved — leads nowhere, per ADR 0042/0048", () => {
-      renderEntryBubble(entry({ body: `- [ ] ${formatTaskReference(taskId, "buy milk")}` }), {
-        tasks: [],
-        completedTasks: [],
-      });
+    it("opens an already-completed Task the same way, and never calls uncompleteTask", () => {
+      const uncompleteTask = vi.fn();
+      const onOpenTask = vi.fn();
+      renderEntryBubble(
+        entry({ body: `- [x] ${formatTaskReference(taskId, "buy milk")}` }),
+        {
+          completedTasks: [taskFixture({ completedAt: "2026-08-28T00:00:00.000Z" })],
+          uncompleteTask,
+        },
+        onOpenTask,
+      );
+
+      const checkbox = screen.getByRole("checkbox");
+      expect(checkbox).toBeChecked();
+      fireEvent.click(checkbox);
+
+      expect(onOpenTask).toHaveBeenCalledWith(taskId);
+      expect(uncompleteTask).not.toHaveBeenCalled();
+    });
+
+    it("stays disabled while the Task hasn't resolved, and calls nothing — leads nowhere, per ADR 0042/0048", () => {
+      const onOpenTask = vi.fn();
+      renderEntryBubble(
+        entry({ body: `- [ ] ${formatTaskReference(taskId, "buy milk")}` }),
+        { tasks: [], completedTasks: [] },
+        onOpenTask,
+      );
 
       const checkbox = screen.getByRole("checkbox");
       expect(checkbox).toBeDisabled();
       fireEvent.click(checkbox);
       expect(checkbox).not.toBeChecked();
+      expect(onOpenTask).not.toHaveBeenCalled();
     });
 
     // ADR 0048's asymmetric-deletion rule: "Deleting a Task leaves the
@@ -412,49 +453,59 @@ describe("EntryBubble", () => {
     });
 
     // ADR 0048/CONTEXT.md's Occurrence entry: a recurring Task's own
-    // `completedAt` never becomes non-null, so ticking THIS line has to
-    // read as a record of THIS occurrence, pinned to this one Entry, not a
-    // write that would also flip every other Entry referencing the same
-    // recurring Task.
+    // `completedAt` never becomes non-null, and — since issue #231, ADR
+    // 0074 — this component never advances one from a click any more
+    // either (`advanceRecurringTask`, use-tasks.ts, now fires only from
+    // Todo/the Composer's own Task overlay, composer-page.tsx's
+    // `handleCompleteTask`). A recurring reference's checkbox opens the
+    // Task exactly like a non-recurring one does, whether or not this
+    // occurrence already reads checked — there is no "cannot be
+    // reopened" refusal left to make here, because opening was never the
+    // thing that rule was about.
     describe("a recurring Task", () => {
-      it("advances the Task and pins only this Entry's own marker, never completeTask", () => {
-        const completeTask = vi.fn();
+      it("opens the Task instead of advancing it, and never calls editEntry", () => {
         const advanceRecurringTask = vi.fn();
         const editEntry = vi.fn();
+        const onOpenTask = vi.fn();
         const body = `- [ ] ${formatTaskReference(taskId, "water the plants")}`;
-        renderEntryBubble(entry({ id: "e9", body }), {
-          tasks: [taskFixture({ content: "water the plants", dateString: "every day" })],
-          completeTask,
-          advanceRecurringTask,
-          editEntry,
-        });
+        renderEntryBubble(
+          entry({ id: "e9", body }),
+          {
+            tasks: [taskFixture({ content: "water the plants", dateString: "every day" })],
+            advanceRecurringTask,
+            editEntry,
+          },
+          onOpenTask,
+        );
 
         fireEvent.click(screen.getByRole("checkbox"));
 
-        expect(completeTask).not.toHaveBeenCalled();
-        expect(advanceRecurringTask).toHaveBeenCalledWith(taskId);
-        expect(editEntry).toHaveBeenCalledTimes(1);
-        const [editedId, editedBody] = editEntry.mock.calls[0] ?? [];
-        expect(editedId).toBe("e9");
-        expect(editedBody).toContain("[x]");
-        expect(editedBody).not.toContain("[ ]");
+        expect(onOpenTask).toHaveBeenCalledWith(taskId);
+        expect(advanceRecurringTask).not.toHaveBeenCalled();
+        expect(editEntry).not.toHaveBeenCalled();
       });
 
-      it("cannot be reopened — a second click on an already-pinned occurrence does nothing", () => {
+      it("still opens the Task once this occurrence already reads checked — nothing left to refuse a second click for", () => {
         const advanceRecurringTask = vi.fn();
         const editEntry = vi.fn();
+        const onOpenTask = vi.fn();
         const body = `- [x] ${formatTaskReference(taskId, "water the plants")}`;
-        renderEntryBubble(entry({ body }), {
-          tasks: [taskFixture({ content: "water the plants", dateString: "every day" })],
-          advanceRecurringTask,
-          editEntry,
-        });
+        renderEntryBubble(
+          entry({ body }),
+          {
+            tasks: [taskFixture({ content: "water the plants", dateString: "every day" })],
+            advanceRecurringTask,
+            editEntry,
+          },
+          onOpenTask,
+        );
 
         const checkbox = screen.getByRole("checkbox");
         expect(checkbox).toBeChecked();
-        expect(checkbox).toBeDisabled();
+        expect(checkbox).not.toBeDisabled();
         fireEvent.click(checkbox);
 
+        expect(onOpenTask).toHaveBeenCalledWith(taskId);
         expect(advanceRecurringTask).not.toHaveBeenCalled();
         expect(editEntry).not.toHaveBeenCalled();
       });

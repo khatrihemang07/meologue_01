@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { entry } from "../test-support/entry-fixture";
-import { groupEntriesIntoDayFiles } from "./day-file";
+import { groupEntriesIntoDayFiles, normalizeBodyForPlainText } from "./day-file";
 
 const OFFSET_IST = 330; // +05:30
 
@@ -84,5 +84,48 @@ describe("groupEntriesIntoDayFiles", () => {
 
   it("produces no files for an empty Entry list", () => {
     expect(groupEntriesIntoDayFiles([], OFFSET_IST).files).toEqual([]);
+  });
+
+  // ADR 0069/issue #234's normalization boundary: a soft break's own
+  // backslash and a Tab-inserted em space are Composer-internal spelling,
+  // never meant to reach a plain-text export.
+  it("strips a soft break's backslash, keeping the line break it introduced", () => {
+    const body = "alpha\\\nbravo";
+    const entries = [entry({ createdAt: "2026-08-16T11:42:03.000Z", body })];
+
+    const { files } = groupEntriesIntoDayFiles(entries, OFFSET_IST);
+
+    expect(files[0]?.contents).toContain("alpha\nbravo");
+    expect(files[0]?.contents).not.toContain("\\");
+  });
+
+  it("replaces a Tab-inserted em space with an ordinary space", () => {
+    const body = "alpha bravo";
+    const entries = [entry({ createdAt: "2026-08-16T11:42:03.000Z", body })];
+
+    const { files } = groupEntriesIntoDayFiles(entries, OFFSET_IST);
+
+    expect(files[0]?.contents).toContain("alpha bravo");
+    expect(files[0]?.contents).not.toContain(" ");
+  });
+
+  it("still preserves a genuine \\n\\n block break — only the two markers are stripped, nothing else", () => {
+    expect(normalizeBodyForPlainText("alpha\n\nbravo")).toBe("alpha\n\nbravo");
+  });
+});
+
+describe("normalizeBodyForPlainText", () => {
+  it("turns a backslash hard break into a bare newline", () => {
+    expect(normalizeBodyForPlainText("alpha\\\nbravo")).toBe("alpha\nbravo");
+  });
+
+  it("turns an em space into an ordinary space", () => {
+    expect(normalizeBodyForPlainText("alpha bravo")).toBe("alpha bravo");
+  });
+
+  it("leaves a body with neither marker unchanged", () => {
+    expect(normalizeBodyForPlainText("plain text, nothing to strip")).toBe(
+      "plain text, nothing to strip",
+    );
   });
 });

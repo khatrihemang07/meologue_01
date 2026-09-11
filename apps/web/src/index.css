@@ -756,6 +756,27 @@
  * comment pointing at the other so a change to one is a prompt to check
  * the other, the same discipline this file's own module comment above
  * already asks for the base ul/ol rules.
+ *
+ * `.ProseMirror > * + *`'s `margin-top` is **zero** (issue #236) — this is
+ * the SAME `BLOCK_SPACING` rule `entry-prose.tsx` states for History's own
+ * top-level blocks, restated here because this file cannot import a
+ * Tailwind class from that one. Before issue #236 this was `0.25rem`, a
+ * leftover of the pre-ADR-0069 "blank line between blocks" rhythm that
+ * `entry-prose.tsx`'s own `BLOCK_SPACING` comment already explains was
+ * removed there; nothing had removed its twin here, so a Composer with two
+ * or more top-level blocks showed a 4px gap between them that vanished the
+ * moment the same Entry was Sent — measured directly, not assumed: with a
+ * real multi-block Entry loaded for editing, `getBoundingClientRect()` on
+ * consecutive top-level children read a 4px top-to-bottom gap in the
+ * Composer and a 0px gap for the identical text in History. UpNote's own
+ * measurement (`docs/reference/upnote-macos-detail.md`'s Gap sweep, E1) is
+ * that a bare, zero-margin block is what makes one Enter look like one new
+ * line at all; this rule is what makes that true on the Composer side, not
+ * only the read side. `li + li`'s own `0.125rem` below is deliberately left
+ * alone — it is a within-list breathing-room choice `entry-prose.tsx`'s own
+ * `space-y-0.5` already agrees with, not the block-boundary gap this
+ * comment is about, and issue #236 found no UpNote measurement asking the
+ * two to be reconciled.
  */
 @layer base {
   .ProseMirror ul {
@@ -776,7 +797,66 @@
     margin-top: 0.125rem;
   }
   .ProseMirror > * + * {
-    margin-top: 0.25rem;
+    margin-top: 0;
+  }
+}
+
+/*
+ * The empty PARENT item issue #233 / ADR 0071 adds — `composer-commands.ts`'s
+ * `sinkFirstListItem`, reached from Tab on a list's first item (the one
+ * case plain `sinkListItem` refuses outright). UpNote nests a sub-list as
+ * a SIBLING `<ul>`/`<ol>` of the `<li>` it follows, needing no wrapper item
+ * at all; `entrySchema`'s own `list_item: "paragraph block*"`
+ * (entry-schema.ts) cannot express that shape, so `sinkFirstListItem`
+ * wraps a first item in a freshly created `list_item` whose own leading
+ * paragraph is left empty, holding nothing but the new nested list. ADR
+ * 0071's own name for that wrapper is "markerless": it exists purely to
+ * satisfy this schema's structural requirement that a nested list live
+ * inside SOME `list_item`, and drawing a bullet or number beside an item
+ * with no text of its own would show the reader a marker that corresponds
+ * to nothing they typed.
+ *
+ * `composer-editor.ts`'s `listItemNodeView` renders every `list_item` as a
+ * plain `<li><div><p>…</p>{nested lists}</div></li>` with no class of its
+ * own to mark this specific case (adding one would mean the NodeView
+ * itself tracking "is this item markerless," a second, hand-maintained
+ * source of truth for a fact this rule can already read straight off the
+ * DOM shape). The selector below matches structurally instead: an `<li>`
+ * whose content `<div>` starts with a `<p>` holding no text — either
+ * genuinely `:empty`, or holding only the `<br class="ProseMirror-
+ * trailingBreak">` `prosemirror-view` itself inserts into an empty
+ * textblock so a browser can still place a caret in it and keep its line
+ * box visible, confirmed live by inspecting a real sunk-first-item's own
+ * DOM rather than assumed — immediately followed by the nested
+ * `<ul>`/`<ol>` that empty paragraph exists to hold.
+ *
+ * Two selectors, not one, because CSS Selectors 4 refuses a `:has()`
+ * nested inside another `:has()`'s own argument (verified directly — a
+ * single selector trying to say "a `<p>` that itself has-a trailing-break
+ * `<br>`, and is followed by a list" throws `SyntaxError` in a real
+ * browser, not merely `matches()`-flagged in a unit test) — so the
+ * "holds only a trailing break" shape is expressed as two SEPARATE,
+ * unnested `:has()` clauses chained onto the same `<li>` (an implicit
+ * AND: "has this descendant" and, separately, "has this OTHER descendant")
+ * rather than one clause that inspects the paragraph from two directions
+ * at once. The plain-`:empty` shape needs no such split, since `:empty`
+ * is a simple pseudo-class the outer `:has()` can test inline.
+ *
+ * Deliberately scoped to THIS file's own `.ProseMirror` rules, not
+ * `entry-prose.tsx`'s read-only History render: issue #233's own file
+ * ownership leaves the read-only markerless rendering to a later ticket,
+ * so a Sent Entry whose body already contains this shape (from a prior
+ * edit, or a future feature that builds one) still shows a bullet beside
+ * an empty line in History today — a known, deliberately deferred gap,
+ * not an oversight.
+ */
+@layer base {
+  .ProseMirror
+    li:has(> div > p:first-child > br.ProseMirror-trailingBreak:only-child):has(
+      > div > :is(ul, ol):nth-child(2)
+    ),
+  .ProseMirror li:has(> div > p:first-child:empty + :is(ul, ol)) {
+    list-style: none;
   }
 }
 

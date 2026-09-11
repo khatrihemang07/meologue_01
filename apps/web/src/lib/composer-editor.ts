@@ -31,7 +31,7 @@
  * `/` menu read the Reference picker's already-computed state for the same
  * transaction and defer to it, per ADR 0046.
  */
-import { baseKeymap, chainCommands } from "prosemirror-commands";
+import { baseKeymap, chainCommands, splitBlock } from "prosemirror-commands";
 import { history } from "prosemirror-history";
 import { InputRule, inputRules, undoInputRule } from "prosemirror-inputrules";
 import { keymap } from "prosemirror-keymap";
@@ -48,11 +48,14 @@ import { canJoin, findWrapping } from "prosemirror-transform";
 import { Decoration, DecorationSet, type EditorView, type NodeView } from "prosemirror-view";
 import {
   bold,
+  checklist,
   code,
   indent,
+  insertEmSpace,
   insertSoftBreak,
   italic,
   outdent,
+  outdentEmSpaceOrExit,
   redoCommand,
   splitListItemUnchecked,
   strikethrough,
@@ -460,11 +463,19 @@ const orderedListInputRule = lineStartWrappingInputRule(
  * `checkboxInputRule`'s own handler only ever fires inside a `list_item`'s
  * LEADING paragraph (`$start.index(-1) !== 0` below rejects anything
  * else), and Enter inside a list item is still `splitListItemUnchecked`
- * (`listKeymap`, unchanged by issue #212) — a real block split, never
- * `insertSoftBreak`. There is therefore no way for a `\n` to ever appear
- * inside that leading paragraph's own text for this rule to need to look
- * past: a soft break is a prose-only concept, unreachable from inside a
- * list item at all.
+ * (`listKeymap`) — a real block split, never `insertSoftBreak`. As of ADR
+ * 0069/issue #234, `Shift-Enter` inside a list item IS `insertSoftBreak`
+ * (matching UpNote's own `<br>`-inside-the-same-`<li>` behaviour), so a
+ * `\n` can now, in principle, appear inside a leading paragraph's own text
+ * — but only strictly after whatever text was already there, never before
+ * it, so it can never land BEFORE the `^` this pattern anchors to. A
+ * checkbox marker typed as the first four characters of a fresh item's
+ * leading paragraph (the only case this rule exists to promote — the
+ * two-step `- ` then `[ ] ` dance, and the one-step
+ * `checklistShortcutInputRulePattern` below handles the rest) still starts
+ * at that paragraph's own offset 0 regardless of what soft breaks a person
+ * adds later on a subsequent line of the same paragraph, so this rule has
+ * nothing new to look past.
  */
 export const checkboxInputRulePattern = /^\[([ \u00A0xX])\]\s$/;
 
@@ -688,33 +699,39 @@ export function buildInputRules(): InputRule[] {
 // ---------------------------------------------------------------------------
 
 /**
- * `chainCommands(splitListItemUnchecked, outdent.run, insertSoftBreak)` is
- * three fallbacks, tried in order, and each of the three names exactly one
- * of the ticket's own required behaviours rather than one command doing
- * all of it: inside a non-empty list item, split into the next item; on an
- * EMPTY top-level item ("bail out and let next command handle lifting" —
- * `splitListItem`'s own doc comment, prosemirror-schema-list), escape the
- * list one level; everywhere else — no list at all — `insertSoftBreak`
- * (composer-commands.ts, issue #212) inserts a literal `\n` into the
- * current paragraph instead of splitting it. Enter no longer reaches
- * `baseKeymap`'s own Enter (an ordinary paragraph split) at all: this
- * plugin's own chain now always returns `true` outside a list, the same
- * way it always did inside one.
+ * ADR 0069 (issue #234) replaces issue #212's identical-chain model:
+ * **Enter splits a block, and Shift+Enter is a soft break — in prose AND
+ * inside a list item.** They are no longer the same binding.
  *
- * **This is the reported defect's actual fix.** A paragraph split
- * serializes to `\n\n` (`entry-document.ts`'s `writeBlocks` — a lone `\n`
+ * `Enter`'s chain, `chainCommands(splitListItemUnchecked, outdent.run,
+ * splitBlock)`, is three fallbacks tried in order, and each names exactly
+ * one of the required behaviours: inside a non-empty list item, split into
+ * the next item; on an EMPTY top-level item ("bail out and let next
+ * command handle lifting" — `splitListItem`'s own doc comment,
+ * prosemirror-schema-list), escape the list one level; everywhere else —
+ * no list at all — fall through to `prosemirror-commands`' own `splitBlock`,
+ * an ordinary paragraph split, exactly what `baseKeymap` would already give
+ * Enter if this plugin did not run first. That last fallback is the one
+ * thing issue #212 removed and this ticket restores: Enter, outside a
+ * list, now reaches a real block split again, not `insertSoftBreak`.
+ *
+ * **Why a block split is safe again, when issue #212 removed it for the
+ * identical reason.** ADR 0066's own defect was that a split paragraph
+ * serialized to `\n\n` (`entry-document.ts`'s `writeBlocks` — a lone `\n`
  * between two paragraph siblings is a CommonMark lazy continuation, so the
- * separator MUST be a full blank line), and `collectBlocks`
- * (inline-markdown.ts) merges consecutive paragraph siblings back into one
- * prose run with that gap copied verbatim — so the very first Enter
- * already produced a real blank line the instant the Entry was Sent and
- * reopened, not merely on the second press. `insertSoftBreak` sidesteps
- * the whole merge: two of them in a row give `\n\n` INSIDE one paragraph's
- * own text, which needed no split, no merge, and no `\n\n`-means-separator
- * convention to begin with — it is just two characters typed into a
- * `white-space: pre-wrap` element, where `\n\n` has always meant a blank
- * line. See ADR 0066 for the full account, including why the fix does not
- * touch `collectBlocks` itself.
+ * separator MUST be a full blank line), and the READER at the time
+ * (`collectBlocks`, inline-markdown.ts) merged consecutive paragraph
+ * siblings back into one prose run with that gap copied verbatim — so one
+ * Enter rendered as a blank line. ADR 0069's own half of this ticket pair
+ * (issue #232, inline-markdown.ts/entry-prose.tsx) changed what the reader
+ * does with that gap: `pushProseRuns` no longer merges paragraph siblings
+ * into one run at all, and `BLOCK_SPACING` gives every block a `mt-0` —
+ * matching UpNote's own zero-margin `<div>` — so a block boundary costs
+ * exactly one line-height, the same as the `\n` a soft break would have
+ * produced. Splitting the block is therefore no longer visually
+ * distinguishable from a soft break for a single Enter; it is what makes
+ * Enter and Shift+Enter mean two genuinely different, and both correct,
+ * things again. See ADR 0069 for the full account.
  *
  * `splitListItemUnchecked` (composer-commands.ts, issue #210) is the real
  * `splitListItem(listItemNodeType)` plus one patch: a new item split off a
@@ -732,32 +749,35 @@ export function buildInputRules(): InputRule[] {
  * `liftListItem` that could quietly diverge if one were ever edited without
  * the other.
  *
- * `Shift-Enter` is bound to the IDENTICAL chain, not merely something that
- * also inserts a break: it must stay its own explicit binding regardless
- * — `prosemirror-keymap`'s own matching (verified by reading its source,
- * not assumed) only tries a held Shift as a fallback for single-character
- * keys ("a", producing "A"), never for a NAMED key like "Enter", so a
- * keymap that binds only `Enter` is never even consulted for
- * `Shift-Enter`; the keydown handler returns `false` outright, nothing
- * calls `preventDefault()`, and the browser's own native contenteditable
+ * **`Shift-Enter` is now its own binding, `insertSoftBreak` alone — not
+ * the Enter chain, and not chained with anything else.** It must stay its
+ * own explicit binding regardless of what it invokes —
+ * `prosemirror-keymap`'s own matching (verified by reading its source, not
+ * assumed) only tries a held Shift as a fallback for single-character keys
+ * ("a", producing "A"), never for a NAMED key like "Enter", so a keymap
+ * that binds only `Enter` is never even consulted for `Shift-Enter`; left
+ * unbound, the keydown handler returns `false` outright, nothing calls
+ * `preventDefault()`, and the browser's own native contenteditable
  * behaviour runs unopposed — normally a bare `<br>`, which `entrySchema`
  * has no node for at all (there is no `hard_break`), so ProseMirror's own
  * DOMObserver reconciles the DOM straight back to the document's real
  * state on its very next update and the keystroke simply vanishes.
  *
- * And under THIS model, identical is the only reading that makes sense —
- * not merely the safe fallback it was before issue #212. A block split
- * now serializes to `\n\n`, i.e. what a caller reaching for `Shift-Enter`
- * would get is two soft breaks in a single keystroke: "insert a blank
- * line," a gesture with no name, no discoverability, and the exact
- * opposite of UpNote's own Shift+Enter (a single new line, same as
- * Enter). Binding it to `chainCommands(listChain, splitBlock)` — this
- * file's own pre-#212 shape — would have quietly reintroduced this
- * ticket's own bug through the one door Enter itself no longer opens.
- * `isSubmitChord` already excludes any Shift-held Enter before either
- * keymap is reached, so "Shift+Enter must never send" holds regardless of
- * which of the two readings this binding takes — that requirement alone
- * does not decide between them.
+ * Binding it to `insertSoftBreak` directly, rather than to a chain that
+ * tries `splitListItemUnchecked`/`outdent.run` first, is deliberate and is
+ * the actual fix for the defect this ticket was filed for: those two
+ * commands are what made Shift+Enter inside a list item split into a new
+ * item instead of continuing the current one (`splitListItem` cannot tell
+ * a Shift-held Enter from a plain one — the distinction lives only in
+ * which `prosemirror-keymap` binding fired, and issue #212 pointed both at
+ * the same chain). `insertSoftBreak` itself has no list-awareness at all:
+ * it only requires `state.selection.$from.parent.isTextblock`, which is
+ * equally true of a bare paragraph and of a list item's own leading
+ * paragraph, so it inserts the identical literal `\n` in either context —
+ * matching UpNote byte-for-byte (`alpha<br>bravo` inside the SAME `<li>`,
+ * not a new one). `isSubmitChord` already excludes any Shift-held Enter
+ * before either keymap is reached, so "Shift+Enter must never send" holds
+ * regardless of what this binding invokes.
  */
 /**
  * Backspace is bound to `chainCommands(undoInputRule, liftAtStartOfListItem)`
@@ -843,44 +863,65 @@ export const liftAtStartOfListItem: Command = (state, dispatch) => {
 
 /**
  * Tab/Shift-Tab indent/outdent a list item (`indent`/`outdent`, issue
- * #160's registry — composer-commands.ts, themselves
- * `sinkListItem(listItemNodeType)`/`liftListItem(listItemNodeType)`) — but
- * ONLY when the caret is inside a list item. That gating needs no extra
- * code here: `sinkListItem`/`liftListItem` already return `false` outside
- * one (both walk the selection's own ancestors the same way this module's
- * `nearestListItem`, composer-commands.ts, does, and find nothing to
- * sink/lift), which — same fallthrough mechanism as `Enter`/`Backspace`
- * above — means `false` here reaches `prosemirror-keymap`'s handler,
- * `preventDefault()` is never called, and the browser's own native Tab
- * (move focus to the next focusable element) runs unopposed. This is the
- * one binding in this file where "does nothing" is load-bearing rather
- * than incidental: a Composer that swallowed Tab unconditionally would be
- * a keyboard trap (WCAG 2.1.2), unable to hand focus back to the rest of
- * the page at all from inside a list. See composer.spec.ts's own
- * "Tab outside a list still moves focus" e2e case, which exists
- * specifically to catch a regression here.
+ * #160's registry — composer-commands.ts, `indent.run` itself
+ * `chainCommands(sinkListItem(listItemNodeType), sinkFirstListItem)` as of
+ * issue #233 so the FIRST item of a list — the case `sinkListItem` alone
+ * refuses, per that command's own doc comment — nests too, matching
+ * UpNote (`upnote-editor-behaviour.md`'s Lists table, ADR 0071).
  *
- * `Ctrl-]`/`Ctrl-[` are unconditional aliases for the same two commands —
- * deliberately bound to literal `Ctrl-`, NOT `Mod-` (which
- * `prosemirror-keymap` resolves to `Cmd-` on macOS, `Ctrl-` elsewhere).
- * `Cmd-]` is already browser-forward navigation on macOS Safari/Chrome, so
- * `Mod-]` here would either lose to the browser or silently hijack a
- * shortcut people already have muscle memory for outside this app. Todoist
- * ships indent as `Control+]`/`Control+[` on EVERY platform, macOS
- * included, for exactly this reason — one chord, not a per-platform pair,
- * at the documented cost (their own docs) that it has no dedicated key on
- * keyboard layouts without bracket keys. That tradeoff is accepted here
- * deliberately, not an oversight: it is the same chord Tab/Shift-Tab
- * already cover for anyone on a layout where it doesn't work.
+ * Unlike every other binding in this file, Tab and Shift-Tab do NOT simply
+ * fall through to `prosemirror-keymap`'s own native-key fallback when
+ * nothing here applies — ADR 0070. Outside a list, `Tab` here is
+ * `chainCommands(indent.run, insertEmSpace)`: `indent.run` already returns
+ * `false` with no list to sink, and `insertEmSpace`
+ * (composer-commands.ts) always returns `true`, inserting a literal
+ * U+2003 EM SPACE and keeping focus in the Composer — UpNote's own
+ * verified Tab-on-plain-prose behaviour, and this repo's too, since Tab
+ * NEVER moves focus here, full stop: this Composer is an input ahead of a
+ * Format toolbar and a Send button in tab order, and letting a forward Tab
+ * escape it would be a keyboard trap in the forward direction (WCAG
+ * 2.1.2), same reasoning the OLD "Tab outside a list still moves focus"
+ * behaviour this replaces got backwards — swallowing Tab is what PREVENTS
+ * the trap here, not what causes one, because Shift-Tab (below) still
+ * offers a way back out.
+ *
+ * `Shift-Tab` is `chainCommands(outdent.run, outdentEmSpaceOrExit)`:
+ * `outdent.run` (`liftListItem`) handles every in-list case unchanged —
+ * outdent one level, or exit the list entirely from a level-1 item.
+ * Outside a list, `outdentEmSpaceOrExit` deletes one PRECEDING U+2003 EM
+ * SPACE if the caret sits right after one (undoing what Tab just
+ * inserted) and otherwise returns `false` — the one place in this whole
+ * keymap where reaching `prosemirror-keymap`'s native fallback is still
+ * deliberate, so Shift-Tab in truly bare prose with nothing to undo is the
+ * documented keyboard exit this Composer's own unconditional Tab makes
+ * necessary. See composer.spec.ts's own rewritten Tab/Shift-Tab cases,
+ * which replace the now-superseded "Tab outside a list still moves focus"
+ * one.
+ *
+ * `Ctrl-]`/`Ctrl-[` are unconditional aliases for `indent.run`/
+ * `outdent.run` only — deliberately NOT the em-space/exit fallbacks above,
+ * which are Tab/Shift-Tab's own UpNote-matching quirk, not a general
+ * property of "indent"/"outdent" as actions — bound to literal `Ctrl-`,
+ * NOT `Mod-` (which `prosemirror-keymap` resolves to `Cmd-` on macOS,
+ * `Ctrl-` elsewhere). `Cmd-]` is already browser-forward navigation on
+ * macOS Safari/Chrome, so `Mod-]` here would either lose to the browser or
+ * silently hijack a shortcut people already have muscle memory for
+ * outside this app. Todoist ships indent as `Control+]`/`Control+[` on
+ * EVERY platform, macOS included, for exactly this reason — one chord, not
+ * a per-platform pair, at the documented cost (their own docs) that it has
+ * no dedicated key on keyboard layouts without bracket keys. That tradeoff
+ * is accepted here deliberately, not an oversight: it is the same chord
+ * Tab/Shift-Tab already cover for anyone on a layout where it doesn't
+ * work.
  */
 function listKeymap(): Plugin {
-  const enterChain = chainCommands(splitListItemUnchecked, outdent.run, insertSoftBreak);
+  const enterChain = chainCommands(splitListItemUnchecked, outdent.run, splitBlock);
   return keymap({
     Enter: enterChain,
-    "Shift-Enter": enterChain,
+    "Shift-Enter": insertSoftBreak,
     Backspace: chainCommands(undoInputRule, liftAtStartOfListItem),
-    Tab: indent.run,
-    "Shift-Tab": outdent.run,
+    Tab: chainCommands(indent.run, insertEmSpace),
+    "Shift-Tab": chainCommands(outdent.run, outdentEmSpaceOrExit),
     "Ctrl-]": indent.run,
     "Ctrl-[": outdent.run,
   });
@@ -925,17 +966,41 @@ function historyKeymap(): Plugin {
  * Send, so this chord is free to mean something else without shadowing the
  * one Composer chord that must never move.
  *
- * Lists (`bulletList`/`orderedList`/`checklist`) deliberately get NO chord
- * here, even though they're in the same registry: each already has three
- * paths in place or on the way — a typed marker (composer-editor.ts's own
- * input rules, above), the toolbar button, and the `/` menu #165 adds — and
- * Todoist ships exactly this (typed marker + button + slash command, no
- * dedicated list chord) for the same reason: a fourth path buys nothing a
- * reader doesn't already have. Indent/outdent keep the Tab/Shift-Tab/
- * Ctrl-]/Ctrl-[ bindings `listKeymap` above already gives them (issue #162)
- * unchanged — they are not repeated or aliased here. The toolbar's own
- * on/off toggle (composer-toolbar.tsx / composer.tsx) gets no chord either;
- * it is flipped once, in Settings-adjacent reach, not a per-Entry action.
+ * **Lists gained exactly ONE chord, `checklist`'s own `Mod-Shift-9`, per
+ * issue #235's chord-parity requirement — `bulletList`/`orderedList`
+ * still get none.** `docs/reference/upnote-macos-detail.md`'s own "Full
+ * Mac menu-bar accelerator table" section records UpNote's three verified
+ * list chords: Bullet List = Cmd+7, Number List = Cmd+8, Checklist =
+ * Cmd+Shift+9 (no menu-reported accelerator at all, but "verified alive"
+ * by direct keypress against a live `notes.html` read-back regardless).
+ * Checking all three against this file's own never-claim list just below:
+ *
+ * - **`Cmd+7`/`Cmd+8` are refused.** `Mod-7`/`Mod-8` fall squarely inside
+ *   `Mod-1` through `Mod-9`, the never-claim list's own FIRST entry —
+ *   every Chromium/WebKit browser reserves the whole digit row for
+ *   switching tabs by position, unconditionally, before a page's own
+ *   keydown handler ever sees the event. Claiming either would either
+ *   silently lose to the browser (the keystroke never reaches
+ *   `prosemirror-keymap` at all) or, worse, appear to work in a context
+ *   without competing tabs and then mysteriously stop the moment a reader
+ *   has 7+ tabs open — exactly the "fights the browser chrome" failure
+ *   mode this file's own never-claim reasoning already names as worse
+ *   than a chord that visibly does nothing. `bulletList`/`orderedList`
+ *   keep their existing three paths (a typed marker, the toolbar button,
+ *   and the `/` menu #165 adds) and gain no fourth.
+ * - **`Cmd+Shift+9` is claimed.** `Mod-Shift-9` is NOT `Mod-1`-`Mod-9` —
+ *   Shift changes the chord entirely, and no browser this app ships on is
+ *   documented (or was found, by directly checking) to reserve a
+ *   Shift-modified digit for anything — so this one chord is free to
+ *   claim, matching UpNote's own verified behaviour exactly.
+ *   `checklist.run` (composer-commands.ts) is bound here exactly as
+ *   `strikethrough.run` is just above.
+ *
+ * Indent/outdent keep the Tab/Shift-Tab/Ctrl-]/Ctrl-[ bindings
+ * `listKeymap` above already gives them (issue #162) unchanged — they are
+ * not repeated or aliased here. The toolbar's own on/off toggle
+ * (composer-toolbar.tsx / composer.tsx) gets no chord either; it is
+ * flipped once, in Settings-adjacent reach, not a per-Entry action.
  *
  * A short list of chords this app can NEVER claim, recorded here because
  * the next person adding a binding will not have just rediscovered them the
@@ -943,7 +1008,10 @@ function historyKeymap(): Plugin {
  *
  * - `Mod-1` through `Mod-9` — every Chromium- and WebKit-based browser
  *   reserves these for switching tabs by position; a page cannot intercept
- *   them at all.
+ *   them at all. This is why `bulletList`/`orderedList` above do NOT claim
+ *   UpNote's own `Cmd+7`/`Cmd+8` chords, even though this file already
+ *   claims UpNote's `Cmd+Shift+9` for `checklist` — the `Shift` is what
+ *   makes the difference between a claimable chord and a reserved one.
  * - `Mod-l` — every mainstream browser's own "focus the address bar."
  * - `Mod-[` / `Mod-]` — back/forward navigation, at least on macOS
  *   Safari/Chrome (`listKeymap`'s own comment above records this in more
@@ -965,6 +1033,7 @@ function formatKeymap(): Plugin {
     "Mod-i": italic.run,
     "Mod-e": code.run,
     "Mod-Shift-x": strikethrough.run,
+    "Mod-Shift-9": checklist.run,
     "Mod-Shift-Enter": toggleCheckboxDone.run,
   });
 }
