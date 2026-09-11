@@ -1,0 +1,16 @@
+{
+  "urlBefore": "https://app.todoist.com/app/inbox",
+  "rowFocusInfo": {
+    "ok": true,
+    "id": "6hVRqMrPmWhQ7JJG",
+    "focusedTag": "DIV",
+    "focusedLabel": null
+  },
+  "urlOpen": "https://app.todoist.com/app/task/zz-probe-detail-6hVRqMrPmWhQ7JJG",
+  "dialogCheck": {
+    "found": true,
+    "ariaLabel": "ZZ probe detail"
+  },
+  "urlAfterEscape": "https://app.todoist.com/app/inbox",
+  "dialogGoneAfterEscape": true
+}

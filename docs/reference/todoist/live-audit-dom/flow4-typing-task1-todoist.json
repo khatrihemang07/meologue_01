@@ -1,0 +1,141 @@
+{
+  "title": "ZZ probe detail",
+  "perChar": [
+    {
+      "typed": "Z",
+      "focus": {
+        "tag": "DIV",
+        "role": "textbox",
+        "ariaLabel": "Task name",
+        "textContent": "Z"
+      }
+    },
+    {
+      "typed": "Z",
+      "focus": {
+        "tag": "DIV",
+        "role": "textbox",
+        "ariaLabel": "Task name",
+        "textContent": "ZZ"
+      }
+    },
+    {
+      "typed": " ",
+      "focus": {
+        "tag": "DIV",
+        "role": "textbox",
+        "ariaLabel": "Task name",
+        "textContent": "ZZ "
+      }
+    },
+    {
+      "typed": "p",
+      "focus": {
+        "tag": "DIV",
+        "role": "textbox",
+        "ariaLabel": "Task name",
+        "textContent": "ZZ p"
+      }
+    },
+    {
+      "typed": "r",
+      "focus": {
+        "tag": "DIV",
+        "role": "textbox",
+        "ariaLabel": "Task name",
+        "textContent": "ZZ pr"
+      }
+    },
+    {
+      "typed": "o",
+      "focus": {
+        "tag": "DIV",
+        "role": "textbox",
+        "ariaLabel": "Task name",
+        "textContent": "ZZ pro"
+      }
+    },
+    {
+      "typed": "b",
+      "focus": {
+        "tag": "DIV",
+        "role": "textbox",
+        "ariaLabel": "Task name",
+        "textContent": "ZZ prob"
+      }
+    },
+    {
+      "typed": "e",
+      "focus": {
+        "tag": "DIV",
+        "role": "textbox",
+        "ariaLabel": "Task name",
+        "textContent": "ZZ probe"
+      }
+    },
+    {
+      "typed": " ",
+      "focus": {
+        "tag": "DIV",
+        "role": "textbox",
+        "ariaLabel": "Task name",
+        "textContent": "ZZ probe "
+      }
+    },
+    {
+      "typed": "d",
+      "focus": {
+        "tag": "DIV",
+        "role": "textbox",
+        "ariaLabel": "Task name",
+        "textContent": "ZZ probe d"
+      }
+    },
+    {
+      "typed": "e",
+      "focus": {
+        "tag": "DIV",
+        "role": "textbox",
+        "ariaLabel": "Task name",
+        "textContent": "ZZ probe de"
+      }
+    },
+    {
+      "typed": "t",
+      "focus": {
+        "tag": "DIV",
+        "role": "textbox",
+        "ariaLabel": "Task name",
+        "textContent": "ZZ probe det"
+      }
+    },
+    {
+      "typed": "a",
+      "focus": {
+        "tag": "DIV",
+        "role": "textbox",
+        "ariaLabel": "Task name",
+        "textContent": "ZZ probe deta"
+      }
+    },
+    {
+      "typed": "i",
+      "focus": {
+        "tag": "DIV",
+        "role": "textbox",
+        "ariaLabel": "Task name",
+        "textContent": "ZZ probe detai"
+      }
+    },
+    {
+      "typed": "l",
+      "focus": {
+        "tag": "DIV",
+        "role": "textbox",
+        "ariaLabel": "Task name",
+        "textContent": "ZZ probe detail"
+      }
+    }
+  ],
+  "aborted": false
+}

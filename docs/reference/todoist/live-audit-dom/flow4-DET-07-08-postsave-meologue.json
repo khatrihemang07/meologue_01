@@ -1,0 +1,110 @@
+{
+  "saveResult": {
+    "ok": true
+  },
+  "toastPolls": [
+    {
+      "elapsedMs": 4,
+      "toasts": []
+    },
+    {
+      "elapsedMs": 512,
+      "toasts": []
+    },
+    {
+      "elapsedMs": 1017,
+      "toasts": []
+    },
+    {
+      "elapsedMs": 1521,
+      "toasts": []
+    },
+    {
+      "elapsedMs": 2028,
+      "toasts": []
+    },
+    {
+      "elapsedMs": 2534,
+      "toasts": []
+    },
+    {
+      "elapsedMs": 3041,
+      "toasts": []
+    },
+    {
+      "elapsedMs": 3549,
+      "toasts": []
+    },
+    {
+      "elapsedMs": 4055,
+      "toasts": []
+    },
+    {
+      "elapsedMs": 4561,
+      "toasts": []
+    },
+    {
+      "elapsedMs": 5066,
+      "toasts": []
+    },
+    {
+      "elapsedMs": 5570,
+      "toasts": []
+    },
+    {
+      "elapsedMs": 6074,
+      "toasts": []
+    },
+    {
+      "elapsedMs": 6579,
+      "toasts": []
+    },
+    {
+      "elapsedMs": 7085,
+      "toasts": []
+    },
+    {
+      "elapsedMs": 7590,
+      "toasts": []
+    },
+    {
+      "elapsedMs": 8094,
+      "toasts": []
+    },
+    {
+      "elapsedMs": 8601,
+      "toasts": []
+    },
+    {
+      "elapsedMs": 9106,
+      "toasts": []
+    },
+    {
+      "elapsedMs": 9610,
+      "toasts": []
+    },
+    {
+      "elapsedMs": 10118,
+      "toasts": []
+    },
+    {
+      "elapsedMs": 10624,
+      "toasts": []
+    },
+    {
+      "elapsedMs": 11131,
+      "toasts": []
+    },
+    {
+      "elapsedMs": 11638,
+      "toasts": []
+    }
+  ],
+  "postSaveState": {
+    "ok": true,
+    "dialogAriaLabel": null,
+    "titleBtnText": "ZZ probe rename",
+    "dateBtnText": "DateTomorrow",
+    "dialogTextSnippet": "InboxZZ probe renameActivate to edit the task nameDescriptionSub-tasksAddCommentsCommentActivity (1)TodaySet the date to Sep 13less than a minute agoProjectInboxDateTomorrowDeadlinePriorityLabels"
+  }
+}

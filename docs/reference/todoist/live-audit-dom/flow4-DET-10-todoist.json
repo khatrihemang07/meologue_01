@@ -1,0 +1,18 @@
+{
+  "point": {
+    "x": 618,
+    "y": 154
+  },
+  "elementAtPointBeforeClick": {
+    "tag": "DIV",
+    "className": "T5MTmRF d2b5021f _2404d8ba d429865c c68f8bf6",
+    "ariaLabel": null,
+    "role": null,
+    "isContentEditable": false
+  },
+  "focusAfterClick": {
+    "tag": "DIV",
+    "ariaLabel": "ZZ probe detail",
+    "role": "dialog"
+  }
+}

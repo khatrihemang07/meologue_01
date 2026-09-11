@@ -1,0 +1,32 @@
+{
+  "ok": true,
+  "editables": [
+    {
+      "tag": "DIV",
+      "role": "textbox",
+      "contentEditable": "true",
+      "ariaLabel": "Task name",
+      "className": "tiptap ProseMirror",
+      "textContent": "ZZ probe detail"
+    },
+    {
+      "tag": "DIV",
+      "role": "textbox",
+      "contentEditable": "true",
+      "ariaLabel": "Description",
+      "className": "tiptap ProseMirror",
+      "textContent": ""
+    }
+  ],
+  "buttons": [
+    {
+      "text": "Cancel",
+      "ariaLabel": null
+    },
+    {
+      "text": "Save",
+      "ariaLabel": null
+    }
+  ],
+  "dialogTextSnippet": "InboxZZ probe detailCancelSaveAdd sub-taskCommentProjectInboxDateDeadlinePriorityP4LabelsRemindersLocation"
+}

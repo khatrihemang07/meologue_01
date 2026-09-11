@@ -498,3 +498,84 @@ PRI-01, PRI-03). Six became `divergent` (DATE-07, DATE-10, SCHED-02, SCHED-07, S
   any failure jumps straight to cleanup. Accepted consequence: Todoist's activity log keeps a
   permanent record of those creates, comments and deletes even after the tasks are removed.
 - **Task detail and comments next**, split into two short runs so a stall strands less.
+
+## Flow 4 — the task detail view
+
+DET-01 to DET-14 (DET-13 skipped as a deliberate divergence), driven under the stricter write rules.
+The run stayed in the foreground throughout and finished without a stall. Artifacts: the `flow4-*`
+files in `live-audit-dom/`.
+
+### Results
+
+| Row | Todoist | meologue | Result |
+|---|---|---|---|
+| DET-01 | `/app/task/<slug>-<id>`; Escape back to Inbox | `/todo/task/<slug>-<id>`; same | `matched` — prefix difference is deliberate |
+| DET-02 | title at rest is a `div`, `tabIndex=-1` | a `<button>` | `divergent` — keyboard reachability |
+| DET-03 | hint text present, **not referenced** by the title | hint linked through `aria-describedby` | `divergent` — meologue more accessible |
+| DET-04 | activated title: `div[role=textbox][contenteditable]` "Task name" | identical | `matched` — was `blocked` |
+| DET-05 | `data-testid="task-details-modal"` | identical | `matched` |
+| DET-06 / 09 | title and description editors together, one Cancel/Save | identical | `matched` |
+| DET-07 | ` tom` recognised in the detail title; Save strips it and sets Tomorrow | identical | `matched` |
+| DET-08 | Date control unchanged until Save | identical | `matched` |
+| DET-10 | at 618,154 → focus on dialog | at 615,154 → Description | `built` — not settled, re-test pending |
+| DET-11 | placeholder "Description", no toolbar | identical | `matched` |
+| DET-12 | bold, bullet and code input rules live | identical | `matched` — `<li><p>` vs `<li>` recorded |
+| DET-14 | 864 wide, radius 10px, `rgb(31,31,31)`, same shadow | identical at rest | `built` — height 708 vs 710.6, re-measure pending |
+| **DET-15** (new) | Cancel with unsaved edits asks "Discard unsaved changes?" | discards **silently** | **`divergent`** |
+| **DET-16** (new) | rename that sets a date raises "Date updated to Tomorrow" + Undo, ~10s | **no toast** | **`divergent`** |
+
+### Defects found
+
+14. **No guard against losing unsaved edits.** Cancelling the detail editor with unsaved changes
+    discards them immediately in meologue; Todoist asks first. `lifecycle.md` had verified this, but
+    it never had a ledger row, so nothing ever compared it.
+15. **No toast when a rename sets a date.** Todoist announces "Date updated to Tomorrow" with Undo for
+    about ten seconds; meologue records the change only in its Activity section.
+
+### One decision for the user, not a defect
+
+**DET-03.** Todoist renders the "Activate to edit the task name" hint but does not link it to the
+title, so assistive technology is never told they belong together. meologue links it through
+`aria-describedby`. Matching Todoist exactly would mean removing that link. Recorded as a divergence
+awaiting a decision, like ROW-12.
+
+### Two readings that looked like findings and were not
+
+- **"The detail modal is 5% too narrow."** meologue's dialog read 820.8×675.06 against Todoist's
+  864×708. Every meologue number is exactly 0.95 of its resting value — it was read mid-way through its
+  `zoom-in-95` opening animation, and `getBoundingClientRect` includes transforms. Both apps were in the
+  same 1470×836 viewport, which each app's own rect confirms. At rest the width is 864 in both; only the
+  height formula differs (708 against 710.6). A text-size setting was checked and ruled out first:
+  `data-text-size` only scales Entry prose.
+- **"A generic click focuses the dialog in both apps."** The run compared a Todoist click at 618,154
+  against a meologue click at 615,400. At the comparable point meologue focused Description, not the
+  dialog. Neither focused the title, which `lifecycle.md` records as verified for "a generic part of the
+  combined edit block" — but one coordinate in two different layouts cannot settle a claim about a
+  region, so DET-10 is being re-tested against a DOM-identified gap.
+
+The general lesson: **read sizes only after animations settle**, and **compare interactions at the
+same semantic location, not the same coordinates**.
+
+### Safety log
+
+- Todoist Inbox: 16 titles before, 16 after, **set-equal**.
+- Two disposable tasks, `ZZ probe detail` and `ZZ probe rename`, created with their titles read back and
+  real (settled, non-`tmp-`) ids saved immediately; both deleted with the confirmation dialog naming each,
+  and confirmed absent afterwards.
+- No stall. The stricter rules — foreground-only in the first prompt, a created-list artifact before
+  measuring — held.
+
+### Tally after flow 4
+
+Read back from `parity-ledger.md`. Two rows were added (DET-15, DET-16), so there are now **127**.
+
+| Status | Session start | After flow 3 | Now |
+|---|---|---|---|
+| `matched` | 17 | 37 | **45** |
+| `built` | 74 | 41 | **32** |
+| `todoist-captured` | 13 | 11 | 11 |
+| `divergent` | 10 | 28 | **32** |
+| `blocked` | 11 | 8 | **7** |
+
+Eight rows reached `matched` (DET-01, 04, 05, 07, 08, 09, 11, 12). DET-02 and DET-03 became
+`divergent`, the two new rows start there, and DET-04 was unblocked.
