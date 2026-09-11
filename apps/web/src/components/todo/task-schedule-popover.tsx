@@ -295,6 +295,17 @@ export function TaskSchedulePopover({
         <Calendar
           mode="single"
           weekStartsOn={1}
+          // `today` follows this component's own injected `now`, not
+          // react-day-picker's reading of the system clock. Everything else
+          // here already derives from `now` — SCHED-02's Today/Tomorrow
+          // hints, the preview line above — so leaving DayPicker on its own
+          // clock let the calendar's "today" cell disagree with every other
+          // date in the same popover. It also made SCHED-07's own test pass
+          // on exactly one day in history: it asserts `data-today="true"` on
+          // 2026-09-10, the reference capture instant, through an attribute
+          // DayPicker derived from the real date, so the suite went red the
+          // morning after and would have stayed red for good.
+          today={now}
           // SCHED-06's own captured header reads "M T W T F S S" — a
           // single letter per weekday — where react-day-picker's own
           // default formatter ("cccccc", date-fns's 2-letter standalone

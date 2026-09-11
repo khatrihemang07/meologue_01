@@ -94,7 +94,7 @@ export function TodoNav() {
   return (
     <nav
       aria-label="Todo"
-      className="flex shrink-0 items-center gap-1 border-t border-border bg-background px-2 py-1.5 [padding-bottom:env(safe-area-inset-bottom)]"
+      className="flex shrink-0 items-center gap-0.5 border-t border-border bg-background px-1 py-1.5 [padding-bottom:env(safe-area-inset-bottom)]"
     >
       {VIEWS.map(({ to, label, Icon }) => (
         <NavLink
@@ -102,13 +102,24 @@ export function TodoNav() {
           to={to}
           className={({ isActive }) =>
             cn(
-              "flex flex-1 flex-col items-center gap-0.5 rounded-md px-2 py-1.5 text-muted-foreground text-xs transition-colors hover:bg-muted",
+              // `min-w-0` is load-bearing, not tidying. A flex item defaults to
+              // `min-width: auto`, so `flex-1` cannot shrink it below its own
+              // content: the longest label ("Upcoming") held every tab at a
+              // 74px floor. Measured at 320px with six tabs, the bar overflowed
+              // — scrollWidth 369 against clientWidth 320 — and pushed Filters
+              // clean past the viewport, making it unreachable on a small phone.
+              // That is the same "destination you cannot reach" defect adding
+              // Upcoming to this list was meant to end, reintroduced one tab
+              // along. `min-w-0` plus a truncating label lets the bar adapt at
+              // any width instead of breaking past a threshold, so a seventh
+              // row degrades legibly rather than silently dropping one.
+              "flex min-w-0 flex-1 flex-col items-center gap-0.5 rounded-md px-1 py-1.5 text-muted-foreground text-xs transition-colors hover:bg-muted",
               isActive && "bg-muted text-foreground",
             )
           }
         >
           <Icon aria-hidden="true" className="size-4" />
-          {label}
+          <span className="max-w-full truncate">{label}</span>
         </NavLink>
       ))}
     </nav>
