@@ -189,6 +189,40 @@ interface ShellProps {
    * affordance" is true by construction, not by a Settings-side check.
    */
   search?: ShellSearchConfig;
+  /**
+   * Issue #254: an override for the content column's width mechanism —
+   * ADR 0019's proportional pair (`w-[97%] ... md:w-[85%]`), hard-coded
+   * below at the scroll region's inner wrapper. Undefined (every caller
+   * today) renders that exact pair, byte-for-byte identical to before this
+   * prop existed — this is additive, not a second place the percentages
+   * have to be kept in sync. Todo (todo-page.tsx) is the one caller that
+   * passes a value, capping the column at 800px above the existing 900px
+   * wide-layout breakpoint (`use-wide-layout.ts`'s `WIDE_LAYOUT_QUERY`)
+   * while staying proportional below it. Todo was never a member of ADR
+   * 0019's "coupled pair" — its `composerSlot` (`TodoNav`) carries no
+   * width classes of its own, unlike `composer.tsx`'s docked bar — so this
+   * override has nothing to keep in sync with. See ADR 0019's amendment
+   * for why Todo's column now steps at a different breakpoint (900px)
+   * than every other Destination's (`md`, 768px).
+   */
+  columnWidthClassName?: string;
+  /**
+   * Issue #254: Todo's own chrome. Skips the fixed app-bar `<header>`
+   * below entirely, and instead renders `back`, `title` as a real `<h1>`
+   * (26px / weight 700 / 35px line-height) and `SyncStatusIndicator` as
+   * the first row inside the scrollable content column. `title` is
+   * repurposed for this, not duplicated — nothing reads it for
+   * `document.title`, so there is no second `heading` prop. Undefined
+   * (every caller but Todo) renders the header exactly as before.
+   *
+   * Accepted consequence, recorded rather than absorbed quietly: `back`
+   * and the Sync dot move out of a `shrink-0` bar that never scrolls and
+   * into a row that scrolls away with the rest of the column, so a reader
+   * deep in a long Inbox loses the always-reachable way home. Todoist has
+   * the identical property (ADR 0019's amendment), so this is the
+   * faithful choice, not an oversight.
+   */
+  hideAppBar?: boolean;
 }
 
 // The app shell every page renders through (ticket 50, replacing the
@@ -213,6 +247,8 @@ export function Shell({
   composerSlot,
   pinnedThread,
   search,
+  columnWidthClassName,
+  hideAppBar,
 }: ShellProps) {
   // Issue #83: the escape hatch History registers its virtualizer's
   // `scrollToIndex` into (see HistoryScrollContext's own comment above).
@@ -347,81 +383,87 @@ export function Shell({
             moves here instead — ambient and always-present on every page,
             unchanged from before. min-h rather than h so the safe-area
             padding-top can grow the bar under a notch/Dynamic Island
-            instead of clipping the title against it. */}
-      <header className="flex min-h-14 shrink-0 items-center gap-2 border-b border-border bg-background px-4 [padding-top:env(safe-area-inset-top)]">
-        {searching && search ? (
-          // Ticket 55: the field replaces the title/Sync-dot row and the
-          // magnifier entirely rather than appearing alongside them — "in
-          // place," not a second row pushing the thread down, which is
-          // what makes this agree with CONTEXT.md's "narrows History in
-          // place rather than producing a separate collection" for the
-          // *navigation* half of Search too, not just the filtering
-          // itself.
-          //
-          // `action` (Settings) stays, deliberately departing from the
-          // reference prototype (#49 variant 08), which hides its whole
-          // app bar including its Settings icon while searching. Settings
-          // is reachable *only* through this app-bar action — it isn't in
-          // the persistent Nav (nav.tsx) — so hiding it here would strand
-          // a reader who starts a search mid-visit with no way to reach
-          // Settings without first dismissing (which clears the query).
-          // "The session-storage backup that restores a query after
-          // leaving the page still works" is this ticket's own kept
-          // guarantee (#55, restating #39): that guarantee is only worth
-          // keeping if the round trip through Settings it describes is
-          // still reachable while a search is active, not just before one.
-          <>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              aria-label="Close search"
-              onClick={dismissSearch}
-              className="shrink-0 text-muted-foreground"
-            >
-              <ArrowLeft aria-hidden="true" className="size-4" />
-            </Button>
-            <Input
-              type="search"
-              aria-label={searchLabel}
-              placeholder={searchLabel}
-              autoFocus
-              value={search.query}
-              onChange={(event) => search.onQueryChange(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Escape") {
-                  dismissSearch();
-                }
-              }}
-              className="h-9 flex-1"
-            />
-            {action && <div className="ml-auto flex items-center gap-3">{action}</div>}
-          </>
-        ) : (
-          <>
-            {back}
-            <span className="flex items-center gap-2 font-heading text-base font-medium">
-              {title}
-              <SyncStatusIndicator />
-            </span>
-            {(search || action) && (
-              <div className="ml-auto flex items-center gap-3">
-                {search && (
-                  <button
-                    type="button"
-                    aria-label={searchLabel}
-                    onClick={() => setSearchOpen(true)}
-                    className="flex size-11 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                  >
-                    <SearchIcon aria-hidden="true" className="size-4" />
-                  </button>
-                )}
-                {action}
-              </div>
-            )}
-          </>
-        )}
-      </header>
+            instead of clipping the title against it.
+
+            Issue #254: skipped entirely when `hideAppBar` is set (Todo) —
+            `title`, `back` and the Sync dot move into the content column
+            below instead, as a real in-column heading. */}
+      {!hideAppBar && (
+        <header className="flex min-h-14 shrink-0 items-center gap-2 border-b border-border bg-background px-4 [padding-top:env(safe-area-inset-top)]">
+          {searching && search ? (
+            // Ticket 55: the field replaces the title/Sync-dot row and the
+            // magnifier entirely rather than appearing alongside them — "in
+            // place," not a second row pushing the thread down, which is
+            // what makes this agree with CONTEXT.md's "narrows History in
+            // place rather than producing a separate collection" for the
+            // *navigation* half of Search too, not just the filtering
+            // itself.
+            //
+            // `action` (Settings) stays, deliberately departing from the
+            // reference prototype (#49 variant 08), which hides its whole
+            // app bar including its Settings icon while searching. Settings
+            // is reachable *only* through this app-bar action — it isn't in
+            // the persistent Nav (nav.tsx) — so hiding it here would strand
+            // a reader who starts a search mid-visit with no way to reach
+            // Settings without first dismissing (which clears the query).
+            // "The session-storage backup that restores a query after
+            // leaving the page still works" is this ticket's own kept
+            // guarantee (#55, restating #39): that guarantee is only worth
+            // keeping if the round trip through Settings it describes is
+            // still reachable while a search is active, not just before one.
+            <>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label="Close search"
+                onClick={dismissSearch}
+                className="shrink-0 text-muted-foreground"
+              >
+                <ArrowLeft aria-hidden="true" className="size-4" />
+              </Button>
+              <Input
+                type="search"
+                aria-label={searchLabel}
+                placeholder={searchLabel}
+                autoFocus
+                value={search.query}
+                onChange={(event) => search.onQueryChange(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") {
+                    dismissSearch();
+                  }
+                }}
+                className="h-9 flex-1"
+              />
+              {action && <div className="ml-auto flex items-center gap-3">{action}</div>}
+            </>
+          ) : (
+            <>
+              {back}
+              <span className="flex items-center gap-2 font-heading text-base font-medium">
+                {title}
+                <SyncStatusIndicator />
+              </span>
+              {(search || action) && (
+                <div className="ml-auto flex items-center gap-3">
+                  {search && (
+                    <button
+                      type="button"
+                      aria-label={searchLabel}
+                      onClick={() => setSearchOpen(true)}
+                      className="flex size-11 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                    >
+                      <SearchIcon aria-hidden="true" className="size-4" />
+                    </button>
+                  )}
+                  {action}
+                </div>
+              )}
+            </>
+          )}
+        </header>
+      )}
 
       {/*
         A positioned wrapper around the scroll region, so the jump-to-newest
@@ -491,10 +533,36 @@ export function Shell({
                 // step is the rule's, not a bug in it. px-4 stays inside
                 // the percentage, so the text itself lands a few points
                 // narrower than the container.
-                "mx-auto flex w-[97%] flex-col gap-4 px-4 py-4 md:w-[85%]",
+                //
+                // Issue #254: `columnWidthClassName`, when a caller passes
+                // one (Todo only), replaces the width pair above wholesale
+                // rather than layering on top of it — building the two
+                // branches as separate full strings, not merging the
+                // override through `cn` alongside the default pair, is
+                // what keeps the undefined case byte-for-byte identical to
+                // before this prop existed rather than depending on
+                // `twMerge`'s conflict resolution to land on the same
+                // output.
+                columnWidthClassName
+                  ? `mx-auto flex flex-col gap-4 px-4 py-4 ${columnWidthClassName}`
+                  : "mx-auto flex w-[97%] flex-col gap-4 px-4 py-4 md:w-[85%]",
                 pinnedThread && !pinnedThread.ownsBottomAlignment && "min-h-full justify-end",
               )}
             >
+              {/* Issue #254: Todo's in-column heading, replacing the app
+                  bar `hideAppBar` skips above — `back` and the Sync dot
+                  move here too, so this row is the only place either
+                  renders while `hideAppBar` is set. Unlike the app bar
+                  (`shrink-0`, never scrolls), this row scrolls away with
+                  the rest of the column — see `hideAppBar`'s own doc
+                  comment for why that's accepted rather than absorbed. */}
+              {hideAppBar && (
+                <div className="flex items-center gap-2">
+                  {back}
+                  <h1 className="font-heading font-bold text-[26px] leading-[35px]">{title}</h1>
+                  <SyncStatusIndicator />
+                </div>
+              )}
               {message && <p className="text-sm text-destructive">{message}</p>}
               {children}
               {footer}

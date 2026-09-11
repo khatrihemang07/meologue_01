@@ -1,4 +1,4 @@
-import type { Project, Section, Task } from "@meologue/core";
+import type { Filter, Project, Section, Task } from "@meologue/core";
 import { today, upcoming } from "@meologue/core";
 import { useQuery } from "@tanstack/react-query";
 import { Suspense, useMemo, useState } from "react";
@@ -96,6 +96,54 @@ function backgroundPath(background: TodoBackgroundView): string {
     return `/todo/activity${background.search ?? ""}`;
   }
   return `/todo/${background.view}`;
+}
+
+/**
+ * Issue #254: the in-column heading's text for every `TodoBackgroundView`
+ * that isn't a Project's or a Filter's own (those two read their resolved
+ * `name` instead — see `todoHeading` below). Covers every view Shell's
+ * `hideAppBar` chrome now renders for, not only the four the ticket names
+ * explicitly (Inbox/Today/Upcoming/a Project's or Filter's own name):
+ * Todo's app bar is gone for the whole Destination, not gated per view, so
+ * every view needs *some* heading rather than the four unnamed ones
+ * falling back to nothing. Wording follows this app's own existing
+ * surfaces where one already exists — `todo-sidebar.tsx`'s row labels for
+ * "Filters & Labels", `todo-nav.tsx`'s "Activity" — rather than inventing
+ * new copy.
+ */
+const VIEW_HEADINGS: Record<Exclude<TodoBackgroundView["view"], "project" | "filter">, string> = {
+  inbox: "Inbox",
+  today: "Today",
+  upcoming: "Upcoming",
+  projects: "Projects",
+  search: "Search",
+  activity: "Activity",
+  filters: "Filters & Labels",
+  labels: "Labels",
+};
+
+/**
+ * A Project's or a Filter's own resolved name (acceptance criterion: "The
+ * heading reflects the current view, including a Project's or Filter's own
+ * name"). `project`/`filter` are looked up by the caller (`currentProject`/
+ * `currentFilter` below, already resolved for the row highlighting and
+ * breadcrumbs elsewhere on this page) rather than re-found here, so this
+ * stays a pure mapping with no store access of its own. `null` — the id
+ * hasn't resolved yet, or `/todo/filters/new` — falls back to a generic
+ * label rather than rendering an empty `<h1>`.
+ */
+function todoHeading(
+  background: TodoBackgroundView,
+  project: Project | null,
+  filter: Filter | null,
+): string {
+  if (background.view === "project") {
+    return project?.name ?? "Project";
+  }
+  if (background.view === "filter") {
+    return filter?.name ?? "New filter";
+  }
+  return VIEW_HEADINGS[background.view];
 }
 
 export interface TodoPageProps {
@@ -722,7 +770,21 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   }
 
   return (
-    <Shell title="Todo" back={<BackToChats />} message={message} composerSlot={<TodoNav />}>
+    <Shell
+      title={todoHeading(backgroundView, currentProject, currentFilter)}
+      back={<BackToChats />}
+      message={message}
+      composerSlot={<TodoNav />}
+      // Issue #254: Todo reads like Todoist's own page now — an 800px
+      // column above the existing 900px wide-layout breakpoint (reused
+      // rather than inventing a second one; see `use-wide-layout.ts`'s
+      // `WIDE_LAYOUT_QUERY`), staying proportional below it exactly like
+      // every other Destination, and its own in-column heading in place of
+      // the app bar (ADR 0019's amendment has both, and the accepted
+      // scrolling-Back consequence).
+      columnWidthClassName="w-[97%] md:w-[85%] min-[900px]:w-full min-[900px]:max-w-[800px]"
+      hideAppBar
+    >
       {backgroundView.view === "today" && (
         <TodayView
           tasks={tasks}

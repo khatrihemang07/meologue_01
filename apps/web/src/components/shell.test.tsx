@@ -338,3 +338,83 @@ describe("Shell's back slot", () => {
     expect(screen.queryByRole("button", { name: "Back" })).not.toBeInTheDocument();
   });
 });
+
+// Issue #254: the shared content column's width override, and Todo's
+// app-bar-to-in-column-heading swap. jsdom lays nothing out, so none of
+// this can confirm the *pixel* values (800px; 26px/700/35px) — only that
+// the right classes and the right elements land in the right place. The
+// real-browser measurement is covered by apps/e2e/tests/layout.spec.ts,
+// not here.
+describe("Shell's column width override and hideAppBar (issue #254)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useSettingsStore.setState({ serverUrl: "" });
+    useSyncStatusStore.setState({ lastAttempt: null });
+  });
+
+  it("renders the default column classes, byte-for-byte, when columnWidthClassName is omitted", () => {
+    render(<Shell title="Meologue">content</Shell>);
+
+    // `getByText` matches by an element's own direct text-node children
+    // (dom-testing-library's `getNodeText`), so this returns the content
+    // column div itself — its only direct text child is "content".
+    const column = screen.getByText("content");
+    // Exact className equality, not toHaveClass's subset check — this is
+    // the "byte-for-byte identical to before this prop existed" bar the
+    // ticket sets for every caller that passes neither new prop.
+    expect(column.className).toBe("mx-auto flex w-[97%] flex-col gap-4 px-4 py-4 md:w-[85%]");
+  });
+
+  it("uses the override's width classes in place of the default pair when columnWidthClassName is given", () => {
+    render(
+      <Shell title="Todo" columnWidthClassName="min-[900px]:w-full min-[900px]:max-w-[800px]">
+        content
+      </Shell>,
+    );
+
+    const column = screen.getByText("content");
+    expect(column.className).toBe(
+      "mx-auto flex flex-col gap-4 px-4 py-4 min-[900px]:w-full min-[900px]:max-w-[800px]",
+    );
+  });
+
+  it("renders the app bar and no in-column heading when hideAppBar is omitted", () => {
+    render(
+      <Shell title="Settings" back={<button type="button" aria-label="Back" />}>
+        content
+      </Shell>,
+    );
+
+    expect(screen.getByRole("banner")).toBeInTheDocument();
+    expect(screen.queryByRole("heading")).not.toBeInTheDocument();
+    // `back` still renders, but inside the (still-present) app bar, not a
+    // second time inside the column.
+    expect(screen.getAllByRole("button", { name: "Back" })).toHaveLength(1);
+  });
+
+  it("skips the app bar and renders title/back/Sync as an in-column heading row when hideAppBar is set", () => {
+    render(
+      <Shell title="Inbox" back={<button type="button" aria-label="Back" />} hideAppBar>
+        content
+      </Shell>,
+    );
+
+    expect(screen.queryByRole("banner")).not.toBeInTheDocument();
+
+    const heading = screen.getByRole("heading", { name: "Inbox" });
+    expect(heading.tagName).toBe("H1");
+
+    // back and the Sync dot sit in the same row as the heading, inside the
+    // scrollable content region rather than a fixed app bar.
+    const scrollRegion = screen.getByTestId("shell-scroll-region");
+    expect(scrollRegion).toContainElement(heading);
+    expect(scrollRegion).toContainElement(screen.getByRole("button", { name: "Back" }));
+    expect(scrollRegion).toContainElement(screen.getByTestId("sync-status-indicator"));
+
+    // The heading row precedes the rest of the column's content.
+    const column = heading.closest("div")?.parentElement;
+    expect(column?.textContent?.indexOf("Inbox")).toBeLessThan(
+      column?.textContent?.indexOf("content") ?? -1,
+    );
+  });
+});

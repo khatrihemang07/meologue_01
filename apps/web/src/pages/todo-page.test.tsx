@@ -128,6 +128,10 @@ function renderTodoPage(context: EntryStoreOutletContext, initialPath = "/todo/i
           <Route element={<Outlet context={context} />}>
             <Route path="/todo/inbox" element={<TodoPage />} />
             <Route path="/todo/today" element={<TodoPage view="today" />} />
+            {/* Issue #254: added for the in-column heading's own tests
+                below — no earlier ticket needed Upcoming reachable through
+                this helper's router. */}
+            <Route path="/todo/upcoming" element={<TodoPage view="upcoming" />} />
             <Route path="/todo/projects" element={<TodoPage view="projects" />} />
             <Route path="/todo/projects/:projectId" element={<TodoPage view="project" />} />
             <Route path="/todo/activity" element={<TodoPage view="activity" />} />
@@ -1243,5 +1247,86 @@ describe("TodoPage — Filters", () => {
 
     expect(screen.getByRole("alert")).toHaveTextContent(/parentheses/i);
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+  });
+});
+
+// Issue #254: Todo's app bar is gone, replaced by a real `<h1>` heading
+// inside the scrollable column, pinning the view→heading mapping
+// (`todoHeading`, this file's own module). jsdom lays nothing out, so this
+// cannot confirm the *pixel* values (26px/700/35px) — only that the right
+// text lands in a real heading, and that the app bar it replaces is gone.
+// The real-browser measurement is outstanding (see the ticket's own
+// verification-honesty note).
+describe("TodoPage — in-column heading (issue #254)", () => {
+  it("shows no separate app bar for Todo", () => {
+    renderTodoPage(readyContext());
+
+    expect(screen.queryByRole("banner")).not.toBeInTheDocument();
+  });
+
+  it("renders Inbox's heading as a real h1", () => {
+    renderTodoPage(readyContext());
+
+    const heading = screen.getByRole("heading", { name: "Inbox" });
+    expect(heading.tagName).toBe("H1");
+  });
+
+  it("renders Today's heading", () => {
+    renderTodoPage(readyContext(), "/todo/today");
+
+    expect(screen.getByRole("heading", { name: "Today" })).toBeInTheDocument();
+  });
+
+  it("renders Upcoming's heading", () => {
+    renderTodoPage(readyContext(), "/todo/upcoming");
+
+    expect(screen.getByRole("heading", { name: "Upcoming" })).toBeInTheDocument();
+  });
+
+  it("renders a Project's own resolved name as the heading", () => {
+    const project = {
+      id: "p1",
+      deviceId: "device-a",
+      name: "Groceries",
+      colour: "#DC4C3E",
+      favourite: false,
+      archived: false,
+      parentId: null,
+      description: null,
+      orderKey: "A",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      seq: 1,
+      syncedAt: "2026-01-01T00:00:00.000Z",
+      deletedAt: null,
+    };
+    renderTodoPage(readyContext({ projects: [project] }), "/todo/projects/p1");
+
+    expect(screen.getByRole("heading", { name: "Groceries" })).toBeInTheDocument();
+  });
+
+  it("renders a Filter's own resolved name as the heading", () => {
+    const filter = {
+      id: "f1",
+      deviceId: "device-a",
+      name: "Due today",
+      colour: "#DC4C3E",
+      query: "today",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      seq: 1,
+      syncedAt: "2026-01-01T00:00:00.000Z",
+      deletedAt: null,
+    };
+    renderTodoPage(readyContext({ filters: [filter] }), "/todo/filters/f1");
+
+    expect(screen.getByRole("heading", { name: "Due today" })).toBeInTheDocument();
+  });
+
+  it("keeps Back reachable and the Sync dot present alongside the heading", () => {
+    renderTodoPage(readyContext());
+
+    expect(screen.getByRole("link", { name: "Back to chats" })).toBeInTheDocument();
+    expect(screen.getByTestId("sync-status-indicator")).toBeInTheDocument();
   });
 });
