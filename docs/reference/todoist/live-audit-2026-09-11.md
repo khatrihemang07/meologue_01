@@ -485,3 +485,16 @@ Read back from `parity-ledger.md`.
 
 Nine rows reached `matched` (DATE-06, DATE-09, SCHED-04, SCHED-06, SCHED-08, SCHED-09, SCHED-10,
 PRI-01, PRI-03). Six became `divergent` (DATE-07, DATE-10, SCHED-02, SCHED-07, SCHED-11, PRI-02).
+
+## Decisions taken by the user, 2026-09-12
+
+- **QA-06 — match Todoist.** Earlier sections of this document record that keeping meologue's node
+  identity through withdrawal was recommended and awaiting a decision. The user chose strict DOM
+  parity instead. QA-06 therefore becomes **defect 13**: meologue's withdrawal should replace the
+  recognised span with a new node, as Todoist's does, with every observable unchanged.
+- **Todoist writes continue, under stricter rules**, after flow 3's incident. Every driving prompt
+  forbids background waits from its first line; at most two disposable tasks per run; a saved
+  "before" title list precedes any write and a saved list of what was created follows immediately;
+  any failure jumps straight to cleanup. Accepted consequence: Todoist's activity log keeps a
+  permanent record of those creates, comments and deletes even after the tasks are removed.
+- **Task detail and comments next**, split into two short runs so a stall strands less.

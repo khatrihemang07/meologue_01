@@ -48,7 +48,8 @@ three separate representations.
 > What survives is the **model**, not the DOM claim: one match, two visual states, removed when the
 > text changes is still a sound way to *implement* this, and it is what meologue does — its span
 > keeps its identity through withdrawal. That is a structural divergence with no user-visible
-> effect (QA-06, `divergent`, pending a decision on whether to keep it).
+> effect (QA-06, `divergent`). **On 2026-09-12 the user chose to match Todoist**, so meologue's
+> withdrawal is to be changed to replace the span node rather than restyle it.
 
 ## The recognised-match span
 
