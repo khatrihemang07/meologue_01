@@ -181,14 +181,25 @@ describe("TaskScheduleSheet", () => {
       expect(onSetDate).toHaveBeenCalledWith("1", null);
     });
 
+    // Issue #249: the "Add a time" toggle and its time input now render
+    // inside TaskSchedulePopover itself, below the calendar, rather than
+    // directly in this sheet's Date section — so every test below opens
+    // the popover first, the same way the Date tests above already do.
+    // The toggle/input's own interaction contract (checking/unchecking,
+    // editing the time) is covered exhaustively by
+    // task-schedule-popover.test.tsx; what's asserted here is only that
+    // this sheet's own `onSetTime` wiring reaches `onSetDate` with the
+    // right combined value.
     it("offers no 'Add a time' toggle until a date is set", () => {
       renderSheet({ date: null });
+      openDatePopover("Pick a date");
 
       expect(screen.queryByText("Add a time")).not.toBeInTheDocument();
     });
 
     it("checking 'Add a time' sets a default time on the existing date", () => {
       const { onSetDate } = renderSheet({ date: "2026-09-05" });
+      openDatePopover("Sep 5");
 
       fireEvent.click(screen.getByLabelText("Add a time"));
 
@@ -197,6 +208,7 @@ describe("TaskScheduleSheet", () => {
 
     it("changing the time input keeps the same day", () => {
       const { onSetDate } = renderSheet({ date: "2026-09-05T09:00" });
+      openDatePopover("Sep 5");
 
       fireEvent.change(screen.getByLabelText("Time"), { target: { value: "14:30" } });
 
@@ -205,6 +217,7 @@ describe("TaskScheduleSheet", () => {
 
     it("unchecking 'Add a time' drops back to an all-day date", () => {
       const { onSetDate } = renderSheet({ date: "2026-09-05T09:00" });
+      openDatePopover("Sep 5");
 
       fireEvent.click(screen.getByLabelText("Add a time"));
 

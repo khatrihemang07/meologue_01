@@ -91,11 +91,46 @@ function resolveSchedulePreview(
   return null;
 }
 
+// A default time for the "Add a time" toggle below — 9am reads as "start
+// of a normal working day" without this file trying to guess a reader's
+// actual schedule; the picker exists specifically so nobody has to type a
+// more precise one, and the `<input type="time">` right below it is where
+// that precision comes from instead. (Relocated here from
+// task-schedule-sheet.tsx by issue #249, along with the toggle and input
+// themselves — see this file's own dateDay/dateTime doc comments below.)
+const DEFAULT_TIME = "09:00";
+
 export interface TaskSchedulePopoverProps {
   /** The trigger this popover anchors under — task-schedule-sheet.tsx's own "Date" button. */
   trigger: React.ReactNode;
-  /** `Task.date`'s day component (`YYYY-MM-DD`), or `null` — this popover only ever picks a day; `task-schedule-sheet.tsx`'s own "Add a time" toggle is untouched by it and preserves whatever time-of-day was already set (its own `setDay` helper). */
+  /**
+   * `Task.date`'s day component (`YYYY-MM-DD`), or `null`. `onPickDay`
+   * itself still only ever commits a *day* — see its own doc comment,
+   * unchanged by issue #249 — but this popover is no longer only a day
+   * picker: it also owns the "Add a time" toggle and the time-of-day input
+   * beneath the calendar (`dateTime`/`onSetTime` below), relocated here
+   * from `task-schedule-sheet.tsx`'s own Date section. The toggle and
+   * input render only once `dateDay` isn't `null` — there is no time-of-day
+   * to attach to an unset date.
+   */
   dateDay: string | null;
+  /**
+   * `Task.date`'s time-of-day component (`HH:MM`), or `null` when the Task
+   * is all-day. Seeds the "Add a time" checkbox (checked iff non-`null`)
+   * and the `<input type="time">` shown once it's checked (issue #249).
+   */
+  dateTime: string | null;
+  /**
+   * Sets or clears the time-of-day on whatever day is already chosen —
+   * fired by checking/unchecking "Add a time" (with `DEFAULT_TIME`, or
+   * `null`) and by editing the time input directly. Unlike `onPickDay`,
+   * this never touches `dateString` and never closes the popover — setting
+   * a time is not "picking a day," and a caller combining this with the
+   * currently-chosen `dateDay` is what keeps a day change from dropping an
+   * already-chosen time and vice versa (`task-schedule-sheet.tsx`'s own
+   * wiring does this, mirroring its former `setDay` helper).
+   */
+  onSetTime: (time: string | null) => void;
   /** `Task.dateString` — the Recurrence phrase currently on the Task, or `null`. Seeds the "Type a date" input on every open (this file's own header comment: the one editable surface). */
   dateString: string | null;
   /** Day-keys carrying at least one active Task, each mapped to how many — SCHED-09's calendar dot and SCHED-04's preview subline read the identical source rather than two independently-computed counts. */
@@ -113,18 +148,47 @@ export interface TaskSchedulePopoverProps {
   onPickRecurrence: (dateString: string, day: string) => void;
   /** Read once per popover open, not per render — every quick option and the typed preview need the identical "today," and a fresh `new Date()` on each keystroke risks "Today" itself rolling over mid-interaction. Defaults to `new Date()` for callers (tests) that don't need to pin it. */
   now?: Date;
+  /**
+   * Controlled open state (issue #249) — omit both `open` and
+   * `onOpenChange` for a caller happy with this popover's own internal
+   * open/closed state, exactly as before this ticket; every existing
+   * caller (`task-schedule-sheet.tsx`) does this today and is unaffected.
+   * When `open` is provided, it alone decides whether the popover is
+   * shown — this component no longer tracks that state itself — and every
+   * transition (a day pick, an outside click, Escape, …) is reported
+   * through `onOpenChange` instead of applied internally, the same
+   * "controlled input" shape React's own `<input>` uses.
+   */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
 
 export function TaskSchedulePopover({
   trigger,
   dateDay,
+  dateTime,
+  onSetTime,
   dateString,
   datesWithTasks,
   onPickDay,
   onPickRecurrence,
   now = new Date(),
+  open: openProp,
+  onOpenChange,
 }: TaskSchedulePopoverProps) {
-  const [open, setOpen] = useState(false);
+  const [internalOpen, setInternalOpen] = useState(false);
+  // Controlled iff a caller passed `open` at all — checked once via the
+  // prop's presence, not compared against a sentinel, so a caller that
+  // passes `open={undefined}` explicitly still falls back to internal
+  // state exactly like one that omits the prop entirely.
+  const isControlled = openProp !== undefined;
+  const open = isControlled ? openProp : internalOpen;
+  function setOpen(next: boolean) {
+    if (!isControlled) {
+      setInternalOpen(next);
+    }
+    onOpenChange?.(next);
+  }
   const [typed, setTyped] = useState("");
   const [month, setMonth] = useState<Date>(() => parseDayKey(dateDay) ?? now);
   const inputId = useId();
@@ -358,6 +422,37 @@ export function TaskSchedulePopover({
           }}
           className="mx-auto"
         />
+
+        {/*
+          Relocated from task-schedule-sheet.tsx's own Date section by
+          issue #249 — roughly where Todoist's own Time button sits,
+          below the calendar (this ticket's own reference: the dedicated
+          Time dialog behind that button is a separate follow-up, not
+          built here). Gated on `dateDay !== null` for the identical
+          reason the sheet gated it before: there is no time-of-day to
+          attach to an unset date.
+        */}
+        {dateDay !== null && (
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={dateTime !== null}
+              onChange={(event) => {
+                onSetTime(event.target.checked ? DEFAULT_TIME : null);
+              }}
+            />
+            Add a time
+          </label>
+        )}
+        {dateTime !== null && (
+          <input
+            type="time"
+            aria-label="Time"
+            value={dateTime}
+            onChange={(event) => onSetTime(event.target.value)}
+            className="w-fit rounded-md border border-border bg-background px-2 py-1 text-sm"
+          />
+        )}
       </PopoverContent>
     </Popover>
   );

@@ -67,13 +67,6 @@ export interface TaskScheduleSheetProps {
   datesWithTasks?: ReadonlyMap<string, number>;
 }
 
-// A default time for the "Add a time" toggle below — 9am reads as "start
-// of a normal working day" without this file trying to guess a reader's
-// actual schedule; the picker exists specifically so nobody has to type a
-// more precise one, and the `<input type="time">` right below it is where
-// that precision comes from instead.
-const DEFAULT_TIME = "09:00";
-
 // A stable empty default for `datesWithTasks` — a fresh `new Map()` on
 // every render with no `datesWithTasks` prop supplied would otherwise be a
 // harmless-looking new object identity each time, the kind of thing that
@@ -132,6 +125,21 @@ export function TaskScheduleSheet({
             <div className="flex flex-wrap gap-2">
               <TaskSchedulePopover
                 dateDay={dateDay}
+                dateTime={dateTime}
+                onSetTime={(time) => {
+                  // Preserves whatever day is already chosen (issue #249:
+                  // the "Add a time" toggle and time input now render
+                  // inside the popover itself, below the calendar) — the
+                  // same combine this file's own `setDay` does for the
+                  // opposite direction (a day change preserving an
+                  // already-chosen time), kept here rather than in the
+                  // popover because the popover owns neither `task.id` nor
+                  // `onSetDate`.
+                  if (dateDay === null) {
+                    return;
+                  }
+                  onSetDate(task.id, time === null ? dateDay : `${dateDay}T${time}`);
+                }}
                 dateString={task.dateString}
                 datesWithTasks={datesWithTasks}
                 onPickDay={(day) => {
@@ -198,32 +206,6 @@ export function TaskScheduleSheet({
                 </Button>
               )}
             </div>
-            {dateDay !== null && (
-              <label className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={dateTime !== null}
-                  onChange={(event) => {
-                    if (event.target.checked) {
-                      onSetDate(task.id, `${dateDay}T${DEFAULT_TIME}`);
-                    } else {
-                      // Dropping the time makes this Task all-day again.
-                      onSetDate(task.id, dateDay);
-                    }
-                  }}
-                />
-                Add a time
-              </label>
-            )}
-            {dateTime !== null && (
-              <input
-                type="time"
-                aria-label="Time"
-                value={dateTime}
-                onChange={(event) => onSetDate(task.id, `${dateDay}T${event.target.value}`)}
-                className="w-fit rounded-md border border-border bg-background px-2 py-1 text-sm"
-              />
-            )}
             {/*
               `task.dateString` rendered verbatim, never re-derived through
               ../recurrence/'s engine — the identical string task-row.tsx
