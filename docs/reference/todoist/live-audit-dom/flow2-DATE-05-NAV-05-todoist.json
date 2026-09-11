@@ -1,0 +1,8 @@
+{
+  "app": "todoist",
+  "rows": ["DATE-05", "NAV-05"],
+  "view": "https://app.todoist.com/app/upcoming",
+  "identityCheck": "read each day-section heading's textContent directly",
+  "headings": ["11 Sep ‧ Today ‧ Friday", "12 Sep ‧ Tomorrow ‧ Saturday"],
+  "verdict": "MATCHED byte-for-byte with meologue's own Upcoming headings (flow2-DATE-04-DATE-05-NAV-05-meologue.json): identical format 'D Mon ‧ [relative word] ‧ Weekday', identical U+2027 separator glyph."
+}

@@ -1,0 +1,19 @@
+{
+  "app": "todoist",
+  "row": "ROW-13",
+  "view": "https://app.todoist.com/app/today",
+  "identityCheck": "on the live Today view, queried each row's own [data-testid='due-date-control'] button -- absence of that whole element (not merely hidden) is what the row requires",
+  "dueTodayRow": {
+    "task": "ZZ probe today",
+    "hasDateControl": false,
+    "verdict": "CONFIRMED LIVE: the due-date-control button is entirely absent from the DOM for a due-today row on Today view -- exactly matching pass2-2026-09-11.md's original claim and meologue's own measured behaviour (flow2-ROW-13-meologue.json). This row can move from built/todoist-captured to MATCHED: both sides drove the identical scenario in the same session and agree."
+  },
+  "recurringDueTodayRow": {
+    "task": "ZZ probe recurring",
+    "hasDateControl": true,
+    "controlHTML": "<button data-testid='due-date-control' class='due_date_controls xtOfDRu'><div>Date:&nbsp;</div><span class='date date_today'><svg .../></span></button>",
+    "colorOfRecurrenceIcon": "rgb(37, 184, 76)",
+    "verdict": "Different mechanic from a plain due-today row: the date control is NOT fully removed for a recurring due-today task -- it survives as an ICON-ONLY badge (the recurrence glyph, tinted the Today green) with its text content emptied out. meologue's own suppression instead keeps a full separate text badge ('every day') alongside the suppressed resolved-date span (flow2-ROW-13-meologue.json). Genuinely different granularity of the same 'don't show a redundant Today word' rule -- worth a note of its own if ROW-13/DATE-04 interaction is ever specified in more detail."
+  },
+  "overdueRow_forContrast": "not re-measured in Today view this session; row-and-detail.md/pass2 already establish the overdue row's date control is NOT suppressed there, unaffected by this finding"
+}

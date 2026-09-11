@@ -33,6 +33,11 @@ identical); hovered `outerHTML` is in `row-dom/row_hover.html`.
 
 - Computed height: **59px** (measured on `<li data-item-id>`, no visible
   content wrapping to a 2nd line).
+  > **Corrected 2026-09-11 (`live-audit-2026-09-11.md`, ledger ROW-01).** 59px is the height of a row
+  > carrying **one metadata line** — "hair wash", the task this was measured on, has a date badge. It
+  > is not a fixed row height. A **title-only row renders at 43px**, measured live on a disposable
+  > fixture with no date, label, comment or priority text; every account task observed here carried
+  > at least a date, so the title-only case was never visible before.
 - Padding: **0px on all sides** (top/bottom/left/right all `0px`) on the
   `<li>` itself — internal spacing comes from the children's own padding,
   not the row.

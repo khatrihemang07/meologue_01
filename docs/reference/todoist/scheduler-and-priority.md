@@ -194,14 +194,37 @@ Read from the task checkbox (`.task_checkbox`), not the flag icon — rows use a
 | Row | Internal class | Displayed priority | Ring/fill colour | Checkmark colour |
 |---|---|---|---|---|
 | "hair wash" (real task, genuinely prioritized) | `priority_4` | **Priority 1** (per the inverted mapping above) | `rgb(255,112,102)` filled ring, 2px | `rgb(255,112,102)` |
-| All other active Inbox tasks | `priority_1` | Priority 4 (default) | fully transparent ring/border | `rgb(169,169,169)` grey checkmark, invisible-ish |
+| All other active Inbox tasks | `priority_1` | Priority 4 (default) | ~~fully transparent ring/border~~ **`1px solid rgb(169,169,169)` — corrected, see below** | `rgb(169,169,169)` grey checkmark, invisible-ish |
 | Completed task | `priority_1` | Priority 4 (default), but completed | `rgb(87,87,87)` grey fill | `rgb(38,38,38)` (same as page bg — checkmark not visually distinguishable once complete) |
 
 VERIFIED for P1 and P4 (default) — both exist for real in this account (`hair wash` is genuinely P1). **P2 and P3 do not exist on any row in this account — their row-rendering colour is INFERRED only (not verified) from the picker's flag colours** (`rgb(235,137,9)` orange, `rgb(36,111,224)` blue) — stated as a gap.
 
+> **Corrected 2026-09-11 (`live-audit-2026-09-11.md`, ledger ROW-03 / PRI-03 / PRI-05 / PRI-06).**
+> Measured live on disposable P1–P4 fixtures, reading the ring from the **second** span inside
+> `button.task_checkbox` (the first is a fill layer, transparent at rest — almost certainly what this
+> table's P4 row originally read):
+>
+> | Priority | Class | Ring |
+> |---|---|---|
+> | P1 | `priority_4` | `2px solid rgb(255,112,102)` |
+> | P2 | `priority_3` | `2px solid rgb(255,154,19)` |
+> | P3 | `priority_2` | `2px solid rgb(82,151,255)` |
+> | P4 | `priority_1` | `1px solid rgb(169,169,169)` |
+>
+> Two consequences. **The P4 ring is opaque grey, not transparent.** And **the P2/P3 inference above
+> was wrong on both axes**: the rings are 2px, and their colours are row-specific, *not* the picker's
+> flag colours — the same row-vs-picker split this section already noted for red. meologue built the
+> inference as written, which is where its P2/P3 ring defect comes from. A flagged guess still gets
+> implemented; the flag has to reach the ledger as a blocker, not a footnote.
+
 ### 10d. Is P4 the invisible default?
 
-**Yes, confirmed.** An untouched Quick Add shows a plain unlabeled "Priority" button (no pill, no colour) until something else is picked; the picker itself pre-checks "Priority 4"; and on real rows, "Priority 4" tasks render a fully transparent checkbox ring identical to "no priority set at all" — i.e. P4 is not merely low-visibility, it renders with **zero** colour, same as the checkbox's own neutral resting state. VERIFIED.
+**Yes, confirmed.** An untouched Quick Add shows a plain unlabeled "Priority" button (no pill, no colour) until something else is picked; the picker itself pre-checks "Priority 4"; ~~and on real rows, "Priority 4" tasks render a fully transparent checkbox ring identical to "no priority set at all" — i.e. P4 is not merely low-visibility, it renders with **zero** colour, same as the checkbox's own neutral resting state.~~ VERIFIED.
+
+> **Corrected 2026-09-11.** The pre-selection half stands, re-read live (`aria-selected="true"` on
+> Priority 4). The struck half does not: a P4 row's ring is `1px solid rgb(169,169,169)`, and its
+> picker swatch is a different opaque grey, `rgb(102,102,102)`. P4 is the default and the quietest
+> level, but it is not colourless. `row-and-detail.md` §1's grey reading was the correct one.
 
 Note the checkbox-ring red (`rgb(255,112,102)`) and the picker/pill flag red (`rgb(209,69,59)`) are **not byte-identical** — same red family, two different exact values depending on which control renders it. Flagged explicitly so a replicator doesn't assume one colour token covers both surfaces.
 

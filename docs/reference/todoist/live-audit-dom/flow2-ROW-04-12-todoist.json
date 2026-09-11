@@ -1,0 +1,12 @@
+{
+  "app": "todoist",
+  "row": "ROW-04/ROW-12",
+  "task": "ZZ probe P1",
+  "identityCheck": "read the row's own .task_list_item__actions wrapper and its Edit button at rest (no hover dispatched)",
+  "atRest": {
+    "actionsBarWrapperInDom": true,
+    "actionsBarWrapperOpacity": "1",
+    "editButtonInDom": false
+  },
+  "verdict": "CONFIRMS ROW-12 live: the wrapping actions bar exists at rest but the individual action buttons (Edit, Date, Comment, More) are NOT mounted in the DOM until hover -- Todoist mounts-on-hover, unlike meologue which keeps them mounted at opacity:0 (see flow2-ROW-04-12-meologue.json). This is the ledger's already-recorded deliberate divergence, now reconfirmed with a fresh fixture in the same session."
+}

@@ -1,0 +1,17 @@
+{
+  "app": "todoist",
+  "rows": ["PRI-01", "PRI-02", "PRI-03-picker-half", "PRI-04-picker-half"],
+  "identityCheck": "opened Quick Add via sidebar 'Add task' (role=dialog aria-label=Quick Add asserted), clicked the footer control [aria-label='Set priority'], read role=option children of the resulting role=listbox -- each option's own colour read via getComputedStyle on its svg icon",
+  "pickerOptions": [
+    { "displayed": "Priority 1", "dataValue": "4", "ariaSelected": "false", "colorRgb": "rgb(209, 69, 59)" },
+    { "displayed": "Priority 2", "dataValue": "3", "ariaSelected": "false", "colorRgb": "rgb(235, 137, 9)" },
+    { "displayed": "Priority 3", "dataValue": "2", "ariaSelected": "false", "colorRgb": "rgb(36, 111, 224)" },
+    { "displayed": "Priority 4", "dataValue": "1", "ariaSelected": "true", "ariaChecked": "true", "colorRgb": "rgb(102, 102, 102)" }
+  ],
+  "verdict": {
+    "PRI-01": "picker swatch colours match scheduler-and-priority.md exactly: P1 rgb(209,69,59), P2 rgb(235,137,9), P3 rgb(36,111,224), P4 rgb(102,102,102)",
+    "PRI-02": "internal data-value confirmed inverted from the displayed label: Priority 1 -> data-value 4, Priority 4 -> data-value 1",
+    "PRI-03_pickerHalf": "P4 IS pre-selected (aria-selected=true, aria-checked=true) by default with no priority chosen; its picker swatch colour is OPAQUE grey rgb(102,102,102), NOT transparent -- see PRI-03-tiebreak file for the ring-vs-swatch reconciliation",
+    "PRI-04_pickerHalf": "confirms the picker itself is unchanged from capture; the pill-colouring-only-the-flag-icon half of PRI-04 needs a selected pill, captured separately"
+  }
+}

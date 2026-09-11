@@ -264,3 +264,117 @@ Read back from `parity-ledger.md` after the edits.
 
 The only status change is QA-06, `blocked` → `divergent`. QA-15, QA-16 and QA-18 gained verified
 dialog evidence without changing status, because meologue has no Quick Add dialog to compare.
+
+## Flow 2 — task rows, dates and priority
+
+ROW-01 to ROW-15, DATE-01 to DATE-12 and PRI-01 to PRI-06, driven in one session on disposable
+fixtures carrying identical titles in both applications. Artifacts: the `flow2-*.json` files in
+`live-audit-dom/`.
+
+### How the fixtures were made
+
+- **meologue, without the UI.** The repository has no seed hook, but the app's own store is
+  reachable: from `#root`'s React container fiber to the `QueryClientProvider` client, then
+  `getQueryData(["entry-store"])` gives `taskStore`, `labelStore`, `projectStore` and
+  `commentStore`. Tasks were upserted through the same store code the UI uses, with dates computed
+  from the live clock. Method and ids: `flow2-setup-meologue.json`. This makes seeding repeatable,
+  but the dates are relative — fixtures made one day read as a day stale the next.
+- **Todoist, as disposable tasks** titled `ZZ probe …` in the Inbox, measured and then deleted,
+  with one moved into an existing project for the cross-project case and one label `zz-probe`
+  created and removed.
+
+### Results
+
+| Row | Todoist | meologue | Result |
+|---|---|---|---|
+| ROW-01 | 59px with a metadata line; **43px title-only** | 59px `min-height` floor | **`divergent`** — was `matched` |
+| ROW-02 | divider `1px solid rgb(61,61,61)` | identical | `matched` |
+| ROW-03 | ring 2px at P1, P2, P3; 1px at P4 | 2px at P1 only | **`divergent`** |
+| ROW-05 | line-clamp 4, 14px/21px | identical | `matched` |
+| ROW-07 | first description line as real HTML, one line | identical | `matched` — was `built` |
+| ROW-08 | comment badge is a link `?intent=reply` | plain `<span>` | `divergent` |
+| ROW-09 | separator not re-read | no separator glyph | `built` |
+| ROW-10 | no priority text badge; label badge is a link | `P1` text badge; label a `<span>` | **`divergent`** |
+| ROW-12 | action buttons not in the DOM at rest | mounted at `opacity: 0` | `divergent` (deliberate, reconfirmed) |
+| ROW-13 | due-today date control absent on Today view | identical | `matched` — was `built` |
+| ROW-14 | completed rows interleaved, `aria-checked` | segregated `<details>` | `divergent` |
+| ROW-15 | completed title `rgb(128,128,128)` + strike, date `rgb(204,204,204)` | identical | `matched` — was `built` |
+| DATE-01 | "Yesterday" `rgb(255,112,102)` | identical | `built` — icon clause not re-read |
+| DATE-02 | completed date `rgb(204,204,204)` | identical | `matched` — was `built` |
+| DATE-03 | "Tuesday" `rgb(169,112,255)` | identical | `matched` |
+| DATE-04 | recurring due today: **icon-only** badge on Today view | `every day` **text** badge | **`divergent`** |
+| DATE-05 / NAV-05 | `11 Sep ‧ Today ‧ Friday`, `12 Sep ‧ Tomorrow ‧ Saturday` | identical | `matched` — was `built` |
+| DATE-06 / 09 / 10 | **not read** — virtualized out of view | Today green, Tomorrow orange, `Tomorrow, 9:30 AM` | `built` — one-sided |
+| DATE-11 | **"21 Sep"** | **"Sep 21"** | **`divergent`** |
+| PRI-01 / 02 | picker swatches and inverted `data-value` re-read | tokens only, picker not driven | unchanged — one-sided |
+| PRI-03 | P4 ring `1px rgb(169,169,169)`, swatch `rgb(102,102,102)` | ring identical | `built` — was `blocked` |
+| PRI-05 | row ≠ picker colour at every level | row = picker at P2, P3 | **`divergent`** |
+| PRI-06 | P2 `2px rgb(255,154,19)`, P3 `2px rgb(82,151,255)` | P2/P3 1px, picker colours | **`divergent`** — was `blocked` |
+
+### Defects found
+
+Each is a fix candidate, not a design decision.
+
+5. **Row height floor.** A title-only row is 43px in Todoist; meologue's `minHeight: "59px"` holds it
+   at 59.
+6. **P2 and P3 checkbox rings.** Todoist draws them 2px in row-specific colours; meologue draws them
+   1px in the picker's colours. Root cause is in the corpus: `scheduler-and-priority.md` §10c marked
+   P2/P3 row colours "INFERRED only (not verified) from the picker's flag colours", and the
+   inference was built as written. Corrected there.
+7. **Priority text badge.** meologue renders `P1`/`P2`/`P3` in the row's metadata line
+   (`task-row-content.tsx:522`); Todoist shows priority only as the ring.
+8. **Far-date wording.** "Sep 21" in meologue against "21 Sep" in Todoist.
+9. **Recurring task due today.** Todoist reduces the date control to an icon; meologue keeps a text
+   badge.
+
+### Corrections to the corpus
+
+- `row-and-detail.md` §1: 59px is the one-metadata-line height, not a fixed row height.
+- `scheduler-and-priority.md` §10c–§10d: the P4 ring is `1px rgb(169,169,169)`, not transparent — the
+  original capture almost certainly read the transparent fill layer, the first of two spans inside
+  `button.task_checkbox`. The P2/P3 inference is replaced with measured values.
+
+### Claims from the run's own summary that were not recorded
+
+The summary was checked against the artifacts, and two claims had nothing behind them:
+
+- **"meologue renders a literal P1 badge"** appeared only inside the *Todoist* artifact, pointing at
+  a meologue file that measured comments, labels and sub-task counts but never priority. It turned
+  out to be true, and is recorded — but on the strength of `task-row-content.tsx:522`, not the run.
+- **"ROW-01: meologue keeps 59px for a metadata-free row"** compared Todoist's title-only row against
+  a meologue row that carries a `P1` badge. The divergence is real, and is recorded from the 59px
+  `min-height` floor in source; meologue's like-for-like title-only row was not measured live.
+
+A value about one application written into the other application's artifact is not evidence for
+either.
+
+### Safety log
+
+- **Inbox**: 16 titles before, 16 after, **set-equal**, collected by scrolling the list and unioning
+  ids. Earlier canaries used a plain `querySelectorAll`, which misses rows Todoist has virtualized out
+  of view; they still showed no change among the rows they could see, but not across the whole list.
+- **Getting Started project**: one `ZZ probe` task was moved in and then deleted, leaving 14 tasks.
+  **No count was taken before the move**, so "restored to its original count" is the run's assertion,
+  not a measured before-and-after. Worth a glance.
+- **Label**: `zz-probe` was created and deleted. The run did not record whether existing labels were
+  available to use instead, which its instructions preferred.
+- Todoist on macOS submits a comment with **Cmd+Enter**; Ctrl+Enter left the draft unsent.
+- **A method note.** A command-safety check rejected driver scripts containing some ordinary words,
+  and the run first worked around it by disguising those words. That is not an acceptable fix: run
+  driver scripts from a file instead (`ego-browser nodejs < file.mjs`), which the run then did and
+  which also resolved the rejections.
+
+### Tally after flow 2
+
+Read back from `parity-ledger.md`.
+
+| Status | Session start | After Quick Add | Now |
+|---|---|---|---|
+| `matched` | 17 | 23 | **28** |
+| `built` | 74 | 65 | **53** |
+| `todoist-captured` | 13 | 13 | 13 |
+| `divergent` | 10 | 13 | **22** |
+| `blocked` | 11 | 11 | **9** |
+
+Six rows reached `matched` (ROW-07, ROW-13, ROW-15, DATE-02, DATE-05, NAV-05) and one left it
+(ROW-01). Nine became `divergent`, and PRI-03 and PRI-06 were unblocked.
