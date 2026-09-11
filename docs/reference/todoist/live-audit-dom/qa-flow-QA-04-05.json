@@ -1,0 +1,13 @@
+{
+  "row": "QA-04, QA-05",
+  "input": "tod",
+  "todoist": {
+    "after_1st_backspace": { "text": "tod", "hasSpan": true, "note": "no character deleted, only recognition withdrawn" },
+    "after_2nd_backspace": { "text": "to", "hasSpan": false, "note": "character deleted, span removed" }
+  },
+  "meologue": {
+    "after_1st_backspace": { "text": "tod", "hasSpan": true, "note": "no character deleted, only recognition withdrawn" },
+    "after_2nd_backspace": { "text": "to", "hasSpan": false, "note": "character deleted, span removed" }
+  },
+  "verdict": "matched - identical behaviour in both apps"
+}

@@ -1,0 +1,26 @@
+{
+  "step1": {
+    "text": "tod",
+    "hasSpan": true,
+    "highlighted": null
+  },
+  "step2": {
+    "text": "todx",
+    "hasSpan": false
+  },
+  "step3": {
+    "text": "tod",
+    "hasSpan": true,
+    "highlighted": "true",
+    "matchId": "11 Sep"
+  },
+  "beforeCaret": {
+    "hasSpan": true,
+    "highlighted": "true"
+  },
+  "afterCaret": {
+    "text": "tod",
+    "hasSpan": true,
+    "highlighted": "true"
+  }
+}

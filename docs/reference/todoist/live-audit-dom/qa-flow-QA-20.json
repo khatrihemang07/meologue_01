@@ -1,0 +1,6 @@
+{
+  "row": "QA-20 - Quick Add title font-size/line-height against surrounding chrome",
+  "todoist_measured": { "fontSize": "16px", "lineHeight": "23px", "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"Noto Sans\", system-ui, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Segoe UI Symbol\", \"Noto Color Emoji\"" },
+  "meologue_measured": { "fontSize": "16px", "lineHeight": "23px", "fontFamily": "-apple-system, \"system-ui\", \"Segoe UI\", \"Noto Sans\", system-ui, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Segoe UI Symbol\", \"Noto Color Emoji\"" },
+  "verdict": "matched - identical computed font-size, line-height and font-family stack, byte for byte, in both apps"
+}

@@ -1,0 +1,56 @@
+{
+  "row": "QA-02, QA-03, QA-06",
+  "input": "tod",
+  "todoist": {
+    "recognized_span": {
+      "outerHTML": "<span data-match-id=\"11 Sep\" class=\"xKV6aZZRBPE399i5L33M1cjNVQHbGoo4\" data-highlighted-match=\"true\" data-testid=\"natural-language-match\">tod</span>",
+      "dataTestid": "natural-language-match",
+      "dataMatchId": "11 Sep",
+      "dataHighlightedMatch": "true",
+      "display": "inline-block",
+      "paddingLeft": "4px",
+      "paddingRight": "4px",
+      "widthPx": 32.3125
+    },
+    "withdrawn_span_after_1st_backspace": {
+      "outerHTML": "<span data-match-id=\"11 Sep\" data-testid=\"natural-language-match\">tod</span>",
+      "display": "inline",
+      "paddingLeft": "0px",
+      "paddingRight": "0px",
+      "widthPx": 24.3125
+    },
+    "same_element_identity_check": {
+      "method": "tagged recognized span with data-qa-tag before Backspace, re-queried after withdrawal",
+      "result": "TAG LOST - a new span element replaces the old one on withdrawal, not the same DOM node",
+      "confirmed_twice": true
+    }
+  },
+  "meologue": {
+    "recognized_span": {
+      "outerHTML": "<span data-testid=\"natural-language-match\" data-match-id=\"2026-09-11\" data-highlighted-match=\"true\" class=\"td-recognition-match\">tod</span>",
+      "dataTestid": "natural-language-match",
+      "dataMatchId": "2026-09-11",
+      "dataHighlightedMatch": "true",
+      "display": "inline-block",
+      "paddingLeft": "4px",
+      "paddingRight": "4px",
+      "widthPx": 32.046875
+    },
+    "withdrawn_span_after_1st_backspace": {
+      "outerHTML": "<span data-testid=\"natural-language-match\" data-match-id=\"2026-09-11\" data-qa-tag=\"same-span-check\">tod</span>",
+      "display": "inline",
+      "paddingLeft": "0px",
+      "paddingRight": "0px",
+      "widthPx": 24.046875
+    },
+    "same_element_identity_check": {
+      "method": "tagged recognized span with data-qa-tag before Backspace, re-queried after withdrawal",
+      "result": "TAG PRESERVED - the same DOM node persists through withdrawal, only attributes/class change"
+    }
+  },
+  "notes": [
+    "QA-02: both carry data-testid=natural-language-match and data-match-id. Format differs: Todoist's data-match-id is a display string ('11 Sep'); meologue's is a raw ISO date ('2026-09-11'). Already known/recorded divergence, reconfirmed.",
+    "QA-03: matched. data-highlighted-match='true' while recognised, attribute absent (not merely false) once withdrawn, in both apps.",
+    "QA-06 STRUCTURAL DIVERGENCE (new finding, contradicts the ledger's existing 'matched' status which was based only on meologue's own behaviour): Todoist does NOT keep the same span element across withdrawal - a fresh element is created (verified twice by tagging the DOM node with a custom attribute and finding it gone after Backspace, while text and visual state are unchanged). meologue DOES keep the identical DOM node (tag survives). Behaviourally indistinguishable (both restyle inline-block -> inline, padding 4px -> 0px, width delta 8px = 4+4), but structurally different at the DOM-node-identity level."
+  ]
+}
