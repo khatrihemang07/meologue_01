@@ -23,7 +23,7 @@
  * deeper.
  */
 import type { Label, QuickAddOptions, Task } from "@meologue/core";
-import { uiPriorityOf } from "@meologue/core";
+import { hasTime, uiPriorityOf } from "@meologue/core";
 import {
   CalendarClock,
   CheckCheck,
@@ -39,6 +39,7 @@ import { inlineProse } from "@/components/inline-prose";
 import { LazyTaskTitleEditor } from "@/components/todo/lazy-task-title-editor";
 import { TaskCommandMenu } from "@/components/todo/task-command-menu";
 import type { TaskDetailActions } from "@/components/todo/task-row";
+import { TaskSchedulePopover } from "@/components/todo/task-schedule-popover";
 import { formatDay, formatTaskDate } from "@/lib/format-task-date";
 import { localDayKey } from "@/lib/local-day-key";
 import { projectNameFor } from "@/lib/project-name";
@@ -63,6 +64,13 @@ export interface TaskRowContentProps {
   onComplete: () => void;
   onCompleteForever: () => void;
   onRequestDelete: () => void;
+  /**
+   * Opens the shared `TaskScheduleSheet` (Deadline and Priority) — narrowed
+   * by issue #253, which moved Date onto its own anchored
+   * `TaskSchedulePopover` instance (`scheduleOpen`/`onScheduleOpenChange`
+   * above) rather than the sheet's own "Pick a date" button. This prop is
+   * now reached only from `TaskCommandMenu`'s "Deadline…" item.
+   */
   onOpenSchedule: () => void;
   isDropTarget: boolean;
   isNestTarget: boolean;
@@ -80,6 +88,16 @@ export interface TaskRowContentProps {
   /** The full command set's own open state — owned by `task-row.tsx` (its `<li>`'s own `onContextMenu`/`onKeyDown` also set it), threaded down here only because the trigger button lives in this file. */
   commandMenuOpen: boolean;
   onCommandMenuOpenChange: (open: boolean) => void;
+  /**
+   * This row's own `TaskSchedulePopover` open state (issue #253) — owned by
+   * `task-row.tsx` for the identical reason `commandMenuOpen` above is: the
+   * hover Date button (this file), the More-actions "Date…" item (also
+   * this file, via `TaskCommandMenu`) and the `T` shortcut
+   * (`task-row.tsx`'s own `OPEN_SCHEDULE_EVENT` listener) all have to flip
+   * the same flag regardless of which one fires.
+   */
+  scheduleOpen: boolean;
+  onScheduleOpenChange: (open: boolean) => void;
   /**
    * ROW-13 (parity-ledger.md), issue #250: Today's own "Due today" section
    * shows every row due today, so the tone-coloured date badge below says
@@ -155,6 +173,8 @@ export function TaskRowContent({
   onMoveToSection,
   commandMenuOpen,
   onCommandMenuOpenChange,
+  scheduleOpen,
+  onScheduleOpenChange,
   suppressDateBadge = false,
 }: TaskRowContentProps) {
   // Issue #225: inline row editing, which did not exist before this
@@ -209,6 +229,25 @@ export function TaskRowContent({
       return;
     }
     detailActions.onRename(task.id, trimmed);
+  }
+
+  // Issue #253: this row's own `TaskSchedulePopover` reads `task.date` split
+  // into its day/time components directly — the identical split
+  // `task-schedule-sheet.tsx`'s own (now-removed) Date section used to
+  // compute, kept here since this file owns the popover instance now.
+  const dateDay = task.date === null ? null : task.date.slice(0, 10);
+  const dateTime = task.date !== null && hasTime(task.date) ? task.date.slice(11, 16) : null;
+
+  function setScheduleDay(day: string | null) {
+    // Preserves an existing time-of-day across a day change, and skips
+    // straight past that for `null` (the popover's own "No Date") — the
+    // identical reasoning `task-schedule-sheet.tsx`'s own former `setDay`
+    // gave for the same combine.
+    if (day === null) {
+      detailActions.onSetDate(task.id, null);
+      return;
+    }
+    detailActions.onSetDate(task.id, dateTime === null ? day : `${day}T${dateTime}`);
   }
 
   const isRecurring = task.dateString !== null;
@@ -566,17 +605,59 @@ export function TaskRowContent({
       >
         <Pencil aria-hidden="true" className="size-4" />
       </button>
-      <button
-        type="button"
-        aria-label={`Date "${task.content}"`}
-        onClick={onOpenSchedule}
-        className={cn(
-          "hidden pointer-fine:flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
-          HOVER_REVEAL_CLASSES,
-        )}
-      >
-        <CalendarClock aria-hidden="true" className="size-4" />
-      </button>
+      {/*
+        Issue #253: Todoist's own scheduler — an anchored popover, not the
+        bottom sheet this button used to open (`onOpenSchedule`, now reached
+        only from Deadline/Priority). One `TaskSchedulePopover` instance per
+        row (`scheduleOpen`/`onScheduleOpenChange`'s own doc comment above),
+        anchored to this very button — a plain `<button>`, not `<Button>`
+        (ui/button.tsx): Radix's `asChild` clones this element and attaches
+        a ref to it to measure where to anchor, and `Button` is a plain
+        function component with no `forwardRef`, so that ref would silently
+        go nowhere (found the hard way, in a real browser, not by this
+        file's own test suite — jsdom never lays anything out to notice).
+        This button was already a plain native element before this ticket,
+        so it needs no change to be a valid trigger.
+      */}
+      <TaskSchedulePopover
+        open={scheduleOpen}
+        onOpenChange={onScheduleOpenChange}
+        dateDay={dateDay}
+        dateTime={dateTime}
+        onSetTime={(time) => {
+          if (dateDay === null) {
+            return;
+          }
+          detailActions.onSetDate(task.id, time === null ? dateDay : `${dateDay}T${time}`);
+        }}
+        dateString={task.dateString}
+        datesWithTasks={detailActions.datesWithTasks}
+        onPickDay={(day) => {
+          setScheduleDay(day);
+          // A plain date (or "No Date") ends any Recurrence the Task
+          // already had — TaskSchedulePopover's own doc comment names
+          // this a deliberate, disclosed design decision, mirrored here
+          // from task-schedule-sheet.tsx's own former identical wiring.
+          if (task.dateString !== null) {
+            detailActions.onSetDateString(task.id, null, new Date().toISOString());
+          }
+        }}
+        onPickRecurrence={(dateString) =>
+          detailActions.onSetDateString(task.id, dateString, new Date().toISOString())
+        }
+        trigger={
+          <button
+            type="button"
+            aria-label={`Date "${task.content}"`}
+            className={cn(
+              "hidden pointer-fine:flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
+              HOVER_REVEAL_CLASSES,
+            )}
+          >
+            <CalendarClock aria-hidden="true" className="size-4" />
+          </button>
+        }
+      />
       <button
         type="button"
         aria-label={`Comment on "${task.content}"`}
@@ -608,6 +689,7 @@ export function TaskRowContent({
           </button>
         }
         onOpenDetail={() => detailActions.onOpenDetail(task)}
+        onOpenDate={() => onScheduleOpenChange(true)}
         onOpenSchedule={onOpenSchedule}
         onSetPriority={(priority) => detailActions.onSetPriority(task.id, priority)}
         onSetProject={(projectId) => detailActions.onSetProject(task.id, projectId)}

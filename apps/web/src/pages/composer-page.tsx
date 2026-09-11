@@ -559,6 +559,9 @@ export function ComposerPage() {
           onComplete={() => handleCompleteTask(openTask)}
           onUncomplete={() => uncompleteTask(openTask.id)}
           onOpenSchedule={() => setSchedulingOpen(true)}
+          onSetDate={setTaskDate}
+          onSetDateString={setTaskDateString}
+          datesWithTasks={datesWithTasks}
           onSetProject={(projectId) => setTaskProject(openTask.id, projectId)}
           onSetLabels={(labelIds) => setTaskLabels(openTask.id, labelIds)}
           onSetDescription={(description) => setTaskDescription(openTask.id, description)}
@@ -584,11 +587,8 @@ export function ComposerPage() {
           task={openTask}
           open={true}
           onOpenChange={setSchedulingOpen}
-          onSetDate={setTaskDate}
           onSetDeadline={setTaskDeadline}
           onSetPriority={setTaskPriority}
-          onSetDateString={setTaskDateString}
-          datesWithTasks={datesWithTasks}
         />
       )}
     </Shell>

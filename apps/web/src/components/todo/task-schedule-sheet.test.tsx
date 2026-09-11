@@ -1,6 +1,6 @@
 import type { Task } from "@meologue/core";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { TaskScheduleSheet } from "./task-schedule-sheet";
 
 function task(overrides: Partial<Task> = {}): Task {
@@ -37,201 +37,39 @@ function task(overrides: Partial<Task> = {}): Task {
 }
 
 function renderSheet(overrides: Partial<Task> = {}) {
-  const onSetDate = vi.fn();
   const onSetDeadline = vi.fn();
   const onSetPriority = vi.fn();
-  const onSetDateString = vi.fn();
   render(
     <TaskScheduleSheet
       task={task(overrides)}
       open={true}
       onOpenChange={vi.fn()}
-      onSetDate={onSetDate}
       onSetDeadline={onSetDeadline}
       onSetPriority={onSetPriority}
-      onSetDateString={onSetDateString}
     />,
   );
-  return { onSetDate, onSetDeadline, onSetPriority, onSetDateString };
-}
-
-// Issue #227: the Date field's own picker is now `TaskSchedulePopover`
-// (task-schedule-popover.tsx), an anchored popover rather than a plain
-// button row — so every Date test below opens it via its trigger first,
-// the same way a reader would. Its own suite (task-schedule-popover.test.tsx)
-// covers the popover's internals (quick options, calendar, typed input)
-// exhaustively; the tests here only prove this sheet wires it up
-// correctly (which setter each callback reaches, and how Recurrence
-// composes with a plain date pick).
-function openDatePopover(triggerName: string) {
-  fireEvent.click(screen.getByRole("button", { name: triggerName }));
+  return { onSetDeadline, onSetPriority };
 }
 
 describe("TaskScheduleSheet", () => {
-  // Today/Tomorrow are pinned to a known "now" the same way
-  // today-view.test.tsx pins it, so their emitted day keys are asserted
-  // exactly rather than "some string".
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date(2026, 8, 2, 12, 0)); // Sep 2, 2026, local noon
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
   it("names the Task being scheduled", () => {
     renderSheet({ content: "call mum" });
 
     expect(screen.getByText('Schedule "call mum"')).toBeInTheDocument();
   });
 
-  it("shows a recurring Task's dateString exactly as typed", () => {
+  // Issue #253: Date — and with it, the "Repeats: …"/"Clear repeat"
+  // read-out — left this sheet entirely for its own anchored
+  // `TaskSchedulePopover` instance (task-schedule-sheet.tsx's own header
+  // comment). This sheet no longer renders a Recurrence at all, on a
+  // recurring Task or otherwise; `task-row.test.tsx`/`task-detail-view.test.tsx`
+  // cover the popover's own wiring now.
+  it("renders no Date section, and nothing naming a Recurrence, even on a recurring Task", () => {
     renderSheet({ dateString: "every other monday" });
 
-    expect(screen.getByText("Repeats: every other monday")).toBeInTheDocument();
-  });
-
-  it("shows nothing for a non-recurring Task", () => {
-    renderSheet({ dateString: null });
-
+    expect(screen.queryByText("Date")).not.toBeInTheDocument();
     expect(screen.queryByText(/Repeats:/)).not.toBeInTheDocument();
-  });
-
-  describe("Date", () => {
-    it("'Today' sets the date to today's local day key", () => {
-      const { onSetDate } = renderSheet();
-      openDatePopover("Pick a date");
-
-      fireEvent.click(screen.getByRole("button", { name: "Today Wed" }));
-
-      expect(onSetDate).toHaveBeenCalledWith("1", "2026-09-02");
-    });
-
-    it("'Tomorrow' sets the date to the next local day key", () => {
-      const { onSetDate } = renderSheet();
-      openDatePopover("Pick a date");
-
-      fireEvent.click(screen.getByRole("button", { name: "Tomorrow Thu" }));
-
-      expect(onSetDate).toHaveBeenCalledWith("1", "2026-09-03");
-    });
-
-    it("'Pick a date' opens the scheduler popover, and clicking a day commits immediately — no separate Confirm", () => {
-      const { onSetDate } = renderSheet();
-      openDatePopover("Pick a date");
-
-      fireEvent.click(screen.getByRole("button", { name: /September 20th, 2026/ }));
-
-      expect(onSetDate).toHaveBeenCalledWith("1", "2026-09-20");
-      expect(screen.queryByRole("button", { name: /^Confirm/ })).not.toBeInTheDocument();
-    });
-
-    it("picking a plain date clears an existing Recurrence (TaskSchedulePopover's own disclosed design decision)", () => {
-      const { onSetDateString } = renderSheet({ dateString: "every day" });
-      openDatePopover("Pick a date");
-
-      fireEvent.click(screen.getByRole("button", { name: "Today Wed" }));
-
-      expect(onSetDateString).toHaveBeenCalledWith("1", null, expect.any(String));
-    });
-
-    it("picking a plain date on a non-recurring Task never calls onSetDateString", () => {
-      const { onSetDateString } = renderSheet({ dateString: null });
-      openDatePopover("Pick a date");
-
-      fireEvent.click(screen.getByRole("button", { name: "Today Wed" }));
-
-      expect(onSetDateString).not.toHaveBeenCalled();
-    });
-
-    it("committing a typed Recurrence in the popover calls onSetDateString, not onSetDate", () => {
-      const { onSetDate, onSetDateString } = renderSheet();
-      openDatePopover("Pick a date");
-
-      fireEvent.change(screen.getByPlaceholderText("Type a date"), {
-        target: { value: "every monday" },
-      });
-      fireEvent.click(screen.getByTestId("scheduler-date-preview"));
-
-      expect(onSetDateString).toHaveBeenCalledWith("1", "every monday", expect.any(String));
-      expect(onSetDate).not.toHaveBeenCalled();
-    });
-
-    it("shows 'Clear repeat' only once a Recurrence is set, and it clears dateString while leaving date untouched", () => {
-      const { onSetDateString } = renderSheet({ dateString: "every day", date: "2026-09-05" });
-
-      fireEvent.click(screen.getByRole("button", { name: "Clear repeat" }));
-
-      expect(onSetDateString).toHaveBeenCalledWith("1", null, expect.any(String));
-    });
-
-    it("offers no 'Clear repeat' for a non-recurring Task", () => {
-      renderSheet({ dateString: null });
-
-      expect(screen.queryByRole("button", { name: "Clear repeat" })).not.toBeInTheDocument();
-    });
-
-    it("offers no Clear button until a date is set, and Clear sets it to null once one is", () => {
-      const { onSetDate } = renderSheet({ date: "2026-09-05" });
-
-      expect(screen.getByRole("button", { name: "Clear date" })).toBeInTheDocument();
-      fireEvent.click(screen.getByRole("button", { name: "Clear date" }));
-
-      expect(onSetDate).toHaveBeenCalledWith("1", null);
-    });
-
-    // Issue #249: the "Add a time" toggle and its time input now render
-    // inside TaskSchedulePopover itself, below the calendar, rather than
-    // directly in this sheet's Date section — so every test below opens
-    // the popover first, the same way the Date tests above already do.
-    // The toggle/input's own interaction contract (checking/unchecking,
-    // editing the time) is covered exhaustively by
-    // task-schedule-popover.test.tsx; what's asserted here is only that
-    // this sheet's own `onSetTime` wiring reaches `onSetDate` with the
-    // right combined value.
-    it("offers no 'Add a time' toggle until a date is set", () => {
-      renderSheet({ date: null });
-      openDatePopover("Pick a date");
-
-      expect(screen.queryByText("Add a time")).not.toBeInTheDocument();
-    });
-
-    it("checking 'Add a time' sets a default time on the existing date", () => {
-      const { onSetDate } = renderSheet({ date: "2026-09-05" });
-      openDatePopover("Sep 5");
-
-      fireEvent.click(screen.getByLabelText("Add a time"));
-
-      expect(onSetDate).toHaveBeenCalledWith("1", "2026-09-05T09:00");
-    });
-
-    it("changing the time input keeps the same day", () => {
-      const { onSetDate } = renderSheet({ date: "2026-09-05T09:00" });
-      openDatePopover("Sep 5");
-
-      fireEvent.change(screen.getByLabelText("Time"), { target: { value: "14:30" } });
-
-      expect(onSetDate).toHaveBeenCalledWith("1", "2026-09-05T14:30");
-    });
-
-    it("unchecking 'Add a time' drops back to an all-day date", () => {
-      const { onSetDate } = renderSheet({ date: "2026-09-05T09:00" });
-      openDatePopover("Sep 5");
-
-      fireEvent.click(screen.getByLabelText("Add a time"));
-
-      expect(onSetDate).toHaveBeenCalledWith("1", "2026-09-05");
-    });
-
-    it("picking a new day through the popover preserves an existing time of day", () => {
-      const { onSetDate } = renderSheet({ date: "2026-09-05T09:00" });
-      openDatePopover("Sep 5");
-
-      fireEvent.click(screen.getByRole("button", { name: /September 20th, 2026/ }));
-
-      expect(onSetDate).toHaveBeenCalledWith("1", "2026-09-20T09:00");
-    });
+    expect(screen.queryByRole("button", { name: "Pick a date" })).not.toBeInTheDocument();
   });
 
   describe("Deadline", () => {

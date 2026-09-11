@@ -1,7 +1,7 @@
 import type { Task } from "@meologue/core";
 import { fireEvent, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { OPEN_COMMAND_MENU_EVENT } from "@/lib/todo-keymap";
+import { OPEN_COMMAND_MENU_EVENT, OPEN_SCHEDULE_EVENT } from "@/lib/todo-keymap";
 import { type UseTodoKeymapOptions, useTodoKeymap } from "./use-todo-keymap";
 
 function task(overrides: Partial<Task> = {}): Task {
@@ -131,15 +131,46 @@ describe("useTodoKeymap", () => {
     );
   });
 
-  it("opens the schedule sheet for the focused Task on T, D and Y", () => {
+  // Issue #253: `T` no longer opens the shared schedule sheet directly —
+  // it dispatches `OPEN_SCHEDULE_EVENT` instead, the identical
+  // document-level fan-in `OPEN_COMMAND_MENU_EVENT` already uses for `.`
+  // (todo-keymap.ts's own doc comment on why), so a row's own anchored
+  // `TaskSchedulePopover` instance can open regardless of which of the
+  // three entry points fired.
+  it("dispatches OPEN_SCHEDULE_EVENT naming the focused Task on T", () => {
+    focusTaskRow("task-1");
+    const options = renderKeymap();
+    const listener = vi.fn();
+    document.addEventListener(OPEN_SCHEDULE_EVENT, listener);
+
+    fireEvent.keyDown(document, { key: "t" });
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    const receivedEvent = listener.mock.calls[0]?.[0] as CustomEvent;
+    expect(receivedEvent.detail).toEqual({ taskId: "task-1" });
+    expect(options.onOpenSchedule).not.toHaveBeenCalled();
+    document.removeEventListener(OPEN_SCHEDULE_EVENT, listener);
+  });
+
+  it("does not dispatch OPEN_SCHEDULE_EVENT on T when no Task row has focus", () => {
+    renderKeymap();
+    const listener = vi.fn();
+    document.addEventListener(OPEN_SCHEDULE_EVENT, listener);
+
+    fireEvent.keyDown(document, { key: "t" });
+
+    expect(listener).not.toHaveBeenCalled();
+    document.removeEventListener(OPEN_SCHEDULE_EVENT, listener);
+  });
+
+  it("opens the schedule sheet for the focused Task on D and Y, unchanged (Deadline and Priority still live there)", () => {
     focusTaskRow("task-1");
     const options = renderKeymap();
 
-    fireEvent.keyDown(document, { key: "t" });
     fireEvent.keyDown(document, { key: "d" });
     fireEvent.keyDown(document, { key: "y" });
 
-    expect(options.onOpenSchedule).toHaveBeenCalledTimes(3);
+    expect(options.onOpenSchedule).toHaveBeenCalledTimes(2);
     expect(options.onOpenSchedule).toHaveBeenCalledWith("task-1");
   });
 
@@ -187,9 +218,11 @@ describe("useTodoKeymap", () => {
     expect(options.onNavigate).toHaveBeenCalledWith("/todo/inbox");
   });
 
-  it("a bare 'g' alone navigates nowhere, and a standalone 't' still opens the schedule sheet once the sequence is consumed", () => {
+  it("a bare 'g' alone navigates nowhere, and a standalone 't' still dispatches OPEN_SCHEDULE_EVENT once the sequence is consumed", () => {
     focusTaskRow("task-1");
     const options = renderKeymap();
+    const listener = vi.fn();
+    document.addEventListener(OPEN_SCHEDULE_EVENT, listener);
 
     fireEvent.keyDown(document, { key: "g" });
     expect(options.onNavigate).not.toHaveBeenCalled();
@@ -197,12 +230,13 @@ describe("useTodoKeymap", () => {
     // Completes the "g t" sequence — go to Today, not "set date".
     fireEvent.keyDown(document, { key: "t" });
     expect(options.onNavigate).toHaveBeenCalledWith("/todo/today");
-    expect(options.onOpenSchedule).not.toHaveBeenCalled();
+    expect(listener).not.toHaveBeenCalled();
 
     // A later, standalone "t" — no preceding "g" this time — hits the
     // ordinary "set date" binding instead.
     fireEvent.keyDown(document, { key: "t" });
-    expect(options.onOpenSchedule).toHaveBeenCalledWith("task-1");
+    expect(listener).toHaveBeenCalledTimes(1);
+    document.removeEventListener(OPEN_SCHEDULE_EVENT, listener);
   });
 
   it("clears the pending sequence on a non-matching second key, firing nothing", () => {
@@ -231,10 +265,13 @@ describe("useTodoKeymap", () => {
 
   it("ignores Alt-held keys entirely", () => {
     focusTaskRow("task-1");
-    const options = renderKeymap();
+    renderKeymap();
+    const listener = vi.fn();
+    document.addEventListener(OPEN_SCHEDULE_EVENT, listener);
 
     fireEvent.keyDown(document, { key: "t", altKey: true });
 
-    expect(options.onOpenSchedule).not.toHaveBeenCalled();
+    expect(listener).not.toHaveBeenCalled();
+    document.removeEventListener(OPEN_SCHEDULE_EVENT, listener);
   });
 });

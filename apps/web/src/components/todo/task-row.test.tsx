@@ -2,7 +2,7 @@ import type { Label, Project, Task } from "@meologue/core";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { OPEN_COMMAND_MENU_EVENT } from "@/lib/todo-keymap";
+import { OPEN_COMMAND_MENU_EVENT, OPEN_SCHEDULE_EVENT } from "@/lib/todo-keymap";
 import { TaskRow } from "./task-row";
 
 /**
@@ -132,6 +132,9 @@ function renderRow(overrides: Partial<Parameters<typeof TaskRow>[0]> = {}) {
       labels: [],
       onOpenDetail: vi.fn(),
       onSetPriority: vi.fn(),
+      onSetDate: vi.fn(),
+      onSetDateString: vi.fn(),
+      datesWithTasks: new Map(),
       onSetProject: vi.fn(),
       onSetLabels: vi.fn(),
       onCopyLink: vi.fn(),
@@ -403,18 +406,78 @@ describe("TaskRow", () => {
     expect(box).not.toHaveClass("ring-primary");
   });
 
-  // Issue #169: the schedule button is the one door onto Date/Deadline/
-  // Priority pickers from any row, in either Inbox or Today
-  // (TaskRow's own doc comment on `onOpenSchedule`).
+  // Issue #253: the Date button now anchors its own `TaskSchedulePopover`
+  // instance directly — it no longer opens the shared bottom sheet
+  // (`onOpenSchedule`), which now only opens from the More-actions
+  // "Deadline…" item. `scheduler-view` is the popover's own `data-testid`
+  // (task-schedule-popover.tsx) — jsdom lays nothing out, so this proves
+  // the popover opens, not that it anchors under the button; see this
+  // ticket's own report for why anchoring itself needs a real browser.
   // "Schedule" was renamed "Date" (issue #178's own reference behaviour —
   // the row's four hover actions read Edit, Date, Comment, More).
-  it("the Date button calls onOpenSchedule", () => {
+  it("the Date button opens this row's own anchored scheduler popover, not the shared sheet", () => {
     const onOpenSchedule = vi.fn();
     renderRow({ task: task({ content: "call mum" }), onOpenSchedule });
 
+    expect(screen.queryByTestId("scheduler-view")).not.toBeInTheDocument();
+
     fireEvent.click(screen.getByRole("button", { name: 'Date "call mum"' }));
 
+    expect(screen.getByTestId("scheduler-view")).toBeInTheDocument();
+    expect(onOpenSchedule).not.toHaveBeenCalled();
+  });
+
+  // Issue #253: the More-actions "Date…" item is a second entry point onto
+  // the identical per-row popover instance the hover button above opens —
+  // both flip the same `scheduleOpen` flag `task-row.tsx` owns.
+  it("the More-actions 'Date…' item opens the identical scheduler popover", () => {
+    renderRow({ task: task({ content: "call mum" }) });
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: 'More actions for "call mum"' }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Date/ }));
+
+    expect(screen.getByTestId("scheduler-view")).toBeInTheDocument();
+  });
+
+  // Issue #253: the `T` shortcut's own fan-in — `use-todo-keymap.ts`
+  // dispatches `OPEN_SCHEDULE_EVENT` (todo-keymap.ts) rather than calling
+  // this row directly, the identical document-level mechanism
+  // `OPEN_COMMAND_MENU_EVENT` already uses for `.` below.
+  it("opens the scheduler popover when todo-keymap.ts's own OPEN_SCHEDULE_EVENT names this Task", () => {
+    renderRow({ task: task({ id: "1", content: "call mum" }) });
+
+    expect(screen.queryByTestId("scheduler-view")).not.toBeInTheDocument();
+
+    act(() => {
+      document.dispatchEvent(new CustomEvent(OPEN_SCHEDULE_EVENT, { detail: { taskId: "1" } }));
+    });
+
+    expect(screen.getByTestId("scheduler-view")).toBeInTheDocument();
+  });
+
+  it("ignores OPEN_SCHEDULE_EVENT when it names a different Task", () => {
+    renderRow({ task: task({ id: "1", content: "call mum" }) });
+
+    act(() => {
+      document.dispatchEvent(
+        new CustomEvent(OPEN_SCHEDULE_EVENT, { detail: { taskId: "other-task" } }),
+      );
+    });
+
+    expect(screen.queryByTestId("scheduler-view")).not.toBeInTheDocument();
+  });
+
+  // Issue #253: "Deadline…" is unchanged by this ticket — it still opens
+  // the shared `TaskScheduleSheet`, not the Date popover.
+  it("the More-actions 'Deadline…' item still calls onOpenSchedule, not the scheduler popover", () => {
+    const onOpenSchedule = vi.fn();
+    renderRow({ task: task({ content: "call mum" }), onOpenSchedule });
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: 'More actions for "call mum"' }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Deadline/ }));
+
     expect(onOpenSchedule).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("scheduler-view")).not.toBeInTheDocument();
   });
 
   it("on a hover-capable pointer, a row's actions render in the fixed order Edit, Date, Comment, More", () => {
@@ -572,6 +635,9 @@ describe("TaskRow", () => {
           labels: [label({ id: "label-1", name: "urgent" })],
           onOpenDetail: vi.fn(),
           onSetPriority: vi.fn(),
+          onSetDate: vi.fn(),
+          onSetDateString: vi.fn(),
+          datesWithTasks: new Map(),
           onSetProject: vi.fn(),
           onSetLabels: vi.fn(),
           onCopyLink: vi.fn(),
@@ -591,6 +657,9 @@ describe("TaskRow", () => {
           labels: [],
           onOpenDetail: vi.fn(),
           onSetPriority: vi.fn(),
+          onSetDate: vi.fn(),
+          onSetDateString: vi.fn(),
+          datesWithTasks: new Map(),
           onSetProject: vi.fn(),
           onSetLabels: vi.fn(),
           onCopyLink: vi.fn(),
@@ -768,6 +837,9 @@ describe("TaskRow", () => {
           labels: [],
           onOpenDetail,
           onSetPriority: vi.fn(),
+          onSetDate: vi.fn(),
+          onSetDateString: vi.fn(),
+          datesWithTasks: new Map(),
           onSetProject: vi.fn(),
           onSetLabels: vi.fn(),
           onCopyLink: vi.fn(),
@@ -790,6 +862,9 @@ describe("TaskRow", () => {
           labels: [],
           onOpenDetail: vi.fn(),
           onSetPriority: vi.fn(),
+          onSetDate: vi.fn(),
+          onSetDateString: vi.fn(),
+          datesWithTasks: new Map(),
           onSetProject: vi.fn(),
           onSetLabels: vi.fn(),
           onCopyLink: vi.fn(),
@@ -824,6 +899,9 @@ describe("TaskRow", () => {
           labels: [],
           onOpenDetail: vi.fn(),
           onSetPriority: vi.fn(),
+          onSetDate: vi.fn(),
+          onSetDateString: vi.fn(),
+          datesWithTasks: new Map(),
           onSetProject: vi.fn(),
           onSetLabels: vi.fn(),
           onCopyLink: vi.fn(),
@@ -853,6 +931,9 @@ describe("TaskRow", () => {
           labels: [],
           onOpenDetail: vi.fn(),
           onSetPriority: vi.fn(),
+          onSetDate: vi.fn(),
+          onSetDateString: vi.fn(),
+          datesWithTasks: new Map(),
           onSetProject: vi.fn(),
           onSetLabels: vi.fn(),
           onCopyLink: vi.fn(),

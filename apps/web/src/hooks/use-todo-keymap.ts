@@ -5,6 +5,7 @@ import {
   focusedTaskId,
   isTypingTarget,
   OPEN_COMMAND_MENU_EVENT,
+  OPEN_SCHEDULE_EVENT,
   TODO_KEY_BINDINGS,
   type TodoKeyBinding,
 } from "@/lib/todo-keymap";
@@ -13,6 +14,7 @@ export interface UseTodoKeymapOptions {
   /** Looks a Task up by id — `todo-page.tsx`'s own `tasks`/`completedTasks` two-list lookup (`openTask`'s own doc comment there gives the reason both lists matter), handed in rather than duplicated here. */
   resolveTask: (taskId: string) => Task | null;
   onOpenTaskDetail: (task: Task) => void;
+  /** Opens the shared `TaskScheduleSheet` — reached from `D`/`Y` (Deadline/Priority) only, since issue #253 moved `T` (Date) onto `OPEN_SCHEDULE_EVENT` instead (that constant's own doc comment, todo-keymap.ts). */
   onOpenSchedule: (taskId: string) => void;
   onSetTaskDate: (taskId: string, date: string | null) => void;
   onSetTaskDeadline: (taskId: string, deadline: string | null) => void;
@@ -104,7 +106,18 @@ export function useTodoKeymap(options: UseTodoKeymapOptions): void {
           }
           return;
         }
+        // Issue #253: `T` now opens the row's own anchored
+        // `TaskSchedulePopover` instance rather than the shared bottom
+        // sheet — `OPEN_SCHEDULE_EVENT`'s own doc comment (todo-keymap.ts)
+        // has the reasoning for why this fires an event instead of calling
+        // `onOpenSchedule` the way `set-deadline`/`set-priority` below
+        // still do (the sheet still holds Deadline and Priority, unchanged
+        // by this ticket).
         case "set-date":
+          if (taskId !== null) {
+            document.dispatchEvent(new CustomEvent(OPEN_SCHEDULE_EVENT, { detail: { taskId } }));
+          }
+          return;
         case "set-deadline":
         case "set-priority":
           if (taskId !== null) {

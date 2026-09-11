@@ -990,38 +990,62 @@ describe("TodoPage — Today", () => {
 // Issue #169: the schedule sheet is one instance shared by every view
 // (todo-page.tsx's own doc comment on `schedulingId`) — exercised once
 // from Inbox here, since task-schedule-sheet.test.tsx already covers the
-// sheet's own picker behaviour in isolation.
+// sheet's own picker behaviour in isolation. Issue #253 moved Date off
+// this sheet onto its own per-row anchored `TaskSchedulePopover` instance
+// (task-row-content.tsx) — the row's hover Date button opens that instead
+// now, so this describe block exercises the sheet through the
+// More-actions "Deadline…" item instead, the door that still reaches it.
 describe("TodoPage — scheduling", () => {
-  // "Schedule" was renamed "Date" on the row (issue #178's own reference
-  // behaviour) — the sheet it opens, and its own title, are unchanged.
-  it("opens the schedule sheet for the tapped Task, and a picker action calls the context's setter", async () => {
-    const setTaskPriority = vi.fn();
-    renderTodoPage(inboxContext([task({ id: "a", content: "call mum" })], { setTaskPriority }));
-
-    await waitFor(() => expect(screen.getByText("call mum")).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: 'Date "call mum"' }));
-    // `LazyTaskScheduleSheet` resolves its `import()` asynchronously
-    // (lazy-task-schedule-sheet.ts's own header comment) — `findByText`,
-    // not `getByText`, tolerates the one microtask/render that takes.
-    expect(await screen.findByText('Schedule "call mum"')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "P1" }));
-
-    // storedPriorityOf(1) === 4.
-    expect(setTaskPriority).toHaveBeenCalledWith("a", 4);
-  });
-
   it("closing the sheet leaves no Task being scheduled", async () => {
     renderTodoPage(inboxContext([task({ id: "a", content: "call mum" })]));
 
     await waitFor(() => expect(screen.getByText("call mum")).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: 'Date "call mum"' }));
+    fireEvent.pointerDown(screen.getByRole("button", { name: 'More actions for "call mum"' }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Deadline/ }));
     // `LazyTaskScheduleSheet` resolves its `import()` asynchronously
     // (lazy-task-schedule-sheet.ts's own header comment) — wait for the
     // dialog to actually mount before dismissing it.
     fireEvent.keyDown(await screen.findByRole("dialog"), { key: "Escape" });
 
     await waitFor(() => expect(screen.queryByText('Schedule "call mum"')).not.toBeInTheDocument());
+  });
+});
+
+// Issue #253: the row's hover Date button, the More-actions "Date…" item
+// and the `T` shortcut all open the SAME per-row anchored
+// `TaskSchedulePopover` instance rather than the shared sheet — exercised
+// once from Inbox here (task-row.test.tsx already covers the fan-in in
+// isolation, and task-schedule-popover.test.tsx the popover's own
+// internals), so this only proves TodoPage wires the popover's setters to
+// real TaskStore mutations.
+describe("TodoPage — the Date popover", () => {
+  it("the hover Date button opens this row's own anchored popover, and picking a day calls setTaskDate", async () => {
+    const setTaskDate = vi.fn();
+    renderTodoPage(inboxContext([task({ id: "a", content: "call mum" })], { setTaskDate }));
+
+    await waitFor(() => expect(screen.getByText("call mum")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: 'Date "call mum"' }));
+
+    expect(await screen.findByTestId("scheduler-view")).toBeInTheDocument();
+    expect(screen.queryByText('Schedule "call mum"')).not.toBeInTheDocument();
+
+    // `/^Today \w{3}$/`, not a bare `/^Today/` — react-day-picker's own
+    // default aria-label for today's calendar cell also starts with
+    // "Today, " (a comma and the full weekday name), which would
+    // otherwise match too (found the hard way, in task-detail-view.test.tsx).
+    fireEvent.click(screen.getByRole("button", { name: /^Today \w{3}$/ }));
+
+    expect(setTaskDate).toHaveBeenCalledWith("a", expect.any(String));
+  });
+
+  it("the More-actions 'Date…' item opens the identical popover instance", async () => {
+    renderTodoPage(inboxContext([task({ id: "a", content: "call mum" })]));
+
+    await waitFor(() => expect(screen.getByText("call mum")).toBeInTheDocument());
+    fireEvent.pointerDown(screen.getByRole("button", { name: 'More actions for "call mum"' }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Date/ }));
+
+    expect(await screen.findByTestId("scheduler-view")).toBeInTheDocument();
   });
 });
 

@@ -228,6 +228,9 @@ function renderView(overrides: Partial<Parameters<typeof TaskDetailView>[0]> = {
     onComplete: vi.fn(),
     onUncomplete: vi.fn(),
     onOpenSchedule: vi.fn(),
+    onSetDate: vi.fn(),
+    onSetDateString: vi.fn(),
+    datesWithTasks: new Map(),
     onSetProject: vi.fn(),
     onSetLabels: vi.fn(),
     onSetDescription: vi.fn(),
@@ -476,15 +479,48 @@ describe("TaskDetailView", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it("Date, Deadline and Priority all open the identical shared schedule sheet", () => {
+  // Issue #253: Deadline and Priority still open the identical shared
+  // schedule sheet; Date left it for its own anchored `TaskSchedulePopover`
+  // instance instead — see the next test.
+  it("Deadline and Priority open the identical shared schedule sheet", () => {
     const onOpenSchedule = vi.fn();
     renderView({ onOpenSchedule });
 
-    fireEvent.click(screen.getByRole("button", { name: "Date" }));
     fireEvent.click(screen.getByRole("button", { name: "Deadline" }));
     fireEvent.click(screen.getByRole("button", { name: "Priority" }));
 
-    expect(onOpenSchedule).toHaveBeenCalledTimes(3);
+    expect(onOpenSchedule).toHaveBeenCalledTimes(2);
+  });
+
+  // Issue #253: Date anchors its own `TaskSchedulePopover` instance
+  // directly under the attribute pill/row — `scheduler-view` is the
+  // popover's own `data-testid` (task-schedule-popover.tsx). jsdom lays
+  // nothing out, so this proves the popover opens, not that it anchors;
+  // see this ticket's own report for why anchoring needs a real browser.
+  it("Date opens its own anchored scheduler popover, not the shared sheet", () => {
+    const onOpenSchedule = vi.fn();
+    renderView({ onOpenSchedule });
+
+    expect(screen.queryByTestId("scheduler-view")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Date" }));
+
+    expect(screen.getByTestId("scheduler-view")).toBeInTheDocument();
+    expect(onOpenSchedule).not.toHaveBeenCalled();
+  });
+
+  it("picking a day from the Date popover calls onSetDate", () => {
+    const onSetDate = vi.fn();
+    renderView({ onSetDate });
+
+    fireEvent.click(screen.getByRole("button", { name: "Date" }));
+    // The popover's own "Today" quick option — `/^Today \w{3}$/`, not a bare
+    // `/^Today/`, because react-day-picker's default day-cell aria-label
+    // for today's own calendar cell also starts with "Today, " (a comma
+    // and the full weekday name), which would otherwise match too.
+    fireEvent.click(screen.getByRole("button", { name: /^Today \w{3}$/ }));
+
+    expect(onSetDate).toHaveBeenCalledWith("1", expect.any(String));
   });
 
   it("an unset Date/Deadline/Priority renders a pill; once set, each is promoted into its own row", () => {

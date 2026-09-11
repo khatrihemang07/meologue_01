@@ -15,7 +15,10 @@
  *
  * Every item here reuses an existing door onto TaskStore — `onOpenDetail`/
  * `onOpenSchedule` open views this app already built (the Task's own
- * route, `TaskScheduleSheet`), `onSetPriority`/`onSetProject`/
+ * route, `TaskScheduleSheet`). Issue #253 split "Date…" off from
+ * `onOpenSchedule` onto its own `onOpenDate` — the row's own anchored
+ * `TaskSchedulePopover` instance, not the sheet — while "Deadline…" keeps
+ * the original callback unchanged. `onSetPriority`/`onSetProject`/
  * `onSetLabels` are use-tasks.ts's own setters. **Reminders, Duplicate and
  * Open in new window are deliberately absent** — none names a capability
  * this codebase has: there is no Reminder store, no Duplicate mutation on
@@ -56,6 +59,14 @@ export interface TaskCommandMenuProps {
   /** The trigger this menu anchors to — task-row.tsx's own "More actions" (⋯) button. */
   trigger: React.ReactNode;
   onOpenDetail: () => void;
+  /**
+   * Opens the row's own anchored `TaskSchedulePopover` instance (issue
+   * #253) — this menu's own "Date…" item, sitting alongside "Deadline…"
+   * below (`onOpenSchedule`, still the shared bottom sheet) rather than
+   * sharing its callback: the two now open genuinely different surfaces,
+   * where before this ticket both opened the identical sheet.
+   */
+  onOpenDate: () => void;
   onOpenSchedule: () => void;
   onSetPriority: (priority: number) => void;
   onSetProject: (projectId: string | null) => void;
@@ -84,6 +95,7 @@ export function TaskCommandMenu({
   onOpenChange,
   trigger,
   onOpenDetail,
+  onOpenDate,
   onOpenSchedule,
   onSetPriority,
   onSetProject,
@@ -112,7 +124,7 @@ export function TaskCommandMenu({
             <Hint id="edit-task" />
           </DropdownMenu.Item>
 
-          <DropdownMenu.Item className={itemClassName} onSelect={onOpenSchedule}>
+          <DropdownMenu.Item className={itemClassName} onSelect={onOpenDate}>
             <CalendarClock aria-hidden="true" className="size-3.5" />
             Date…
             <Hint id="set-date" />

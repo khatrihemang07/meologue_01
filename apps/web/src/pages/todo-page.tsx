@@ -697,6 +697,12 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     labels,
     onOpenDetail: openTaskDetail,
     onSetPriority: setTaskPriority,
+    // Issue #253: bundled here so every row's own per-instance
+    // `TaskSchedulePopover` (task-row-content.tsx) reaches these without a
+    // sixth prop threaded through TaskList/TaskTree/TodayView/ProjectView.
+    onSetDate: setTaskDate,
+    onSetDateString: setTaskDateString,
+    datesWithTasks,
     onSetProject: setTaskProject,
     onSetLabels: setTaskLabels,
     onCopyLink: copyTaskLink,
@@ -1019,11 +1025,8 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
                 setSchedulingId(null);
               }
             }}
-            onSetDate={setTaskDate}
             onSetDeadline={setTaskDeadline}
             onSetPriority={setTaskPriority}
-            onSetDateString={setTaskDateString}
-            datesWithTasks={datesWithTasks}
           />
         </Suspense>
       )}
@@ -1098,6 +1101,9 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
             onComplete={() => handleComplete(openTask.id, openTask.content, openTask.dateString)}
             onUncomplete={() => uncompleteTask(openTask.id)}
             onOpenSchedule={() => handleOpenSchedule(openTask.id)}
+            onSetDate={setTaskDate}
+            onSetDateString={setTaskDateString}
+            datesWithTasks={datesWithTasks}
             onSetProject={(projectId) => setTaskProject(openTask.id, projectId)}
             onSetLabels={(labelIds) => setTaskLabels(openTask.id, labelIds)}
             onSetDescription={(description) => setTaskDescription(openTask.id, description)}

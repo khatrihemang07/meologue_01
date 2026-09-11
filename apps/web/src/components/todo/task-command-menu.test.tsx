@@ -74,6 +74,7 @@ function renderMenu(overrides: Partial<Parameters<typeof TaskCommandMenu>[0]> = 
     onOpenChange: vi.fn(),
     trigger: <button type="button">More</button>,
     onOpenDetail: vi.fn(),
+    onOpenDate: vi.fn(),
     onOpenSchedule: vi.fn(),
     onSetPriority: vi.fn(),
     onSetProject: vi.fn(),
@@ -96,14 +97,30 @@ describe("TaskCommandMenu", () => {
     expect(onOpenDetail).toHaveBeenCalledTimes(1);
   });
 
-  it("Date and Deadline both open the shared TaskScheduleSheet, not a picker of their own", () => {
+  // Issue #253: Date and Deadline now open genuinely different surfaces —
+  // Date the row's own anchored `TaskSchedulePopover` instance
+  // (`onOpenDate`), Deadline the shared `TaskScheduleSheet` (`onOpenSchedule`,
+  // unchanged) — where before this ticket both opened the identical sheet.
+  it("Date opens the row's own scheduler popover through onOpenDate, not onOpenSchedule", () => {
+    const onOpenDate = vi.fn();
     const onOpenSchedule = vi.fn();
-    renderMenu({ onOpenSchedule });
+    renderMenu({ onOpenDate, onOpenSchedule });
 
     fireEvent.click(screen.getByRole("menuitem", { name: /^Date/ }));
+
+    expect(onOpenDate).toHaveBeenCalledTimes(1);
+    expect(onOpenSchedule).not.toHaveBeenCalled();
+  });
+
+  it("Deadline still opens the shared TaskScheduleSheet through onOpenSchedule", () => {
+    const onOpenDate = vi.fn();
+    const onOpenSchedule = vi.fn();
+    renderMenu({ onOpenDate, onOpenSchedule });
+
     fireEvent.click(screen.getByRole("menuitem", { name: /^Deadline/ }));
 
-    expect(onOpenSchedule).toHaveBeenCalledTimes(2);
+    expect(onOpenSchedule).toHaveBeenCalledTimes(1);
+    expect(onOpenDate).not.toHaveBeenCalled();
   });
 
   it("Priority's own submenu writes the stored (inverted) value, never the UI number", () => {

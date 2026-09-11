@@ -2,7 +2,12 @@ import type { Label, Project, Task } from "@meologue/core";
 import type { PointerEvent, ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { TaskRowContent } from "@/components/todo/task-row-content";
-import { OPEN_COMMAND_MENU_EVENT, type OpenCommandMenuDetail } from "@/lib/todo-keymap";
+import {
+  OPEN_COMMAND_MENU_EVENT,
+  OPEN_SCHEDULE_EVENT,
+  type OpenCommandMenuDetail,
+  type OpenScheduleEventDetail,
+} from "@/lib/todo-keymap";
 
 /**
  * Every door onto the Task detail view and its own command set (issue
@@ -25,6 +30,30 @@ export interface TaskDetailActions {
   onSetProject: (id: string, projectId: string | null) => void;
   onSetLabels: (id: string, labelIds: string[]) => void;
   onCopyLink: (task: Task) => void;
+  /**
+   * Sets or clears the Task's `date` (issue #253) — the row's hover Date
+   * button, the More-actions "Date…" item and the `T` shortcut all reach
+   * this through the identical per-row `TaskSchedulePopover` instance
+   * `task-row-content.tsx` owns (that file's own doc comment). Bundled
+   * here, not threaded as a sixth prop through TaskList/TaskTree/
+   * TodayView/ProjectView, for the identical reason every other setter in
+   * this object already is.
+   */
+  onSetDate: (id: string, date: string | null) => void;
+  /**
+   * Sets or clears the Task's Recurrence phrase (issue #253) —
+   * `TaskStore.setDateString`'s own doc comment (task-schedule-sheet.tsx)
+   * has the reasoning for why `date` is recomputed by the store rather
+   * than trusted from a caller.
+   */
+  onSetDateString: (id: string, dateString: string | null, now: string) => void;
+  /**
+   * Day-keys carrying at least one active Task, mapped to how many —
+   * threaded straight through to `TaskSchedulePopover`'s identical prop
+   * (its own doc comment: SCHED-09's calendar dot and SCHED-04's preview
+   * subline share this one source).
+   */
+  datesWithTasks: ReadonlyMap<string, number>;
   /**
    * Renames this Task (issue #225) — reached by clicking the row's own
    * Edit pencil, which swaps the title from the display `<button>` into
@@ -303,6 +332,18 @@ export function TaskRow({
   // already has of everything the `<li>` itself does.
   const [commandMenuOpen, setCommandMenuOpen] = useState(false);
 
+  // Issue #253: the row's own anchored `TaskSchedulePopover` instance
+  // (task-row-content.tsx) — a second, independent open flag alongside
+  // `commandMenuOpen` above, owned here for the identical reason: both the
+  // full command set's own trigger and this row's own Date popover need a
+  // single flag two different entry points can flip (a direct click on
+  // this row's own controls, or the `T` shortcut's document-level event,
+  // `OPEN_SCHEDULE_EVENT`'s own doc comment in todo-keymap.ts), and only
+  // this `<li>` — not `TaskRowContent`, issue #224's own visual/interaction
+  // split — owns state two of its own children (the Date button and
+  // `TaskCommandMenu`'s "Date…" item) both need to reach.
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+
   // Issue #228: supersedes this row's own former `.`-key `onKeyDown` —
   // `use-todo-keymap.ts`'s one document-level listener resolves "which
   // Task" from `document.activeElement` and dispatches this event rather
@@ -322,6 +363,22 @@ export function TaskRow({
     }
     document.addEventListener(OPEN_COMMAND_MENU_EVENT, onOpenCommandMenu);
     return () => document.removeEventListener(OPEN_COMMAND_MENU_EVENT, onOpenCommandMenu);
+  }, [task.id]);
+
+  // Issue #253: the `T` shortcut's own door onto this row's Date popover —
+  // mirrors the `OPEN_COMMAND_MENU_EVENT` listener above exactly, one
+  // document-level event, keyed on `task.id`, dispatched by
+  // `use-todo-keymap.ts` for a Task it has no direct component reference
+  // to.
+  useEffect(() => {
+    function onOpenSchedule(event: Event) {
+      const detail = (event as CustomEvent<OpenScheduleEventDetail>).detail;
+      if (detail.taskId === task.id) {
+        setScheduleOpen(true);
+      }
+    }
+    document.addEventListener(OPEN_SCHEDULE_EVENT, onOpenSchedule);
+    return () => document.removeEventListener(OPEN_SCHEDULE_EVENT, onOpenSchedule);
   }, [task.id]);
 
   return (
@@ -390,6 +447,8 @@ export function TaskRow({
         onMoveToSection={onMoveToSection}
         commandMenuOpen={commandMenuOpen}
         onCommandMenuOpenChange={setCommandMenuOpen}
+        scheduleOpen={scheduleOpen}
+        onScheduleOpenChange={setScheduleOpen}
         suppressDateBadge={suppressDateBadge}
       />
       {/*

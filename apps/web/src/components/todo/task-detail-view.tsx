@@ -37,25 +37,36 @@
  * caller scopes it, this view only renders" split `comments` above
  * already takes.
  *
- * **Date, Deadline and Priority all open the identical `TaskScheduleSheet`
- * every row's own "Date" hover action already opens** (`onOpenSchedule`
+ * **Deadline and Priority open the identical `TaskScheduleSheet` every
+ * row's own More-actions "Deadline…" item already opens** (`onOpenSchedule`
  * below) — the brief's own "Reuse what exists" instruction, applied
- * literally: this view has no second Date/Deadline/Priority picker of its
- * own to keep in sync with the row's. Project and Labels have no existing
+ * literally: this view has no second Deadline/Priority picker of its own
+ * to keep in sync with the row's. Project and Labels have no existing
  * picker to reuse (neither TaskScheduleSheet nor anything else in this
  * app edits either), so this file builds the one inline control each
  * needs.
+ *
+ * **Date is the one exception (issue #253).** It no longer shares
+ * `onOpenSchedule` at all — the sheet lost its own Date section entirely
+ * — and instead opens its own `TaskSchedulePopover` instance
+ * (`dateScheduleOpen` below), anchored directly under the Date attribute
+ * itself, the identical per-site instance a row's own hover Date button
+ * opens (`task-row-content.tsx`'s own doc comment). This view has exactly
+ * one Task open at a time, so "per-site" here just means "owned by this
+ * component," with no fan-in of its own to build: nothing else in this
+ * view can open a Task's Date.
  */
 import type { Comment, Event, Label, Project, Section, Task } from "@meologue/core";
-import { uiPriorityOf } from "@meologue/core";
+import { hasTime, uiPriorityOf } from "@meologue/core";
 import { ChevronLeft, ChevronRight, Pencil, Trash2, X } from "lucide-react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import type * as React from "react";
-import { Suspense, useRef, useState } from "react";
+import { forwardRef, Suspense, useRef, useState } from "react";
 import { entryProse } from "@/components/entry-prose";
 import { ActivityFeed } from "@/components/todo/activity-feed";
 import { LazyTaskDescriptionEditor } from "@/components/todo/lazy-task-description-editor";
 import { LazyTaskTitleEditor } from "@/components/todo/lazy-task-title-editor";
+import { TaskSchedulePopover } from "@/components/todo/task-schedule-popover";
 import { ConfirmDialog } from "@/components/ui/alert-dialog";
 import { useWideLayout } from "@/hooks/use-wide-layout";
 import { formatDay, formatTaskDate } from "@/lib/format-task-date";
@@ -99,8 +110,14 @@ export interface TaskDetailViewProps {
    */
   onComplete: () => void;
   onUncomplete: () => void;
-  /** Opens the shared `TaskScheduleSheet` — this file's own header comment on why Date/Deadline/Priority all funnel through the one door rather than each growing a picker of its own. */
+  /** Opens the shared `TaskScheduleSheet` — this file's own header comment on why Deadline/Priority funnel through the one door rather than each growing a picker of its own. Date no longer does (issue #253) — see `onSetDate`/`onSetDateString`/`datesWithTasks` below. */
   onOpenSchedule: () => void;
+  /** Sets or clears the Task's `date` (issue #253) — reaches this view's own `TaskSchedulePopover` instance for the Date attribute, mirroring `task-row-content.tsx`'s identical wiring. */
+  onSetDate: (id: string, date: string | null) => void;
+  /** Sets or clears the Task's Recurrence phrase (issue #253) — `TaskStore.setDateString`'s own doc comment (task-schedule-sheet.tsx) has the reasoning for why `date` is recomputed by the store rather than trusted from a caller. */
+  onSetDateString: (id: string, dateString: string | null, now: string) => void;
+  /** Day-keys carrying at least one active Task, mapped to how many — threaded straight through to `TaskSchedulePopover`'s identical prop (its own doc comment: SCHED-09's calendar dot and SCHED-04's preview subline share this one source). */
+  datesWithTasks: ReadonlyMap<string, number>;
   onSetProject: (projectId: string | null) => void;
   onSetLabels: (labelIds: string[]) => void;
   /** Sets the Task's `description` (issue #180) — `null` clears it back to "nothing chosen yet." */
@@ -134,36 +151,58 @@ export interface TaskDetailViewProps {
   events: Event[];
 }
 
-/** A Task's attribute, before it has one — a small, tappable pill rather than an empty row (this file's own header comment: "the view grows with the Task instead of showing empty fields"). */
-function AttributePill({ label, onClick }: { label: string; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="w-fit rounded-full border border-border px-2.5 py-1 text-muted-foreground text-xs transition hover:border-foreground/30 hover:text-foreground"
-    >
-      {label}
-    </button>
-  );
-}
+/**
+ * A Task's attribute, before it has one — a small, tappable pill rather
+ * than an empty row (this file's own header comment: "the view grows with
+ * the Task instead of showing empty fields").
+ *
+ * **`forwardRef`, since issue #253.** The Date attribute anchors a
+ * `TaskSchedulePopover` directly to this pill via Radix `asChild`, which
+ * clones this element and attaches a ref to it to measure where to
+ * anchor — a plain function component (no `forwardRef`) would silently
+ * swallow that ref the identical way `ui/button.tsx`'s own `Button` does
+ * (`task-row-content.tsx`'s own doc comment has the fuller account of that
+ * trap, found once already in this repo). `onClick` is optional now for
+ * the identical reason: the Date attribute passes none — Radix's own
+ * trigger click is what opens its popover — where Project/Deadline/
+ * Priority/Labels below still pass one to toggle their own local picker.
+ */
+const AttributePill = forwardRef<HTMLButtonElement, { label: string; onClick?: () => void }>(
+  function AttributePill({ label, onClick }, ref) {
+    return (
+      <button
+        ref={ref}
+        type="button"
+        onClick={onClick}
+        className="w-fit rounded-full border border-border px-2.5 py-1 text-muted-foreground text-xs transition hover:border-foreground/30 hover:text-foreground"
+      >
+        {label}
+      </button>
+    );
+  },
+);
 
-/** A Task's attribute, once it has one — promoted into its own full-width row (this file's own header comment). */
-function AttributeRow({
-  icon,
-  label,
-  value,
-  colour,
-  onClick,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: React.ReactNode;
-  /** A leading dot in this colour — Priority's own ring colour, or a Project's/Label's own swatch. Omitted for Date/Deadline, which carry no colour of their own. */
-  colour?: string;
-  onClick: () => void;
-}) {
+/**
+ * A Task's attribute, once it has one — promoted into its own full-width
+ * row (this file's own header comment). `forwardRef` and an optional
+ * `onClick` for the identical reason `AttributePill` above carries both —
+ * the Date attribute, once set, is a promoted row like this one, and needs
+ * the identical ref for its own `TaskSchedulePopover` trigger.
+ */
+const AttributeRow = forwardRef<
+  HTMLButtonElement,
+  {
+    icon: React.ReactNode;
+    label: string;
+    value: React.ReactNode;
+    /** A leading dot in this colour — Priority's own ring colour, or a Project's/Label's own swatch. Omitted for Date/Deadline, which carry no colour of their own. */
+    colour?: string;
+    onClick?: () => void;
+  }
+>(function AttributeRow({ icon, label, value, colour, onClick }, ref) {
   return (
     <button
+      ref={ref}
       type="button"
       onClick={onClick}
       className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition hover:bg-muted"
@@ -182,7 +221,7 @@ function AttributeRow({
       <span className="ml-auto truncate">{value}</span>
     </button>
   );
-}
+});
 
 /**
  * One Comment in the thread (issue #180) — rendered inline, click to
@@ -334,6 +373,9 @@ function TaskDetailBody({
   onComplete,
   onUncomplete,
   onOpenSchedule,
+  onSetDate,
+  onSetDateString,
+  datesWithTasks,
   onSetProject,
   onSetLabels,
   onSetDescription,
@@ -434,6 +476,20 @@ function TaskDetailBody({
           completed: task.completedAt !== null,
           recurring: task.dateString !== null,
         });
+  // Issue #253: this view's own `TaskSchedulePopover` instance for the
+  // Date attribute — `dateDay`/`dateTime` split the identical way
+  // `task-row-content.tsx`'s own identical popover instance does.
+  const [dateScheduleOpen, setDateScheduleOpen] = useState(false);
+  const dateDay = task.date === null ? null : task.date.slice(0, 10);
+  const dateTime = task.date !== null && hasTime(task.date) ? task.date.slice(11, 16) : null;
+
+  function setScheduleDay(day: string | null) {
+    if (day === null) {
+      onSetDate(task.id, null);
+      return;
+    }
+    onSetDate(task.id, dateTime === null ? day : `${day}T${dateTime}`);
+  }
 
   function startEditing(field: "title" | "description") {
     setTitleDraft(task.content);
@@ -868,20 +924,54 @@ function TaskDetailBody({
               ))}
             </select>
           )}
-          {task.date === null || dateDisplay === null ? (
-            <AttributePill label="Date" onClick={onOpenSchedule} />
-          ) : (
-            <AttributeRow
-              icon={null}
-              label="Date"
-              // Issue #224: the identical tone `task-row.tsx`'s own badge
-              // reads through `formatTaskDate` — `completed`/`recurring`
-              // passed the same way, so a Task overdue in the row is
-              // never merely upcoming in its own detail view.
-              value={<span style={{ color: dateDisplay.colour }}>{dateDisplay.text}</span>}
-              onClick={onOpenSchedule}
-            />
-          )}
+          {/*
+            Issue #253: Date is the one attribute here that no longer
+            opens `onOpenSchedule`'s shared sheet — it anchors this view's
+            own `TaskSchedulePopover` instance directly under the pill/row
+            below instead, the identical per-site instance
+            `task-row-content.tsx`'s own hover Date button opens. Both
+            `AttributePill` and `AttributeRow` forward refs (their own doc
+            comments above) specifically so this works as a Radix `asChild`
+            trigger.
+          */}
+          <TaskSchedulePopover
+            open={dateScheduleOpen}
+            onOpenChange={setDateScheduleOpen}
+            dateDay={dateDay}
+            dateTime={dateTime}
+            onSetTime={(time) => {
+              if (dateDay === null) {
+                return;
+              }
+              onSetDate(task.id, time === null ? dateDay : `${dateDay}T${time}`);
+            }}
+            dateString={task.dateString}
+            datesWithTasks={datesWithTasks}
+            onPickDay={(day) => {
+              setScheduleDay(day);
+              if (task.dateString !== null) {
+                onSetDateString(task.id, null, new Date().toISOString());
+              }
+            }}
+            onPickRecurrence={(dateString) =>
+              onSetDateString(task.id, dateString, new Date().toISOString())
+            }
+            trigger={
+              task.date === null || dateDisplay === null ? (
+                <AttributePill label="Date" />
+              ) : (
+                <AttributeRow
+                  icon={null}
+                  label="Date"
+                  // Issue #224: the identical tone `task-row.tsx`'s own badge
+                  // reads through `formatTaskDate` — `completed`/`recurring`
+                  // passed the same way, so a Task overdue in the row is
+                  // never merely upcoming in its own detail view.
+                  value={<span style={{ color: dateDisplay.colour }}>{dateDisplay.text}</span>}
+                />
+              )
+            }
+          />
           {task.deadline === null ? (
             <AttributePill label="Deadline" onClick={onOpenSchedule} />
           ) : (

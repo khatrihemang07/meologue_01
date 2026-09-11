@@ -136,11 +136,14 @@ export const TODO_KEY_BINDINGS: readonly TodoKeyBinding[] = [
     when: "task-focused",
     keys: ["mod+e"],
   },
-  // `T`/`D`/`Y` below all open the one sheet that actually has a Date, a
-  // Deadline and a Priority control (`task-schedule-sheet.tsx`'s own header
-  // comment: "The one place Date, Deadline and Priority are all
-  // settable") — Todoist's own overlay lists three separate pickers, this
-  // app has one surface that is all three, so all three keys open it.
+  // `T`/`D`/`Y` below all target Todoist's own three separate pickers —
+  // `D`/`Y` (Deadline/Priority) still open the one shared
+  // `TaskScheduleSheet` that holds both (`task-schedule-sheet.tsx`'s own
+  // header comment). `T` (Date) no longer does: issue #253 moved Date onto
+  // its own anchored `TaskSchedulePopover`, reached via `OPEN_SCHEDULE_
+  // EVENT` below rather than `use-todo-keymap.ts`'s `onOpenSchedule`
+  // (`OPEN_SCHEDULE_EVENT`'s own doc comment has the fuller fan-in
+  // reasoning).
   {
     id: "set-date",
     section: "Edit task",
@@ -238,6 +241,25 @@ export function isTypingTarget(target: EventTarget | null): boolean {
 export const OPEN_COMMAND_MENU_EVENT = "todo:open-command-menu";
 
 export interface OpenCommandMenuDetail {
+  taskId: string;
+}
+
+/**
+ * Issue #253's identical fan-in, one door over: `use-todo-keymap.ts`
+ * dispatches this for the `set-date` binding (`T`) instead of calling
+ * `onOpenSchedule` directly, and `task-row.tsx` listens for it the same way
+ * it already listens for `OPEN_COMMAND_MENU_EVENT` above — open *this row's
+ * own* `TaskSchedulePopover` instance when `data-task-id` matches. The row's
+ * hover Date button and the More-actions "Date…" item reach the identical
+ * per-row instance directly (they already sit inside the same component
+ * tree, the same reason `command-menu`'s own trigger button and its
+ * right-click handler need no event either) — only the keyboard binding,
+ * which has no component reference to reach through, needs a document-level
+ * event at all.
+ */
+export const OPEN_SCHEDULE_EVENT = "todo:open-schedule";
+
+export interface OpenScheduleEventDetail {
   taskId: string;
 }
 
