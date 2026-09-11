@@ -1,7 +1,91 @@
-import type { Task } from "@meologue/core";
-import { fireEvent, render, screen } from "@testing-library/react";
+import type { Label, Project, Task } from "@meologue/core";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
+import { OPEN_COMMAND_MENU_EVENT } from "@/lib/todo-keymap";
 import { TaskRow } from "./task-row";
+
+/**
+ * Stands in for the real `TaskTitleEditor` — `task-title-editor.tsx`'s own
+ * header comment records why no test mounts that component directly: it
+ * wraps a real ProseMirror `EditorView`, and jsdom "cannot usefully mount
+ * [one], let alone type into it" (`composer.tsx`'s own identical finding
+ * for the Composer). Mocking exactly this module, not `TaskRow` or
+ * `TaskRowContent` themselves, is the same split `todo-sidebar.test.tsx`
+ * and `chat-shell-layout.test.tsx` already use for `entry-store-layout.tsx`
+ * (mocked there because it needs a real SqliteDriver) — everything this
+ * suite actually wants to prove (double-click activates it, Enter commits
+ * through `detailActions.onRename`, Escape cancels) lives in the wiring
+ * around the editor, not inside the editor itself.
+ */
+function StubTaskTitleEditor({
+  value,
+  onCommit,
+  onCancel,
+  ariaLabel,
+}: {
+  value: string;
+  onCommit: (value: string) => void;
+  onCancel: () => void;
+  ariaLabel?: string;
+}) {
+  const [text, setText] = useState(value);
+  return (
+    <input
+      aria-label={ariaLabel ?? "Task name"}
+      value={text}
+      onChange={(event) => setText(event.target.value)}
+      onBlur={() => onCommit(text)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          onCommit(text);
+        }
+        if (event.key === "Escape") {
+          onCancel();
+        }
+      }}
+    />
+  );
+}
+
+vi.mock("@/components/todo/task-title-editor", () => ({
+  TaskTitleEditor: StubTaskTitleEditor,
+}));
+
+function label(overrides: Partial<Label> = {}): Label {
+  return {
+    id: "label-1",
+    deviceId: "device-a",
+    name: "urgent",
+    colour: "#ff8d85",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    seq: null,
+    syncedAt: null,
+    deletedAt: null,
+    ...overrides,
+  };
+}
+
+function project(overrides: Partial<Project> = {}): Project {
+  return {
+    id: "project-1",
+    deviceId: "device-a",
+    name: "Errands",
+    colour: "#ff8d85",
+    favourite: false,
+    archived: false,
+    parentId: null,
+    description: null,
+    orderKey: "V",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    seq: null,
+    syncedAt: null,
+    deletedAt: null,
+    ...overrides,
+  };
+}
 
 function task(overrides: Partial<Task> = {}): Task {
   return {
@@ -51,6 +135,7 @@ function renderRow(overrides: Partial<Parameters<typeof TaskRow>[0]> = {}) {
       onSetProject: vi.fn(),
       onSetLabels: vi.fn(),
       onCopyLink: vi.fn(),
+      onRename: vi.fn(),
       commentCountFor: vi.fn(() => 0),
     },
     onComplete: vi.fn(),
@@ -352,19 +437,34 @@ describe("TaskRow", () => {
   // pass or fail independent of any class on the element. What's actually
   // load-bearing, and what this asserts instead, is the exact utility
   // classes Tailwind mechanically turns into that CSS: `hidden` (the base,
-  // no-hover state) overridden only by `[@media(hover:hover)]:flex`, on
-  // Edit/Date/Comment specifically — the same pattern entry-actions.tsx's
-  // own `EntryHoverActions` already uses for its own two buttons. More
-  // carries no `hidden` at all: it has to stay the one thing a touch
-  // reader can always tap, since it's now the only door onto the other
-  // three's own actions at rest.
-  it("only More actions renders unconditionally — Edit, Date and Comment are hidden outside a hover-capable pointer", () => {
+  // no-hover state) overridden only by a hover-capable media query, on
+  // Edit/Date/Comment specifically. More carries no `hidden` at all: it
+  // has to stay the one thing a touch reader can always tap, since it's
+  // now the only door onto the other three's own actions at rest.
+  //
+  // Issue #224 widened that media query from plain `(hover: hover)` to
+  // `(hover: hover),(pointer: fine)` — `task-row-content.tsx`'s own comment
+  // explains why: a Tauri desktop window can misreport `(hover: none)` for
+  // a real mouse, and OR-ing in `(pointer: fine)` is what stops that
+  // misreport from also taking these three buttons away on a build the real
+  // device fix above was never about. It now rides the `pointer-fine`
+  // variant declared in index.css rather than an inline arbitrary one.
+  //
+  // **Read the limit of this assertion honestly.** `toHaveClass` proves a
+  // string is on the element and nothing more — it cannot see whether any
+  // CSS was ever generated for that name. This very test passed while the
+  // classes were assembled by template interpolation, which Tailwind's
+  // text scanner never sees, so no rule existed and every one of these
+  // buttons was fully visible on every row. The class name and the applied
+  // style are two different claims; only rendering the real stylesheet
+  // settles the second, which is what the side-by-side rig is for.
+  it("only More actions renders unconditionally — Edit, Date and Comment are hidden outside a hover-or-fine-pointer device", () => {
     renderRow({ task: task({ content: "call mum" }) });
 
     for (const label of ['Edit "call mum"', 'Date "call mum"', 'Comment on "call mum"']) {
       const button = screen.getByRole("button", { name: label });
       expect(button).toHaveClass("hidden");
-      expect(button).toHaveClass("[@media(hover:hover)]:flex");
+      expect(button).toHaveClass("pointer-fine:flex");
     }
 
     const more = screen.getByRole("button", { name: 'More actions for "call mum"' });
@@ -372,7 +472,7 @@ describe("TaskRow", () => {
     expect(more).toHaveClass("flex");
   });
 
-  it('opens the full command menu on right-click, and on the "." key', () => {
+  it("opens the full command menu on right-click", () => {
     renderRow({ task: task({ content: "call mum" }) });
 
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
@@ -387,9 +487,33 @@ describe("TaskRow", () => {
     // until the menu closes again.
     fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
 
-    fireEvent.keyDown(screen.getByRole("listitem"), { key: "." });
+  // Issue #228: the `.` key itself moved off this row entirely, onto
+  // `use-todo-keymap.ts`'s one document-level listener — this row's own
+  // remaining job is reacting to *that* hook's event, which is what this
+  // test drives directly rather than a raw "." keydown (there's no keydown
+  // handler left on this row to receive one).
+  it("opens the full command menu when use-todo-keymap.ts's own event names this Task", () => {
+    renderRow({ task: task({ id: "1", content: "call mum" }) });
+
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+
+    act(() => {
+      document.dispatchEvent(new CustomEvent(OPEN_COMMAND_MENU_EVENT, { detail: { taskId: "1" } }));
+    });
     expect(screen.getByRole("menu")).toBeInTheDocument();
+  });
+
+  it("ignores use-todo-keymap.ts's own event when it names a different Task", () => {
+    renderRow({ task: task({ id: "1", content: "call mum" }) });
+
+    act(() => {
+      document.dispatchEvent(
+        new CustomEvent(OPEN_COMMAND_MENU_EVENT, { detail: { taskId: "other-task" } }),
+      );
+    });
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 
   it("shows no schedule summary for a Task with no date, deadline or priority set", () => {
@@ -418,6 +542,91 @@ describe("TaskRow", () => {
     renderRow({ task: task({ content: "call mum", date: "2026-09-03T09:30" }) });
 
     expect(screen.getByText("Sep 3, 9:30 AM")).toBeInTheDocument();
+  });
+
+  // Issue #224's own "must gain" list: Labels, the Project a Task lives
+  // in, a Description preview and a sub-task count, none of which this
+  // row rendered before.
+  describe("issue #224's new metadata — Labels, Project, Description, sub-tasks", () => {
+    it("shows every resolved Label as a dot-plus-name badge, skipping a dangling id it can't resolve", () => {
+      renderRow({
+        task: task({ content: "call mum", labelIds: ["label-1", "gone"] }),
+        detailActions: {
+          projects: [],
+          labels: [label({ id: "label-1", name: "urgent" })],
+          onOpenDetail: vi.fn(),
+          onSetPriority: vi.fn(),
+          onSetProject: vi.fn(),
+          onSetLabels: vi.fn(),
+          onCopyLink: vi.fn(),
+          onRename: vi.fn(),
+          commentCountFor: vi.fn(() => 0),
+        },
+      });
+
+      expect(screen.getByText("urgent")).toBeInTheDocument();
+    });
+
+    it("shows the Task's own Project name when it has one, resolved live off detailActions.projects", () => {
+      renderRow({
+        task: task({ content: "call mum", projectId: "project-1" }),
+        detailActions: {
+          projects: [project({ id: "project-1", name: "Errands" })],
+          labels: [],
+          onOpenDetail: vi.fn(),
+          onSetPriority: vi.fn(),
+          onSetProject: vi.fn(),
+          onSetLabels: vi.fn(),
+          onCopyLink: vi.fn(),
+          onRename: vi.fn(),
+          commentCountFor: vi.fn(() => 0),
+        },
+      });
+
+      expect(screen.getByText("Errands")).toBeInTheDocument();
+    });
+
+    it("shows no Project name for an Inbox Task (projectId null)", () => {
+      renderRow({ task: task({ content: "call mum", projectId: null }) });
+
+      // "Inbox" is never named on the row itself — only a Task actually
+      // filed under a Project gets the badge (task-schedule-chips.tsx's
+      // own `projectNameFor` precedent for the identical omission).
+      expect(screen.queryByText("Inbox")).not.toBeInTheDocument();
+    });
+
+    it("shows no sub-task count when there are none", () => {
+      renderRow({ task: task({ content: "call mum" }), subtaskCount: 0 });
+
+      expect(screen.queryByText("3")).not.toBeInTheDocument();
+    });
+
+    it("shows the sub-task count, icon plus number, once there are sub-tasks", () => {
+      renderRow({ task: task({ content: "call mum" }), subtaskCount: 3 });
+
+      expect(screen.getByText("3")).toBeInTheDocument();
+    });
+
+    it("previews a Description's first line as rendered markdown beneath the title — ROW-07", () => {
+      renderRow({
+        task: task({ content: "call mum", description: "**call** first\nthen leave a voicemail" }),
+      });
+
+      // Only the first line — the rest of a multi-line Description is one
+      // tap away in the detail view, not repeated here (this row's own
+      // header comment on `descriptionFirstLine`).
+      expect(screen.queryByText(/voicemail/)).not.toBeInTheDocument();
+      // Real HTML from markdown, not the literal `**call**` characters —
+      // ROW-07's own "real HTML from markdown" requirement.
+      const strong = screen.getByText("call", { selector: "strong" });
+      expect(strong).toBeInTheDocument();
+    });
+
+    it("renders no Description preview at all when the Task has none", () => {
+      renderRow({ task: task({ content: "call mum", description: null }) });
+
+      expect(document.querySelector(".truncate.text-muted-foreground")).not.toBeInTheDocument();
+    });
   });
 
   describe("comment count — issue #180", () => {
@@ -517,5 +726,132 @@ describe("TaskRow", () => {
     expect(li).not.toBeNull();
     expect(li?.contains(subtasks)).toBe(true);
     expect(subtasks.parentElement).toBe(li);
+  });
+
+  // Issue #225: inline row editing, which did not exist before this
+  // ticket. The activation gesture is Todoist's own measured "Edit"
+  // hover pencil (`task-row-content.tsx`'s own header comment records
+  // driving it directly) — a single click on the title keeps its
+  // pre-existing, unambiguous meaning, "open the detail view."
+  describe("inline rename (issue #225)", () => {
+    it("clicking Edit swaps the title for the shared editor, seeded with the current content", async () => {
+      renderRow({ task: task({ content: "buy milk" }) });
+
+      fireEvent.click(screen.getByRole("button", { name: 'Edit "buy milk"' }));
+
+      expect(await screen.findByLabelText("Task name")).toHaveValue("buy milk");
+      expect(screen.queryByRole("button", { name: "buy milk" })).not.toBeInTheDocument();
+    });
+
+    it("a plain click on the title still opens the detail view, unambiguously and with no delay", () => {
+      const onOpenDetail = vi.fn();
+      renderRow({
+        task: task({ content: "buy milk" }),
+        detailActions: {
+          projects: [],
+          labels: [],
+          onOpenDetail,
+          onSetPriority: vi.fn(),
+          onSetProject: vi.fn(),
+          onSetLabels: vi.fn(),
+          onCopyLink: vi.fn(),
+          onRename: vi.fn(),
+          commentCountFor: vi.fn(() => 0),
+        },
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "buy milk" }));
+
+      expect(onOpenDetail).toHaveBeenCalledWith(expect.objectContaining({ content: "buy milk" }));
+    });
+
+    it("Enter commits a changed title through detailActions.onRename, and returns to the display button", async () => {
+      const onRename = vi.fn();
+      renderRow({
+        task: task({ content: "buy milk" }),
+        detailActions: {
+          projects: [],
+          labels: [],
+          onOpenDetail: vi.fn(),
+          onSetPriority: vi.fn(),
+          onSetProject: vi.fn(),
+          onSetLabels: vi.fn(),
+          onCopyLink: vi.fn(),
+          onRename,
+          commentCountFor: vi.fn(() => 0),
+        },
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: 'Edit "buy milk"' }));
+      const editor = await screen.findByLabelText("Task name");
+      fireEvent.change(editor, { target: { value: "buy oat milk" } });
+      fireEvent.keyDown(editor, { key: "Enter" });
+
+      expect(onRename).toHaveBeenCalledWith("1", "buy oat milk");
+      // `onRename` here is a bare mock, not a store mutation — this row's
+      // own `task` prop never actually changes, so what returns at rest
+      // is the display button showing that same, still-current prop
+      // (`todo-page.tsx`'s real `renameTask` is what a reader would see
+      // reflect the new text, once the store round-trips it back down).
+      // What this test can prove at this isolation level is that editing
+      // ends and the shared editor unmounts.
+      expect(await screen.findByRole("button", { name: "buy milk" })).toBeInTheDocument();
+      expect(screen.queryByLabelText("Task name")).not.toBeInTheDocument();
+    });
+
+    it("does not rename when the committed text is unchanged or blank", async () => {
+      const onRename = vi.fn();
+      renderRow({
+        task: task({ content: "buy milk" }),
+        detailActions: {
+          projects: [],
+          labels: [],
+          onOpenDetail: vi.fn(),
+          onSetPriority: vi.fn(),
+          onSetProject: vi.fn(),
+          onSetLabels: vi.fn(),
+          onCopyLink: vi.fn(),
+          onRename,
+          commentCountFor: vi.fn(() => 0),
+        },
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: 'Edit "buy milk"' }));
+      let editor = await screen.findByLabelText("Task name");
+      fireEvent.keyDown(editor, { key: "Enter" });
+      expect(onRename).not.toHaveBeenCalled();
+
+      fireEvent.click(await screen.findByRole("button", { name: 'Edit "buy milk"' }));
+      editor = await screen.findByLabelText("Task name");
+      fireEvent.change(editor, { target: { value: "   " } });
+      fireEvent.keyDown(editor, { key: "Enter" });
+      expect(onRename).not.toHaveBeenCalled();
+    });
+
+    it("Escape cancels without renaming, discarding the in-progress edit", async () => {
+      const onRename = vi.fn();
+      renderRow({
+        task: task({ content: "buy milk" }),
+        detailActions: {
+          projects: [],
+          labels: [],
+          onOpenDetail: vi.fn(),
+          onSetPriority: vi.fn(),
+          onSetProject: vi.fn(),
+          onSetLabels: vi.fn(),
+          onCopyLink: vi.fn(),
+          onRename,
+          commentCountFor: vi.fn(() => 0),
+        },
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: 'Edit "buy milk"' }));
+      const editor = await screen.findByLabelText("Task name");
+      fireEvent.change(editor, { target: { value: "discard me" } });
+      fireEvent.keyDown(editor, { key: "Escape" });
+
+      expect(onRename).not.toHaveBeenCalled();
+      expect(await screen.findByRole("button", { name: "buy milk" })).toBeInTheDocument();
+    });
   });
 });

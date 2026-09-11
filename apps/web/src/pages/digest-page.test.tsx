@@ -32,6 +32,7 @@ const defaultEntryStoreContext: EntryStoreOutletContext = {
   setTaskDate: vi.fn(),
   setTaskDeadline: vi.fn(),
   setTaskPriority: vi.fn(),
+  setTaskDateString: vi.fn(),
   setTaskLabels: vi.fn(),
   setTaskDescription: vi.fn(),
   listTasksInProject: vi.fn(async () => []),
@@ -82,6 +83,11 @@ const defaultEntryStoreContext: EntryStoreOutletContext = {
   setFilterColour: vi.fn(),
   setFilterQuery: vi.fn(async () => {}),
   removeFilter: vi.fn(),
+  addLabel: vi.fn(),
+  renameLabel: vi.fn(),
+  setLabelColour: vi.fn(),
+  removeLabel: vi.fn(),
+  removeProject: vi.fn(),
   disabled: false,
 };
 

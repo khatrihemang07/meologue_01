@@ -1,33 +1,50 @@
 import { describe, expect, it } from "vitest";
-import { priorityColour } from "./task-priority-colors";
+import { priorityColour, priorityPickerColour } from "./task-priority-colors";
 
-describe("priorityColour", () => {
-  // P1 and P2 are the two values this ticket verified live, in a real
-  // Todoist, dark theme, computed style — see this module's own header
-  // comment. Asserted against literally, not merely "is a string," so a
-  // future edit that quietly drifts either value fails a test rather than
-  // only a visual diff nobody happened to look at.
-  it("p1 is the verified rgb(255, 112, 102)", () => {
-    expect(priorityColour(1)).toBe("rgb(255, 112, 102)");
+// Both functions here return `var(--td-*)` references, not literal `rgb()`
+// strings — index.css's `[data-surface="todo"]` scope (issue #223) is what
+// resolves them, and only inside that scope. Asserting the exact token name
+// (not merely "is a string") is what catches a future edit renaming a token
+// in one file without the other, the same failure mode the pre-#223 tests
+// caught for a literal value drifting.
+describe("priorityColour (the row/checkbox ring)", () => {
+  it("p1 reads the measured row-ring token, --td-priority-row-1", () => {
+    expect(priorityColour(1)).toBe("var(--td-priority-row-1)");
   });
 
-  it("p2 is the verified rgb(255, 154, 19)", () => {
-    expect(priorityColour(2)).toBe("rgb(255, 154, 19)");
+  it("p2 and p3 read the row tokens (PRI-06: unmeasured, index.css falls them back to the picker swatch)", () => {
+    expect(priorityColour(2)).toBe("var(--td-priority-row-2)");
+    expect(priorityColour(3)).toBe("var(--td-priority-row-3)");
   });
 
-  it("p4 (and, by extension, 'no priority') is the verified neutral rgb(169, 169, 169)", () => {
-    expect(priorityColour(4)).toBe("rgb(169, 169, 169)");
+  it("p4 (and, by extension, 'no priority') reads the shared checkbox-ring default", () => {
+    expect(priorityColour(4)).toBe("var(--td-checkbox-ring-default)");
   });
 
-  it("p3 is distinct from every other level", () => {
-    const p3 = priorityColour(3);
-    expect(p3).not.toBe(priorityColour(1));
-    expect(p3).not.toBe(priorityColour(2));
-    expect(p3).not.toBe(priorityColour(4));
-  });
-
-  it("falls back to p4's neutral grey for an out-of-range input", () => {
+  it("falls back to p4's token for an out-of-range input", () => {
     expect(priorityColour(0)).toBe(priorityColour(4));
     expect(priorityColour(5)).toBe(priorityColour(4));
   });
+});
+
+describe("priorityPickerColour (the priority picker's own swatches)", () => {
+  it("reads the four measured picker-swatch tokens (PRI-01)", () => {
+    expect(priorityPickerColour(1)).toBe("var(--td-priority-picker-1)");
+    expect(priorityPickerColour(2)).toBe("var(--td-priority-picker-2)");
+    expect(priorityPickerColour(3)).toBe("var(--td-priority-picker-3)");
+    expect(priorityPickerColour(4)).toBe("var(--td-priority-picker-4)");
+  });
+
+  it("falls back to p4's swatch for an out-of-range input", () => {
+    expect(priorityPickerColour(0)).toBe(priorityPickerColour(4));
+    expect(priorityPickerColour(5)).toBe(priorityPickerColour(4));
+  });
+});
+
+// PRI-05's whole point, asserted directly rather than only implied by the
+// two describe blocks above reading different token names: P1's row ring
+// and P1's picker swatch are genuinely different values in a real Todoist,
+// and this module must never collapse them into one shared token.
+it("keeps the row ring's P1 and the picker's P1 on two different tokens (PRI-05)", () => {
+  expect(priorityColour(1)).not.toBe(priorityPickerColour(1));
 });

@@ -7,6 +7,8 @@ import {
   completedRecurringOccurrencesForDay,
   tasksForDay,
   today,
+  upcoming,
+  upcomingDayHeading,
 } from "./task-views";
 import { entry } from "./test-support/entry-fixture";
 import { event } from "./test-support/event-fixture";
@@ -478,5 +480,79 @@ describe("completedRecurringOccurrencesForDay (issue #181)", () => {
     const completed = event({ taskId: "gone", eventType: "completed" });
 
     expect(completedRecurringOccurrencesForDay([], [completed], "2026-09-03", OFFSET)).toEqual([]);
+  });
+});
+
+describe("upcoming() — issue #223's Upcoming view", () => {
+  it("groups dated Tasks by day, starting with today, excluding overdue ones today() already owns", () => {
+    const overdue = task({ id: "overdue", date: "2026-09-01" });
+    const dueToday = task({ id: "due-today", date: "2026-09-02" });
+    const tomorrow = task({ id: "tomorrow", date: "2026-09-03" });
+    const nextWeek = task({ id: "next-week", date: "2026-09-09" });
+
+    const days = upcoming([overdue, dueToday, tomorrow, nextWeek], NOW);
+
+    expect(days.map((d) => d.dayKey)).toEqual(["2026-09-02", "2026-09-03", "2026-09-09"]);
+    expect(days[0]?.tasks.map((t) => t.id)).toEqual(["due-today"]);
+    expect(days[1]?.tasks.map((t) => t.id)).toEqual(["tomorrow"]);
+    expect(days[2]?.tasks.map((t) => t.id)).toEqual(["next-week"]);
+  });
+
+  it("excludes an undated Task, even one carrying a Deadline — unlike today(), Upcoming groups by date, not by 'is due'", () => {
+    const deadlineOnly = task({ id: "deadline-only", date: null, deadline: "2026-09-05" });
+    const dated = task({ id: "dated", date: "2026-09-05" });
+
+    const days = upcoming([deadlineOnly, dated], NOW);
+
+    expect(days).toHaveLength(1);
+    expect(days[0]?.tasks.map((t) => t.id)).toEqual(["dated"]);
+  });
+
+  it("sorts within a day with the identical compareForToday chain today() uses — priority breaks a same-day tie", () => {
+    const low = task({ id: "low", date: "2026-09-05", priority: 1 });
+    const urgent = task({ id: "urgent", date: "2026-09-05", priority: 4 });
+
+    const days = upcoming([low, urgent], NOW);
+
+    expect(days[0]?.tasks.map((t) => t.id)).toEqual(["urgent", "low"]);
+  });
+
+  it("returns nothing for a Task list with no future or present dated Task", () => {
+    const overdue = task({ id: "overdue", date: "2026-08-01" });
+    const undated = task({ id: "undated", date: null });
+
+    expect(upcoming([overdue, undated], NOW)).toEqual([]);
+  });
+});
+
+describe("upcomingDayHeading() — the exact wording DATE-05 records", () => {
+  // "today" for this whole block matches the reference capture itself
+  // (docs/reference/todoist/README.md: "today" = 10 Sep 2026, a Thursday),
+  // so every expected string here is copied verbatim from
+  // scheduler-and-priority.md §9 rather than reasoned about independently.
+  const CAPTURED_TODAY = "2026-09-10";
+
+  it("reads exactly '10 Sep ‧ Today ‧ Thursday' for today itself", () => {
+    expect(upcomingDayHeading("2026-09-10", CAPTURED_TODAY)).toBe("10 Sep ‧ Today ‧ Thursday");
+  });
+
+  it("reads exactly '11 Sep ‧ Tomorrow ‧ Friday' for tomorrow", () => {
+    expect(upcomingDayHeading("2026-09-11", CAPTURED_TODAY)).toBe("11 Sep ‧ Tomorrow ‧ Friday");
+  });
+
+  it("reads exactly '12 Sep ‧ Saturday' beyond tomorrow — weekday only, no relative word", () => {
+    expect(upcomingDayHeading("2026-09-12", CAPTURED_TODAY)).toBe("12 Sep ‧ Saturday");
+  });
+
+  it("uses U+2027 (hyphenation point), not a lookalike bullet or middle dot, as the separator", () => {
+    const heading = upcomingDayHeading("2026-09-12", CAPTURED_TODAY);
+
+    expect(heading).toContain("‧");
+    expect(heading).not.toContain("•");
+    expect(heading).not.toContain("·");
+  });
+
+  it("never prints a relative word once a day is more than a day out, however far away it is", () => {
+    expect(upcomingDayHeading("2026-12-25", CAPTURED_TODAY)).toBe("25 Dec ‧ Friday");
   });
 });

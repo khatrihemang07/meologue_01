@@ -222,6 +222,20 @@ describe("useProjects", () => {
     expect(added.orderKey > "M").toBe(true);
   });
 
+  // Issue #229's own gap: ProjectStore.removeProject existed since #171
+  // but no UI ever reached it (projects-view.tsx/project-view.tsx only
+  // offered Archive) — this proves the mutation itself reaches the store.
+  it("removeProject reaches ProjectStore.removeProject and invalidates the Project list", async () => {
+    const store = createFakeStore();
+    await store.upsertProjects([project({ id: "p1", name: "Groceries" })]);
+    const { result } = await renderUseProjects(store);
+    await waitFor(() => expect(result.current.projects).toHaveLength(1));
+
+    act(() => result.current.removeProject("p1"));
+
+    await waitFor(() => expect(store.removeProject).toHaveBeenCalledWith("p1"));
+  });
+
   // setProjectParent returns the write's own Promise, unlike every other
   // setter here (this hook's own doc comment on why) — a caller has to be
   // able to `catch` a cycle refusal.
@@ -352,6 +366,22 @@ describe("useProjects", () => {
 
       await waitFor(() => expect(store.reorderProject).toHaveBeenCalled());
       expect(eventStore.record).not.toHaveBeenCalled();
+    });
+
+    it("removeProject records a 'deleted' Project Event", async () => {
+      const store = createFakeStore();
+      await store.upsertProjects([project({ id: "p1", name: "Groceries" })]);
+      const { result, eventStore } = await renderUseProjects(store);
+      await waitFor(() => expect(result.current.projects).toHaveLength(1));
+
+      act(() => result.current.removeProject("p1"));
+
+      await waitFor(() => expect(eventStore.record).toHaveBeenCalledTimes(1));
+      expect(lastRecordedEvent(eventStore)).toMatchObject({
+        eventType: "deleted",
+        objectType: "project",
+        extra: { name: "Groceries" },
+      });
     });
   });
 });

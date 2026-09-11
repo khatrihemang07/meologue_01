@@ -8,7 +8,29 @@ export interface UseLabelsResult {
   /** Every active Label, alphabetical (LabelStore.list()'s own guarantee). */
   labels: Label[];
   /**
-   * Turns issue #170's quick-add parser's `labelNames` (a Task's `%label`
+   * Creates a Label from plain text — issue #229's own gap: before this,
+   * a Label could only come into existence as a side effect of typing
+   * `@name` into the quick-add field (`resolveLabelIds` below). Ignores
+   * blank input, mirroring addProject/addTask. Coloured `colour` when
+   * given, `DEFAULT_LABEL_COLOUR` otherwise — the identical default
+   * `resolveLabelIds` already uses for a Label minted implicitly, so a
+   * Label created either way starts the same.
+   */
+  addLabel: (name: string, colour?: string) => void;
+  /** Issue #229 — reaches LabelStore.rename, previously wired to no UI at all (this file's own header comment, pre-#229). Ignores a blank name, mirroring renameProject/renameFilter. */
+  renameLabel: (id: string, name: string) => void;
+  /** Issue #229 — reaches LabelStore.setColour, previously wired to no UI at all. */
+  setLabelColour: (id: string, colour: string) => void;
+  /**
+   * Issue #229 — reaches LabelStore.remove, previously wired to no UI at
+   * all. Tombstones only; a Task still carrying this Label's id in its
+   * own `labelIds` is left with a dangling reference, the accepted,
+   * transient state LabelStore.remove's own doc comment names (mirroring
+   * Project/Filter's identical removeProject/removeFilter).
+   */
+  removeLabel: (id: string) => void;
+  /**
+   * Turns issue #170's quick-add parser's `labelNames` (a Task's `@label`
    * tokens, resolved to plain strings — see packages/core/src/quick-add/
    * types.ts's own doc comment on why the parser itself never resolves a
    * name to an id: it carries no LabelStore) into the `labelIds` a Task
@@ -30,7 +52,7 @@ export interface UseLabelsResult {
    * Returns ids in `names`' own order, de-duplicated — a Task's
    * `labelIds` is an ordered array (../../packages/core/src/task-types.ts's
    * own doc comment on why: "the order Labels were added in" is preserved
-   * for free), and typing the same `%label` twice in one line should not
+   * for free), and typing the same `@label` twice in one line should not
    * duplicate it in that order.
    */
   resolveLabelIds: (names: string[]) => Promise<string[]>;
@@ -43,13 +65,18 @@ export interface UseLabelsResult {
  * for the identical reason that file's own header comment gives for
  * mirroring use-history.ts.
  *
- * Deliberately thin: this ticket's web-side brief (170-brief.md's own Part
- * D) never asks for a Labels management page — renaming, recolouring or
- * deleting a Label — only for resolving what a reader typed into the add
- * field. `rename`/`setColour`/`remove` stay unreachable from `apps/web`
- * until a future ticket asks a UI to reach them, the same "built, not yet
- * wired to a control" posture TaskStore's own setters had for one release
- * between #168 and #169.
+ * Was deliberately thin through issue #170: that ticket's own web-side
+ * brief never asked for a Labels management page — renaming, recolouring
+ * or deleting a Label — only for resolving what a reader typed into the
+ * add field, so `rename`/`setColour`/`remove` stayed unreachable from
+ * `apps/web`, the same "built, not yet wired to a control" posture
+ * TaskStore's own setters had for one release between #168 and #169.
+ * Issue #229 is the ticket that finally asks for that UI (`labels-
+ * view.tsx`) — `addLabel`/`renameLabel`/`setLabelColour`/`removeLabel`
+ * below are its mutation surface, following `useProjects`/`useFilters`'s
+ * own "a query, a mutation per write, TanStack's own cache invalidation"
+ * shape exactly, for the identical reason those two hooks' own header
+ * comments give for mirroring `use-history.ts`.
  */
 export function useLabels(labelStore: LabelStore, deviceId: string): UseLabelsResult {
   const labelsQuery = useQuery({
@@ -64,12 +91,70 @@ export function useLabels(labelStore: LabelStore, deviceId: string): UseLabelsRe
     onSuccess: () => queryClient.invalidateQueries({ queryKey: LABELS_QUERY_KEY }),
   });
 
+  function invalidateLabels() {
+    return queryClient.invalidateQueries({ queryKey: LABELS_QUERY_KEY });
+  }
+
+  function addLabel(name: string, colour?: string) {
+    const trimmed = name.trim();
+    if (trimmed === "") {
+      return;
+    }
+    const capturedAt = new Date().toISOString();
+    upsertMutation.mutate([
+      {
+        id: mintId(),
+        deviceId,
+        name: trimmed,
+        colour: colour ?? DEFAULT_LABEL_COLOUR,
+        createdAt: capturedAt,
+        // Issue #196: starts equal to createdAt, the same single clock read.
+        updatedAt: capturedAt,
+        seq: null,
+        syncedAt: null,
+        deletedAt: null,
+      },
+    ]);
+  }
+
+  const renameMutation = useMutation({
+    mutationFn: ({ id, name }: { id: string; name: string }) => labelStore.rename(id, name),
+    onSuccess: invalidateLabels,
+  });
+
+  function renameLabel(id: string, name: string) {
+    const trimmed = name.trim();
+    if (trimmed === "") {
+      return;
+    }
+    renameMutation.mutate({ id, name: trimmed });
+  }
+
+  const setColourMutation = useMutation({
+    mutationFn: ({ id, colour }: { id: string; colour: string }) =>
+      labelStore.setColour(id, colour),
+    onSuccess: invalidateLabels,
+  });
+
+  function setLabelColour(id: string, colour: string) {
+    setColourMutation.mutate({ id, colour });
+  }
+
+  const removeMutation = useMutation({
+    mutationFn: (id: string) => labelStore.remove(id),
+    onSuccess: invalidateLabels,
+  });
+
+  function removeLabel(id: string) {
+    removeMutation.mutate(id);
+  }
+
   async function resolveLabelIds(names: string[]): Promise<string[]> {
     if (names.length === 0) {
       return [];
     }
     // Read fresh off the query cache rather than the `labels` closed over
-    // above: two `%label` tokens resolved back-to-back in the same call
+    // above: two `@label` tokens resolved back-to-back in the same call
     // (this function's own loop below) must see a Label the first one just
     // minted, or the second would create a duplicate instead of reusing
     // it — `labels` from the render that triggered this call is a snapshot
@@ -108,5 +193,5 @@ export function useLabels(labelStore: LabelStore, deviceId: string): UseLabelsRe
     return ids;
   }
 
-  return { labels, resolveLabelIds };
+  return { labels, addLabel, renameLabel, setLabelColour, removeLabel, resolveLabelIds };
 }

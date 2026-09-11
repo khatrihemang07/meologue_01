@@ -1,5 +1,13 @@
-import { CalendarCheck, FolderKanban, History, ListFilter, ListTodo } from "lucide-react";
+import {
+  CalendarCheck,
+  CalendarClock,
+  FolderKanban,
+  History,
+  ListFilter,
+  ListTodo,
+} from "lucide-react";
 import { NavLink } from "react-router";
+import { useWideLayout } from "@/hooks/use-wide-layout";
 import { cn } from "@/lib/utils";
 
 /**
@@ -25,10 +33,43 @@ import { cn } from "@/lib/utils";
  * here — the same reason `/reflect/:sessionId` isn't a `Nav`
  * destination (nav.tsx) either: a reader reaches it by opening a specific
  * Project, not by picking it from this bar.
+ *
+ * **Hides itself at the wide breakpoint (issue #223's second half).**
+ * `TodoSidebar` (chat-shell-layout.tsx) takes over this component's own
+ * role — "a second, co-equal way into the same Tasks" — the moment there
+ * is room for a pane beside the open Destination, and it carries the
+ * identical `aria-label="Todo"` this component's own `<nav>` already
+ * does. Leaving both mounted at once would put two nav landmarks with the
+ * same name on screen simultaneously — exactly the duplicate-landmark
+ * defect `chat-list-pane.tsx`'s own header comment already argues a
+ * `<div>` instead of a `<header>` into existence to avoid, reappearing
+ * here on the same axis rebuilt as two `<nav>`s instead of two
+ * `<header>`s. Below the breakpoint this renders exactly as it always
+ * has — the load-bearing narrow-viewport constraint issue #223's own
+ * brief names is that nothing here changes for it.
+ *
+ * **Two lists, not one — the miss this file's `Upcoming` row now fixes.**
+ * Issue #223 shipped `/todo/upcoming` and added it to `todo-sidebar.tsx`'s
+ * own rows in the same change, but never to `VIEWS` below: this component
+ * and the sidebar are separate lists a new destination has to be added to
+ * twice, not one shared source of truth read at two widths, and #223 only
+ * touched one of them. Above the wide breakpoint that was invisible — the
+ * sidebar carried a real link — so it shipped anyway, and `/todo/upcoming`
+ * stayed unreachable on Android and at any phone width for a full release
+ * until this paragraph's own fix. "Adding a view is adding a row to a
+ * list" (above, and again below) was never false; it just undercounted
+ * how many lists there are.
  */
 const VIEWS = [
   { to: "/todo/inbox", label: "Inbox", Icon: ListTodo },
   { to: "/todo/today", label: "Today", Icon: CalendarCheck },
+  // Issue #223 added this same destination to todo-sidebar.tsx (the wide
+  // breakpoint's own list) but not here, leaving /todo/upcoming
+  // unreachable below the wide breakpoint for a full release — see this
+  // file's own header comment. Positioned after Today, matching
+  // todo-sidebar.tsx's own Inbox/Today/Upcoming/Filters order (parity
+  // ledger NAV-01) so the two lists agree.
+  { to: "/todo/upcoming", label: "Upcoming", Icon: CalendarClock },
   { to: "/todo/projects", label: "Projects", Icon: FolderKanban },
   // Issue #184 / ADR 0056: Todo's activity log, the fourth row — exactly
   // the proof this component's own header comment already names ("a
@@ -45,6 +86,11 @@ const VIEWS = [
 ] as const;
 
 export function TodoNav() {
+  const wide = useWideLayout();
+  if (wide) {
+    return null;
+  }
+
   return (
     <nav
       aria-label="Todo"

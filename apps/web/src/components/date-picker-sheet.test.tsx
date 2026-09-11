@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DatePickerSheet, localDayKey } from "./date-picker-sheet";
+import { DatePickerSheet } from "./date-picker-sheet";
 
 // A day near the middle of the month whose number can't collide with an
 // "outside day" from the neighbouring month the grid also renders (those
@@ -152,34 +152,27 @@ describe("DatePickerSheet — tap then confirm", () => {
   });
 });
 
-describe("localDayKey — the local-day rule, not a UTC conversion", () => {
+describe("DatePickerSheet — the local-day round trip", () => {
   // Pacific/Kiritimati sits at UTC+14, the furthest-east timezone that
   // exists — chosen specifically because a local midnight there is still
   // the *previous* day in UTC. `vi.stubEnv` reassigns `TZ` for the process;
   // only *new* `Date`s built after that pick up the new zone, which is
   // exactly what this test needs (nothing here relies on any `Date`
-  // constructed before this `beforeEach` runs).
+  // constructed before this `beforeEach` runs). The pure `localDayKey`
+  // trap this offset exercises is pinned directly in
+  // `lib/local-day-key.test.ts`; this test is the one that can only be
+  // written here, against the picker's own `initialDate` parsing.
   beforeEach(() => {
     vi.stubEnv("TZ", "Pacific/Kiritimati");
   });
 
-  it("names a near-midnight local day by the day a reader would name it, not the UTC day", () => {
-    // Local midnight (00:30) on the 1st, at UTC+14, is 10:30 the *previous*
-    // day in UTC. A day key derived via `toISOString().slice(0, 10)` (or
-    // any other UTC accessor) would silently answer the 31st here — this
-    // pins that `localDayKey` never takes that route.
-    const localMidnightOnThe1st = new Date(2026, 0, 1, 0, 30, 0);
-
-    expect(localMidnightOnThe1st.toISOString().slice(0, 10)).toBe("2025-12-31");
-    expect(localDayKey(localMidnightOnThe1st)).toBe("2026-01-01");
-  });
-
   it("round-trips a seeded day key through the picker's own initialDate parsing, not just localDayKey in isolation", () => {
     // Seeding from "2026-01-01" and confirming immediately, under the same
-    // UTC+14 offset the test above pins, must emit "2026-01-01" back — this
-    // exercises `parseDayKey` (initialDate -> Date) as well as
-    // `localDayKey` (Date -> emitted key), since a mistake in either one
-    // could silently cancel the other out on a naive round trip.
+    // UTC+14 offset this describe block's beforeEach pins, must emit
+    // "2026-01-01" back — this exercises `parseDayKey` (initialDate ->
+    // Date) as well as `localDayKey` (Date -> emitted key), since a
+    // mistake in either one could silently cancel the other out on a naive
+    // round trip.
     const onConfirm = vi.fn();
     render(
       <DatePickerSheet

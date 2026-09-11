@@ -1,6 +1,6 @@
 import { withDefaultLabelIds } from "../label-fields";
 import { compareByOrder } from "../order-key";
-import { nextOccurrenceAfterCompletion, tomorrowOf } from "../recurrence";
+import { firstOccurrence, nextOccurrenceAfterCompletion, tomorrowOf } from "../recurrence";
 import {
   assertValidDate,
   assertValidDeadline,
@@ -228,6 +228,48 @@ export class InMemoryTaskStore implements TaskStore {
   async setPriority(id: string, priority: number): Promise<void> {
     assertValidPriority(priority);
     this.applyIfLive(id, { priority, updatedAt: this.now(), seq: null, syncedAt: null });
+  }
+
+  // Mirrors SqliteTaskStore.setDateString — see TaskStore.setDateString's
+  // own doc comment for the full reasoning. "No-op against a tombstone"
+  // checked here the same way advanceRecurring's own does, before either
+  // throw below becomes reachable.
+  async setDateString(id: string, dateString: string | null, now: string): Promise<void> {
+    const existing = this.tasks.get(id);
+    if (existing === undefined || existing.deletedAt !== null) {
+      return;
+    }
+    if (dateString === null) {
+      // Ends the Recurrence, `date` untouched — see TaskStore.setDateString's
+      // own doc comment on why this mirrors completeForever's "date is
+      // left exactly as it was" rather than clearing it too.
+      this.applyIfLive(id, { dateString: null, updatedAt: this.now(), seq: null, syncedAt: null });
+      return;
+    }
+    // Only the calendar day matters to ../recurrence/'s engine — the
+    // identical `.slice(0, 10)` advanceRecurring's own mechanics applies
+    // above.
+    const outcome = firstOccurrence(dateString, {
+      dueDate: existing.date,
+      now: now.slice(0, 10),
+    });
+    if (outcome.kind === "refused") {
+      throw new Error(
+        `"${dateString}" is not a recurrence rule ../recurrence/ accepts: ${outcome.reason}`,
+      );
+    }
+    if (outcome.kind === "ended") {
+      throw new Error(
+        `"${dateString}" has no occurrence left as of ${now} — its own starting/ending/for bound has already elapsed`,
+      );
+    }
+    this.applyIfLive(id, {
+      date: outcome.date,
+      dateString,
+      updatedAt: this.now(),
+      seq: null,
+      syncedAt: null,
+    });
   }
 
   // Mirrors SqliteTaskStore.setLabelIds — see TaskStore.setLabelIds's own

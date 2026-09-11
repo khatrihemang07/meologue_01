@@ -11,7 +11,7 @@ import type { QuickAddToken } from "./types";
 /**
  * The sigil-marked rules (issue #170's Part A) — every one of these is
  * always active, regardless of `QuickAddOptions.smartDates`, because the
- * user typed an explicit marker on purpose: `#`, `/`, `%`, `p1`-`p4`,
+ * user typed an explicit marker on purpose: `#`, `/`, `@`, `p1`-`p4`,
  * `!`, `{}`, a leading `* `, `//`. See ./types.ts's
  * `QuickAddTokenKind` doc comment for why that's the line
  * `smartDates` draws, and ./date-rules.ts for the family it turns off.
@@ -65,9 +65,22 @@ export function matchSection(input: string): QuickAddToken[] {
   return collectNamedMatches(input, regex, "section");
 }
 
-/** `%label` — `%`, never the retiring `@` (issue #170's own instruction; CONTEXT.md's Label entry). */
+/**
+ * `@label` — issue #170 chose `%`, retiring `@` as "unlikely to be
+ * missed." Issue #226's own reference capture (docs/reference/todoist/
+ * quick-add.md § Recognised vocabulary and § Autocomplete popups) shows
+ * Todoist using `@` for labels, verified, with its own autocomplete
+ * popup and "Label not found. Create <text>" fallback — so this reverses
+ * #170's choice rather than layering a second sigil onto it. Parity with
+ * Todoist is the standing brief here (CONTEXT.md's `"Project" — admitted,
+ * with a note` makes the same call for a different word), not a new
+ * direction, and two sigils for one concept would be exactly the kind of
+ * ambiguity a glossary-driven parser like this one exists to avoid — see
+ * this file's own header comment for why an explicit marker is supposed
+ * to carry no ambiguity at all. `%` is not kept as an alias.
+ */
 export function matchLabel(input: string): QuickAddToken[] {
-  return matchNamedSigil(input, "%", "label");
+  return matchNamedSigil(input, "@", "label");
 }
 
 function matchNamedSigil(input: string, sigil: string, kind: "project" | "label"): QuickAddToken[] {

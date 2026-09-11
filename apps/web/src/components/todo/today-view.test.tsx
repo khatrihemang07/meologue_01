@@ -47,6 +47,7 @@ function renderTodayView(overrides: Partial<Parameters<typeof TodayView>[0]> = {
       onSetProject: vi.fn(),
       onSetLabels: vi.fn(),
       onCopyLink: vi.fn(),
+      onRename: vi.fn(),
       commentCountFor: vi.fn(() => 0),
     },
     onComplete: vi.fn(),
@@ -64,7 +65,7 @@ function renderTodayView(overrides: Partial<Parameters<typeof TodayView>[0]> = {
 describe("TodayView", () => {
   // "Now" is pinned so overdue/due-today classification (task-views.ts's
   // own today()) doesn't depend on whatever day this suite happens to run
-  // on — the same reasoning date-picker-sheet.tsx's own localDayKey exists
+  // on — the same reasoning lib/local-day-key.ts's own localDayKey exists
   // to make deterministic from a Date this test controls.
   beforeEach(() => {
     vi.useFakeTimers();

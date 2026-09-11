@@ -1,5 +1,6 @@
 import type { Project, Task } from "@meologue/core";
 import { fireEvent, render, screen } from "@testing-library/react";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { TaskQuickFind } from "./task-quick-find";
 
@@ -50,17 +51,38 @@ function project(overrides: Partial<Project> = {}): Project {
   };
 }
 
-function renderQuickFind(props: Partial<Parameters<typeof TaskQuickFind>[0]> = {}) {
+// Issue #228: `TaskQuickFind` is a controlled dialog now — its own former
+// document-level `/`/`f`/⌘K listener moved to `use-todo-keymap.ts` (that
+// hook's own header comment on why it's the one listener now, not a second
+// one racing it). This wrapper stands in for `todo-page.tsx`'s own
+// `quickFindOpen` state, so these tests still drive open/close the way a
+// reader actually would — by whatever calls `onOpenChange` — without
+// re-testing the keymap hook's own trigger-key matching here (that lives
+// in `use-todo-keymap.test.ts`).
+function ControlledQuickFind(
+  props: Omit<Parameters<typeof TaskQuickFind>[0], "open" | "onOpenChange"> & {
+    initialOpen?: boolean;
+  },
+) {
+  const { initialOpen = false, ...rest } = props;
+  const [open, setOpen] = useState(initialOpen);
+  return <TaskQuickFind {...rest} open={open} onOpenChange={setOpen} />;
+}
+
+function renderQuickFind(
+  props: Partial<Parameters<typeof TaskQuickFind>[0]> & { initialOpen?: boolean } = {},
+) {
   const onOpenTask = vi.fn();
   const onOpenProject = vi.fn();
   const onShowMoreResults = vi.fn();
   render(
-    <TaskQuickFind
+    <ControlledQuickFind
       tasks={[]}
       projects={[]}
       onOpenTask={onOpenTask}
       onOpenProject={onOpenProject}
       onShowMoreResults={onShowMoreResults}
+      initialOpen={true}
       {...props}
     />,
   );
@@ -68,52 +90,21 @@ function renderQuickFind(props: Partial<Parameters<typeof TaskQuickFind>[0]> = {
 }
 
 describe("TaskQuickFind", () => {
-  it("is closed until its keyboard shortcut is pressed", () => {
-    renderQuickFind();
+  it("renders nothing while `open` is false", () => {
+    renderQuickFind({ initialOpen: false });
 
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
-  it("opens on '/', 'f' and Ctrl+K", () => {
-    renderQuickFind();
+  it("renders the dialog while `open` is true — controlled entirely by the caller (issue #228)", () => {
+    renderQuickFind({ initialOpen: true });
 
-    fireEvent.keyDown(document, { key: "/" });
     expect(screen.getByRole("dialog")).toBeInTheDocument();
-
-    fireEvent.keyDown(document, { key: "Escape" });
-    fireEvent.keyDown(document, { key: "f" });
-    expect(screen.getByRole("dialog")).toBeInTheDocument();
-
-    fireEvent.keyDown(document, { key: "Escape" });
-    fireEvent.keyDown(document, { key: "k", ctrlKey: true });
-    expect(screen.getByRole("dialog")).toBeInTheDocument();
-  });
-
-  it("does not open on '/' or 'f' while typing in a text field", () => {
-    render(
-      <div>
-        <input aria-label="somewhere else" />
-        <TaskQuickFind
-          tasks={[]}
-          projects={[]}
-          onOpenTask={vi.fn()}
-          onOpenProject={vi.fn()}
-          onShowMoreResults={vi.fn()}
-        />
-      </div>,
-    );
-
-    const otherInput = screen.getByLabelText("somewhere else");
-    otherInput.focus();
-    fireEvent.keyDown(otherInput, { key: "/" });
-
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("matches a Task title by a mid-word fragment, highlighted", () => {
     renderQuickFind({ tasks: [task({ id: "a", content: "Buildzzzing" })] });
 
-    fireEvent.keyDown(document, { key: "/" });
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "uildz" } });
 
     const match = screen.getByText("uildz");
@@ -126,7 +117,6 @@ describe("TaskQuickFind", () => {
       projects: [project({ id: "p1", name: "Groceries" })],
     });
 
-    fireEvent.keyDown(document, { key: "/" });
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "groc" } });
 
     expect(screen.getByText("Groc")).toBeInTheDocument();
@@ -140,7 +130,6 @@ describe("TaskQuickFind", () => {
       onOpenTask,
     });
 
-    fireEvent.keyDown(document, { key: "/" });
     const input = screen.getByRole("textbox");
     fireEvent.change(input, { target: { value: "alpha" } });
     fireEvent.keyDown(input, { key: "ArrowDown" });
@@ -152,10 +141,9 @@ describe("TaskQuickFind", () => {
   it("closes on Escape", () => {
     renderQuickFind();
 
-    fireEvent.keyDown(document, { key: "/" });
     expect(screen.getByRole("dialog")).toBeInTheDocument();
 
-    fireEvent.keyDown(document, { key: "Escape" });
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
@@ -164,7 +152,6 @@ describe("TaskQuickFind", () => {
       tasks: [task({ id: "a", content: "alpha task" })],
     });
 
-    fireEvent.keyDown(document, { key: "/" });
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "alpha" } });
     fireEvent.click(screen.getByText(/Show more results/));
 

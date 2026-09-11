@@ -1,7 +1,7 @@
 import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
 import { withDefaultLabelIds } from "../label-fields";
-import { nextOccurrenceAfterCompletion, tomorrowOf } from "../recurrence";
+import { firstOccurrence, nextOccurrenceAfterCompletion, tomorrowOf } from "../recurrence";
 import {
   assertValidDate,
   assertValidDeadline,
@@ -390,6 +390,39 @@ export class SqliteTaskStore implements TaskStore {
   async setPriority(id: string, priority: number): Promise<void> {
     assertValidPriority(priority);
     await this.updateIfLive(id, { priority });
+  }
+
+  // See TaskStore.setDateString's own doc comment for the full reasoning.
+  // Reads the Task first, mirroring advanceRecurring/setParent above: the
+  // tombstone no-op has to be checked before either throw below becomes
+  // reachable.
+  async setDateString(id: string, dateString: string | null, now: string): Promise<void> {
+    const current = await this.get(id);
+    if (current === undefined) {
+      return;
+    }
+    if (dateString === null) {
+      // Ends the Recurrence, `date` untouched — TaskStore.setDateString's
+      // own doc comment on why this mirrors completeForever's "date is
+      // left exactly as it was" rather than clearing it too.
+      await this.updateIfLive(id, { dateString: null });
+      return;
+    }
+    // Only the calendar day matters to ../recurrence/'s engine — the
+    // identical `.slice(0, 10)` advanceRecurring's own mechanics applies
+    // to `completedAt` above.
+    const outcome = firstOccurrence(dateString, { dueDate: current.date, now: now.slice(0, 10) });
+    if (outcome.kind === "refused") {
+      throw new Error(
+        `"${dateString}" is not a recurrence rule ../recurrence/ accepts: ${outcome.reason}`,
+      );
+    }
+    if (outcome.kind === "ended") {
+      throw new Error(
+        `"${dateString}" has no occurrence left as of ${now} — its own starting/ending/for bound has already elapsed`,
+      );
+    }
+    await this.updateIfLive(id, { date: outcome.date, dateString });
   }
 
   // Replaces `labelIds` wholesale — see TaskStore.setLabelIds's own doc

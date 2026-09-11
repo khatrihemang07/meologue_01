@@ -1207,10 +1207,15 @@ export function slashPlugin(): Plugin<SlashMenuState | null> {
  * caching this at construction time would leave it stale the moment the
  * Device crosses midnight or the reader flips Smart dates in Settings
  * while the Composer stays mounted. `entryDayKey`/`deviceUtcOffsetMinutes`
- * rather than `date-picker-sheet.tsx`'s own `localDayKey` — the two
- * compute the identical device-local `YYYY-MM-DD`, but this file already
- * sits under `lib/`, and reaching into a `components/` file for a date
- * utility would be the one import in it running the wrong direction.
+ * rather than `lib/local-day-key.ts`'s own `localDayKey` — the two
+ * compute the identical device-local `YYYY-MM-DD`, but from different
+ * inputs (an ISO instant plus a device offset here, versus a `Date`
+ * already built from local fields there). Kept separate so this
+ * function's `now` stays on the same `entryDayKey` conversion `use-
+ * history.ts`'s send/edit path already relies on for the identical value,
+ * per this function's own doc comment below — not because of an
+ * import-direction rule `localDayKey`'s later move out of `components/`
+ * would have made moot anyway.
  *
  * Exported so `use-history.ts`'s `sendEntry`/`commitEntryEdit` can fall
  * back to this SAME computation when no live Composer handed over its own

@@ -236,7 +236,11 @@ test("a completed Task's look — decoration and colour — agrees across every 
     await dayBlockWords.click();
     const dialog = page.getByRole("dialog");
     await expect(dialog).toBeVisible();
-    const titleField = dialog.getByRole("textbox", { name: "Task title" });
+    // The at-rest title is a button, not a textbox — #229 replaced the
+    // textarea with a button that swaps in a real editor only once
+    // activated. Reading the resting state is what this spec wants: a
+    // completed Task's title as a person sees it before touching it.
+    const titleField = dialog.getByRole("button", { name: body });
     const taskDetail = await renderedStyle(titleField);
     await page.keyboard.press("Escape");
     await expect(dialog).toHaveCount(0);

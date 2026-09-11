@@ -25,6 +25,20 @@
  * itself), so this is one more client-side narrowing of data already in
  * hand, not a second store round trip for what's effectively instant
  * either way at this app's scale.
+ *
+ * **`open`/`onOpenChange` are controlled props (issue #228).** Before this
+ * ticket this component owned its own `open` state and a `document.
+ * addEventListener("keydown", …)` that read `/`/`f`/⌘K itself — deleted,
+ * not left standing beside `use-todo-keymap.ts`'s own single listener
+ * (that hook's own header comment: "One listener… mounted once", not a
+ * second one racing it). `todo-page.tsx` now owns `open`, toggled by the
+ * keymap hook's `onOpenQuickFind`, the identical "controlled from the
+ * page" shape `schedulingId`/`confirmingId` already use there. Nothing
+ * about the guard against opening while typing in a text field moved
+ * *into* this file to replace what was deleted — it lives once, in
+ * `use-todo-keymap.ts` (via `isTypingTarget`, `@/lib/todo-keymap`), the
+ * single answer issue #228's own brief asks for rather than a second copy
+ * here.
  */
 import type { Project, Task } from "@meologue/core";
 import { matchesSubstring } from "@meologue/core";
@@ -35,6 +49,8 @@ import { highlightSubstring } from "@/lib/task-search-match";
 import { cn } from "@/lib/utils";
 
 export interface TaskQuickFindProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
   /** Active Tasks only — TaskStore.search's own "find something still open" default, applied here too. */
   tasks: Task[];
   projects: Project[];
@@ -69,41 +85,17 @@ function resultKey(result: QuickFindResult): string {
 }
 
 export function TaskQuickFind({
+  open,
+  onOpenChange,
   tasks,
   projects,
   onOpenTask,
   onOpenProject,
   onShowMoreResults,
 }: TaskQuickFindProps) {
-  const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [highlighted, setHighlighted] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
-
-  // `/`, `f` and ⌘K/Ctrl+K open Quick-find — issue #183's own
-  // reference-behaviour research named exactly these three. Ignored while
-  // the keypress lands in a text field (an input, a textarea, or anything
-  // `contentEditable`, which covers the Composer/Description/Comment
-  // ProseMirror editors) so typing "f" into a Task's own title never hijacks
-  // the keystroke — the identical guard issue #165's own slash-menu trigger
-  // ("Typing / opens a menu") already has to apply for the same reason.
-  useEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
-      const target = event.target as HTMLElement | null;
-      const typing =
-        target !== null &&
-        (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
-      const isShortcut =
-        (event.key === "/" || event.key === "f") && !typing && !event.metaKey && !event.ctrlKey;
-      const isCommandK = event.key.toLowerCase() === "k" && (event.metaKey || event.ctrlKey);
-      if (isShortcut || isCommandK) {
-        event.preventDefault();
-        setOpen(true);
-      }
-    }
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, []);
 
   useEffect(() => {
     if (open) {
@@ -138,7 +130,7 @@ export function TaskQuickFind({
   }, [tasks, projects, query]);
 
   function openResult(result: QuickFindResult) {
-    setOpen(false);
+    onOpenChange(false);
     if (result.kind === "task") {
       onOpenTask(result.task);
     } else if (result.kind === "project") {
@@ -165,7 +157,7 @@ export function TaskQuickFind({
   }
 
   return (
-    <DialogPrimitive.Root open={open} onOpenChange={setOpen}>
+    <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/50 duration-150 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0" />
         <DialogPrimitive.Content
@@ -235,7 +227,7 @@ export function TaskQuickFind({
             <button
               type="button"
               onClick={() => {
-                setOpen(false);
+                onOpenChange(false);
                 onShowMoreResults(query);
               }}
               className="w-full border-t border-border px-3 py-2 text-left text-muted-foreground text-xs hover:bg-muted"

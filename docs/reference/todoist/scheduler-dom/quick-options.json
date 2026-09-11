@@ -1,0 +1,22 @@
+[
+  {
+    "label": "Today",
+    "rowClass": "scheduler-suggestions-item-label",
+    "rowHTML": "<div class=\"scheduler-suggestions-item-label\">Today</div>"
+  },
+  {
+    "label": "Tomorrow",
+    "rowClass": "scheduler-suggestions-item-label",
+    "rowHTML": "<div class=\"scheduler-suggestions-item-label\">Tomorrow</div>"
+  },
+  {
+    "label": "This weekend",
+    "rowClass": "scheduler-suggestions-item-label",
+    "rowHTML": "<div class=\"scheduler-suggestions-item-label\">This weekend</div>"
+  },
+  {
+    "label": "Next week",
+    "rowClass": "scheduler-suggestions-item-label",
+    "rowHTML": "<div class=\"scheduler-suggestions-item-label\">Next week</div>"
+  }
+]

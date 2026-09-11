@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { TodoNav } from "./todo-nav";
 
 function renderAt(path: string) {
@@ -9,6 +9,31 @@ function renderAt(path: string) {
       <TodoNav />
     </MemoryRouter>,
   );
+}
+
+// Mirrors use-wide-layout.test.ts's own stand-in ("jsdom implements no
+// matchMedia at all") — every test above renders with no stub at all,
+// which use-wide-layout.ts's own default (narrow) already covers; this is
+// the one test in this file that needs the query to answer wide.
+function installWideMatchMedia() {
+  Object.defineProperty(window, "matchMedia", {
+    value: vi.fn(() => ({
+      matches: true,
+      media: "",
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })),
+    configurable: true,
+    writable: true,
+  });
+}
+
+function removeMatchMedia() {
+  Object.defineProperty(window, "matchMedia", {
+    value: undefined,
+    configurable: true,
+    writable: true,
+  });
 }
 
 describe("TodoNav", () => {
@@ -45,6 +70,20 @@ describe("TodoNav", () => {
     expect(screen.getByRole("link", { name: "Inbox" })).not.toHaveAttribute("aria-current");
   });
 
+  // Issue #223 added Upcoming to todo-sidebar.tsx's own list (the wide
+  // breakpoint's replacement for this bar) but never to this one — the
+  // defect this test now holds shut the way chat-shell-layout.test.tsx's
+  // own NAV-03 row holds the bottom bar's reachability below 900px: by a
+  // test, not by an assertion left to whoever edits VIEWS next.
+  it("offers Upcoming as a real link", () => {
+    renderAt("/todo/inbox");
+
+    expect(screen.getByRole("link", { name: "Upcoming" })).toHaveAttribute(
+      "href",
+      "/todo/upcoming",
+    );
+  });
+
   // Issue #171's own proof of ADR 0049's prediction a second time — see
   // todo-nav.tsx's own comment on VIEWS.
   it("offers Projects as a third real link", () => {
@@ -74,5 +113,23 @@ describe("TodoNav", () => {
     renderAt("/todo/filters/some-filter-id");
 
     expect(screen.getByRole("link", { name: "Filters" })).toHaveAttribute("aria-current", "page");
+  });
+
+  // Issue #223's second half: TodoSidebar takes over this bar's own role
+  // at the wide breakpoint, and this component's own header comment
+  // explains why both can't stay mounted at once (two identically-named
+  // "Todo" nav landmarks). This is the complement of that ticket's
+  // load-bearing narrow-viewport test (chat-shell-layout.test.tsx) — this
+  // one proves the wide side of the same claim.
+  describe("at the wide breakpoint", () => {
+    afterEach(removeMatchMedia);
+
+    it("renders nothing at all", () => {
+      installWideMatchMedia();
+
+      renderAt("/todo/inbox");
+
+      expect(screen.queryByRole("navigation")).not.toBeInTheDocument();
+    });
   });
 });

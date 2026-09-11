@@ -76,8 +76,26 @@ describe("describeEventLine", () => {
       tasks: [task()],
       projects: [],
     });
-    expect(line.lead).toBe("Completed");
+    // CMT-06: `You completed {task}`.
+    expect(line.lead).toBe("You completed");
     expect(line.subject).toEqual({ glyph: "○", label: "Buy milk", href: taskDetailPath(task()) });
+  });
+
+  it("CMT-06: uncompleting a Task carries no extra clause", () => {
+    const line = describeEventLine(event({ eventType: "uncompleted" }), {
+      tasks: [task()],
+      projects: [],
+    });
+    expect(line.lead).toBe("You uncompleted");
+    expect(line.detail).toBeUndefined();
+  });
+
+  it("CMT-06: adding a Task", () => {
+    const line = describeEventLine(event({ eventType: "added" }), {
+      tasks: [task()],
+      projects: [],
+    });
+    expect(line.lead).toBe("You added");
   });
 
   it("a Task event's subject links to that Task's own address", () => {
@@ -120,7 +138,7 @@ describe("describeEventLine", () => {
       "t1",
     );
     expect(line.subject).toBeUndefined();
-    expect(line.lead).toBe("Completed");
+    expect(line.lead).toBe("You completed");
   });
 
   it("does not suppress a different Task's own subject", () => {
@@ -166,13 +184,45 @@ describe("describeEventLine", () => {
     expect(line.subject).toBeUndefined();
   });
 
-  it("describes a rename with the old and new content", () => {
+  it("CMT-06: a rename shows only the resulting name, never an old→new pair", () => {
     const line = describeEventLine(
       event({ eventType: "updated", extra: { content: "new title", lastContent: "old title" } }),
-      { tasks: [], projects: [] },
+      { tasks: [task({ content: "new title" })], projects: [] },
     );
-    expect(line.lead).toBe("Renamed");
-    expect(line.detail).toBe('from "old title" to "new title"');
+    expect(line.lead).toBe("You changed the name of");
+    expect(line.subject?.label).toBe("new title");
+    expect(line.detail).toBeUndefined();
+  });
+
+  it("CMT-06: Description templates — added, changed, removed", () => {
+    const added = describeEventLine(
+      event({ eventType: "updated", extra: { description: "buy milk", lastDescription: null } }),
+      { tasks: [task()], projects: [] },
+    );
+    expect(added.lead).toBe("You added a description");
+    expect(added.detail).toBe('"buy milk"');
+    expect(added.trailingLead).toBe("to");
+    expect(added.trailingSubject?.label).toBe("Buy milk");
+
+    const changed = describeEventLine(
+      event({
+        eventType: "updated",
+        extra: { description: "get the good milk", lastDescription: "buy milk" },
+      }),
+      { tasks: [task()], projects: [] },
+    );
+    expect(changed.lead).toBe("You changed the description of");
+    expect(changed.subject?.label).toBe("Buy milk");
+    expect(changed.detail).toBe('to "get the good milk"');
+
+    const removed = describeEventLine(
+      event({ eventType: "updated", extra: { description: null, lastDescription: "buy milk" } }),
+      { tasks: [task()], projects: [] },
+    );
+    expect(removed.lead).toBe("You removed the description");
+    expect(removed.detail).toBe('"buy milk"');
+    expect(removed.trailingLead).toBe("from");
+    expect(removed.trailingSubject?.label).toBe("Buy milk");
   });
 
   it("resolves a moved Task's destination Project as its own linked chip", () => {
@@ -193,7 +243,7 @@ describe("describeEventLine", () => {
     });
   });
 
-  it("describes a Comment as naming the Task it was made on", () => {
+  it("CMT-06: You commented {content} on {task}", () => {
     const line = describeEventLine(
       event({
         objectType: "comment",
@@ -204,18 +254,44 @@ describe("describeEventLine", () => {
       }),
       { tasks: [task()], projects: [] },
     );
-    expect(line.lead).toBe("Commented on");
-    expect(line.subject?.label).toBe("Buy milk");
+    expect(line.lead).toBe("You commented");
+    expect(line.detail).toBe('"sounds good"');
+    expect(line.trailingLead).toBe("on");
+    expect(line.trailingSubject?.label).toBe("Buy milk");
   });
 
   it("suppresses the Comment's own Task chip on that Task's own Activity view", () => {
     const line = describeEventLine(
-      event({ objectType: "comment", objectId: "c1", taskId: "t1", eventType: "added" }),
+      event({
+        objectType: "comment",
+        objectId: "c1",
+        taskId: "t1",
+        eventType: "added",
+        extra: { text: "sounds good" },
+      }),
       { tasks: [], projects: [] },
       "t1",
     );
-    expect(line.lead).toBe("Commented");
+    expect(line.lead).toBe("You commented");
+    expect(line.trailingSubject).toBeUndefined();
     expect(line.subject).toBeUndefined();
+  });
+
+  it("CMT-06: You deleted a comment from {task}, with no comment body shown", () => {
+    const line = describeEventLine(
+      event({
+        objectType: "comment",
+        objectId: "c1",
+        taskId: "t1",
+        eventType: "deleted",
+        extra: { text: "sounds good", taskContent: "Buy milk" },
+      }),
+      { tasks: [task()], projects: [] },
+    );
+    expect(line.lead).toBe("You deleted a comment");
+    expect(line.trailingLead).toBe("from");
+    expect(line.trailingSubject?.label).toBe("Buy milk");
+    expect(line.detail).toBeUndefined();
   });
 
   it("describes a Comment being edited — the one deliberate divergence from the reference", () => {

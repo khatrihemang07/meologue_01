@@ -137,7 +137,7 @@ export interface QuickAddTaskFields {
   priority: number;
   /** `../../packages/core/src/task-types.ts`'s `Task.dateString` — the canonical recurrence phrase (see `RECURRENCE_WORD_TO_PHRASE` above), or `null` for a Task that doesn't repeat. */
   dateString: string | null;
-  /** `%label` names, not yet resolved to ids — use-labels.ts's `resolveLabelIds` is the async second half of turning these into `Task.labelIds`, which is why this function itself stays synchronous. */
+  /** `@label` names, not yet resolved to ids — use-labels.ts's `resolveLabelIds` is the async second half of turning these into `Task.labelIds`, which is why this function itself stays synchronous. */
   labelNames: string[];
 }
 
@@ -198,6 +198,20 @@ function findRecurrenceToken(tokens: readonly QuickAddToken[]): QuickAddToken | 
  * identically to a refusal here: there is no next occurrence to store
  * either way.
  */
+/**
+ * Exported for task-schedule-popover.tsx's own "Type a date" input
+ * (issue #227) — the identical bridge described above, applied to a
+ * recurrence token's `raw` text wherever one is found, not just the one
+ * this file's own `findRecurrenceToken` locates. Kept as a one-line
+ * function rather than re-exporting `RECURRENCE_WORD_TO_PHRASE` itself:
+ * the popover has no reason to know this is a table lookup with a
+ * pass-through default, only that "raw recognised text in, canonical
+ * phrase ../recurrence/ accepts out" is one call.
+ */
+export function resolveRecurrencePhrase(raw: string): string {
+  return RECURRENCE_WORD_TO_PHRASE[raw.toLowerCase()] ?? raw;
+}
+
 function resolveRecurrence(
   recurrenceToken: QuickAddToken | undefined,
   dueDate: string | null,
@@ -206,8 +220,7 @@ function resolveRecurrence(
   if (recurrenceToken === undefined) {
     return { date: null, dateString: null };
   }
-  const phrase =
-    RECURRENCE_WORD_TO_PHRASE[recurrenceToken.raw.toLowerCase()] ?? recurrenceToken.raw;
+  const phrase = resolveRecurrencePhrase(recurrenceToken.raw);
   const outcome = firstOccurrence(phrase, { dueDate, now });
   if (outcome.kind !== "occurrence") {
     return { date: null, dateString: null };

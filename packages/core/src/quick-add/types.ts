@@ -25,7 +25,7 @@ import type { QuickAddLanguage } from "./language";
  *
  * - **Sigil-marked** (`project`, `section`, `label`, `priority`,
  *   `reminder`, `deadline`, `uncompletable`, `description`):
- *   the user typed an explicit marker — `#`, `/`, `%`, `p1`, `!`, `{}`,
+ *   the user typed an explicit marker — `#`, `/`, `@`, `p1`, `!`, `{}`,
  *   a leading `* `, `//` — so there is no false-positive risk to
  *   guard against. These are always recognised.
  * - **Eager/natural-language** (`date`, `time`, `recurrence`): inferred
@@ -108,7 +108,7 @@ export interface QuickAddResult {
   priority: number;
   projectName: string | null;
   sectionName: string | null;
-  /** Every recognised `%label`, in the order typed. Names, not ids — resolving a name to a Label id is a caller concern (this module has no LabelStore). */
+  /** Every recognised `@label`, in the order typed. Names, not ids — resolving a name to a Label id is a caller concern (this module has no LabelStore). */
   labelNames: string[];
   /** Floating time-of-day (`HH:MM`) from a recognised `!reminder` token, or `null` if none was recognised, or if one was but carried no time of its own. */
   reminderTime: string | null;
@@ -147,7 +147,7 @@ export interface QuickAddOptions {
    * Turns off the eager/natural-language family of rules entirely — the
    * clean call-site distinction issue #170's Part A brief asks for,
    * instead of a flag threaded through every individual rule function.
-   * Defaults to `true`. Sigil-marked tokens (`#project`, `%label`, `p1`,
+   * Defaults to `true`. Sigil-marked tokens (`#project`, `@label`, `p1`,
    * `!reminder`, `{deadline}`, leading `* `, `//`) are
    * unaffected — see QuickAddTokenKind's own doc comment for why an
    * explicit marker carries no false-positive risk to turn off.

@@ -1,0 +1,14 @@
+{
+  "selectedClassName": "calendar__day calendar__day--selected",
+  "selectedOuter": "<button type=\"button\" aria-label=\"2026-09-21\" class=\"calendar__day calendar__day--selected\"><span class=\"calendar__day__date\"><span class=\"calendar__day__date__number\">21</span></span></button>",
+  "dayBg": "rgba(0, 0, 0, 0)",
+  "dateSpanBg": "rgb(222, 76, 74)",
+  "dateSpanBorderRadius": "12px",
+  "dateSpanWidth": "24px",
+  "numColor": "rgb(255, 255, 255)",
+  "numWeight": "700",
+  "noDateExactText": "No Date",
+  "noDateBtnOuter": "<button type=\"button\" data-track=\"scheduler|date_shortcut_nodate\" data-action-hint=\"scheduler-suggestion-noDate\" class=\"scheduler-suggestions-item\"><div class=\"scheduler-suggestions-item-icon\"><svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" aria-hidden=\"true\" focusable=\"false\"><path fill=\"currentColor\" d=\"M12 3a9 9 0 1 1 0 18 9 9 0 0 1 0-18m0 1a8 8 0 1 0 0 16 8 8 0 0 0 0-16m3.854 4.146a.5.5 0 0 1 0 .708l-7 7a.5.5 0 0 1-.708-.708l7-7a.5.5 0 0 1 .708 0\"></path></svg></div><div class=\"scheduler-suggestions-item-label\">No Date</div></button>",
+  "inputValue": "21 Sep",
+  "inputOuter": "<input class=\"gUX4uAM\" aria-label=\"Type a date\" maxlength=\"150\" placeholder=\"Type a date\" spellcheck=\"false\" value=\"21 Sep\">"
+}

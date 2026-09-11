@@ -270,3 +270,29 @@ instead of letting it bleed harmlessly into padding the way an unconstrained con
 `apps/e2e/tests/composer.spec.ts`'s own `locator.click()` — real coordinate-based hit-testing —
 caught it; the negative margin is dropped for the Composer's own checkbox, trading tight
 bullet-alignment for a control that is always exactly where it is drawn.
+
+## Amendment (2026-09-10, while landing parity-ledger row DET-07)
+
+The Tests section above says a ProseMirror `EditorView` "cannot usefully mount" in jsdom. That is
+too strong, and the boundary is worth stating precisely, because a blanket claim of impossibility
+invites the next reader to delete a working test as impossible.
+
+What jsdom genuinely cannot do is what this ADR actually needed at the time: **simulate typing**.
+There is no `Range`, no `Selection` and no meaningful `getBoundingClientRect`, so keystroke and IME
+replay — anything that moves a cursor — has to run in a real browser, which is why `apps/e2e` owns
+it and why this ADR's own deleted `composer.test.tsx` was right to go.
+
+What jsdom *can* do, established empirically rather than argued: construct a real `EditorView`
+against a **seeded** document, read the decorations it renders, and dispatch a plain `keydown` —
+ProseMirror's keymap is an ordinary DOM listener and does not depend on `Selection`.
+`apps/web/src/components/todo/task-detail-view-recognition.test.tsx` is the existence proof: it
+mounts the real `TaskTitleEditor` with the real `quickAddRecognitionPlugin` and proves the
+recognition spans, their `data-match-id` values, that decorations leave the document text untouched,
+and that `commit()` returns the title verbatim — none of it against a stub, none of it a
+`toHaveClass` assertion that a string appears in the DOM.
+
+So the rule is about the *gesture*, not the component: seed-and-read is a jsdom test, type-and-see
+is a Playwright test. One gotcha found on the way, since it reads as a hang rather than a failure:
+plain `vi.useFakeTimers()` stalls `await screen.findBy*` on a `Suspense`-wrapped lazy component,
+because Testing Library's polling needs a real `setTimeout` — `vi.useFakeTimers({ toFake: ["Date"] })`
+pins "now" without breaking it.

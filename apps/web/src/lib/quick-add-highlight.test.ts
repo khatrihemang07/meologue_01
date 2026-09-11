@@ -217,7 +217,7 @@ describe("highlightSegments", () => {
     // Two independently-placed tokens with a zero-width gap — real input
     // never actually produces two adjacent priority tokens this way, but
     // `highlightSegments` has no reason to assume adjacency can't happen
-    // (a `%label` immediately followed by a `#project`, say, would).
+    // (a `@label` immediately followed by a `#project`, say, would).
     const segments = highlightSegments(
       "ab",
       [

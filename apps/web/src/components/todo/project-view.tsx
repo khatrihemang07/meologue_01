@@ -14,7 +14,7 @@
  * gesture would have saved them.
  */
 import type { Project, Section, Task } from "@meologue/core";
-import { orderKeyBetween } from "@meologue/core";
+import { LABEL_COLOURS, orderKeyBetween } from "@meologue/core";
 import { ChevronDown, ChevronUp, History, Trash2 } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { Link } from "react-router";
@@ -31,9 +31,20 @@ export interface ProjectViewProps {
   /** Forwarded straight through to `TaskList` — see `TaskDetailActions`'s own doc comment (task-row.tsx). */
   detailActions: TaskDetailActions;
   onRename: (name: string) => void;
+  /** Issue #229 — reaches ProjectStore.setProjectColour, previously wired to no UI at all (the static colour dot had no control beside it). */
+  onSetColour: (colour: string) => void;
   onSetDescription: (description: string | null) => void;
   onToggleFavourite: (favourite: boolean) => void;
   onToggleArchived: (archived: boolean) => void;
+  /**
+   * Issue #229 — Tombstone, never a hard delete (ProjectStore.removeProject's
+   * own doc comment). The confirmation lives in this component
+   * (`confirmingDeleteProject` below), mirroring Section delete's own
+   * "capture, then confirm" shape just below it, with Todoist's own
+   * verbatim wording (docs/reference/todoist/quick-add.md § "Destructive
+   * confirmation wording").
+   */
+  onDeleteProject: () => void;
   /** Rejects — legibly, per this ticket's own brief — on the twenty-Section cap or an empty name (ProjectStore.addSection's own doc comment). */
   onAddSection: (name: string) => Promise<void>;
   onRenameSection: (id: string, name: string) => void;
@@ -73,9 +84,11 @@ export function ProjectView({
   tasks,
   detailActions,
   onRename,
+  onSetColour,
   onSetDescription,
   onToggleFavourite,
   onToggleArchived,
+  onDeleteProject,
   onAddSection,
   onRenameSection,
   onReorderSection,
@@ -106,6 +119,12 @@ export function ProjectView({
     section: Section;
     count: number;
   } | null>(null);
+  // Issue #229's own Project delete — `boolean`, not a captured target
+  // the way `confirmingDelete` above needs one: unlike a Section's own
+  // destruction count (awaited fresh before the dialog opens), Todoist's
+  // own wording for a Project delete names nothing but the Project this
+  // whole screen is already about, so there is nothing to look up first.
+  const [confirmingDeleteProject, setConfirmingDeleteProject] = useState(false);
 
   function commitRename() {
     const trimmed = name.trim();
@@ -147,11 +166,18 @@ export function ProjectView({
     <div className="flex flex-col gap-4 p-3">
       <div className="flex flex-col gap-2">
         <div className="flex items-center gap-2">
-          <span
-            aria-hidden="true"
-            className="size-3 shrink-0 rounded-full"
-            style={{ backgroundColor: project.colour }}
-          />
+          <select
+            aria-label="Project colour"
+            value={project.colour}
+            onChange={(event) => onSetColour(event.target.value)}
+            className="shrink-0 rounded-md border border-border bg-background px-1.5 text-xs"
+          >
+            {LABEL_COLOURS.map((option) => (
+              <option key={option.hex} value={option.hex}>
+                {option.name.replace(/_/g, " ")}
+              </option>
+            ))}
+          </select>
           <Input
             type="text"
             aria-label="Project name"
@@ -194,6 +220,14 @@ export function ProjectView({
               <History aria-hidden="true" className="size-4" />
             </Link>
           </Button>
+          <button
+            type="button"
+            aria-label={`Delete Project "${project.name}"`}
+            onClick={() => setConfirmingDeleteProject(true)}
+            className="flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+          >
+            <Trash2 aria-hidden="true" className="size-4" />
+          </button>
         </div>
         <textarea
           aria-label="Project description"
@@ -367,6 +401,24 @@ export function ProjectView({
             onDeleteSection(confirmingDelete.section.id);
           }
         }}
+      />
+
+      {/* Verbatim (quick-add.md § "Destructive confirmation wording"):
+          "Delete project? The <name> project and all its tasks will be
+          permanently deleted. This action cannot be undone." Buttons
+          Cancel/Delete — ConfirmDialog's own fixed pair. */}
+      <ConfirmDialog
+        open={confirmingDeleteProject}
+        onOpenChange={setConfirmingDeleteProject}
+        title="Delete project?"
+        description={
+          <>
+            The "{project.name}" project and all its tasks will be permanently deleted. This action
+            cannot be undone.
+          </>
+        }
+        confirmLabel="Delete"
+        onConfirm={onDeleteProject}
       />
     </div>
   );

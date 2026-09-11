@@ -44,11 +44,11 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router";
-import { localDayKey } from "@/components/date-picker-sheet";
 import { ConfirmDialog } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { localDayKey } from "@/lib/local-day-key";
 import { projectNameFor } from "@/lib/project-name";
 import { cn } from "@/lib/utils";
 
