@@ -58,6 +58,7 @@ This was captured against the author's own live Todoist, which constrains the me
 | `row-and-detail.md` | Task row anatomy, hover, metadata, the detail view's structure |
 | `keyboard.md` | The 80-shortcut map, focus movement, focus appearance, accessibility semantics |
 | `lifecycle.md` | Description and comment CRUD, completion and undo, activity-log wording |
+| `live-audit-2026-09-11.md` | **Both applications driven together**, live, one session per flow — the shape ADR 0077 requires. Rows appended as each flow is driven |
 | `parity-ledger.md` | **The checklist.** One row per nuance; a ticket lands when its rows read `matched` |
 
 ## Where the raw evidence sits

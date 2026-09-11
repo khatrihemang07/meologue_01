@@ -72,27 +72,53 @@ was taken, and its central claim (a popover anchored under its trigger) is still
 |---|---|---|---|
 | Typed text font-size | 16px | 16px | matched |
 | Typed text line-height | 23px | 23px | matched |
-| Chip width, recognised | 32.31px | **36.14px** | **divergent, +3.83px** |
-| Chip width, withdrawn | 24.31px | **28.14px** | **divergent, +3.83px** |
+| Chip width, recognised | 32.31px | **36.14px** | ~~divergent, +3.83px~~ — **MEASUREMENT ERROR** |
+| Chip width, withdrawn | 24.31px | **28.14px** | ~~divergent, +3.83px~~ — **MEASUREMENT ERROR** |
 | Recognised − withdrawn | 8.00px | **8.00px** | matched exactly |
 
-**This acceptance criterion is not met, and the ticket's framing of it was wrong.** #251 reasoned
+> **CORRECTED 2026-09-11 by `live-audit-2026-09-11.md`.** The two chip rows above are wrong, and so
+> was everything this section originally concluded from them. **The two numbers were measured on
+> different strings**: Todoist's 32.31px was read with `tod` typed, meologue's 36.14px with **`tom`**.
+> One substituted glyph is worth roughly 4px at 16px, and it lands in *both* states equally — which
+> is exactly why the offset looked like a suspiciously constant "+3.83px residue". Re-driven live
+> with `tod` typed on **both** sides, meologue measures **32.05px / 24.05px** against Todoist's
+> 32.31 / 24.31 — a 0.26px sub-pixel gap. **QA-01 is `matched`.**
+>
+> The stated *cause* was false as well. This section claimed "meologue renders Geist; Todoist renders
+> its own stack." It does not: `[data-surface="todo"]` declares Todoist's own stack **verbatim** and
+> applies `font-family` unlayered on `documentElement`, which beats the layered
+> `html{font-family:Geist}` on both layer order and specificity. Neither `EDITOR_BOX_CLASSES`,
+> `.tiptap` nor `.td-recognition-match` sets a font. Ledger row `THEME-05`, already reading
+> `matched`, was right the whole time — and the live run confirms both applications report the
+> identical `font-family` string at 16px/23px.
+>
+> The original text is kept below rather than deleted, because the *way* it went wrong is the useful
+> part: a confident, well-argued, internally consistent conclusion, built on two measurements that
+> were never controlled against each other, which then propagated into a session handoff as a large
+> open product decision ("match the font stack"). No raw artifact was committed that would have let a
+> reader check it. That is the failure [ADR 0077](../../adr/0077-parity-is-proved-live-not-against-a-dated-capture.md)
+> exists to close.
+
+**~~This acceptance criterion is not met, and the ticket's framing of it was wrong.~~** #251 reasoned
 that the chip was too narrow *because the font was too small*, and that fixing 14px → 16px would
 bring 29.41px up to Todoist's 32.31px. The font-size fix landed and is confirmed at 16px/23px — and
-the chip overshot in the other direction, to 36.14px.
+the chip overshot in the other direction, to 36.14px. *(That overshoot was `tom`, not `tod`.)*
 
 What the numbers actually say: the **delta** between recognised and withdrawn is 8.00px in both
 applications, exactly the 4px + 4px horizontal padding the highlighted span adds and the withdrawn
-span drops. So the padding implementation is correct and is not the variable. The constant +3.83px
+span drops. So the padding implementation is correct and is not the variable. ~~The constant +3.83px
 offset in *both* states is glyph width — the same string ("tom") at the same 16px in a different
-typeface. meologue renders Geist; Todoist renders its own stack.
+typeface. meologue renders Geist; Todoist renders its own stack.~~ **It is glyph width — but between
+two *different strings* in the same typeface, not the same string in two typefaces.**
 
-**A chip width therefore cannot be matched to the pixel while the two applications use different
-fonts**, and no amount of padding or font-size work will close it. The honest options are to match
+**~~A chip width therefore cannot be matched to the pixel while the two applications use different
+fonts~~**, and no amount of padding or font-size work will close it. ~~The honest options are to match
 the font stack (a far larger decision than this ticket, and not one the corpus has evidence for) or
-to restate the row's target as the 8px padding delta, which *is* matched and *is* implementation.
+to restate the row's target as the 8px padding delta.~~ **Neither option was needed: the target was
+already met and the comparison was simply uncontrolled.**
 Recorded here rather than quietly rounded off: the previous programme's whole failure mode was rows
-marked healthy on numbers nobody re-measured.
+marked healthy on numbers nobody re-measured — and this section is now an instance of the same
+failure, caught by re-measuring.
 
 ## Two judgements that needed a screen, not a test
 
@@ -211,8 +237,12 @@ All three platforms are now driven and measured. What is left is scoped and name
   clicks in a desktop browser. Unfixed, filed with evidence. Note the Android run reached the
   scheduler through the detail sheet rather than that menu, so it neither reproduces nor clears
   this; the defect is recorded against the browser, where it was measured.
-- **Issue #251's chip width** — 36.14px against Todoist's 32.31px, a glyph-width difference between
-  typefaces. Unreachable without matching font stacks; see QA-01.
+- ~~**Issue #251's chip width** — 36.14px against Todoist's 32.31px, a glyph-width difference between
+  typefaces. Unreachable without matching font stacks; see QA-01.~~ **Resolved, and it was never a
+  gap.** The two figures were measured on different strings (`tod` in Todoist, `tom` in meologue).
+  Re-driven live with `tod` on both sides: 32.05px against 32.31px, a 0.26px sub-pixel difference.
+  QA-01 is `matched`, no font-stack change was needed, and the stacks were identical all along —
+  see `live-audit-2026-09-11.md`.
 - **Issue #252's "14px row"** — true of the resting placeholder, not of typed content, which
   renders at 16px through the shared Quick Add tokens.
 - **Light theme everywhere** — the corpus is Dark-theme only by decision (`THEME-01`, `divergent`).
