@@ -1153,3 +1153,118 @@ is not met there is itself recorded.
 
 The eight `todoist-captured` rows remain what they have always been: things known about Todoist that
 meologue has not built.
+
+## The fix phase — five rows, and four bugs no test could see
+
+Ordered by user impact, as the user directed, not by cost. The cheapest fix on the list (defect 31,
+the quoted name in a delete dialog) is still unfixed, deliberately, because it sits low on impact.
+
+Five rows moved to `matched`: KBD-03, KBD-04, KBD-05, THEME-03, CMT-03, CMT-05 — and SCHED-01, which
+was held at `built` by issue #255 alone. **With SCHED-01 closed, every one of the ledger's 127 rows
+is terminal for the first time: 59 `matched`, 54 `divergent`, 8 `todoist-captured`, 6 `blocked`, 0
+`built`.**
+
+Each row's own ledger note carries its implementation detail. What follows is only what generalises.
+
+### Four bugs that passed a green suite
+
+Every one of these was invisible to a suite that grew from 3,287 to 3,312 passing tests across the
+phase. They are worth listing together because the *reasons* they were invisible differ.
+
+1. **A focus trap in the Add-task composer** (row navigation). Arrows could enter the composer from
+   either side and never leave, in either direction — worse than the keys being unbound, because it
+   looks broken. The suite was green because **two individually-correct tests combine into the bug**:
+   one asserting "arrows in a text field don't move row focus", another asserting "the cycle includes
+   the Add-task field". Both true. Together they describe a trap.
+
+   The deeper reason: **jsdom does not implement `HTMLElement.isContentEditable` at all** — it reads
+   `undefined`, probed rather than assumed. So `isTypingTarget()` never classifies a contenteditable
+   as a typing target under test, and **no test in this repo can verify that any binding is
+   suppressed while typing in the real composer.** The existing "text field" test used a bare
+   `<input>` outside the composer, and the composer's own test double was a `role="textbox"` div that
+   jsdom would not have honoured either way. That is a standing blind spot, not a one-off.
+
+2. **Escape was silently saving the comment edit it was meant to discard.** The handler called
+   `setDraft(original)` then `.blur()` synchronously; React state does not flush in that window, so
+   `onBlur={commit}` still saw the edited text. Proved with a failing test first — and it only
+   reproduces when the textarea is genuinely focused, since `.blur()` on an unfocused element is a
+   no-op in jsdom and in browsers alike, which produced a false negative on the first probe.
+
+3. **`Cmd+Z` had never worked in any Task title editor.** `task-title-editor.tsx` bound
+   `"Mod-z": undo` but never registered `history()`, the plugin those commands read their state
+   from — so it was a silent no-op in the composer, a row's inline rename and the detail view's
+   title alike. `composer-editor.ts` registers it correctly, which is what makes this an oversight
+   rather than a decision.
+
+   **This is the same shape as this ledger's dead `--td-*` tokens**: wiring that reads as finished
+   and does nothing. `--td-focus-ring` was declared and consumed by nothing; here a keymap was bound
+   to commands with no plugin behind them. Three instances of the token version (QA-16, QA-20,
+   KBD-05) and now one of the keymap version. **A name being present is not evidence it is wired.**
+
+4. **Issue #255's mechanism was not what anyone thought.** See below.
+
+### Issue #255, and why two prior fixes missed
+
+Everyone — the issue's author, both reverted attempts, and the brief this phase wrote — assumed the
+**pointer** path: a click landing on whatever sits beneath the menu as it unmounts, read as an
+interact-outside. It is not. `document.body`'s `pointer-events` guard stayed benign throughout the
+failing sequence.
+
+It is a **focus fight between two simultaneously-mounted Radix `FocusScope`s.** Selecting the item
+opens the popover in the same tick, but the menu's `Content` is still alive through `Presence`'s exit
+animation, and `@radix-ui/react-focus-scope`'s autofocus effect — unconditional, and recomposed fresh
+on every render — re-runs, sees focus now outside its own container, and yanks it back. The popover's
+`DismissableLayer` reads that as focus leaving and dismisses itself. A same-tick open-then-close never
+paints, which is exactly the reported "no DOM node at all".
+
+Found by instrumenting `EventTarget.prototype.dispatchEvent` to log Radix's internal discrete events,
+so the mechanism is traced rather than inferred. Both earlier attempts assumed the menu was returning
+focus to its *trigger*; `modal={false}` only removes the trapped-focus variant of an effect that
+exists regardless of modality. **The positional determinism — bottom rows always worked, upper rows
+never did — was a real clue pointing at the wrong thing.**
+
+The fix defers the open to the menu's `onCloseAutoFocus`, the one signal meaning nothing is left to
+steal focus back. Verified independently of the fixing agent: **6 of 6 mouse attempts** across four
+upper rows and two bottom ones, where upper rows had been 0 of 7.
+
+### What the fixes deliberately did NOT do
+
+- **Extend the focus ring past what was measured.** Tailwind v4's layer order means a `@layer base`
+  rule loses to any `focus-visible:ring-*` utility, so the composer and dialog buttons keep their own
+  rings. Left that way on purpose: the audit measured Todoist's ring **on a row** and never measured
+  Todoist's own composer or dialog-button focus, so painting it there would be extrapolation past the
+  evidence. The checkbox is untouched for a stronger reason still — its inline `box-shadow` is the
+  **priority** ring (PRI-05/PRI-06), and taking it over would destroy one measured behaviour to
+  satisfy another.
+- **Force `role="alert"` onto the toast.** sonner 2.0.8 exposes no `role` field on any of its option
+  types and its rendered `<li>` hardcodes props with no spread, leaving only `toast.custom()` with
+  hand-built JSX or a runtime DOM patch. CMT-04 stays open on that point, with the reason evidenced.
+- **Change CMT-04's wording.** `Completed "buy milk"` names the task; Todoist's `1 task completed`
+  does not. Matching would make the message *less* informative, so it waits on the user.
+
+### Two costs this phase introduced, recorded rather than hidden
+
+- **The scheduler popover now opens after the menu's exit animation completes** — measured ~215ms on
+  two rows and ~1150ms on four. The long readings are almost certainly the automated tab throttling
+  animations rather than what a reader sees, but the fix is now **coupled to that animation's
+  duration**: slow it or add one, and the delay grows with it.
+- **A test harness was found to be inert.** `task-command-menu.test.tsx` pinned `open: true` forever,
+  so Radix's close transition — and therefore the entire code path #255 lives in — was never
+  exercised by it at all. Two other tests asserted the popover appeared synchronously and became
+  genuinely wrong once the open was deferred.
+
+### Method notes for the re-drive
+
+- **Two agent reports were materially wrong and both were caught by checking them.** One declared a
+  feature absent from the running build, having grepped the *main* checkout rather than this
+  worktree — its DOM claim was false too, since the attribute was present four times on the page.
+  Another called a row `MATCH` while its own numbers showed `gap: normal` against `8px`. The rule
+  that catches these is the one this document already runs on: **verify every agent claim against
+  its artifact, and re-read the artifact rather than the summary.**
+- **A service worker serves stale assets.** This app registers one, so a rebuild is not enough:
+  unregister it, clear caches, and **compare the served `index-*.js` hash against the build output**
+  before believing any on-screen reading. Several checks in this phase would have measured the old
+  app otherwise.
+- **Commands are split by package.** `pnpm build:web` and `pnpm vitest run` exist only in
+  `apps/web` — there is no root vitest binary at all — while `biome:check` and `graphify` run from
+  the repo root. Handoffs quote these bare and send you to the wrong directory.
