@@ -9,8 +9,8 @@ import { describeTaskDay, formatDay, formatTaskDate } from "./format-task-date";
 const NOW = new Date(2026, 8, 10, 12, 0);
 
 describe("formatDay", () => {
-  it("formats a bare day as 'MMM d', with no tone of any kind", () => {
-    expect(formatDay("2026-09-03")).toBe("Sep 3");
+  it("formats a bare day as 'd MMM', day-then-month — Todoist's order (DATE-11, parity-ledger.md) — with no tone of any kind", () => {
+    expect(formatDay("2026-09-03")).toBe("3 Sep");
   });
 
   it("returns the raw string for something that isn't YYYY-MM-DD", () => {
@@ -32,7 +32,7 @@ describe("formatTaskDate — DATE-01/02/03/04 (parity-ledger.md)", () => {
     // "1 Sep" (scheduler-and-priority.md §9), not a second relative
     // phrase like "9 days ago."
     const display = formatTaskDate("2026-09-01", { now: NOW });
-    expect(display.text).toBe("Sep 1");
+    expect(display.text).toBe("1 Sep");
     expect(display.tone).toBe("overdue");
     expect(display.colour).toBe("var(--td-date-overdue)");
   });
@@ -66,14 +66,19 @@ describe("formatTaskDate — DATE-01/02/03/04 (parity-ledger.md)", () => {
 
   it("seven or more days out falls back to the plain absolute day, toned 'none' — DATE-06's 'further out' gap, the upcoming side of it", () => {
     const display = formatTaskDate("2026-09-20", { now: NOW });
-    expect(display.text).toBe("Sep 20");
+    expect(display.text).toBe("20 Sep");
     expect(display.tone).toBe("none");
     expect(display.colour).toBe("var(--td-date-muted)");
   });
 
-  it("a timed date appends the time of day after whatever word the day itself resolved to — DATE-07's own gap, a reasonable extension of the wording bank rather than a measured value", () => {
+  it("a timed date appends the time of day after whatever word the day itself resolved to, with no comma — DATE-10 (parity-ledger.md): measured live as 'Tomorrow 9:30 AM'", () => {
     const display = formatTaskDate("2026-09-11T09:30", { now: NOW });
-    expect(display.text).toBe("Tomorrow, 9:30 AM");
+    expect(display.text).toBe("Tomorrow 9:30 AM");
+  });
+
+  it("a far-out timed date combines DATE-11's day-then-month fallback with DATE-10's no-comma time suffix", () => {
+    const display = formatTaskDate("2026-09-21T09:30", { now: NOW });
+    expect(display.text).toBe("21 Sep 9:30 AM");
   });
 
   it("DATE-04: a recurring Task appends ↻ after the date, in the date's own colour", () => {

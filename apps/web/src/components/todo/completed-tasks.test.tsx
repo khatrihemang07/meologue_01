@@ -89,16 +89,16 @@ describe("CompletedTasks", () => {
   it("shows a completed Task's own date, muted through DATE-02's completion rule", () => {
     // Far enough in the past, relative to whatever day this suite actually
     // runs on, to fall past DATE-11's "further out" edge and land on the
-    // plain absolute `formatDay` wording ("Jan 2") rather than a relative
-    // word this test would then have to compute for itself.
+    // plain absolute `formatDay` wording ("2 Jan", day-then-month) rather
+    // than a relative word this test would then have to compute for itself.
     render(<CompletedTasks tasks={[task({ date: "2020-01-02" })]} onUncomplete={vi.fn()} />);
 
-    expect(screen.getByText("Jan 2")).toBeInTheDocument();
+    expect(screen.getByText("2 Jan")).toBeInTheDocument();
   });
 
   it("renders no date at all for a completed Task that never had one", () => {
     render(<CompletedTasks tasks={[task({ date: null })]} onUncomplete={vi.fn()} />);
 
-    expect(screen.queryByText("Jan 2")).not.toBeInTheDocument();
+    expect(screen.queryByText("2 Jan")).not.toBeInTheDocument();
   });
 });

@@ -882,7 +882,7 @@ describe("EntryRow", () => {
           projects: [projectFixture()],
         });
 
-        expect(screen.getByText("Sep 3")).toBeInTheDocument();
+        expect(screen.getByText("3 Sep")).toBeInTheDocument();
         expect(screen.getByText("P1")).toBeInTheDocument();
         expect(screen.getByText("Groceries")).toBeInTheDocument();
       });
@@ -893,7 +893,7 @@ describe("EntryRow", () => {
           completedTasks: [],
         });
 
-        expect(screen.queryByText("Sep 3")).not.toBeInTheDocument();
+        expect(screen.queryByText("3 Sep")).not.toBeInTheDocument();
         expect(screen.queryByText(/^P\d$/)).not.toBeInTheDocument();
       });
 
@@ -917,7 +917,7 @@ describe("EntryRow", () => {
           ],
         });
 
-        expect(screen.queryByText("Sep 4")).not.toBeInTheDocument();
+        expect(screen.queryByText("4 Sep")).not.toBeInTheDocument();
         expect(screen.getByText("P2")).toBeInTheDocument();
       });
 
@@ -926,7 +926,7 @@ describe("EntryRow", () => {
           tasks: [taskFixture({ dateString: "every weekday", date: "2026-09-04" })],
         });
 
-        expect(screen.getByText("Sep 4")).toBeInTheDocument();
+        expect(screen.getByText("4 Sep")).toBeInTheDocument();
       });
     });
 

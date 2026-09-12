@@ -58,7 +58,7 @@ describe("TaskScheduleChips (issue #181)", () => {
 
   it("shows the Date, but no Priority or Project chip, for an undated-priority Inbox Task with a Date", () => {
     render(<TaskScheduleChips task={task({ date: "2026-09-03" })} projects={[]} />);
-    expect(screen.getByText("Sep 3")).toBeInTheDocument();
+    expect(screen.getByText("3 Sep")).toBeInTheDocument();
     expect(screen.queryByText(/^P\d$/)).not.toBeInTheDocument();
   });
 
@@ -92,7 +92,7 @@ describe("TaskScheduleChips (issue #181)", () => {
         projects={[]}
       />,
     );
-    expect(screen.queryByText(/Sep 10/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/10 Sep/)).not.toBeInTheDocument();
     expect(screen.queryByText("every weekday")).not.toBeInTheDocument();
   });
 
@@ -105,7 +105,7 @@ describe("TaskScheduleChips (issue #181)", () => {
       render(
         <TaskScheduleChips task={task({ date: "2026-09-05" })} projects={[]} hideDate={true} />,
       );
-      expect(screen.queryByText("Sep 5")).not.toBeInTheDocument();
+      expect(screen.queryByText("5 Sep")).not.toBeInTheDocument();
     });
 
     it("keeps Priority and Project showing while Date is hidden — only Date has the occurrence problem", () => {
@@ -116,7 +116,7 @@ describe("TaskScheduleChips (issue #181)", () => {
           hideDate={true}
         />,
       );
-      expect(screen.queryByText("Sep 5")).not.toBeInTheDocument();
+      expect(screen.queryByText("5 Sep")).not.toBeInTheDocument();
       expect(screen.getByText("P1")).toBeInTheDocument();
       expect(screen.getByText("Groceries")).toBeInTheDocument();
     });
@@ -130,7 +130,7 @@ describe("TaskScheduleChips (issue #181)", () => {
 
     it("defaults to false — an ordinary row's Date keeps showing when the caller says nothing", () => {
       render(<TaskScheduleChips task={task({ date: "2026-09-05" })} projects={[]} />);
-      expect(screen.getByText("Sep 5")).toBeInTheDocument();
+      expect(screen.getByText("5 Sep")).toBeInTheDocument();
     });
   });
 });

@@ -159,7 +159,12 @@ describe("describeEventLine", () => {
       { tasks: [], projects: [] },
     );
     expect(line.lead).toBe("Set the date on");
-    expect(line.detail).toBe("to Feb 1");
+    // format-task-date.ts's formatDay now reads day-then-month (DATE-11,
+    // parity-ledger.md) — this Activity surface was never itself measured
+    // against Todoist, but day-then-month is Todoist's order everywhere
+    // else, so the fix reaches here too rather than leaving one date
+    // phrase in the app spelled the old way.
+    expect(line.detail).toBe("to 1 Feb");
     expect(line.subject?.label).toBe("Buy milk");
   });
 

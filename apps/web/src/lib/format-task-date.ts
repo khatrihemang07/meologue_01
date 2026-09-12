@@ -62,10 +62,21 @@ function parseLocalDay(day: string): Date | null {
   return new Date(Number(year), Number(month) - 1, Number(date));
 }
 
-/** Formats a date-only `YYYY-MM-DD` string (a Task's `deadline`, or an all-day `date`) as e.g. "Sep 3". Carries no tone — see this module's own header comment for why `Task.deadline` stays plain. */
+/**
+ * Formats a date-only `YYYY-MM-DD` string (a Task's `deadline`, or an
+ * all-day `date`) as e.g. "3 Sep" — day-then-month, Todoist's order
+ * everywhere it renders an absolute date (Upcoming headings, the captured
+ * "1 Sep": scheduler-and-priority.md §9). DATE-11 (parity-ledger.md) is
+ * what measured meologue's own "Sep 21" as the divergent order; no year is
+ * ever appended, in either app — scheduler-and-priority.md §9 marks "a
+ * different year" an explicit GAP, never observed live, so this keeps the
+ * pre-existing (also year-less) behaviour rather than inventing one.
+ * Carries no tone — see this module's own header comment for why
+ * `Task.deadline` stays plain.
+ */
 export function formatDay(day: string): string {
   const parsed = parseLocalDay(day);
-  return parsed === null ? day : format(parsed, "MMM d");
+  return parsed === null ? day : format(parsed, "d MMM");
 }
 
 /**
@@ -122,7 +133,7 @@ export interface TaskDateDisplay {
  * "Tomorrow" carries its own tone since issue #250 (see `DateTone`'s own
  * doc comment above), distinct from the five days after it.
  * Everything past that edge — further overdue, or seven-plus days out —
- * falls back to `formatDay`'s plain `MMM d`: DATE-06/07 (parity-ledger.md)
+ * falls back to `formatDay`'s plain day-then-month (DATE-11): DATE-06/07 (parity-ledger.md)
  * mark both "further out" and "with a time" as `blocked`, no such Task
  * existed to observe, so this is the reasonable default named in issue
  * #224's own brief rather than a second relative phrase ("2 days ago")
@@ -197,7 +208,11 @@ export function formatTaskDate(
     if (parsed !== null) {
       const [hours, minutes] = date.slice(11, 16).split(":").map(Number);
       parsed.setHours(hours ?? 0, minutes ?? 0);
-      text = `${text}, ${format(parsed, "h:mm a")}`;
+      // DATE-10 (parity-ledger.md): Todoist reads "Tomorrow 9:30 AM", no
+      // comma — measured live, same session, against meologue's own
+      // "Tomorrow, 9:30 AM". The comma was a reasonable-looking extension
+      // this module invented, not a replayed measurement.
+      text = `${text} ${format(parsed, "h:mm a")}`;
     }
   }
   // DATE-04: the ↻ glyph, not the literal recurrence rule — task-row.tsx
