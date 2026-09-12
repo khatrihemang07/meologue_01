@@ -1,0 +1,45 @@
+{
+  "row": "STR-03",
+  "app": "meologue",
+  "origin": "http://127.0.0.1:41999 (vite preview of dist/web)",
+  "action": "Created label 'zz probe label', renamed it to 'zz probe label renamed', then deleted it via the row's own trash button",
+  "openerSelector": "button[aria-label='Delete Label \"zz probe label renamed\"']",
+  "labelsBeforeDelete": ["zz probe label renamed"],
+  "confirmationDialog": {
+    "domRole": "alertdialog",
+    "headingText": "Delete label?",
+    "bodyFullText": "The \"zz probe label renamed\" label will be permanently deleted.",
+    "buttons": ["Cancel", "Delete"],
+    "rawConcatenatedTextContent": "Delete label?The \"zz probe label renamed\" label will be permanently deleted.CancelDelete",
+    "ariaModal": null,
+    "nameIsQuoted": true,
+    "quoteCharCode": 34,
+    "quoteCharName": "U+0022 QUOTATION MARK (ASCII straight double quote)",
+    "charCodesOfBodyPrefix": [84, 104, 101, 32, 34, 122, 122, 32]
+  },
+  "comparisonToTodoist": {
+    "todoistArtifact": "flow9-STR-03-todoist.json",
+    "heading": { "todoist": "Delete label?", "meologue": "Delete label?", "verdict": "EXACT MATCH" },
+    "buttons": { "todoist": ["Cancel", "Delete"], "meologue": ["Cancel", "Delete"], "verdict": "EXACT MATCH, same order" },
+    "body": {
+      "todoist": "The zz probe label renamed label will be permanently deleted.",
+      "meologue": "The \"zz probe label renamed\" label will be permanently deleted.",
+      "verdict": "DIVERGENT — meologue wraps the label name in ASCII double quotes; Todoist does not. Every other character matches."
+    },
+    "domRole": {
+      "todoist": "dialog",
+      "meologue": "alertdialog",
+      "verdict": "DIVERGENT — but meologue's role is the more correct one for a destructive confirmation, so this is an accessibility surplus, not a defect."
+    }
+  },
+  "postDeleteVerification": {
+    "method": "waitForFunction until zero rows matched ul li input[aria-label='Label name']",
+    "labelRowsAfter": [],
+    "emptyStateRestored": true
+  },
+  "measurementTrap": {
+    "observed": "An immediate read straight after clicking Delete reported the dialog still present in the DOM (dialogStillOpen: true).",
+    "diagnosis": "Exit animation still in flight at the instant of the read, not a stuck dialog. A probe one round later found no dialog node at all, and finishing every running animation changed nothing.",
+    "rule": "This is automated-tab-freezes-animations-and-wipes-storage seen from the other side: read dialog teardown after the animation, never at the instant of the click."
+  }
+}

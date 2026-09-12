@@ -499,6 +499,23 @@ PRI-01, PRI-03). Six became `divergent` (DATE-07, DATE-10, SCHED-02, SCHED-07, S
   permanent record of those creates, comments and deletes even after the tasks are removed.
 - **Task detail and comments next**, split into two short runs so a stall strands less.
 
+### Three further answers, given at the close of session 5
+
+These were spoken after flow 8 was committed and are recorded here because no other artifact carried
+them. They govern flow 9 and the fix phase.
+
+- **The browser is released, so resume driving.** The user had held the ego-browser task space
+  themselves during flow 8; they handed it back. No further wait for it is warranted.
+- **STR-01, STR-02 and STR-07 get exactly one disposable project.** The account stands at 1 project
+  of the free plan's 5, so `todoist-free-tier-caps-at-five-projects` does not bite here — the cap
+  risk that blocked earlier structural rows simply does not arise at 1/5. The protocol: name it
+  `ZZ probe`, take the measurements, delete it, and **read the project list back both before and
+  after**, committing each reading. This is narrower than "Todoist writes are allowed" in general:
+  one project, not one per row.
+- **The fix phase is ordered by user impact, not by cost.** The cheapest-first ordering is
+  explicitly rejected. The numbered defect list in this document is therefore re-read as an
+  impact ranking when the fix phase begins, and a cheap fix does not jump the queue for being cheap.
+
 ## Flow 4 — the task detail view
 
 DET-01 to DET-14 (DET-13 skipped as a deliberate divergence), driven under the stricter write rules.
@@ -822,3 +839,155 @@ were described as divergent in their notes while their status column still read 
 | `todoist-captured` | 13 | 8 | 8 |
 | `divergent` | 10 | 47 | **50** |
 | `blocked` | 11 | 6 | 6 |
+
+## Flow 9 — labels, filters and the structural objects
+
+The last flow, and the only one driven across two sessions. Todoist's label and filter readings were
+taken on 11 Sep; meologue's half, and everything about Projects and Sections, on 12 Sep.
+
+### Method, and the ADR problem it had to solve first
+
+ADR 0077 is explicit: *a row is established by driving both applications in the same session.* Flow
+9 began already in breach of that — four rows (STR-03…06) had a committed Todoist half from the day
+before and nothing on meologue's side. Pairing those across two days would have produced seven
+terminal rows resting on a rule the repo had just adopted and then quietly bent.
+
+So Todoist's side was **re-read on the 12th before any status was set**, and it reproduced the 11 Sep
+reading in every particular: the label options menu's five items in the same DOM order, the Add and
+Edit dialog shapes with their 0/60 and 14/60 counters, the filter cap still at `Used: 3/3`, and the
+unquoted name in the delete body. That re-read is committed as
+`live-audit-dom/flow9-todoist-reread-2026-09-12.json`, and every STR-03…06 note now says the row is
+same-session rather than cross-day.
+
+Two disposable objects were written to the real account, both under the stricter rules: a label
+(`zz probe label`, id 2185034826) and a project (`ZZ probe`, id `zz-probe-6hVXq42jpVmjG5Wr`, carrying
+one section). Both were deleted against confirmation dialogs quoting their names. Nothing else was
+created; the user's three filters, one project and Inbox were read only, with the `Priority 1` Edit
+dialog and the section menu both closed with Escape without saving.
+
+### Results
+
+All seven STR rows were `built` and one-sided at the start of this flow. All seven are now terminal,
+and all seven are `divergent` — but for three different reasons, which matters more than the count.
+
+**One real defect, with two sites.** STR-03 and STR-01 are the same bug. Todoist writes
+`The zz probe label label will be permanently deleted.` and `The ZZ probe project and all its tasks
+will be permanently deleted. This action cannot be undone.` — the name bare. meologue reproduces
+every character of both except that it wraps the name in ASCII double quotes. Headings, button pairs
+and, for the project, both sentences match exactly. The ledger's meologue-evidence column claimed
+"verbatim" for both rows; it was wrong for both.
+
+What makes this worth fixing rather than arguing about is that **meologue already contradicts
+itself**: `todo-page.tsx:1059` renders the Task delete body with the name bare, exactly as Todoist
+does, while `labels-view.tsx:150` and `project-view.tsx:416` quote it. The intended style is already
+in the tree at one of three call sites.
+
+**Capability parity, divergent surface.** STR-02, STR-04, STR-05 and STR-07 all match on what the
+nuance actually claims and differ only in how it is reached. Todoist routes label create/rename/
+recolour and project editing through modal dialogs; meologue does all of it inline, following
+`projects-view.tsx`. Two findings inside this group are worth more than their rows:
+
+- **The palettes are a 20-for-20 match** — berry red, red, orange, yellow, olive green, lime green,
+  green, mint green, teal, sky blue, light blue, blue, grape, violet, lavender, magenta, salmon,
+  charcoal, grey, taupe — identical membership in identical order, differing only in casing.
+- **Todoist is not uniformly modal, and Sections are where the two apps agree.** Todoist's project
+  *create* is an inline tiptap editor at the foot of the project tree, not a dialog; its section
+  create and rename are both inline too. Sections are the one structural object where meologue's
+  inline shape is also Todoist's.
+
+**One row a free plan cannot close.** STR-06's capability parity holds — meologue drove all four
+filter operations end to end, and the filter id held steady across rename and recolour — and the
+live preview matches on both sides. But Todoist sits at `Used: 3/3` with an "Unlock more filters"
+button, so its create/rename/recolour could not be executed and **its filter delete wording remains
+uncaptured**. A fourth filter is forbidden and editing one of the user's three real ones is
+destructive. Recorded as a tier limit, as this row's note already predicted.
+
+### Defects found
+
+- **Defect 31 — the destructive confirmation quotes the name where Todoist leaves it bare.** Two
+  sites: `labels-view.tsx:150` (STR-03) and `project-view.tsx:416` (STR-01). `todo-page.tsx:1059`
+  is already correct and shows the intended style. Cheap, and it removes an internal inconsistency
+  as well as a parity gap.
+- **Defect 32 — no character counter on the Label name field.** Todoist's Add/Edit label dialogs
+  carry `0/60` and `14/60`; meologue's name input has no `maxLength` and no counter. The project
+  equivalent is `8/120` and also absent. Minor, and cosmetic rather than functional.
+
+### A fourth decision for the user
+
+Three rows already await ratification because meologue is *more* accessible than Todoist (NAV-04,
+DET-03, ROW-12). Flow 9 adds a fourth, and it recurs on both delete dialogs:
+
+- **meologue's destructive dialogs are `role="alertdialog"`; Todoist's are `role="dialog"`.**
+  `alertdialog` is the correct role for a confirmation that interrupts to prevent data loss, so
+  strict DOM parity here means *downgrading* meologue's ARIA. Recorded on STR-01 and STR-03 as a
+  difference in meologue's favour, not as a defect.
+
+meologue's reorder controls are a milder instance of the same tension: `Move "x" earlier` / `Move "x"
+later` buttons are keyboard-operable where Todoist's section drag is not.
+
+### Measurement traps, all three new
+
+- **`offsetParent === null` is not a visibility test.** It is null for every `position: fixed`
+  element, and meologue's dialogs are fixed — so the visibility filter that correctly excludes
+  Todoist's permanent invisible `<h1>` silently finds *no dialog at all* in meologue. Filter on
+  `data-state="open"` instead, or do not filter.
+- **`textContent` does not include input values.** A section created successfully was reported
+  missing because its name lives in an `<input value>`; the heading counter (`Sections (1/20)`) and
+  the per-row `aria-label`s were the evidence that it existed. The same trap makes a Todoist filter
+  row read `"Priority 11"` once its task-count badge loads, which is why the row had to be found by
+  `href` rather than by name.
+- **A counter read from concatenated text can be wrong by a digit.** Sweeping
+  `/\d+\/\d+/` over Todoist's Edit filter dialog returns `110/1024`, because the query value
+  `priority 1` abuts the counter `10/1024`. The real counter is `10/1024`.
+
+A fourth, already known but seen from the other side: an immediate read after clicking Delete
+reported meologue's dialog still mounted. That was its exit animation in flight, not a stuck dialog —
+a probe one round later found no dialog node, and finishing every running animation changed nothing.
+
+### Safety log
+
+- Todoist projects: **1 before, 1 after**, the same `Getting Started` project.
+- Todoist labels: **0 before, 0 after**.
+- Todoist filters: **3 before, 3 after**, the same three hrefs, unchanged after both Escapes.
+- **Two objects created, both deleted**, each against a dialog quoting its name. No unintended
+  writes this time — the Add-label and Add-project names were typed only after polling for focus
+  inside the editor and were asserted character-exact before submitting, which is flow 8's `ted`
+  lesson applied.
+- meologue's test origin: the `zz probe` label and filter and the `ZZ probe` project and its section
+  were all created and deleted; both lists are back to their empty states and no Task was touched.
+
+### Tally after flow 9
+
+Read back from `parity-ledger.md` with `awk` over the status column, not counted from the edits.
+
+| Status | Session start | After flow 8 | Now |
+|---|---|---|---|
+| `matched` | 17 | 48 | 48 |
+| `built` | 74 | 15 | **8** |
+| `todoist-captured` | 13 | 8 | 8 |
+| `divergent` | 10 | 50 | **57** |
+| `blocked` | 11 | 6 | 6 |
+
+127 rows, and **flow 9 closed the last of the STR rows: all seven are terminal.**
+
+The eight rows still reading `built` are the honest residue, and the first draft of this section
+described them wrongly as belonging to no flow. They do not: they sit inside areas flows 2–8 drove
+and were simply never closed individually.
+
+| Row | What is still open |
+|---|---|
+| `QA-14` | the `@` label popup's "Label not found. Create X" fallback |
+| `QA-19` | whether `Shift+Enter` submits rather than inserting a newline |
+| `SCHED-01` | the scheduler popover's 250×525px geometry, radius and colours |
+| `ROW-06` | Markdown in a title staying literal |
+| `ROW-09` | metadata blocks as adjacent flex children with no separator glyph |
+| `NAV-02` | the sidebar rendering only inside `/todo/*` at ≥900px |
+| `NAV-03` | no sidebar below 900px, bottom bar remaining |
+| `NAV-06` | "Filters & Labels" as one destination with a combined count |
+
+Five of these look cheap. `NAV-02`, `NAV-03` and `NAV-06` are viewport-width and DOM-presence reads
+needing no writes to either account, and `ROW-06`/`ROW-09` are single computed-style reads. `QA-14`,
+`QA-19` and `SCHED-01` need real typing and a popover measured after its animation settles.
+
+So the bar the user set — every row `matched` or `divergent` with a recorded reason — is **not yet
+met for these eight**. Every other row in the ledger meets it.

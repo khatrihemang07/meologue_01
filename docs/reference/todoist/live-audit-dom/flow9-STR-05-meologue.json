@@ -1,0 +1,24 @@
+{
+  "row": "STR-05",
+  "app": "meologue",
+  "origin": "http://127.0.0.1:41999",
+  "screen": "/todo/labels (labels-view.tsx)",
+  "isMenuWidget": false,
+  "menuTriggerPresent": false,
+  "note": "meologue offers no menu widget at all — no aria-haspopup, no role=menu. The row carries its controls inline and always mounted.",
+  "controlsInDomOrder": [
+    { "tag": "SELECT", "ariaLabel": "\"zz probe label renamed\"'s colour", "job": "recolour" },
+    { "tag": "INPUT", "type": "text", "ariaLabel": "Label name", "job": "rename (commits on blur)" },
+    { "tag": "BUTTON", "type": "button", "ariaLabel": "Delete Label \"zz probe label renamed\"", "job": "delete" }
+  ],
+  "hoverRequired": false,
+  "allControlsAlwaysVisible": true,
+  "comparisonToTodoist": {
+    "todoistArtifact": "flow9-STR-05-todoist.json",
+    "todoistMenuItems": ["Edit", "Add to favorites", "Move to shared labels", "Copy link to label", "Delete"],
+    "meologueJobsOffered": ["Edit (inline rename field)", "Delete (trash button)", "plus recolour, which Todoist reaches through Edit"],
+    "itemsAbsentInMeologue": ["Add to favorites", "Move to shared labels", "Copy link to label"],
+    "absenceJustified": "label-types.ts carries no favourite and no shared flag, and no /todo/labels/:labelId route exists for a link to point at. These three have nothing to be built against.",
+    "verdict": "DIVERGENT BY SHAPE, and the shape was chosen deliberately — the two jobs that apply are present, the three that do not apply are absent, and meologue's inline controls are reachable by keyboard without a hover, which Todoist's hover-revealed menu trigger is not."
+  }
+}
