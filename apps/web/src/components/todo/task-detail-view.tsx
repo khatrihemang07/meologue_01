@@ -62,6 +62,7 @@ import { ChevronLeft, ChevronRight, Pencil, Trash2, X } from "lucide-react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import type * as React from "react";
 import { forwardRef, Suspense, useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import { entryProse } from "@/components/entry-prose";
 import { ActivityFeed } from "@/components/todo/activity-feed";
 import { LazyTaskDescriptionEditor } from "@/components/todo/lazy-task-description-editor";
@@ -76,6 +77,17 @@ import { useSettingsStore } from "@/lib/settings";
 import { priorityColour } from "@/lib/task-priority-colors";
 import { quickAddRecognitionPlugin } from "@/lib/todo-quick-add-recognition";
 import { cn } from "@/lib/utils";
+
+/**
+ * DET-16 (parity-ledger.md): live Todoist's own "Date updated to Tomorrow"
+ * toast, with Undo, was present through 9,609ms and gone by 10,119ms after
+ * Save (`rename-capture-2026-09-11.md`; flow 4, polled every ~500ms). 10s,
+ * not `todo-page.tsx`'s own 11s `COMPLETION_TOAST_DURATION_MS` — that
+ * row's own note is explicit that the two toasts' lifetimes should not be
+ * assumed to share a duration, and this is a separate measurement, not a
+ * reused one.
+ */
+const RENAME_DATE_TOAST_DURATION_MS = 10_000;
 
 export interface TaskDetailViewProps {
   task: Task;
@@ -385,7 +397,9 @@ function CommentRow({
 
   return (
     <li className="group flex items-start gap-1 rounded-md p-1.5 text-sm transition hover:bg-muted">
-      <div className="min-w-0 flex-1 [&_p]:my-0 [&_ul]:my-0">{entryProse(comment.text)}</div>
+      <div className="min-w-0 flex-1 [&_p]:my-0 [&_ul]:my-0">
+        {entryProse(comment.text, undefined, undefined, undefined, "comment")}
+      </div>
       <button
         type="button"
         aria-label="Edit comment"
@@ -620,6 +634,85 @@ function TaskDetailBody({
   const [dateScheduleOpen, setDateScheduleOpen] = useState(false);
   const { dateDay, dateTime, setScheduleDay, setScheduleTime } = useTaskDateState(task, onSetDate);
 
+  // DET-16: `saveEditing` below hands the raw typed title straight to its
+  // `onRename` prop and gets nothing back — resolving a recognised phrase
+  // into a real Date happens one layer up, in `todo-page.tsx`'s/
+  // `composer-page.tsx`'s own `commitRename` wrapper (`commitTaskTitle`,
+  // task-title-commit.ts), asynchronously (its Task-store write is a
+  // `useMutation`, not an optimistic cache write — hooks/use-tasks.ts's
+  // own `setDateMutation`). So the only way this view can tell a rename
+  // just resolved a Date is by watching its own `task.date` prop for the
+  // change that wrapper eventually produces, against a snapshot taken
+  // the instant a title-changing Save fired. `previousDate` carries the
+  // full `Task.date` string (day and time-of-day both, when present),
+  // not just the day, since Undo below has to restore both.
+  //
+  // This is a heuristic, not a closed loop back to the specific rename
+  // that triggered it — nothing in this view's own contract (`onRename`
+  // returns `void`) can make it one. The risk that heuristic carries: an
+  // unrelated `task.date` change arriving in this same window (a
+  // completely separate edit, mid-flight for some other reason) would be
+  // misread as this rename's own effect. The three sites in this file
+  // that change `task.date` directly — `onPickDay`/`onSetTime`/
+  // `onPickRecurrence` below, all reached through this view's own Date
+  // attribute — clear this ref first, precisely so an explicit, reader-
+  // driven date edit can never be mistaken for a rename's side effect.
+  const pendingRenameDateRef = useRef<{ taskId: string; previousDate: string | null } | null>(null);
+
+  // DET-16: the toast itself — same mechanism `todo-page.tsx`'s own
+  // `raiseCompletionToast` uses (`toast(message, { duration, action:
+  // { label: "Undo", onClick } })`), read there rather than reimplemented
+  // blind, but not shared code: that function lives in a file this ticket
+  // does not own, and its Undo reverses a completion, not a Date.
+  //
+  // Undo restores only the Date (day and time together, via `onSetDate`)
+  // — not the title. `rename-capture-2026-09-11.md`, the one live capture
+  // of this toast, records that it reads "Date updated to Tomorrow" with
+  // an Undo/Close pair, but never drove Undo itself or read back what it
+  // left the title as — so what Todoist's own Undo restores is
+  // unmeasured, not merely undocumented here. Restoring only the Date is
+  // this file's own conservative choice, matching the toast's own wording
+  // ("Date updated," not "Rename undone") and the guard `commitTaskTitle`
+  // already applies on the way in (only ever set a field a phrase
+  // actually resolved) — Undo mirrors that by only ever restoring the one
+  // field the toast itself names.
+  function raiseDateResolvedToast(taskId: string, dayText: string, previousDate: string | null) {
+    toast(`Date updated to ${dayText}`, {
+      duration: RENAME_DATE_TOAST_DURATION_MS,
+      action: {
+        label: "Undo",
+        onClick: () => onSetDate(taskId, previousDate),
+      },
+    });
+  }
+
+  // DET-16: fires once per rename that changed `task.date` — comparing
+  // this render's own `task.date` against the snapshot `saveEditing` took
+  // right before calling `onRename`. Keyed on `task.date`/`task.id`
+  // specifically, not the whole `task` object, so an unrelated field
+  // changing (a Comment posted, a Label added, while this modal happens
+  // to still be open) can't retrigger this check once it has already run
+  // for the pending rename. `dateDisplay` below is read as of THIS
+  // render, the same value the Date attribute row itself is about to
+  // show — DET-16's own brief: the toast must use the identical word the
+  // row badge would. `dateDisplay`/`raiseDateResolvedToast` are
+  // deliberately absent from the dependency list: both are recomputed
+  // fresh every render from `task`/`onSetDate`, so naming them would only
+  // ever re-run this effect in lockstep with `task.date` itself — the one
+  // dependency that actually decides whether this effect has anything to
+  // do.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: see comment above — task.date/task.id are the only real re-run triggers; dateDisplay and raiseDateResolvedToast are derived from them each render, not independent inputs.
+  useEffect(() => {
+    const pending = pendingRenameDateRef.current;
+    if (pending === null || pending.taskId !== task.id || task.date === pending.previousDate) {
+      return;
+    }
+    pendingRenameDateRef.current = null;
+    if (dateDisplay !== null) {
+      raiseDateResolvedToast(task.id, dateDisplay.text, pending.previousDate);
+    }
+  }, [task.date, task.id]);
+
   function startEditing(field: "title" | "description") {
     setTitleDraft(task.content);
     setDescriptionDraft(task.description ?? "");
@@ -718,6 +811,11 @@ function TaskDetailBody({
     setEditing(false);
     const trimmedTitle = (titleText ?? titleDraft).trim();
     if (trimmedTitle !== "" && trimmedTitle !== task.content) {
+      // DET-16: snapshot taken before `onRename` fires — see
+      // `pendingRenameDateRef`'s own doc comment above for why this is
+      // the only hook this view has into whether the rename it just sent
+      // upstream turns out to resolve a Date.
+      pendingRenameDateRef.current = { taskId: task.id, previousDate: task.date };
       onRename(trimmedTitle);
     }
     // Trims only — the identical "never reflows a body, only trims it"
@@ -1198,18 +1296,28 @@ function TaskDetailBody({
             onOpenChange={setDateScheduleOpen}
             dateDay={dateDay}
             dateTime={dateTime}
-            onSetTime={setScheduleTime}
+            // DET-16: each of these three is a reader-driven, explicit
+            // Date edit — clearing `pendingRenameDateRef` first means a
+            // rename that didn't itself touch the Date can never have a
+            // LATER, unrelated edit here misread as its own effect (that
+            // ref's own doc comment above has the full reasoning).
+            onSetTime={(time) => {
+              pendingRenameDateRef.current = null;
+              setScheduleTime(time);
+            }}
             dateString={task.dateString}
             datesWithTasks={datesWithTasks}
             onPickDay={(day) => {
+              pendingRenameDateRef.current = null;
               setScheduleDay(day);
               if (task.dateString !== null) {
                 onSetDateString(task.id, null, new Date().toISOString());
               }
             }}
-            onPickRecurrence={(dateString) =>
-              onSetDateString(task.id, dateString, new Date().toISOString())
-            }
+            onPickRecurrence={(dateString) => {
+              pendingRenameDateRef.current = null;
+              onSetDateString(task.id, dateString, new Date().toISOString());
+            }}
             trigger={
               task.date === null || dateDisplay === null ? (
                 <AttributePill label="Date" />
@@ -1424,13 +1532,30 @@ export function TaskDetailView(props: TaskDetailViewProps) {
               ? // DET-14: measured directly against the live Todoist modal —
                 // radius 10px, not Tailwind's own 14px `rounded-xl` this
                 // used to carry.
-                // 54rem x 48.25rem is Todoist's own measured 864 x 772 at
-                // desktop width (DET-14), against the 40rem x 32rem this
-                // carried before — a third narrower and a third shorter,
-                // which is what made the two columns feel cramped where
-                // Todoist's breathe. Both stay clamped so a smaller window
-                // still gets a modal that fits inside it.
-                "top-1/2 left-1/2 h-[min(48.25rem,85vh)] w-[min(54rem,calc(100%-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-lg data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95"
+                // 54rem wide is Todoist's own measured 864px at desktop
+                // width (DET-14), against the 40rem this carried before —
+                // a third narrower, which is what made the two columns
+                // feel cramped where Todoist's breathe. Width stays
+                // clamped so a smaller window still gets a modal that
+                // fits inside it.
+                //
+                // Height is `100vh - 8rem` (128px), not a flat fraction of
+                // the viewport: re-measured live at the same 1470×836
+                // viewport (flow 5, parity-ledger.md's DET-14 row),
+                // Todoist read 864×708 twice with no animation running,
+                // against this file's own `min(48.25rem,85vh)`, which
+                // resolved to 710.594 there once meologue's own opening
+                // animation was driven to its resting frame
+                // (`Animation.finish()`) rather than read mid-transform.
+                // 836 − 128 = 708 is an exact match; 85vh never was. The
+                // 48.25rem (772px) cap is `100vh − 128px` at a 900px-tall
+                // viewport, matching the corpus's older 864×772 reading
+                // (flow 4) — but nobody has actually measured a live
+                // Todoist modal at a viewport taller than 900px, so this
+                // formula holding as the cap above that height is this
+                // file's own assumption, consistent with both readings
+                // rather than a third one.
+                "top-1/2 left-1/2 h-[min(48.25rem,calc(100vh-8rem))] w-[min(54rem,calc(100%-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-lg data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95"
               : "inset-x-0 bottom-0 max-h-[85vh] rounded-t-xl data-open:animate-in data-open:slide-in-from-bottom data-closed:animate-out data-closed:slide-out-to-bottom",
           )}
           style={wide ? undefined : { paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))" }}

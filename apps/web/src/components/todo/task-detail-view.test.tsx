@@ -1,8 +1,18 @@
 import type { Comment, Label, Project, Section, Task } from "@meologue/core";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { useEffect, useRef, useState } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TaskDetailView } from "./task-detail-view";
+
+// DET-16 — mirrors `todo-page.test.tsx`'s own `vi.mock("sonner", ...)` shape
+// (that file's own header comment on why): `toast` is a plain callable here
+// (no `.error`, unlike that file), since this view never raises an error
+// toast of its own.
+vi.mock("sonner", () => {
+  const toast = vi.fn() as unknown as typeof import("sonner").toast;
+  return { toast };
+});
 
 /**
  * Stands in for the real `TaskTitleEditor` — see `task-title-editor.tsx`'s
@@ -245,8 +255,26 @@ function renderView(overrides: Partial<Parameters<typeof TaskDetailView>[0]> = {
     events: [],
     ...overrides,
   };
-  render(<TaskDetailView {...props} />);
-  return props;
+  const view = render(<TaskDetailView {...props} />);
+  return {
+    ...props,
+    /**
+     * DET-16: the real app never hands this view a changed `task` prop
+     * synchronously — `onRename`'s own resolution (`commitTaskTitle`,
+     * task-title-commit.ts) reaches the store through a `useMutation`, and
+     * this component only learns the result once its parent re-renders it
+     * with the updated Task (task-detail-view.tsx's own `pendingRenameDateRef`
+     * doc comment has the full account). `rerender` stands in for that
+     * later, external re-render — tests below use it to simulate the
+     * store's own write landing, the same way the real page eventually
+     * would.
+     */
+    rerender: (nextOverrides: Partial<Parameters<typeof TaskDetailView>[0]> = {}) => {
+      const nextProps = { ...props, ...nextOverrides };
+      view.rerender(<TaskDetailView {...nextProps} />);
+      return nextProps;
+    },
+  };
 }
 
 describe("TaskDetailView", () => {
@@ -859,6 +887,156 @@ describe("TaskDetailView", () => {
     expect(screen.getByRole("button", { name: /Labels.*Home, Errands/s })).toBeInTheDocument();
   });
 
+  describe("DET-16 — a toast when a rename resolves a Date", () => {
+    // Pinned the same way task-detail-view-recognition.test.tsx's own
+    // `beforeEach` is (that file's own comment on why `toFake: ["Date"]`
+    // alone, not every timer: entering title-edit mode below goes through
+    // `findByLabelText`, which polls with a REAL `setTimeout` — faking
+    // every timer would hang that poll instead of resolving it).
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(2026, 8, 13, 12, 0));
+      vi.mocked(toast).mockClear();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    // This view's own contract (`onRename: (content: string) => void`)
+    // never hands resolution back — `commitTaskTitle` (task-title-commit.ts)
+    // runs one layer up, through a `useMutation` (hooks/use-tasks.ts's
+    // `setDateMutation`), so this view only learns a Date resolved once its
+    // parent re-renders it with the changed Task. `renderView`'s own
+    // `rerender` (this file's header comment on it) stands in for that
+    // later, external re-render.
+    it("raises a toast naming the resolved Date, with a 10s duration, once the store's own write lands", async () => {
+      const onRename = vi.fn();
+      const { rerender } = renderView({
+        task: task({ id: "1", content: "buy milk", date: null }),
+        onRename,
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "buy milk" }));
+      const titleField = await screen.findByLabelText("Task name");
+      fireEvent.change(titleField, { target: { value: "buy milk tomorrow" } });
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+      expect(onRename).toHaveBeenCalledWith("buy milk tomorrow");
+      // Nothing has resolved yet — `onRename` is a bare mock here, exactly
+      // as it is in every other test in this file; no toast until the
+      // Task prop itself changes.
+      expect(toast).not.toHaveBeenCalled();
+
+      rerender({ task: task({ id: "1", content: "buy milk", date: "2026-09-14" }) });
+
+      expect(toast).toHaveBeenCalledWith(
+        "Date updated to Tomorrow",
+        expect.objectContaining({
+          // DET-16 (parity-ledger.md): measured live, 9,609ms present and
+          // gone by 10,119ms — 10s, not the completion toast's own 11s.
+          duration: 10_000,
+          action: expect.objectContaining({ label: "Undo", onClick: expect.any(Function) }),
+        }),
+      );
+    });
+
+    it("raises no toast when a rename does not change the Date", async () => {
+      const onRename = vi.fn();
+      const { rerender } = renderView({
+        task: task({ id: "1", content: "buy milk", date: "2026-09-20" }),
+        onRename,
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "buy milk" }));
+      const titleField = await screen.findByLabelText("Task name");
+      fireEvent.change(titleField, { target: { value: "buy bread" } });
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+      expect(onRename).toHaveBeenCalledWith("buy bread");
+
+      // The store's own write lands, but the rename never touched Date —
+      // only `content` differs from the render before Save.
+      rerender({ task: task({ id: "1", content: "buy bread", date: "2026-09-20" }) });
+
+      expect(toast).not.toHaveBeenCalled();
+    });
+
+    // "If that is not recorded, restore only the date, and say so"
+    // (this ticket's own brief): `rename-capture-2026-09-11.md` records
+    // that Todoist's own toast carries an Undo, but never drove it, so
+    // what it restores there is unmeasured. This view's own Undo restores
+    // only the Date — day and time together, as one `Task.date` string —
+    // never the title, and this test is the record of that choice.
+    it("Undo restores the previous Date and time, and never the title", async () => {
+      const onRename = vi.fn();
+      const onSetDate = vi.fn();
+      const { rerender } = renderView({
+        task: task({ id: "1", content: "buy milk", date: "2026-09-01T08:00" }),
+        onRename,
+        onSetDate,
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "buy milk" }));
+      const titleField = await screen.findByLabelText("Task name");
+      fireEvent.change(titleField, { target: { value: "buy milk tomorrow" } });
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+      rerender({
+        task: task({ id: "1", content: "buy milk", date: "2026-09-14" }),
+        onSetDate,
+      });
+
+      const toastCall = vi.mocked(toast).mock.calls[0];
+      const action = toastCall?.[1]?.action as { onClick: () => void } | undefined;
+      action?.onClick();
+
+      // The exact previous string, time-of-day included — never just the
+      // day, and never a second call touching `content`.
+      expect(onSetDate).toHaveBeenCalledWith("1", "2026-09-01T08:00");
+      expect(onRename).toHaveBeenCalledTimes(1);
+    });
+
+    // Regression guard for the misattribution risk this file's own
+    // `pendingRenameDateRef` doc comment names: a rename that never
+    // touched the Date leaves that ref sitting unconsumed (`task.date`
+    // never changed to not-match its snapshot), so a LATER, unrelated
+    // Date edit must not be misread as the earlier rename's own effect.
+    // `onPickDay` (task-detail-view.tsx, the Date attribute's own
+    // popover) clears the ref before calling `onSetDate` specifically to
+    // guard against this.
+    it("does not raise a toast for an unrelated Date pick that follows a non-Date-changing rename", async () => {
+      const onRename = vi.fn();
+      const onSetDate = vi.fn();
+      const { rerender } = renderView({
+        task: task({ id: "1", content: "buy milk", date: null }),
+        onRename,
+        onSetDate,
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "buy milk" }));
+      const titleField = await screen.findByLabelText("Task name");
+      fireEvent.change(titleField, { target: { value: "buy bread" } });
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      expect(onRename).toHaveBeenCalledWith("buy bread");
+
+      // Store update lands: only `content` changed, Date stays null.
+      rerender({ task: task({ id: "1", content: "buy bread", date: null }), onSetDate });
+      expect(toast).not.toHaveBeenCalled();
+
+      // The reader now picks a Date explicitly, through this view's own
+      // Date attribute — a wholly separate action from the rename above.
+      fireEvent.click(screen.getByRole("button", { name: "Date" }));
+      fireEvent.click(screen.getByRole("button", { name: /^Today \w{3}$/ }));
+      expect(onSetDate).toHaveBeenCalled();
+
+      const pickedDay = vi.mocked(onSetDate).mock.calls[0]?.[1] as string;
+      rerender({ task: task({ id: "1", content: "buy bread", date: pickedDay }), onSetDate });
+
+      expect(toast).not.toHaveBeenCalled();
+    });
+  });
+
   describe("Description — issue #180", () => {
     it("an unset Description renders a pill", () => {
       renderView({ task: task({ description: null }) });
@@ -971,6 +1149,24 @@ describe("TaskDetailView", () => {
       expect(screen.getByText("Comments (2)")).toBeInTheDocument();
       expect(screen.getByText("reply", { selector: "em" })).toBeInTheDocument();
       expect(screen.getByText("second reply")).toBeInTheDocument();
+    });
+
+    // CMT-02/CMT-08: `CommentRow` now renders through `entryProse`'s own
+    // `"comment"` mode (entry-prose.tsx's own doc comment on the parameter)
+    // rather than the default `"entry"` mode `task.description` still uses
+    // below — a bare URL only linkifies in `"comment"` mode
+    // (entry-prose.test.tsx's own "linkifies a bare https URL" case is the
+    // direct proof of that gate; this is the same behaviour reached through
+    // this file's own real caller).
+    it("CMT-02: a Comment's own bare URL renders as a real link, opened safely in a new tab", () => {
+      renderView({
+        comments: [comment({ id: "c1", text: "see https://example.com now" })],
+      });
+
+      const link = screen.getByRole("link", { name: "https://example.com" });
+      expect(link).toHaveAttribute("href", "https://example.com");
+      expect(link).toHaveAttribute("target", "_blank");
+      expect(link).toHaveAttribute("rel", "noopener noreferrer");
     });
 
     it("the composer is always visible, and submitting adds a Comment and clears the field", () => {
