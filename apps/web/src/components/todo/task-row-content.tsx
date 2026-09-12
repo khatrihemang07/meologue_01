@@ -489,6 +489,18 @@ export function TaskRowContent({
               "line-clamp-4 block w-full text-left hover:underline",
               "text-[length:var(--td-row-font-size)] leading-[length:var(--td-row-line-height)]",
             )}
+            // KBD-03/04 (parity ledger): this button, not the `<li data-
+            // task-id>` it lives inside, is what Todoist's own measured
+            // target actually is — a `role="button"` element carrying the
+            // task title (`docs/reference/todoist/live-audit-dom/flow6-
+            // KBD-03-todoist.json`). `use-todo-keymap.ts`'s `focusAdjacentRow`
+            // walks every `[data-row-nav-target]` in one live `querySelectorAll`
+            // to build the row-to-row cycle straight from the DOM, so a
+            // future row type only needs this one attribute to join it —
+            // no second, hand-maintained list to fall out of sync with
+            // (exactly the parity defect a destination added to one nav
+            // but not the other already produced once in this repo).
+            data-row-nav-target
           >
             {task.content}
           </button>

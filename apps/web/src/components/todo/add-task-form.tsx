@@ -142,7 +142,25 @@ export function AddTaskForm({ onAdd, disabled }: AddTaskFormProps) {
     // `EDITOR_BOX_CLASSES`'s own header comment above for what did and
     // didn't change about the field's own type scale.
     <div className="flex items-center gap-2 px-3 py-2">
-      <div className="relative flex-1">
+      {/*
+        KBD-04 (parity ledger): Todoist's own "Add task" affordance is a
+        plain `<button>` and joins the row-to-row cycle as one stop
+        (`docs/reference/todoist/live-audit-dom/flow6-KBD-04-todoist.json`'s
+        `isAddTaskBtn`). This app's own affordance is the field itself —
+        `AddTaskForm`'s own header comment on playing "Todoist's quiet
+        '+ Add task' row *and* its Quick Add title" at once — so there is
+        no separate button to mark. The live focusable element inside this
+        wrapper (`LazyTaskTitleEditor`'s own `role="textbox"` div, or the
+        disabled placeholder `Input` before Todo's store has opened) is
+        `TaskTitleEditor` (task-title-editor.tsx), the identical shared
+        component a Task's own inline rename and the detail view's editor
+        also mount — marking that component's own DOM node directly would
+        make every in-place rename a cycle stop too. Marking this wrapper
+        instead, and having `use-todo-keymap.ts`'s `focusAdjacentRow` look
+        up its one live focusable descendant, keeps the cycle's landing
+        point specific to *this* editor without touching the shared file.
+      */}
+      <div className="relative flex-1" data-add-task-field>
         {disabled ? (
           // No point mounting a live editor (and its recognition plugin)
           // while there is nowhere yet to send what it would parse —

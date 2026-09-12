@@ -41,6 +41,52 @@ function focusTaskRow(taskId: string): HTMLElement {
   return row;
 }
 
+/** An incomplete row for row-to-row navigation tests — mirrors task-row-content.tsx's own `[data-row-nav-target]` title button inside task-row.tsx's `<li data-task-id>`. */
+function renderTaskRow(taskId: string, title: string): HTMLButtonElement {
+  const li = document.createElement("li");
+  li.setAttribute("data-task-id", taskId);
+  const button = document.createElement("button");
+  button.setAttribute("data-row-nav-target", "");
+  button.textContent = title;
+  li.append(button);
+  document.body.append(li);
+  return button;
+}
+
+/** The "Add task" affordance's own live focusable descendant — mirrors add-task-form.tsx's `[data-add-task-field]` wrapper around `TaskTitleEditor`'s `role="textbox"` div. */
+function renderAddTaskField(): HTMLDivElement {
+  const wrapper = document.createElement("div");
+  wrapper.setAttribute("data-add-task-field", "");
+  const field = document.createElement("div");
+  field.setAttribute("role", "textbox");
+  field.tabIndex = 0;
+  wrapper.append(field);
+  document.body.append(wrapper);
+  return field;
+}
+
+/** A completed row inside a collapsed-by-default `<details>` — mirrors completed-tasks.tsx exactly, including the disclosure defaulting closed, since that is precisely what `focusAdjacentRow` (todo-keymap.ts) has to open before a landing there is real rather than jsdom-only. Reuses one `<details>` across calls in the same test, matching the single disclosure `CompletedTasks` itself renders. */
+function renderCompletedRow(title: string): {
+  restoreButton: HTMLButtonElement;
+  details: HTMLDetailsElement;
+} {
+  let details = document.querySelector("details");
+  if (details === null) {
+    details = document.createElement("details");
+    const summary = document.createElement("summary");
+    summary.textContent = "Completed";
+    details.append(summary);
+    document.body.append(details);
+  }
+  const li = document.createElement("li");
+  const restoreButton = document.createElement("button");
+  restoreButton.setAttribute("data-row-nav-target", "");
+  restoreButton.setAttribute("aria-label", `Restore "${title}"`);
+  li.append(restoreButton);
+  details.append(li);
+  return { restoreButton, details: details as HTMLDetailsElement };
+}
+
 function renderKeymap(overrides: Partial<UseTodoKeymapOptions> = {}) {
   const options: UseTodoKeymapOptions = {
     resolveTask: (taskId) => (taskId === "task-1" ? task() : null),
@@ -273,5 +319,239 @@ describe("useTodoKeymap", () => {
 
     expect(listener).not.toHaveBeenCalled();
     document.removeEventListener(OPEN_SCHEDULE_EVENT, listener);
+  });
+
+  // KBD-03/KBD-04 (parity ledger) — measured live against Todoist
+  // (docs/reference/todoist/live-audit-dom/flow6-KBD-03-todoist.json,
+  // flow6-KBD-04-todoist.json): both ArrowDown/ArrowUp and j/k move focus
+  // row-to-row, wrapping at both ends and walking through the "Add task"
+  // affordance and completed rows.
+  describe("row-to-row navigation (KBD-03/KBD-04)", () => {
+    it("moves focus down on ArrowDown, then down again on 'j'", () => {
+      const row1 = renderTaskRow("t1", "Row 1");
+      const row2 = renderTaskRow("t2", "Row 2");
+      const row3 = renderTaskRow("t3", "Row 3");
+      renderKeymap();
+      row1.focus();
+
+      fireEvent.keyDown(document, { key: "ArrowDown" });
+      expect(document.activeElement).toBe(row2);
+
+      fireEvent.keyDown(document, { key: "j" });
+      expect(document.activeElement).toBe(row3);
+    });
+
+    it("moves focus up on ArrowUp, then up again on 'k'", () => {
+      const row1 = renderTaskRow("t1", "Row 1");
+      const row2 = renderTaskRow("t2", "Row 2");
+      const row3 = renderTaskRow("t3", "Row 3");
+      renderKeymap();
+      row3.focus();
+
+      fireEvent.keyDown(document, { key: "ArrowUp" });
+      expect(document.activeElement).toBe(row2);
+
+      fireEvent.keyDown(document, { key: "k" });
+      expect(document.activeElement).toBe(row1);
+    });
+
+    it("wraps focus from the last row back to the first on ArrowDown", () => {
+      const row1 = renderTaskRow("t1", "Row 1");
+      const row2 = renderTaskRow("t2", "Row 2");
+      renderKeymap();
+      row2.focus();
+
+      fireEvent.keyDown(document, { key: "ArrowDown" });
+      expect(document.activeElement).toBe(row1);
+    });
+
+    it("wraps focus from the first row back to the last on ArrowUp", () => {
+      const row1 = renderTaskRow("t1", "Row 1");
+      const row2 = renderTaskRow("t2", "Row 2");
+      renderKeymap();
+      row1.focus();
+
+      fireEvent.keyDown(document, { key: "ArrowUp" });
+      expect(document.activeElement).toBe(row2);
+    });
+
+    it("lands on the first row when nothing is focused yet", () => {
+      const row1 = renderTaskRow("t1", "Row 1");
+      renderTaskRow("t2", "Row 2");
+      renderKeymap();
+      expect(document.activeElement).toBe(document.body);
+
+      fireEvent.keyDown(document, { key: "ArrowDown" });
+      expect(document.activeElement).toBe(row1);
+    });
+
+    it("walks through the Add task affordance and into a completed row, opening its collapsed disclosure, then wraps", () => {
+      const row1 = renderTaskRow("t1", "Row 1");
+      const addTaskField = renderAddTaskField();
+      const { restoreButton, details } = renderCompletedRow("Done task");
+      renderKeymap();
+      row1.focus();
+
+      fireEvent.keyDown(document, { key: "ArrowDown" });
+      expect(document.activeElement).toBe(addTaskField);
+
+      expect(details.open).toBe(false);
+      fireEvent.keyDown(document, { key: "ArrowDown" });
+      expect(document.activeElement).toBe(restoreButton);
+      // Real-browser correctness, not just a jsdom pass: a completed
+      // row's own <details> has to actually be open for its Restore
+      // button to be focusable at all (todo-keymap.ts's own
+      // focusAdjacentRow doc comment has the HTML-spec reasoning).
+      expect(details.open).toBe(true);
+
+      fireEvent.keyDown(document, { key: "ArrowDown" });
+      expect(document.activeElement).toBe(row1);
+    });
+
+    it("does not move row focus when ArrowDown/ArrowUp is pressed inside a text field", () => {
+      renderTaskRow("t1", "Row 1");
+      renderTaskRow("t2", "Row 2");
+      const input = document.createElement("input");
+      document.body.append(input);
+      renderKeymap();
+      input.focus();
+
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      expect(document.activeElement).toBe(input);
+
+      fireEvent.keyDown(input, { key: "ArrowUp" });
+      expect(document.activeElement).toBe(input);
+    });
+
+    it("does not move row focus when ArrowDown/ArrowUp is pressed inside an open dialog/popover", () => {
+      renderTaskRow("t1", "Row 1");
+      const dialog = document.createElement("div");
+      dialog.setAttribute("role", "dialog");
+      const dialogButton = document.createElement("button");
+      dialog.append(dialogButton);
+      document.body.append(dialog);
+      renderKeymap();
+      dialogButton.focus();
+
+      fireEvent.keyDown(dialogButton, { key: "ArrowDown" });
+      expect(document.activeElement).toBe(dialogButton);
+    });
+
+    /**
+     * The Add-task composer's own escape rule (`canLeaveAddTaskField`,
+     * todo-keymap.ts) — the focus trap these tests exist because of: arrows
+     * could enter the composer from either side and never leave it.
+     *
+     * **What jsdom cannot check here, stated rather than faked.**
+     * `HTMLElement.isContentEditable` is `undefined` in jsdom (probed, not
+     * assumed — it is not implemented at all), so `isTypingTarget` never
+     * reports a contenteditable as a typing target under test. That is
+     * exactly why the trap survived 3287 passing tests: the real composer is
+     * a contenteditable `TaskTitleEditor`, and no jsdom test can reach the
+     * suppression path it takes. These tests therefore drive the `<input>`
+     * arm of `rowNavTargets`'s own selector — real for that arm, and the
+     * one jsdom honours — while the contenteditable arm stays verified on
+     * screen only. `Range.toString()` boundary probing itself does work in
+     * jsdom, so the caret logic below is genuinely exercised.
+     */
+    describe("leaving the Add-task composer (the focus trap)", () => {
+      function renderAddTaskInput(value: string): HTMLInputElement {
+        const wrapper = document.createElement("div");
+        wrapper.setAttribute("data-add-task-field", "");
+        const input = document.createElement("input");
+        input.value = value;
+        wrapper.append(input);
+        document.body.append(wrapper);
+        return input;
+      }
+
+      it("leaves the composer on ArrowDown when the caret sits at the end", () => {
+        const row1 = renderTaskRow("t1", "Row 1");
+        const input = renderAddTaskInput("buy milk");
+        renderKeymap();
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+        // Wraps past the composer (the last stop here) back to the first row.
+        expect(document.activeElement).toBe(row1);
+      });
+
+      it("leaves the composer on ArrowUp when the caret sits at the start", () => {
+        const row1 = renderTaskRow("t1", "Row 1");
+        const input = renderAddTaskInput("buy milk");
+        renderKeymap();
+        input.focus();
+        input.setSelectionRange(0, 0);
+
+        fireEvent.keyDown(input, { key: "ArrowUp" });
+        expect(document.activeElement).toBe(row1);
+      });
+
+      it("keeps native caret movement when the caret sits mid-text", () => {
+        renderTaskRow("t1", "Row 1");
+        const input = renderAddTaskInput("buy milk");
+        renderKeymap();
+        input.focus();
+        input.setSelectionRange(3, 3);
+
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+        expect(document.activeElement).toBe(input);
+
+        fireEvent.keyDown(input, { key: "ArrowUp" });
+        expect(document.activeElement).toBe(input);
+      });
+
+      it("does not leave on an arrow pointing away from the caret's own edge", () => {
+        renderTaskRow("t1", "Row 1");
+        const input = renderAddTaskInput("buy milk");
+        renderKeymap();
+        input.focus();
+        // Caret at the very end: ArrowUp points at the *other* edge, so it
+        // must move the caret natively rather than walk the cycle.
+        input.setSelectionRange(input.value.length, input.value.length);
+
+        fireEvent.keyDown(input, { key: "ArrowUp" });
+        expect(document.activeElement).toBe(input);
+      });
+
+      it("does not leave while text is selected rather than a bare caret", () => {
+        renderTaskRow("t1", "Row 1");
+        const input = renderAddTaskInput("buy milk");
+        renderKeymap();
+        input.focus();
+        input.setSelectionRange(0, input.value.length);
+
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+        expect(document.activeElement).toBe(input);
+      });
+
+      it("never navigates on 'j'/'k', which must stay typeable at any caret position", () => {
+        renderTaskRow("t1", "Row 1");
+        const input = renderAddTaskInput("");
+        renderKeymap();
+        input.focus();
+        // Empty composer: both edges are satisfied, so this is the position
+        // most likely to leak — `jack` and `kite` must still be typeable.
+        input.setSelectionRange(0, 0);
+
+        fireEvent.keyDown(input, { key: "j" });
+        expect(document.activeElement).toBe(input);
+
+        fireEvent.keyDown(input, { key: "k" });
+        expect(document.activeElement).toBe(input);
+      });
+
+      it("leaves an empty composer on either arrow, the ordinary case", () => {
+        const row1 = renderTaskRow("t1", "Row 1");
+        const input = renderAddTaskInput("");
+        renderKeymap();
+        input.focus();
+        input.setSelectionRange(0, 0);
+
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+        expect(document.activeElement).toBe(row1);
+      });
+    });
   });
 });

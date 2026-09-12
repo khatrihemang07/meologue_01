@@ -71,6 +71,16 @@ export function CompletedTasks({ tasks, onUncomplete }: CompletedTasksProps) {
                 aria-label={`Restore "${task.content}"`}
                 onClick={() => onUncomplete(task.id)}
                 className="flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                // KBD-04 (parity ledger): Todoist's own completed row is
+                // still the title's own `role="button"` element
+                // (`flow6-KBD-04-todoist.json`'s `isTaskRowBody`), but this
+                // component renders a completed Task's title as a plain,
+                // unfocusable `<span>` (above) — Restore is the only
+                // focusable element a completed row actually owns, so it
+                // carries the row-to-row cycle's landing marker instead.
+                // `use-todo-keymap.ts`'s own report on this ticket says so
+                // rather than papering over the gap.
+                data-row-nav-target
               >
                 <Undo2 aria-hidden="true" className="size-4" />
               </button>

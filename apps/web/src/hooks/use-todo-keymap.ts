@@ -1,8 +1,11 @@
 import type { Task } from "@meologue/core";
 import { useEffect, useRef } from "react";
 import {
+  canLeaveAddTaskField,
   chordFor,
+  focusAdjacentRow,
   focusedTaskId,
+  isInsideOverlay,
   isTypingTarget,
   OPEN_COMMAND_MENU_EVENT,
   OPEN_SCHEDULE_EVENT,
@@ -91,6 +94,17 @@ export function useTodoKeymap(options: UseTodoKeymapOptions): void {
           return;
         case "show-shortcuts":
           opts.onShowShortcuts();
+          return;
+        // KBD-03/04: row-to-row focus movement — `focusAdjacentRow`
+        // (todo-keymap.ts) owns the whole cycle (DOM order, wrap, the
+        // "Add task" affordance, completed rows), so this case is a bare
+        // fan-out, the same shape every other single-purpose binding here
+        // already takes.
+        case "focus-next-row":
+          focusAdjacentRow("next");
+          return;
+        case "focus-previous-row":
+          focusAdjacentRow("previous");
           return;
         case "command-menu":
           if (taskId !== null) {
@@ -214,6 +228,43 @@ export function useTodoKeymap(options: UseTodoKeymapOptions): void {
         return;
       }
       if (typing && binding.allowInField !== true) {
+        // One exception, and only for the arrow keys: the "Add task"
+        // composer is itself a stop in the row-navigation cycle
+        // (`rowNavTargets`, todo-keymap.ts), so suppressing these two
+        // bindings there unconditionally trapped focus inside it — in
+        // both directions. An arrow already at the edge it points at
+        // leaves the field and continues the cycle; anywhere else in the
+        // text it keeps native caret movement
+        // (`canLeaveAddTaskField` carries the full reasoning).
+        //
+        // Gated on the arrow chords, NOT on `binding.id` alone: `j`/`k`
+        // share these bindings' `keys` and are ordinary characters, so
+        // they must always type into the composer and never navigate.
+        const escapeDirection =
+          chord === "arrowdown" && binding.id === "focus-next-row"
+            ? "next"
+            : chord === "arrowup" && binding.id === "focus-previous-row"
+              ? "previous"
+              : null;
+        if (escapeDirection === null || !canLeaveAddTaskField(event.target, escapeDirection)) {
+          return;
+        }
+      }
+      // `focus-next-row`/`focus-previous-row` are the only bindings whose
+      // own keys (ArrowDown/ArrowUp/j/k) an open Radix overlay might
+      // already be using for its own purpose — `TaskSchedulePopover`'s
+      // day-picker grid, `TaskCommandMenu`'s own item navigation — and
+      // neither is a text field `isTypingTarget` above would catch. Every
+      // other binding here is either `task-focused` (already a no-op
+      // once focus leaves a row for a portalled overlay, since
+      // `focusedTaskId()` finds no `[data-task-id]` ancestor there) or
+      // doesn't touch focus at all, so this check is scoped to just these
+      // two rather than added as a blanket rule for every binding
+      // (`isInsideOverlay`, todo-keymap.ts, has the full reasoning).
+      if (
+        (binding.id === "focus-next-row" || binding.id === "focus-previous-row") &&
+        isInsideOverlay(event.target)
+      ) {
         return;
       }
       event.preventDefault();

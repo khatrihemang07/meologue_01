@@ -186,6 +186,44 @@ export const TODO_KEY_BINDINGS: readonly TodoKeyBinding[] = [
     when: "task-focused",
     keys: ["mod+backspace", "shift+delete"],
   },
+  // KBD-03/KBD-04 (parity ledger), measured live against Todoist
+  // (`docs/reference/todoist/live-audit-dom/flow6-KBD-03-todoist.json`,
+  // `flow6-KBD-04-todoist.json`): both ArrowDown/ArrowUp AND j/k move
+  // focus row-to-row, wrapping at both ends and walking through the
+  // "Add task" affordance and completed rows, not just the incomplete
+  // list. `when: "always"` (not "task-focused") is deliberate — unlike
+  // every other Navigate/Edit-task row here, which does nothing without
+  // a Task already focused, the very first ArrowDown/`j` from `BODY`
+  // (nothing focused yet) has to land on the first row rather than no-op,
+  // matching the audit's own first step. `label` is transcribed verbatim
+  // from `keyboard.md`'s General section ("Move focus up: ↑ or K" / "Move
+  // focus down: ↓ or J") even though this table files the pair under
+  // "Navigate" rather than "General" — a deliberate, once-off exception
+  // to this module's own "grouping matches keyboard.md's headings"
+  // convention (this file's own header comment), because these two
+  // *are* row-to-row navigation, not a General action like Quick Find or
+  // the shortcuts overlay.
+  //
+  // `keys` are spelled lowercase (`"arrowdown"`, not `"ArrowDown"`)
+  // despite `event.key` itself reporting `"ArrowDown"` — `chordFor` below
+  // lower-cases unconditionally before building the chord string, so a
+  // capitalised entry here would simply never match. Every other named
+  // key already wired in this table (`"backspace"`, `"delete"`) follows
+  // the identical convention.
+  {
+    id: "focus-next-row",
+    section: "Navigate",
+    label: "Move focus down",
+    when: "always",
+    keys: ["arrowdown", "j"],
+  },
+  {
+    id: "focus-previous-row",
+    section: "Navigate",
+    label: "Move focus up",
+    when: "always",
+    keys: ["arrowup", "k"],
+  },
   {
     id: "open-in-project",
     section: "Navigate",
@@ -270,6 +308,190 @@ export function focusedTaskId(): string | null {
     return null;
   }
   return active.closest("[data-task-id]")?.getAttribute("data-task-id") ?? null;
+}
+
+/**
+ * Every stop in the `focus-next-row`/`focus-previous-row` cycle
+ * (KBD-03/04, parity ledger), in DOM order — read live off the tree, not
+ * a hand-maintained list, so a row type this table doesn't know about yet
+ * can't silently fall out of navigation (this ticket's own report: that
+ * exact defect already happened once, a destination added to one nav but
+ * not the other). Three producers mark themselves:
+ *   - `task-row-content.tsx`'s title button — `[data-row-nav-target]`
+ *     directly, one per incomplete row, matching Todoist's own measured
+ *     landing element (`flow6-KBD-03-todoist.json`'s `isTaskRowBody`).
+ *   - `completed-tasks.tsx`'s Restore button — the identical
+ *     `[data-row-nav-target]` marker, since a completed row's title
+ *     renders as a plain, unfocusable `<span>` there (that file's own
+ *     comment on why Restore, not the title, carries this).
+ *   - `add-task-form.tsx`'s `[data-add-task-field]` wrapper — not marked
+ *     directly on the focusable element itself, because that element is
+ *     `TaskTitleEditor` (task-title-editor.tsx), the identical shared
+ *     component a Task's own inline rename and the detail view's editor
+ *     also mount; marking it there would make every in-place rename a
+ *     cycle stop too. This function resolves the wrapper's own one live
+ *     focusable descendant instead — the ProseMirror `role="textbox"`
+ *     div once Todo's store has opened, or nothing at all while the
+ *     disabled placeholder `Input` is showing (`:not([disabled])`
+ *     excludes it, so the affordance simply isn't a stop yet, the same
+ *     restraint `CompletedTasks` already takes for "nothing completed
+ *     yet").
+ *
+ * A single `querySelectorAll` call across all three selectors returns
+ * every match in one tree-order list — exactly `TaskList` → `AddTaskForm`
+ * → `CompletedTasks`'s own render order (`todo-page.tsx`), matching
+ * KBD-04's own verified traversal (open tasks → "Add task" → completed).
+ */
+function rowNavTargets(): HTMLElement[] {
+  return Array.from(
+    document.querySelectorAll<HTMLElement>(
+      '[data-row-nav-target], [data-add-task-field] [role="textbox"], [data-add-task-field] input:not([disabled])',
+    ),
+  );
+}
+
+/**
+ * True once `target` sits inside an open Radix Dialog/AlertDialog/
+ * Popover/DropdownMenu — every overlay this app renders (`Sheet`,
+ * `Dialog` and `Popover` default to `role="dialog"`; `AlertDialog` sets
+ * `role="alertdialog"` by hand, ui/alert-dialog.tsx's own header comment;
+ * `DropdownMenu` defaults to `role="menu"`). `focus-next-row`/
+ * `focus-previous-row` are `when: "always"` so a bare ArrowDown/ArrowUp
+ * with nothing focused still lands on the first row — but "always" would
+ * just as readily fire while a reader is arrowing through
+ * `TaskSchedulePopover`'s own day-picker grid or `TaskCommandMenu`'s own
+ * items, stealing focus out from under an open overlay the instant either
+ * uses an arrow key for its own purpose. Neither is a text field, so
+ * `isTypingTarget` alone doesn't catch this — this is the dialog/popover
+ * gap this ticket's own brief asked to be found and handled rather than
+ * silently left open.
+ */
+export function isInsideOverlay(target: EventTarget | null): boolean {
+  return Boolean(
+    target instanceof HTMLElement &&
+      target.closest('[role="dialog"], [role="alertdialog"], [role="menu"]') !== null,
+  );
+}
+
+/**
+ * True when an ArrowUp/ArrowDown pressed inside the "Add task" composer
+ * should leave it and continue the cycle instead of moving the caret.
+ *
+ * The composer is a stop in `rowNavTargets()` above, but unlike every
+ * other stop it is a real editor (`TaskTitleEditor`, a contenteditable),
+ * so `isTypingTarget` correctly suppresses these two bindings there to
+ * preserve native caret movement. Correct in isolation, and combined with
+ * the composer being *in* the cycle it produced a focus trap: arrows could
+ * enter the field from either side and never leave it, in either
+ * direction — verified on screen, and invisible to the suite, because one
+ * test asserting "arrows in a text field don't move row focus" and another
+ * asserting "the cycle includes the Add-task field" both passed while
+ * together describing the trap.
+ *
+ * Todoist has no equivalent problem: its own "Add task" affordance is a
+ * plain button, so arrows were never needed there for a caret. The rule
+ * that gives this app the same traversal without the trap is the one text
+ * editors in a list conventionally use — leave only from the edge the key
+ * points at, so a reader mid-text keeps native movement and a reader at
+ * the boundary (including the ordinary empty composer) walks on.
+ *
+ * `j`/`k` are deliberately NOT accepted here even though they share these
+ * bindings' `keys`: they are ordinary characters, and typing `jack` into
+ * the composer must stay possible. `use-todo-keymap.ts`'s own caller gates
+ * this on the arrow chords for that reason.
+ */
+export function canLeaveAddTaskField(
+  target: EventTarget | null,
+  direction: "next" | "previous",
+): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+  const field = target.closest("[data-add-task-field]");
+  if (field === null) {
+    return false;
+  }
+  const edge = direction === "next" ? "end" : "start";
+
+  // A plain `<input>` stop (`rowNavTargets`'s own third selector) reports
+  // its caret directly, with no Selection involved.
+  if (target instanceof HTMLInputElement) {
+    const caret = target.selectionStart;
+    if (caret === null || caret !== target.selectionEnd) {
+      return false;
+    }
+    return edge === "start" ? caret === 0 : caret === target.value.length;
+  }
+
+  const selection = window.getSelection();
+  if (selection === null || selection.rangeCount === 0) {
+    return false;
+  }
+  const range = selection.getRangeAt(0);
+  // A highlighted span is not a caret at an edge — an arrow there should
+  // collapse the selection natively rather than leave the field.
+  if (!range.collapsed) {
+    return false;
+  }
+
+  // Whether any text sits between the caret and the edge the key points
+  // at, measured against the editable root's own contents rather than a
+  // string-length guess — so multi-line content still arrows between its
+  // own lines, and only the document boundary lets focus out.
+  const probe = range.cloneRange();
+  probe.selectNodeContents(target.isContentEditable ? target : field);
+  if (edge === "start") {
+    probe.setEnd(range.startContainer, range.startOffset);
+  } else {
+    probe.setStart(range.endContainer, range.endOffset);
+  }
+  return probe.toString().length === 0;
+}
+
+/**
+ * Moves focus one stop along `rowNavTargets()`'s own live order — computed
+ * fresh on every call, never cached, for the identical reason
+ * `focusedTaskId()` above reads `document.activeElement` fresh rather
+ * than tracking a second "selected" concept: a Task arriving mid-session
+ * from another device must not leave a stale cycle behind.
+ *
+ * With nothing focused (`document.activeElement` isn't one of the
+ * targets — including the ordinary case of it being `<body>`), the first
+ * press in either direction lands on the first stop rather than doing
+ * nothing (KBD-03's own first step, from a neutral click). Otherwise it
+ * wraps at both ends, verified against Todoist's own measured traversal
+ * (`flow6-KBD-04-todoist.json`: `wrapped: true`).
+ *
+ * A completed row's own stop sits inside `CompletedTasks`'s
+ * collapsed-by-default `<details>` (that component's own header comment
+ * on why it defaults closed). Todoist has no equivalent disclosure — every
+ * row it measured was already visible — and the HTML spec (unlike
+ * jsdom's looser default handling) makes a closed `<details>`'s
+ * non-`summary` content genuinely unfocusable, not just visually hidden:
+ * a bare `.focus()` on a completed row's Restore button would silently
+ * no-op in a real browser while still "working" under jsdom. Opening the
+ * `<details>` first, before focusing, is what makes landing on a
+ * completed row real rather than a jsdom-only pass.
+ */
+export function focusAdjacentRow(direction: "next" | "previous"): void {
+  const targets = rowNavTargets();
+  if (targets.length === 0) {
+    return;
+  }
+  const active = document.activeElement;
+  const currentIndex = active instanceof HTMLElement ? targets.indexOf(active) : -1;
+  const nextIndex =
+    currentIndex === -1
+      ? 0
+      : direction === "next"
+        ? (currentIndex + 1) % targets.length
+        : (currentIndex - 1 + targets.length) % targets.length;
+  const target = targets[nextIndex] as HTMLElement;
+  const collapsedDisclosure = target.closest("details:not([open])");
+  if (collapsedDisclosure instanceof HTMLDetailsElement) {
+    collapsedDisclosure.open = true;
+  }
+  target.focus();
 }
 
 // Symbols where Shift is already baked into `event.key` (Shift+/ reports
