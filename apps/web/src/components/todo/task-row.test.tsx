@@ -663,11 +663,17 @@ describe("TaskRow", () => {
   // used to be a single `minHeight: "59px"` floor that held every
   // title-only row at 59 regardless. jsdom computes no layout, so this
   // only proves the inline `minHeight` style switches with `hasMetadata`
-  // — it cannot measure the row's actual painted height, and the
-  // always-present `size-11` (44px) action buttons in the same flex row
-  // may still force a real browser's rendered height above 43px even with
-  // this floor lowered (see this file's own comment on the style prop).
+  // — it cannot measure the row's actual painted height. Flow 11 R2 did:
+  // the 44px action buttons held a title-only row at 47px, so they now lay
+  // out at 36px through `-my-1`, which the last test here pins.
   describe("ROW-01: row height follows whether the row has a metadata line", () => {
+    it("lays the 44px row actions out at 36px so they cannot hold a title-only row above 43px", () => {
+      renderRow({ task: task({ content: "call mum" }) });
+
+      const more = screen.getByRole("button", { name: 'More actions for "call mum"' });
+      expect(more).toHaveClass("size-11", "-my-1");
+    });
+
     it("floors a title-only row at 43px", () => {
       renderRow({ task: task({ content: "call mum" }) });
 

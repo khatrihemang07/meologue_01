@@ -353,18 +353,16 @@ export function TaskRowContent({
       // short, unwrapped title vertically balanced inside whichever floor
       // applies, rather than pinned to its top.
       //
-      // Honest limit: this floor is not a pure function of line-height and
-      // padding (the row itself has neither — see above), so it stays two
-      // measured literals switched on `hasMetadata` rather than a single
-      // formula derived from type scale. It is also not the only thing that
-      // can set this row's rendered height in a real browser — the
-      // always-present "More actions" button a few lines down (and,
-      // outside touch, Edit/Date/Comment beside it) is `size-11` (44px),
-      // taking up flex-row space via `opacity`, not `display`, whether or
-      // not it is visually revealed. 44px < 59px, so that never surfaced
-      // before; at a 43px floor it is the taller of the two, and jsdom
-      // computes no layout, so which value actually wins in a real browser
-      // is not proven by this file's own tests.
+      // Two measured literals switched on `hasMetadata`, not a formula: the
+      // row has no padding of its own to derive one from.
+      //
+      // The row actions (Edit, Date, Comment, More, and the recurring
+      // archive button) are `size-11`, a 44px touch target that stays in the
+      // layout at `opacity: 0`. Flow 11 R2 read a title-only row at 47px
+      // against Todoist's 43: that 44px button plus this box's 2px
+      // drop-target top border and 1px divider. Each action carries `-my-1`,
+      // so it keeps its full 44px hit area but lays out at 36px, and the 43px
+      // floor is what sets the row.
       style={{
         minHeight: hasMetadata ? "59px" : "43px",
         paddingLeft: `${12 + (depth - 1) * 20}px`,
@@ -607,7 +605,7 @@ export function TaskRowContent({
           aria-label={`Complete and archive recurring task "${task.content}"`}
           onClick={onCompleteForever}
           className={cn(
-            "flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
+            "flex -my-1 size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
             HOVER_REVEAL_CLASSES,
           )}
         >
@@ -653,7 +651,7 @@ export function TaskRowContent({
         aria-label={`Edit "${task.content}"`}
         onClick={() => setEditingTitle(true)}
         className={cn(
-          "hidden pointer-fine:flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
+          "hidden pointer-fine:flex -my-1 size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
           HOVER_REVEAL_CLASSES,
         )}
       >
@@ -699,7 +697,7 @@ export function TaskRowContent({
             type="button"
             aria-label={`Date "${task.content}"`}
             className={cn(
-              "hidden pointer-fine:flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
+              "hidden pointer-fine:flex -my-1 size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
               HOVER_REVEAL_CLASSES,
             )}
           >
@@ -712,7 +710,7 @@ export function TaskRowContent({
         aria-label={`Comment on "${task.content}"`}
         onClick={() => detailActions.onOpenDetail(task)}
         className={cn(
-          "hidden pointer-fine:flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
+          "hidden pointer-fine:flex -my-1 size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
           HOVER_REVEAL_CLASSES,
         )}
       >
@@ -729,7 +727,7 @@ export function TaskRowContent({
             type="button"
             aria-label={`More actions for "${task.content}"`}
             className={cn(
-              "flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
+              "flex -my-1 size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground",
               HOVER_REVEAL_CLASSES,
               "aria-expanded:opacity-100",
             )}

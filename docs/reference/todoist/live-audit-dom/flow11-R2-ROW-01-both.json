@@ -1,0 +1,44 @@
+{
+  "round": 2,
+  "driveDate": "2026-09-13 (Sunday, live clock, both apps, same session)",
+  "row": "ROW-01",
+  "method": {
+    "todoist": "disposable 'ZZ probe rowonly' (typed literally, no NLP-recognizable words) and 'ZZ probe rowdate today' (typed with 'today' recognized and stripped by NLP into a date, leaving the title 'ZZ probe rowdate') created via Quick Add, measured via getBoundingClientRect on the real li[data-item-id] row, then deleted",
+    "meologue": "seeded through taskStore.upsert(): 'ZZ probe rowonly' (priority=1/no-priority default, date=null) and 'ZZ probe rowdate' (priority=1, date=today's date string), navigated to via SPA click on the Inbox link, measured on [data-task-row-box=true] inside li[data-task-id], animations finished via document.getAnimations().forEach(a=>a.finish()) before each of two reads"
+  },
+  "todoist": {
+    "titleOnly": { "title": "ZZ probe rowonly", "height": 43, "borderBottom": "1px solid rgb(61, 61, 61)" },
+    "oneDate": { "title": "ZZ probe rowdate", "height": 59, "borderBottom": "1px solid rgb(61, 61, 61)" }
+  },
+  "meologue": {
+    "titleOnly": {
+      "title": "ZZ probe rowonly",
+      "height_read1": 47,
+      "height_read2": 47,
+      "stable": true,
+      "childrenHeights": [
+        { "tag": "BUTTON", "role": "drag handle", "h": 24 },
+        { "tag": "LABEL", "role": "checkbox wrapper", "h": 24 },
+        { "tag": "SPAN", "role": "title/content column, no metadata line", "h": 21 },
+        { "tag": "BUTTON", "role": "row action (hidden until hover, still laid out)", "h": 44 },
+        { "tag": "BUTTON", "role": "row action (hidden until hover, still laid out)", "h": 44 },
+        { "tag": "BUTTON", "role": "row action (hidden until hover, still laid out)", "h": 44 },
+        { "tag": "BUTTON", "role": "More actions (always mounted)", "h": 44 }
+      ],
+      "moreActionsButtonHeight": 44,
+      "note": "The row itself measures 47px, not 44 -- 3px taller than its own tallest child (the 44px More-actions button), most likely from the row box's own vertical padding/border rather than the button setting a floor directly. Neither the old 59px minHeight floor nor a straightforward '44px button sets the floor' story is what's on screen now."
+    },
+    "oneDate": {
+      "title": "ZZ probe rowdate",
+      "height_read1": 59,
+      "height_read2": 59,
+      "stable": true,
+      "childrenHeights_titleColumn": { "tag": "SPAN", "h": 37, "note": "37px title+date column vs 21px title-only column above -- this is the +16px 'one metadata line' the ledger describes, and it now lands on exactly Todoist's 59px" }
+    }
+  },
+  "verdict": {
+    "titleOnly": "DIFFERS -- Todoist 43px, meologue 47px (was 59px before this fix). The fixed 59px floor is gone; meologue is now content-driven the same way Todoist is, but its title-only floor still reads 4px taller than Todoist's.",
+    "oneDate": "MATCH -- both apps render a one-metadata-line row at exactly 59px.",
+    "numbersWinNote": "The ledger's prior 'divergent, was matched' note described a 16px gap (59 vs 43). The current gap is 4px (47 vs 43), a real improvement, but the row is not yet MATCH on the title-only case."
+  }
+}
