@@ -1,5 +1,5 @@
 import type { Comment, Label, Project, Section, Task } from "@meologue/core";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { useEffect, useRef, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TaskDetailView } from "./task-detail-view";
@@ -320,6 +320,39 @@ describe("TaskDetailView", () => {
       expect(await screen.findByLabelText("Task name")).toHaveFocus();
     });
 
+    // DET-10: live Todoist's own finding (`parity-ledger.md`) is that a
+    // generic click in the gap between the title and Description editors
+    // focuses neither field — it moves focus to the dialog itself. jsdom
+    // never performs a real pointer click's own "move focus to whatever's
+    // under the cursor" step (it only dispatches the synthetic `click`
+    // this fires), and has no `isContentEditable` at all, so this proves
+    // the code's OWN reaction to a generic click (it calls
+    // `contentRef.current?.focus()`) lands where intended — not that a
+    // real click at that screen position would reach this handler rather
+    // than land inside a ProseMirror box first, which needs a real
+    // browser to confirm (this ticket's own report has that caveat).
+    it("DET-10: a generic click in the gap between the title and Description editors focuses the dialog, not either field", async () => {
+      renderView({ task: task({ content: "call mum", description: "existing text" }) });
+
+      fireEvent.click(screen.getByRole("button", { name: "call mum" }));
+      const titleField = await screen.findByLabelText("Task name");
+      expect(titleField).toHaveFocus();
+
+      fireEvent.click(screen.getByTestId("task-detail-edit-column"));
+
+      expect(titleField).not.toHaveFocus();
+      expect(screen.getByLabelText("Description")).not.toHaveFocus();
+      expect(screen.getByRole("dialog")).toHaveFocus();
+    });
+
+    it("DET-10: clicking a descendant of the shared edit column (the title button, the Description block) does not re-target focus to the dialog", async () => {
+      renderView({ task: task({ content: "call mum", description: "existing text" }) });
+
+      fireEvent.click(screen.getByText("existing text"));
+
+      expect(await screen.findByLabelText("Description")).toHaveFocus();
+    });
+
     it("saves both the title and the description together from one Save click", async () => {
       const onRename = vi.fn();
       const onSetDescription = vi.fn();
@@ -342,7 +375,7 @@ describe("TaskDetailView", () => {
       expect(onSetDescription).toHaveBeenCalledWith("new text");
     });
 
-    it("Cancel discards both drafts and returns to the display state", async () => {
+    it("Cancel with unsaved changes discards both drafts and returns to the display state, once Discard is confirmed", async () => {
       const onRename = vi.fn();
       const onSetDescription = vi.fn();
       renderView({
@@ -357,9 +390,208 @@ describe("TaskDetailView", () => {
       });
       fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
+      // DET-15: not discarded yet — the confirm dialog is open, not the
+      // discard itself, exactly like CMT-03's own delete confirm above.
+      const confirmDialog = await screen.findByRole("alertdialog");
+      fireEvent.click(within(confirmDialog).getByRole("button", { name: "Discard" }));
+
       expect(onRename).not.toHaveBeenCalled();
       expect(onSetDescription).not.toHaveBeenCalled();
       expect(screen.getByRole("button", { name: "old title" })).toBeInTheDocument();
+    });
+  });
+
+  describe("DET-15 — Cancel/Escape confirm first when there are unsaved changes", () => {
+    it("Cancel with an unsaved title change asks before discarding, with Todoist's own wording and a Cancel/Discard pair", async () => {
+      renderView({ task: task({ content: "old title" }) });
+
+      fireEvent.click(screen.getByRole("button", { name: "old title" }));
+      fireEvent.change(await screen.findByLabelText("Task name"), {
+        target: { value: "discard me" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+      const confirmDialog = await screen.findByRole("alertdialog");
+      expect(within(confirmDialog).getByText("Discard unsaved changes?")).toBeInTheDocument();
+      expect(
+        within(confirmDialog).getByText("Your unsaved changes will be discarded."),
+      ).toBeInTheDocument();
+      expect(within(confirmDialog).getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+      expect(within(confirmDialog).getByRole("button", { name: "Discard" })).toBeInTheDocument();
+
+      // Nothing discarded yet — the draft is still sitting in the field
+      // underneath, unlike the pre-fix behaviour this replaces.
+      expect(screen.getByLabelText("Task name")).toHaveValue("discard me");
+    });
+
+    it("Cancelling the discard-confirmation dialog leaves the draft intact, still editing", async () => {
+      renderView({ task: task({ content: "old title" }) });
+
+      fireEvent.click(screen.getByRole("button", { name: "old title" }));
+      fireEvent.change(await screen.findByLabelText("Task name"), {
+        target: { value: "discard me" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      const confirmDialog = await screen.findByRole("alertdialog");
+      fireEvent.click(within(confirmDialog).getByRole("button", { name: "Cancel" }));
+
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+      expect(screen.getByLabelText("Task name")).toHaveValue("discard me");
+      expect(screen.queryByRole("button", { name: "old title" })).not.toBeInTheDocument();
+    });
+
+    // The regression test for the keyboard-trap bug a first version of
+    // this guard had: that version intercepted Escape at the `window`,
+    // in capture phase, unconditionally while `editing` — which ran
+    // ahead of EVERY layer, including this confirm dialog's own, so
+    // Escape here just re-opened the same confirm instead of dismissing
+    // it. Radix's `DismissableLayer` only wires its own `document`
+    // Escape listener while a layer is topmost (this ticket's own report
+    // has the source citation), so once the confirm is open, this
+    // Content's `onEscapeKeyDown` above stops being called at all —
+    // Escape reaches only the confirm's own (default) handling.
+    it("Escape while the discard-confirmation is open dismisses ONLY the confirmation, not the whole view, leaving the draft intact", async () => {
+      const onClose = vi.fn();
+      renderView({ task: task({ content: "old title" }), onClose });
+
+      fireEvent.click(screen.getByRole("button", { name: "old title" }));
+      fireEvent.change(await screen.findByLabelText("Task name"), {
+        target: { value: "discard me" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      const confirmDialog = await screen.findByRole("alertdialog");
+
+      fireEvent.keyDown(confirmDialog, { key: "Escape" });
+
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+      // Still editing, draft intact — the confirm closed, the edit form
+      // underneath did not.
+      expect(screen.getByLabelText("Task name")).toHaveValue("discard me");
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("clicking Discard in the confirmation ends editing and discards the draft, without closing the whole view", async () => {
+      const onClose = vi.fn();
+      const onRename = vi.fn();
+      renderView({ task: task({ content: "old title" }), onClose, onRename });
+
+      fireEvent.click(screen.getByRole("button", { name: "old title" }));
+      fireEvent.change(await screen.findByLabelText("Task name"), {
+        target: { value: "discard me" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      const confirmDialog = await screen.findByRole("alertdialog");
+      fireEvent.click(within(confirmDialog).getByRole("button", { name: "Discard" }));
+
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+      expect(screen.queryByLabelText("Task name")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "old title" })).toBeInTheDocument();
+      expect(onRename).not.toHaveBeenCalled();
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("Cancel with nothing changed discards immediately, with no confirmation", async () => {
+      renderView({ task: task({ content: "old title" }) });
+
+      fireEvent.click(screen.getByRole("button", { name: "old title" }));
+      await screen.findByLabelText("Task name");
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "old title" })).toBeInTheDocument();
+    });
+
+    it("Cancel with an unsaved Description-only change also asks first", async () => {
+      renderView({ task: task({ content: "old title", description: "old text" }) });
+
+      fireEvent.click(screen.getByText("old text"));
+      fireEvent.change(await screen.findByLabelText("Description"), {
+        target: { value: "discard me" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+      expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+    });
+
+    // "Clicking away" is the third path named in this ticket's own
+    // report, alongside Cancel and Escape. What this proves: this file's
+    // own window-capture pointerdown guard (mirroring `CommentRow`'s
+    // identical, already-shipped Escape guard, see that component's own
+    // header comment) intercepts a pointerdown outside the whole panel
+    // and routes it through the identical confirm-first door, rather
+    // than reaching `TaskDetailView`'s `onClose`. It does NOT prove that
+    // clicking Radix's own overlay in a real browser reaches this
+    // listener before Radix's own outside-dismiss handling decides to
+    // close — that's the same document-vs-window capture-order argument
+    // `CommentRow`'s header comment already makes for Escape, and this
+    // guard is built the identical way for the identical reason, but a
+    // real browser (or at least a non-jsdom outside-click harness) would
+    // be needed to confirm Radix's own detection actually fires here the
+    // way `flow5-DET-10-meologue.json`'s click-target capture showed it
+    // does elsewhere in this same view.
+    // Radix's own outside-pointerdown detection
+    // (`usePointerDownOutside`, `@radix-ui/react-dismissable-layer`) is a
+    // two-part real-browser sequence, not one event: (1) its `document`
+    // `pointerdown` listener is registered behind a `setTimeout(0)` — a
+    // genuine detail of Radix's own implementation, not a jsdom
+    // shortcoming — so a pointerdown fired in the SAME tick a dialog
+    // mounts is dispatched before that listener exists yet; and (2)
+    // `Dialog.Content` (unlike `AlertDialog.Content`) passes
+    // `deferPointerDownOutside: true`, so the actual dismiss dispatch
+    // waits for a subsequent `click` on the same target rather than
+    // firing on `pointerdown` alone (`@radix-ui/react-dialog`'s own
+    // `DialogContentModal`, `deferPointerDownOutside: true` — this is
+    // what a real mouse click already produces as pointerdown-then-click,
+    // so a test has to fire both, not shortcut to just the one that
+    // looked sufficient at a glance).
+    async function clickOutside(target: Element) {
+      // Lets Radix's own mount-time `setTimeout(0)` (registering its
+      // `document` pointerdown listener) run before the pointerdown below
+      // — otherwise this dispatches into a listener that doesn't exist
+      // yet, the identical race a real browser has for a click in the
+      // same tick a dialog opens.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      fireEvent.pointerDown(target);
+      fireEvent.click(target);
+    }
+
+    it("clicking away from the whole panel with unsaved changes asks first, and does not close the view", async () => {
+      const onClose = vi.fn();
+      renderView({ task: task({ content: "old title" }), onClose });
+
+      fireEvent.click(screen.getByRole("button", { name: "old title" }));
+      fireEvent.change(await screen.findByLabelText("Task name"), {
+        target: { value: "discard me" },
+      });
+      await clickOutside(document.body);
+
+      expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+      expect(onClose).not.toHaveBeenCalled();
+      expect(screen.getByLabelText("Task name")).toHaveValue("discard me");
+    });
+
+    it("clicking away from the whole panel with nothing changed cancels the edit silently, with no confirmation and no view-close", async () => {
+      const onClose = vi.fn();
+      renderView({ task: task({ content: "old title" }), onClose });
+
+      fireEvent.click(screen.getByRole("button", { name: "old title" }));
+      await screen.findByLabelText("Task name");
+      await clickOutside(document.body);
+
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "old title" })).toBeInTheDocument();
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("a pointerdown INSIDE the panel while editing is left alone — DET-09's own 'clicking away inside does nothing' stays true", async () => {
+      renderView({ task: task({ content: "old title" }) });
+
+      fireEvent.click(screen.getByRole("button", { name: "old title" }));
+      await screen.findByLabelText("Task name");
+      fireEvent.pointerDown(screen.getByTestId("task-detail-edit-column"));
+
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+      expect(screen.getByLabelText("Task name")).toBeInTheDocument();
     });
   });
 
@@ -437,7 +669,23 @@ describe("TaskDetailView", () => {
     expect(onRename).toHaveBeenCalledWith("new title");
   });
 
-  it("Escape cancels the in-progress edit and returns to the display title, without renaming", async () => {
+  it("Escape with no unsaved changes cancels the in-progress edit and returns to the display title, without renaming", async () => {
+    const onRename = vi.fn();
+    renderView({ task: task({ content: "old title" }), onRename });
+
+    fireEvent.click(screen.getByRole("button", { name: "old title" }));
+    const titleField = await screen.findByLabelText("Task name");
+    fireEvent.keyDown(titleField, { key: "Escape" });
+
+    expect(onRename).not.toHaveBeenCalled();
+    expect(await screen.findByRole("button", { name: "old title" })).toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
+
+  // DET-15: Escape used to discard an in-progress, unsaved title/
+  // description edit immediately — see the `DET-15` describe block above
+  // for the Cancel-button equivalent of this same guard.
+  it("Escape with an unsaved title change asks first instead of discarding immediately", async () => {
     const onRename = vi.fn();
     renderView({ task: task({ content: "old title" }), onRename });
 
@@ -446,8 +694,40 @@ describe("TaskDetailView", () => {
     fireEvent.change(titleField, { target: { value: "discard me" } });
     fireEvent.keyDown(titleField, { key: "Escape" });
 
+    const confirmDialog = await screen.findByRole("alertdialog");
+    expect(within(confirmDialog).getByText("Discard unsaved changes?")).toBeInTheDocument();
     expect(onRename).not.toHaveBeenCalled();
+    // Still editing underneath — nothing was discarded by the Escape itself.
+    expect(screen.getByLabelText("Task name")).toHaveValue("discard me");
+
+    fireEvent.click(within(confirmDialog).getByRole("button", { name: "Discard" }));
+
     expect(await screen.findByRole("button", { name: "old title" })).toBeInTheDocument();
+  });
+
+  // DET-15 (a second, previously-unguarded bug found while fixing the
+  // one above): Escape while editing used to ALSO bubble to Radix's own
+  // Dialog Escape handling and close the whole view in the same
+  // keystroke — verified directly (before this file's own window-capture
+  // guard existed) by asserting `onClose` here and watching it fail.
+  // `TaskDetailView`'s `open` is hardcoded `true`, so nothing about the
+  // dialog visually disappearing would have caught this; only asserting
+  // `onClose` itself does.
+  it("Escape while editing does not also close the whole Task view, whether or not there are unsaved changes", async () => {
+    const onClose = vi.fn();
+    renderView({ task: task({ content: "old title" }), onClose });
+
+    fireEvent.click(screen.getByRole("button", { name: "old title" }));
+    const titleField = await screen.findByLabelText("Task name");
+    fireEvent.keyDown(titleField, { key: "Escape" });
+    expect(onClose).not.toHaveBeenCalled();
+
+    fireEvent.click(await screen.findByRole("button", { name: "old title" }));
+    fireEvent.change(screen.getByLabelText("Task name"), { target: { value: "discard me" } });
+    fireEvent.keyDown(screen.getByLabelText("Task name"), { key: "Escape" });
+    await screen.findByRole("alertdialog");
+
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it("prev/next chevrons are disabled when there's nothing further, and call onNavigate when there is", () => {
@@ -529,7 +809,7 @@ describe("TaskDetailView", () => {
     });
 
     // Date is set — a promoted row naming its value, not a bare pill.
-    expect(screen.getByRole("button", { name: /Date.*Sep 3/s })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Date.*3 Sep/s })).toBeInTheDocument();
     // Deadline is still unset — a pill, exactly the word "Deadline".
     expect(screen.getByRole("button", { name: "Deadline" })).toBeInTheDocument();
     // Priority is set — a promoted row naming P1.
@@ -638,7 +918,22 @@ describe("TaskDetailView", () => {
       expect(onSetDescription).not.toHaveBeenCalled();
     });
 
-    it("Escape reverts an in-progress edit without committing", async () => {
+    it("Escape with no unsaved changes reverts an in-progress edit without committing", async () => {
+      const onSetDescription = vi.fn();
+      renderView({ task: task({ description: "original" }), onSetDescription });
+
+      fireEvent.click(screen.getByText("original"));
+      const field = await screen.findByLabelText("Description");
+      fireEvent.keyDown(field, { key: "Escape" });
+
+      expect(onSetDescription).not.toHaveBeenCalled();
+      expect(screen.getByText("original")).toBeInTheDocument();
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    });
+
+    // DET-15: same guard as the title's own Escape test above, exercised
+    // through the Description editor's `onCancel` instead.
+    it("Escape with an unsaved Description change asks first instead of discarding immediately", async () => {
       const onSetDescription = vi.fn();
       renderView({ task: task({ description: "original" }), onSetDescription });
 
@@ -647,8 +942,13 @@ describe("TaskDetailView", () => {
       fireEvent.change(field, { target: { value: "discard me" } });
       fireEvent.keyDown(field, { key: "Escape" });
 
+      const confirmDialog = await screen.findByRole("alertdialog");
       expect(onSetDescription).not.toHaveBeenCalled();
-      expect(screen.getByText("original")).toBeInTheDocument();
+      expect(screen.getByLabelText("Description")).toHaveValue("discard me");
+
+      fireEvent.click(within(confirmDialog).getByRole("button", { name: "Discard" }));
+
+      expect(await screen.findByText("original")).toBeInTheDocument();
     });
   });
 

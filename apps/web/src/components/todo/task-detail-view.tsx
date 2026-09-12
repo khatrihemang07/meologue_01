@@ -492,8 +492,36 @@ function TaskDetailBody({
   onUncompleteSubtask,
   events,
   wide,
+  contentRef,
+  dismissGuardRef,
 }: Omit<TaskDetailViewProps, "onClose"> & {
   wide: boolean;
+  /**
+   * DET-10: the dialog Content node itself (`TaskDetailView`'s own
+   * `contentRef`, which Radix already gives `tabIndex={-1}`) — the one
+   * neutral focus target that matches live Todoist's own "a generic
+   * click in the combined edit form focuses the dialog, neither field"
+   * finding (`parity-ledger.md`'s DET-10 row, flow 5's DOM-identified
+   * gap click). Threaded down rather than duplicated: `TaskDetailView`
+   * already owns the ref Radix needs for `onOpenAutoFocus`, and this is
+   * the same node, not a second one.
+   */
+  contentRef: React.RefObject<HTMLDivElement | null>;
+  /**
+   * DET-15: `TaskDetailView`'s own hook into this form's dismissal claim,
+   * consulted from `Content`'s composable `onEscapeKeyDown`/
+   * `onPointerDownOutside` props (that file's own doc comment on the
+   * prop). Called with no arguments; returns `true` when this form wants
+   * the attempt (editing, whether or not there are unsaved changes — see
+   * this file's assignment of it below), which is `TaskDetailView`'s own
+   * signal to `preventDefault()` so Radix's `DismissableLayer` never
+   * dismisses the whole view for an interaction this form claimed first.
+   * A ref rather than a prop read once: `TaskDetailView` calls
+   * `dismissGuardRef.current?.()` from a stable handler it hands to
+   * Radix at mount, so this needs to stay current across every render
+   * without that handler itself changing identity.
+   */
+  dismissGuardRef: React.RefObject<(() => boolean) | null>;
 }) {
   // DET-09: editing is task-wide, not field-wide — clicking either the
   // title or the description puts BOTH into edit together, sharing one
@@ -566,6 +594,12 @@ function TaskDetailBody({
   // Comment it's currently open for, mirroring `todo-page.tsx`'s own
   // `confirmingId`/`ConfirmDialog` pair for deleting a Task.
   const [confirmingCommentId, setConfirmingCommentId] = useState<string | null>(null);
+  // DET-15: the shared discard-confirm dialog for the title/description
+  // form — one boolean, not one per field, since DET-09 already made
+  // Cancel/Save a single pair for both fields together; asking twice
+  // (once per field) would be asking about a boundary this form no
+  // longer has.
+  const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
   const uiPriority = uiPriorityOf(task.priority);
   // Issue #224: computed once, not inline in the Date row's own `value`
   // JSX below, so `text`/`colour` can't drift from calling
@@ -596,6 +630,80 @@ function TaskDetailBody({
   function cancelEditing() {
     setEditing(false);
   }
+
+  // DET-15: "is there anything Cancel/Escape/an outside click would
+  // actually throw away" — the identical question `saveEditing` below
+  // already answers per-field (would it call `onRename`/
+  // `onSetDescription` at all), asked once, up front, so
+  // `requestCancelEditing` never has to guess at a looser definition of
+  // "changed" than the one that actually governs a write. Trims here too
+  // for the identical reason `saveEditing` does: a reader who types a
+  // trailing space and then backs it out again has not, by this file's
+  // own convention, changed anything worth confirming.
+  function hasUnsavedChanges() {
+    const trimmedTitle = titleDraft.trim();
+    const titleChanged = trimmedTitle !== "" && trimmedTitle !== task.content;
+    const trimmedDescription = descriptionDraft.trim();
+    const nextDescription = trimmedDescription === "" ? null : trimmedDescription;
+    const descriptionChanged = nextDescription !== task.description;
+    return titleChanged || descriptionChanged;
+  }
+
+  // DET-15: the one door Cancel, Escape and an outside click all go
+  // through now, replacing the direct `cancelEditing` call each of them
+  // used to make — live Todoist confirms first ("Discard unsaved
+  // changes?" / "Your unsaved changes will be discarded.",
+  // `parity-ledger.md`'s DET-15 row); meologue used to discard
+  // immediately. A no-op edit (nothing typed, or typed and then undone)
+  // still cancels straight through, matching Todoist's own behaviour —
+  // the confirm is for data loss specifically, not for touching Cancel
+  // at all.
+  function requestCancelEditing() {
+    if (hasUnsavedChanges()) {
+      setDiscardConfirmOpen(true);
+      return;
+    }
+    cancelEditing();
+  }
+
+  // DET-15 (reworked after review): Escape and an outside click both used
+  // to reach Radix's own Dialog Escape/outside-dismiss handling and close
+  // the WHOLE view — confirmed directly, before any guard existed here,
+  // by asserting `onClose` and watching it fire on an Escape aimed at the
+  // title editor. A first version of this guard fixed that with a
+  // `window`-capture `keydown`/`pointerdown` listener (`CommentRow`'s own
+  // established pattern above, for the identical reason its own header
+  // comment gives). That approach doesn't compose: `window` capture runs
+  // before ANY layer gets the event, so it also ate Escape meant for
+  // `discardConfirmOpen`'s own `ConfirmDialog` once THAT was open (a
+  // keyboard trap — Escape just re-opened the same confirm instead of
+  // dismissing it), swallowed every pointerdown on that dialog's own
+  // Cancel/Discard buttons (mis-read as "outside the panel"), and would
+  // have done the identical thing to any other portaled layer opened
+  // while editing (a popover, a menu).
+  //
+  // Radix already solves exactly this: `DismissableLayer` (what
+  // `Dialog.Content` is built on, both here and in `ConfirmDialog`) only
+  // wires its OWN `document`-capture Escape listener while it is the
+  // topmost layer, and gates its own outside-pointerdown detection on the
+  // same stacking — so a nested modal layer on top correctly gets first
+  // (and, for Escape, exclusive) claim, with no coordination this file
+  // has to write by hand. `dismissGuardRef` (a callback `TaskDetailView`
+  // holds and calls from `Content`'s own composable `onEscapeKeyDown`/
+  // `onPointerDownOutside` props, `TaskDetailView`'s own doc comment on
+  // the prop has the rest) is what lets THIS layer's dismissal ask this
+  // form first, without this file reaching past Radix's layer stack the
+  // way the `window` listener did. Assigned plainly during render (the
+  // identical `xRef.current = ...` pattern `titleRecognitionOptionsRef`
+  // above already uses), not in an effect: the value has to be current by
+  // the time an interaction fires, and a plain assignment already is.
+  dismissGuardRef.current = () => {
+    if (!editing) {
+      return false;
+    }
+    requestCancelEditing();
+    return true;
+  };
 
   // The one door both the title's own `onCommit` (Enter, or the Save
   // button below) and the description's own Save button go through —
@@ -677,7 +785,43 @@ function TaskDetailBody({
       </header>
 
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-3 sm:flex-row">
-        <div className="flex min-w-0 flex-1 flex-col gap-3">
+        {/* DET-10: this container's own `gap-3` spacing is real empty
+            space between the title row and the Description block below —
+            belonging to neither child (live audit's own
+            `flow5-DET-10-meologue.json`, `commonContainer`, named this
+            exact element by className). `event.target ===
+            event.currentTarget` is what tells a genuine click on that
+            gap apart from a click on the title button, the Description's
+            own pill/block, or either editor, all of which bubble THROUGH
+            this element rather than starting on it — so this never fires
+            for the two deliberate entry points those elements' own
+            `onClick`s already handle. Live Todoist's own finding was
+            "focuses the dialog," not "does nothing": clicking here while
+            `editing` moves focus to `contentRef` (`TaskDetailView`'s own
+            Content node, already `tabIndex={-1}` for Radix's identical
+            `onOpenAutoFocus` reason above `TaskDetailView`), which blurs
+            whichever editor still held it from whichever entry point
+            opened this form — matching the reference rather than leaving
+            stale focus sitting in a field the reader didn't click.
+
+            Pointer-only, deliberately: there is no keyboard equivalent of
+            "click the empty gap between two fields" for this to pair
+            with (matching `entry-row.tsx`'s own identical reasoning for
+            its pointer-only `onContextMenu`), and giving this div an
+            interactive role would misrepresent it as a control a reader
+            might mean to activate rather than the plain layout container
+            it is. */}
+        {/* biome-ignore lint/a11y/noStaticElementInteractions: pointer-only progressive enhancement on a plain layout container — see the comment above. */}
+        {/* biome-ignore lint/a11y/useKeyWithClickEvents: no keyboard equivalent of clicking empty space exists to pair this with — see the comment above. */}
+        <div
+          data-testid="task-detail-edit-column"
+          onClick={(event) => {
+            if (editing && event.target === event.currentTarget) {
+              contentRef.current?.focus();
+            }
+          }}
+          className="flex min-w-0 flex-1 flex-col gap-3"
+        >
           {/* The title (issue #225's display/edit split — `editingTitle`'s
               own doc comment above). Editable regardless of completion
               state: nothing about this view's own scope refuses a rename
@@ -735,7 +879,7 @@ function TaskDetailBody({
                       value={task.content}
                       onChange={setTitleDraft}
                       onCommit={saveEditing}
-                      onCancel={cancelEditing}
+                      onCancel={requestCancelEditing}
                       autoFocus={focusField === "title"}
                       // DET-09: blur no longer means "done" — moving focus
                       // from the title into the description (still inside
@@ -800,7 +944,7 @@ function TaskDetailBody({
                 <LazyTaskDescriptionEditor
                   value={task.description ?? ""}
                   onChange={setDescriptionDraft}
-                  onCancel={cancelEditing}
+                  onCancel={requestCancelEditing}
                   autoFocus={focusField === "description"}
                   className="text-sm"
                 />
@@ -808,7 +952,7 @@ function TaskDetailBody({
               <div className="flex justify-end gap-2">
                 <button
                   type="button"
-                  onClick={cancelEditing}
+                  onClick={requestCancelEditing}
                   className="rounded-md border border-border px-2.5 py-1 text-sm transition hover:bg-muted"
                 >
                   Cancel
@@ -932,6 +1076,26 @@ function TaskDetailBody({
             )}
             <CommentComposer onSubmit={onAddComment} />
           </div>
+
+          {/* DET-15: Cancel/Escape/an outside click confirm first when the
+              title/description form holds unsaved changes, verbatim
+              wording matching live Todoist's own (`parity-ledger.md`'s
+              DET-15 row) — meologue used to discard immediately. Rendered
+              unconditionally (not nested inside the `editing` branch
+              above) for the identical reason the Comment-delete
+              `ConfirmDialog` right below is: `discardConfirmOpen` alone
+              controls whether it's open, so a Discard click that flips
+              `editing` back to `false` in the same tick doesn't also
+              unmount this dialog out from under its own closing
+              animation. */}
+          <ConfirmDialog
+            open={discardConfirmOpen}
+            onOpenChange={setDiscardConfirmOpen}
+            title="Discard unsaved changes?"
+            description="Your unsaved changes will be discarded."
+            confirmLabel="Discard"
+            onConfirm={cancelEditing}
+          />
 
           {/* CMT-03: deleting a Comment confirms first, verbatim wording
               matching Todoist's own (`lifecycle.md` §2). */}
@@ -1149,6 +1313,16 @@ export function TaskDetailView(props: TaskDetailViewProps) {
   // element through it needs a cast, and a cast here would be asserting the
   // one fact this file can simply hold instead.
   const contentRef = useRef<HTMLDivElement>(null);
+  // DET-15: `TaskDetailBody`'s own dismissal claim — assigned there, on
+  // every render, to a closure that opens the discard-confirm (or cancels
+  // outright, for a no-op edit) and returns `true` whenever the shared
+  // title/description form is open. `null` is a real, meaningful default
+  // (nothing has claimed a dismissal yet, e.g. before `TaskDetailBody`'s
+  // own first render, or once `editing` there is `false`), not a stand-in
+  // for "not wired up" — `onEscapeKeyDown`/`onPointerDownOutside` below
+  // both treat a missing or false-returning guard identically: let Radix
+  // dismiss as it always has.
+  const dismissGuardRef = useRef<(() => boolean) | null>(null);
 
   function handleOpenChange(open: boolean) {
     if (!open) {
@@ -1204,6 +1378,40 @@ export function TaskDetailView(props: TaskDetailViewProps) {
             event.preventDefault();
             contentRef.current?.focus();
           }}
+          // DET-15: gives `TaskDetailBody`'s own edit form first claim on
+          // Escape and an outside click, ahead of this Dialog's own
+          // default (close the whole view). Composable, unlike Radix's
+          // own `AlertDialog.Content` (this file's sibling
+          // `alert-dialog.tsx` has the full contrast) — `preventDefault()`
+          // here is read by the identical `DismissableLayer` that would
+          // otherwise call `onDismiss`, so returning `true` from the ref
+          // genuinely stops the close rather than merely reacting after
+          // the fact. Both consult the SAME guard: whatever counts as
+          // "this form wants to handle it" is one decision, not two that
+          // could disagree.
+          //
+          // This is layer-stack-aware for free, which a `window`-level
+          // listener (this file's own first attempt, reverted) was not:
+          // `DismissableLayer` only wires its `document`-capture Escape
+          // listener while a layer is the topmost one, so once
+          // `TaskDetailBody`'s own `ConfirmDialog` (itself a
+          // `DismissableLayer`) opens on top, THIS Content's own listener
+          // goes quiet and stops calling `onEscapeKeyDown` at all — the
+          // confirm dialog gets Escape, not this guard, with nothing
+          // written here to make that true. The identical stacking is
+          // what keeps a pointerdown on the confirm's own Cancel/Discard
+          // buttons from ever reaching this Content's outside-pointerdown
+          // detection as "outside" while it's open.
+          onEscapeKeyDown={(event) => {
+            if (dismissGuardRef.current?.()) {
+              event.preventDefault();
+            }
+          }}
+          onPointerDownOutside={(event) => {
+            if (dismissGuardRef.current?.()) {
+              event.preventDefault();
+            }
+          }}
           className={cn(
             // No border, and Todoist's own measured shadow rather than
             // shadow-lg (DET-14): the modal was measured directly at
@@ -1239,7 +1447,12 @@ export function TaskDetailView(props: TaskDetailViewProps) {
               className="mx-auto mt-2 h-1 w-10 shrink-0 rounded-full bg-muted-foreground/30"
             />
           )}
-          <TaskDetailBody {...props} wide={wide} />
+          <TaskDetailBody
+            {...props}
+            wide={wide}
+            contentRef={contentRef}
+            dismissGuardRef={dismissGuardRef}
+          />
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>
     </DialogPrimitive.Root>
