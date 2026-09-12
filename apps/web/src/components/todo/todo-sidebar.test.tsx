@@ -173,8 +173,11 @@ describe("TodoSidebar", () => {
     // `findByRole` would settle the instant the first (count-less) render
     // appears instead of waiting for the count to actually load.
     const inbox = await screen.findByRole("link", { name: "Inbox, 1 task" });
-    expect(inbox).toHaveTextContent(/^Inbox1$/);
-    expect(within(inbox).getByText("1")).toHaveAttribute("aria-hidden", "true");
+    // The digit is the link's sibling, as Todoist draws it (flow 11 R2).
+    expect(inbox).toHaveTextContent(/^Inbox$/);
+    const count = within(inbox.parentElement as HTMLElement).getByText("1");
+    expect(inbox.contains(count)).toBe(false);
+    expect(count).toHaveAttribute("aria-hidden", "true");
     // Today: the one Task dated today.
     expect(screen.getByRole("link", { name: "Today, 1 task" })).toBeInTheDocument();
     // Upcoming: today's own Task and tomorrow's, both — upcoming() starts

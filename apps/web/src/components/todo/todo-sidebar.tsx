@@ -109,38 +109,43 @@ function CountRow({
   dayOfMonth?: number;
 }) {
   return (
-    <NavLink
-      to={to}
-      aria-label={count > 0 ? `${label}, ${count} ${count === 1 ? "task" : "tasks"}` : undefined}
-      className={({ isActive }) =>
-        cn(
-          "flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm hover:bg-muted",
-          isActive && "bg-muted font-medium",
-        )
-      }
-    >
-      {dayOfMonth === undefined ? (
-        <Icon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
-      ) : (
+    <div className="relative">
+      <NavLink
+        to={to}
+        aria-label={count > 0 ? `${label}, ${count} ${count === 1 ? "task" : "tasks"}` : undefined}
+        className={({ isActive }) =>
+          cn(
+            "flex items-center gap-2.5 rounded-md py-1.5 pr-8 pl-2 text-sm hover:bg-muted",
+            isActive && "bg-muted font-medium",
+          )
+        }
+      >
+        {dayOfMonth === undefined ? (
+          <Icon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
+        ) : (
+          <span
+            aria-hidden="true"
+            className="flex size-4 shrink-0 items-center justify-center text-[10px] text-muted-foreground tabular-nums"
+          >
+            {dayOfMonth}
+          </span>
+        )}
+        <span className="flex-1 truncate">{label}</span>
+      </NavLink>
+      {/* The count is the link's sibling, as in Todoist (flow 11 R2), laid
+        over the row's right edge so it looks as it did inside the link.
+        The link's aria-label ("Inbox, 9 tasks") already names the count;
+        aria-hidden keeps the digit from being read twice, and
+        pointer-events-none lets a click on it reach the link. */}
+      {count > 0 && (
         <span
           aria-hidden="true"
-          className="flex size-4 shrink-0 items-center justify-center text-[10px] text-muted-foreground tabular-nums"
+          className="pointer-events-none absolute inset-y-0 right-2 flex items-center text-muted-foreground text-xs"
         >
-          {dayOfMonth}
-        </span>
-      )}
-      <span className="flex-1 truncate">{label}</span>
-      {/* The count moved into `aria-label` to match Todoist's accessible
-          name ("Inbox, 9 tasks"), but it stays on screen: flow 6 read only
-          the link's own text, which says nothing about a counter drawn
-          beside it, so hiding it would be a regression the evidence never
-          asked for. `aria-hidden` keeps it out of the name twice over. */}
-      {count > 0 && (
-        <span aria-hidden="true" className="text-muted-foreground text-xs">
           {count}
         </span>
       )}
-    </NavLink>
+    </div>
   );
 }
 
