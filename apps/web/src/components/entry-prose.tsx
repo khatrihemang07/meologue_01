@@ -36,7 +36,12 @@
 import type { ReactNode } from "react";
 import { type ReferenceRenderers, renderNodes } from "@/components/inline-prose";
 import type { EntryBlockNode, EntryListItem } from "@/lib/inline-markdown";
-import { entryBlocksToText, parseEntryMarkdown, referencedTaskOf } from "@/lib/inline-markdown";
+import {
+  entryBlocksToText,
+  parseCommentMarkdown,
+  parseEntryMarkdown,
+  referencedTaskOf,
+} from "@/lib/inline-markdown";
 import { cn } from "@/lib/utils";
 
 /**
@@ -137,6 +142,34 @@ export type TaskReferenceRenderer = (props: TaskReferenceProps, key: string) => 
  * accident of what the reset happens to do.
  */
 const BLOCK_SPACING = "mt-0";
+
+/**
+ * CMT-08's heading form — "comment" mode only (`entryProse`'s own `mode`
+ * param, below); `parseEntryMarkdown` never produces a `"heading"` block,
+ * so this table is dead weight for every other caller. No existing prose
+ * style covers a heading anywhere in this app (grep of index.css turned up
+ * nothing — this app has no `@tailwindcss/typography` and no `.prose`
+ * rule of its own), so these are plain Tailwind utilities, the same way
+ * every other size/weight choice in this file already is
+ * (`bulletListStyleClass`, above). Only level 1 is exercised live (CMT-08's
+ * own reading was `# heading`); levels 2-6 scale down from it rather than
+ * inventing a look nothing observed asks for.
+ */
+const HEADING_CLASS: Record<number, string> = {
+  1: "text-lg font-semibold",
+  2: "text-base font-semibold",
+  3: "text-sm font-semibold",
+  4: "text-sm font-semibold",
+  5: "text-sm font-semibold",
+  6: "text-sm font-semibold",
+};
+
+const HEADING_TAG = ["h1", "h2", "h3", "h4", "h5", "h6"] as const;
+
+function headingTag(level: number): (typeof HEADING_TAG)[number] {
+  const index = Math.min(Math.max(level, 1), HEADING_TAG.length) - 1;
+  return HEADING_TAG[index] ?? "h6";
+}
 
 /**
  * The disc → circle → square cascade for a NESTED bullet list, issue #162
@@ -270,9 +303,55 @@ function renderBlocks(
           </ol>
         );
       }
+      case "heading": {
+        // CMT-08 — only ever reached in "comment" mode (`entryProse`'s own
+        // `mode` param): `parseEntryMarkdown` never produces a `"heading"`
+        // block (ADR 0041, `entryParser`'s own `remove` list), so this
+        // branch is unreachable from any of ADR 0041's original seven prose
+        // surfaces.
+        const Tag = headingTag(block.level);
+        return (
+          <Tag
+            key={key}
+            className={cn(HEADING_CLASS[block.level] ?? HEADING_CLASS[6], BLOCK_SPACING)}
+          >
+            {renderNodes(block.children, query, refs, `${key}-`)}
+          </Tag>
+        );
+      }
+      case "blockquote":
+        // CMT-08 — same "comment" mode-only reachability as "heading" above.
+        return (
+          <blockquote
+            key={key}
+            className={cn(
+              "border-muted-foreground/40 border-l-2 pl-3 text-muted-foreground",
+              BLOCK_SPACING,
+            )}
+          >
+            {renderBlocks(block.content, query, refs, `${key}-`, renderTaskReference, depth)}
+          </blockquote>
+        );
+      case "codeBlock":
+        // CMT-08 — same "comment" mode-only reachability. `<code>` nested in
+        // `<pre>` is what preserves the block's own line breaks and
+        // whitespace without a second `whitespace-pre-wrap` class — `<pre>`
+        // already sets `white-space: pre` by user-agent default, unlike the
+        // "prose" case above, which relies on an ancestor for it.
+        return (
+          <pre
+            key={key}
+            className={cn(
+              "overflow-x-auto rounded-md bg-muted p-2 font-mono text-xs",
+              BLOCK_SPACING,
+            )}
+          >
+            <code>{block.text}</code>
+          </pre>
+        );
       default:
-        // Exhaustive over EntryBlockNode's three kinds — `satisfies never`
-        // is what makes a fourth kind a compile error here rather than a
+        // Exhaustive over EntryBlockNode's six kinds — `satisfies never`
+        // is what makes a seventh kind a compile error here rather than a
         // silent fallthrough, and the explicit `return` (rather than
         // relying on the switch being exhaustive) is what the linter wants
         // out of a callback passed to `map`.
@@ -462,6 +541,29 @@ function renderListItem(
 }
 
 /**
+ * Which dialect `entryProse` reads `body` through (CMT-02/CMT-08,
+ * `docs/reference/todoist/parity-ledger.md`). "entry" — the default, and
+ * every caller's behaviour before this mode existed — is `parseEntryMarkdown`:
+ * ADR 0041's seven original prose surfaces, where a heading, a blockquote,
+ * a fenced code block and a bare URL all stay exactly the literal
+ * characters typed, by construction. "comment" is `parseCommentMarkdown`
+ * instead, which reverses exactly those four for a Task comment — CMT-02's
+ * own live reading found Todoist renders a comment "like the
+ * description's," and ADR 0041's own reasons for removing them (the Entry
+ * bubble's floated clock, the Digest clamp's line-counting arithmetic,
+ * `CONTEXT.md`'s "an Entry stays untitled and unorganized") are about
+ * those seven surfaces specifically, none of which is a Task comment or
+ * description.
+ *
+ * Only a caller that passes `"comment"` explicitly gets the new rendering
+ * — every existing call (`entry-row.tsx`, `entry-bubble.tsx`, and
+ * `task-detail-view.tsx`'s own two Task-description reads) omits this
+ * parameter entirely and keeps rendering exactly as before this mode was
+ * added.
+ */
+export type EntryProseMode = "entry" | "comment";
+
+/**
  * `renderTaskReference` defaults to `defaultTaskReferenceItem` (cached
  * data, disabled) for every caller that doesn't supply its own — Grounding
  * (`entry-row.tsx`'s `EntryBody`), every test in this file's own suite,
@@ -473,13 +575,19 @@ function renderListItem(
  * reader, so a bare `\n` in `body` renders as a block break and `\`
  * immediately followed by `\n` as a soft break within one, the identical
  * shape `entryMarkdownToDocument` (entry-document.ts, the Composer's own
- * load path) builds a ProseMirror document from.
+ * load path) builds a ProseMirror document from. `mode` (above) switches
+ * this to `parseCommentMarkdown` instead; `renderBlocks` itself needs no
+ * mode of its own to do that safely — the three block kinds only that
+ * parser produces (`"heading"`/`"blockquote"`/`"codeBlock"`) simply never
+ * occur in whatever `parseEntryMarkdown` hands it.
  */
 export function entryProse(
   body: string,
   query = "",
   refs: ReferenceRenderers = {},
   renderTaskReference: TaskReferenceRenderer = defaultTaskReferenceItem,
+  mode: EntryProseMode = "entry",
 ): ReactNode {
-  return <>{renderBlocks(parseEntryMarkdown(body), query, refs, "", renderTaskReference, 0)}</>;
+  const blocks = mode === "comment" ? parseCommentMarkdown(body) : parseEntryMarkdown(body);
+  return <>{renderBlocks(blocks, query, refs, "", renderTaskReference, 0)}</>;
 }

@@ -117,6 +117,26 @@ export function renderNodes(
             : [refs.entry({ entryId: node.entryId, raw: node.raw }, key)]),
         );
         break;
+      case "link":
+        // CMT-02 — only ever produced by `parseCommentMarkdown`
+        // (inline-markdown.ts), whose own `isSafeAutolinkUrl` gate already
+        // guarantees `node.url` is `http`/`https` before this node exists
+        // at all, so there is nothing left for this renderer to re-check.
+        // `target="_blank"` always pairs with `rel="noopener noreferrer"` —
+        // an opened tab gets no `window.opener` back into this app, and no
+        // `Referer` header naming it either.
+        rendered.push(
+          <a
+            key={key}
+            href={node.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline underline-offset-2"
+          >
+            {node.text}
+          </a>,
+        );
+        break;
     }
   });
   return rendered;

@@ -37,6 +37,7 @@
  */
 import type { SyntaxNode } from "@lezer/common";
 import {
+  Autolink,
   parser as commonmark,
   type Element,
   type InlineParser,
@@ -71,10 +72,39 @@ export type InlineNode =
    * replaying `raw` verbatim — `raw` exists on this node only for a reader
    * (`entryBlocksToText`'s callers, a test) that wants the mark as typed.
    */
-  | { kind: "taskReference"; taskId: string; label: string; raw: string };
+  | { kind: "taskReference"; taskId: string; label: string; raw: string }
+  /**
+   * A bare `http(s)://` URL (CMT-02), recognised only in "comment" mode
+   * (`parseCommentMarkdown`, below) — `parseInlineMarkdown`/`parseEntryMarkdown`
+   * never produce this node at all, since neither configures the
+   * `Autolink` extension that is this node's only source. `url` is
+   * guaranteed `http`/`https` by construction — `isSafeAutolinkUrl` below
+   * is checked before this node is ever built, not after — so a renderer
+   * needs no second check to hand it straight to an `<a href>`. `text` is
+   * always the same characters as `url`: a bare autolink has no separate
+   * label the way an explicit `[label](url)` would (that syntax stays out
+   * of the dialect entirely, ADR 0041), so there is nothing else for a
+   * reader to show.
+   */
+  | { kind: "link"; url: string; text: string };
 
 const OPEN_BRACKET = 91; // [
 const CLOSE_BRACKET = 93; // ]
+
+/**
+ * `Autolink`'s own `URL` node recognises `www.`, `http://`, `https://`,
+ * `mailto:` and `xmpp:` (its own doc comment in `@lezer/markdown`) — more
+ * than CMT-02 ever asked this app to linkify. Anything this returns
+ * `false` for renders as the plain text it already was (`walkEntryInline`'s
+ * own "URL" case, below) rather than becoming a link, which is also what
+ * keeps a `javascript:` URL — not that `Autolink` ever recognises that
+ * scheme as one of its own triggers, verified directly against the parser
+ * — unreachable by a second, independent gate rather than by relying on
+ * the upstream parser alone never changing its mind about what it accepts.
+ */
+function isSafeAutolinkUrl(url: string): boolean {
+  return /^https?:\/\//i.test(url);
+}
 
 const DATE_SHAPE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const ENTRY_SHAPE =
@@ -441,6 +471,14 @@ export function inlineNodesToText(nodes: readonly InlineNode[]): string {
         // function's own callers, want real words here, not `[[task:…]]`.
         text += node.label;
         break;
+      case "link":
+        // Never actually reached by anything `entryBlocksToText` (the one
+        // caller of this function against a real body) is used on today —
+        // a "link" node only ever comes from `parseCommentMarkdown`, and
+        // nothing flattens a comment through this path — kept total anyway
+        // rather than leaving a future caller's link text silently dropped.
+        text += node.text;
+        break;
     }
   }
   return text;
@@ -461,7 +499,45 @@ export function inlineNodesToText(nodes: readonly InlineNode[]): string {
 export type EntryBlockNode =
   | { kind: "prose"; children: InlineNode[] }
   | { kind: "bulletList"; items: readonly EntryListItem[] }
-  | { kind: "orderedList"; start: number; items: readonly EntryListItem[] };
+  | { kind: "orderedList"; start: number; items: readonly EntryListItem[] }
+  /**
+   * `# heading` through `###### heading` (CMT-08) — `parseCommentMarkdown`
+   * only. `parseEntryMarkdown`'s own parser removes `ATXHeading` (and
+   * `SetextHeading`) entirely (ADR 0041, `entryParser`'s own `remove`
+   * list below), so `collectBlocks` never actually produces one from an
+   * Entry's tree even though this case exists in the shared type — the
+   * three new kinds here are reachable only from the tree
+   * `commentParser` builds. `level` is 1-6, read off `ATXHeading<n>`'s own
+   * node name (`atxHeadingLevel`, below).
+   */
+  | { kind: "heading"; level: number; children: InlineNode[] }
+  /**
+   * `> quote` (CMT-08) — `parseCommentMarkdown` only, same non-production
+   * from an Entry's tree as `heading` above. `content` recurses through
+   * `collectBlocks` again, the same way a list item's own `content` does,
+   * so a quote can hold whatever a Document's top level can, one level
+   * down — a paragraph, a list, even a further nested quote.
+   *
+   * Only a single-line `> quote` is exercised (CMT-08's own live reading);
+   * a multi-line quote (`> line one\n> line two`) is parsed but not
+   * specially cleaned up — CommonMark's own continuation `>` on the
+   * second line is not a sibling node under this implementation's walk,
+   * it is `Paragraph` text that still carries its own literal `> `,
+   * exactly as `pushProseRuns` would already read it for any other
+   * lazy-continuation line. Nothing observed live needs more than that.
+   */
+  | { kind: "blockquote"; content: readonly EntryBlockNode[] }
+  /**
+   * A fenced code block (CMT-08) — `parseCommentMarkdown` only, same
+   * non-production from an Entry's tree. `text` is the block's own inner
+   * text verbatim, with no escaping applied on the way in because there is
+   * no way back out: a comment is a plain string end to end (unlike an
+   * Entry's body, which round-trips through `entryMarkdownToDocument`/
+   * `entryDocumentToMarkdown` for the Composer), so nothing here ever
+   * reserializes this text into Markdown again. `lang` is the fence's own
+   * info string (```js`), when the author wrote one.
+   */
+  | { kind: "codeBlock"; text: string; lang?: string };
 
 /**
  * `task` is present exactly when the item opened with `- [ ]`/`- [x]`, and
@@ -682,6 +758,22 @@ function walkEntryInline(
         });
         break;
       }
+      case "URL": {
+        // Only ever seen when `commentParser` (below) produced this tree —
+        // `entryParser` never configures the `Autolink` extension that is
+        // this node's only source, so this case is dead code for an
+        // Entry's own body. `isSafeAutolinkUrl` is the CMT-02 safety gate:
+        // `Autolink` also recognises `www.`/`mailto:`/`xmpp:`, none of
+        // which this app asked to linkify, and those fall through to
+        // plain text exactly like any other unrecognised construct.
+        const raw = body.slice(node.from, node.to);
+        if (isSafeAutolinkUrl(raw)) {
+          result.push({ kind: "link", url: raw, text: raw });
+        } else {
+          pushText(result, raw);
+        }
+        break;
+      }
       default:
         pushText(result, body.slice(node.from, node.to));
         break;
@@ -736,6 +828,80 @@ function itemContentStart(item: SyntaxNode, body: string): number {
   }
   const nextChar = body[mark.to];
   return nextChar === " " || nextChar === "\t" ? mark.to + 1 : mark.to;
+}
+
+const ATX_HEADING = /^ATXHeading([1-6])$/;
+
+/**
+ * `"ATXHeading3"` -> `3`, `undefined` for anything else — used by
+ * `collectBlocks` to recognise a heading node by name without hard-coding
+ * all six. Only ever matches a tree `commentParser` built: `entryParser`
+ * removes every `ATXHeading<n>` parser (ADR 0041), so this never matches
+ * anything in an Entry's own tree.
+ */
+function atxHeadingLevel(name: string): number | undefined {
+  const match = ATX_HEADING.exec(name);
+  return match !== null ? Number(match[1]) : undefined;
+}
+
+/**
+ * Where an `ATXHeading<n>`'s own words start — `itemContentStart`'s
+ * identical mark-then-one-separator rule, aimed at `HeaderMark` (`#`)
+ * instead of `ListMark`. Anchoring on the mark rather than trusting the
+ * first inline child's own `.from` matters here for the same reason it
+ * matters there: extra leading whitespace after `#` is real, typed
+ * content once `IndentedCode` — the only other parser that could have
+ * swallowed it — is out of the picture.
+ */
+function headingContentStart(heading: SyntaxNode, body: string): number {
+  const mark = childNodes(heading).find((c) => c.type.name === "HeaderMark");
+  if (mark === undefined) {
+    return heading.from;
+  }
+  const nextChar = body[mark.to];
+  return nextChar === " " || nextChar === "\t" ? mark.to + 1 : mark.to;
+}
+
+/**
+ * Where a `Blockquote`'s own content starts on its first line —
+ * `itemContentStart`/`headingContentStart`'s identical rule, aimed at the
+ * first `QuoteMark` (`>`). A continuation line's own `QuoteMark` (one per
+ * line the quote spans) is filtered out of `content`'s own children by
+ * `collectBlocks`' "Blockquote" case below the same way `listToBlock`
+ * filters `ListMark` — but only the FIRST one ever needs its position
+ * read for `containerStart`, since every later one sits inside a
+ * `Paragraph` sibling's own span rather than before `collectBlocks`'
+ * cursor ever reaches it (see the `blockquote` `EntryBlockNode` case's own
+ * comment on why a multi-line quote's continuation `>` is not specially
+ * cleaned up beyond that).
+ */
+function blockquoteContentStart(quote: SyntaxNode, body: string): number {
+  const mark = childNodes(quote).find((c) => c.type.name === "QuoteMark");
+  if (mark === undefined) {
+    return quote.from;
+  }
+  const nextChar = body[mark.to];
+  return nextChar === " " || nextChar === "\t" ? mark.to + 1 : mark.to;
+}
+
+/**
+ * A `FencedCode` node's own info string and inner text — `undefined`/`""`
+ * respectively when either is missing (an unlabelled fence, or a fence
+ * with nothing between its two `` ``` `` lines). Verified directly against
+ * a real parse (see this file's own module comment for the general
+ * discipline): `@lezer/markdown` already coalesces a fence's own lines
+ * into a single `CodeText` node spanning every line between the fences,
+ * `\n` characters included, so no further joining is needed here.
+ */
+function fencedCodeBlock(node: SyntaxNode, body: string): EntryBlockNode {
+  const children = childNodes(node);
+  const info = children.find((c) => c.type.name === "CodeInfo");
+  const text = children.find((c) => c.type.name === "CodeText");
+  return {
+    kind: "codeBlock",
+    text: text !== undefined ? body.slice(text.from, text.to) : "",
+    lang: info !== undefined ? body.slice(info.from, info.to) : undefined,
+  };
 }
 
 /**
@@ -910,6 +1076,38 @@ function collectBlocks(
       cursor = child.to;
       continue;
     }
+    // The next three are only ever produced by `commentParser`'s tree —
+    // `entryParser` removes all three parsers (ADR 0041), so none of these
+    // branches is reachable from `parseEntryMarkdown`'s own call into this
+    // function. Kept in the one shared collector rather than forked into a
+    // second one so a list, a checkbox, and a Reference behave identically
+    // wherever they sit — inside a heading, a quote, or plain top-level
+    // prose — instead of risking two copies that quietly drift apart.
+    const headingLevel = atxHeadingLevel(name);
+    if (headingLevel !== undefined) {
+      const inlineChildren = childNodes(child).filter((c) => c.type.name !== "HeaderMark");
+      blocks.push({
+        kind: "heading",
+        level: headingLevel,
+        children: walkEntryInline(inlineChildren, body, headingContentStart(child, body), child.to),
+      });
+      cursor = child.to;
+      continue;
+    }
+    if (name === "Blockquote") {
+      const quoteChildren = childNodes(child).filter((c) => c.type.name !== "QuoteMark");
+      blocks.push({
+        kind: "blockquote",
+        content: collectBlocks(quoteChildren, body, blockquoteContentStart(child, body)),
+      });
+      cursor = child.to;
+      continue;
+    }
+    if (name === "FencedCode") {
+      blocks.push(fencedCodeBlock(child, body));
+      cursor = child.to;
+      continue;
+    }
     // The two remaining content types after the removals above: Paragraph,
     // and Task (a paragraph-shaped leaf that also carries a TaskMarker).
     pushProseRuns(blocks, childNodes(child), body, cursor, child.to);
@@ -937,6 +1135,77 @@ export function parseEntryMarkdown(body: string): EntryBlockNode[] {
 }
 
 /**
+ * `entryParser`'s block removals reversed for exactly the three forms
+ * CMT-08 (`docs/reference/todoist/parity-ledger.md`) found live Todoist
+ * rendering in a Task comment that this app didn't — a heading, a
+ * blockquote, a fenced code block — plus `Autolink` (CMT-02's
+ * linkification), added rather than merely un-removed, since neither
+ * `entryParser` nor `inlineParser` ever configured it.
+ *
+ * ADR 0041's reasons for removing all of this in the first place are
+ * about `entryProse`'s seven ORIGINAL prose surfaces specifically — the
+ * Entry bubble's floated clock needing one line box, the Digest card's
+ * `scrollHeight`/`lineHeight` division, `CONTEXT.md`'s "an Entry stays
+ * untitled and unorganized." None of the three applies to a Task comment:
+ * `CommentRow` (`task-detail-view.tsx`) shares no line box with a floated
+ * clock, a comment is never handed to the Digest clamp, and Todoist's own
+ * comment surface already renders this way — CMT-02's own reading found
+ * it renders "like the description's," not like an Entry's. That is the
+ * live evidence this dialect exists at all, not a rule this file states
+ * on its own authority.
+ *
+ * `SetextHeading`, `IndentedCode`, `HorizontalRule`, `HTMLBlock` and
+ * `LinkReference` stay removed — nothing live observed needs them, and
+ * `IndentedCode` in particular stays gone for `entryParser`'s own reason
+ * (its own comment above): without it, accidental leading whitespace on
+ * an ordinary line stays literal text instead of silently becoming a code
+ * block.
+ *
+ * Never `entryMarkdownToDocument`'s parser, and never should be: a Task
+ * comment is a plain string end to end — `CommentComposer`'s own
+ * `<textarea>` (`task-detail-view.tsx`), no ProseMirror document behind it
+ * — so there is no writer for this dialect to stay symmetric with, unlike
+ * `entryParser`/`entryDocumentToMarkdown`'s matched reader/writer pair.
+ */
+const commentParser = commonmark.configure([
+  {
+    defineNodes: ["DateReference", "EntryReference", "TaskReference"],
+    parseInline: [referenceParser],
+    remove: [
+      "Link",
+      "Image",
+      "HTMLTag",
+      "Entity",
+      "SetextHeading",
+      "IndentedCode",
+      "HorizontalRule",
+      "HTMLBlock",
+      "LinkReference",
+    ],
+  },
+  TaskList,
+  Strikethrough,
+  Autolink,
+]);
+
+/**
+ * A Task comment's body into block nodes (CMT-02/CMT-08) — `entryProse`'s
+ * "comment" mode (`entry-prose.tsx`) reader, and `commentParser`'s only
+ * caller. Shares `collectBlocks`/`walkEntryInline` with `parseEntryMarkdown`
+ * above — the recursive walk itself is agnostic to which parser produced
+ * its tree, and reuses `parseEntryMarkdown`'s exact list/checkbox/Reference
+ * handling rather than a second copy of it — but never touches
+ * `entryParser` itself. Same empty-body contract as `parseEntryMarkdown`.
+ */
+export function parseCommentMarkdown(body: string): EntryBlockNode[] {
+  if (body === "") {
+    return [];
+  }
+  const tree = commentParser.parse(body);
+  return collectBlocks(childNodes(tree.topNode), body, 0);
+}
+
+/**
  * The text a set of block nodes renders, ignoring both inline formatting
  * and list structure — no bullet, number, or checkbox marker, and no
  * indentation, just the words, each item's own text space-joined against
@@ -948,12 +1217,23 @@ export function parseEntryMarkdown(body: string): EntryBlockNode[] {
 export function entryBlocksToText(blocks: readonly EntryBlockNode[]): string {
   const parts: string[] = [];
   for (const block of blocks) {
-    if (block.kind === "prose") {
-      parts.push(inlineNodesToText(block.children));
-    } else {
-      for (const item of block.items) {
-        parts.push(entryBlocksToText(item.content));
-      }
+    switch (block.kind) {
+      case "prose":
+      case "heading":
+        parts.push(inlineNodesToText(block.children));
+        break;
+      case "blockquote":
+        parts.push(entryBlocksToText(block.content));
+        break;
+      case "codeBlock":
+        parts.push(block.text);
+        break;
+      case "bulletList":
+      case "orderedList":
+        for (const item of block.items) {
+          parts.push(entryBlocksToText(item.content));
+        }
+        break;
     }
   }
   return parts.join(" ");
@@ -1096,12 +1376,22 @@ function collectTaskReferenceRaws(
   out: string[],
 ): void {
   for (const block of blocks) {
-    if (block.kind === "prose") {
-      collectTaskReferenceRawsInline(block.children, taskId, out);
-    } else {
-      for (const item of block.items) {
-        collectTaskReferenceRaws(item.content, taskId, out);
-      }
+    switch (block.kind) {
+      case "prose":
+      case "heading":
+        collectTaskReferenceRawsInline(block.children, taskId, out);
+        break;
+      case "blockquote":
+        collectTaskReferenceRaws(block.content, taskId, out);
+        break;
+      case "codeBlock":
+        break;
+      case "bulletList":
+      case "orderedList":
+        for (const item of block.items) {
+          collectTaskReferenceRaws(item.content, taskId, out);
+        }
+        break;
     }
   }
 }
