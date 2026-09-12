@@ -594,9 +594,9 @@ describe("TodoPage", () => {
       // task-specific `Completed "<name>"` this replaced.
       "1 task completed",
       expect.objectContaining({
-        // CMT-05: 11s, measured live (`COMPLETION_TOAST_DURATION_MS`'s own
+        // CMT-05: 10s, measured live (`COMPLETION_TOAST_DURATION_MS`'s own
         // doc comment, todo-page.tsx) — not sonner's unconfigured default.
-        duration: 11_000,
+        duration: 10_000,
         action: expect.objectContaining({ label: "Undo", onClick: expect.any(Function) }),
       }),
     );

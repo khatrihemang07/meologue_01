@@ -1,0 +1,56 @@
+{
+  "round": 3,
+  "driveDate": "2026-09-13 (round 3 re-drive, both apps, same session)",
+  "row": "DET-15",
+  "viewport": { "width": 1470, "height": 836 },
+  "method": "On the same disposable task ('ZZ probe detail' in both apps), before every keystroke the focused editor's current text was asserted to be exactly the task's own title. Tested: (0) activate editing with no changes, then Escape -- expect no confirmation; (1) type one character, click Cancel; (2) type one character (fresh activation), press Escape; (3) type one character (fresh activation), click far outside the modal. For each, recorded whether a confirmation appeared (role/title/body/buttons verbatim), then resolved it (Discard) before the next attempt.",
+  "noChangeCase": {
+    "todoist": { "editActivated": true, "escapePressed": true, "confirmationAppeared": false, "mainDialogStillOpen": true },
+    "meologue": { "editActivated": true, "escapePressed": true, "confirmationAppeared": false, "mainDialogStillOpen": true },
+    "verdict": "MATCH -- neither app asks anything when there are no unsaved changes."
+  },
+  "attempt1_cancelButton": {
+    "todoist": { "role": "dialog", "title": "Discard unsaved changes?", "fullText": "Discard unsaved changes?Your unsaved changes will be discarded.CancelDiscard", "buttons": ["Cancel", "Discard"] },
+    "meologue": { "role": "alertdialog", "title": "Discard unsaved changes?", "fullText": "Discard unsaved changes?Your unsaved changes will be discarded.CancelDiscard", "buttons": ["Cancel", "Discard"] },
+    "verdict": "MATCH on title, body and button labels verbatim. role differs (dialog vs alertdialog) -- per instructions this is meologue's own decision and is recorded, not counted as a difference."
+  },
+  "attempt2_escapeKey": {
+    "todoist": { "confirmationAppeared": true, "title": "Discard unsaved changes?", "buttons": ["Cancel", "Discard"] },
+    "meologue": { "confirmationAppeared": true, "title": "Discard unsaved changes?", "buttons": ["Cancel", "Discard"] },
+    "verdict": "MATCH -- Escape with unsaved changes triggers the same confirmation as Cancel in both apps."
+  },
+  "attempt3_clickOutsideModal": {
+    "todoist": {
+      "confirmationAppeared": true, "title": "Discard unsaved changes?", "buttons": ["Cancel", "Discard"],
+      "afterClickingDiscard": { "mainModalStillOpen": false, "note": "Clicking Discard when the confirmation was triggered by an outside click closed the ENTIRE detail modal, not just the edit -- the outside click's original intent (leave the task) completed once the discard was confirmed." }
+    },
+    "meologue": {
+      "confirmationAppeared": true, "title": "Discard unsaved changes?", "buttons": ["Cancel", "Discard"],
+      "afterClickingDiscard": { "mainModalStillOpen": true, "note": "Clicking Discard after an outside-click trigger only discarded the edit; the detail modal itself stayed open." }
+    },
+    "verdict": "DIFFERS -- both apps show the identical confirmation text for an outside click, but resolving it with Discard has a different scope: Todoist closes the whole modal (the outside click's own action completes), meologue keeps the modal open (only the edit is discarded). This is a real, newly-observed difference, not previously in the ledger's DET-15 note."
+  },
+  "escapeInsideConfirmation": {
+    "method": "With the confirmation open (from the Cancel-button trigger), pressed Escape once and recorded whether only the confirmation closed, whether the edit and its draft text survived, and whether the whole detail modal closed.",
+    "todoist": {
+      "before": { "dialogCount": 2, "testids": ["task-details-modal", "confirmation-modal"] },
+      "after": { "dialogCount": 1, "testids": ["task-details-modal"], "mainModalStillOpen": true, "activeElementText": "ZZ probe detailX", "activeElementAriaLabel": "Task name" },
+      "note": "Confirmation closed; editing resumed with the draft ('ZZ probe detailX') still in place and focus back on the Task name editor; the detail modal itself never closed."
+    },
+    "meologue": {
+      "before": { "alertDialogCount": 1 },
+      "after": { "alertDialogCount": 0, "mainModalStillOpen": true, "activeElementText": "(whole app text -- focus fell back to document body, not the title editor)", "activeElementRole": null, "draftVisibleInDialog": "ZZ probe detailX (Cancel/Save buttons still present, confirming editing is still active)" },
+      "note": "Confirmation closed; the edit form remained active with its draft text intact and Cancel/Save still showing; the detail modal itself never closed. Focus landed on the document body rather than back on the Task name editor -- a minor difference from Todoist's behavior of returning focus to the editor."
+    },
+    "verdict": "MATCH on the required behavior (confirmation closes, draft and edit survive, modal stays open). Minor difference: Todoist returns keyboard focus to the Task name editor after the Escape; meologue does not return focus to any specific editable element."
+  },
+  "clickDiscardAfterCancelTrigger": {
+    "todoist": { "editingEnded": true, "mainModalStillOpen": true, "titleText": "ZZ probe detail" },
+    "meologue": { "editingEnded": true, "mainModalStillOpen": true, "titleText": "ZZ probe detail" },
+    "verdict": "MATCH -- clicking Discard (after a Cancel-button or Escape-key trigger) ends editing, discards the draft, and leaves the modal open in both apps."
+  },
+  "overallVerdict": {
+    "result": "MOSTLY MATCH, one DIFFERS",
+    "note": "The core ask (Cancel/Escape/outside-click all raise the same 'Discard unsaved changes?' confirmation with identical title/body/buttons; no-change Cancel/Escape ask nothing; Escape inside the confirmation closes only the confirmation and preserves the draft) is now satisfied in meologue -- this was the flow-4/5 defect (#14, no guard at all) and it is fixed. The one real difference found this round: after an OUTSIDE-CLICK-triggered confirmation, clicking Discard closes the whole modal in Todoist but only ends editing in meologue (attempt3_clickOutsideModal above). meologue's alertdialog role (vs Todoist's dialog role) is recorded per instructions but not counted as a difference."
+  }
+}

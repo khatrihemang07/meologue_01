@@ -135,12 +135,20 @@ const VIEW_HEADINGS: Record<Exclude<TodoBackgroundView["view"], "project" | "fil
  * dated capture, so this targets Todoist's measured ~11s rather than the
  * ledger row's own nuance text.
  *
+ * **Corrected to 10s by flow 11 R3 (Sun 13 Sep).** Measured from when the
+ * toast *appears*, both Todoist readings are about 10s plus an exit animation:
+ * flow 5 first saw it at 360ms, gone 10,775–11,081ms; R3 at 388ms, gone
+ * 10,469–10,774ms, so "~11s" folded the appearance delay and the exit into
+ * the duration. R3 read meologue at 11s as gone 11,068–11,372ms, about
+ * 600ms late. Todoist's "Date updated" toast (DET-16) reads the same ~10s, and meologue's 10s copy
+ * of it landed within 50ms of Todoist's in the same session.
+ *
  * Applied to the two completion toasts below only (`handleComplete`,
  * `handleCompleteForever`) — every other toast on this page (`copyTaskLink`'s
  * "Link copied", the error toasts) keeps sonner's default, unmeasured and
  * unaffected by this ticket.
  */
-const COMPLETION_TOAST_DURATION_MS = 11_000;
+const COMPLETION_TOAST_DURATION_MS = 10_000;
 
 /**
  * A Project's or a Filter's own resolved name (acceptance criterion: "The
@@ -414,7 +422,7 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
    * button and the `undo-complete` keyboard binding both end up calling
    * the identical `undo` callback, so there is exactly one way a
    * completion gets reversed, not two implementations that could drift.
-   * `duration`/`onAutoClose`/`onDismiss` are the CMT-05 pieces: an 11s
+   * `duration`/`onAutoClose`/`onDismiss` are the CMT-05 pieces: a 10s
    * lifetime (`COMPLETION_TOAST_DURATION_MS`'s own doc comment has the
    * measurement) and clearing `pendingUndoRef` the moment this exact toast
    * stops being on screen, by either path sonner offers for "it's gone." */

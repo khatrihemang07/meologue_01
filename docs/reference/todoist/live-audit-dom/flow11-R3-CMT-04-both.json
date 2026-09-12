@@ -1,0 +1,29 @@
+{
+  "round": 3,
+  "driveDate": "2026-09-13 (round 3 re-drive, both apps, same session)",
+  "row": "CMT-04",
+  "method": "Completed a disposable ZZ probe task by clicking its checkbox from the LIST view (not the detail view), polling every ~300ms for the toast, then uncompleting/deleting it.",
+  "todoist": {
+    "text": "1 task completedUndo",
+    "firstSeenMs": 388,
+    "lastPresentMs": 10469,
+    "goneByMs": 10774,
+    "hasUndo": true,
+    "role": null,
+    "note": "role attribute was not present directly on the matched element via this session's selector; the corpus (flow 5) previously recorded role=\"alert\" aria-live=\"polite\" on Todoist's toast and that was not independently re-confirmed this round because the toast had already dismissed by the time a follow-up check ran."
+  },
+  "meologue": {
+    "text": "1 task completedUndo",
+    "firstSeenMs": 71,
+    "lastPresentMs": 11068,
+    "goneByMs": 11372,
+    "hasUndo": true,
+    "role": null,
+    "ariaLive": "polite",
+    "note": "aria-live=\"polite\" confirmed live on an ancestor element this round."
+  },
+  "verdict": {
+    "result": "MATCH",
+    "note": "Wording is now verbatim identical -- '1 task completed' with Undo -- in both apps, a fix from the ledger's prior divergent reading of 'Completed \"<task name>\"'. Duration is now comparable: Todoist ~10.4s this session (previously read ~11s), meologue ~11.0s this session (previously read ~4.5s, then fixed). role=\"alert\" was not independently re-verified live on either side's toast element this round (see notes above); this is a gap in this round's measurement, not a claimed finding."
+  }
+}
