@@ -71,26 +71,51 @@ describe("remapWithdrawnSpans", () => {
 describe("matchIdForToken", () => {
   it("carries the resolved date, not the typed text", () => {
     expect(
-      matchIdForToken({ kind: "date", start: 0, end: 3, raw: "tod", date: "2026-09-10" }),
+      matchIdForToken({ kind: "date", start: 0, end: 3, raw: "tod", date: "2026-09-10" }, null),
     ).toBe("2026-09-10");
   });
 
   it("renders a priority as P<n>, crossing the stored/ui inversion — typed p1 stores 4, renders P1", () => {
-    expect(matchIdForToken({ kind: "priority", start: 0, end: 2, raw: "p1", priority: 4 })).toBe(
-      "P1",
-    );
+    expect(
+      matchIdForToken({ kind: "priority", start: 0, end: 2, raw: "p1", priority: 4 }, null),
+    ).toBe("P1");
   });
 
   it("renders the degenerate p4 the same way — typed p4 stores 1, renders P4", () => {
-    expect(matchIdForToken({ kind: "priority", start: 0, end: 2, raw: "p4", priority: 1 })).toBe(
-      "P4",
-    );
+    expect(
+      matchIdForToken({ kind: "priority", start: 0, end: 2, raw: "p4", priority: 1 }, null),
+    ).toBe("P4");
   });
 
   it("carries a label's resolved name", () => {
     expect(
-      matchIdForToken({ kind: "label", start: 0, end: 8, raw: "@Family", name: "Family" }),
+      matchIdForToken({ kind: "label", start: 0, end: 8, raw: "@Family", name: "Family" }, null),
     ).toBe("Family");
+  });
+
+  // QA-10: a time-only phrase carries no date in meologue where Todoist
+  // bundles one in — "12 Sep 5:00 PM" vs. the bare "17:00". The chip's
+  // matchId now takes the merged date+time straight from the same
+  // parse's own `QuickAddResult.date` (parse-quick-add.ts's
+  // mergeDateAndTime), rather than the token's bare `time` field.
+  describe("time — QA-10, bundles the resolved day rather than a bare time", () => {
+    it("uses the merged date+time when one is supplied", () => {
+      expect(
+        matchIdForToken(
+          { kind: "time", start: 0, end: 5, raw: "5pm", time: "17:00" },
+          "2026-09-12T17:00",
+        ),
+      ).toBe("2026-09-12T17:00");
+    });
+
+    it("falls back to the bare time if no merged value is supplied", () => {
+      // Defensive only — computeQuickAddMatches always supplies
+      // `natural.date`, which mergeDateAndTime guarantees is non-null
+      // whenever a "time" token exists at all.
+      expect(
+        matchIdForToken({ kind: "time", start: 0, end: 5, raw: "5pm", time: "17:00" }, null),
+      ).toBe("17:00");
+    });
   });
 });
 
@@ -134,6 +159,16 @@ describe("computeQuickAddMatches", () => {
 
     expect(computeQuickAddMatches("tod", { now: NOW }, afterRetype)).toEqual([
       { start: 0, end: 3, kind: "date", matchId: "2026-09-10", withdrawn: false },
+    ]);
+  });
+
+  // QA-10, end to end: a time-only phrase's chip now bundles the implied
+  // day (here "today", NOW's own date) rather than the bare time.
+  it("bundles today's date into a time-only phrase's matchId (QA-10)", () => {
+    const matches = computeQuickAddMatches("5pm", { now: NOW }, []);
+
+    expect(matches).toEqual([
+      { start: 0, end: 3, kind: "time", matchId: "2026-09-10T17:00", withdrawn: false },
     ]);
   });
 });

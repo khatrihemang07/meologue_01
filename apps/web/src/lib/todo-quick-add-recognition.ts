@@ -123,13 +123,28 @@ export function remapWithdrawnSpans(
  * be a second place it could drift from the first. A recurring word's
  * `matchId` is therefore its own raw text, lower-cased for the same
  * case-insensitivity every other rule in this app already applies.
+ *
+ * `resolvedDateTime` is `QuickAddResult.date` from the very same parse —
+ * the merged date-and-time value ../../packages/core/src/quick-add/
+ * parse-quick-add.ts's `mergeDateAndTime` already computes for the whole
+ * input, including its "a lone time with no date word attaches to
+ * today" rule. QA-10's own measured gap: a `"time"` token's `matchId`
+ * used to be the bare `token.time` (`"17:00"`), where Todoist's bundles
+ * the resolved day in (`"12 Sep 5:00 PM"`) — a time-only phrase implies
+ * a day in Todoist, and now does here too. Only the `"time"` case reads
+ * this parameter; every other kind ignores it, so passing it through
+ * unconditionally from `computeQuickAddMatches` costs nothing.
  */
-export function matchIdForToken(token: QuickAddToken): string {
+export function matchIdForToken(token: QuickAddToken, resolvedDateTime: string | null): string {
   switch (token.kind) {
     case "date":
       return token.date;
     case "time":
-      return token.time;
+      // `resolvedDateTime` is guaranteed non-null whenever a "time" token
+      // exists — `mergeDateAndTime` only returns `null` when there is no
+      // time at all — but `token.time` is kept as a defensive fallback
+      // rather than asserting that guarantee with a non-null assertion.
+      return resolvedDateTime ?? token.time;
     case "deadline":
       return token.deadline;
     case "priority":
@@ -198,7 +213,7 @@ export function computeQuickAddMatches(
     start: token.start,
     end: token.end,
     kind: token.kind,
-    matchId: matchIdForToken(token),
+    matchId: matchIdForToken(token, natural.date),
     withdrawn: withdrawnSpans.some((span) => span.start === token.start && span.end === token.end),
   }));
 }
