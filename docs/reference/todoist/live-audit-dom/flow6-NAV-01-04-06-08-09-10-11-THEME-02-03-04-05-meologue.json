@@ -1,0 +1,219 @@
+{
+  "nav04": {
+    "tag": "NAV",
+    "ariaLabel": "Todo",
+    "outerHTMLStart": "<nav aria-label=\"Todo\" class=\"flex h-full flex-col gap-1 overflow-y-auto bg-muted p-2 text-[length:var(--td-chrome-font-size)]\"><a aria-current=\"page\" class=\"flex items-center gap-2.5 rounded-md px-2 "
+  },
+  "nav01": [
+    {
+      "kind": "Add task",
+      "found": true,
+      "tag": "A",
+      "role": null,
+      "ariaLabel": null,
+      "href": "/todo/inbox",
+      "ariaCurrent": "page",
+      "text": "Add task",
+      "visible": true
+    },
+    {
+      "kind": "Search",
+      "found": true,
+      "tag": "A",
+      "role": null,
+      "ariaLabel": null,
+      "href": "/todo/search",
+      "ariaCurrent": null,
+      "text": "Search",
+      "visible": true
+    },
+    {
+      "kind": "Inbox",
+      "found": true,
+      "tag": "A",
+      "role": null,
+      "ariaLabel": null,
+      "href": "/todo/inbox",
+      "ariaCurrent": "page",
+      "text_INVALID_first_match_was_Add_task_anchor": "Add task",
+      "text_corrected": "Inbox4",
+      "note": "first-match selector on href=/todo/inbox picked the 'Add task' entry, which ALSO links to /todo/inbox (NAV-07's own documented divergence: no global Quick Add exists, Add task just opens Inbox). Re-queried for the anchor whose text starts with 'Inbox' specifically.",
+      "visible": true
+    },
+    {
+      "kind": "Today",
+      "found": true,
+      "tag": "A",
+      "role": null,
+      "ariaLabel": null,
+      "href": "/todo/today",
+      "ariaCurrent": null,
+      "text": "Today",
+      "visible": true
+    },
+    {
+      "kind": "Upcoming",
+      "found": true,
+      "tag": "A",
+      "role": null,
+      "ariaLabel": null,
+      "href": "/todo/upcoming",
+      "ariaCurrent": null,
+      "text": "Upcoming",
+      "visible": true
+    },
+    {
+      "kind": "Filters & Labels",
+      "found": true,
+      "tag": "A",
+      "role": null,
+      "ariaLabel": null,
+      "href": "/todo/filters",
+      "ariaCurrent": null,
+      "text": "Filters & Labels",
+      "visible": true
+    },
+    {
+      "kind": "Activity",
+      "found": true,
+      "tag": "A",
+      "role": null,
+      "ariaLabel": null,
+      "href": "/todo/activity",
+      "ariaCurrent": null,
+      "text": "Activity",
+      "visible": true
+    },
+    {
+      "kind": "Projects heading",
+      "found": true,
+      "tag": "H2",
+      "role": null,
+      "ariaLabel": null,
+      "href": null,
+      "ariaCurrent": null,
+      "text": "Projects",
+      "visible": true
+    }
+  ],
+  "ariaCurrentEntry": {
+    "tag": "A",
+    "ariaLabel": null,
+    "href": "/todo/inbox",
+    "ariaCurrent": "page"
+  },
+  "filtersCountText_INVALID": "Inbox4TodayUpcomingFilters & LabelsActivity",
+  "filtersCountText_corrected": "Filters & Labels",
+  "filtersCountText_note": "re-read filtersLink.textContent directly (not its ancestor li/parentElement, which had swallowed sibling sidebar rows); no numeric count badge rendered on this account (0 filters + 0 labels)",
+  "nav08": {
+    "fontSize": "13px",
+    "fontWeight": "400",
+    "lineHeight": "19.5px"
+  },
+  "nav09": {
+    "h1": {
+      "tag": "H1",
+      "text": "Inbox",
+      "rect": {
+        "x": 567,
+        "y": 20.5,
+        "width": 66.734375,
+        "height": 35,
+        "top": 20.5,
+        "right": 633.734375,
+        "bottom": 55.5,
+        "left": 567
+      },
+      "styles": {
+        "fontSize": "26px",
+        "fontWeight": "700",
+        "lineHeight": "35px",
+        "textAlign": "start"
+      }
+    },
+    "listRect_note": "768px is the <ul>'s own rect (inset from the column by the row's internal padding), not the column itself",
+    "columnRect_corrected": {
+      "left": 499,
+      "right": 1299,
+      "width": 800,
+      "className": "mx-auto flex flex-col gap-4 px-4 py-4 w-[97%] md:w-[85%] min-[900px]:w-full min-[900px]:max-w-[800px]",
+      "method": "walked up from the visible h1 to the ancestor carrying the min-[900px]:max-w-[800px] class; measured live at 1470px viewport (>900px breakpoint) confirming the 800px cap is engaged"
+    },
+    "separateHeaderCount": 0,
+    "separateHeaderTags": [],
+    "note": "confirms NAV-09's documented claim of no separate app-bar <header> in meologue's Todo shell"
+  },
+  "nav10": {
+    "found": true,
+    "tag": "DIV",
+    "text": "Add a Task",
+    "rect": {
+      "top": 348,
+      "left": 527,
+      "width": 687.609375,
+      "height": 32
+    },
+    "styles": {
+      "fontSize": "16px",
+      "color": "rgb(255, 255, 255)"
+    },
+    "domOrderRelativeToLastRow": "after-last-row",
+    "lastRowRect_INVALID": {
+      "x": 515, "y": 312, "width": 768, "height": 12, "top": 312, "right": 1283, "bottom": 324, "left": 515,
+      "note": "this was ul>li's 5th child, an empty height:12px drop-zone/spacer <li> with no data-task-id and no checkbox -- not a real task row"
+    },
+    "lastRowText_INVALID": "",
+    "lastRow_corrected": {
+      "selector": "li[data-task-id] (last of 4)",
+      "taskId": "8cb1b9bc-8643-4e1c-ab33-126f64cf1249",
+      "text": "ZZ probe four",
+      "rect": { "x": 515, "y": 253, "width": 768, "height": 59, "top": 253, "right": 1283, "bottom": 312, "left": 515 },
+      "domOrderRelativeToLastRow": "after-last-row"
+    }
+  },
+  "nav11": {
+    "found": true,
+    "label": "Activity",
+    "href": "/todo/activity",
+    "ariaLabel": null
+  },
+  "theme02_INVALID": {
+    "sidebarBg": "rgb(31, 31, 31)",
+    "sidebarBgElTag": "DIV",
+    "contentBg": "rgb(31, 31, 31)",
+    "contentBgElTag": "DIV",
+    "note": "findBgAncestor started from addTaskLink.closest('div'), the wrong starting element -- it walked past <nav> to a shared ancestor with the same bg as content. Superseded by theme02_corrected, which reads <nav>'s own background-color directly."
+  },
+  "theme02_corrected": {
+    "sidebarBg": "rgb(38, 38, 38)",
+    "sidebarBgElTag": "NAV (aria-label=Todo, class includes bg-muted)",
+    "contentBg": "rgb(31, 31, 31)",
+    "contentBgElTag": "DIV.flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-backg(round)",
+    "method": "read getComputedStyle(nav).backgroundColor directly, and walked up from the visible 'Inbox' h1's parent chain for the content pane's own bg",
+    "matchesTodoist": "identical rgb values to todoist theme02 (sidebar 38,38,38 / content 31,31,31)"
+  },
+  "theme03_partial": {
+    "dividerBorderColor": "rgb(61, 61, 61)",
+    "mutedTextColor": {
+      "tag": "SPAN",
+      "text": "4",
+      "color": "rgb(204, 204, 204)"
+    }
+  },
+  "theme04_partial": {
+    "rowTitleFontSize": "14px",
+    "rowTitleLineHeight": "21px",
+    "rowTitleText": "ZZ probe one"
+  },
+  "theme05": "-apple-system, \"system-ui\", \"Segoe UI\", \"Noto Sans\", system-ui, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Segoe UI Symbol\", \"Noto Color Emoji\"",
+  "debug": {
+    "rowCount": 5,
+    "hasAddField": true
+  },
+  "viewport": {
+    "innerWidth": 1470,
+    "innerHeight": 836
+  },
+  "app": "meologue",
+  "url": "http://127.0.0.1:41999/todo/inbox"
+}

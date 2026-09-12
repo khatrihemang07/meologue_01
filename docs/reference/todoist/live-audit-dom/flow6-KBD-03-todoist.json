@@ -1,0 +1,83 @@
+{
+  "app": "todoist",
+  "stoppedEarly": false,
+  "log": [
+    {
+      "step": "neutral-click",
+      "active": {
+        "tag": "MAIN",
+        "role": null,
+        "ariaLabel": "Main Content",
+        "isTaskRowBody": false,
+        "taskTitle": null,
+        "text": "Display: 2Inbox(No Section)9Task: Bat fixDate: TodayTask: Bu"
+      }
+    },
+    {
+      "step": "ArrowDown#1",
+      "active": {
+        "tag": "DIV",
+        "role": "button",
+        "ariaLabel": null,
+        "isTaskRowBody": true,
+        "taskTitle": "Bat fix",
+        "text": "Task: Bat fixDate: Today"
+      }
+    },
+    {
+      "step": "ArrowDown#2",
+      "active": {
+        "tag": "DIV",
+        "role": "button",
+        "ariaLabel": null,
+        "isTaskRowBody": true,
+        "taskTitle": "Buy mobile holder and get the bike fixed",
+        "text": "Task: Buy mobile holder and get the bike fixedDate: Today1"
+      }
+    },
+    {
+      "step": "j#1",
+      "active": {
+        "tag": "DIV",
+        "role": "button",
+        "ariaLabel": null,
+        "isTaskRowBody": true,
+        "taskTitle": "Check for ipad cover",
+        "text": "Task: Check for ipad coverDate: Today1"
+      }
+    },
+    {
+      "step": "j#2",
+      "active": {
+        "tag": "DIV",
+        "role": "button",
+        "ariaLabel": null,
+        "isTaskRowBody": true,
+        "taskTitle": "hair wash",
+        "text": "Task: hair washDate: Today"
+      }
+    },
+    {
+      "step": "ArrowUp",
+      "active": {
+        "tag": "DIV",
+        "role": "button",
+        "ariaLabel": null,
+        "isTaskRowBody": true,
+        "taskTitle": "Check for ipad cover",
+        "text": "Task: Check for ipad coverDate: Today1"
+      }
+    },
+    {
+      "step": "k",
+      "active": {
+        "tag": "DIV",
+        "role": "button",
+        "ariaLabel": null,
+        "isTaskRowBody": true,
+        "taskTitle": "Buy mobile holder and get the bike fixed",
+        "text": "Task: Buy mobile holder and get the bike fixedDate: Today1"
+      }
+    }
+  ]
+}

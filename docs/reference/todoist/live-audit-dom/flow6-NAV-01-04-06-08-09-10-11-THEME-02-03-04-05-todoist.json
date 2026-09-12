@@ -1,0 +1,200 @@
+{
+  "nav04": {
+    "tag": "NAV",
+    "ariaLabel": null,
+    "outerHTMLStart": "<nav class=\"XoRptUo\"><div class=\"d2b5021f\"><div class=\"d2b5021f _2404d8ba _4ea254c1 _297575f4 c7313022 c4a9b3ab _2121bb0c _33bcc451 c8aa7139\"><div class=\"UHxIh6N QkztGcX d2b5021f\"><button aria-expande"
+  },
+  "nav01": [
+    {
+      "kind": "Add task",
+      "tag": "BUTTON",
+      "role": null,
+      "ariaLabel": null,
+      "href": null,
+      "ariaCurrent": null,
+      "text": "Add task",
+      "visible": true
+    },
+    {
+      "kind": "Dictate tasks with Ramble",
+      "tag": "BUTTON",
+      "role": null,
+      "ariaLabel": "Dictate tasks with Ramble",
+      "href": null,
+      "ariaCurrent": null,
+      "text": "",
+      "visible": true
+    },
+    {
+      "kind": "Search",
+      "tag": "BUTTON",
+      "role": null,
+      "ariaLabel": "Search",
+      "href": null,
+      "ariaCurrent": null,
+      "text": "Search",
+      "visible": true
+    },
+    {
+      "kind": "Inbox",
+      "tag": "A",
+      "role": null,
+      "ariaLabel": "Inbox, 9 tasks",
+      "href": "/app/inbox",
+      "ariaCurrent": null,
+      "text": "Inbox",
+      "visible": true
+    },
+    {
+      "kind": "Today",
+      "tag": "A",
+      "role": null,
+      "ariaLabel": "Today, 9 tasks",
+      "href": "/app/today",
+      "ariaCurrent": null,
+      "text": "12Today",
+      "visible": true
+    },
+    {
+      "kind": "Upcoming",
+      "tag": "A",
+      "role": null,
+      "ariaLabel": "Upcoming",
+      "href": "/app/upcoming",
+      "ariaCurrent": null,
+      "text": "Upcoming",
+      "visible": true
+    },
+    {
+      "kind": "Filters & Labels",
+      "tag": "A",
+      "role": null,
+      "ariaLabel": "Filters & Labels",
+      "href": "/app/filters-labels",
+      "ariaCurrent": null,
+      "text": "Filters & Labels",
+      "visible": true
+    },
+    {
+      "kind": "Reporting",
+      "tag": "A",
+      "role": null,
+      "ariaLabel": "Reporting",
+      "href": "/app/activity",
+      "ariaCurrent": null,
+      "text": "Reporting",
+      "visible": true
+    },
+    {
+      "kind": "My Projects heading",
+      "tag": "A",
+      "role": null,
+      "ariaLabel": null,
+      "href": "/app/projects",
+      "ariaCurrent": null,
+      "text": "My Projects",
+      "visible": true
+    }
+  ],
+  "ariaCurrentEntry": null,
+  "filtersCountText": "Filters & Labels",
+  "nav08": {
+    "fontSize": "13px",
+    "fontWeight": "400",
+    "lineHeight": "normal"
+  },
+  "nav09": {
+    "mainContentRect": {
+      "left": 280,
+      "right": 1470,
+      "width": 1190,
+      "top": 0
+    },
+    "h1_INVALID_first_match_hidden_fallback_element": {
+      "tag": "H1",
+      "text": "Todoist couldn't load the required files.",
+      "note": "This h1 is not visible (offsetParent null) - a no-JS fallback element. Superseded by h1_corrected below, re-queried filtering for visibility."
+    },
+    "h1_corrected": {
+      "tag": "H1",
+      "text": "Inbox",
+      "rect": { "x": 466.5, "y": 63, "width": 67.84375, "height": 35, "top": 63, "right": 534.34375, "bottom": 98, "left": 466.5 },
+      "styles": { "fontSize": "26px", "fontWeight": "700", "lineHeight": "35px", "textAlign": "start" },
+      "assertion": "confirmed visible (offsetParent!==null, non-zero rect) and text===\"Inbox\", the correct view-name heading"
+    },
+    "separateHeaderCount": 2,
+    "separateHeaderTags": [
+      {
+        "tag": "HEADER",
+        "ariaLabel": "Header: contains title, subtitle, actions and options related to the current view"
+      },
+      {
+        "tag": "HEADER",
+        "ariaLabel": null
+      }
+    ]
+  },
+  "nav10": {
+    "found": true,
+    "tag": "BUTTON",
+    "text": "Add task",
+    "rect": {
+      "top": 645,
+      "left": 460.5,
+      "width": 779,
+      "height": 33
+    },
+    "styles": {
+      "fontSize": "14px",
+      "color": "rgb(128, 128, 128)"
+    },
+    "domOrderRelativeToLastRow": "before-last-row",
+    "lastRowRect": {
+      "x": 467.5,
+      "y": 1093,
+      "width": 800,
+      "height": 59,
+      "top": 1093,
+      "right": 1267.5,
+      "bottom": 1152,
+      "left": 467.5
+    }
+  },
+  "nav11": {
+    "found": true,
+    "label": "Reporting",
+    "href": "/app/activity",
+    "ariaLabel": "Reporting"
+  },
+  "theme02": {
+    "sidebarBg": "rgb(38, 38, 38)",
+    "sidebarBgElTag": "NAV",
+    "contentBg": "rgb(31, 31, 31)",
+    "contentBgElTag": "MAIN"
+  },
+  "theme03_partial": {
+    "dividerBorderColor": "rgb(61, 61, 61)",
+    "mutedTextColor_INVALID_wrong_element": {
+      "value": "rgb(255, 255, 255)",
+      "note": "This picked the sr-only 'Date:' label div inside the due-date button, not real muted chrome text. Superseded by mutedTextColor_corrected."
+    },
+    "mutedTextColor_corrected": {
+      "value": "rgb(204, 204, 204)",
+      "source": "leaf DIV with text 'My Projects' (sidebar projects heading)",
+      "outerHTMLStart": "<div class=\"d2b5021f _211eebc7 ieOwiLx f79c8aa7 _16ca96f5 _1aad084c _21add032 _515e85c4\">My Projects</div>",
+      "method": "scanned all leaf elements for computed color === rgb(204,204,204), matches ledger THEME-03's documented muted-text figure"
+    }
+  },
+  "theme04_partial": {
+    "rowTitleFontSize": "14px",
+    "rowTitleLineHeight": "21px",
+    "rowTitleText": "Bat fix"
+  },
+  "theme05": "-apple-system, \"system-ui\", \"Segoe UI\", \"Noto Sans\", system-ui, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Segoe UI Symbol\", \"Noto Color Emoji\"",
+  "viewport": {
+    "innerWidth": 1470,
+    "innerHeight": 836
+  },
+  "app": "todoist",
+  "url": "https://app.todoist.com/app/inbox"
+}

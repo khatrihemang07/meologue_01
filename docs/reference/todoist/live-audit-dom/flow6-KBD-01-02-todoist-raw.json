@@ -1,0 +1,28 @@
+{
+  "opened": {
+    "opened": true,
+    "role": "dialog",
+    "ariaLabel": "Buy mobile holder and get the bike fixed",
+    "title": null,
+    "dialogOuterHTMLStart": "<div data-open=\"true\" data-dialog=\"\" role=\"dialog\" tabindex=\"-1\" aria-label=\"Buy mobile holder and get the bike fixed\" data-testid=\"task-details-modal\" data-wide-modal=\"\" id=\":rg:\" class=\"DPhTS8Z _5905d2f3 d2b5021f _2404d8ba d429865c _8461c9bc _35b527a2 _2ce4563f b0e82bbe f287db91\" style=\"--dialog-viewport-height: 836px;\"><header data-component=\"ModalHeader\" class=\"NCF_4Q3 d2b5021f _4e9ab24b ad0ccf15 _9510d053 _078feb3c\"><div class=\"eae3d34f _1cf15621 d2b5021f _2404d8ba _2121bb0c _33bcc451 d3c1c",
+    "sectionsGuess": [
+      "Inbox",
+      "Activate to edit the task name",
+      "Description",
+      "Comments",
+      "Hemang",
+      "Comment",
+      "Project",
+      "Inbox",
+      "Date",
+      "Today",
+      "Priority",
+      "Labels",
+      "Reminders",
+      "Location"
+    ]
+  },
+  "afterClose": {
+    "dialogStillPresent": false
+  }
+}
