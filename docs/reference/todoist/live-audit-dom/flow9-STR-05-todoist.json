@@ -1,0 +1,27 @@
+{
+  "row": "STR-05",
+  "app": "todoist",
+  "labelUsedForMenu": "zz probe label (own probe label; no pre-existing label of the user's existed -- labels list was empty before this run, confirmed by flow9-canary-before-todoist.json)",
+  "menuOpenedFrom": "button[aria-label='Label options menu'] on the label's own detail page (/app/label/zz-probe-label-2185032586)",
+  "assertionThatThisIsTheRealMenu": {
+    "menuRole": "menu",
+    "menuAriaLabelledby": ":rp:",
+    "buttonId": ":rp:",
+    "buttonAriaControls": ":rq:",
+    "menuId": ":rq:",
+    "match": "menuAriaLabelledby === buttonId AND buttonAriaControls === menuId",
+    "buttonAriaExpandedWhileOpen": "true",
+    "menuBoundingRect": { "x": 1176, "y": 48, "w": 282, "h": 187 },
+    "menuInViewport": true
+  },
+  "menuItemsDomOrder": ["Edit", "Add to favorites", "Move to shared labels", "Copy link to label", "Delete"],
+  "matchesRecordedSet": {
+    "recorded": ["Edit", "Add to favorites", "Move to shared labels", "Copy link to label", "Delete"],
+    "verdict": "EXACT MATCH, same DOM order"
+  },
+  "escapeTest": {
+    "action": "pressed Escape without clicking any item",
+    "polledUpTo": "2.5s",
+    "closedAfterEscape": true
+  }
+}

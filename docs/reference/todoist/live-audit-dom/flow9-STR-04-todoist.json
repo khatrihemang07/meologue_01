@@ -1,0 +1,34 @@
+{
+  "row": "STR-04",
+  "app": "todoist",
+  "screen": "https://app.todoist.com/app/filters-labels (Filters & Labels)",
+  "screenHeadings": ["Filters & Labels", "My Filters", "Labels"],
+  "create": {
+    "entryPoint": "button[aria-label='Add new label'] in the Labels section",
+    "controlType": "modal dialog (role=dialog, aria name 'Add label')",
+    "dialogFields": ["Name textbox (input[name=name], 0/60 counter)", "Color combobox/listbox (default 'Charcoal')", "Add to favorites checkbox"],
+    "dialogButtons": ["Cancel", "Add"],
+    "typedCharByChar": true,
+    "createdName": "zz probe label",
+    "verifiedByNavigationTo": "/app/label/zz-probe-label-2185032586 with visible heading 'zz probe label'"
+  },
+  "rename": {
+    "entryPoint": "Label options menu (button[aria-label='Label options menu']) -> Edit menuitem",
+    "controlType": "modal dialog (role=dialog, aria name 'Edit label'), same shape as Add label dialog, Name field pre-filled with current name",
+    "typedCharByChar": true,
+    "clearMethod": "ControlOrMeta+a then Backspace, verified value === '' before retyping",
+    "renamedTo": "zz probe label renamed",
+    "verifiedBy": "list at /app/filters-labels shows a[href='/app/label/zz-probe-label-renamed-2185032586'] textContent 'zz probe label renamed' -- same numeric id 2185032586 as before rename, confirming same object renamed not a new one"
+  },
+  "recolour": {
+    "entryPoint": "Same Edit label dialog's Color combobox",
+    "controlType": "combobox opening a role=listbox popup dialog (role=dialog aria-label='Color') containing role=listboxoption items",
+    "optionsSeen": ["Berry Red","Red","Orange","Yellow","Olive Green","Lime Green","Green","Mint Green","Teal","Sky Blue","Light Blue","Blue","Grape","Violet","Lavender","Magenta","Salmon","Charcoal","Grey","Taupe"],
+    "selected": "Blue",
+    "verifiedBy": {
+      "dialogTextBeforeSave": "Edit labelName22/60ColorBlueAdd to favoritesCancelSave",
+      "listSwatchComputedColorAfterSave": "rgb(42, 103, 226)",
+      "domSource": "getComputedStyle(svgElementInsideLabelLink).color on https://app.todoist.com/app/filters-labels after Save"
+    }
+  }
+}

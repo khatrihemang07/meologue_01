@@ -1,0 +1,54 @@
+{
+  "capturedAt": "2026-09-12",
+  "url_filters_labels": "https://app.todoist.com/app/filters-labels",
+  "theme": {
+    "htmlClass": "theme_dark todoist_loaded",
+    "isDarkThemeClassPresent": true
+  },
+  "viewport": {
+    "innerWidth": 1470,
+    "innerHeight": 836
+  },
+  "labels": {
+    "count": 0,
+    "names": [],
+    "emptyStateMessage": "Your list of labels will show up here.",
+    "domSource": "document.querySelectorAll('a[href^=\"/app/label/\"]') -> [] ; empty-state text node matched verbatim"
+  },
+  "filters": {
+    "count": 3,
+    "names": ["Assigned to me", "Priority 1", "All my Routines"],
+    "capLabelTextNode": "Used: 3/3",
+    "capLabelDomSource": "TreeWalker SHOW_TEXT over document.body, node.parentElement is SPAN class 'dc555a5b _4ccc562f d2b5021f _4a259487'",
+    "unlockMoreFiltersButtonPresent": true,
+    "unlockMoreFiltersButtonAriaLabel": "Unlock more filters",
+    "capVerdict": "AT_CAP - free plan shows Used: 3/3 with a visible 'Unlock more filters' upgrade button; creating a 4th filter would exceed the cap / trip the upgrade prompt"
+  },
+  "projects": {
+    "count": 1,
+    "names": ["Getting Started 👋"],
+    "domSource": "document.querySelectorAll('a[href^=\"/app/project/\"]') on https://app.todoist.com/app/projects"
+  },
+  "inboxTaskTitles": {
+    "count": 16,
+    "titles": [
+      "add split and splid both without fail EOD",
+      "Apply company",
+      "Buy bluetooth for vishal",
+      "Lld",
+      "Message ashu to connect",
+      "Need to improve reflect and todo completely. They are crap right now. Specially when typing long title or updating title",
+      "Quick dsa",
+      "Bat fix",
+      "Buy mobile holder and get the bike fixed",
+      "Check for ipad cover",
+      "hair wash",
+      "Homeo medicine refil",
+      "naukri photo update",
+      "Roller thigh pain",
+      "Room clean",
+      "Thigh guard and marker order"
+    ],
+    "domSource": "document.querySelectorAll('[data-testid=\"task-content\"], div[class*=\"task_content\"]') on https://app.todoist.com/app/inbox, scroll-and-union over 6 scroll steps"
+  }
+}

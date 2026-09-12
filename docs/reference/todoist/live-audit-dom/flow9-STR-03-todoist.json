@@ -1,0 +1,27 @@
+{
+  "row": "STR-03",
+  "app": "todoist",
+  "action": "Deleted label 'zz probe label renamed' via its own detail page's Label options menu -> Delete",
+  "assertionBeforeDelete": {
+    "url": "https://app.todoist.com/app/label/zz-probe-label-renamed-2185032586",
+    "documentTitle": "zz probe label renamed – Todoist",
+    "visibleHeading": "zz probe label renamed",
+    "note": "A decoy heading 'Todoist couldn't load the required files.' also exists in the DOM at all times but has offsetParent === null (not visible) -- excluded by filtering for visible h1/h2 only."
+  },
+  "confirmationDialog": {
+    "domRole": "dialog",
+    "headingText": "Delete label?",
+    "bodyFullText": "The zz probe label renamed label will be permanently deleted.",
+    "buttons": ["Cancel", "Delete"],
+    "rawConcatenatedTextContent": "Delete label?The zz probe label renamed label will be permanently deleted.CancelDelete"
+  },
+  "matchesRecordedWording": {
+    "recorded": "Delete label? The [name] label will be permanently deleted. Buttons: Cancel/Delete",
+    "verdict": "EXACT MATCH (case-insensitive, name substituted)"
+  },
+  "postDeleteVerification": {
+    "polledUpTo": "2.5s (25 x 100ms)",
+    "labelsListAfter": [],
+    "confirmed": true
+  }
+}
