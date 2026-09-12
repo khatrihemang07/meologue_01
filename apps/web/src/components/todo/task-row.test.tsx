@@ -1,5 +1,5 @@
 import type { Label, Project, Task } from "@meologue/core";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { OPEN_COMMAND_MENU_EVENT, OPEN_SCHEDULE_EVENT } from "@/lib/todo-keymap";
@@ -430,13 +430,21 @@ describe("TaskRow", () => {
   // Issue #253: the More-actions "Date…" item is a second entry point onto
   // the identical per-row popover instance the hover button above opens —
   // both flip the same `scheduleOpen` flag `task-row.tsx` owns.
-  it("the More-actions 'Date…' item opens the identical scheduler popover", () => {
+  //
+  // Issue #255: opening the popover now waits for the More-actions menu's
+  // own `onCloseAutoFocus` (fired once Radix's `Presence` actually finishes
+  // closing the menu's Content) rather than happening synchronously inside
+  // `onSelect` — see task-command-menu.tsx's own doc comment on the "Date…"
+  // item for why. jsdom runs no real CSS animation, so this still resolves
+  // quickly, but asynchronously — hence `waitFor` rather than an immediate
+  // assertion.
+  it("the More-actions 'Date…' item opens the identical scheduler popover", async () => {
     renderRow({ task: task({ content: "call mum" }) });
 
     fireEvent.pointerDown(screen.getByRole("button", { name: 'More actions for "call mum"' }));
     fireEvent.click(screen.getByRole("menuitem", { name: /^Date/ }));
 
-    expect(screen.getByTestId("scheduler-view")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId("scheduler-view")).toBeInTheDocument());
   });
 
   // Issue #253: the `T` shortcut's own fan-in — `use-todo-keymap.ts`

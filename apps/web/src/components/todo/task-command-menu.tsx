@@ -46,6 +46,7 @@ import { storedPriorityOf, uiPriorityOf } from "@meologue/core";
 import { CalendarClock, CalendarX2, Copy, FolderInput, Pencil, Tag, Trash2 } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
 import type * as React from "react";
+import { useRef } from "react";
 import { priorityPickerColour } from "@/lib/task-priority-colors";
 import { hintForId } from "@/lib/todo-keymap";
 import { cn } from "@/lib/utils";
@@ -104,6 +105,11 @@ export function TaskCommandMenu({
   onRequestDelete,
 }: TaskCommandMenuProps) {
   const uiPriority = uiPriorityOf(task.priority);
+  // Set by the "Date…" item's own `onSelect` below, consumed by this
+  // Content's own `onCloseAutoFocus` — see that item's doc comment for why
+  // opening the popover has to wait for this menu's own close to actually
+  // finish, not just be requested.
+  const pendingDateOpenRef = useRef(false);
 
   function toggleLabel(labelId: string) {
     const has = task.labelIds.includes(labelId);
@@ -117,6 +123,21 @@ export function TaskCommandMenu({
         <DropdownMenu.Content
           align="end"
           className="z-50 flex w-56 flex-col gap-0.5 rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-lg data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0"
+          // See the "Date…" item's own doc comment (issue #255) — this
+          // only ever acts when that item set `pendingDateOpenRef`, and it
+          // is the one moment this menu's own `FocusScope` has actually
+          // torn down rather than merely being told to close.
+          onCloseAutoFocus={(event) => {
+            if (!pendingDateOpenRef.current) {
+              return;
+            }
+            pendingDateOpenRef.current = false;
+            // Skip the default "return focus to the trigger" — the
+            // popover's own autofocus takes it from here, and bouncing
+            // through the trigger first buys nothing.
+            event.preventDefault();
+            onOpenDate();
+          }}
         >
           <DropdownMenu.Item className={itemClassName} onSelect={onOpenDetail}>
             <Pencil aria-hidden="true" className="size-3.5" />
@@ -125,30 +146,65 @@ export function TaskCommandMenu({
           </DropdownMenu.Item>
 
           {/*
-            **Known broken by mouse — issue #255.** This item is the one
-            entry point of #253's four that does not reliably open the
-            anchored popover: measured 2 of 10 mouse attempts, against 3 of
-            3 by keyboard, and the failure is deterministic by row position
-            (bottom rows open, upper rows never do) rather than flaky.
+            **Issue #255.** "Date…" used to fail to open its anchored
+            popover when clicked with a mouse (2 of 10 attempts,
+            deterministic by row position), while the identical keyboard
+            path (Arrow keys, Enter) worked every time. Two earlier fixes
+            were tried and reverted — `preventDefault()` in this item's own
+            `onSelect` (which also suppressed the menu's auto-close, so it
+            needed two Escapes), and a ref-scoped `onCloseAutoFocus` that
+            only ever redirected *where* focus went back to. Neither moved
+            the mouse tally — the second result is what points away from
+            "the menu returns focus to its trigger," which both assumed.
 
-            Left as an ordinary `onSelect` deliberately. Two fixes were
-            tried here and both are reverted: `preventDefault()` on this
-            item's own `onSelect` (which also suppressed the menu's
-            auto-close, so the menu stayed open needing two Escapes), and
-            an `onCloseAutoFocus` on the Content scoped to this item (clean,
-            and it did remove that regression, but it did not move the
-            mouse tally at all). The second result is the informative one:
-            **the cause is not this menu returning focus to its trigger**,
-            which is what both attempts assumed. #255 carries the evidence
-            and the next hypothesis.
+            **Root cause, proved with a `dispatchEvent`/`focusin`
+            instrumentation trace in a real browser (jsdom lays out no
+            popover and reproduces neither `FocusScope` nor pointer
+            dismissal, so this is invisible there):** `onSelect` fires
+            inside the *same* `flushSync` Radix uses to dispatch
+            `menu.itemSelect`. The old code opened
+            `TaskSchedulePopover` — and mounted its `FocusScope`, which
+            autofocuses the "Type a date" input — synchronously in that
+            same tick, *before* this menu's own `Content` had actually
+            unmounted (`Presence` keeps a closing `Content` — and its
+            `FocusScope` — alive through the exit animation, well after
+            `onOpenChange(false)` is called). With two `FocusScope`s
+            simultaneously mounted, this menu's own focus-management effect
+            (`@radix-ui/react-focus-scope`'s unconditional
+            mount/unmount-autofocus effect, present whether or not the menu
+            is `modal`) sees focus sitting outside its own container on
+            every render it takes while closing — and Radix recomposes its
+            `onMountAutoFocus`/`onUnmountAutoFocus` handlers on every
+            render, so it reliably takes at least one more — and forcibly
+            refocuses back into itself. The popover's own `DismissableLayer`
+            reads that forced refocus as focus leaving it, and dismisses
+            itself. A same-tick open-then-close never paints, which is why
+            the failure mode was "no DOM node" rather than a misplaced one.
 
-            Nothing in this repo's test suite can see any of this — jsdom
-            lays out no popover and reproduces neither focus restoration
-            nor pointer dismissal — so a fix is only ever confirmed by
-            driving a real browser, with a tally across upper AND bottom
-            rows. One successful attempt proves nothing here.
+            **The fix:** don't open the popover until this menu's `Content`
+            has genuinely finished closing. The item's own `onSelect` below
+            no longer calls `onOpenDate` directly — it only arms
+            `pendingDateOpenRef` (declared above, alongside this Content's
+            own `onCloseAutoFocus`). `onCloseAutoFocus` fires exactly once,
+            exactly when `Presence` finally tears the menu's `FocusScope`
+            down — the one moment nothing is left to steal focus back — and
+            that is where `onOpenDate` now runs. This is the deferral this
+            issue's own report suggested trying ("whether deferring the
+            popover's open past the menu's unmount changes the tally") and
+            explicitly distinguished from attempt #1's `preventDefault()`:
+            that suppressed the menu's *own* close; this instead lets the
+            close finish and rides its own completion signal.
+
+            Verified in a real browser across upper AND bottom rows with a
+            mouse tally, plus that Escape still closes this menu in one
+            press and the keyboard path (Arrow keys, Enter) is unaffected.
           */}
-          <DropdownMenu.Item className={itemClassName} onSelect={onOpenDate}>
+          <DropdownMenu.Item
+            className={itemClassName}
+            onSelect={() => {
+              pendingDateOpenRef.current = true;
+            }}
+          >
             <CalendarClock aria-hidden="true" className="size-3.5" />
             Date…
             <Hint id="set-date" />
