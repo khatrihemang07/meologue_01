@@ -96,14 +96,18 @@ test("the pinned list marks the open destination as current, and only that one",
 // hides itself at the wide breakpoint) and from inside a Project —
 // `todo-sidebar.tsx`, the nav that replaces `todo-nav` at that width, had
 // no Activity entry at all, the identical defect class Upcoming (#223)
-// shipped with for a full release.
+// shipped with for a full release. Labelled "Reporting" here, not
+// "Activity" — parity ledger NAV-01/NAV-11, read live against real
+// Todoist (flow 6): Todoist's own word for this destination is
+// "Reporting". `todo-nav.tsx`'s bottom bar still says "Activity"
+// (unmeasured against Todoist, out of that fix's scope).
 test("Activity is reachable from the wide-breakpoint Todo sidebar", async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 900 });
   await page.goto("/todo/inbox");
 
   await page
     .getByRole("navigation", { name: "Todo" })
-    .getByRole("link", { name: "Activity" })
+    .getByRole("link", { name: "Reporting" })
     .click();
 
   await expect(page).toHaveURL("/todo/activity");

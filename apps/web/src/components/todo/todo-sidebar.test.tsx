@@ -146,7 +146,12 @@ describe("TodoSidebar", () => {
     ]);
   });
 
-  it("shows each row's count once the store resolves", async () => {
+  // NAV-01's own fix: the count now lives in aria-label ("Inbox, 9
+  // tasks", read live against real Todoist) — aria-label overrides an
+  // element's accessible name outright, so this is what `getByRole`'s own
+  // `name` option now has to match. The digit stays on screen, hidden from
+  // the accessibility tree, so the name never reads "Inbox1".
+  it("carries each row's count in aria-label and keeps it on screen, hidden from the name", async () => {
     renderSidebar("/todo/inbox", {
       tasks: [
         task({ id: "in-inbox", projectId: null }),
@@ -167,19 +172,23 @@ describe("TodoSidebar", () => {
     // prefix match: the uncounted row also matches that prefix, so
     // `findByRole` would settle the instant the first (count-less) render
     // appears instead of waiting for the count to actually load.
-    expect(await screen.findByRole("link", { name: "Inbox1" })).toBeInTheDocument();
+    const inbox = await screen.findByRole("link", { name: "Inbox, 1 task" });
+    expect(inbox).toHaveTextContent(/^Inbox1$/);
+    expect(within(inbox).getByText("1")).toHaveAttribute("aria-hidden", "true");
     // Today: the one Task dated today.
-    expect(screen.getByRole("link", { name: "Today1" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Today, 1 task" })).toBeInTheDocument();
     // Upcoming: today's own Task and tomorrow's, both — upcoming() starts
     // with today itself (task-views.ts's own doc comment).
-    expect(screen.getByRole("link", { name: "Upcoming2" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Filters & Labels2" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Upcoming, 2 tasks" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Filters & Labels, 2 tasks" })).toBeInTheDocument();
   });
 
-  it("omits a row's count badge entirely when it's zero, rather than showing '0'", async () => {
+  it("omits any digit and any aria-label mentioning a count when it's zero", async () => {
     renderSidebar("/todo/inbox", { tasks: [] });
 
-    expect(await screen.findByRole("link", { name: "Inbox" })).toHaveTextContent(/^Inbox$/);
+    const inbox = await screen.findByRole("link", { name: "Inbox" });
+    expect(inbox).toHaveTextContent(/^Inbox$/);
+    expect(inbox).not.toHaveAttribute("aria-label");
   });
 
   // Issue #248: `/todo/activity` was reachable from `todo-nav.tsx` (which
@@ -187,10 +196,18 @@ describe("TodoSidebar", () => {
   // never from this sidebar — the identical defect class Upcoming shipped
   // with for a full release (todo-nav.tsx's own header comment). No count
   // badge: Activity is a log, not a pending-work count.
-  it("offers Activity as a real link, with no count badge", async () => {
+  //
+  // Labelled "Reporting", not "Activity" — parity ledger NAV-01/NAV-11,
+  // read live against real Todoist (flow 6): Todoist's own word for this
+  // destination is "Reporting". todo-nav.tsx's bottom bar still says
+  // "Activity" (unmeasured, out of this fix's scope) — the two
+  // navigations are free to word a shared destination differently
+  // (todo-nav-destinations.ts's own header comment); only the `to` path
+  // has to agree.
+  it("offers Activity as a real link labelled Reporting, with no count badge", async () => {
     renderSidebar("/todo/inbox");
 
-    expect(await screen.findByRole("link", { name: "Activity" })).toHaveAttribute(
+    expect(await screen.findByRole("link", { name: "Reporting" })).toHaveAttribute(
       "href",
       "/todo/activity",
     );
@@ -244,7 +261,15 @@ describe("TodoSidebar", () => {
     });
 
     await screen.findByRole("heading", { name: "Favourites" });
-    expect(screen.getByRole("heading", { name: "Projects" })).toBeInTheDocument();
+    // "My Projects" — NAV-01/defect 33's own fix: real Todoist's "My
+    // Projects" is a link to /todo/projects, not a bare heading the way
+    // meologue's "Projects" used to be, which also happened to be the
+    // only instance of defect 33 that wasn't yet covered by a shared-list
+    // test: there was no /todo/projects link anywhere at this width.
+    expect(screen.getByRole("link", { name: "My Projects" })).toHaveAttribute(
+      "href",
+      "/todo/projects",
+    );
     expect(
       within(screen.getByRole("navigation")).getAllByRole("link", { name: "Errands" }),
     ).toHaveLength(2);

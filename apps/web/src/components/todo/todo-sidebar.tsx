@@ -55,17 +55,13 @@
 import type { Filter, Label, Project, Task } from "@meologue/core";
 import { today, upcoming } from "@meologue/core";
 import { useQuery } from "@tanstack/react-query";
-import {
-  CalendarCheck,
-  CalendarClock,
-  History,
-  ListFilter,
-  ListTodo,
-  Plus,
-  Search,
-} from "lucide-react";
+import { Plus, Search } from "lucide-react";
 import { NavLink } from "react-router";
 import { depthOf } from "@/components/todo/projects-view";
+import {
+  TODO_NAV_DESTINATIONS,
+  type TodoNavDestination,
+} from "@/components/todo/todo-nav-destinations";
 import { localDayKey } from "@/lib/local-day-key";
 import {
   FILTERS_QUERY_KEY,
@@ -76,21 +72,46 @@ import {
 import { cn } from "@/lib/utils";
 import { entryStoreQueryOptions } from "@/pages/entry-store-layout";
 
-/** One of the fixed count-carrying rows below `Search` — a `NavLink`, not a plain `Link`, so the reader can see which of Inbox/Today/Upcoming/Filters is the currently open route the same way `chat-list.tsx`'s own rows do. */
+/**
+ * One of the fixed count-carrying rows below `Search` — a `NavLink`, not a
+ * plain `Link`, so the reader can see which of Inbox/Today/Upcoming/Filters
+ * is the currently open route the same way `chat-list.tsx`'s own rows do.
+ *
+ * **The count lives in `aria-label`, not in the visible text — NAV-01's
+ * own fix.** Real Todoist reads "Inbox, 9 tasks" to a screen reader with
+ * nothing in the row's own visible text; meologue used to append a bare
+ * digit straight onto the label ("Inbox4"), with no `aria-label` at all.
+ * `aria-label` overrides an element's computed accessible name outright,
+ * so setting it here is what actually matches Todoist rather than merely
+ * adding one alongside the old digit. Zero is the ordinary steady state
+ * for a fresh Task list — this isn't Inbox-zero's own achievement moment
+ * (that's TodayView's job) — so an empty count reads as "nothing to say":
+ * no `aria-label` at all, falling back to the plain visible label.
+ *
+ * **`dayOfMonth`, Today's row alone.** Real Todoist's Today entry shows
+ * the day-of-month where every other row shows its icon — read live, the
+ * row's flattened text comes back "12Today" rather than a calendar-check
+ * glyph plus the word. This swaps the icon for that numeral when
+ * `dayOfMonth` is given, `aria-hidden` like every icon here so it never
+ * leaks into the row's `aria-label`-driven accessible name.
+ */
 function CountRow({
   to,
   label,
   Icon,
   count,
+  dayOfMonth,
 }: {
   to: string;
   label: string;
-  Icon: typeof ListTodo;
+  Icon: TodoNavDestination["Icon"];
   count: number;
+  dayOfMonth?: number;
 }) {
   return (
     <NavLink
       to={to}
+      aria-label={count > 0 ? `${label}, ${count} ${count === 1 ? "task" : "tasks"}` : undefined}
       className={({ isActive }) =>
         cn(
           "flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm hover:bg-muted",
@@ -98,16 +119,43 @@ function CountRow({
         )
       }
     >
-      <Icon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
+      {dayOfMonth === undefined ? (
+        <Icon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
+      ) : (
+        <span
+          aria-hidden="true"
+          className="flex size-4 shrink-0 items-center justify-center text-[10px] text-muted-foreground tabular-nums"
+        >
+          {dayOfMonth}
+        </span>
+      )}
       <span className="flex-1 truncate">{label}</span>
-      {/* Zero is the ordinary steady state for a fresh Task list — this
-          isn't Inbox-zero's own achievement moment (that's TodayView's
-          job), so an empty count reads as "nothing to say" and the badge
-          is simply absent rather than showing a "0" nobody asked to see. */}
-      {count > 0 && <span className="text-muted-foreground text-xs">{count}</span>}
+      {/* The count moved into `aria-label` to match Todoist's accessible
+          name ("Inbox, 9 tasks"), but it stays on screen: flow 6 read only
+          the link's own text, which says nothing about a counter drawn
+          beside it, so hiding it would be a regression the evidence never
+          asked for. `aria-hidden` keeps it out of the name twice over. */}
+      {count > 0 && (
+        <span aria-hidden="true" className="text-muted-foreground text-xs">
+          {count}
+        </span>
+      )}
     </NavLink>
   );
 }
+
+// This sidebar's own wording for a shared destination, where it departs
+// from todo-nav.tsx's plain label — todo-nav-destinations.ts's own header
+// comment: the shared list forecloses drift in *reachability*, not
+// prose, so each navigation stays free to render its own words for a
+// destination they both link to. "Filters & Labels" predates this ticket
+// (issue #229/NAV-06); "Reporting" is this ticket's own fix for parity
+// ledger NAV-01/NAV-11 — Todoist's own word for the identical
+// destination, read live against the real app (flow 6).
+const SIDEBAR_LABELS: Partial<Record<string, string>> = {
+  "/todo/filters": "Filters & Labels",
+  "/todo/activity": "Reporting",
+};
 
 /**
  * A single Project's own row — its colour dot (label-colors.ts's palette,
@@ -173,11 +221,31 @@ export function TodoSidebar() {
   const filters = filtersQuery.data ?? [];
   const labels = labelsQuery.data ?? [];
 
-  const now = localDayKey(new Date());
+  const nowDate = new Date();
+  const now = localDayKey(nowDate);
   const inboxCount = tasks.filter((t) => t.projectId === null).length;
   const { overdue, dueToday } = today(tasks, now);
   const todayCount = overdue.length + dueToday.length;
   const upcomingCount = upcoming(tasks, now).reduce((sum, day) => sum + day.tasks.length, 0);
+
+  // Each shared destination's own count, keyed by its `to` path so the
+  // render below can read TODO_NAV_DESTINATIONS in one pass instead of a
+  // hand-written CountRow per destination — the same per-destination data
+  // this file always computed, just no longer copy-pasted once per row.
+  // "/todo/activity" always reads 0: Activity is a log, not something
+  // with a pending count the way Inbox/Today/Upcoming/Filters have one.
+  const countsByPath: Partial<Record<string, number>> = {
+    "/todo/inbox": inboxCount,
+    "/todo/today": todayCount,
+    "/todo/upcoming": upcomingCount,
+    // Issue #229's own fix for NAV-06: real Todoist's "Filters & Labels"
+    // opens one combined screen, and `/todo/filters` (filters-view.tsx)
+    // now actually is one — its own Filters list plus a Labels section
+    // underneath. The count is Filters *and* Labels together, matching
+    // what this one destination actually shows.
+    "/todo/filters": filters.length + labels.length,
+    "/todo/activity": 0,
+  };
 
   const byId = new Map(projects.map((project) => [project.id, project] as const));
   // Archived Projects drop out of the sidebar entirely, mirroring real
@@ -224,37 +292,26 @@ export function TodoSidebar() {
       </NavLink>
 
       <div className="mt-1 flex flex-col gap-0.5">
-        <CountRow to="/todo/inbox" label="Inbox" Icon={ListTodo} count={inboxCount} />
-        <CountRow to="/todo/today" label="Today" Icon={CalendarCheck} count={todayCount} />
-        <CountRow to="/todo/upcoming" label="Upcoming" Icon={CalendarClock} count={upcomingCount} />
         {/*
-          Issue #229's own fix for NAV-06: real Todoist's "Filters &
-          Labels" opens one combined screen, and `/todo/filters`
-          (filters-view.tsx) now actually is one — its own Filters list
-          plus a Labels section underneath, with "Manage Labels" leading
-          to the full create/rename/recolour/delete surface
-          (`/todo/labels`, `labels-view.tsx`). The count is now Filters
-          *and* Labels together, matching what this one destination
-          actually shows, rather than the Filters-only count that used to
-          silently exclude half of what the row's own name promised.
+          Every flat, single-view destination except Projects — driven by
+          TODO_NAV_DESTINATIONS, the same list todo-nav.tsx renders from,
+          so this sidebar can no longer drift from it the way it did for
+          Upcoming (issue #223) and Activity (issue #248) before this
+          ticket. Projects is excluded: this sidebar reaches it through
+          the "My Projects" heading and tree below, not a CountRow.
         */}
-        <CountRow
-          to="/todo/filters"
-          label="Filters & Labels"
-          Icon={ListFilter}
-          count={filters.length + labels.length}
-        />
-        {/*
-          Issue #248: `todo-nav.tsx` has carried Activity since ADR 0056,
-          but that bar hides itself at this same breakpoint (ADR 0076)
-          and nothing ever added the identical row here — the same "two
-          lists, not one" miss `todo-nav.tsx`'s own header comment records
-          for Upcoming, reappearing for Activity instead. `count={0}`
-          always: Activity is a log, not something with a pending count the
-          way Inbox/Today/Upcoming/Filters have one, so the badge above
-          simply never shows for it.
-        */}
-        <CountRow to="/todo/activity" label="Activity" Icon={History} count={0} />
+        {TODO_NAV_DESTINATIONS.filter((destination) => destination.to !== "/todo/projects").map(
+          (destination) => (
+            <CountRow
+              key={destination.to}
+              to={destination.to}
+              label={SIDEBAR_LABELS[destination.to] ?? destination.label}
+              Icon={destination.Icon}
+              count={countsByPath[destination.to] ?? 0}
+              dayOfMonth={destination.to === "/todo/today" ? nowDate.getDate() : undefined}
+            />
+          ),
+        )}
       </div>
 
       {favouriteProjects.length > 0 && (
@@ -267,7 +324,28 @@ export function TodoSidebar() {
       )}
 
       <div className="mt-2 flex flex-col gap-0.5">
-        <h2 className="px-2 py-1 font-medium text-muted-foreground text-xs">Projects</h2>
+        {/*
+          Parity ledger NAV-01/defect 33: real Todoist's "My Projects" is a
+          link to its own projects page, not a bare heading — meologue's
+          "Projects" heading here was the desktop-only instance of defect
+          33 (no `/todo/projects` link anywhere ≥900px, since todo-nav.tsx
+          hides itself at that width), on top of the wording gap NAV-01
+          measured live. A plain `to="/todo/projects"` rather than reading
+          TODO_NAV_DESTINATIONS: the shared list exists to keep both
+          navigations' *sets* of destinations from drifting, not to source
+          every literal href in either component.
+        */}
+        <NavLink
+          to="/todo/projects"
+          className={({ isActive }) =>
+            cn(
+              "rounded-md px-2 py-1 font-medium text-muted-foreground text-xs hover:text-foreground",
+              isActive && "text-foreground",
+            )
+          }
+        >
+          My Projects
+        </NavLink>
         {activeProjects.length === 0 ? (
           <p className="px-2 py-1 text-muted-foreground text-xs">
             No Projects yet — add one from the Projects list.
