@@ -247,9 +247,51 @@ export const quickAddRecognitionPluginKey = new PluginKey<readonly QuickAddSpan[
  * no padding, no background, inherited colour — the withdrawn row of that
  * file's own property table), so no withdrawn-specific CSS is needed at
  * all here, only the absence of the highlighted one.
+ *
+ * **`nodeName` — QA-06's tiebreak, strict DOM parity (decided
+ * 2026-09-12).** A recognised span is a `Decoration.inline` wrapping a
+ * plain text node, not an atom node of its own — for exactly that shape,
+ * `prosemirror-view` decides whether to reuse or recreate the wrapping
+ * `<span>` in `patchOuterDeco`
+ * (node_modules/prosemirror-view/dist/index.js:1699-1723), by walking
+ * `computeOuterDeco`'s per-level `OuterDecoLevel.nodeName` STRINGS
+ * (index.js:1673-1698) and reusing the existing element whenever level i's
+ * label is `===` between renders (the `prev.nodeName == deco.nodeName`
+ * check at index.js:1708). That check runs whether or not the decoration
+ * even changed — `updateOuterDeco` only skips it when `sameOuterDeco`
+ * finds the two decoration arrays' own `InlineType.eq` equal
+ * (index.js:1486-1491, `sameOuterDeco` at 1756-1763, `InlineType.eq` at
+ * 3999-4004 comparing `attrs`/`spec` via `compareObjs`) — attrs already
+ * differ here (the two keys above), so that check does NOT short-circuit;
+ * `patchOuterDeco` still runs and still reuses the span, because leaving
+ * `nodeName` unset makes BOTH states fall through to the identical
+ * implicit "span" fallback (`computeOuterDeco`'s `needsWrap &&
+ * result.length == 1` branch, index.js:1687-1688) — the two label strings
+ * are equal, so the existing wrapper is kept and only patched
+ * (`patchAttributes`, index.js:1724-1751). That is exactly QA-06's
+ * measured divergence: Todoist replaces the node on withdrawal (a
+ * `childList` mutation swaps in a fresh `SPAN[data-testid=
+ * natural-language-match]`), meologue restyled the same one (`attributes`
+ * mutations only) — see docs/reference/todoist/parity-ledger.md's QA-06
+ * row and its tiebreak artifacts.
+ *
+ * Setting `nodeName` explicitly, to a STRING that differs between the two
+ * states, is what breaks the label match and forces `patchOuterDeco` to
+ * build a fresh element — `document.createElement(deco.nodeName)`
+ * (index.js:1713) — instead of reusing the held one. Using `"span"` for
+ * highlighted and `"SPAN"` for withdrawn keeps the actual rendered
+ * element identical: an HTML document ASCII-lowercases whatever tag name
+ * `createElement` is given (confirmed against this repo's own jsdom), so
+ * both produce a real, indistinguishable `<span>` — only the JS string
+ * ProseMirror diffs differs. `nodeName` itself is never emitted as a DOM
+ * attribute (`computeOuterDeco`'s `else if (name != "nodeName")` guard,
+ * index.js:1693; `patchAttributes`'s own `name != "nodeName"` guard,
+ * index.js:1726/1729), so this is invisible to anything reading the
+ * rendered markup.
  */
 function decorationAttrs(match: QuickAddRecognitionMatch): Record<string, string> {
   const attrs: Record<string, string> = {
+    nodeName: match.withdrawn ? "SPAN" : "span",
     "data-testid": "natural-language-match",
     "data-match-id": match.matchId,
   };

@@ -1,8 +1,14 @@
 import type { QuickAddSpan } from "@meologue/core";
-import { describe, expect, it } from "vitest";
+import { baseKeymap } from "prosemirror-commands";
+import { keymap } from "prosemirror-keymap";
+import { EditorState, Selection } from "prosemirror-state";
+import { EditorView } from "prosemirror-view";
+import { afterEach, describe, expect, it } from "vitest";
+import { taskTitleSchema, titleDocFromText } from "@/components/todo/task-title-editor";
 import {
   computeQuickAddMatches,
   matchIdForToken,
+  quickAddRecognitionPlugin,
   remapWithdrawnSpans,
 } from "./todo-quick-add-recognition";
 
@@ -170,5 +176,171 @@ describe("computeQuickAddMatches", () => {
     expect(matches).toEqual([
       { start: 0, end: 3, kind: "time", matchId: "2026-09-10T17:00", withdrawn: false },
     ]);
+  });
+});
+
+// QA-06 — strict DOM parity, decided 2026-09-12 (docs/reference/todoist/
+// parity-ledger.md's QA-06 row): on withdrawal, meologue must REPLACE the
+// recognised span with a new node, exactly as Todoist's own tiebreak
+// (docs/reference/todoist/live-audit-dom/qa06-tiebreak-todoist.json)
+// showed — not restyle the held one in place, which is what meologue did
+// before this fix (qa06-tiebreak-meologue.json).
+//
+// This mounts a real `EditorView`, the thing `task-title-editor.tsx`'s own
+// header comment says a test here normally can't do ("jsdom implements no
+// Range, no Selection... cannot usefully mount"). That limitation is about
+// simulating real typing/IME/caret placement through the DOM's own
+// Selection APIs — nothing this test needs. `handleKeyDown` and
+// `baseKeymap`'s commands read and write `view.state`/`view.dispatch`
+// directly, never the DOM selection, so a synthetic `keydown` dispatched
+// on `view.dom` drives the exact same code path a real browser keystroke
+// does (`prosemirror-view`'s own `editHandlers.keydown`, dist/index.js:
+// 3189, calls `view.someProp("handleKeyDown", ...)` before falling back to
+// `captureKeyDown`), and ProseMirror's DOM rendering (decoration diffing,
+// `patchOuterDeco`) runs for real against jsdom's DOM — a `MutationObserver`
+// on it sees exactly what the live tiebreak's own probe saw.
+describe("quickAddRecognitionPlugin — DOM node identity on withdrawal (QA-06)", () => {
+  let view: EditorView | undefined;
+  let host: HTMLDivElement | undefined;
+
+  afterEach(() => {
+    view?.destroy();
+    host?.remove();
+    view = undefined;
+    host = undefined;
+  });
+
+  function mount(text: string): EditorView {
+    const doc = titleDocFromText(text);
+    const state = EditorState.create({
+      schema: taskTitleSchema,
+      doc,
+      selection: Selection.atEnd(doc),
+      // Same order buildTitlePlugins uses in production: the recognition
+      // plugin's own `handleKeyDown` must be asked before `baseKeymap`'s
+      // ordinary Backspace (this module's own header comment on
+      // `quickAddRecognitionPlugin`).
+      plugins: [quickAddRecognitionPlugin(() => ({ now: NOW })), keymap(baseKeymap)],
+    });
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    view = new EditorView({ mount: host }, { state });
+    return view;
+  }
+
+  function backspace(target: EditorView): KeyboardEvent {
+    const event = new KeyboardEvent("keydown", {
+      key: "Backspace",
+      code: "Backspace",
+      keyCode: 8,
+      which: 8,
+      bubbles: true,
+      cancelable: true,
+    });
+    target.dom.dispatchEvent(event);
+    return event;
+  }
+
+  it("replaces the span with a new node on the first Backspace, and a second Backspace still deletes a character", () => {
+    const editorView = mount("tod");
+    const editorHost = host as HTMLDivElement;
+
+    const spanBefore = editorHost.querySelector<HTMLElement>(
+      '[data-testid="natural-language-match"]',
+    );
+    expect(spanBefore).not.toBeNull();
+    const held = spanBefore as HTMLElement;
+    // Sanity check on the recognised (non-withdrawn) rendering this test
+    // starts from.
+    expect(held.textContent).toBe("tod");
+    expect(held.getAttribute("data-match-id")).toBe("2026-09-10");
+    expect(held.getAttribute("data-highlighted-match")).toBe("true");
+    expect(held.tagName).toBe("SPAN");
+
+    const mutations: MutationRecord[] = [];
+    const observer = new MutationObserver((records) => mutations.push(...records));
+    observer.observe(editorHost, { childList: true, subtree: true, attributes: true });
+
+    // First Backspace: withdraws, deletes no character (QA-04).
+    const firstEvent = backspace(editorView);
+    // `MutationObserver` callbacks land in a microtask; this test never
+    // awaits one, so pull the queued records synchronously instead of
+    // relying on the callback ever having run.
+    mutations.push(...observer.takeRecords());
+    observer.disconnect();
+
+    expect(firstEvent.defaultPrevented).toBe(true);
+    expect(editorView.state.doc.textContent).toBe("tod");
+    // The caret never moved — no character was deleted, only the
+    // highlight withdrawn (QA-04's own width measurement: the text is
+    // unchanged).
+    expect(editorView.state.selection.from).toBe(3);
+
+    // The held reference is detached — Todoist's own measured behaviour
+    // (qa06-tiebreak-todoist.json: `heldIsConnected: false`).
+    expect(held.isConnected).toBe(false);
+
+    const spanAfter = editorHost.querySelector<HTMLElement>(
+      '[data-testid="natural-language-match"]',
+    );
+    expect(spanAfter).not.toBeNull();
+    const replaced = spanAfter as HTMLElement;
+    expect(replaced).not.toBe(held);
+    expect(replaced.tagName).toBe("SPAN");
+    expect(replaced.textContent).toBe("tod");
+    expect(replaced.getAttribute("data-match-id")).toBe("2026-09-10");
+    // Withdrawn styling dropped (QA-01/QA-06): no highlight attribute, no
+    // class — an ordinary, unstyled span.
+    expect(replaced.getAttribute("data-highlighted-match")).toBeNull();
+    expect(replaced.className).toBe("");
+
+    // A `childList` mutation replaced the node — never merely patched its
+    // attributes — mirroring the tiebreak's own mutation log (one SPAN
+    // added, its text node added, the old SPAN removed).
+    const childListMutations = mutations.filter((m) => m.type === "childList");
+    expect(childListMutations.length).toBeGreaterThan(0);
+    const removedTheHeldSpan = childListMutations.some((m) =>
+      Array.from(m.removedNodes).includes(held),
+    );
+    expect(removedTheHeldSpan).toBe(true);
+    const addedANewSpan = childListMutations.some((m) =>
+      Array.from(m.addedNodes).includes(replaced),
+    );
+    expect(addedANewSpan).toBe(true);
+
+    // Second Backspace: no longer withdrawable. In a real browser this
+    // plugin's own `handleKeyDown` returns `false` WITHOUT calling
+    // `preventDefault()` (this module's own header comment on the plugin:
+    // "returns `false` without calling `preventDefault()` and
+    // `keymap(baseKeymap)` ... deletes the character normally") —
+    // deliberately, because `baseKeymap`'s own `Backspace` command
+    // (`chainCommands(deleteSelection, joinBackward, selectNodeBackward)`,
+    // node_modules/prosemirror-commands/dist/index.js:800) does nothing
+    // for a collapsed caret mid-text with no block boundary; the actual
+    // character deletion is the BROWSER's native contenteditable editing,
+    // which `prosemirror-view`'s own `captureKeyDown` deliberately leaves
+    // alone for a plain Backspace (`stopNativeHorizontalDelete`,
+    // node_modules/prosemirror-view/dist/index.js:2781-2782, returns
+    // `false` in the plain case) and its `DOMObserver` then reconciles
+    // into a transaction. jsdom implements no native contenteditable
+    // engine to originate that edit — the same gap task-title-editor.tsx's
+    // own header comment names for real typing — so this asserts the part
+    // that IS this plugin's own responsibility (letting the keystroke
+    // through unprevented) and then performs the DOM edit a real browser
+    // would have made, handing it to ProseMirror's own reconciliation
+    // path exactly as its `DOMObserver` does for a genuine native edit.
+    const secondEvent = backspace(editorView);
+    expect(secondEvent.defaultPrevented).toBe(false);
+    expect(editorView.state.doc.textContent).toBe("tod");
+
+    const textNode = replaced.firstChild as Text;
+    expect(textNode.nodeType).toBe(Node.TEXT_NODE);
+    textNode.deleteData(2, 1); // "tod" -> "to", the native edit itself.
+    editorView.domObserver.flush();
+
+    expect(editorView.state.doc.textContent).toBe("to");
+    expect(editorView.state.selection.from).toBe(2);
+    // "to" no longer parses as a date — the span disappears entirely.
+    expect(editorHost.querySelector('[data-testid="natural-language-match"]')).toBeNull();
   });
 });
