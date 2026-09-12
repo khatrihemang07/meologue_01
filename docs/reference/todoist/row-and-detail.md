@@ -152,6 +152,44 @@ completely…":
   stated as a gap for the literal claim, though the structural evidence is
   strong).
 
+> **Correction, 2026-09-12 (flow 10).** The claim immediately above — "Markdown
+> in the title stays literal" — is **false**, and it failed in exactly the gap
+> this passage names. Todoist **parses markdown in a task title at render time**
+> and shows real formatting.
+>
+> It was tested the hard way, because the obvious tests do not work. Todoist's
+> Quick Add is a ProseMirror field whose input rules convert `**bold**` as you
+> type, and its *paste* handler converts a pasted markdown string too, so both
+> routes destroy the literal delimiters before the task is ever created — and a
+> single undo does not surgically revert the auto-format, it reverts the whole
+> typing burst. The route that worked: type the pattern **one character short**
+> of completion (`**bold2*`, an odd delimiter count the input-rule regex cannot
+> match), then paste **only the single closing character**, which completes the
+> pattern without triggering conversion. The composer was then verified as a
+> single plain text node with zero marks (its innerHTML was the literal
+> `<p>ZZ probe ` plus the raw delimiters `**bold2** _em2_` plus a backtick-wrapped
+> `code2`, with no `<strong>`, `<em>` or `<code>` element in the document) — and
+> submitted.
+>
+> The created row rendered
+> `<div class="task_content">ZZ probe <strong>bold2</strong> <em>em2</em> <code>code2</code></div>`.
+> So `div.task_content` is **not** a plain-text container; it is a rendered one.
+> Corroboration that these are two separate mechanisms: this task's tab title
+> preserved `_em2_` unnormalized, whereas a task whose markdown was converted at
+> compose time had its tab title normalized to `*em*`.
+>
+> **Why the original inference failed.** It reasoned from `div.task_content`
+> carrying no nested markup across the 7 observed tasks — but none of those 7
+> had markdown in its title, which is the gap the passage itself declared. A
+> plain div is what a rendered container looks like when there is nothing to
+> render. The structural argument was sound and the conclusion was wrong.
+>
+> This is the clearest case yet for ADR 0077: a plausible, carefully-hedged,
+> pinned capture claim stood until somebody typed the characters. Note that
+> **meologue does keep title markdown literal** — so meologue implements what
+> this document predicted of Todoist, and `ROW-06` is `divergent` because of it.
+> Evidence: `live-audit-dom/flow10-ROW-06-both.json`.
+
 ## 2. The task detail view
 
 Opened via keyboard only: focus a row (`ArrowDown`), then `Enter`

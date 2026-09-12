@@ -991,3 +991,165 @@ needing no writes to either account, and `ROW-06`/`ROW-09` are single computed-s
 
 So the bar the user set — every row `matched` or `divergent` with a recorded reason — is **not yet
 met for these eight**. Every other row in the ledger meets it.
+
+## Flow 10 — the eight rows flow 9 left behind
+
+Flow 9's own section closed with a table of eight rows still reading `built` and the admission that
+the user's bar was not met for them. This flow went after those eight. **Seven are now terminal.
+One cannot be closed by measuring at all**, and saying which is the point.
+
+### What could not be closed, and why
+
+`SCHED-01` is held on **issue #255** — More-actions → "Date…" opens the scheduler on roughly 2 of 10
+mouse clicks, deterministic by row position. Its geometry (250×525, radius 10px, `rgb(38,38,38)`,
+`1px solid rgb(61,61,61)`) and its anchoring are **already** read on both sides, in one session, in
+flow 8. Nothing is missing from the measurement. The row is waiting on a fix, and #255 and #256 are
+both still open. So the target was seven, not eight, and re-measuring it would have been busywork.
+
+### Results
+
+**Two rows had no second app to drive.** `NAV-02` and `NAV-03` cite **ADR 0076**, not Todoist — they
+are claims about meologue's own shell. Driven by CDP at 1200, 900, 899 and 600 CSS px with SPA
+navigation only: at ≥900px the sidebar is a single 306×900 left pane, present inside `/todo/*` and
+**absent on `/`** (`navCount: 0`); at 899 and 600px it is gone and the bottom bar is a 53px full-width
+strip flush with the viewport bottom. **Exactly one `nav[aria-label="Todo"]` exists at every width** —
+they swap rather than coexist — and the boundary is inclusive at 900, matching `WIDE_LAYOUT_QUERY`.
+
+Both are recorded `matched`, which **stretches the vocabulary**: the ledger defines `matched` as
+"driven in both apps side by side", and these cannot be that. Here it means "conforms to its ADR,
+verified live". The status vocabulary has no word for an architecture-conformance row. That is
+flagged for the user rather than resolved by fiat.
+
+**One row's own reference document was wrong.** `ROW-06` claimed, on `row-and-detail.md` §1's
+authority, that *Todoist keeps markdown in a title literal*. It does not. Todoist **parses markdown
+in a task title at render time**.
+
+Proving that took three attempts, because the obvious tests destroy the evidence. Todoist's Quick Add
+is a ProseMirror field whose input rules convert `**bold**` as you type; its **paste handler converts
+a pasted markdown string too**; and a single undo reverts the entire typing burst rather than just
+the auto-format transaction. The route that worked: type the pattern **one character short** of
+completion (`**bold2*`, an odd delimiter count the input-rule regex cannot match), then paste **only
+the closing character**, which completes the pattern without triggering conversion. The composer was
+verified as a single plain text node with **zero marks**, and the created row still rendered
+`<div class="task_content">ZZ probe <strong>bold2</strong> <em>em2</em> <code>code2</code></div>`.
+Corroboration that two distinct mechanisms are in play: this task's tab title preserved `_em2_`
+**unnormalized**, where a compose-time-converted task's normalized to `*em*`.
+
+**Why the original inference failed is worth more than the row.** It reasoned from
+`div.task_content` carrying no nested markup across the 7 observed tasks — while explicitly noting
+that none of those 7 had markdown in its title, and calling that a gap. A plain div is exactly what a
+*rendered* container looks like when there is nothing to render. The argument was careful, hedged,
+honest about its own limit, and wrong. `row-and-detail.md` now carries a dated correction block.
+
+This is the clearest vindication so far of **ADR 0077**: a pinned capture claim stood until somebody
+typed the characters. Note the direction of the divergence — **meologue keeps title markdown
+literal**, so meologue implements what the corpus predicted of Todoist.
+
+**One row was a hedge that had to be unpicked.** `ROW-09`'s first verdict reported Todoist's metadata
+container as `gap: normal` and meologue's as `8px`, then called the row a MATCH anyway on the grounds
+that both are "simple adjacent flex children either way". That concealed a real question: if Todoist
+sets no gap, what makes its spacing? Re-measured per child: Todoist's 8px comes **entirely from
+`margin-right: 8px` on the first child** (edge-to-edge 506.55 → 514.55) with no column-gap on the
+container; meologue's children carry zero margin and padding and its 8px is a real
+`column-gap: 8px`. Identical 8px on screen, different mechanism. Recorded `matched` because every
+observable the row asserts holds on both sides — adjacent flex children, 8px apart, **no separator
+glyph** (checked as text nodes) — with the mechanism difference noted rather than scored. If the
+corpus means to cover both apps it should say "with 8px of separation", not "with a gap".
+
+**Two rows were straightforward divergences.** `QA-14`: Todoist opens a real autocomplete after `@`
+(`role=listbox`, `data-testid="content-editor-suggestions-dropdown"`) with a
+**"Label not found.Create …"** fallback — re-run with the nonsense token `zzznotalabel` to prove it
+is a genuine fallback and not a coincidental match. meologue has **no popup of any kind**, only the
+inline `.td-recognition-match` highlight. One honest caveat: with 0 labels in the account, the
+*populated* suggestion list was never seen, only the fallback.
+
+`NAV-06`'s count clause is settled after being untestable in flow 6. Todoist's sidebar entry renders
+**no count at all**, confirmed in a state that would show one (3 filters). meologue renders a **live
+combined sum**, measured across five states: 0/0 → nothing, 1 filter → `1`, 1 filter + 1 label →
+`2`, 1 label → `1`, back to 0/0 → nothing. So it is `filters.length + labels.length`, live, and
+suppressed at zero — a feature Todoist does not have. This also corrected the guess this flow started
+from, which had only half the model. meologue still has **no "My Filters" heading**.
+
+**One row needed only a paired pass.** `QA-19` was already driven on both sides, but in different
+sessions. Both halves were re-driven now: `Shift+Enter` **submitted and closed/cleared the composer
+in both apps** — Todoist's `[data-testid="quick-add"]` left the DOM and its Inbox went 9 → 10;
+meologue's row appeared. Both disposable tasks were deleted against each app's own "Delete task?"
+dialog.
+
+### A conflict the ledger cannot resolve
+
+The user's own Todoist Inbox contains a task complaining that, in meologue, "Shift enter is also
+counting just like enter. Wrong."
+
+`QA-19` now certifies that exact behaviour as **correct parity**, because Todoist does submit on
+`Shift+Enter`. So parity with Todoist and what the user wants point in opposite directions on this
+row. This is recorded, not resolved: it is the user's call whether parity or their own preference
+wins, and it is the first row in this programme where the two are known to conflict.
+
+### Defect found
+
+- **Defect 33 — the two navigations do not cover the same destinations, and `/todo/projects` is
+  unreachable at ≥900px.** Sidebar: Add task · Search · Inbox · Today · Upcoming · Filters & Labels ·
+  Activity. Bottom bar: Inbox · Today · Upcoming · **Projects** · Activity · Filters. At ≥900px there
+  is **no link to `/todo/projects` anywhere on the page**, while the sidebar simultaneously prints
+  "No Projects yet — add one from the Projects list." — naming a destination the reader cannot reach.
+  The route works when typed.
+
+  This is **NAV-03's own warning coming true in reverse**. That row's note already records Upcoming
+  being added to `todo-sidebar.tsx` alone and stranding touch users; Projects lives in
+  `todo-nav.tsx` alone and strands desktop users. And the principle it states — "a new destination
+  has to enter both" — is **enforced by nothing**: no test asserts parity between the two navs, and
+  each holds its own separate destination list. `Add task` and `Search` are likewise sidebar-only,
+  and the same destination reads "Filters & Labels" in one nav and "Filters" in the other.
+
+  Worth noting for whoever probes this next: **both navs carry the identical `aria-label="Todo"`**
+  (`todo-sidebar.tsx:203`, `todo-nav.tsx:96`), so that selector cannot tell them apart — distinguish
+  them by rect or link set.
+
+### Measurement traps, two more
+
+- **`offsetParent === null` is not a visibility test** — it is null for every `position: fixed`
+  element, and meologue's dialogs are fixed, so the filter that correctly excludes Todoist's
+  permanent invisible `<h1>` finds *no dialog at all* in meologue. The two apps need opposite
+  filters. (First recorded in flow 9; it bit again here.)
+- **The single-window lock and the store wipe are different failures, and the wipe is permanent.**
+  meologue's test origin showed "already open in another window" with an empty Inbox. The lock was
+  held by **whole leftover task spaces** from earlier flows (42, 43, 45), not just loose tabs, and it
+  took roughly five minutes to clear after they were closed — long enough to look permanent. Once it
+  cleared the Inbox was **still genuinely empty**: the seeded `ZZ probe` fixtures were gone, not
+  merely unreachable. An empty list *plus* `locked: false` means the store really is empty — re-seed,
+  and never read a fixture's values from a previous session's notes. `ROW-09`'s meologue half was
+  therefore measured on a like-for-like row recreated for the purpose, which is flagged in its
+  artifact rather than passed off as the original.
+
+### Safety log
+
+- Todoist projects, labels, filters and **all 16 Inbox titles: set-equal before and after.**
+- **Two disposable tasks** created across this flow (one for QA-19/ROW-06, one for ROW-06's decisive
+  test) and both deleted, each title read back first. The QA-14 probing created nothing — Todoist
+  interposed a **"Discard unsaved changes?"** confirmation rather than closing on Escape, and it was
+  explicitly discarded.
+- One deletion hit a genuine Todoist UI bug: the confirm dialog's Delete button was covered by an
+  intercepting `<div>` when the confirm opens from inside the task-detail dialog. Resolved without
+  forcing anything — the button already held DOM focus, so `Enter` was pressed. No coordinate hacks.
+- meologue's test origin: every object created in this flow was deleted.
+
+### Tally after flow 10
+
+Read back from `parity-ledger.md` with `awk` over the status column.
+
+| Status | Session start | After flow 9 | Now |
+|---|---|---|---|
+| `matched` | 17 | 48 | **52** |
+| `built` | 74 | 8 | **1** |
+| `todoist-captured` | 13 | 8 | 8 |
+| `divergent` | 10 | 57 | **60** |
+| `blocked` | 11 | 6 | 6 |
+
+127 rows. **One row still reads `built`: `SCHED-01`, and it is blocked on a fix rather than on a
+reading.** Every other row in the ledger is `matched`, `divergent`, `blocked` or `todoist-captured`
+with its reason recorded — so the user's bar is met everywhere except that one row, and the reason it
+is not met there is itself recorded.
+
+The eight `todoist-captured` rows remain what they have always been: things known about Todoist that
+meologue has not built.

@@ -1,0 +1,50 @@
+{
+  "row": "QA-19",
+  "targetTitleLiteral": "ZZ probe **bold** _em_ `code`",
+  "todoist": {
+    "steps": [
+      "Opened Quick Add, polled document.activeElement until inside [data-testid='quick-add'] (resolved true immediately)",
+      "Typed the target title one character at a time via page.keyboard.type(ch) in a loop",
+      "DEVIATION FROM THE EXPECTED CHECK: Todoist's Quick Add title field is a ProseMirror rich-text editor that converts markdown delimiters to live formatting AS TYPED -- so accumulated textContent after typing was 'ZZ probe bold em code' (no asterisks/underscores/backticks), NOT character-exact against the literal input string. This is real-time WYSIWYG conversion, not a dropped-character bug: innerHTML was '<p>ZZ probe <strong>bold</strong> <em>em</em> <code>code</code>...</p>', i.e. all three spans were correctly and completely converted, no words lost.",
+      "Pressed Shift+Enter"
+    ],
+    "shiftEnterSubmitted": true,
+    "shiftEnterClosedDialog": true,
+    "evidence": "immediately after Shift+Enter, [data-testid='quick-add'] was gone from the DOM and the Inbox count went from 9 to 10 tasks",
+    "createdTaskId": "6hVc9PGwhJQ7hPmG",
+    "tabTitleAfterCreate": "ZZ probe **bold** *em* `code` – Todoist",
+    "noteOnStoredSyntax": "The underlying/stored title (tab title, task-detail dialog accessible name) normalizes underscore-italic '_em_' to asterisk-italic '*em*' -- Todoist canonicalizes emphasis markup even though both render as <em>.",
+    "deletion": {
+      "path": "task detail dialog -> More actions -> Delete",
+      "confirmationDialogTitle": "Delete task?",
+      "confirmationDialogText": "The ZZ probe bold em code task will be permanently deleted.",
+      "noteOnConfirmationText": "Quotes the RENDERED plain text (formatting/delimiters stripped), not the literal markdown source.",
+      "deleteClicked": true,
+      "postDeleteInboxCount": 9,
+      "postDeleteTaskPresent": false
+    }
+  },
+  "meologue": {
+    "steps": [
+      "Clicked composer div[contenteditable='true'][aria-label='Add a Task'], confirmed focus via document.activeElement",
+      "Typed the target title one character at a time via page.keyboard.type(ch)",
+      "Verified accumulated el.textContent === el.innerHTML === 'ZZ probe **bold** _em_ `code`' -- CHARACTER-EXACT match, no conversion, no dropped characters (unlike Todoist, meologue's composer does not live-convert markdown)",
+      "Pressed Shift+Enter"
+    ],
+    "shiftEnterSubmitted": true,
+    "shiftEnterClosedOrClearedComposer": true,
+    "evidence": "Inbox sidebar count went from (none) to '1' and the task row appeared with title button text literally 'ZZ probe **bold** _em_ `code`'",
+    "deletion": {
+      "path": "task row -> More actions -> Delete",
+      "confirmationDialogRole": "alertdialog",
+      "confirmationDialogTitle": "Delete task?",
+      "confirmationDialogText": "The ZZ probe **bold** _em_ `code` task will be permanently deleted.",
+      "noteOnConfirmationText": "Quotes the LITERAL markdown source verbatim (unlike Todoist, which quotes the rendered plain text) -- consistent with meologue never converting the markdown to formatting anywhere.",
+      "deleteClicked": true,
+      "postDeleteTaskPresent": false,
+      "postDeleteInboxEmpty": true
+    },
+    "sessionNote": "Earlier in this session, a persistent 'meologue is already open in another window' single-window lock (see flow10-NAV-06-both.json for full account) blocked meologue entirely for a period; it cleared before this QA-19 measurement was taken, so this reading is a genuine, unblocked, same-session reading of meologue's Inbox composer."
+  },
+  "verdict": "MATCH on Shift+Enter behavior: in BOTH apps, Shift+Enter submitted the task and closed/cleared the composer (neither app treats Shift+Enter as a newline-only key in this composer). DIVERGE on live typing behavior: Todoist's composer live-converts markdown delimiters into real formatting characters as you type (dropping the literal delimiter characters from the visible/accumulated text); meologue's composer keeps the literal characters throughout typing, with no live conversion. DIVERGE on the delete-confirmation dialog's quoted text: Todoist quotes the rendered/plain title, meologue quotes the literal markdown title."
+}

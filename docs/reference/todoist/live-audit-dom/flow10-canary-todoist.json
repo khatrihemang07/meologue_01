@@ -1,0 +1,76 @@
+{
+  "before": {
+    "projects": [
+      "https://app.todoist.com/app/project/getting-started-6h5pC9QRMFgm375m"
+    ],
+    "labels": [],
+    "filters": [
+      "https://app.todoist.com/app/filter/assigned-to-me-2371671027",
+      "https://app.todoist.com/app/filter/priority-1-2371671028",
+      "https://app.todoist.com/app/filter/all-my-routines-2371671029"
+    ],
+    "inboxTaskTitles": [
+      "Task: Bat fix",
+      "Task: Buy mobile holder and get the bike fixed",
+      "Task: Check for ipad cover",
+      "Task: hair wash",
+      "Task: Homeo medicine refil",
+      "Task: naukri photo update",
+      "Task: Roller thigh pain",
+      "Task: Room clean",
+      "Task: Thigh guard and marker order",
+      "Task: add split and splid both without fail EOD",
+      "Task: Apply company",
+      "Task: Buy bluetooth for vishalAmazon.in",
+      "Task: Lld",
+      "Task: Message ashu to connect",
+      "Task: Need to improve reflect and todo completely. They are crap right now. Specially when typing long title or updating titlePlus date keeper is crap\nShift enter is also counting just like enter. Wrong",
+      "Task: Quick dsa"
+    ],
+    "inboxTaskCount": 16
+  },
+  "intermediateWrites": [
+    "Created 1 disposable task 'ZZ probe **bold** _em_ `code`' via Quick Add + Shift+Enter (for QA-19/ROW-06), then deleted it via task detail -> More actions -> Delete -> confirmed 'Delete task?' dialog. Net effect: zero.",
+    "Opened Quick Add for QA-14 label-autocomplete probing (typed 'zz probe @urgent' then 'zz probe @zzznotalabel'), discarded via the 'Discard unsaved changes?' confirmation. Net effect: zero, nothing created."
+  ],
+  "after": {
+    "projects": [
+      "https://app.todoist.com/app/project/getting-started-6h5pC9QRMFgm375m"
+    ],
+    "labels": [],
+    "filters": [
+      "https://app.todoist.com/app/filter/assigned-to-me-2371671027",
+      "https://app.todoist.com/app/filter/priority-1-2371671028",
+      "https://app.todoist.com/app/filter/all-my-routines-2371671029"
+    ],
+    "inboxTaskTitles": [
+      "Task: Bat fix",
+      "Task: Buy mobile holder and get the bike fixed",
+      "Task: Check for ipad cover",
+      "Task: hair wash",
+      "Task: Homeo medicine refil",
+      "Task: naukri photo update",
+      "Task: Roller thigh pain",
+      "Task: Room clean",
+      "Task: Thigh guard and marker order",
+      "Task: add split and splid both without fail EOD",
+      "Task: Apply company",
+      "Task: Buy bluetooth for vishalAmazon.in",
+      "Task: Lld",
+      "Task: Message ashu to connect",
+      "Task: Need to improve reflect and todo completely. They are crap right now. Specially when typing long title or updating titlePlus date keeper is crap\nShift enter is also counting just like enter. Wrong",
+      "Task: Quick dsa"
+    ],
+    "inboxTaskCount": 16
+  },
+  "verdict": "MATCH -- projects, labels, filters, and Inbox task titles are set-equal before and after. The one disposable task created for QA-19/ROW-06 was successfully deleted; no other user data (the 3 filters, 1 project, or any pre-existing Inbox task) was touched.",
+  "followUpRound": {
+    "additionalWrite": "One further disposable Todoist task ('ZZ probe **bold2** _em2_ `code2`', built via a paste-completion technique to get genuinely literal markdown into the title for the ROW-06 decisive test) was created and deleted during the coordinator's follow-up round. This was the ONE new disposable Todoist task allowed for that round.",
+    "reReadAfter": {
+      "inboxTaskCount": 16,
+      "titlesSetEqualToBaseline": true,
+      "projectsSetEqualToBaseline": true
+    },
+    "verdict": "MATCH -- re-read after the follow-up round's decisive test confirms the Inbox is back to the original 16 titles and the project list is unchanged. No net change to the account."
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "row": "ROW-06",
+  "claim_or_question": "does the task title render markdown literally (asterisks/underscores/backticks visible as characters) or as actual formatting (bold/italic/code)?",
+  "targetTitleLiteral": "ZZ probe **bold** _em_ `code`",
+  "todoist": {
+    "composerBehavior": "Todoist's Quick Add title field is a live ProseMirror rich-text editor: it converted the markdown delimiters to real formatting AS TYPED, before the task was even created. Field innerHTML after typing was '<p>ZZ probe <strong>bold</strong> <em>em</em> <code>code</code>...</p>'.",
+    "createdTaskRenderedTextContent": "Task: ZZ probe bold em code",
+    "hasStrongElement": true,
+    "hasEmElement": true,
+    "hasCodeElement": true,
+    "storedRawTitle_visibleInTabTitleAndDialogAccessibleName": "ZZ probe **bold** *em* `code`",
+    "noteOnUnderscoreNormalization": "The typed underscore-italic '_em_' was canonicalized to asterisk-italic '*em*' in the stored/raw representation (tab title, task-detail dialog accessible name), even though both render identically as <em>.",
+    "deleteConfirmationDialogQuotedText": "The ZZ probe bold em code task will be permanently deleted. (rendered/plain form)",
+    "conclusion": "Todoist renders the title AS FORMATTING (bold/italic/code), not literally, on every visible surface except the raw tab-title/dialog-name accessible strings which retain the markdown source."
+  },
+  "meologue": {
+    "composerBehavior": "meologue's contenteditable composer (div[contenteditable='true'][aria-label='Add a Task']) does NOT convert markdown at all while typing -- textContent and innerHTML stayed character-exact to the literal input throughout ('ZZ probe **bold** _em_ `code`').",
+    "createdTaskTitleButtonTextContent": "ZZ probe **bold** _em_ `code`",
+    "createdTaskTitleButtonInnerHTML": "ZZ probe **bold** _em_ `code`",
+    "hasStrongElement": false,
+    "hasEmElement": false,
+    "hasCodeElement": false,
+    "deleteConfirmationDialogRole": "alertdialog",
+    "deleteConfirmationDialogQuotedText": "The ZZ probe **bold** _em_ `code` task will be permanently deleted. (literal markdown, verbatim)",
+    "conclusion": "meologue renders the title LITERALLY everywhere -- the row, the delete-confirmation dialog, and (implicitly) storage -- with no markdown-to-formatting conversion at any point in this flow."
+  },
+  "decisiveTest": {
+    "purpose": "The original Todoist reading could not distinguish (a) Todoist RENDERS markdown present in a title, from (b) Todoist's Quick Add composer merely CONVERTED the markdown at type-time via ProseMirror input rules, so the title never contained literal delimiters at all -- the row's <strong>/<em>/<code> could just reflect marks that were applied before save, and the tab-title's retained '**bold**' could be a markdown serialization of those marks rather than evidence of literal stored text.",
+    "method": "Tried the paste-whole-string route first (page.keyboard.paste({text: '**bold2** _em2_'})) -- Todoist's paste handler ALSO ran the markdown-to-mark conversion (innerHTML became '<p>ZZ probe <strong>bold2</strong> <em>em2</em></p>'), so that route did not work. Tried the ControlOrMeta+z-after-typing route next -- a single undo did not surgically revert just the auto-format transaction; it reverted the ENTIRE preceding typing burst back to an empty field (ProseMirror's history plugin grouped the whole fast automated typing sequence, including the trigger keystroke, into one undo step). That route also did not work as suggested. DEVISED A THIRD ROUTE that did work: type the pattern up to one character short of completion (e.g. 'ZZ probe **bold2*', an ODD/incomplete delimiter count that cannot match the input-rule regex, so it never converts), confirmed via innerHTML that this was still plain literal text, then complete the pattern by PASTING only the single missing closing character (page.keyboard.paste({text: '*'})). A one-character paste that only COMPLETES an existing pattern (rather than pasting a whole self-contained markdown string) did NOT trigger any conversion -- innerHTML stayed literal '**bold2**' with zero marks. Repeated the same technique for '_em2_' (paste closing '_') and '`code2`' (paste closing backtick), building the fully literal, verified-unconverted composer content 'ZZ probe **bold2** _em2_ `code2`' (confirmed via innerHTML immediately before submit: a single plain text node, no strong/em/code anywhere in the ProseMirror document).",
+    "verifiedLiteralComposerHTMLBeforeSubmit": "<p>ZZ probe **bold2** _em2_ `code2`</p>",
+    "submittedVia": "Enter",
+    "createdTaskId": "6hVcH92Qc53h5RjG",
+    "rowRenderedTextContent": "Task: ZZ probe bold2 em2 code2",
+    "rowInnerHTML": "<div>Task:&nbsp;</div><div><div><div class=\"task_content\">ZZ probe <strong>bold2</strong> <em>em2</em> <code>code2</code></div></div></div>",
+    "rowHasStrongElement": true,
+    "rowHasEmElement": true,
+    "rowHasCodeElement": true,
+    "tabTitleAfterCreate": "ZZ probe **bold2** _em2_ `code2` – Todoist",
+    "noteOnUnderscorePreservedThisTime": "Unlike the first (composer-converted) test, where the stored/raw form normalized '_em_' to '*em*', this genuinely-literal-input task's tab title preserved the underscore form '_em2_' exactly as typed, unnormalized. This is a further piece of evidence for interpretation (a): when the ProseMirror document actually contains an <em> MARK, the app serializes it back to its canonical markdown spelling ('*em*') for the raw-string surfaces (tab title, dialog accessible name); when the document contains no mark at all -- just a plain string that happens to look like markdown -- that raw string is carried through unchanged (underscore preserved), and the ROW still independently parses and renders it as formatting. That only makes sense if the row-rendering path re-parses markdown from the stored plain text at DISPLAY time, separately from whatever marks the composer did or didn't apply at compose time.",
+    "deleteConfirmationDialogQuotedText": "The ZZ probe bold2 em2 code2 task will be permanently deleted. (rendered/plain form, matching the first test)",
+    "cleanupNote": "Deletion required a workaround: the 'Delete' confirm button was blocked by 'a <div> intercepts pointer events' on repeated page.click() attempts (an apparent stacking/overlay issue when the confirm dialog opens from within the already-open task-detail dialog). Resolved by confirming the button already had DOM focus (document.activeElement.textContent === 'Delete') and pressing Enter to activate it -- no coordinates, no forced/synthetic .click() bypass of hit-testing, no storage clearing. Verified afterward: task gone, Inbox back to 9 (then re-verified full Inbox title-set match against the original canary).",
+    "conclusion_decisive": "(a) is confirmed and (b) is ruled out. A Todoist task title verified to contain ONLY literal markdown characters -- never touched by any composer-time mark conversion -- is still rendered by the task row as real <strong>/<em>/<code> formatting. Todoist's row display independently parses markdown out of the stored title string at render time; the earlier reading's row-formatting was not merely an artifact of ProseMirror's type-time conversion."
+  },
+  "verdict_corrected": "SETTLED, DIVERGE CONFIRMED (not merely apparent): Todoist's task ROW renders markdown as real formatting regardless of how the literal delimiters got into the title -- this is a genuine rendering behavior, not a composer-conversion artifact, per the decisive test above. meologue renders the title literally everywhere (row, delete-confirmation dialog, and -- unlike Todoist -- with no separate render-time markdown parsing pass in this flow) with no <strong>/<em>/<code> elements anywhere. The corpus document's claim that these apps diverge on markdown rendering in task titles is UPHELD and now airtight.",
+  "parentReview": {
+    "reviewedBy": "parent session, 2026-09-12, before any status was recorded",
+    "readingsAccepted": "The decisive test is accepted in full. Typing the pattern one character short so the input rule cannot match, then pasting only the completing character, produced a composer verified as a single plain text node with zero marks (`<p>ZZ probe **bold2** _em2_ `code2`</p>`), and the created row still rendered `<strong>bold2</strong> <em>em2</em> <code>code2</code>`. That rules out the composer-conversion explanation. The corroborating detail is good: this task's tab title preserved `_em2_` unnormalized, where the earlier composer-converted task's normalized to `*em*` — two different mechanisms, as the agent says.",
+    "verdictCorrection": {
+      "agentWrote": "The corpus document's claim that these apps diverge on markdown rendering in task titles is UPHELD and now airtight.",
+      "whyThatIsWrong": "The corpus claims the opposite of what the agent implies. `row-and-detail.md` §1 states plainly: '**Markdown in the title stays literal.**' — i.e. it asserts Todoist keeps title markdown literal. The decisive test shows Todoist RENDERS it. So the corpus claim is FALSIFIED, not upheld.",
+      "whatTheCorpusGotRight": "It flagged its own gap. That passage says the literal claim was INFERRED from `div.task_content` being a plain text container across the 7 observed tasks, and explicitly noted 'no task in this Inbox actually has markdown syntax typed into its title — stated as a gap for the literal claim, though the structural evidence is strong'. The structural inference was reasonable and wrong, and it was wrong precisely in the gap its author named.",
+      "correctedVerdict": "ROW-06 is DIVERGENT: Todoist parses markdown in a task title at render time and shows real formatting; meologue renders the title literally, with no <strong>/<em>/<code> anywhere, including inside its own delete-confirmation dialog. meologue's behaviour is what the corpus predicted of Todoist; Todoist does not do it."
+    },
+    "consequence": "row-and-detail.md §1 now carries a dated correction block. This is the clearest vindication so far of ADR 0077's reason for existing: a pinned, plausible, structurally-argued capture claim survived until somebody actually typed the characters."
+  }
+}
