@@ -57,7 +57,7 @@
  * view can open a Task's Date.
  */
 import type { Comment, Event, Label, Project, Section, Task } from "@meologue/core";
-import { hasTime, uiPriorityOf } from "@meologue/core";
+import { uiPriorityOf } from "@meologue/core";
 import { ChevronLeft, ChevronRight, Pencil, Trash2, X } from "lucide-react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import type * as React from "react";
@@ -68,6 +68,7 @@ import { LazyTaskDescriptionEditor } from "@/components/todo/lazy-task-descripti
 import { LazyTaskTitleEditor } from "@/components/todo/lazy-task-title-editor";
 import { TaskSchedulePopover } from "@/components/todo/task-schedule-popover";
 import { ConfirmDialog } from "@/components/ui/alert-dialog";
+import { useTaskDateState } from "@/hooks/use-task-date-state";
 import { useWideLayout } from "@/hooks/use-wide-layout";
 import { formatDay, formatTaskDate } from "@/lib/format-task-date";
 import { localDayKey } from "@/lib/local-day-key";
@@ -576,20 +577,14 @@ function TaskDetailBody({
           completed: task.completedAt !== null,
           recurring: task.dateString !== null,
         });
-  // Issue #253: this view's own `TaskSchedulePopover` instance for the
-  // Date attribute — `dateDay`/`dateTime` split the identical way
-  // `task-row-content.tsx`'s own identical popover instance does.
+  // Issue #256: this view's own `TaskSchedulePopover` instance for the
+  // Date attribute reads `task.date` split into day/time through
+  // `useTaskDateState` — the identical hook `task-row-content.tsx`'s own
+  // popover instance also consumes, rather than the two files each
+  // carrying their own copy of the split and combine (issue #253's
+  // wiring, byte-identical between them, is what #256 closed).
   const [dateScheduleOpen, setDateScheduleOpen] = useState(false);
-  const dateDay = task.date === null ? null : task.date.slice(0, 10);
-  const dateTime = task.date !== null && hasTime(task.date) ? task.date.slice(11, 16) : null;
-
-  function setScheduleDay(day: string | null) {
-    if (day === null) {
-      onSetDate(task.id, null);
-      return;
-    }
-    onSetDate(task.id, dateTime === null ? day : `${day}T${dateTime}`);
-  }
+  const { dateDay, dateTime, setScheduleDay, setScheduleTime } = useTaskDateState(task, onSetDate);
 
   function startEditing(field: "title" | "description") {
     setTitleDraft(task.content);
@@ -1039,12 +1034,7 @@ function TaskDetailBody({
             onOpenChange={setDateScheduleOpen}
             dateDay={dateDay}
             dateTime={dateTime}
-            onSetTime={(time) => {
-              if (dateDay === null) {
-                return;
-              }
-              onSetDate(task.id, time === null ? dateDay : `${dateDay}T${time}`);
-            }}
+            onSetTime={setScheduleTime}
             dateString={task.dateString}
             datesWithTasks={datesWithTasks}
             onPickDay={(day) => {

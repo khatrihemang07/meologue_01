@@ -23,7 +23,7 @@
  * deeper.
  */
 import type { Label, QuickAddOptions, Task } from "@meologue/core";
-import { hasTime, uiPriorityOf } from "@meologue/core";
+import { uiPriorityOf } from "@meologue/core";
 import {
   CalendarClock,
   CheckCheck,
@@ -40,6 +40,7 @@ import { LazyTaskTitleEditor } from "@/components/todo/lazy-task-title-editor";
 import { TaskCommandMenu } from "@/components/todo/task-command-menu";
 import type { TaskDetailActions } from "@/components/todo/task-row";
 import { TaskSchedulePopover } from "@/components/todo/task-schedule-popover";
+import { useTaskDateState } from "@/hooks/use-task-date-state";
 import { formatDay, formatTaskDate } from "@/lib/format-task-date";
 import { localDayKey } from "@/lib/local-day-key";
 import { projectNameFor } from "@/lib/project-name";
@@ -231,24 +232,15 @@ export function TaskRowContent({
     detailActions.onRename(task.id, trimmed);
   }
 
-  // Issue #253: this row's own `TaskSchedulePopover` reads `task.date` split
-  // into its day/time components directly — the identical split
-  // `task-schedule-sheet.tsx`'s own (now-removed) Date section used to
-  // compute, kept here since this file owns the popover instance now.
-  const dateDay = task.date === null ? null : task.date.slice(0, 10);
-  const dateTime = task.date !== null && hasTime(task.date) ? task.date.slice(11, 16) : null;
-
-  function setScheduleDay(day: string | null) {
-    // Preserves an existing time-of-day across a day change, and skips
-    // straight past that for `null` (the popover's own "No Date") — the
-    // identical reasoning `task-schedule-sheet.tsx`'s own former `setDay`
-    // gave for the same combine.
-    if (day === null) {
-      detailActions.onSetDate(task.id, null);
-      return;
-    }
-    detailActions.onSetDate(task.id, dateTime === null ? day : `${day}T${dateTime}`);
-  }
+  // Issue #256: this row's own `TaskSchedulePopover` reads `task.date` split
+  // into its day/time components through `useTaskDateState` — the
+  // identical hook `task-detail-view.tsx`'s own popover instance also
+  // consumes, replacing what used to be a byte-identical local split and
+  // combine in both files (that duplication is what #256 exists to close).
+  const { dateDay, dateTime, setScheduleDay, setScheduleTime } = useTaskDateState(
+    task,
+    detailActions.onSetDate,
+  );
 
   const isRecurring = task.dateString !== null;
   const isCompleted = task.completedAt !== null;
@@ -636,12 +628,7 @@ export function TaskRowContent({
         onOpenChange={onScheduleOpenChange}
         dateDay={dateDay}
         dateTime={dateTime}
-        onSetTime={(time) => {
-          if (dateDay === null) {
-            return;
-          }
-          detailActions.onSetDate(task.id, time === null ? dateDay : `${dateDay}T${time}`);
-        }}
+        onSetTime={setScheduleTime}
         dateString={task.dateString}
         datesWithTasks={detailActions.datesWithTasks}
         onPickDay={(day) => {
