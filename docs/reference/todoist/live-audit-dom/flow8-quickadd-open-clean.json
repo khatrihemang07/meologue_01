@@ -1,0 +1,15 @@
+{
+  "rect": {
+    "x": 12,
+    "y": 66,
+    "width": 224,
+    "height": 34
+  },
+  "identity": {
+    "found": true,
+    "activeInsideDialog": true,
+    "activeTag": "DIV",
+    "activeText": "",
+    "activeTextTrimmed": ""
+  }
+}

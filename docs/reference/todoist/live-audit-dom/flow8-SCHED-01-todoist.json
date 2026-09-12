@@ -1,0 +1,66 @@
+{
+  "row": "SCHED-01",
+  "app": "todoist",
+  "task": "ZZ probe undated",
+  "viewport": { "innerWidth": 1470, "innerHeight": 836, "source": "confirmed in flow8-canary-before-todoist.json at session start; not navigated/resized since" },
+  "rowRect": {
+    "found": true,
+    "rect": {
+      "x": 467.5,
+      "y": 644,
+      "width": 800,
+      "height": 43
+    },
+    "id": "task-6hVWCgFMjcVXhJwp"
+  },
+  "triggerInfo": {
+    "found": true,
+    "identity": {
+      "ariaLabel": "Date",
+      "tag": "BUTTON"
+    },
+    "rect": {
+      "x": 1209.5,
+      "y": 652,
+      "width": 24,
+      "height": 24,
+      "top": 652,
+      "left": 1209.5,
+      "right": 1233.5,
+      "bottom": 676
+    }
+  },
+  "popover": {
+    "found": true,
+    "identity": {
+      "tag": "DIV",
+      "dataTestid": "scheduler-view",
+      "role": null
+    },
+    "read1": {
+      "width": 250,
+      "height": 525,
+      "top": 127,
+      "left": 1097,
+      "transform": "none",
+      "borderRadius": "10px",
+      "background": "rgb(38, 38, 38)",
+      "border": "1px solid rgb(61, 61, 61)"
+    },
+    "read2": {
+      "width": 250,
+      "height": 525,
+      "top": 127,
+      "left": 1097
+    },
+    "stable": true
+  },
+  "closedPoll": {
+    "popoverPresent": false
+  },
+  "dateStillEmpty": {
+    "found": true,
+    "rowText": "Task: ZZ probe undated",
+    "hasDueDateControl": true
+  }
+}

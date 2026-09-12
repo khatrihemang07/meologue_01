@@ -1,0 +1,37 @@
+{
+  "deletion": {
+    "skipped": false,
+    "titleBefore": {
+      "found": true,
+      "title": "ZZ probe undated",
+      "id": "task-6hVWCgFMjcVXhJwp"
+    },
+    "confirmDialog": {
+      "found": true,
+      "text": "Delete task?The ZZ probe undated task will be permanently deleted.CancelDelete"
+    },
+    "confirmClicked": true,
+    "goneCheck": {
+      "stillPresent": false
+    }
+  },
+  "titlesAfter": [
+    "Bat fix",
+    "Buy mobile holder and get the bike fixed",
+    "Check for ipad cover",
+    "hair wash",
+    "Homeo medicine refil",
+    "naukri photo update",
+    "Roller thigh pain",
+    "Room clean",
+    "Thigh guard and marker order",
+    "add split and splid both without fail EOD",
+    "Apply company",
+    "Buy bluetooth for vishal",
+    "Lld",
+    "Message ashu to connect",
+    "Need to improve reflect and todo completely. They are crap right now. Specially when typing long title or updating title",
+    "Quick dsa"
+  ],
+  "titlesAfterCount": 16
+}

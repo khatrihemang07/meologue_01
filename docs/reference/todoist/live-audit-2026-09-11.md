@@ -757,3 +757,68 @@ Read back from `parity-ledger.md`.
 | `todoist-captured` | 13 | 11 | **8** |
 | `divergent` | 10 | 38 | **47** |
 | `blocked` | 11 | 6 | 6 |
+
+## Flow 8 — the six readings that were refused
+
+Not a new area: the six rows this audit had declined to close on weak evidence. Each had been left
+open deliberately — a wrong element measured, a claim carried over from another session, or a question
+the artifacts could not answer. Artifacts: the `flow8-*` files in `live-audit-dom/`.
+
+### Results
+
+| Row | Todoist | meologue | Result |
+|---|---|---|---|
+| NAV-09 | heading block 800px and list 800px, **two independent siblings**, 5px offset, shared ancestor 1175px | one 800px column | `divergent` — width confirmed, framing corrected |
+| NAV-10 | "Add task", 14px, `rgb(128,128,128)` | "Add a Task", **14px**, `rgb(204,204,204)` | **`divergent`** — size resolved, colour and wording differ |
+| SCHED-01 | trigger 1209.5,652 → popover 127,1097, 250×525 (flips up-left) | trigger 1123,379 → popover 427,1123, 250×525 | `built` — anchoring matched; #255 still blocks |
+| SCHED-03 | hides the quick option matching the current date | **still lists "Today"** on a task due today | **`divergent`** |
+| DATE-01 | date control holds an inline calendar `<svg>` | no icon | **`divergent`** — icon clause closed |
+| QA-19 | `Shift+Enter` closed Quick Add and created the task | driven earlier in the programme | `built` — halves in different sessions |
+
+### Defects found
+
+28. **The add-field placeholder is the wrong grey** — `rgb(204,204,204)` against `rgb(128,128,128)` —
+    and reads "Add a Task" against "Add task". Its 14px size is correct; the earlier "16px white"
+    reading was the editor box, not the placeholder.
+29. **The scheduler does not hide the option matching a task's current date.** Todoist drops "Today"
+    for a task already due today; meologue still offers it.
+30. **The date badge has no calendar icon.** Todoist's date control carries an inline 12×12 `<svg>`.
+
+### What each refusal was worth
+
+Every one of the six had been held back for a stated reason, and in four cases the reason was right:
+
+- **NAV-10** was refused because the captured tag looked like a container. It was: the placeholder is
+  14px, not 16px, and recording the earlier reading would have invented a size defect while missing
+  the real colour one.
+- **NAV-09** was refused because the reading taken was the 1190px main region. The column is 800px —
+  but so is the heading block, separately, and their shared ancestor is 1175px. The naive common
+  ancestor would have been a third wrong answer.
+- **SCHED-03** was refused because neither opening was tied to a task. Tying them found that
+  meologue's own rule holds *and* that the follow-on question fails.
+- **DATE-01's** icon clause had never been read on Todoist's side at all.
+- **QA-19** stays `built` on a technicality — both halves are now driven, but in different sessions,
+  and ADR 0077 wants them in one. Stated rather than waved through.
+
+### Safety log
+
+- Todoist Inbox: 16 titles before, 16 after, **set-equal**.
+- **Three tasks were created, and all three deleted**, each against a confirmation dialog quoting its
+  name. One of them, `ted`, was **unintended**: the first Quick Add attempt typed after a fixed 400ms
+  wait instead of polling for focus, so only the last three characters landed and Todoist created a
+  task from them. It was found, confirmed by title and removed. The fix — poll `document.activeElement`
+  until it is inside the dialog, then assert the accumulated text after every keystroke — is now
+  recorded, because a fixed wait is precisely how an agent writes unintended data into a live account.
+
+### Tally after flow 8
+
+Read back from `parity-ledger.md`. Two status cells had to be corrected first: DATE-01 and SCHED-03
+were described as divergent in their notes while their status column still read `built`.
+
+| Status | Session start | After flows 6–7 | Now |
+|---|---|---|---|
+| `matched` | 17 | 48 | 48 |
+| `built` | 74 | 18 | **15** |
+| `todoist-captured` | 13 | 8 | 8 |
+| `divergent` | 10 | 47 | **50** |
+| `blocked` | 11 | 6 | 6 |

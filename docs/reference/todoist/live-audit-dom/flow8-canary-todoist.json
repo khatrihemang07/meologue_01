@@ -1,0 +1,49 @@
+{
+  "titlesBefore": [
+    "Bat fix",
+    "Buy mobile holder and get the bike fixed",
+    "Check for ipad cover",
+    "hair wash",
+    "Homeo medicine refil",
+    "naukri photo update",
+    "Roller thigh pain",
+    "Room clean",
+    "Thigh guard and marker order",
+    "add split and splid both without fail EOD",
+    "Apply company",
+    "Buy bluetooth for vishal",
+    "Lld",
+    "Message ashu to connect",
+    "Need to improve reflect and todo completely. They are crap right now. Specially when typing long title or updating title",
+    "Quick dsa"
+  ],
+  "titlesAfter": [
+    "Bat fix",
+    "Buy mobile holder and get the bike fixed",
+    "Check for ipad cover",
+    "hair wash",
+    "Homeo medicine refil",
+    "naukri photo update",
+    "Roller thigh pain",
+    "Room clean",
+    "Thigh guard and marker order",
+    "add split and splid both without fail EOD",
+    "Apply company",
+    "Buy bluetooth for vishal",
+    "Lld",
+    "Message ashu to connect",
+    "Need to improve reflect and todo completely. They are crap right now. Specially when typing long title or updating title",
+    "Quick dsa"
+  ],
+  "setEqual": true,
+  "countBefore": 16,
+  "countAfter": 16,
+  "tasksCreatedThisSession": ["ted (typing bug, unintended)", "ZZ probe undated (SCHED-01 fixture)", "ZZ probe shiftenter (QA-19 fixture)"],
+  "tasksDeletedThisSession": ["ted", "ZZ probe shiftenter", "ZZ probe undated"],
+  "deletionConfirmationTexts": [
+    "Delete task?The ted task will be permanently deleted.CancelDelete",
+    "Delete task?The ZZ probe shiftenter task will be permanently deleted.CancelDelete",
+    "Delete task?The ZZ probe undated task will be permanently deleted.CancelDelete"
+  ],
+  "verdict": "Inbox returned to its exact pre-session state -- same 16 titles, same set, no pre-existing task touched."
+}

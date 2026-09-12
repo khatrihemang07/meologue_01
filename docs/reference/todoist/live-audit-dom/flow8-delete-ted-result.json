@@ -1,0 +1,12 @@
+{
+  "titleBefore": null,
+  "confirmDialog": {
+    "found": true,
+    "text": "Delete task?The ted task will be permanently deleted.CancelDelete",
+    "role": "dialog"
+  },
+  "confirmClicked": true,
+  "goneCheck": {
+    "stillPresent": false
+  }
+}

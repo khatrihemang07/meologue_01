@@ -1,0 +1,58 @@
+{
+  "rowRect": {
+    "found": true,
+    "rect": {
+      "x": 467.5,
+      "y": 585,
+      "width": 800,
+      "height": 43
+    }
+  },
+  "moreInfo": [
+    {
+      "ariaLabel": "Mark task as complete",
+      "rect": {
+        "x": 464.5,
+        "y": 593,
+        "width": 24,
+        "height": 24
+      }
+    },
+    {
+      "ariaLabel": "Edit",
+      "rect": {
+        "x": 1177.5,
+        "y": 593,
+        "width": 24,
+        "height": 24
+      }
+    },
+    {
+      "ariaLabel": "Date",
+      "rect": {
+        "x": 1209.5,
+        "y": 593,
+        "width": 24,
+        "height": 24
+      }
+    },
+    {
+      "ariaLabel": "Comment",
+      "rect": {
+        "x": 1241.5,
+        "y": 593,
+        "width": 24,
+        "height": 24
+      }
+    },
+    {
+      "ariaLabel": "More actions",
+      "rect": {
+        "x": 1273.5,
+        "y": 593,
+        "width": 24,
+        "height": 24
+      }
+    }
+  ]
+}
