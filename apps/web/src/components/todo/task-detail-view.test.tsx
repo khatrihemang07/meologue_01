@@ -721,17 +721,118 @@ describe("TaskDetailView", () => {
       expect(onAddComment).not.toHaveBeenCalled();
     });
 
-    it("editing a Comment opens a textarea seeded with its text, and commits on blur", () => {
+    it("editing a Comment opens a textarea seeded with its text", () => {
+      renderView({ comments: [comment({ id: "c1", text: "original" })] });
+
+      fireEvent.click(screen.getByRole("button", { name: "Edit comment" }));
+      const field = screen.getByLabelText("Edit comment");
+      expect(field).toHaveValue("original");
+    });
+
+    it("CMT-03: blurring the editor (clicking away) leaves it open with the draft intact, and saves nothing — Todoist's model, where only Cancel/Update decide the edit's fate", () => {
       const onEditComment = vi.fn();
       renderView({ comments: [comment({ id: "c1", text: "original" })], onEditComment });
 
       fireEvent.click(screen.getByRole("button", { name: "Edit comment" }));
       const field = screen.getByLabelText("Edit comment");
-      expect(field).toHaveValue("original");
+      field.focus();
       fireEvent.change(field, { target: { value: "changed" } });
       fireEvent.blur(field);
 
+      expect(onEditComment).not.toHaveBeenCalled();
+      expect(screen.getByLabelText("Edit comment")).toHaveValue("changed");
+    });
+
+    it("CMT-03: Escape discards the draft and closes the editor without saving (regression — see this commit's own message for the bug this replaced)", () => {
+      const onEditComment = vi.fn();
+      renderView({ comments: [comment({ id: "c1", text: "original" })], onEditComment });
+
+      fireEvent.click(screen.getByRole("button", { name: "Edit comment" }));
+      const field = screen.getByLabelText("Edit comment");
+      // Focused, exactly like a reader who has actually been typing —
+      // the bug this guards against only shows up once the textarea is
+      // the real `document.activeElement`, which is what makes the
+      // Escape handler's own `.blur()` call fire a genuine blur event.
+      field.focus();
+      fireEvent.change(field, { target: { value: "changed" } });
+      fireEvent.keyDown(field, { key: "Escape" });
+
+      expect(onEditComment).not.toHaveBeenCalled();
+      expect(screen.queryByRole("textbox", { name: "Edit comment" })).not.toBeInTheDocument();
+      expect(screen.getByText("original")).toBeInTheDocument();
+    });
+
+    it("Escape cancelling a Comment edit closes only the inline editor, not the whole task-detail dialog (regression — the keydown used to bubble to Radix Dialog's own close handler)", () => {
+      const onClose = vi.fn();
+      renderView({ comments: [comment({ id: "c1", text: "original" })], onClose });
+
+      fireEvent.click(screen.getByRole("button", { name: "Edit comment" }));
+      const field = screen.getByLabelText("Edit comment");
+      field.focus();
+      fireEvent.change(field, { target: { value: "changed" } });
+      fireEvent.keyDown(field, { key: "Escape" });
+
+      // The editor closed (the same assertion the test above already
+      // makes) — what this test adds is that the DIALOG survived it: the
+      // exact same `role="dialog"` node is still on screen, and `onClose`
+      // (this view's own signal that Radix decided to dismiss it) was
+      // never called.
+      expect(screen.queryByRole("textbox", { name: "Edit comment" })).not.toBeInTheDocument();
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("Escape still closes the dialog when no Comment editor is open — the fix above is scoped to editing, not a blanket swallow of every Escape in this view", () => {
+      const onClose = vi.fn();
+      renderView({ comments: [comment({ id: "c1", text: "original" })], onClose });
+
+      fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it("CMT-03: Cancel discards the draft and closes the editor without saving", () => {
+      const onEditComment = vi.fn();
+      renderView({ comments: [comment({ id: "c1", text: "original" })], onEditComment });
+
+      fireEvent.click(screen.getByRole("button", { name: "Edit comment" }));
+      const field = screen.getByLabelText("Edit comment");
+      fireEvent.change(field, { target: { value: "changed" } });
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+      expect(onEditComment).not.toHaveBeenCalled();
+      expect(screen.queryByRole("textbox", { name: "Edit comment" })).not.toBeInTheDocument();
+      expect(screen.getByText("original")).toBeInTheDocument();
+    });
+
+    it("CMT-03: Update commits the trimmed draft and closes the editor", () => {
+      const onEditComment = vi.fn();
+      renderView({ comments: [comment({ id: "c1", text: "original" })], onEditComment });
+
+      fireEvent.click(screen.getByRole("button", { name: "Edit comment" }));
+      const field = screen.getByLabelText("Edit comment");
+      fireEvent.change(field, { target: { value: "  changed  " } });
+      fireEvent.click(screen.getByRole("button", { name: "Update" }));
+
       expect(onEditComment).toHaveBeenCalledWith("c1", "changed");
+      expect(screen.queryByRole("textbox", { name: "Edit comment" })).not.toBeInTheDocument();
+    });
+
+    it("CMT-03: Update saves nothing for a blank draft or one identical to the original", () => {
+      const onEditComment = vi.fn();
+      renderView({ comments: [comment({ id: "c1", text: "original" })], onEditComment });
+
+      fireEvent.click(screen.getByRole("button", { name: "Edit comment" }));
+      fireEvent.click(screen.getByRole("button", { name: "Update" }));
+      expect(onEditComment).not.toHaveBeenCalled();
+      expect(screen.getByText("original")).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Edit comment" }));
+      const field = screen.getByLabelText("Edit comment");
+      fireEvent.change(field, { target: { value: "   " } });
+      fireEvent.click(screen.getByRole("button", { name: "Update" }));
+      expect(onEditComment).not.toHaveBeenCalled();
+      expect(screen.getByText("original")).toBeInTheDocument();
     });
 
     it("CMT-03: deleting a Comment asks for confirmation first, and does not remove until confirmed", () => {

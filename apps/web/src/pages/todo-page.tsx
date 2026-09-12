@@ -1,7 +1,7 @@
 import type { Filter, Project, Section, Task } from "@meologue/core";
 import { today, upcoming } from "@meologue/core";
 import { useQuery } from "@tanstack/react-query";
-import { Suspense, useMemo, useState } from "react";
+import { Suspense, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import { BackToChats } from "@/components/back-to-chats";
@@ -121,6 +121,26 @@ const VIEW_HEADINGS: Record<Exclude<TodoBackgroundView["view"], "project" | "fil
   filters: "Filters & Labels",
   labels: "Labels",
 };
+
+/**
+ * CMT-05 (parity ledger) — how long a completion toast stays up, measured
+ * live rather than trusted from `docs/reference/todoist/lifecycle.md`'s own
+ * once-coarse estimate. That doc's "6-8 seconds" came from 2-second polling
+ * and doesn't reproduce; a 300ms re-poll (flow 5,
+ * `docs/reference/todoist/live-audit-dom/flow5-CMT-05-todoist.json`) found
+ * Todoist's own toast still present at 10,775ms and gone by 11,081ms.
+ * meologue's matching toast (`flow5-CMT-05-meologue.json`) was gone between
+ * 4,346ms and 4,651ms — sonner's own unconfigured default, not a value
+ * anyone chose. ADR 0077 makes the live reading the reference over the
+ * dated capture, so this targets Todoist's measured ~11s rather than the
+ * ledger row's own nuance text.
+ *
+ * Applied to the two completion toasts below only (`handleComplete`,
+ * `handleCompleteForever`) — every other toast on this page (`copyTaskLink`'s
+ * "Link copied", the error toasts) keeps sonner's default, unmeasured and
+ * unaffected by this ticket.
+ */
+const COMPLETION_TOAST_DURATION_MS = 11_000;
 
 /**
  * A Project's or a Filter's own resolved name (acceptance criterion: "The
@@ -377,6 +397,49 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   const [quickFindOpen, setQuickFindOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
+  // CMT-05 (parity ledger) — the one thing `Z`/`⌘Z` (`use-todo-keymap.ts`'s
+  // `undo-complete` binding) has to act on: the most recent completion's
+  // own `uncompleteTask` call, live only while its toast is still showing.
+  // A `ref`, not `useState`, deliberately — this never drives a render,
+  // only `fire()`'s later, out-of-band read of it, the same reason
+  // `document.activeElement` (`focusedTaskId()`, todo-keymap.ts) is read
+  // fresh rather than tracked in state. `toastId` guards against a stale
+  // write: if a second completion happens before the first toast's
+  // `onAutoClose`/`onDismiss` fires, that older callback must not clear
+  // the ref out from under the newer completion it no longer describes.
+  const pendingUndoRef = useRef<{ toastId: string | number; undo: () => void } | null>(null);
+
+  /** The one place a completion toast is raised (`handleComplete`,
+   * `handleCompleteForever` below share it) — the toast's own "Undo"
+   * button and the `undo-complete` keyboard binding both end up calling
+   * the identical `undo` callback, so there is exactly one way a
+   * completion gets reversed, not two implementations that could drift.
+   * `duration`/`onAutoClose`/`onDismiss` are the CMT-05 pieces: an 11s
+   * lifetime (`COMPLETION_TOAST_DURATION_MS`'s own doc comment has the
+   * measurement) and clearing `pendingUndoRef` the moment this exact toast
+   * stops being on screen, by either path sonner offers for "it's gone." */
+  function raiseCompletionToast(taskId: string, message: string) {
+    const undo = () => {
+      uncompleteTask(taskId);
+      pendingUndoRef.current = null;
+    };
+    const toastId = toast(message, {
+      duration: COMPLETION_TOAST_DURATION_MS,
+      action: { label: "Undo", onClick: undo },
+      onAutoClose: () => {
+        if (pendingUndoRef.current?.toastId === toastId) {
+          pendingUndoRef.current = null;
+        }
+      },
+      onDismiss: () => {
+        if (pendingUndoRef.current?.toastId === toastId) {
+          pendingUndoRef.current = null;
+        }
+      },
+    });
+    pendingUndoRef.current = { toastId, undo };
+  }
+
   // Issue #184: "completed work is reached by narrowing the log to
   // completions, not from a separate destination of its own" — a plain
   // toggle above the Activity view rather than a second route.
@@ -445,12 +508,7 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
       return;
     }
     completeTask(taskId);
-    toast(`Completed "${content}"`, {
-      action: {
-        label: "Undo",
-        onClick: () => uncompleteTask(taskId),
-      },
-    });
+    raiseCompletionToast(taskId, `Completed "${content}"`);
   }
 
   // Ends a recurring Task's series (TaskStore.completeForever's own doc
@@ -465,12 +523,7 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   // actually gives back.
   function handleCompleteForever(taskId: string, content: string) {
     completeForeverTask(taskId);
-    toast(`Completed "${content}" — the recurrence has ended`, {
-      action: {
-        label: "Undo",
-        onClick: () => uncompleteTask(taskId),
-      },
-    });
+    raiseCompletionToast(taskId, `Completed "${content}" — the recurrence has ended`);
   }
 
   function handleRequestDelete(taskId: string) {
@@ -657,6 +710,13 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     onOpenQuickFind: () => setQuickFindOpen(true),
     onShowShortcuts: () => setShortcutsOpen(true),
     onNavigate: navigate,
+    // CMT-05 — the pending-undo ref's one door (`pendingUndoRef`'s own doc
+    // comment above has the full reasoning). Nothing pending is this
+    // callback's own no-op to make, not a `null` `use-todo-keymap.ts` has
+    // to branch on.
+    onUndoComplete: () => {
+      pendingUndoRef.current?.undo();
+    },
   });
 
   // Issue #247: both rename surfaces resolve a typed phrase through this

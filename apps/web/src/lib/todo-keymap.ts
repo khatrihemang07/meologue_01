@@ -114,6 +114,33 @@ export const TODO_KEY_BINDINGS: readonly TodoKeyBinding[] = [
     when: "always",
     keys: ["?"],
   },
+  // CMT-05 (parity ledger), measured live: `docs/reference/todoist/
+  // keyboard.md:74` transcribes the overlay's own General row as "Z or ⌘Z |
+  // Undo" — bare `z` undoes there too, not just ⌘Z — so this follows the
+  // table's existing "one binding, several keys" idiom (`quick-find`'s
+  // `["/", "f"]`, `focus-next-row`'s `["arrowdown", "j"]`) rather than
+  // splitting into two rows. `label` is `keyboard.md`'s own wording, kept
+  // traceable back to the transcription.
+  //
+  // `when: "always"` and `allowInField` left at its default `false` —
+  // deliberately, unlike `quick-find-global`'s `mod+k` exception above.
+  // Todoist fires Z/⌘Z reaching through text too, but this app's own
+  // `isTypingTarget` guard (below) is what keeps ⌘Z as native text-undo
+  // inside a title rename, the Add-task composer or the detail view's
+  // description field — the highest-risk part of this binding. There is
+  // exactly one door onto this action (`todo-page.tsx`'s pending-undo ref,
+  // set for the most recent completion's toast and cleared when it is used
+  // or the toast closes), so `use-todo-keymap.ts`'s `fire()` does no
+  // task-lookup for this id the way `task-focused` bindings do — a stale
+  // or absent pending undo is `todo-page.tsx`'s own no-op to make, not a
+  // `null` this hook has to check for itself.
+  {
+    id: "undo-complete",
+    section: "General",
+    label: "Undo",
+    when: "always",
+    keys: ["z", "mod+z"],
+  },
   // Supersedes task-row.tsx's own per-row `.`-key `onKeyDown` (issue #178)
   // — centralising it here is a real simplification, not just bureaucracy:
   // the per-row handler needed `stopPropagation()` solely to stop a `.`

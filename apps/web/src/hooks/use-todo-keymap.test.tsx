@@ -98,6 +98,7 @@ function renderKeymap(overrides: Partial<UseTodoKeymapOptions> = {}) {
     onOpenQuickFind: vi.fn(),
     onShowShortcuts: vi.fn(),
     onNavigate: vi.fn(),
+    onUndoComplete: vi.fn(),
     ...overrides,
   };
   renderHook(() => useTodoKeymap(options));
@@ -139,6 +140,81 @@ describe("useTodoKeymap", () => {
     fireEvent.keyDown(document, { key: "?" });
 
     expect(options.onShowShortcuts).toHaveBeenCalledTimes(1);
+  });
+
+  // CMT-05 (parity ledger) — `docs/reference/todoist/keyboard.md:74`
+  // transcribes Todoist's own overlay row as "Z or ⌘Z | Undo", so both
+  // keys fire the identical `onUndoComplete` door; this hook itself has
+  // no notion of "what's pending" beyond calling that one callback
+  // unconditionally (`todo-page.tsx`'s own pending-undo ref decides
+  // whether there's anything to do).
+  describe("undo (CMT-05)", () => {
+    it("calls onUndoComplete on 'z'", () => {
+      const options = renderKeymap();
+
+      fireEvent.keyDown(document, { key: "z" });
+
+      expect(options.onUndoComplete).toHaveBeenCalledTimes(1);
+    });
+
+    it("calls onUndoComplete on Cmd+Z", () => {
+      const options = renderKeymap();
+
+      fireEvent.keyDown(document, { key: "z", metaKey: true });
+
+      expect(options.onUndoComplete).toHaveBeenCalledTimes(1);
+    });
+
+    // Nothing here for this hook to no-op on directly — `onUndoComplete`
+    // always fires; a "nothing undoable" world is the caller's own
+    // no-op to make (`todo-page.tsx`'s pending-undo ref is `null`). What
+    // this asserts is the hook's half of that contract: it never
+    // second-guesses whether there's something to undo, so a caller
+    // wired to do nothing when nothing is pending sees exactly that,
+    // and nothing more.
+    it("still calls onUndoComplete when the caller has nothing pending — the hook itself never withholds the call", () => {
+      const onUndoComplete = vi.fn();
+      renderKeymap({ onUndoComplete });
+
+      fireEvent.keyDown(document, { key: "z" });
+      fireEvent.keyDown(document, { key: "z", metaKey: true });
+
+      expect(onUndoComplete).toHaveBeenCalledTimes(2);
+    });
+
+    // The highest-risk part of CMT-05: a reader typing a task title (or
+    // anything else) and pressing Cmd+Z must get their text back, not an
+    // unrelated completion undone. `isTypingTarget` plus this binding's
+    // default `allowInField: false` is what's supposed to guarantee
+    // that — proved here rather than assumed. An `<input>` stands in for
+    // the composer: jsdom does not implement `HTMLElement.
+    // isContentEditable` at all (it reads `undefined`, not `false`), so
+    // a jsdom test cannot exercise the contenteditable arm of
+    // `isTypingTarget` — that arm (the Add-task/description composers)
+    // is verified on screen only, not here.
+    it("does not fire inside a text field, on 'z' or Cmd+Z", () => {
+      const input = document.createElement("input");
+      document.body.append(input);
+      input.focus();
+      const options = renderKeymap();
+
+      fireEvent.keyDown(input, { key: "z" });
+      fireEvent.keyDown(input, { key: "z", metaKey: true });
+
+      expect(options.onUndoComplete).not.toHaveBeenCalled();
+    });
+
+    it("does not fire inside a textarea, on 'z' or Cmd+Z", () => {
+      const textarea = document.createElement("textarea");
+      document.body.append(textarea);
+      textarea.focus();
+      const options = renderKeymap();
+
+      fireEvent.keyDown(textarea, { key: "z" });
+      fireEvent.keyDown(textarea, { key: "z", metaKey: true });
+
+      expect(options.onUndoComplete).not.toHaveBeenCalled();
+    });
   });
 
   it("dispatches the command-menu event naming the focused Task on '.'", () => {

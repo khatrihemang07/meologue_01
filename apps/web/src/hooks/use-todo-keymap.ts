@@ -25,6 +25,19 @@ export interface UseTodoKeymapOptions {
   onOpenQuickFind: () => void;
   onShowShortcuts: () => void;
   onNavigate: (path: string) => void;
+  /**
+   * CMT-05 (parity ledger) — fired for `undo-complete` (`Z`/`⌘Z`,
+   * `@/lib/todo-keymap`'s own doc comment on that binding has the fuller
+   * reasoning). `todo-page.tsx` owns the one thing there is to undo — a
+   * ref holding the most recent completion's own `uncompleteTask` call,
+   * set when its toast is raised and cleared the moment it is used or the
+   * toast closes — and this option is that ref's single door, called
+   * unconditionally. When nothing is pending it is `todo-page.tsx`'s own
+   * no-op to make, not a lookup this hook performs, matching every other
+   * binding here whose target can come back absent (`fire()`'s own
+   * `taskId !== null` guards just below).
+   */
+  onUndoComplete: () => void;
 }
 
 // Every sequence's own first key (currently just `"g"`, from `TODO_KEY_
@@ -94,6 +107,9 @@ export function useTodoKeymap(options: UseTodoKeymapOptions): void {
           return;
         case "show-shortcuts":
           opts.onShowShortcuts();
+          return;
+        case "undo-complete":
+          opts.onUndoComplete();
           return;
         // KBD-03/04: row-to-row focus movement — `focusAdjacentRow`
         // (todo-keymap.ts) owns the whole cycle (DOM order, wrap, the

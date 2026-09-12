@@ -592,6 +592,9 @@ describe("TodoPage", () => {
     expect(toast).toHaveBeenCalledWith(
       'Completed "call mum"',
       expect.objectContaining({
+        // CMT-05: 11s, measured live (`COMPLETION_TOAST_DURATION_MS`'s own
+        // doc comment, todo-page.tsx) — not sonner's unconfigured default.
+        duration: 11_000,
         action: expect.objectContaining({ label: "Undo", onClick: expect.any(Function) }),
       }),
     );
@@ -600,6 +603,83 @@ describe("TodoPage", () => {
     const action = toastCall?.[1]?.action as { onClick: () => void } | undefined;
     action?.onClick();
     expect(uncompleteTask).toHaveBeenCalledWith("a");
+  });
+
+  // CMT-05 (parity ledger) — `Z`/`⌘Z` reach the identical `uncompleteTask`
+  // call the toast's own "Undo" button already used above, through
+  // `todo-page.tsx`'s pending-undo ref rather than a second undo
+  // mechanism. `toast` is mocked (this file's own header comment), so
+  // there is no real toast to auto-close mid-test — these three cover the
+  // ref's own lifecycle: set on completion, fired once by either key, and
+  // silent when nothing is pending.
+  describe("keyboard undo of a completion (CMT-05)", () => {
+    it("undoes the most recent completion on 'z'", async () => {
+      const completeTask = vi.fn();
+      const uncompleteTask = vi.fn();
+      renderTodoPage(
+        inboxContext([task({ id: "a", content: "call mum" })], { completeTask, uncompleteTask }),
+      );
+
+      await waitFor(() => expect(screen.getByText("call mum")).toBeInTheDocument());
+      fireEvent.click(screen.getByRole("checkbox", { name: "call mum" }));
+      expect(completeTask).toHaveBeenCalledWith("a");
+
+      fireEvent.keyDown(document, { key: "z" });
+
+      expect(uncompleteTask).toHaveBeenCalledWith("a");
+    });
+
+    it("undoes the most recent completion on Cmd+Z", async () => {
+      const completeTask = vi.fn();
+      const uncompleteTask = vi.fn();
+      renderTodoPage(
+        inboxContext([task({ id: "a", content: "call mum" })], { completeTask, uncompleteTask }),
+      );
+
+      await waitFor(() => expect(screen.getByText("call mum")).toBeInTheDocument());
+      fireEvent.click(screen.getByRole("checkbox", { name: "call mum" }));
+
+      fireEvent.keyDown(document, { key: "z", metaKey: true });
+
+      expect(uncompleteTask).toHaveBeenCalledWith("a");
+    });
+
+    it("does nothing on 'z' or Cmd+Z when nothing has been completed", () => {
+      const uncompleteTask = vi.fn();
+      renderTodoPage(inboxContext([task({ id: "a", content: "call mum" })], { uncompleteTask }));
+
+      fireEvent.keyDown(document, { key: "z" });
+      fireEvent.keyDown(document, { key: "z", metaKey: true });
+
+      expect(uncompleteTask).not.toHaveBeenCalled();
+    });
+
+    // The highest-risk part of CMT-05: Cmd+Z inside a text field must stay
+    // native text-undo, not reach through to an unrelated completion. The
+    // Add-task field stubs to a plain `<input>` in this suite
+    // (`StubTaskTitleEditor`'s own header comment on why — jsdom can't
+    // usefully mount the real ProseMirror editor), which is also exactly
+    // the surface `use-todo-keymap.test.tsx`'s own CMT-05 tests note: a
+    // jsdom `<input>`/`<textarea>` exercises `isTypingTarget`'s tag-check
+    // arm; its `isContentEditable` arm (the real composer) is verified on
+    // screen only, jsdom not implementing that property at all.
+    it("does not undo a completion when Cmd+Z is pressed while typing in the Add task field", async () => {
+      const completeTask = vi.fn();
+      const uncompleteTask = vi.fn();
+      renderTodoPage(
+        inboxContext([task({ id: "a", content: "call mum" })], { completeTask, uncompleteTask }),
+      );
+
+      await waitFor(() => expect(screen.getByText("call mum")).toBeInTheDocument());
+      fireEvent.click(screen.getByRole("checkbox", { name: "call mum" }));
+      expect(completeTask).toHaveBeenCalledWith("a");
+
+      const addField = screen.getByLabelText("Add a Task");
+      addField.focus();
+      fireEvent.keyDown(addField, { key: "z", metaKey: true });
+
+      expect(uncompleteTask).not.toHaveBeenCalled();
+    });
   });
 
   it("restores a completed Task from the durable Completed section, independent of any toast", () => {

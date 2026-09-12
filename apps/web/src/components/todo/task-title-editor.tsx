@@ -65,7 +65,7 @@
  * comment prescribes for the Composer.
  */
 import { baseKeymap } from "prosemirror-commands";
-import { redo, undo } from "prosemirror-history";
+import { history, redo, undo } from "prosemirror-history";
 import { keymap } from "prosemirror-keymap";
 import type { Node as PMNode } from "prosemirror-model";
 import { Fragment, Schema, Slice } from "prosemirror-model";
@@ -200,8 +200,16 @@ export interface TaskTitleEditorProps {
  * `composer-editor.ts`'s `buildComposerPlugins` documents the identical
  * "plugins earlier in this array are asked first" mechanism this relies
  * on.
+ *
+ * Exported for the identical reason `composer-editor.ts` exports
+ * `buildComposerPlugins`: a test that wants to prove `Mod-z`/`Mod-Shift-z`
+ * actually undo/redo typed text needs the REAL plugin list this editor
+ * mounts with — building an ad hoc `[history(), keymap({...})]` array by
+ * hand in a test would only prove `prosemirror-history` itself works, not
+ * that this file remembers to register it (`task-title-editor.test.tsx`'s
+ * own "history" suite is exactly that regression test).
  */
-function buildTitlePlugins(options: {
+export function buildTitlePlugins(options: {
   placeholder: string | undefined;
   extraPlugins: Plugin[];
   commit: () => void;
@@ -227,12 +235,44 @@ function buildTitlePlugins(options: {
       return true;
     },
   });
+  // `todo-keymap.ts` also binds a global `z`/`Mod-z` chord ("undo-complete")
+  // that undoes a Task's own last COMPLETION, not text — the two never
+  // race, because that binding carries the default `allowInField: false`
+  // (`use-todo-keymap.ts`'s own dispatch, untouched here) and so never
+  // fires while focus sits inside this editor. That default is exactly
+  // what leaves `Mod-z` free for `historyKeymap` below to mean "undo my
+  // typing" whenever a title editor is focused; outside one, the same
+  // chord means "undo my last completion" instead. Fixing the bug this
+  // file's own header comment on `history()` describes is what makes that
+  // split real rather than moot — with `undo` a no-op, `Mod-z` in a title
+  // editor used to do nothing at all, so there was nothing here to
+  // conflict with in the first place.
   const historyKeymap = keymap({
     "Mod-z": undo,
     "Shift-Mod-z": redo,
     "Mod-y": redo,
   });
   return [
+    // A genuine pre-existing bug, not something #253's rename-capture work
+    // introduced: `historyKeymap` above has always bound `undo`/`redo`, but
+    // `history()` — the plugin that actually records the done/undone step
+    // stacks those two commands read — was never registered anywhere in
+    // this list. Both commands look up that state via a fixed plugin key
+    // (`prosemirror-history`'s own `historyKey.getState`), which comes back
+    // `undefined` with no `history()` plugin present, so `undo`/`redo` were
+    // silent no-ops in every editor built on this component — the Add-a-
+    // Task composer, a row's inline rename, and this view's own title, all
+    // three. `composer-editor.ts`'s `buildComposerPlugins` registers
+    // `history()` too (last in its own list, proof this project already
+    // knows the plugin is needed here) — its own placement doesn't matter:
+    // `historyKey.getState` is a lookup into `EditorState.plugins`, keyed
+    // by plugin identity, not by array order, so `history()` only has to
+    // be present somewhere in the list, not before or after any particular
+    // keymap. It's placed first here anyway, ahead of the keymaps that
+    // dispatch `undo`/`redo`, matching the usual ProseMirror convention
+    // (most published examples register it before `keymap(baseKeymap)`)
+    // rather than after, as `composer-editor.ts` happens to.
+    history(),
     commitKeymap,
     historyKeymap,
     ...options.extraPlugins,

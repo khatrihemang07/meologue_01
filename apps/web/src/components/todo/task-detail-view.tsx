@@ -61,7 +61,7 @@ import { hasTime, uiPriorityOf } from "@meologue/core";
 import { ChevronLeft, ChevronRight, Pencil, Trash2, X } from "lucide-react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import type * as React from "react";
-import { forwardRef, Suspense, useRef, useState } from "react";
+import { forwardRef, Suspense, useEffect, useRef, useState } from "react";
 import { entryProse } from "@/components/entry-prose";
 import { ActivityFeed } from "@/components/todo/activity-feed";
 import { LazyTaskDescriptionEditor } from "@/components/todo/lazy-task-description-editor";
@@ -230,6 +230,54 @@ const AttributeRow = forwardRef<
  * trash pair rather than a swipe or a context menu: this file has no
  * other row chrome to match, and a Comment thread is short enough that
  * two small buttons cost nothing to keep visible on hover.
+ *
+ * **CMT-03: explicit Cancel/Update, not save-on-blur.** Todoist's own
+ * comment editor (`docs/reference/todoist/live-audit-dom/flow5-CMT-03-
+ * todoist.json`) opens with those two buttons and never commits just
+ * because focus left the field — clicking away leaves the draft sitting
+ * there, unresolved, and only Cancel or Update decides its fate. The
+ * live audit's own meologue side (`flow5-CMT-03-meologue.json`) is what
+ * this replaces: a bare textarea whose `onBlur` committed, which meant
+ * an edit could never actually be abandoned once the reader looked away
+ * — clicking outside to reconsider silently saved a half-finished draft.
+ * Deletion is untouched — both apps already agree there
+ * (`ConfirmDialog`/CMT-03's own confirm-first note on `onRequestRemove`
+ * below) — and neither app marks a Comment "edited," so this still
+ * writes no such marker.
+ *
+ * **Escape used to look safe and wasn't.** The previous handler did
+ * `setDraft(comment.text); event.currentTarget.blur()` — but `setDraft`
+ * doesn't apply before `.blur()` fires, and `.blur()` fires the real
+ * blur event synchronously, in the same tick, calling the old `onBlur`
+ * commit handler while it was still closed over *this render's* `draft`
+ * — the edited text, not the just-requested reset. Escape was
+ * discarding nothing; it was saving the very edit it was meant to
+ * cancel (a failing test guarded this before the fix — see this
+ * comment's own commit message). `cancelEditing` below sidesteps the
+ * whole flush question by closing the editor directly, with no blur in
+ * the loop at all.
+ *
+ * **Escape also used to close the whole dialog, not just this editor.**
+ * `cancelEditing`'s own Escape handler lived on the textarea's `onKeyDown`
+ * — a normal React (bubble-phase, root-delegated) handler — which reads
+ * as though `event.stopPropagation()` there would keep the keystroke from
+ * ever reaching `TaskDetailView`'s Radix `Dialog`. It doesn't: Radix's own
+ * Escape handling (`DismissableLayer`, inside `@radix-ui/react-dialog`)
+ * listens on `document` in the CAPTURE phase, which runs BEFORE the
+ * event ever reaches this textarea at all — by the time any handler here
+ * could call `stopPropagation`/`preventDefault`, Radix has already read
+ * `event.defaultPrevented`, found it false, and closed the dialog. Verified
+ * directly against a real `Dialog` before writing this comment: neither
+ * call, made from a nested field's own `onKeyDown`, stops the close.
+ * The one node that sits earlier than `document` in the capture order is
+ * `window` itself — a capture-phase listener registered there intercepts
+ * Escape before capture ever reaches `document`, and (per the DOM's own
+ * "stopping propagation mid-capture skips the target entirely" contract)
+ * also means this textarea's own `onKeyDown` never sees that keystroke —
+ * which is why `cancelEditing` is invoked directly from the effect below,
+ * not left for the textarea to call. The effect is scoped to `editing`
+ * so a reader who isn't mid-edit still closes the dialog on Escape
+ * exactly as before.
  */
 function CommentRow({
   comment,
@@ -249,9 +297,16 @@ function CommentRow({
     setEditing(true);
   }
 
-  function commit() {
+  /** Escape and Cancel both land here — discard the draft, close the editor, save nothing. No blur involved (this file's own header comment above on why routing through blur was the bug). */
+  function cancelEditing() {
+    setDraft(comment.text);
     setEditing(false);
+  }
+
+  /** Update's only path to `onEdit` — trims first, and a blank or unchanged draft commits nothing (CMT-03's own guard, carried over unchanged from the save-on-blur version this replaces). */
+  function commit() {
     const trimmed = draft.trim();
+    setEditing(false);
     if (trimmed === "" || trimmed === comment.text) {
       setDraft(comment.text);
       return;
@@ -259,23 +314,70 @@ function CommentRow({
     onEdit(trimmed);
   }
 
+  // The "latest callback" ref pattern this file's own `TaskDetailBody`
+  // (and `task-title-editor.tsx`) already use for an imperative listener
+  // that outlives a single render — `cancelEditing` closes over this
+  // render's `comment.text`, and the `window` listener below is only
+  // re-attached when `editing` flips, not on every keystroke.
+  const cancelEditingRef = useRef(cancelEditing);
+  cancelEditingRef.current = cancelEditing;
+
+  // This file's own header comment above ("Escape also used to close the
+  // whole dialog") has the full account of why this listener lives on
+  // `window`, in the capture phase, rather than on this row's own
+  // textarea: it is the only point in the DOM earlier than Radix's own
+  // `document`-capture Escape handler. Scoped to `editing` — mounted only
+  // while this row's inline editor is open, torn down the instant it
+  // closes — so an Escape pressed anywhere else in the dialog still
+  // reaches Radix and closes it exactly as before.
+  useEffect(() => {
+    if (!editing) {
+      return;
+    }
+    function handleWindowEscape(event: KeyboardEvent) {
+      if (event.key !== "Escape") {
+        return;
+      }
+      // Stops the keystroke from ever reaching `document`'s own capture
+      // listener — Radix never gets a chance to read `defaultPrevented`,
+      // so there is nothing to `preventDefault()` here. This also means
+      // the textarea's own `onKeyDown` below never fires for this key
+      // (the DOM never delivers a stopped event to its target), so
+      // `cancelEditing` has to be called from here directly.
+      event.stopPropagation();
+      cancelEditingRef.current();
+    }
+    window.addEventListener("keydown", handleWindowEscape, { capture: true });
+    return () => window.removeEventListener("keydown", handleWindowEscape, { capture: true });
+  }, [editing]);
+
   if (editing) {
     return (
-      <li>
+      <li className="flex flex-col gap-1.5">
         <textarea
           aria-label="Edit comment"
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
-          onBlur={commit}
-          onKeyDown={(event) => {
-            if (event.key === "Escape") {
-              setDraft(comment.text);
-              event.currentTarget.blur();
-            }
-          }}
           rows={2}
           className="w-full resize-none rounded-md border border-border bg-transparent p-2 text-sm outline-none"
         />
+        {/* Todoist's own labels (this row exists to match it) — real accessible names via visible text, no separate aria-label needed. */}
+        <div className="flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={cancelEditing}
+            className="shrink-0 rounded-md border border-border px-2.5 py-1.5 text-sm transition hover:bg-muted"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={commit}
+            className="shrink-0 rounded-md border border-border px-2.5 py-1.5 text-sm transition hover:bg-muted"
+          >
+            Update
+          </button>
+        </div>
       </li>
     );
   }
