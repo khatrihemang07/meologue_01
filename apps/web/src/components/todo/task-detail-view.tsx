@@ -71,6 +71,7 @@ import { TaskSchedulePopover } from "@/components/todo/task-schedule-popover";
 import { ConfirmDialog } from "@/components/ui/alert-dialog";
 import { useTaskDateState } from "@/hooks/use-task-date-state";
 import { useWideLayout } from "@/hooks/use-wide-layout";
+import { isRenderableEvent } from "@/lib/format-event";
 import { formatDay, formatTaskDate } from "@/lib/format-task-date";
 import { localDayKey } from "@/lib/local-day-key";
 import { useSettingsStore } from "@/lib/settings";
@@ -614,6 +615,9 @@ function TaskDetailBody({
   // (once per field) would be asking about a boundary this form no
   // longer has.
   const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
+  // ActivityFeed drops old "Edited a comment" events (CMT-06), so the badge
+  // counts what it will actually show rather than what the store holds.
+  const renderableEvents = events.filter(isRenderableEvent);
   const uiPriority = uiPriorityOf(task.priority);
   // Issue #224: computed once, not inline in the Date row's own `value`
   // JSX below, so `text`/`colour` can't drift from calling
@@ -1219,22 +1223,22 @@ function TaskDetailBody({
               own header comment). Renders nothing when there's nothing
               to show yet, the same "don't show a section with nothing in
               it" restraint CompletedTasks itself takes. */}
-          {events.length > 0 && (
+          {renderableEvents.length > 0 && (
             <details className="rounded-lg border border-border">
               <summary className="cursor-pointer select-none px-3 py-2 text-muted-foreground text-sm">
-                Activity ({events.length})
+                Activity ({renderableEvents.length})
               </summary>
               <div className="border-t border-border">
                 <ActivityFeed
-                  events={events}
-                  // Every Event this view reads is already scoped to
-                  // `task.id` (`listEventsByTask`, entry-store-layout.tsx),
-                  // so its own subject is always suppressed below and
-                  // `resolveTaskSubject` never actually runs against this
-                  // list — see `format-event.ts`'s own `describeEventLine`.
-                  tasks={[]}
+                  events={renderableEvents}
+                  // CMT-06: no `currentTaskId`. Flow 5 read Todoist's own
+                  // per-task activity and it names the task in every line
+                  // ("You completed {task}", "You deleted a comment from
+                  // {task}"), even though every line is about that task, so
+                  // suppressing the subject here was the divergence itself.
+                  // `tasks` holds this task so its subject resolves.
+                  tasks={[task]}
                   projects={projects}
-                  currentTaskId={task.id}
                 />
               </div>
             </details>

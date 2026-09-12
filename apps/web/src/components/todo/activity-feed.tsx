@@ -5,6 +5,7 @@ import {
   type EventSubject,
   eventTimestamp,
   groupEventsByDay,
+  isRenderableEvent,
 } from "@/lib/format-event";
 
 export interface ActivityFeedProps {
@@ -53,6 +54,27 @@ function SubjectChip({ subject }: { subject: EventSubject }) {
 }
 
 /**
+ * CMT-06's `{content}` (a comment's own text, or a description's own text)
+ * — Todoist's own DOM, re-driven live (flow 5), shows this unquoted as a
+ * clickable content-preview chip; the artifacts that measured it captured
+ * only its rendered text, never its markup or click target, so this chip
+ * stays a plain, non-interactive `<span>` rather than guessing at a
+ * destination to link to. `truncate` bounds it to one line the same way
+ * `entry-row.tsx`'s own `EntryReferenceLink` chip does — CSS ellipsis,
+ * not a hand-picked character count this ticket has no artifact to justify.
+ */
+function ContentPreviewChip({ text }: { text: string }) {
+  return (
+    <span
+      title={text}
+      className="mx-0.5 inline-block max-w-[16rem] truncate rounded-full border border-border bg-background/60 px-2 align-bottom text-xs leading-normal"
+    >
+      {text}
+    </span>
+  );
+}
+
+/**
  * The one activity-log renderer behind all three surfaces issue #184
  * names (a Task's own history, a Project's own, and the view across
  * everything) — grouped by calendar day, newest first, relative
@@ -72,7 +94,9 @@ export function ActivityFeed({
   currentTaskId,
   emptyMessage = "Nothing here yet.",
 }: ActivityFeedProps) {
-  const narrowed = completedOnly ? events.filter((e) => e.eventType === "completed") : events;
+  const narrowed = (
+    completedOnly ? events.filter((e) => e.eventType === "completed") : events
+  ).filter(isRenderableEvent);
   const groups = groupEventsByDay(narrowed);
 
   if (groups.length === 0) {
@@ -103,6 +127,9 @@ export function ActivityFeed({
                       </>
                     )}
                     {line.detail && <> {line.detail}</>}
+                    {line.contentPreview !== undefined && (
+                      <ContentPreviewChip text={line.contentPreview} />
+                    )}
                     {line.trailingLead && <> {line.trailingLead}</>}
                     {line.trailingSubject && (
                       <>

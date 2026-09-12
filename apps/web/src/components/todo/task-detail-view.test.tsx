@@ -1,6 +1,7 @@
-import type { Comment, Label, Project, Section, Task } from "@meologue/core";
+import type { Comment, Event, Label, Project, Section, Task } from "@meologue/core";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { useEffect, useRef, useState } from "react";
+import { MemoryRouter } from "react-router";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TaskDetailView } from "./task-detail-view";
@@ -255,7 +256,8 @@ function renderView(overrides: Partial<Parameters<typeof TaskDetailView>[0]> = {
     events: [],
     ...overrides,
   };
-  const view = render(<TaskDetailView {...props} />);
+  // MemoryRouter: an Activity line links its subject, as it does in the app.
+  const view = render(<TaskDetailView {...props} />, { wrapper: MemoryRouter });
   return {
     ...props,
     /**
@@ -288,6 +290,41 @@ describe("TaskDetailView", () => {
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "call mum" })).toBeInTheDocument();
     expect(screen.queryByLabelText("Task name")).not.toBeInTheDocument();
+  });
+
+  // CMT-06: Todoist's own per-task activity names the task in every line
+  // (flow 5), so this view no longer suppresses its subject; and an old
+  // "Edited a comment" event is neither shown nor counted.
+  it("names the task in its own Activity lines, and counts only lines it shows", () => {
+    const base = {
+      deviceId: "device-a",
+      objectType: "task",
+      objectId: "1",
+      taskId: "1",
+      projectId: null,
+      occurredAt: "2026-09-10T09:00:00.000Z",
+      extra: null,
+      syncedAt: "2026-09-10T09:00:00.000Z",
+    } as const;
+    const events: Event[] = [
+      { ...base, id: "e1", seq: 1, eventType: "completed" },
+      {
+        ...base,
+        id: "e2",
+        seq: 2,
+        eventType: "updated",
+        objectType: "comment",
+        objectId: "c1",
+        extra: { text: "old" },
+      },
+    ];
+    renderView({ task: task({ content: "call mum" }), events });
+
+    expect(screen.getByText("Activity (1)")).toBeInTheDocument();
+    const lines = screen.getAllByRole("listitem").map((item) => item.textContent ?? "");
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("You completed");
+    expect(lines[0]).toContain("call mum");
   });
 
   it("carries DET-05's own data-testid (keyboard.md §1) on the dialog content", () => {
