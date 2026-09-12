@@ -512,6 +512,13 @@
      assumed to share a value just because neither was contradicted). */
   --td-checkbox-ring-default: rgb(169, 169, 169);
   --td-focus-ring: rgb(23, 91, 194);
+  /* The measured tint (dark block below) is a WHITE wash — correct on
+     Todoist's dark ground, invisible on this block's white one. Todoist's
+     light theme was never reachable on the captured account
+     (parity-ledger.md's THEME-01, blocked), so there is no light tint to
+     carry forward; `transparent` invents nothing, and the inset ring above
+     is still clearly visible against white on its own. */
+  --td-focus-tint: transparent;
 
   /* Priority picker swatches (PRI-01), all four independently measured. */
   --td-priority-picker-1: rgb(209, 69, 59);
@@ -661,6 +668,11 @@
   --muted: rgb(38, 38, 38);
   --muted-foreground: rgb(204, 204, 204);
   --td-composer-background: rgb(40, 40, 40);
+  /* KBD-05/THEME-03: the measured keyboard-focus tint
+     (flow6-KBD-05-06-todoist.json), a white wash only correct on this
+     dark ground — see the light block's own `--td-focus-tint` for why
+     light gets `transparent` instead of a second, invented value. */
+  --td-focus-tint: rgba(255, 255, 255, 0.14);
 }
 
 @layer base {
@@ -996,5 +1008,64 @@
     border-radius: var(--td-recognition-radius);
     background-color: var(--td-recognition-background);
     color: var(--td-recognition-foreground);
+  }
+}
+
+/*
+ * Keyboard focus (KBD-05/THEME-03), matched against a keyboard-focused
+ * Todoist row (docs/reference/todoist/live-audit-dom/flow6-KBD-05-06-
+ * todoist.json): an inset ring plus a background tint, with `outline`
+ * itself unset — Todoist's own `outline` computed to `none` on the same
+ * element, `box-shadow` doing all the work instead. `:focus-visible`, not
+ * `:focus`, so a mouse click paints nothing, matching the browser default
+ * this replaces. `--td-focus-ring` was declared above long before this
+ * rule existed to read it (the THIRD `--td-*` "dead token" this ledger
+ * has caught — KBD-05's own note names QA-16 and QA-20 as the first two); `--td-focus-tint` is genuinely per-theme, not just
+ * unverified, so it is declared once per theme block instead of here —
+ * see where each is set for why.
+ */
+@layer base {
+  [data-surface="todo"] :focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 1px var(--td-focus-ring) inset;
+    background-color: var(--td-focus-tint);
+  }
+}
+
+/*
+ * Three kinds of element inside this scope keep their own focus styling, and
+ * in each case that is correct rather than a shortfall:
+ *
+ *  - The completion checkbox. Its `box-shadow` is set as an INLINE style
+ *    (task-row-content.tsx), so no stylesheet rule can reach it — but that
+ *    shadow is the PRIORITY ring (`--td-priority-row-*`, rows PRI-05/PRI-06),
+ *    not decoration. Replacing it with a focus ring would destroy a different
+ *    measured behaviour to satisfy this one. It takes the tint and keeps its
+ *    ring, which is the right trade.
+ *  - The "Add a Task" composer and the buttons inside dialogs/popovers. These
+ *    are built from the shared shadcn `Button`/`Input` recipes, whose
+ *    `focus-visible:ring-*` classes live in `@layer utilities` — declared
+ *    AFTER `base` by Tailwind v4, so a later layer wins on those properties
+ *    regardless of selector specificity. They keep their existing, perfectly
+ *    visible Tailwind ring.
+ *
+ * Left as-is deliberately, not merely because the cascade makes it awkward:
+ * the audit measured Todoist's ring on a task ROW (KBD-05, flow 6). It never
+ * measured Todoist's own composer or dialog-button focus, so painting this
+ * ring onto those would be extrapolation past the evidence — exactly the move
+ * ADR 0077 exists to stop. If Todoist's counterparts are ever measured, the
+ * rule can be widened then, with a reading behind it.
+ */
+
+/*
+ * forced-colors (Windows High Contrast) does not render `box-shadow`, so
+ * the rule above would leave keyboard focus with no visible indicator at
+ * all in that mode once `outline` is unset. This is not part of the
+ * Todoist parity measurement — it is a correctness guard so matching
+ * Todoist does not make Todo unusable under forced colors.
+ */
+@media (forced-colors: active) {
+  [data-surface="todo"] :focus-visible {
+    outline: 2px solid;
   }
 }
