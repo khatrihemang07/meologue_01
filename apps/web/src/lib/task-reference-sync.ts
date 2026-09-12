@@ -52,7 +52,9 @@ export async function findEntriesReferencingTask(
 
 function referencesTask(blocks: readonly EntryBlockNode[], taskId: string): boolean {
   for (const block of blocks) {
-    if (block.kind === "prose") {
+    // Only lists hold task items. Entry bodies never contain the comment-only
+    // heading/blockquote/codeBlock kinds, but the union now names them.
+    if (block.kind !== "bulletList" && block.kind !== "orderedList") {
       continue;
     }
     for (const item of block.items) {
@@ -85,7 +87,9 @@ function collectTaskMarkers(
   out: TaskMarkerSpan[],
 ): void {
   for (const block of blocks) {
-    if (block.kind === "prose") {
+    // Only lists hold task items. Entry bodies never contain the comment-only
+    // heading/blockquote/codeBlock kinds, but the union now names them.
+    if (block.kind !== "bulletList" && block.kind !== "orderedList") {
       continue;
     }
     for (const item of block.items) {

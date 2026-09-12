@@ -12,7 +12,7 @@ function taskMarkersOf(body: string): EntryListItem["task"][] {
   const markers: EntryListItem["task"][] = [];
   const walk = (blocks: readonly ReturnType<typeof parseEntryMarkdown>[number][]) => {
     for (const block of blocks) {
-      if (block.kind === "prose") continue;
+      if (block.kind !== "bulletList" && block.kind !== "orderedList") continue;
       for (const item of block.items) {
         markers.push(item.task);
         walk(item.content);

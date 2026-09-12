@@ -336,7 +336,9 @@ describe("quickAddRecognitionPlugin — DOM node identity on withdrawal (QA-06)"
     const textNode = replaced.firstChild as Text;
     expect(textNode.nodeType).toBe(Node.TEXT_NODE);
     textNode.deleteData(2, 1); // "tod" -> "to", the native edit itself.
-    editorView.domObserver.flush();
+    // `domObserver` is ProseMirror's own reconciliation entry point, but not
+    // part of its public types.
+    (editorView as unknown as { domObserver: { flush(): void } }).domObserver.flush();
 
     expect(editorView.state.doc.textContent).toBe("to");
     expect(editorView.state.selection.from).toBe(2);

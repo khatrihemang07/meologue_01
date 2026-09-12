@@ -65,6 +65,7 @@ function createFakeCommentStore(seed: Comment[] = []): CommentStore {
   return {
     list: vi.fn(async () => comments),
     listByTask: vi.fn(async (taskId: string) => comments.filter((c) => c.taskId === taskId)),
+    search: vi.fn(async () => []),
     get: vi.fn(async (id: string) => comments.find((c) => c.id === id)),
     upsert: vi.fn(async (incoming: Comment[]) => {
       comments = [...comments, ...incoming];
