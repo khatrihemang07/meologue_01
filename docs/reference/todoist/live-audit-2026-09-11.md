@@ -660,3 +660,100 @@ Read back from `parity-ledger.md`.
 
 CMT-01 reached `matched`. CMT-02, CMT-03, CMT-06, DET-10 and DET-14 became `divergent`, and CMT-08 was
 unblocked into `divergent`.
+
+## Flows 6 and 7 — the sidebar, the keyboard and the theme
+
+NAV, KBD and THEME rows. Split across two runs because the first died on a usage limit: **flow 6** read
+Todoist's whole side and meologue's navigation and theme; **flow 7** finished meologue's keyboard half.
+Artifacts: the `flow6-*` and `flow7-*` files in `live-audit-dom/`.
+
+### Method, and why Todoist was safe
+
+Flow 6 was **read-only in Todoist**, with an explicit key allowlist — `?`, Escape, arrows, `j`/`k`, and
+`g` then `i`/`t`/`u`. Everything else was forbidden, because in Todoist a bare `e`, `d`, `y` or Delete
+acts on the focused task. When the run hit its usage limit, there was nothing to clean up: Inbox titles
+were **16 before and 16 after, set-equal, nothing added or missing**. That is the argument for putting
+read-only flows first when limits are unpredictable.
+
+### Results
+
+| Row | Todoist | meologue | Result |
+|---|---|---|---|
+| NAV-01 | Add task · Ramble · Search · Inbox · Today · Upcoming · Filters & Labels · **Reporting** · **My Projects** (link); counts in `aria-label` | … · **Activity** · **Projects** (heading); count in visible text | **`divergent`** |
+| NAV-04 | `<nav>` with **no** `aria-label`; **no** `aria-current` anywhere | `<nav aria-label="Todo">`, `aria-current="page"` | **`divergent`** — decision |
+| NAV-06 | `<h1>` + `<h2>` **My Filters** + `<h2>` Labels | `<h1>` + `<h2>` Labels | `built` — count untestable at 0 |
+| NAV-08 | 13px / 400 | 13px / 400 | `matched` |
+| NAV-09 | `<h1>` 26px/700/35px; **two `<header>` elements** | same heading; **zero headers**; column 800px | **`divergent`** |
+| NAV-10 | "Add task", 14px, `rgb(128,128,128)` | "Add a Task"; size and colour **not trusted** | `built` — re-read needed |
+| NAV-11 | "Reporting" → `/app/activity` | "Activity" → `/todo/activity` | **`divergent`** — label |
+| KBD-01 | 8 sections, **80** rows, driven | 3 sections, **16** rows | `todoist-captured` |
+| KBD-02 | `?` opens; Escape closes | identical | `matched` — was `built` |
+| KBD-03 | arrows and `j`/`k` walk the rows | **not bound at all** | **`divergent`** |
+| KBD-04 | wraps; includes Add task and completed | inapplicable — no focus movement | **`divergent`** |
+| KBD-05 | inset `rgb(23,91,194)` ring + tint, no outline | default `outline`, no ring, no tint | **`divergent`** |
+| KBD-06 | `g t` / `g i` navigate | identical; plus `.` menu and `/` Quick-find | **`divergent`** — subset |
+| THEME-02 | sidebar `rgb(38,38,38)`, content `rgb(31,31,31)` | identical | `matched` |
+| THEME-03 | borders, muted text, **focus ring** | first two identical, ring absent | **`divergent`** |
+| THEME-04 | 14px/21px row, 13px chrome | identical | `matched` — was `built` |
+| THEME-05 | system stack | byte-identical | `matched` |
+
+### Defects found
+
+24. **No row-to-row keyboard navigation.** Arrows and `j`/`k` move between tasks in Todoist and are not
+    bound in meologue, so rows are reachable only by `Tab`. KBD-04's wrap cannot exist until this does.
+25. **The focus ring is the browser default.** Todoist draws an inset `rgb(23,91,194)` ring with a
+    translucent tint; meologue draws `outline: oklab(0.556 0 0 / 0.5) auto 1px`. `--td-focus-ring` is
+    declared and consumed nowhere — the dead-token trap, now confirmed live.
+26. **Sidebar labels and counts.** "Activity" against "Reporting", a plain "Projects" heading against a
+    "My Projects" link, and counts in visible text rather than `aria-label`.
+27. **The add-field label** reads "Add a Task" against Todoist's "Add task". Text only — its size and
+    colour were not reliably measured.
+
+### Corrections
+
+- **NAV-09's own premise was wrong.** Todoist has **two `<header>` elements**, one labelled as the
+  current view's header; meologue has none. The corpus saw the view name sitting in the column and
+  concluded there was no app bar. The heading metrics do match exactly.
+- **KBD-01 is now driven, not transcribed.** `?` opens eight sections totalling exactly **80**
+  shortcuts — 13+11+15+17+5+3+11+5 — matching `keyboard.md`'s table. The method is recorded with it:
+  the per-section counts came from a content-hashed class, and a second selector in the same run
+  disagreed; only the total corroborates.
+- **A defect was withdrawn, not recorded.** meologue's overlay looked like it ignored Escape
+  (`dialogStillPresent: true`). Polling shows it present at 1,000ms and gone by 1,200ms — the same
+  delayed close as its `.` menu (2,000ms) and `/` dialog (1,400ms). The single immediate check was a
+  false negative, caused by the same frozen-transition behaviour that made flow 4 misread a dialog's
+  width.
+
+### A third decision for the user
+
+**NAV-04** joins **DET-03** and **ROW-12**: in each, meologue is more accessible than Todoist, and
+matching exactly means removing that. Todoist's sidebar names neither its landmark nor the current
+page; meologue does both.
+
+### Not established
+
+- **Todoist's content-column width** this run — the reading taken was its 1190px main region, so the
+  800px figure still rests on pass 2.
+- **meologue's add-field size and colour** — the element captured looks like the editor box rather than
+  the placeholder leaf, the same wrong-element error QA-16 and NAV-09 hit. Re-read the placeholder.
+- **Todoist's `.` and `/`** — never pressed, because this run's own safety allowlist forbade them. A
+  limit of the method, not a finding.
+
+### Traps
+
+- **Frozen transitions** produce false negatives on "did it close?" as reliably as on "how wide is it?".
+  Poll for a state change; never take one immediate read as proof.
+- **meologue's store wiped itself a third time** (a new device id and an empty task list), so flow 7
+  re-seeded before measuring.
+
+### Tally after flows 6 and 7
+
+Read back from `parity-ledger.md`.
+
+| Status | Session start | After flow 5 | Now |
+|---|---|---|---|
+| `matched` | 17 | 46 | **48** |
+| `built` | 74 | 26 | **18** |
+| `todoist-captured` | 13 | 11 | **8** |
+| `divergent` | 10 | 38 | **47** |
+| `blocked` | 11 | 6 | 6 |

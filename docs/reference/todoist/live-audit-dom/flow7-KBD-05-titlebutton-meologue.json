@@ -1,0 +1,30 @@
+{
+  "activeElement": {
+    "tag": "BUTTON",
+    "ariaLabel": null,
+    "textSnippet": "ZZ probe one",
+    "isRowTitleButton": true,
+    "dataTaskId": "d2544e80-f9c1-471b-9571-f1b2134e8b63",
+    "rowTaskTitleViaCheckbox": "ZZ probe one"
+  },
+  "animationsFoundBeforeFinish": [],
+  "read1": {
+    "boxShadow": "none",
+    "outline": "oklab(0.556 0 0 / 0.5) auto 1px",
+    "outlineStyle": "auto",
+    "outlineWidth": "1px",
+    "outlineColor": "oklab(0.556 0 0 / 0.5)",
+    "backgroundColor": "rgba(0, 0, 0, 0)",
+    "transform": "none"
+  },
+  "read2": {
+    "boxShadow": "none",
+    "outline": "oklab(0.556 0 0 / 0.5) auto 1px",
+    "outlineStyle": "auto",
+    "outlineWidth": "1px",
+    "outlineColor": "oklab(0.556 0 0 / 0.5)",
+    "backgroundColor": "rgba(0, 0, 0, 0)",
+    "transform": "none"
+  },
+  "readsIdentical": true
+}

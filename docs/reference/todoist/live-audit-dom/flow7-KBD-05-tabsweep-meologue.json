@@ -1,0 +1,199 @@
+{
+  "tabStops": [
+    {
+      "tabIndex": 1,
+      "active": {
+        "tag": "BUTTON",
+        "role": null,
+        "ariaLabel": "Reorder or reparent \"ZZ probe one\" — arrow keys to move, Alt+arrow keys to indent or outdent",
+        "className": "flex size-6 shrink-0 touch-none cursor-grab items-center justify-center rounded text-muted-foreground active:cursor-grabbing pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:focus-visible:opacity-100",
+        "inRow": true,
+        "dataTaskId": "d2544e80-f9c1-471b-9571-f1b2134e8b63"
+      }
+    },
+    {
+      "tabIndex": 2,
+      "active": {
+        "tag": "INPUT",
+        "role": null,
+        "ariaLabel": "ZZ probe one",
+        "className": "block size-[18px] shrink-0 appearance-none rounded-full accent-current",
+        "inRow": true,
+        "dataTaskId": "d2544e80-f9c1-471b-9571-f1b2134e8b63"
+      }
+    },
+    {
+      "tabIndex": 3,
+      "active": {
+        "tag": "BUTTON",
+        "role": null,
+        "ariaLabel": null,
+        "className": "line-clamp-4 block w-full text-left hover:underline text-[length:var(--td-row-font-size)] leading-[length:var(--td-row-line-height)]",
+        "inRow": true,
+        "dataTaskId": "d2544e80-f9c1-471b-9571-f1b2134e8b63"
+      }
+    },
+    {
+      "tabIndex": 4,
+      "active": {
+        "tag": "BUTTON",
+        "role": null,
+        "ariaLabel": "Edit \"ZZ probe one\"",
+        "className": "hidden pointer-fine:flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:focus-visible:opacity-100",
+        "inRow": true,
+        "dataTaskId": "d2544e80-f9c1-471b-9571-f1b2134e8b63"
+      }
+    },
+    {
+      "tabIndex": 5,
+      "active": {
+        "tag": "BUTTON",
+        "role": null,
+        "ariaLabel": "Date \"ZZ probe one\"",
+        "className": "hidden pointer-fine:flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:focus-visible:opacity-100",
+        "inRow": true,
+        "dataTaskId": "d2544e80-f9c1-471b-9571-f1b2134e8b63"
+      }
+    },
+    {
+      "tabIndex": 6,
+      "active": {
+        "tag": "BUTTON",
+        "role": null,
+        "ariaLabel": "Comment on \"ZZ probe one\"",
+        "className": "hidden pointer-fine:flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:focus-visible:opacity-100",
+        "inRow": true,
+        "dataTaskId": "d2544e80-f9c1-471b-9571-f1b2134e8b63"
+      }
+    },
+    {
+      "tabIndex": 7,
+      "active": {
+        "tag": "BUTTON",
+        "role": null,
+        "ariaLabel": "More actions for \"ZZ probe one\"",
+        "className": "flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:focus-visible:opacity-100 aria-expanded:opacity-100",
+        "inRow": true,
+        "dataTaskId": "d2544e80-f9c1-471b-9571-f1b2134e8b63"
+      }
+    },
+    {
+      "tabIndex": 8,
+      "active": {
+        "tag": "BUTTON",
+        "role": null,
+        "ariaLabel": "Reorder or reparent \"ZZ probe two\" — arrow keys to move, Alt+arrow keys to indent or outdent",
+        "className": "flex size-6 shrink-0 touch-none cursor-grab items-center justify-center rounded text-muted-foreground active:cursor-grabbing pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:focus-visible:opacity-100",
+        "inRow": true,
+        "dataTaskId": "e651d5e0-3361-45b1-a09d-593638f5ebe8"
+      }
+    },
+    {
+      "tabIndex": 9,
+      "active": {
+        "tag": "INPUT",
+        "role": null,
+        "ariaLabel": "ZZ probe two",
+        "className": "block size-[18px] shrink-0 appearance-none rounded-full accent-current",
+        "inRow": true,
+        "dataTaskId": "e651d5e0-3361-45b1-a09d-593638f5ebe8"
+      }
+    },
+    {
+      "tabIndex": 10,
+      "active": {
+        "tag": "BUTTON",
+        "role": null,
+        "ariaLabel": null,
+        "className": "line-clamp-4 block w-full text-left hover:underline text-[length:var(--td-row-font-size)] leading-[length:var(--td-row-line-height)]",
+        "inRow": true,
+        "dataTaskId": "e651d5e0-3361-45b1-a09d-593638f5ebe8"
+      }
+    },
+    {
+      "tabIndex": 11,
+      "active": {
+        "tag": "BUTTON",
+        "role": null,
+        "ariaLabel": "Edit \"ZZ probe two\"",
+        "className": "hidden pointer-fine:flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:focus-visible:opacity-100",
+        "inRow": true,
+        "dataTaskId": "e651d5e0-3361-45b1-a09d-593638f5ebe8"
+      }
+    },
+    {
+      "tabIndex": 12,
+      "active": {
+        "tag": "BUTTON",
+        "role": null,
+        "ariaLabel": "Date \"ZZ probe two\"",
+        "className": "hidden pointer-fine:flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:focus-visible:opacity-100",
+        "inRow": true,
+        "dataTaskId": "e651d5e0-3361-45b1-a09d-593638f5ebe8"
+      }
+    },
+    {
+      "tabIndex": 13,
+      "active": {
+        "tag": "BUTTON",
+        "role": null,
+        "ariaLabel": "Comment on \"ZZ probe two\"",
+        "className": "hidden pointer-fine:flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:focus-visible:opacity-100",
+        "inRow": true,
+        "dataTaskId": "e651d5e0-3361-45b1-a09d-593638f5ebe8"
+      }
+    },
+    {
+      "tabIndex": 14,
+      "active": {
+        "tag": "BUTTON",
+        "role": null,
+        "ariaLabel": "More actions for \"ZZ probe two\"",
+        "className": "flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:focus-visible:opacity-100 aria-expanded:opacity-100",
+        "inRow": true,
+        "dataTaskId": "e651d5e0-3361-45b1-a09d-593638f5ebe8"
+      }
+    },
+    {
+      "tabIndex": 15,
+      "active": {
+        "tag": "BUTTON",
+        "role": null,
+        "ariaLabel": "Reorder or reparent \"ZZ probe three\" — arrow keys to move, Alt+arrow keys to indent or outdent",
+        "className": "flex size-6 shrink-0 touch-none cursor-grab items-center justify-center rounded text-muted-foreground active:cursor-grabbing pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:focus-visible:opacity-100",
+        "inRow": true,
+        "dataTaskId": "a114b2fe-6cc5-4bbf-a641-95db4a59b729"
+      }
+    }
+  ],
+  "landedOnRowAtTabIndex": 1,
+  "finalFocusedMeasurement": {
+    "activeElement": {
+      "tag": "BUTTON",
+      "role": null,
+      "ariaLabel": "Reorder or reparent \"ZZ probe three\" — arrow keys to move, Alt+arrow keys to indent or outdent",
+      "textSnippet": null,
+      "dataTaskId": "a114b2fe-6cc5-4bbf-a641-95db4a59b729"
+    },
+    "animationsFoundBeforeFinish": [],
+    "read1": {
+      "boxShadow": "none",
+      "outline": "oklab(0.556 0 0 / 0.5) auto 1px",
+      "outlineStyle": "auto",
+      "outlineWidth": "1px",
+      "outlineColor": "oklab(0.556 0 0 / 0.5)",
+      "backgroundColor": "rgba(0, 0, 0, 0)",
+      "transform": "none"
+    },
+    "read2": {
+      "boxShadow": "none",
+      "outline": "oklab(0.556 0 0 / 0.5) auto 1px",
+      "outlineStyle": "auto",
+      "outlineWidth": "1px",
+      "outlineColor": "oklab(0.556 0 0 / 0.5)",
+      "backgroundColor": "rgba(0, 0, 0, 0)",
+      "transform": "none"
+    },
+    "readsIdentical": true
+  }
+}
