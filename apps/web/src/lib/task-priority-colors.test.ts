@@ -12,7 +12,7 @@ describe("priorityColour (the row/checkbox ring)", () => {
     expect(priorityColour(1)).toBe("var(--td-priority-row-1)");
   });
 
-  it("p2 and p3 read the row tokens (PRI-06: unmeasured, index.css falls them back to the picker swatch)", () => {
+  it("p2 and p3 read the row tokens (PRI-06: now measured directly, index.css no longer falls them back to the picker swatch)", () => {
     expect(priorityColour(2)).toBe("var(--td-priority-row-2)");
     expect(priorityColour(3)).toBe("var(--td-priority-row-3)");
   });
@@ -42,9 +42,13 @@ describe("priorityPickerColour (the priority picker's own swatches)", () => {
 });
 
 // PRI-05's whole point, asserted directly rather than only implied by the
-// two describe blocks above reading different token names: P1's row ring
-// and P1's picker swatch are genuinely different values in a real Todoist,
-// and this module must never collapse them into one shared token.
-it("keeps the row ring's P1 and the picker's P1 on two different tokens (PRI-05)", () => {
+// two describe blocks above reading different token names: each of P1-P3's
+// row ring and picker swatch are genuinely different values in a real
+// Todoist, and this module must never collapse them into one shared token.
+// PRI-06 is what extended that rule from "true at P1" to "true at every
+// non-default level" — asserted here for P2 and P3 too, not only P1.
+it("keeps each of P1-P3's row ring and picker swatch on two different tokens (PRI-05/PRI-06)", () => {
   expect(priorityColour(1)).not.toBe(priorityPickerColour(1));
+  expect(priorityColour(2)).not.toBe(priorityPickerColour(2));
+  expect(priorityColour(3)).not.toBe(priorityPickerColour(3));
 });

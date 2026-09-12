@@ -525,15 +525,17 @@
   --td-priority-picker-2: rgb(235, 137, 9);
   --td-priority-picker-3: rgb(36, 111, 224);
   --td-priority-picker-4: rgb(102, 102, 102);
-  /* The row/checkbox ring's own P1 (PRI-05) — measured, and DELIBERATELY
-     different from `--td-priority-picker-1` above; see task-priority-
-     colors.ts's own header comment before "fixing" these into one value.
-     P2/P3's row rendering was never observed (PRI-06, blocked — no P2/P3
-     Task exists in the captured account), so those two fall back to the
-     picker's own swatch below rather than a third, wholly invented number. */
+  /* The row/checkbox ring's own P1-P3 (PRI-05/PRI-06) — measured, and
+     DELIBERATELY different from `--td-priority-picker-1/2/3` above; see
+     task-priority-colors.ts's own header comment before "fixing" these
+     into one value per level. P2/P3's row rendering was blocked for a
+     while (PRI-06 — no P2/P3 Task existed in the captured account) and
+     these two used to fall back to the picker's own swatch below; both
+     are now measured directly (flow 2, disposable P2/P3 fixtures) and
+     hold their own literals, no longer a fallback onto the picker. */
   --td-priority-row-1: rgb(255, 112, 102);
-  --td-priority-row-2: var(--td-priority-picker-2);
-  --td-priority-row-3: var(--td-priority-picker-3);
+  --td-priority-row-2: rgb(255, 154, 19);
+  --td-priority-row-3: rgb(82, 151, 255);
 
   /* The Date family's tones (DATE-01/02/03), reused verbatim by
      `--td-date-muted` rather than a second literal — DATE-02's own point is
@@ -637,6 +639,12 @@
      honest cost of deferring the composer, and it is the thing to look at
      first if the field ever reads as jumpy. */
   --td-add-task-font-size: 14px;
+  /* NAV-10: the add-task placeholder's own colour, split from
+     `--muted-foreground` because that token paints every muted label on this
+     surface and only this widget was measured. Todoist was read only in dark
+     theme (THEME-01), so light keeps the colour it already had rather than
+     inventing a value; the dark block carries the measurement. */
+  --td-add-task-placeholder: var(--muted-foreground);
 }
 
 /*
@@ -673,6 +681,8 @@
      dark ground — see the light block's own `--td-focus-tint` for why
      light gets `transparent` instead of a second, invented value. */
   --td-focus-tint: rgba(255, 255, 255, 0.14);
+  /* NAV-10, measured on Todoist's placeholder leaf (flow8-NAV-10). */
+  --td-add-task-placeholder: rgb(128, 128, 128);
 }
 
 @layer base {

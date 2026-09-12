@@ -261,17 +261,26 @@ describe("TaskRow", () => {
     expect(screen.queryByRole("button", { name: /Complete and archive/ })).not.toBeInTheDocument();
   });
 
-  // ROW-03 (parity-ledger.md), issue #250: pass2-2026-09-11.md §2 measured
-  // the checkbox ring at 2px for P1, 1px at every other priority — this
-  // used to hardcode 1px everywhere. `priority: 4` is the STORED value for
-  // UI "P1" (task-types.ts's own `uiPriorityOf`'s `5 - x` inversion).
-  it("thickens the checkbox ring to 2px at P1", () => {
-    renderRow({ task: task({ priority: 4 }) });
+  // ROW-03/PRI-06 (parity-ledger.md), issue #250 then a later fix pass:
+  // pass2-2026-09-11.md §2 first measured the checkbox ring at 2px for P1,
+  // 1px everywhere else — flow 2's live P1-P4 fixtures (PRI-06) then showed
+  // that "everywhere else" was wrong for P2/P3 too: the ring is 2px for
+  // EVERY non-default priority (P1, P2, P3) and 1px only at P4 ("no
+  // priority"). `priority` below is the STORED value; UI P1/P2/P3/P4 are
+  // stored 4/3/2/1 (task-types.ts's own `uiPriorityOf`'s `5 - x`
+  // inversion) — this suite always states the UI level in the test name
+  // and the stored number in the fixture, never the reverse.
+  it.each([
+    ["P1", 4],
+    ["P2", 3],
+    ["P3", 2],
+  ])("thickens the checkbox ring to 2px at %s", (_uiLabel, storedPriority) => {
+    renderRow({ task: task({ priority: storedPriority }) });
 
     expect(screen.getByRole("checkbox").style.boxShadow).toContain("2px");
   });
 
-  it("keeps the checkbox ring at 1px for every other priority", () => {
+  it("keeps the checkbox ring at 1px for P4 ('no priority'), the one default level", () => {
     renderRow({ task: task({ priority: 1 }) });
 
     expect(screen.getByRole("checkbox").style.boxShadow).toContain("1px");
@@ -620,15 +629,77 @@ describe("TaskRow", () => {
       }),
     });
 
-    expect(screen.getByText("Sep 3")).toBeInTheDocument();
-    expect(screen.getByText("Due Sep 10")).toBeInTheDocument();
+    expect(screen.getByText("3 Sep")).toBeInTheDocument();
+    expect(screen.getByText("Due 10 Sep")).toBeInTheDocument();
     expect(screen.getByText("P1")).toBeInTheDocument();
   });
 
   it("summarises a timed date with its time of day", () => {
     renderRow({ task: task({ content: "call mum", date: "2026-09-03T09:30" }) });
 
-    expect(screen.getByText("Sep 3, 9:30 AM")).toBeInTheDocument();
+    expect(screen.getByText("3 Sep 9:30 AM")).toBeInTheDocument();
+  });
+
+  // DATE-01 (parity-ledger.md): Todoist's own date control carries an
+  // inline 12×12 calendar `<svg>` beside the date text
+  // (`live-audit-dom/flow8-DATE-01-todoist.json`), which meologue rendered
+  // no icon for at all before this fix. That artifact only ever sampled
+  // an OVERDUE row ("Yesterday", four captures in flow8-DATE-01-debug.json)
+  // — whether Todoist's non-overdue dates also carry the icon was never
+  // settled either way, so this is on every dated row, not gated to
+  // overdue, per this fix's own instruction for an unsettled artifact.
+  // jsdom paints no pixels, so this only proves the icon element is in the
+  // DOM next to the date text, not that it renders at 12×12 on screen.
+  it("shows a calendar icon beside the date text — DATE-01", () => {
+    renderRow({ task: task({ content: "call mum", date: "2026-09-03" }) });
+
+    const dateText = screen.getByText("3 Sep");
+    expect(dateText.querySelector("svg.lucide-calendar")).not.toBeNull();
+  });
+
+  // ROW-01 (parity-ledger.md): a title-only row (no date, deadline,
+  // priority, recurrence, Label, Project, sub-task or comment count) is
+  // 43px in Todoist; a row carrying one metadata line is 59px, +16px. This
+  // used to be a single `minHeight: "59px"` floor that held every
+  // title-only row at 59 regardless. jsdom computes no layout, so this
+  // only proves the inline `minHeight` style switches with `hasMetadata`
+  // — it cannot measure the row's actual painted height, and the
+  // always-present `size-11` (44px) action buttons in the same flex row
+  // may still force a real browser's rendered height above 43px even with
+  // this floor lowered (see this file's own comment on the style prop).
+  describe("ROW-01: row height follows whether the row has a metadata line", () => {
+    it("floors a title-only row at 43px", () => {
+      renderRow({ task: task({ content: "call mum" }) });
+
+      expect(rowBox().style.minHeight).toBe("43px");
+    });
+
+    it("floors a row with a date badge at 59px", () => {
+      renderRow({ task: task({ content: "call mum", date: "2026-09-03" }) });
+
+      expect(rowBox().style.minHeight).toBe("59px");
+    });
+
+    it("floors a row with a non-default priority (and no date) at 59px", () => {
+      renderRow({ task: task({ content: "call mum", priority: 4 }) });
+
+      expect(rowBox().style.minHeight).toBe("59px");
+    });
+
+    it("floors a row whose only metadata is a sub-task count at 59px", () => {
+      renderRow({ task: task({ content: "call mum" }), subtaskCount: 2 });
+
+      expect(rowBox().style.minHeight).toBe("59px");
+    });
+
+    it("floors a row at 43px when its date badge is suppressed and nothing else qualifies as metadata", () => {
+      renderRow({
+        task: task({ content: "call mum", date: "2026-09-03" }),
+        suppressDateBadge: true,
+      });
+
+      expect(rowBox().style.minHeight).toBe("43px");
+    });
   });
 
   // Issue #224's own "must gain" list: Labels, the Project a Task lives
@@ -735,7 +806,7 @@ describe("TaskRow", () => {
         commentCount: 3,
       });
 
-      expect(screen.getByText("Sep 3")).toBeInTheDocument();
+      expect(screen.getByText("3 Sep")).toBeInTheDocument();
       expect(screen.getByText("3")).toBeInTheDocument();
     });
 

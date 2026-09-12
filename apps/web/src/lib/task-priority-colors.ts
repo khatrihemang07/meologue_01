@@ -31,10 +31,13 @@
  * would silently "fix" a real, deliberate Todoist design choice the first
  * time someone noticed the two reds didn't match; keeping two named
  * functions is what makes that mistake need a conscious edit to make.
- * P2/P3's row rendering was never observed (PRI-06, blocked — no P2/P3
- * Task exists in the captured account), so `--td-priority-row-2`/`-3`
- * fall back to the picker's own swatch in index.css rather than a third,
- * invented pair of literals; P4 ("no priority") reads identically on both
+ * P2/P3's row rendering is now measured too (PRI-06, unblocked with
+ * disposable P2/P3 fixtures): row rgb(255,154,19)/rgb(82,151,255) against
+ * picker rgb(235,137,9)/rgb(36,111,224) — a second and third instance of
+ * the identical row-vs-picker split P1 already established, not a
+ * coincidence limited to red. `--td-priority-row-2`/`-3` hold those row
+ * values directly now, no longer a fallback onto the picker's own swatch;
+ * P4 ("no priority") reads identically on both
  * functions because Todoist's own picker and its row both render a
  * priority-less Task as the same neutral grey, `--td-checkbox-ring-
  * default`, distinct from the picker's own darker P4 swatch.

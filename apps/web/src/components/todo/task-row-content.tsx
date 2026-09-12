@@ -25,6 +25,7 @@
 import type { Label, QuickAddOptions, Task } from "@meologue/core";
 import { uiPriorityOf } from "@meologue/core";
 import {
+  Calendar,
   CalendarClock,
   CheckCheck,
   GripVertical,
@@ -329,16 +330,46 @@ export function TaskRowContent({
         isNestTarget && "bg-primary/10 ring-2 ring-primary ring-inset",
       )}
       // ROW-01: 59px is the row's own baseline height for a single-line
-      // title plus one metadata line — `min-h`, not a fixed `h`, because a
-      // title long enough to wrap (ROW-05's own 4-line clamp, below) has
-      // to be allowed to grow the row rather than clip against a hard
-      // ceiling the reference itself never measured against a wrapped
-      // title. "No padding on the row itself" is why this box carries
-      // none of its own: the checkbox, title and metadata line supply
-      // whatever internal spacing they need, and centring via
-      // `items-center` is what keeps a short, unwrapped title vertically
-      // balanced inside the 59px floor rather than pinned to its top.
-      style={{ minHeight: "59px", paddingLeft: `${12 + (depth - 1) * 20}px`, paddingRight: "12px" }}
+      // title plus one metadata line; a title-only row (no date, deadline,
+      // priority, recurrence, Label, Project, sub-task or comment count —
+      // `hasMetadata`, above, the SAME boolean that decides whether the
+      // metadata `<span>` below renders at all) is 43px, +16px shorter.
+      // Restated live (`live-audit-2026-09-11.md`): the corpus's original
+      // 59px was measured on "hair wash," which carries a date badge, so it
+      // was always the one-metadata-line height, never a fixed one; a
+      // disposable title-only fixture measured 43px instead. This used to
+      // be a single hard-coded `minHeight: "59px"` floor that held every
+      // title-only row at 59 regardless — keying the floor to `hasMetadata`
+      // ties it to the actual rendered content instead of a second,
+      // independent guess at whether this row has a metadata line.
+      //
+      // Still `min-h`, not a fixed `h`, for the reason it always was: a
+      // title long enough to wrap (ROW-05's own 4-line clamp, below) has to
+      // be allowed to grow the row rather than clip against a hard ceiling
+      // the reference itself never measured against a wrapped title. "No
+      // padding on the row itself" is why this box carries none of its
+      // own: the checkbox, title and metadata line supply whatever internal
+      // spacing they need, and centring via `items-center` is what keeps a
+      // short, unwrapped title vertically balanced inside whichever floor
+      // applies, rather than pinned to its top.
+      //
+      // Honest limit: this floor is not a pure function of line-height and
+      // padding (the row itself has neither — see above), so it stays two
+      // measured literals switched on `hasMetadata` rather than a single
+      // formula derived from type scale. It is also not the only thing that
+      // can set this row's rendered height in a real browser — the
+      // always-present "More actions" button a few lines down (and,
+      // outside touch, Edit/Date/Comment beside it) is `size-11` (44px),
+      // taking up flex-row space via `opacity`, not `display`, whether or
+      // not it is visually revealed. 44px < 59px, so that never surfaced
+      // before; at a 43px floor it is the taller of the two, and jsdom
+      // computes no layout, so which value actually wins in a real browser
+      // is not proven by this file's own tests.
+      style={{
+        minHeight: hasMetadata ? "59px" : "43px",
+        paddingLeft: `${12 + (depth - 1) * 20}px`,
+        paddingRight: "12px",
+      }}
     >
       {draggable && (
         <button
@@ -394,9 +425,15 @@ export function TaskRowContent({
 
         The ring's own WIDTH (issue #250, ROW-03's own "dimensionally
         incomplete" caveat) is a second axis pass2-2026-09-11.md §2
-        measured and this used to flatten: 2px at P1, 1px at every other
-        priority — not a fixed 1px everywhere. The colour was already
-        right; only the box-shadow's spread was hardcoded.
+        measured and this used to flatten to a fixed 1px everywhere.
+
+        Restated again by PRI-06 (flow 2, driven live with P1-P4 fixtures):
+        the ring is 2px for EVERY non-default priority — P1 `rgb(255,112,
+        102)`, P2 `rgb(255,154,19)`, P3 `rgb(82,151,255)` — and 1px only at
+        P4 ("no priority", `rgb(169,169,169)`). This used to test
+        `uiPriorityOf(...) === 1`, so only P1 got the 2px ring and P2/P3
+        fell through to the 1px branch alongside P4 — testing "not the
+        default level" (`!== 4`) instead is what covers all three.
       */}
       <label className="flex size-6 shrink-0 cursor-pointer items-center justify-center">
         <input
@@ -417,7 +454,7 @@ export function TaskRowContent({
           }}
           aria-label={task.content}
           style={{
-            boxShadow: `0 0 0 ${uiPriorityOf(task.priority) === 1 ? "2px" : "1px"} ${priorityColour(uiPriorityOf(task.priority))}`,
+            boxShadow: `0 0 0 ${uiPriorityOf(task.priority) === 4 ? "1px" : "2px"} ${priorityColour(uiPriorityOf(task.priority))}`,
           }}
           // `appearance-none` is what makes `rounded-full` mean anything at
           // all here (ROW-03). A native checkbox paints the platform widget
@@ -519,8 +556,21 @@ export function TaskRowContent({
           // than inventing a comma/pipe/dot the reference never showed
           // for the two fields it did observe (date, comment count).
           <span className="flex flex-wrap items-center gap-x-2 text-muted-foreground text-xs">
+            {/* DATE-01 (parity-ledger.md), issue #257: an inline 12×12
+                calendar `<svg>` beside the date text, measured live on an
+                overdue row (`live-audit-dom/flow8-DATE-01-todoist.json`) —
+                `hasSvgIconInsideDateControl: true`, `svgViewBox: "0 0 12
+                12"`. That artifact only ever sampled overdue rows (four
+                "Yesterday" captures, `flow8-DATE-01-debug.json`), so
+                whether Todoist's non-overdue dates (Today, a weekday, "21
+                Sep") also carry the icon was NOT settled either way — put
+                here on every dated row, per this fix's own instruction for
+                an unsettled artifact, rather than gated to overdue only. */}
             {dateDisplay !== null && !suppressDateBadge && (
-              <span style={{ color: dateDisplay.colour }}>{dateDisplay.text}</span>
+              <span className="flex items-center gap-0.5" style={{ color: dateDisplay.colour }}>
+                <Calendar aria-hidden="true" className="size-3" />
+                {dateDisplay.text}
+              </span>
             )}
             {task.deadline !== null && <span>Due {formatDay(task.deadline)}</span>}
             {task.priority !== 1 && <span>P{uiPriorityOf(task.priority)}</span>}
