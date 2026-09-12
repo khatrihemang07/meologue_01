@@ -288,18 +288,65 @@ export function bindingById(id: string): TodoKeyBinding | undefined {
 }
 
 /**
- * The field guard — lifted verbatim from `task-quick-find.tsx`'s own
- * pre-#228 inline check (that file's own former header comment named the
- * exact same three conditions), exported so there is one answer rather
- * than two. The Quick Add field is a ProseMirror `contenteditable` div, not
- * an `<input>`/`<textarea>` (`task-title-editor.tsx`), which is why
- * `isContentEditable` — not a tag check — is what actually catches it.
+ * `<input>` types that take no typed text, so focus sitting on one is not
+ * "the reader is typing" — a denylist rather than an allowlist of text
+ * types, so an unfamiliar or future text-ish type still counts as typing
+ * and keeps its keystrokes. `time` is deliberately absent: its own arrows
+ * change the hour and minute, so it IS capturing the keyboard.
+ */
+const NON_TYPING_INPUT_TYPES = new Set([
+  "checkbox",
+  "radio",
+  "button",
+  "submit",
+  "reset",
+  "file",
+  "image",
+  "color",
+  "range",
+]);
+
+/**
+ * The field guard — lifted from `task-quick-find.tsx`'s own pre-#228 inline
+ * check, exported so there is one answer rather than two. The Quick Add
+ * field is a ProseMirror `contenteditable` div, not an `<input>`/
+ * `<textarea>` (`task-title-editor.tsx`), which is why `isContentEditable`
+ * — not a tag check — is what actually catches it.
+ *
+ * **A bare `tagName === "INPUT"` was too broad, and it broke CMT-05's undo
+ * on the one path a reader actually takes.** Completing a Task by clicking
+ * its checkbox leaves focus *on that checkbox*, which is an `<input>` — so
+ * the old rule reported "typing", every binding was suppressed, and
+ * `Ctrl/Cmd+Z` (or `z`) silently did nothing. Click the checkbox, press
+ * undo, get no undo. Found in the re-drive by completing a Task the way a
+ * person would rather than by focusing something else first; the suite
+ * could not see it because jsdom never leaves focus where a real click
+ * does, and the row's own tests drive the checkbox through `fireEvent`
+ * rather than a real pointer.
+ *
+ * So the question this answers is "is the reader typing text into this?",
+ * not "is this an input?" — which also un-suppresses every *other* binding
+ * while a checkbox holds focus, the same latent problem one row deep.
+ * There are no `radio` or `range` inputs in this surface to have relied on
+ * their own arrow handling (checked, not assumed); the types actually in
+ * use here are `text`, `checkbox`, `time` and `search`.
  */
 export function isTypingTarget(target: EventTarget | null): boolean {
-  return Boolean(
-    target instanceof HTMLElement &&
-      (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable),
-  );
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+  if (target.isContentEditable) {
+    return true;
+  }
+  if (target.tagName === "TEXTAREA") {
+    return true;
+  }
+  if (target.tagName === "INPUT") {
+    // A missing `type` defaults to `text`, so an absent attribute is typing.
+    const type = (target.getAttribute("type") ?? "text").toLowerCase();
+    return !NON_TYPING_INPUT_TYPES.has(type);
+  }
+  return false;
 }
 
 /** The custom event `use-todo-keymap.ts` dispatches for `command-menu` — `task-row.tsx` listens for it to open *its own* `TaskCommandMenu` when its `data-task-id` matches, rather than every row keeping a keydown handler of its own. */

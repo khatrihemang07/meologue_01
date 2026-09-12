@@ -602,6 +602,62 @@ describe("useTodoKeymap", () => {
         expect(document.activeElement).toBe(input);
       });
 
+      it("fires undo while a CHECKBOX holds focus — the path a reader actually takes", () => {
+        // CMT-05's real-world failure: completing a Task by clicking its
+        // checkbox leaves focus on that checkbox, and the old
+        // `tagName === "INPUT"` guard called that "typing", suppressing the
+        // binding so Ctrl/Cmd+Z silently did nothing. A checkbox takes no
+        // typed text, so it must not suppress anything.
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        document.body.append(checkbox);
+        const props = renderKeymap();
+        checkbox.focus();
+
+        fireEvent.keyDown(checkbox, { key: "z" });
+        expect(props.onUndoComplete).toHaveBeenCalledTimes(1);
+
+        fireEvent.keyDown(checkbox, { key: "z", metaKey: true });
+        expect(props.onUndoComplete).toHaveBeenCalledTimes(2);
+      });
+
+      it("still suppresses undo inside a text input and a textarea", () => {
+        const text = document.createElement("input");
+        text.type = "text";
+        const area = document.createElement("textarea");
+        document.body.append(text, area);
+        const props = renderKeymap();
+
+        text.focus();
+        fireEvent.keyDown(text, { key: "z" });
+        fireEvent.keyDown(text, { key: "z", metaKey: true });
+        area.focus();
+        fireEvent.keyDown(area, { key: "z" });
+        fireEvent.keyDown(area, { key: "z", metaKey: true });
+        expect(props.onUndoComplete).not.toHaveBeenCalled();
+      });
+
+      it("treats an input with no type attribute as typing, since it defaults to text", () => {
+        const bare = document.createElement("input");
+        document.body.append(bare);
+        const props = renderKeymap();
+        bare.focus();
+
+        fireEvent.keyDown(bare, { key: "z" });
+        expect(props.onUndoComplete).not.toHaveBeenCalled();
+      });
+
+      it("treats a time input as typing, because its own arrows change its value", () => {
+        const time = document.createElement("input");
+        time.type = "time";
+        document.body.append(time);
+        const props = renderKeymap();
+        time.focus();
+
+        fireEvent.keyDown(time, { key: "z" });
+        expect(props.onUndoComplete).not.toHaveBeenCalled();
+      });
+
       it("never navigates on 'j'/'k', which must stay typeable at any caret position", () => {
         renderTaskRow("t1", "Row 1");
         const input = renderAddTaskInput("");

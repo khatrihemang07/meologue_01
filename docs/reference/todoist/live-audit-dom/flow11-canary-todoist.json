@@ -1,0 +1,28 @@
+{
+  "flow": 11,
+  "purpose": "The re-drive. Seven rows were fixed and recorded `matched`, but each was paired against a Todoist reading taken on an earlier day. ADR 0077 requires both sides driven in the SAME session; this flow reads both halves back to back.",
+  "date": "2026-09-12",
+  "note": "A first attempt at this flow was run by a subagent that hit a model rate limit and terminated before writing anything. The account was checked immediately afterwards and was untouched — the readings below are from the parent session driving directly.",
+  "before": {
+    "inboxCount": 16,
+    "projects": ["/app/project/getting-started-6h5pC9QRMFgm375m"],
+    "labels": [],
+    "anyProbeTasks": []
+  },
+  "writes": [
+    "One disposable task 'ZZ probe redrive' — created via Quick Add (typed character by character after polling document.activeElement into the dialog, then asserted character-exact), used for SCHED-01, CMT-03 and CMT-05, then deleted against a dialog naming it."
+  ],
+  "writesIntended": "exactly one task",
+  "unintendedWrites": "none",
+  "deleteDialogText": "Delete task?The ZZ probe redrive task will be permanently deleted.CancelDelete",
+  "deleteDialogQuotesName": false,
+  "deleteDialogNote": "The name is unquoted, consistent with defect 31 — Todoist leaves it bare where meologue's label and project dialogs wrap it in quotes.",
+  "after": {
+    "inboxCount": 16,
+    "projects": ["/app/project/getting-started-6h5pC9QRMFgm375m"],
+    "labels": [],
+    "anyProbeTasks": []
+  },
+  "realDataTouched": "none. The user's 3 filters, 1 project and 16 Inbox tasks were read only. The scheduler was opened on their tasks and closed with Escape without setting a date; one comment was added only to the disposable task.",
+  "safetyVerdict": "CLEAN — projects, labels and all 16 Inbox titles are set-equal before and after."
+}
