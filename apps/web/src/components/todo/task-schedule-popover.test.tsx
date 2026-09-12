@@ -39,34 +39,51 @@ function open() {
 
 describe("TaskSchedulePopover", () => {
   describe("quick options (SCHED-02/03)", () => {
-    it("renders Today/Tomorrow/This weekend/Next week with the exact captured hints, in order", () => {
+    it("renders Today/Tomorrow/Next week/Next weekend with the exact captured hints, in order", () => {
       renderPopover();
       open();
 
-      // Exact wording from scheduler-and-priority.md §2's own table.
+      // Wording and order from parity-ledger.md SCHED-02, driven live on
+      // Sat 12 Sep 2026 — Today (Sat)/Tomorrow (Sun)/Next week (Mon 14
+      // Sep)/Next weekend (Sat 19 Sep). This suite is pinned to Thu 10 Sep
+      // instead (the original reference-capture instant, still used
+      // throughout the rest of this file), so the exact hint strings below
+      // are this test's own — Today/Tomorrow read a bare weekday, Next
+      // week/Next weekend read a full date, matching what the row records
+      // for each slot.
       expect(screen.getByRole("button", { name: "Today Thu" })).toHaveAccessibleName("Today Thu");
       expect(screen.getByRole("button", { name: "Tomorrow Fri" })).toHaveAccessibleName(
         "Tomorrow Fri",
       );
-      expect(screen.getByRole("button", { name: "This weekend Sat" })).toHaveAccessibleName(
-        "This weekend Sat",
-      );
       expect(screen.getByRole("button", { name: "Next week Mon 14 Sep" })).toHaveAccessibleName(
         "Next week Mon 14 Sep",
       );
+      // From Thu 10 Sep, the next Saturday strictly after "now" is 12 Sep
+      // — see the component's own `nextWeekend` comment for why this is
+      // the same date-fns call the row's Sat-12-Sep data point verifies.
+      expect(screen.getByRole("button", { name: "Next weekend Sat 12 Sep" })).toHaveAccessibleName(
+        "Next weekend Sat 12 Sep",
+      );
 
       const view = screen.getByTestId("scheduler-view");
+      // Read order off `aria-label` rather than `textContent` — the label
+      // and hint sit in two sibling `<span>`s with no literal whitespace
+      // between them in the DOM (this file's own QuickOption comment), so
+      // `textContent` for "Next week" and "Next weekend" concatenate to
+      // "Next weekMon 14 Sep" and "Next weekendSat 12 Sep" respectively,
+      // which `startsWith` can't tell apart reliably; `aria-label` is set
+      // explicitly with a real space and has no such ambiguity.
       const names = within(view)
         .getAllByRole("button")
-        .map((button) => button.textContent ?? "");
+        .map((button) => button.getAttribute("aria-label") ?? "");
       const todayIdx = names.findIndex((name) => name.startsWith("Today"));
       const tomorrowIdx = names.findIndex((name) => name.startsWith("Tomorrow"));
-      const weekendIdx = names.findIndex((name) => name.startsWith("This weekend"));
-      const nextWeekIdx = names.findIndex((name) => name.startsWith("Next week"));
+      const nextWeekIdx = names.findIndex((name) => name.startsWith("Next week "));
+      const nextWeekendIdx = names.findIndex((name) => name.startsWith("Next weekend"));
       expect(todayIdx).toBeGreaterThanOrEqual(0);
       expect(todayIdx).toBeLessThan(tomorrowIdx);
-      expect(tomorrowIdx).toBeLessThan(weekendIdx);
-      expect(weekendIdx).toBeLessThan(nextWeekIdx);
+      expect(tomorrowIdx).toBeLessThan(nextWeekIdx);
+      expect(nextWeekIdx).toBeLessThan(nextWeekendIdx);
     });
 
     it("offers no 'No Date' option until a date is already set (SCHED-03)", () => {
@@ -83,6 +100,31 @@ describe("TaskSchedulePopover", () => {
       fireEvent.click(screen.getByRole("button", { name: "No Date" }));
 
       expect(onPickDay).toHaveBeenCalledWith(null);
+    });
+
+    it("drops the quick option matching the Task's current date (SCHED-03)", () => {
+      // Todoist: a Task already due today drops "Today", leaving Tomorrow
+      // · Next week · Next weekend · No Date (parity-ledger.md SCHED-03).
+      renderPopover({ dateDay: "2026-09-10" });
+      open();
+
+      expect(screen.queryByRole("button", { name: "Today Thu" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Tomorrow Fri" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Next week Mon 14 Sep" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Next weekend Sat 12 Sep" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "No Date" })).toBeInTheDocument();
+    });
+
+    it("drops 'Next week' when the Task is already due next Monday, generalising the rule beyond Today", () => {
+      renderPopover({ dateDay: "2026-09-14" });
+      open();
+
+      expect(
+        screen.queryByRole("button", { name: "Next week Mon 14 Sep" }),
+      ).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Today Thu" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Tomorrow Fri" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Next weekend Sat 12 Sep" })).toBeInTheDocument();
     });
 
     it("'Today' commits today's local day key and closes", () => {
@@ -104,15 +146,6 @@ describe("TaskSchedulePopover", () => {
       expect(onPickDay).toHaveBeenCalledWith("2026-09-11");
     });
 
-    it("'This weekend' commits the coming Saturday", () => {
-      const { onPickDay } = renderPopover();
-      open();
-
-      fireEvent.click(screen.getByRole("button", { name: "This weekend Sat" }));
-
-      expect(onPickDay).toHaveBeenCalledWith("2026-09-12");
-    });
-
     it("'Next week' commits the coming Monday", () => {
       const { onPickDay } = renderPopover();
       open();
@@ -120,6 +153,27 @@ describe("TaskSchedulePopover", () => {
       fireEvent.click(screen.getByRole("button", { name: "Next week Mon 14 Sep" }));
 
       expect(onPickDay).toHaveBeenCalledWith("2026-09-14");
+    });
+
+    it("'Next weekend' commits the next Saturday strictly after now", () => {
+      const { onPickDay } = renderPopover();
+      open();
+
+      fireEvent.click(screen.getByRole("button", { name: "Next weekend Sat 12 Sep" }));
+
+      expect(onPickDay).toHaveBeenCalledWith("2026-09-12");
+    });
+
+    it("'Next weekend' skips today and lands a full week out when now is itself a Saturday", () => {
+      // The row's own Sat-12-Sep data point: Next weekend resolves to
+      // Sat 19 Sep, not today, even though today is a Saturday.
+      const SATURDAY_NOW = new Date(2026, 8, 12, 12, 0);
+      const { onPickDay } = renderPopover({ now: SATURDAY_NOW });
+      open();
+
+      fireEvent.click(screen.getByRole("button", { name: "Next weekend Sat 19 Sep" }));
+
+      expect(onPickDay).toHaveBeenCalledWith("2026-09-19");
     });
   });
 
@@ -152,11 +206,58 @@ describe("TaskSchedulePopover", () => {
       const today = screen.getByRole("button", { name: /September 10th, 2026/ });
       expect(today).not.toHaveAttribute("aria-current");
       // The `<td>` cell DayPicker itself flags as today, independent of
-      // this file's own styling override.
+      // this file's own styling override. Read through the component's
+      // own injected `now` (NOW = Thu 10 Sep), not react-day-picker's
+      // default reading of the real system clock — `today={now}` on the
+      // `<Calendar>` below is what makes this assertion mean anything on
+      // any day other than the one this suite happens to run on.
       expect(document.querySelector('[data-day="2026-09-10"]')).toHaveAttribute(
         "data-today",
         "true",
       );
+    });
+
+    it("today's colour utility carries `!important` so it wins over the weekend utility on a weekday's cell too (SCHED-07)", () => {
+      renderPopover();
+      open();
+
+      // Thu 10 Sep 2026 is a weekday, so this cell should carry ONLY the
+      // today styling, not the weekend one.
+      const cell = document.querySelector('[data-day="2026-09-10"]');
+      expect(cell?.className).toContain("text-[color:var(--td-calendar-today)]!");
+      expect(cell?.className).not.toContain("text-muted-foreground");
+    });
+
+    it("today's colour utility still carries `!important` when today is itself a weekend day (SCHED-07 defect)", () => {
+      // The measured defect: Sat 12 Sep 2026 driven as "now" through the
+      // SAME injected clock every other assertion in this file uses (not
+      // the real system clock, which is not this date) — react-day-picker
+      // must derive its own `data-today` from that same injected value via
+      // this component's `today={now}` prop, or this test would silently
+      // pass on the capture day and go stale everywhere else, exactly the
+      // trap this row's own earlier test fell into.
+      const SATURDAY_NOW = new Date(2026, 8, 12, 12, 0); // Sat 12 Sep 2026
+      renderPopover({ now: SATURDAY_NOW });
+      open();
+
+      const cell = document.querySelector('[data-day="2026-09-12"]');
+      expect(cell).toHaveAttribute("data-today", "true");
+      // The cell is both `today` and `weekend` at once — the exact
+      // collision SCHED-07 measured live. Both utilities are present on
+      // the cell (this file's own `weekend`/`today` classNames both apply
+      // unconditionally), and `today`'s carries the trailing `!` that
+      // forces it to win the cascade regardless of Tailwind's generated
+      // stylesheet order.
+      //
+      // NOTE ON WHAT THIS DOES NOT PROVE: jsdom never computes a cascade
+      // (no stylesheet is parsed/applied), so this assertion cannot show
+      // which colour actually paints — it only shows both classes are
+      // present and that `today`'s carries `!important`. The real-browser
+      // finding this row cites (grey rgb(204,204,204) instead of today-red
+      // rgb(226,106,96)) was read via `getComputedStyle` on a live page;
+      // that verification step is out of reach for this suite.
+      expect(cell?.className).toContain("text-[color:var(--td-calendar-today)]!");
+      expect(cell?.className).toContain("text-muted-foreground");
     });
 
     it("the selected day is a filled circle (SCHED-08) — the cell carries data-selected", () => {

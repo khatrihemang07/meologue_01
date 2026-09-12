@@ -229,8 +229,57 @@ export function TaskSchedulePopover({
   }
 
   const tomorrow = addDays(now, 1);
-  const thisWeekend = nextSaturday(now);
   const nextWeek = nextMonday(now);
+  // SCHED-02: date-fns's `nextSaturday` is already "the next Saturday
+  // strictly after `now`" — the exact rule Todoist's own "Next weekend"
+  // needs, verified against both captured data points (scheduler-and-
+  // priority.md §2 / parity-ledger.md SCHED-02): from Sat 12 Sep it lands
+  // a full week out, Sat 19 Sep (never "today" even though today IS a
+  // Saturday), and from the original Thu 10 Sep capture it lands two days
+  // out, Sat 12 Sep. Renamed from `thisWeekend` — this was Todoist's own
+  // slot 3 label until it (and the hint format below) changed between 10
+  // and 11 Sep 2026 (SCHED-02's "Earlier note"); the underlying date math
+  // never needed to change, only the label, its position (now slot 4,
+  // after Next week), and the hint format (full date, not bare weekday).
+  const nextWeekend = nextSaturday(now);
+
+  // SCHED-02/03: Today/Tomorrow/Next week/Next weekend, in Todoist's own
+  // order, each carrying the day-key it would commit — used both to render
+  // the button and, per SCHED-03, to drop whichever one already matches
+  // the Task's current date ("the quick option matching the task's current
+  // date disappears," parity-ledger.md SCHED-03). `No Date` is handled
+  // separately below: it isn't keyed to a day at all, and its own gate
+  // (`dateDay !== null`) predates and is independent of this one.
+  const quickOptionDefs = [
+    {
+      key: "today",
+      icon: CalendarDays,
+      label: "Today",
+      hint: format(now, "EEE"),
+      day: nowKey,
+    },
+    {
+      key: "tomorrow",
+      icon: Sun,
+      label: "Tomorrow",
+      hint: format(tomorrow, "EEE"),
+      day: localDayKey(tomorrow),
+    },
+    {
+      key: "next-week",
+      icon: CalendarRange,
+      label: "Next week",
+      hint: format(nextWeek, "EEE d MMM"),
+      day: localDayKey(nextWeek),
+    },
+    {
+      key: "next-weekend",
+      icon: Sofa,
+      label: "Next weekend",
+      hint: format(nextWeekend, "EEE d MMM"),
+      day: localDayKey(nextWeekend),
+    },
+  ].filter((option) => option.day !== dateDay);
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -321,30 +370,15 @@ export function TaskSchedulePopover({
         )}
 
         <div className="flex flex-col">
-          <QuickOption
-            icon={CalendarDays}
-            label="Today"
-            hint={format(now, "EEE")}
-            onClick={() => commitDay(nowKey)}
-          />
-          <QuickOption
-            icon={Sun}
-            label="Tomorrow"
-            hint={format(tomorrow, "EEE")}
-            onClick={() => commitDay(localDayKey(tomorrow))}
-          />
-          <QuickOption
-            icon={Sofa}
-            label="This weekend"
-            hint={format(thisWeekend, "EEE")}
-            onClick={() => commitDay(localDayKey(thisWeekend))}
-          />
-          <QuickOption
-            icon={CalendarRange}
-            label="Next week"
-            hint={format(nextWeek, "EEE d MMM")}
-            onClick={() => commitDay(localDayKey(nextWeek))}
-          />
+          {quickOptionDefs.map((option) => (
+            <QuickOption
+              key={option.key}
+              icon={option.icon}
+              label={option.label}
+              hint={option.hint}
+              onClick={() => commitDay(option.day)}
+            />
+          ))}
           {/* SCHED-03: only offered once a date already exists. */}
           {dateDay !== null && (
             <QuickOption
@@ -409,7 +443,21 @@ export function TaskSchedulePopover({
             // source before this was written) so there's nothing to
             // suppress here beyond not adding a visual ring — do not
             // "fix" this back in.
-            today: "[&>button]:font-bold [&>button]:text-[color:var(--td-calendar-today)]",
+            //
+            // The trailing `!` (Tailwind v4's important modifier) is load-
+            // bearing, not decoration: on a weekend, this same cell also
+            // carries `modifiersClassNames.weekend`'s
+            // `[&>button]:text-muted-foreground` below, and both compile to
+            // an equal-specificity `.<modifier> > button { color: … }` rule
+            // — which one wins is decided by Tailwind's generated-CSS
+            // source order, not by the order these two class strings are
+            // concatenated onto the cell's `class` attribute, so reordering
+            // the JSX alone would not have been a real fix. Without `!`,
+            // today-on-a-weekend rendered grey instead of today-red
+            // (SCHED-07); `!important` here forces today's colour to win
+            // regardless of stylesheet order, without touching index.css or
+            // any `--td-*` token.
+            today: "[&>button]:font-bold [&>button]:text-[color:var(--td-calendar-today)]!",
             // SCHED-08: a 24px filled circle — `size-6` (Tailwind's 24px)
             // plus `rounded-full` on a square box is exactly a 12px
             // corner radius, the measured figure, not merely "looks round."
