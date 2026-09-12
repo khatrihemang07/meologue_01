@@ -116,7 +116,7 @@ describe("ProjectView — colour and delete (issue #229)", () => {
     expect(screen.getByText("Delete project?")).toBeInTheDocument();
     expect(
       screen.getByText(
-        'The "Groceries" project and all its tasks will be permanently deleted. This action cannot be undone.',
+        "The Groceries project and all its tasks will be permanently deleted. This action cannot be undone.",
       ),
     ).toBeInTheDocument();
   });

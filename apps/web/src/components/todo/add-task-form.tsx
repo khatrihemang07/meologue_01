@@ -81,10 +81,13 @@ export interface AddTaskFormProps {
 // because the click-to-reveal composer that would separate them is
 // deferred (NAV-12, parity ledger); reintroducing a hardcoded font-size
 // beside `--td-composer-title-font-size` here would restore the exact
-// dead-token defect #251 fixed. The placeholder text itself already
-// renders in `text-muted-foreground` (task-title-editor.tsx's own
-// `placeholderPlugin` widget), so "muted grey" already holds; the
-// composed 14px figure from quick-add.md is Todoist's measurement of its
+// dead-token defect #251 fixed. The placeholder's own colour is fixed by
+// NAV-10 in `task-title-editor.tsx`'s `placeholderPlugin` widget — a
+// literal value scoped to that widget, not the shared `text-muted-
+// foreground` this comment used to point to before the ledger's live
+// measurement caught it reading `rgb(204,204,204)` against Todoist's
+// `rgb(128,128,128)`; the composed 14px figure from quick-add.md is
+// Todoist's measurement of its
 // *static, pre-click* label, which this field has no separate state for —
 // see this ticket's own report for why narrowing the placeholder alone to
 // 14px was left undone rather than hacked around a file outside this
@@ -167,15 +170,15 @@ export function AddTaskForm({ onAdd, disabled }: AddTaskFormProps) {
           // matching `todo-page.tsx`'s own "store hasn't opened yet"
           // posture.
           <Input
-            placeholder="Add a Task"
-            aria-label="Add a Task"
+            placeholder="Add task"
+            aria-label="Add task"
             disabled
             className="border-transparent"
           />
         ) : (
           <Suspense
             // No `aria-label` here, deliberately: the real editor below
-            // carries the identical `aria-label="Add a Task"`, and a
+            // carries the identical `aria-label="Add task"`, and a
             // labelled fallback with the same accessible name is
             // indistinguishable from it to `findByLabelText` — a test
             // awaiting "the field is ready" would resolve on this
@@ -183,7 +186,7 @@ export function AddTaskForm({ onAdd, disabled }: AddTaskFormProps) {
             // settles, rather than actually waiting.
             fallback={
               <Input
-                placeholder="Add a Task"
+                placeholder="Add task"
                 aria-hidden="true"
                 disabled
                 tabIndex={-1}
@@ -194,8 +197,8 @@ export function AddTaskForm({ onAdd, disabled }: AddTaskFormProps) {
             <LazyTaskTitleEditor
               key={resetKey}
               value=""
-              ariaLabel="Add a Task"
-              placeholder="Add a Task"
+              ariaLabel="Add task"
+              placeholder="Add task"
               autoFocus={false}
               commitOnBlur={false}
               onChange={setValue}

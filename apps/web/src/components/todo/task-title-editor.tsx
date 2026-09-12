@@ -155,8 +155,13 @@ function placeholderPlugin(text: string | undefined): Plugin {
           return DecorationSet.empty;
         }
         const widget = document.createElement("span");
+        // NAV-10: the placeholder's own token, not `text-muted-foreground`.
+        // That token paints every muted label on the Todo surface, and only
+        // this widget was measured (rgb(128,128,128) in Todoist against
+        // rgb(204,204,204) here). index.css's `--td-add-task-placeholder`
+        // carries the dark-theme reading and leaves light unchanged.
         widget.className =
-          "pointer-events-none select-none text-[length:var(--td-add-task-font-size)] text-muted-foreground";
+          "pointer-events-none select-none text-[length:var(--td-add-task-font-size)] text-[color:var(--td-add-task-placeholder)]";
         widget.textContent = text;
         return DecorationSet.create(state.doc, [Decoration.widget(0, widget)]);
       },

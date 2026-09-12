@@ -515,7 +515,7 @@ describe("TodoPage", () => {
     const addTask = vi.fn();
     renderTodoPage(inboxContext([], { addTask }));
 
-    fireEvent.change(await screen.findByLabelText("Add a Task"), { target: { value: "call mum" } });
+    fireEvent.change(await screen.findByLabelText("Add task"), { target: { value: "call mum" } });
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
 
     // handleAdd (todo-page.tsx) awaits resolveLabelIds before calling
@@ -540,7 +540,7 @@ describe("TodoPage", () => {
     const addTask = vi.fn();
     renderTodoPage(readyContext({ addTask }), "/todo/today");
 
-    fireEvent.change(await screen.findByLabelText("Add a Task"), { target: { value: "call mum" } });
+    fireEvent.change(await screen.findByLabelText("Add task"), { target: { value: "call mum" } });
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
 
     await waitFor(() =>
@@ -558,7 +558,7 @@ describe("TodoPage", () => {
     const addTask = vi.fn();
     renderTodoPage(readyContext({ addTask }), "/todo/today");
 
-    fireEvent.change(await screen.findByLabelText("Add a Task"), {
+    fireEvent.change(await screen.findByLabelText("Add task"), {
       target: { value: "call mum tomorrow" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
@@ -572,7 +572,7 @@ describe("TodoPage", () => {
   it("disables the Add form while the store isn't ready", () => {
     renderTodoPage(readyContext({ disabled: true }));
 
-    expect(screen.getByLabelText("Add a Task")).toBeDisabled();
+    expect(screen.getByLabelText("Add task")).toBeDisabled();
   });
 
   // The completion toast mirrors register-service-worker.web.ts's own
@@ -590,7 +590,9 @@ describe("TodoPage", () => {
 
     expect(completeTask).toHaveBeenCalledWith("a");
     expect(toast).toHaveBeenCalledWith(
-      'Completed "call mum"',
+      // CMT-04: Todoist's own task-agnostic, count-based wording, not the
+      // task-specific `Completed "<name>"` this replaced.
+      "1 task completed",
       expect.objectContaining({
         // CMT-05: 11s, measured live (`COMPLETION_TOAST_DURATION_MS`'s own
         // doc comment, todo-page.tsx) — not sonner's unconfigured default.
@@ -674,7 +676,7 @@ describe("TodoPage", () => {
       fireEvent.click(screen.getByRole("checkbox", { name: "call mum" }));
       expect(completeTask).toHaveBeenCalledWith("a");
 
-      const addField = screen.getByLabelText("Add a Task");
+      const addField = screen.getByLabelText("Add task");
       addField.focus();
       fireEvent.keyDown(addField, { key: "z", metaKey: true });
 
@@ -1061,7 +1063,7 @@ describe("TodoPage — Today", () => {
 
     expect(completeTask).toHaveBeenCalledWith("a");
     expect(toast).toHaveBeenCalledWith(
-      'Completed "call mum"',
+      "1 task completed",
       expect.objectContaining({ action: expect.objectContaining({ label: "Undo" }) }),
     );
   });
@@ -1231,7 +1233,7 @@ describe("TodoPage — Projects", () => {
     const addTask = vi.fn();
     renderTodoPage(readyContext({ projects: [project], addTask }), "/todo/projects/p1");
 
-    fireEvent.change(await screen.findByLabelText("Add a Task"), { target: { value: "buy milk" } });
+    fireEvent.change(await screen.findByLabelText("Add task"), { target: { value: "buy milk" } });
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
 
     await waitFor(() =>

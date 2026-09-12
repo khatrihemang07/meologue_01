@@ -502,13 +502,20 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   // nothing here for the Undo toast to reverse and none is offered; the
   // row itself already shows the next occurrence the moment this
   // component re-renders.
-  function handleComplete(taskId: string, content: string, dateString: string | null) {
+  // CMT-04 (parity ledger) — Todoist's own wording is task-agnostic and
+  // count-based ("1 task completed"), not `Completed "<name>"`; matched
+  // verbatim rather than kept as the more informative original. `content`
+  // stays in the signature even though this branch no longer reads it:
+  // `onComplete` below is bound directly to this function, and its shared
+  // type (task-row-content.tsx/task-row.tsx, outside this ticket) still
+  // passes it.
+  function handleComplete(taskId: string, _content: string, dateString: string | null) {
     if (dateString !== null) {
       advanceRecurringTask(taskId);
       return;
     }
     completeTask(taskId);
-    raiseCompletionToast(taskId, `Completed "${content}"`);
+    raiseCompletionToast(taskId, "1 task completed");
   }
 
   // Ends a recurring Task's series (TaskStore.completeForever's own doc
@@ -521,9 +528,18 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   // ended (`uncomplete`'s own doc comment never claims otherwise). The
   // toast's own wording says so, rather than promising more than Undo
   // actually gives back.
-  function handleCompleteForever(taskId: string, content: string) {
+  //
+  // CMT-04 (parity ledger): "1 task completed" replaces this row's own
+  // `Completed "<name>"`, matching `handleComplete` above — Todoist's own
+  // wording, verbatim. Todoist has no equivalent "series ended" variant to
+  // match against, so " — the recurrence has ended" is kept, appended to
+  // the same base, rather than dropped: losing it would silently hide the
+  // one piece of information this toast alone carries. `content` stays
+  // in the signature for the same shared-callback reason as
+  // `handleComplete`'s own comment above.
+  function handleCompleteForever(taskId: string, _content: string) {
     completeForeverTask(taskId);
-    raiseCompletionToast(taskId, `Completed "${content}" — the recurrence has ended`);
+    raiseCompletionToast(taskId, "1 task completed — the recurrence has ended");
   }
 
   function handleRequestDelete(taskId: string) {
