@@ -279,7 +279,15 @@ export function TaskSchedulePopover({
       hint: format(nextWeekend, "EEE d MMM"),
       day: localDayKey(nextWeekend),
     },
-  ].filter((option) => option.day !== dateDay);
+  ]
+    // SCHED-03: the option matching the task's current date is dropped.
+    // SCHED-02 (flow 11, Sunday 13 Sep): a slot landing on the same day as an
+    // earlier one is dropped too. On a Sunday, Tomorrow and Next week are
+    // both Monday, and Todoist showed three options, not four.
+    .filter(
+      (option, index, all) =>
+        option.day !== dateDay && all.findIndex((other) => other.day === option.day) === index,
+    );
 
   return (
     <Popover open={open} onOpenChange={setOpen}>

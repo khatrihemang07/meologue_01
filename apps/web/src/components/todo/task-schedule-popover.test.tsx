@@ -127,6 +127,18 @@ describe("TaskSchedulePopover", () => {
       expect(screen.getByRole("button", { name: "Next weekend Sat 12 Sep" })).toBeInTheDocument();
     });
 
+    it("drops a slot that lands on the same day as an earlier one, as Todoist does on a Sunday (SCHED-02)", () => {
+      // flow11-R1-SCHED-02-03-07-both.json: on Sun 13 Sep Todoist read
+      // Today · Tomorrow · Next weekend — Next week (Mon 14 Sep) is Tomorrow.
+      renderPopover({ now: new Date(2026, 8, 13, 12, 0) });
+      open();
+
+      expect(screen.getByRole("button", { name: "Today Sun" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Tomorrow Mon" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /^Next week Mon/ })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Next weekend Sat 19 Sep" })).toBeInTheDocument();
+    });
+
     it("'Today' commits today's local day key and closes", () => {
       const { onPickDay } = renderPopover();
       open();

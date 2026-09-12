@@ -1,0 +1,57 @@
+{
+  "driveDate": "2026-09-13 (Sunday, live clock)",
+  "before": {
+    "inboxTitles": [
+      "Bat fix",
+      "Buy mobile holder and get the bike fixed",
+      "Check for ipad cover",
+      "hair wash",
+      "Homeo medicine refil",
+      "naukri photo update",
+      "Roller thigh pain",
+      "Room clean",
+      "Thigh guard and marker order",
+      "add split and splid both without fail EOD",
+      "Apply company",
+      "Buy bluetooth for vishal",
+      "Lld",
+      "Message ashu to connect",
+      "Need to improve reflect and todo completely. They are crap right now. Specially when typing long title or updating title",
+      "Quick dsa"
+    ],
+    "inboxTitleCount": 16,
+    "filters": ["Assigned to me", "Priority 1", "All my Routines"],
+    "filtersUsed": "3/3",
+    "labels": [],
+    "labelsEmpty": true,
+    "projects": ["Getting Started 👋, 14 tasks"]
+  },
+  "after": {
+    "inboxTitles": [
+      "Bat fix",
+      "Buy mobile holder and get the bike fixed",
+      "Check for ipad cover",
+      "hair wash",
+      "Homeo medicine refil",
+      "naukri photo update",
+      "Roller thigh pain",
+      "Room clean",
+      "Thigh guard and marker order",
+      "add split and splid both without fail EOD",
+      "Apply company",
+      "Buy bluetooth for vishal",
+      "Lld",
+      "Message ashu to connect",
+      "Need to improve reflect and todo completely. They are crap right now. Specially when typing long title or updating title",
+      "Quick dsa"
+    ],
+    "inboxTitleCount": 16,
+    "filters": ["Assigned to me", "Priority 11", "All my Routines 🔁"],
+    "filtersUsed": "3/3",
+    "labels": [],
+    "labelsEmpty": true,
+    "projects": ["Getting Started 👋, 14 tasks"]
+  },
+  "setEqual": true,
+  "note": "Inbox title set identical (16/16), filters identical set (3, same names; 'Priority 11'/'All my Routines 🔁' differ only in incidental trailing count/emoji text captured by the raw selector, not a real change), labels still empty, project count unchanged at 14 tasks. All ZZ probe fixtures created during this drive (12 total: 2 for QA-09, 1 draft-only for QA-10 never created, 2 for SCHED-02/03, 2 for DATE-10/11) were deleted, each title read back before deletion, per the safety log entries in flow11-R1-QA-06-09-10-both.json, flow11-R1-SCHED-02-03-07-both.json and flow11-R1-DATE-01-10-11-both.json."
+}
