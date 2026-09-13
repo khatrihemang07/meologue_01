@@ -553,5 +553,70 @@ describe("entryProse", () => {
       expect(screen.getByText("italic", { selector: "em" })).toBeInTheDocument();
       expect(screen.getByText("code", { selector: "code" })).toBeInTheDocument();
     });
+
+    // Live re-drive gaps (docs/reference/todoist/parity-ledger.md's CMT-08
+    // row): strikethrough tag, one-`\n`-stays-in-one-paragraph, and a tight
+    // list's unwrapped `<li>` text — each pinned against entry mode staying
+    // exactly as it was, in the same test that pins the comment behaviour.
+    it("renders strikethrough as <del> in comment mode, but keeps <s> in default (entry) mode", () => {
+      const { container: comment } = render(<Harness body="~~struck~~" mode="comment" />);
+      expect(comment.querySelector("del")).toHaveTextContent("struck");
+      expect(comment.querySelector("s")).toBeNull();
+
+      const { container: entry } = render(<Harness body="~~struck~~" />);
+      expect(entry.querySelector("s")).toHaveTextContent("struck");
+      expect(entry.querySelector("del")).toBeNull();
+    });
+
+    it("keeps consecutive single-newline lines in one <p>, joined by <br>, but still splits them into separate <p>s in default (entry) mode", () => {
+      const body = "*italic*\n~~strike~~";
+      const { container: comment } = render(<Harness body={body} mode="comment" />);
+      const paragraphs = comment.querySelectorAll("p");
+      expect(paragraphs).toHaveLength(1);
+      expect(paragraphs[0]?.querySelector("br")).not.toBeNull();
+      expect(paragraphs[0]?.querySelector("em")).toHaveTextContent("italic");
+      expect(paragraphs[0]?.querySelector("del")).toHaveTextContent("strike");
+
+      const { container: entry } = render(<Harness body={body} />);
+      expect(entry.querySelectorAll("p")).toHaveLength(2);
+      expect(entry.querySelectorAll("br")).toHaveLength(0);
+    });
+
+    it("renders a tight list's item text directly inside <li>, with no wrapping <p>", () => {
+      const { container } = render(<Harness body={"1. first"} mode="comment" />);
+
+      const list = container.querySelector("ol");
+      expect(list).not.toBeNull();
+      // No `start` attribute either — Todoist omits it at the default of 1.
+      expect(list?.getAttribute("start")).toBeNull();
+      const item = list?.querySelector("li");
+      expect(item).toHaveTextContent("first");
+      expect(item?.querySelector("p")).toBeNull();
+    });
+
+    it("keeps a loose list's item wrapped in <p> — items separated by a blank line", () => {
+      const { container } = render(<Harness body={"- one\n\n- two"} mode="comment" />);
+
+      const items = container.querySelectorAll("li");
+      expect(items).toHaveLength(2);
+      for (const item of Array.from(items)) {
+        expect(item.querySelector("p")).not.toBeNull();
+      }
+    });
+
+    it("still wraps a tight list item's text in <p> in default (entry) mode — this mode's own list behaviour is unchanged", () => {
+      const { container } = render(<Harness body={"1. first"} />);
+
+      const item = container.querySelector("ol li");
+      expect(item?.querySelector("p")).not.toBeNull();
+      expect(container.querySelector("ol")).toHaveAttribute("start", "1");
+    });
+
+    it("keeps a fenced code block's own trailing newline, matching Todoist", () => {
+      const { container } = render(<Harness body={"```\ncode block\n```"} mode="comment" />);
+
+      expect(container.querySelector("pre code")).toHaveTextContent("code block");
+      expect(container.querySelector("pre code")?.textContent).toBe("code block\n");
+    });
   });
 });

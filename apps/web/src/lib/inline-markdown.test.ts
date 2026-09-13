@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   entryBlocksToText,
+  flattenCommentPreview,
   formatTaskReference,
   type InlineNode,
   inlineNodesToText,
@@ -906,9 +907,13 @@ describe("parseCommentMarkdown", () => {
     ]);
   });
 
+  // Trailing `\n`: Todoist's own rendered `<pre><code>` keeps it (CMT-08's
+  // own reading, `code block\n`) even though `CodeText`'s own span stops
+  // short of it — `fencedCodeBlock`'s own comment (inline-markdown.ts) has
+  // the full account.
   it("renders a fenced block as a codeBlock, carrying its info string, unlike parseEntryMarkdown's literal prose", () => {
     expect(parseCommentMarkdown("```js\nconsole.log(1)\n```")).toEqual([
-      { kind: "codeBlock", text: "console.log(1)", lang: "js" },
+      { kind: "codeBlock", text: "console.log(1)\n", lang: "js" },
     ]);
     expect(parseEntryMarkdown("```js\nconsole.log(1)\n```")).toEqual([
       { kind: "prose", children: [{ kind: "text", text: "```js" }] },
@@ -919,7 +924,7 @@ describe("parseCommentMarkdown", () => {
 
   it("carries no info string when the fence has none", () => {
     expect(parseCommentMarkdown("```\nplain\n```")).toEqual([
-      { kind: "codeBlock", text: "plain", lang: undefined },
+      { kind: "codeBlock", text: "plain\n", lang: undefined },
     ]);
   });
 
@@ -975,10 +980,15 @@ describe("parseCommentMarkdown", () => {
     expect(entryBlocksToText(parseCommentMarkdown(body))).toBe(body);
   });
 
+  // `tight: true` (CMT-08, comment mode only — `listIsTight`'s own comment,
+  // inline-markdown.ts) — no blank line separates the two items, so Todoist's
+  // own tight-list rendering applies: `entry-prose.tsx` renders each item's
+  // text directly inside its `<li>`, no wrapping `<p>`.
   it("still renders a real bullet list, the gap CMT-08 says runs the other way (only a numbered list stays literal in Todoist, not this app's)", () => {
     expect(parseCommentMarkdown("- milk\n- eggs")).toEqual([
       {
         kind: "bulletList",
+        tight: true,
         items: [
           {
             task: undefined,
@@ -1007,5 +1017,32 @@ describe("parseCommentMarkdown", () => {
   it("keeps bold/italic/strikethrough/inline-code the same as parseEntryMarkdown", () => {
     const body = "**bold** *italic* ~~struck~~ `code`";
     expect(parseCommentMarkdown(body)).toEqual(parseEntryMarkdown(body));
+  });
+});
+
+// CMT-06 (docs/reference/todoist/parity-ledger.md) — Activity's own
+// content-preview chip (`format-event.ts`'s `describeEventLine`) shows a
+// plain-text flattening of a comment's/description's raw markdown, not the
+// source itself. Both cases here are Todoist's own live-measured strings,
+// reproduced exactly — not invented shapes this function merely happens to
+// produce.
+describe("flattenCommentPreview", () => {
+  it("reproduces Todoist's own measured single-line flattening — marks stripped, a bare URL kept", () => {
+    expect(flattenCommentPreview("**bold** and https://example.com")).toBe(
+      "bold and https://example.com",
+    );
+  });
+
+  it("reproduces Todoist's own measured multi-line flattening — fence lines dropped, # and > kept, lines joined with single spaces", () => {
+    const body = "*italic*\n~~strike~~\n# heading\n> quote\n```\ncode block\n```\n1. first";
+    expect(flattenCommentPreview(body)).toBe("italic strike # heading > quote code block 1. first");
+  });
+
+  it("returns an empty string for an empty body", () => {
+    expect(flattenCommentPreview("")).toBe("");
+  });
+
+  it("drops a fence line even when it carries an info string", () => {
+    expect(flattenCommentPreview("```js\nconsole.log(1)\n```")).toBe("console.log(1)");
   });
 });

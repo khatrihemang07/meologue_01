@@ -28,6 +28,7 @@
 import type { Event, Project, Task } from "@meologue/core";
 import { format, formatDistanceToNow, isToday, isYesterday } from "date-fns";
 import { formatDay } from "@/lib/format-task-date";
+import { flattenCommentPreview } from "@/lib/inline-markdown";
 import { taskDetailPath } from "@/lib/task-detail-route";
 
 /** How long an Event reads as "5 minutes ago" rather than an absolute time — a day, matching the day-grouping headers themselves. */
@@ -300,7 +301,12 @@ export function describeEventLine(
         // way every other event's own subject label is) rides in
         // `contentPreview`, which `activity-feed.tsx` renders as an inert
         // chip between `lead` and `trailingLead`/`trailingSubject`.
-        const text = typeof extra.text === "string" ? extra.text : "";
+        // CMT-06's own measured chip is a plain-text flattening of the
+        // comment's raw markdown, not the source itself — `flattenCommentPreview`
+        // (inline-markdown.ts) is what reproduces both of its measured
+        // strings exactly (that function's own comment has the full
+        // account).
+        const text = typeof extra.text === "string" ? flattenCommentPreview(extra.text) : "";
         return onThisTask
           ? { lead: "You commented", contentPreview: text }
           : {
@@ -420,11 +426,15 @@ export function describeEventLine(
         // Re-driven live (flow 5, CMT-06): `{content}` is an unquoted chip
         // in Todoist's own DOM here too, the same finding as the comment
         // templates above — so it rides in `contentPreview`, never the
-        // quoted `detail` string this module used to build.
-        const content = typeof extra.description === "string" ? extra.description : "";
+        // quoted `detail` string this module used to build. Flattened the
+        // same way the comment templates' own `{content}` is above.
+        const content =
+          typeof extra.description === "string" ? flattenCommentPreview(extra.description) : "";
         if (extra.description === null) {
           const removedContent =
-            typeof extra.lastDescription === "string" ? extra.lastDescription : "";
+            typeof extra.lastDescription === "string"
+              ? flattenCommentPreview(extra.lastDescription)
+              : "";
           return onThisTask
             ? { lead: "You removed the description", contentPreview: removedContent }
             : {

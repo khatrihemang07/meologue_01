@@ -33,7 +33,7 @@
  * longer be a `<p>` itself — a `<ul>` cannot validly nest inside one — which
  * is why both callers moved to a `<div>` alongside this ticket.
  */
-import type { ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
 import { type ReferenceRenderers, renderNodes } from "@/components/inline-prose";
 import type { EntryBlockNode, EntryListItem } from "@/lib/inline-markdown";
 import {
@@ -233,6 +233,30 @@ function bulletListStyleClass(depth: number): string {
  * the counter for whatever list-of-either-kind nests INSIDE it to see the
  * right depth, exactly what index.css's `:is(ul, ol)` selectors count on
  * the CSS side.
+ *
+ * `mode` (CMT-08) picks two things `renderNodes` needs and cannot infer
+ * from an `InlineNode` on its own — `strikeTag` (`<del>` in "comment" mode,
+ * matching Todoist; `<s>` everywhere else, unchanged) and `breakNewlines`
+ * (a bare `\n` a "comment"-mode "prose" block still carries — see
+ * `pushProseRuns`'s own comment, inline-markdown.ts, for why it is still
+ * there — becomes a real `<br>` instead of relying on an ancestor's
+ * `white-space: pre-wrap`). Both stay at their entry-mode default the
+ * instant `mode` is `"entry"`, which is every existing caller of this
+ * function before CMT-08 and every recursive call this function itself
+ * makes with an unchanged `mode`.
+ *
+ * `suppressPara` (CMT-08) is CommonMark 5.3's own "a tight list's items
+ * render their text directly inside `<li>`, with no wrapping `<p>`" —
+ * `true` only for the "prose" blocks directly inside a "comment"-mode
+ * tight list's own item content (`renderListItem`'s own call into this
+ * function, below, is the only place that ever computes it as `true`);
+ * every other call — the top-level `entryProse` call, a blockquote's own
+ * content, a NESTED list's own items (which get a freshly recomputed value
+ * from THEIR OWN `tight` flag, not this one) — passes `false`, so a
+ * suppressed wrapper never leaks past the one container it was computed
+ * for. Entry mode never sets this at all (`EntryBlockNode`'s own comment on
+ * why `tight` is `undefined` there), so this parameter has no effect on it
+ * regardless of whether it is passed.
  */
 function renderBlocks(
   blocks: readonly EntryBlockNode[],
@@ -241,11 +265,17 @@ function renderBlocks(
   keyPrefix: string,
   renderTaskReference: TaskReferenceRenderer,
   depth: number,
+  mode: EntryProseMode,
+  suppressPara = false,
 ): ReactNode[] {
+  const inlineOptions = {
+    strikeTag: mode === "comment" ? ("del" as const) : ("s" as const),
+    breakNewlines: mode === "comment",
+  };
   return blocks.map((block, index) => {
     const key = `${keyPrefix}${index}`;
     switch (block.kind) {
-      case "prose":
+      case "prose": {
         // No `whitespace-pre-wrap` of its own (ADR 0069's prefactor) — every
         // caller of `entryProse` wraps it in an element that already sets
         // that (`EntryBody`, entry-row.tsx; the bubble body, entry-bubble.tsx),
@@ -257,13 +287,22 @@ function renderBlocks(
         // inline-markdown.ts) is still a literal `\n` character sitting
         // inside this `<p>`'s own text, and multiple consecutive spaces are
         // still exactly what the author typed.
+        const inline = renderNodes(block.children, query, refs, `${key}-`, inlineOptions);
+        if (suppressPara) {
+          // CMT-08 — a tight list item's own paragraph, unwrapped. `Fragment`
+          // rather than an array so `renderBlocks`' own `ReactNode[]` return
+          // type stays uniform across every case.
+          return <Fragment key={key}>{inline}</Fragment>;
+        }
         return (
           <p key={key} className={BLOCK_SPACING}>
-            {renderNodes(block.children, query, refs, `${key}-`)}
+            {inline}
           </p>
         );
+      }
       case "bulletList": {
         const listDepth = depth + 1;
+        const tight = mode === "comment" && block.tight === true;
         return (
           <ul
             key={key}
@@ -277,6 +316,8 @@ function renderBlocks(
                 `${key}-${itemIndex}`,
                 renderTaskReference,
                 listDepth,
+                mode,
+                tight,
               ),
             )}
           </ul>
@@ -284,10 +325,17 @@ function renderBlocks(
       }
       case "orderedList": {
         const listDepth = depth + 1;
+        const tight = mode === "comment" && block.tight === true;
+        // CMT-08: Todoist omits `start` entirely when it's the default 1;
+        // entry mode always renders it, even at 1 (a pinned behaviour —
+        // `entry-prose.test.tsx`'s own "defaults an ordered list's start to
+        // 1" comment — that this must not disturb), so the omission is
+        // scoped to "comment" mode only.
+        const start = mode === "comment" && block.start === 1 ? undefined : block.start;
         return (
           <ol
             key={key}
-            start={block.start}
+            start={start}
             className={cn("list-decimal space-y-0.5 pl-5", BLOCK_SPACING)}
           >
             {block.items.map((item, itemIndex) =>
@@ -298,6 +346,8 @@ function renderBlocks(
                 `${key}-${itemIndex}`,
                 renderTaskReference,
                 listDepth,
+                mode,
+                tight,
               ),
             )}
           </ol>
@@ -315,12 +365,18 @@ function renderBlocks(
             key={key}
             className={cn(HEADING_CLASS[block.level] ?? HEADING_CLASS[6], BLOCK_SPACING)}
           >
-            {renderNodes(block.children, query, refs, `${key}-`)}
+            {renderNodes(block.children, query, refs, `${key}-`, inlineOptions)}
           </Tag>
         );
       }
       case "blockquote":
         // CMT-08 — same "comment" mode-only reachability as "heading" above.
+        // `suppressPara` always resets to `false` here: a blockquote's own
+        // paragraphs are not part of any enclosing tight list's item
+        // content, so they always get their own `<p>`, matching Todoist's
+        // own `<blockquote><p>quote</p></blockquote>` (CMT-08's own
+        // reading) — a simplification for a quote that is itself a tight
+        // list, which nothing observed live needs.
         return (
           <blockquote
             key={key}
@@ -329,7 +385,7 @@ function renderBlocks(
               BLOCK_SPACING,
             )}
           >
-            {renderBlocks(block.content, query, refs, `${key}-`, renderTaskReference, depth)}
+            {renderBlocks(block.content, query, refs, `${key}-`, renderTaskReference, depth, mode)}
           </blockquote>
         );
       case "codeBlock":
@@ -337,7 +393,9 @@ function renderBlocks(
         // `<pre>` is what preserves the block's own line breaks and
         // whitespace without a second `whitespace-pre-wrap` class — `<pre>`
         // already sets `white-space: pre` by user-agent default, unlike the
-        // "prose" case above, which relies on an ancestor for it.
+        // "prose" case above, which relies on an ancestor for it. `block.text`
+        // already carries Todoist's own trailing newline (`fencedCodeBlock`'s
+        // own comment, inline-markdown.ts).
         return (
           <pre
             key={key}
@@ -483,6 +541,13 @@ function isMarkerlessParentItem(item: EntryListItem): boolean {
  * ticking it, or opening its Task (ADR 0074) — is entirely
  * `renderTaskReference`'s own business; this file has no Task store to act
  * through (this file's own module comment) for either gesture.
+ *
+ * `mode`/`tight` (CMT-08) are threaded straight through to every
+ * `renderBlocks` call this function makes for the item's OWN content —
+ * `tight` is the enclosing list's own tightness (`renderBlocks`' own
+ * `bulletList`/`orderedList` cases compute it fresh per list, above), never
+ * recomputed here, so a nested list inside this item gets its own fresh
+ * value from ITS tight flag instead of inheriting this one.
  */
 function renderListItem(
   item: EntryListItem,
@@ -491,6 +556,8 @@ function renderListItem(
   key: string,
   renderTaskReference: TaskReferenceRenderer,
   depth: number,
+  mode: EntryProseMode,
+  tight: boolean,
 ): ReactNode {
   if (item.task !== undefined) {
     const reference = referencedTaskOf(item);
@@ -502,6 +569,8 @@ function renderListItem(
         `${key}-`,
         renderTaskReference,
         depth,
+        mode,
+        tight,
       );
       return renderTaskReference(
         {
@@ -516,7 +585,16 @@ function renderListItem(
       );
     }
   }
-  const content = renderBlocks(item.content, query, refs, `${key}-`, renderTaskReference, depth);
+  const content = renderBlocks(
+    item.content,
+    query,
+    refs,
+    `${key}-`,
+    renderTaskReference,
+    depth,
+    mode,
+    tight,
+  );
   if (item.task === undefined) {
     return (
       <li key={key} className={isMarkerlessParentItem(item) ? "list-none" : undefined}>
@@ -589,5 +667,5 @@ export function entryProse(
   mode: EntryProseMode = "entry",
 ): ReactNode {
   const blocks = mode === "comment" ? parseCommentMarkdown(body) : parseEntryMarkdown(body);
-  return <>{renderBlocks(blocks, query, refs, "", renderTaskReference, 0)}</>;
+  return <>{renderBlocks(blocks, query, refs, "", renderTaskReference, 0, mode)}</>;
 }

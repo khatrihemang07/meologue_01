@@ -29,7 +29,7 @@ export interface ReferenceRenderers {
   entry?: (node: { entryId: string; raw: string }, key: string) => ReactNode;
 }
 
-function renderText(text: string, query: string, keyPrefix: string): ReactNode[] {
+function renderTextRun(text: string, query: string, keyPrefix: string): ReactNode[] {
   if (query.trim() === "") {
     return [text];
   }
@@ -44,6 +44,63 @@ function renderText(text: string, query: string, keyPrefix: string): ReactNode[]
       <span key={`${keyPrefix}t${index}`}>{segment.text}</span>
     ),
   );
+}
+
+/**
+ * `renderTextRun`'s own caller, with one more thing to do first: in
+ * "comment" mode (CMT-08, `breakNewlines` — `entry-prose.tsx`'s own
+ * `renderBlocks` is the only caller that ever passes `true`), a bare `\n`
+ * `pushProseRuns` (inline-markdown.ts) left embedded in this text run —
+ * because `parseCommentMarkdown`, unlike `parseEntryMarkdown`, no longer
+ * splits a paragraph into a separate block for one — becomes a real
+ * `<br>`, matching Todoist's own rendering of consecutive comment lines as
+ * one paragraph. `breakNewlines` defaults to `false`, so every OTHER
+ * caller of `renderNodes`/`inlineProse` — every one of ADR 0041's seven
+ * original prose surfaces, entry mode included — takes the untouched
+ * branch below and renders exactly as it always has: a `\n` there only
+ * ever comes from an explicit soft break (`walkEntryInline`'s "HardBreak"
+ * case), which those surfaces already show correctly via an ancestor's
+ * `white-space: pre-wrap`, with no `<br>` element needed or wanted.
+ */
+function renderText(
+  text: string,
+  query: string,
+  keyPrefix: string,
+  breakNewlines: boolean,
+): ReactNode[] {
+  if (!breakNewlines || !text.includes("\n")) {
+    return renderTextRun(text, query, keyPrefix);
+  }
+  const lines = text.split("\n");
+  const rendered: ReactNode[] = [];
+  lines.forEach((line, index) => {
+    if (index > 0) {
+      // biome-ignore lint/suspicious/noArrayIndexKey: lines are a stable, ordered split of one text run for one render; keyPrefix keeps them unique across runs.
+      rendered.push(<br key={`${keyPrefix}br${index}`} />);
+    }
+    rendered.push(...renderTextRun(line, query, `${keyPrefix}l${index}-`));
+  });
+  return rendered;
+}
+
+/**
+ * `renderNodes`'s two comment-mode-only knobs (CMT-08), both defaulted so
+ * every existing caller — every one of ADR 0041's seven original prose
+ * surfaces, `inlineProse` below included — renders exactly as it always
+ * has when it omits this parameter entirely.
+ *
+ * `strikeTag` — Todoist renders `~~struck~~` as `<del>`; this app has
+ * always rendered `<s>` (issue #211), which stays the entry-mode default
+ * (`"s"`) since ADR 0041's original surfaces are unaffected by CMT-08 and
+ * nothing pins one tag over the other for them. Only `entry-prose.tsx`'s
+ * `"comment"` mode passes `"del"`.
+ *
+ * `breakNewlines` — see `renderText`'s own comment above for what this
+ * does and why it is safe.
+ */
+export interface InlineRenderOptions {
+  readonly strikeTag?: "s" | "del";
+  readonly breakNewlines?: boolean;
 }
 
 /**
@@ -64,33 +121,36 @@ export function renderNodes(
   query: string,
   refs: ReferenceRenderers,
   keyPrefix: string,
+  options: InlineRenderOptions = {},
 ): ReactNode[] {
+  const { strikeTag = "s", breakNewlines = false } = options;
+  const StrikeTag = strikeTag;
   const rendered: ReactNode[] = [];
   nodes.forEach((node, index) => {
     const key = `${keyPrefix}${index}`;
     switch (node.kind) {
       case "text":
-        rendered.push(...renderText(node.text, query, `${key}-`));
+        rendered.push(...renderText(node.text, query, `${key}-`, breakNewlines));
         break;
       case "strong":
         rendered.push(
           <strong key={key} className="font-semibold">
-            {renderNodes(node.children, query, refs, `${key}-`)}
+            {renderNodes(node.children, query, refs, `${key}-`, options)}
           </strong>,
         );
         break;
       case "emphasis":
         rendered.push(
           <em key={key} className="italic">
-            {renderNodes(node.children, query, refs, `${key}-`)}
+            {renderNodes(node.children, query, refs, `${key}-`, options)}
           </em>,
         );
         break;
       case "strikethrough":
         rendered.push(
-          <s key={key} className="line-through">
-            {renderNodes(node.children, query, refs, `${key}-`)}
-          </s>,
+          <StrikeTag key={key} className="line-through">
+            {renderNodes(node.children, query, refs, `${key}-`, options)}
+          </StrikeTag>,
         );
         break;
       case "code":
@@ -106,14 +166,14 @@ export function renderNodes(
       case "dateReference":
         rendered.push(
           ...(refs.date === undefined
-            ? renderText(node.raw, query, `${key}-`)
+            ? renderText(node.raw, query, `${key}-`, breakNewlines)
             : [refs.date({ date: node.date, raw: node.raw }, key)]),
         );
         break;
       case "entryReference":
         rendered.push(
           ...(refs.entry === undefined
-            ? renderText(node.raw, query, `${key}-`)
+            ? renderText(node.raw, query, `${key}-`, breakNewlines)
             : [refs.entry({ entryId: node.entryId, raw: node.raw }, key)]),
         );
         break;

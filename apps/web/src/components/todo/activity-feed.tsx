@@ -36,13 +36,32 @@ export interface ActivityFeedProps {
   emptyMessage?: string;
 }
 
-/** One resolved subject, rendered as a live link when it has one and inert text when it doesn't — `entry-row.tsx`'s own Task Reference rule ("render the cached words, and stay inert") applied to an activity chip. */
+/**
+ * One resolved subject, rendered as a live link when it has one and inert
+ * text when it doesn't — `entry-row.tsx`'s own Task Reference rule ("render
+ * the cached words, and stay inert") applied to an activity chip.
+ *
+ * CMT-06 (re-driven live, flow 5): Todoist shows a Task subject as its bare
+ * name, with no leading glyph — `You commented … on ZZ probe comments`, not
+ * "… on ○ ZZ probe comments." A Task subject is the only one CMT-06 ever
+ * measured this way live, so only its own `"○"` glyph is dropped here;
+ * `EventSubject.glyph`'s other two values (`"▭"` a Section, `"#"` a
+ * Project) are untouched — nothing observed live says whether Todoist
+ * drops those too, so this stays scoped to what was actually measured.
+ * `format-event.ts`'s own `EventSubject` type is local to this Activity
+ * feed (not shared with any journal-side task-reference rendering — a
+ * grep of the app turned up no other consumer of `EventSubject`/`glyph`),
+ * so this change reaches nothing else.
+ */
 function SubjectChip({ subject }: { subject: EventSubject }) {
-  const label = (
-    <>
-      <span aria-hidden="true">{subject.glyph}</span> {subject.label}
-    </>
-  );
+  const label =
+    subject.glyph === "○" ? (
+      subject.label
+    ) : (
+      <>
+        <span aria-hidden="true">{subject.glyph}</span> {subject.label}
+      </>
+    );
   if (subject.href === null) {
     return <span className="font-medium">{label}</span>;
   }

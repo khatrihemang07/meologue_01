@@ -498,8 +498,24 @@ export function inlineNodesToText(nodes: readonly InlineNode[]): string {
  */
 export type EntryBlockNode =
   | { kind: "prose"; children: InlineNode[] }
-  | { kind: "bulletList"; items: readonly EntryListItem[] }
-  | { kind: "orderedList"; start: number; items: readonly EntryListItem[] }
+  /**
+   * `tight` (CMT-08, comment mode only) is CommonMark 5.3's own tightness
+   * bit — `listIsTight` (below) computes it directly off the raw source
+   * a list's items span, since a tight and a loose single-paragraph item
+   * parse to an identical `EntryListItem[]` shape and the distinction is a
+   * fact about the SOURCE (was there a blank line here), not about
+   * anything `collectBlocks` otherwise records. Left `undefined` by
+   * `parseEntryMarkdown` — `listToBlock` only computes it when its own
+   * `isComment` flag is set — so every existing `EntryBlockNode` an Entry's
+   * own tests already pin stays byte-for-byte unchanged: an absent key and
+   * an `undefined`-valued one compare equal to `toEqual`, but this function
+   * omits the key entirely for an Entry's own lists rather than relying on
+   * that. `entry-prose.tsx`'s renderer only ever reads it in `"comment"`
+   * mode, matching Todoist's own behaviour of dropping a tight item's `<p>`
+   * wrapper (`renderBlocks`'s own comment there has the render-side half).
+   */
+  | { kind: "bulletList"; items: readonly EntryListItem[]; tight?: boolean }
+  | { kind: "orderedList"; start: number; items: readonly EntryListItem[]; tight?: boolean }
   /**
    * `# heading` through `###### heading` (CMT-08) — `parseCommentMarkdown`
    * only. `parseEntryMarkdown`'s own parser removes `ATXHeading` (and
@@ -891,7 +907,13 @@ function blockquoteContentStart(quote: SyntaxNode, body: string): number {
  * a real parse (see this file's own module comment for the general
  * discipline): `@lezer/markdown` already coalesces a fence's own lines
  * into a single `CodeText` node spanning every line between the fences,
- * `\n` characters included, so no further joining is needed here.
+ * `\n` characters included between them — but NOT a trailing one after the
+ * last content line, which `CodeText.to` stops short of. Todoist's own
+ * rendered `<pre><code>` keeps that trailing newline (CMT-08's own reading:
+ * `code block\n`), so it is appended back here rather than left to whatever
+ * `CodeText`'s own span happens to include — cheap to match, and there is
+ * no writer for this dialect to stay symmetric with either way (this
+ * file's own module comment on `commentParser`, below).
  */
 function fencedCodeBlock(node: SyntaxNode, body: string): EntryBlockNode {
   const children = childNodes(node);
@@ -899,7 +921,7 @@ function fencedCodeBlock(node: SyntaxNode, body: string): EntryBlockNode {
   const text = children.find((c) => c.type.name === "CodeText");
   return {
     kind: "codeBlock",
-    text: text !== undefined ? body.slice(text.from, text.to) : "",
+    text: text !== undefined ? `${body.slice(text.from, text.to)}\n` : "",
     lang: info !== undefined ? body.slice(info.from, info.to) : undefined,
   };
 }
@@ -920,6 +942,7 @@ type BlockCollector = (
   children: readonly SyntaxNode[],
   body: string,
   containerStart: number,
+  isComment: boolean,
 ) => EntryBlockNode[];
 
 /** The leading run of digits off a `ListMark`, for an `OrderedList`'s start number — `"1."` and `"1)"` both give `1`. */
@@ -932,7 +955,54 @@ function orderedListStart(firstItem: SyntaxNode | undefined, body: string): numb
   return digits !== null ? Number(digits[0]) : 1;
 }
 
-function listToBlock(list: SyntaxNode, body: string, collect: BlockCollector): EntryBlockNode {
+/**
+ * A blank line anywhere in `body[from, to)` — a `\n`, then only inline
+ * whitespace, then another `\n`. `listIsTight` (below) is this function's
+ * only caller, checking exactly the two gaps CommonMark 5.3's own
+ * tightness rule cares about: between two consecutive items, and inside
+ * one item's own span. A single bare `\n` (an ordinary lazy-continuation
+ * line, or the gap before/after a list item's own marker) does not match —
+ * that is the whole point of requiring a SECOND `\n` on the far side of it.
+ */
+function hasBlankLine(body: string, from: number, to: number): boolean {
+  return /\n[ \t]*\n/.test(body.slice(from, to));
+}
+
+/**
+ * CommonMark 5.3's tightness bit (CMT-08, comment mode only —
+ * `listToBlock`'s own `isComment` guard is what keeps this uncalled, and
+ * therefore this field unset, for `parseEntryMarkdown`'s own lists; see
+ * `EntryBlockNode`'s own comment on why that matters for a `toEqual` pin).
+ * A list is loose when any two of its items are separated by a blank
+ * line, or when one item's own content spans a blank line internally —
+ * checked directly against the raw source each item spans, because a
+ * tight and a loose single-paragraph item parse to an identical
+ * `EntryListItem[]` shape and looseness is a fact about the SOURCE, not
+ * about anything `collectBlocks` otherwise records.
+ */
+function listIsTight(itemNodes: readonly SyntaxNode[], body: string): boolean {
+  for (let index = 0; index < itemNodes.length; index += 1) {
+    const item = itemNodes[index];
+    if (item === undefined) {
+      continue;
+    }
+    if (hasBlankLine(body, item.from, item.to)) {
+      return false;
+    }
+    const previous = itemNodes[index - 1];
+    if (previous !== undefined && hasBlankLine(body, previous.to, item.from)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function listToBlock(
+  list: SyntaxNode,
+  body: string,
+  collect: BlockCollector,
+  isComment: boolean,
+): EntryBlockNode {
   const itemNodes = childNodes(list).filter((c) => c.type.name === "ListItem");
   const items = itemNodes.map((item): EntryListItem => {
     const itemChildren = childNodes(item);
@@ -941,11 +1011,15 @@ function listToBlock(list: SyntaxNode, body: string, collect: BlockCollector): E
       firstContent !== undefined && firstContent.type.name === "Task"
         ? taskMarkerOf(firstContent, body)
         : undefined;
-    return { task, content: collect(itemChildren, body, itemContentStart(item, body)) };
+    return {
+      task,
+      content: collect(itemChildren, body, itemContentStart(item, body), isComment),
+    };
   });
+  const tight = isComment ? { tight: listIsTight(itemNodes, body) } : {};
   return list.type.name === "OrderedList"
-    ? { kind: "orderedList", start: orderedListStart(itemNodes.at(0), body), items }
-    : { kind: "bulletList", items };
+    ? { kind: "orderedList", start: orderedListStart(itemNodes.at(0), body), items, ...tight }
+    : { kind: "bulletList", items, ...tight };
 }
 
 /**
@@ -985,6 +1059,19 @@ function listToBlock(list: SyntaxNode, body: string, collect: BlockCollector): E
  * body — and it is also what recovers the real leading whitespace
  * `Paragraph.from` would have swallowed: the actual content is simply
  * whatever text survives after every empty flush, spaces included.
+ *
+ * `isComment` (CMT-08) reverses the split entirely rather than configuring
+ * it: a Task comment renders like Todoist's own — CommonMark's ordinary
+ * "a bare `\n` is a soft break inside one paragraph" — so this whole
+ * function collapses to a single `walkEntryInline` call over `[from, to)`
+ * with no scan for `\n` at all. The character survives regardless, since
+ * `walkEntryInline` already fills every gap between children verbatim
+ * (`pushText`, that function's own logic) — it just never gets torn into a
+ * second block for it. `entry-prose.tsx`'s renderer is what turns the
+ * embedded `\n` this leaves behind into a real `<br>`, and only in
+ * `"comment"` mode, so an Entry's own soft break (which reaches this same
+ * function with `isComment` false) still renders through `white-space:
+ * pre-wrap` exactly as it always has.
  */
 function pushProseRuns(
   blocks: EntryBlockNode[],
@@ -992,7 +1079,16 @@ function pushProseRuns(
   body: string,
   from: number,
   to: number,
+  isComment: boolean,
 ): void {
+  if (isComment) {
+    const nodes = walkEntryInline(children, body, from, to);
+    if (nodes.length > 0) {
+      blocks.push({ kind: "prose", children: nodes });
+    }
+    return;
+  }
+
   let runFrom = from;
   let runChildren: SyntaxNode[] = [];
 
@@ -1062,6 +1158,7 @@ function collectBlocks(
   children: readonly SyntaxNode[],
   body: string,
   containerStart: number,
+  isComment: boolean,
 ): EntryBlockNode[] {
   const blocks: EntryBlockNode[] = [];
   let cursor = containerStart;
@@ -1072,7 +1169,7 @@ function collectBlocks(
       continue;
     }
     if (name === "BulletList" || name === "OrderedList") {
-      blocks.push(listToBlock(child, body, collectBlocks));
+      blocks.push(listToBlock(child, body, collectBlocks, isComment));
       cursor = child.to;
       continue;
     }
@@ -1098,7 +1195,7 @@ function collectBlocks(
       const quoteChildren = childNodes(child).filter((c) => c.type.name !== "QuoteMark");
       blocks.push({
         kind: "blockquote",
-        content: collectBlocks(quoteChildren, body, blockquoteContentStart(child, body)),
+        content: collectBlocks(quoteChildren, body, blockquoteContentStart(child, body), isComment),
       });
       cursor = child.to;
       continue;
@@ -1110,7 +1207,7 @@ function collectBlocks(
     }
     // The two remaining content types after the removals above: Paragraph,
     // and Task (a paragraph-shaped leaf that also carries a TaskMarker).
-    pushProseRuns(blocks, childNodes(child), body, cursor, child.to);
+    pushProseRuns(blocks, childNodes(child), body, cursor, child.to, isComment);
     cursor = child.to;
   }
   return blocks;
@@ -1131,7 +1228,7 @@ export function parseEntryMarkdown(body: string): EntryBlockNode[] {
     return [];
   }
   const tree = entryParser.parse(body);
-  return collectBlocks(childNodes(tree.topNode), body, 0);
+  return collectBlocks(childNodes(tree.topNode), body, 0, false);
 }
 
 /**
@@ -1202,7 +1299,7 @@ export function parseCommentMarkdown(body: string): EntryBlockNode[] {
     return [];
   }
   const tree = commentParser.parse(body);
-  return collectBlocks(childNodes(tree.topNode), body, 0);
+  return collectBlocks(childNodes(tree.topNode), body, 0, true);
 }
 
 /**
@@ -1237,6 +1334,49 @@ export function entryBlocksToText(blocks: readonly EntryBlockNode[]): string {
     }
   }
   return parts.join(" ");
+}
+
+/** A line that opens or closes a fenced code block — dropped entirely by `flattenCommentPreview`, below. */
+const FENCE_LINE = /^\s*```/;
+
+/**
+ * CMT-06's content-preview chip flattening — Activity's own `You commented
+ * {content} on {task}` (`format-event.ts`'s `describeEventLine`) shows
+ * `{content}` as Todoist's own plain-text preview, not raw markdown source.
+ * Reproduces both of CMT-06's own live-measured strings exactly (this
+ * function's own test file pins both):
+ *
+ *   `**bold** and https://example.com` -> `bold and https://example.com`
+ *   `*italic*\n~~strike~~\n# heading\n> quote\n\`\`\`\ncode block\n\`\`\`\n1. first`
+ *     -> `italic strike # heading > quote code block 1. first`
+ *
+ * Deliberately NOT built on `parseCommentMarkdown`/`entryBlocksToText`
+ * (unlike a bare checkbox's own accessible name, which reuses that pair):
+ * `collectBlocks`' own heading/blockquote handling
+ * (`headingContentStart`/`blockquoteContentStart`, above) strips a `#`/`>`
+ * marker at PARSE time, before a walker ever sees it, but Todoist's own
+ * second measured string keeps both verbatim — and so does the ordered
+ * list's own `1.`, left alone for the identical reason: neither measured
+ * string asks for it to go. Working off `body`'s own raw lines instead
+ * keeps exactly what was measured: a fenced block's own two fence lines
+ * dropped, its inner content kept, and only the three INLINE marks CMT-06
+ * actually measured stripped (`**`, `*`, `~~`) — inline code's own
+ * backticks are not among either measured string and are therefore
+ * deliberately left alone.
+ *
+ * `format-event.ts` is this function's only caller — the comment templates'
+ * own `{content}` and every description template's own (`You added a
+ * description`/`You changed the description of`/`You removed the
+ * description`), which read the identical raw text CMT-06 measured a chip
+ * for.
+ */
+export function flattenCommentPreview(body: string): string {
+  return body
+    .split("\n")
+    .filter((line) => !FENCE_LINE.test(line))
+    .map((line) => line.replaceAll("**", "").replaceAll("~~", "").replaceAll("*", "").trim())
+    .filter((line) => line !== "")
+    .join(" ");
 }
 
 /**
