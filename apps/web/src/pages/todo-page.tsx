@@ -9,6 +9,7 @@ import { Shell } from "@/components/shell";
 import { ActivityFeed } from "@/components/todo/activity-feed";
 import { AddTaskForm } from "@/components/todo/add-task-form";
 import { CompletedTasks } from "@/components/todo/completed-tasks";
+import { CompletionToastBody } from "@/components/todo/completion-toast";
 import { FilterView } from "@/components/todo/filter-view";
 import { FiltersView } from "@/components/todo/filters-view";
 import { LabelsView } from "@/components/todo/labels-view";
@@ -425,26 +426,47 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
    * `duration`/`onAutoClose`/`onDismiss` are the CMT-05 pieces: a 10s
    * lifetime (`COMPLETION_TOAST_DURATION_MS`'s own doc comment has the
    * measurement) and clearing `pendingUndoRef` the moment this exact toast
-   * stops being on screen, by either path sonner offers for "it's gone." */
+   * stops being on screen, by either path sonner offers for "it's gone."
+   *
+   * CMT-04 (parity ledger): `toast.custom()` in place of the plain
+   * `toast(message, {...})` this used before — `completion-toast.tsx`'s
+   * own header comment has the full reasoning (sonner exposes no `role`
+   * option; `toast.custom()` is its documented escape hatch). The Undo
+   * button now lives inside that custom body rather than being sonner's
+   * own `action`, so its `onClick` has to do both things `action.onClick`
+   * used to get for free: run `undo`, then dismiss the toast itself
+   * (`toast.dismiss(id)`, the same id `toast.custom` handed the jsx
+   * callback and returned here) — sonner's own action button dismissed
+   * automatically after `onClick`; a bare custom button does not. */
   function raiseCompletionToast(taskId: string, message: string) {
     const undo = () => {
       uncompleteTask(taskId);
       pendingUndoRef.current = null;
     };
-    const toastId = toast(message, {
-      duration: COMPLETION_TOAST_DURATION_MS,
-      action: { label: "Undo", onClick: undo },
-      onAutoClose: () => {
-        if (pendingUndoRef.current?.toastId === toastId) {
-          pendingUndoRef.current = null;
-        }
+    const toastId = toast.custom(
+      (id) => (
+        <CompletionToastBody
+          message={message}
+          onUndo={() => {
+            undo();
+            toast.dismiss(id);
+          }}
+        />
+      ),
+      {
+        duration: COMPLETION_TOAST_DURATION_MS,
+        onAutoClose: () => {
+          if (pendingUndoRef.current?.toastId === toastId) {
+            pendingUndoRef.current = null;
+          }
+        },
+        onDismiss: () => {
+          if (pendingUndoRef.current?.toastId === toastId) {
+            pendingUndoRef.current = null;
+          }
+        },
       },
-      onDismiss: () => {
-        if (pendingUndoRef.current?.toastId === toastId) {
-          pendingUndoRef.current = null;
-        }
-      },
-    });
+    );
     pendingUndoRef.current = { toastId, undo };
   }
 

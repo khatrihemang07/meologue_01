@@ -9,15 +9,26 @@ import { localDayKey } from "@/lib/local-day-key";
 import type { EntryStoreOutletContext } from "@/pages/entry-store-layout";
 import { TodoPage } from "./todo-page";
 
-// `toast` is both callable (the Undo toast, todo-page.tsx's own
-// `handleComplete`) and carries an `.error` method (task-tree.tsx's own
-// reparent-refused toast, issue #171) — mirroring history.test.tsx's own
-// `vi.mock("sonner", ...)` shape rather than the plain-callable one this
-// file used before #171 ever called `toast.error`.
+// `toast` is callable (task-tree.tsx's reparent-refused toast, issue #171,
+// via `.error`) and, since CMT-04, also carries a `.custom` and a
+// `.dismiss` — `raiseCompletionToast` (todo-page.tsx) switched its Undo
+// toast from plain `toast(message, {...})` to `toast.custom(jsx, {...})`
+// so the toast's own JSX can carry `role="alert"`/`aria-live="polite"`
+// (completion-toast.tsx's own header comment has the full reasoning; no
+// `role` option exists anywhere in sonner 2.0.8). `.custom`'s mock returns
+// an incrementing id — the same id `toast.custom` hands its `jsx`
+// callback in production — so a test can call the captured `jsx` factory
+// itself to get the real `CompletionToastBody` element and render it, and
+// `.dismiss` records the id `raiseCompletionToast`'s Undo handler closes.
 vi.mock("sonner", () => {
   const toast = vi.fn() as unknown as typeof import("sonner").toast;
-  // biome-ignore lint/suspicious/noExplicitAny: attaching a mock method to a mock function, the same shape sonner's own `toast` carries in production (a callable object with `.error`/`.success` etc as properties).
+  // biome-ignore lint/suspicious/noExplicitAny: attaching mock methods to a mock function, the same shape sonner's own `toast` carries in production (a callable object with `.error`/`.custom`/`.dismiss` etc as properties).
   (toast as any).error = vi.fn();
+  let nextCustomToastId = 1;
+  // biome-ignore lint/suspicious/noExplicitAny: see above.
+  (toast as any).custom = vi.fn(() => `custom-toast-${nextCustomToastId++}`);
+  // biome-ignore lint/suspicious/noExplicitAny: see above.
+  (toast as any).dismiss = vi.fn();
   return { toast };
 });
 
@@ -258,6 +269,8 @@ describe("TodoPage", () => {
   beforeEach(() => {
     vi.mocked(toast).mockReset();
     vi.mocked(toast.error).mockReset();
+    vi.mocked(toast.custom).mockClear();
+    vi.mocked(toast.dismiss).mockClear();
 
     // jsdom lays nothing out — `getBoundingClientRect` is always zero
     // (`history.tsx`'s own comment names the identical gap) — so the drop
@@ -575,9 +588,13 @@ describe("TodoPage", () => {
     expect(screen.getByLabelText("Add task")).toBeDisabled();
   });
 
-  // The completion toast mirrors register-service-worker.web.ts's own
-  // `toast(..., { action: { label, onClick } })` shape — this is the
-  // Undo affordance the ticket's own brief points at.
+  // CMT-04 (parity ledger): the completion toast is raised through
+  // `toast.custom()` (`raiseCompletionToast`, todo-page.tsx —
+  // completion-toast.tsx's own header comment has the full reasoning), so
+  // this asserts against the real `CompletionToastBody` element the `jsx`
+  // callback produces — a `role="alert"` element containing the message
+  // and a real "Undo" `<button>` — rather than against `toast`'s call
+  // args the way the old plain-`toast()` shape allowed.
   it("completes a Task and offers an Undo toast wired to uncompleteTask", async () => {
     const completeTask = vi.fn();
     const uncompleteTask = vi.fn();
@@ -589,22 +606,31 @@ describe("TodoPage", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: "call mum" }));
 
     expect(completeTask).toHaveBeenCalledWith("a");
-    expect(toast).toHaveBeenCalledWith(
-      // CMT-04: Todoist's own task-agnostic, count-based wording, not the
-      // task-specific `Completed "<name>"` this replaced.
-      "1 task completed",
+    expect(toast.custom).toHaveBeenCalledWith(
+      expect.any(Function),
       expect.objectContaining({
         // CMT-05: 10s, measured live (`COMPLETION_TOAST_DURATION_MS`'s own
         // doc comment, todo-page.tsx) — not sonner's unconfigured default.
         duration: 10_000,
-        action: expect.objectContaining({ label: "Undo", onClick: expect.any(Function) }),
       }),
     );
 
-    const toastCall = vi.mocked(toast).mock.calls[0];
-    const action = toastCall?.[1]?.action as { onClick: () => void } | undefined;
-    action?.onClick();
+    const customCall = vi.mocked(toast.custom).mock.calls[0];
+    if (!customCall) throw new Error("toast.custom was not called");
+    const [jsxFactory] = customCall;
+    render(jsxFactory("toast-a"));
+
+    const alertToast = screen.getByRole("alert");
+    // CMT-04: Todoist's own task-agnostic, count-based wording, not the
+    // task-specific `Completed "<name>"` this replaced.
+    expect(alertToast).toHaveTextContent("1 task completed");
+
+    fireEvent.click(within(alertToast).getByRole("button", { name: "Undo" }));
     expect(uncompleteTask).toHaveBeenCalledWith("a");
+    // The Undo click has to dismiss the toast itself now (completion-toast.tsx's
+    // own header comment) — sonner's own `action` button did this for free;
+    // a bare custom button does not.
+    expect(toast.dismiss).toHaveBeenCalledWith("toast-a");
   });
 
   // CMT-05 (parity ledger) — `Z`/`⌘Z` reach the identical `uncompleteTask`
@@ -1062,9 +1088,12 @@ describe("TodoPage — Today", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: "call mum" }));
 
     expect(completeTask).toHaveBeenCalledWith("a");
-    expect(toast).toHaveBeenCalledWith(
-      "1 task completed",
-      expect.objectContaining({ action: expect.objectContaining({ label: "Undo" }) }),
+    // CMT-04: same `toast.custom()` path as Inbox's own test above —
+    // rendering the produced element here would only re-check what that
+    // test already covers, so this just confirms the same call shape.
+    expect(toast.custom).toHaveBeenCalledWith(
+      expect.any(Function),
+      expect.objectContaining({ duration: 10_000 }),
     );
   });
 });
