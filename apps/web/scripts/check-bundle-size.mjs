@@ -316,7 +316,10 @@ const CHUNK_BUDGETS = {
   // (own chunk, no shared), up from 1,088; both "Project not found" and
   // "Label not found" grep to this chunk and to no other.
   //
-  // Ceiling raised to 3,400. A small chunk with a real feature in it is
+  // Ceiling raised to 3,400 — ~24% over the measured number, so this entry
+  // sits below this section's ~30% norm too, for a different reason than the
+  // two Todo chunks above: at this size the norm would buy 820 bytes, which
+  // is noise rather than headroom. A small chunk with a real feature in it is
   // still small; what this entry is guarding against is this file quietly
   // becoming a second home for scheduler or recognition weight, and 3,400
   // still catches that.
