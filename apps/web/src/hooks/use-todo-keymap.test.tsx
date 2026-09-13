@@ -103,6 +103,8 @@ function renderKeymap(overrides: Partial<UseTodoKeymapOptions> = {}) {
     onShowShortcuts: vi.fn(),
     onNavigate: vi.fn(),
     onUndoComplete: vi.fn(),
+    onCompleteTask: vi.fn(),
+    onCopyLink: vi.fn(),
     ...overrides,
   };
   renderHook(() => useTodoKeymap(options));
@@ -361,6 +363,115 @@ describe("useTodoKeymap", () => {
     expect(options.onOpenTaskDetail).not.toHaveBeenCalled();
   });
 
+  // KBD-01/KBD-06 (parity ledger) — three missed (b)s: the app-side
+  // handlers (`handleCompleteTask`, the Comment button's `onOpenDetail`,
+  // `copyTaskLink`) already existed; only the keys were missing.
+  describe("missed (b)s found by KBD-01/KBD-06", () => {
+    it("completes the focused Task on 'e'", () => {
+      focusTaskRow("task-1");
+      const options = renderKeymap();
+
+      fireEvent.keyDown(document, { key: "e" });
+
+      expect(options.onCompleteTask).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "task-1" }),
+      );
+    });
+
+    it("does not complete while typing, since 'e' has no allowInField exception", () => {
+      const input = document.createElement("input");
+      document.body.append(input);
+      input.focus();
+      const options = renderKeymap();
+
+      fireEvent.keyDown(input, { key: "e" });
+
+      expect(options.onCompleteTask).not.toHaveBeenCalled();
+    });
+
+    it("opens the focused Task's detail view on 'c' (Comment on task)", () => {
+      focusTaskRow("task-1");
+      const options = renderKeymap();
+
+      fireEvent.keyDown(document, { key: "c" });
+
+      expect(options.onOpenTaskDetail).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "task-1" }),
+      );
+    });
+
+    it("copies the focused Task's link on Cmd/Ctrl+Shift+C", () => {
+      focusTaskRow("task-1");
+      const options = renderKeymap();
+
+      fireEvent.keyDown(document, { key: "C", metaKey: true, shiftKey: true });
+      expect(options.onCopyLink).toHaveBeenCalledWith(expect.objectContaining({ id: "task-1" }));
+
+      options.onCopyLink = vi.fn();
+      fireEvent.keyDown(document, { key: "C", ctrlKey: true, shiftKey: true });
+      expect(options.onCopyLink).toHaveBeenCalledWith(expect.objectContaining({ id: "task-1" }));
+    });
+
+    it("does nothing for 'e', 'c' or Cmd+Shift+C when no Task row has focus", () => {
+      const options = renderKeymap();
+
+      fireEvent.keyDown(document, { key: "e" });
+      fireEvent.keyDown(document, { key: "c" });
+      fireEvent.keyDown(document, { key: "C", metaKey: true, shiftKey: true });
+
+      expect(options.onCompleteTask).not.toHaveBeenCalled();
+      expect(options.onOpenTaskDetail).not.toHaveBeenCalled();
+      expect(options.onCopyLink).not.toHaveBeenCalled();
+    });
+
+    it("navigates to Settings on the O-then-S sequence", () => {
+      const options = renderKeymap();
+
+      fireEvent.keyDown(document, { key: "o" });
+      fireEvent.keyDown(document, { key: "s" });
+
+      expect(options.onNavigate).toHaveBeenCalledWith("/settings");
+    });
+
+    // Coordinator's own re-audit: the theme picker (`appearance-
+    // section.tsx`) lives on the same `/settings` screen, not a separate
+    // route — so this shares `go-settings`'s own destination.
+    it("navigates to Settings (where the theme picker lives) on the O-then-T sequence", () => {
+      const options = renderKeymap();
+
+      fireEvent.keyDown(document, { key: "o" });
+      fireEvent.keyDown(document, { key: "t" });
+
+      expect(options.onNavigate).toHaveBeenCalledWith("/settings");
+    });
+
+    it("focuses the Add-task field on 'a'", () => {
+      const wrapper = document.createElement("div");
+      wrapper.setAttribute("data-add-task-field", "");
+      const field = document.createElement("div");
+      field.setAttribute("role", "textbox");
+      field.tabIndex = 0;
+      wrapper.append(field);
+      document.body.append(wrapper);
+      renderKeymap();
+
+      fireEvent.keyDown(document, { key: "a" });
+
+      expect(document.activeElement).toBe(field);
+    });
+
+    it("does not steal 'a' while typing in a text field", () => {
+      const input = document.createElement("input");
+      document.body.append(input);
+      input.focus();
+      renderKeymap();
+
+      fireEvent.keyDown(input, { key: "a" });
+
+      expect(document.activeElement).toBe(input);
+    });
+  });
+
   it("navigates on the G-then-key sequences", () => {
     const options = renderKeymap();
 
@@ -371,6 +482,21 @@ describe("useTodoKeymap", () => {
     fireEvent.keyDown(document, { key: "g" });
     fireEvent.keyDown(document, { key: "i" });
     expect(options.onNavigate).toHaveBeenCalledWith("/todo/inbox");
+  });
+
+  // Coordinator's own re-audit found these two wrongly excluded:
+  // `/todo/labels` and `/todo/activity` (labelled "Reporting" by
+  // `todo-sidebar.tsx`, NAV-01) are both real routes.
+  it("navigates to Labels and Activity on the G-then-L and G-then-A sequences", () => {
+    const options = renderKeymap();
+
+    fireEvent.keyDown(document, { key: "g" });
+    fireEvent.keyDown(document, { key: "l" });
+    expect(options.onNavigate).toHaveBeenCalledWith("/todo/labels");
+
+    fireEvent.keyDown(document, { key: "g" });
+    fireEvent.keyDown(document, { key: "a" });
+    expect(options.onNavigate).toHaveBeenCalledWith("/todo/activity");
   });
 
   it("a bare 'g' alone navigates nowhere, and a standalone 't' still dispatches OPEN_SCHEDULE_EVENT once the sequence is consumed", () => {

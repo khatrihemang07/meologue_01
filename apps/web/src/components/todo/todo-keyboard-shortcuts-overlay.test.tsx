@@ -39,4 +39,35 @@ describe("TodoKeyboardShortcutsOverlay", () => {
 
     expect(screen.queryByText("Move to…")).not.toBeInTheDocument();
   });
+
+  // KBD-01/KBD-06 (parity ledger) — the missed (b)s this ticket bound.
+  it("lists the newly-bound KBD-01/KBD-06 rows, including the new Add task section", () => {
+    render(<TodoKeyboardShortcutsOverlay open={true} onOpenChange={vi.fn()} />);
+
+    // Scoped to the section heading (`h3`) — "Add task" is also the
+    // *label* of the unrelated `quick-add` binding (General section, `Q`),
+    // the same ambiguity `todo-keyboard-shortcuts-overlay.test.tsx`'s own
+    // earlier "Edit task" comment already calls out for section headings
+    // vs. row labels.
+    expect(screen.getByText("Add task", { selector: "h3" })).toBeInTheDocument();
+    expect(
+      screen.getByText("Add new task to the bottom of the list", { selector: "dt" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Complete focused task", { selector: "dt" })).toBeInTheDocument();
+    expect(screen.getByText("Comment on task", { selector: "dt" })).toBeInTheDocument();
+    expect(screen.getByText("Copy link to task", { selector: "dt" })).toBeInTheDocument();
+    expect(screen.getByText("Open settings", { selector: "dt" })).toBeInTheDocument();
+  });
+
+  // Coordinator's own re-audit found three more real (b)s in a second pass.
+  it("lists the rows added by the coordinator's re-audit", () => {
+    render(<TodoKeyboardShortcutsOverlay open={true} onOpenChange={vi.fn()} />);
+
+    expect(screen.getByText("Open label…", { selector: "dt" })).toBeInTheDocument();
+    expect(screen.getByText("Go to reporting", { selector: "dt" })).toBeInTheDocument();
+    // Both "Open settings" and "Open themes" resolve to the same
+    // destination (`/settings`) but are listed as two honest, separate
+    // rows — matching Todoist's own two separate overlay entries.
+    expect(screen.getByText("Open themes", { selector: "dt" })).toBeInTheDocument();
+  });
 });

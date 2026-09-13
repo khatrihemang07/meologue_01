@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   bindingById,
   chordFor,
+  focusAddTaskField,
   focusedTaskId,
   formatKeyHint,
   groupedBindingsBySection,
@@ -125,6 +126,44 @@ describe("bindingById", () => {
 
   it("returns undefined for an unknown id", () => {
     expect(bindingById("nope")).toBeUndefined();
+  });
+
+  // KBD-01/KBD-06 (parity ledger) — the missed (b)s this ticket added.
+  it("finds every binding added for KBD-01/KBD-06", () => {
+    expect(bindingById("complete-task")?.keys).toEqual(["e"]);
+    expect(bindingById("comment-task")?.keys).toEqual(["c"]);
+    expect(bindingById("copy-link")?.keys).toEqual(["mod+shift+c"]);
+    expect(bindingById("go-settings")?.keys).toEqual(["o s"]);
+    expect(bindingById("focus-add-task")?.keys).toEqual(["a"]);
+  });
+
+  // Coordinator's own re-audit found three more, added in a second pass.
+  it("finds every binding added by the coordinator's re-audit", () => {
+    expect(bindingById("go-labels")?.keys).toEqual(["g l"]);
+    expect(bindingById("go-reporting")?.keys).toEqual(["g a"]);
+    expect(bindingById("go-themes")?.keys).toEqual(["o t"]);
+  });
+});
+
+describe("focusAddTaskField", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("focuses the Add-task field's live role=textbox descendant", () => {
+    document.body.innerHTML = `
+      <div data-add-task-field>
+        <div role="textbox" tabindex="0" id="field"></div>
+      </div>
+    `;
+
+    focusAddTaskField();
+
+    expect(document.activeElement).toBe(document.getElementById("field"));
+  });
+
+  it("is a silent no-op when the field isn't in the DOM", () => {
+    expect(() => focusAddTaskField()).not.toThrow();
   });
 });
 

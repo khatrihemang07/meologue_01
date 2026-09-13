@@ -12,30 +12,173 @@
  *
  * **Scope — only what has a real door.** `docs/reference/todoist/keyboard.md`
  * transcribes 80 shortcuts from Todoist's own overlay, unverified by
- * driving (that file's own header comment). This table carries a small
- * fraction of those 80 — only the ones with a target that already exists in
- * this app (issue #228's own brief: "do not invent bindings for surfaces
- * that do not exist yet"). Concretely, left out and why:
- *   - Every `O then …` binding (Productivity/notifications/user menu/
- *     settings/themes) — none of those five destinations exist in this app
- *     at all.
- *   - `G then H`, `G then A`, `G then /`, `G then L` (home, reporting, a
- *     section picker, a label picker) — no such destination or picker
- *     exists; `G then L` and label management generally are #229's, not
- *     this ticket's, per the brief.
- *   - `V` ("Move to…") — the one door onto it, `TaskCommandMenu`'s own
- *     "Move to…" submenu, is a Radix `DropdownMenu.Sub` with no controlled
- *     "open pre-expanded on this submenu" API; wiring `V` would mean either
- *     opening the same generic menu `.` already opens (indistinguishable
- *     from `.`, despite the specific label) or a real submenu-open
- *     refactor this ticket's scope doesn't reach. Left unimplemented rather
- *     than shipping a guess.
- *   - `E` (complete), `X` (multi-select), `Enter` (open task view), `M`
- *     (toggle sidebar), Quick Add's own token grammar (`#`, `@`, `P1`-`P4`,
- *     `!`, `{`) — either no real multi-select/sidebar-toggle surface exists
- *     to target, or (Quick Add's tokens) these are typed *text* the
- *     composer's own parser already recognises (`parseQuickAdd`), not
- *     single-keystroke chords this table has any business intercepting.
+ * driving (that file's own header comment). This table carries a fraction
+ * of those 80 — only the ones with a target that already exists in this
+ * app (issue #228's own brief: "do not invent bindings for surfaces that
+ * do not exist yet").
+ *
+ * **KBD-01/KBD-06 (parity ledger): this list used to not exist at all.**
+ * An earlier version of this comment claimed to name "each key left out
+ * and why" and did not — several absences (undo, the row-nav keys, `E`)
+ * had no acknowledgement anywhere in the file, which is exactly how
+ * CMT-05's missing undo binding went unnoticed for as long as it did. `Z`/
+ * `⌘Z`, `ArrowUp/Down`/`j`/`k` are bound now (below); `E`/`C`/`⇧⌘C`/`A`/
+ * `O then S` turned out to be real, missed (b)s too — bound below rather
+ * than left excluded a second time.
+ *
+ * **A second round of the identical mistake, caught by the coordinator's
+ * own re-audit rather than this file's own diligence:** the first pass of
+ * this exclusion list reasoned two rows from their *name* rather than
+ * checking the app — "`G then A` (reporting) — no reporting/insights
+ * feature exists" and "`O then T` (themes) — no theme picker exists,
+ * checked `settings-page.tsx`" — and both were wrong. `/todo/activity`
+ * (`App.tsx`) is a real route that `todo-sidebar.tsx` itself labels
+ * "Reporting" (NAV-01, parity ledger); the theme picker lives in
+ * `appearance-section.tsx`, a component `settings-page.tsx` mounts rather
+ * than contains inline, which a single-file grep missed. A third,
+ * `G then L` (open label…), turned out to have the identical shape as
+ * `go-projects`'s own already-accepted resolution ("open X…" → the list
+ * view) and was excluded on a stale #229 deferral rather than checked
+ * against the routes that now exist. All three are bound below
+ * (`go-reporting`, `go-themes`, `go-labels`) rather than re-excluded a
+ * third time. The full re-audit that followed also corrected `⌃]`/`⌃[`
+ * (Sub-task, below) from "no feature" to "a *different*, already-working
+ * binding" — see that paragraph.
+ *
+ * What remains excluded, and why, is every one of the 80 keyboard.md rows
+ * not already covered above, listed exhaustively by keyboard.md's own
+ * section, each verified against the app itself (a grep for the feature,
+ * not an inference from the row's name) so this list can be checked row
+ * for row rather than trusted on its word:
+ *
+ * *General* — `Enter` ("Open task view"): **not bound, deliberately, not
+ * merely missed.** This app's row title and Edit buttons already call
+ * `onOpenDetail` on click, so Enter already opens the Task wherever focus
+ * naturally lands on either of those two controls; but unlike Todoist,
+ * whose row is a single focusable target, this app's row decomposes into
+ * several independently-focusable native controls (checkbox, Date,
+ * Comment, More), each with its own existing Enter/click behaviour. A
+ * document-level Enter binding firing unconditionally would `preventDefault()`
+ * and override every one of those — Date's popover, Comment's identical
+ * open-detail, More's menu — replacing each control's own native Enter
+ * with "open the Task" regardless. That is a regression against this
+ * app's own current keyboard behaviour, not a parity fix, so it stays
+ * unbound. `X` (select), `⌘A` (select all), `,` under Edit task (multi-select
+ * toolbar) — grepped for `multiSelect`/`multi-select`/`selectedTask`
+ * across the whole app: no match outside this file's own comments and one
+ * unrelated field name in a Todoist-side test fixture; no multi-select or
+ * selection concept exists in this app at all.
+ * `←`/`→` (move focus left/right) — no adjacent-column/board layout exists
+ * for focus to move into. `Esc` (dismiss/cancel) — already true everywhere,
+ * for free: every dialog/popover/menu this app renders is a Radix
+ * primitive, and Radix wires Escape-to-close into all of them already
+ * (KBD-02, parity ledger, verified live on the `?` overlay itself); adding
+ * a binding here would be redundant with, not additive to, existing
+ * behaviour. `M` (open/close sidebar) — re-checked directly (grepped for
+ * `sidebarOpen`/`toggleSidebar`/`isSidebarOpen` and any collapse state on
+ * `pane-divider.tsx`/`shell.tsx`): no collapsible sidebar or pane exists
+ * anywhere in this app, not just under Todo. `⌘⌥0` (collapse/expand view)
+ * — no board/calendar view exists for this to collapse, and the action's
+ * own meaning is Todoist-view-specific.
+ *
+ * *Quick Add* — `⇧Q` (dictate with Ramble) — Todoist's own voice-dictation
+ * product, no equivalent. `#`/`/`/`@`/`P1`-`P4`/`!`/`{` (pick project, pick
+ * section, add label, set priority, add reminder, set deadline) — typed
+ * *text* inside the composer that `parseQuickAdd` already tokenises, not
+ * single-keystroke chords this document-level table has any business
+ * intercepting; whether a given token then actually persists is that
+ * parser's own completeness question (`quick-add-task.ts`'s
+ * `UNSUPPORTED_TOKEN_KINDS` — project/section/reminder/description are
+ * recognised but not yet stored; label and priority already are), separate
+ * from whether it belongs in this table at all — it doesn't, either way.
+ * `+` (add assignee) — grepped for `assignee` across the whole app: no
+ * match outside this file's own comments; no assignee feature exists.
+ * `↓`/`⇧↓` (add description /
+ * open more actions, both from inside the Quick Add composer) — no such
+ * inline reveal or menu exists in `add-task-form.tsx`, which this ticket's
+ * file list doesn't reach this round.
+ *
+ * *Navigate* — `G then H`/bare `H` (home) — checked directly: root `/`
+ * renders `ChatListPage` (`App.tsx`), a different Destination entirely
+ * (this app's chat/journal home, not a Todo overview), so there is no
+ * "home" inside Todo for this to reach. `G then /` (section picker) —
+ * `project-view.tsx` has an inline "add section" form but no picker or
+ * search surface for jumping to an existing one, checked directly, not
+ * assumed from the row's name. `O then P` (Productivity/Karma), `O then
+ * N` (notifications), `O then U` (user menu) — grepped for `karma`,
+ * `productivity`, `notification`, `user menu`, `Account`, `Profile`
+ * across the whole app: no match outside this file's own comments: none
+ * of those three destinations exist. `G then A` (reporting), `G then L`
+ * (open label…) and `O then T` (themes) used to be listed here too and
+ * were wrong — see this file's own header comment on the coordinator's
+ * re-audit; all three are bound below instead.
+ *
+ * *Edit task* — `⇧R` (assign to…) — same `assignee` grep as Quick Add's
+ * `+` above; no assignee feature. `L` (change
+ * labels) — same limitation as `V` below: `TaskCommandMenu`'s "Labels"
+ * item is a Radix `DropdownMenu.Sub` with no controlled "open
+ * pre-expanded" API. `V` ("Move to…") — the one door onto it is that same
+ * kind of `DropdownMenu.Sub`; wiring `V` would mean either opening the
+ * same generic menu `.` already opens (indistinguishable from `.`, despite
+ * the specific label) or a real submenu-open refactor this ticket's scope
+ * doesn't reach. Left unimplemented rather than shipping a guess, same as
+ * before. `⌘↓`/`⌘↑` (move to and edit the task below/above) — "move" and
+ * "edit" both exist separately (`reorderTask`, `onOpenTaskDetail`), but
+ * "swap with the adjacent row in the current list, then open it" is list-
+ * ordering orchestration that lives in `task-list.tsx`/`todo-page.tsx`
+ * (which sibling, which section, index math) — files this ticket doesn't
+ * touch — not a single existing function this hook can just call. `. or
+ * ⇧.` ("More actions") — `.` is bound; the `⇧.` variant (`event.key`
+ * reports `">"` on a US layout under Shift+Period) is the identical
+ * action already reachable on the bare key, so leaving it unwired isn't a
+ * missing binding, just an unwired synonym for one that already exists.
+ *
+ * *Add task* — `⇧A` ("add new task to the top of the list") — this app's
+ * Add field only ever appends at the list's end (`todo-page.tsx`'s own
+ * doc comment: it renders "just before `CompletedTasks`"); there is no
+ * "top of list" placement for `⇧A` to target. `Enter`/`⇧Enter`/`⌃Enter`
+ * (save-and-continue variants) — owned by `task-title-editor.tsx`'s own
+ * ProseMirror keymap, a different module entirely, not this table's
+ * concern; `⇧Enter` specifically is QA-19 (parity ledger, tracked
+ * separately in issue #258) and is not to be touched here. `⌃Enter`
+ * ("save and create another above") additionally has no "insert above"
+ * ordering in this app's Add composer, which only ever appends.
+ *
+ * *Sub-task* — `⇧E` (expand/collapse task) — checked directly (grepped
+ * `task-row.tsx`/`task-row-content.tsx`/`task-tree.tsx` for "expand"/
+ * "collapse"): sub-tasks always render, with no collapsible state to grep
+ * for, so there is genuinely nothing for this to target. `⌃]`/`⌃[`
+ * (indent/outdent) are **not** a missing feature, corrected here by the
+ * coordinator's own re-audit — this app already indents/outdents a Task
+ * via `Alt+ArrowRight`/`Alt+ArrowLeft`, wired directly on the row
+ * (`task-row.tsx`'s `onIndent`/`onOutdent` props, `task-tree.tsx`'s
+ * `handleIndent`/`handleOutdent`) — just a different pair of keys than
+ * Todoist's, and a row-local `onKeyDown` rather than this document-level
+ * table's. Adding `⌃]`/`⌃[` here would need a new event bus into
+ * `task-tree.tsx` (outside this ticket's file list this round) for an
+ * action that already has a working, if differently-keyed, shortcut —
+ * left unbound rather than risk a second, conflicting path to the
+ * identical mutation.
+ *
+ * *Projects* — all 11 rows (add project, add section, share project,
+ * change layout & view, the four sort orders, "more actions", comments,
+ * insights) are chrome for `project-view.tsx`/`projects-view.tsx` — a
+ * different view's own state (sort mode, share dialog, layout), reachable
+ * through no existing door from this document-level table, and outside
+ * this ticket's file list regardless. Grepped for `share`/`ShareProject`,
+ * `insight`/`analytics`, `sortBy`/`sortMode`/`SortOrder` and `board`
+ * across the whole app: no match — sharing, alternate layouts, sort modes
+ * and insights/analytics have no feature at all yet in this app;
+ * assignee-based sorting doubly doesn't, on top of that. `addProject`/
+ * `addSection` themselves do exist on the store (`project-view.tsx`'s own
+ * always-visible "add section" form calls the latter directly), but
+ * reaching either from a keystroke needs a marker/event this document-
+ * level table has no door onto without editing those off-limits files.
+ *
+ * *Calendar and Upcoming views* — all 5 rows (back to today, next/previous
+ * week or month, scroll up/down in week view) assume a calendar/week grid.
+ * This app's Upcoming (`upcoming-view.tsx`) is a flat, date-grouped list,
+ * not a calendar — there is no grid for any of these five to act on.
  *
  * **`allowInField`.** issue #228's own brief: Todoist fires `P1`-`P4` and
  * `Y` even while the caret sits inside its Quick Add composer, so a blanket
@@ -50,17 +193,20 @@
  * that — `isCommandK` bypassed the typing guard while `/`/`f` did not. This
  * table keeps that one exception, explicit rather than buried in an `if`.
  *
- * **Sequences.** `G then I/T/U/P/V` are the only two-key chords wired,
- * encoded as `"g i"` etc. (space-separated, lowercase) — `use-todo-
- * keymap.ts`'s own pending-prefix state machine treats any `keys` entry
- * containing a space as a sequence rather than a chord.
+ * **Sequences.** `G then I/T/U/P/V/L/A` and `O then S/T` are the two-key
+ * chords wired, encoded as `"g i"`/`"o s"` etc. (space-separated,
+ * lowercase) — `use-todo-keymap.ts`'s own pending-prefix state machine
+ * treats any `keys` entry containing a space as a sequence rather than a
+ * chord. `"o s"`/`"o t"` (settings/themes) are the two `O then …` rows
+ * that turned out to have real destinations — see the Navigate exclusions
+ * above for why the other three (`O then P/N/U`) don't.
  */
 
 /** Grouping only — matches `keyboard.md`'s own section headings, so a
  * reader can find a wired binding by looking for the same heading. Not
  * every section that document has appears here (see the header comment
  * above for the ones this table has nothing to put under). */
-export type TodoKeySection = "General" | "Navigate" | "Edit task";
+export type TodoKeySection = "General" | "Navigate" | "Edit task" | "Add task";
 
 /**
  * Whether a binding needs a specific Task singled out to act on, or applies
@@ -178,6 +324,33 @@ export const TODO_KEY_BINDINGS: readonly TodoKeyBinding[] = [
     when: "task-focused",
     keys: ["mod+e"],
   },
+  // KBD-01/KBD-06 (parity ledger) — a missed (b), not a documented
+  // exclusion: `handleCompleteTask` (`todo-page.tsx`) already exists (it's
+  // what the row's own checkbox click calls), so there was a real door
+  // onto "complete the focused Task" the whole time. `label` is
+  // `keyboard.md`'s own wording verbatim.
+  {
+    id: "complete-task",
+    section: "Edit task",
+    label: "Complete focused task",
+    when: "task-focused",
+    keys: ["e"],
+  },
+  // Same finding as `complete-task` above. This app has no comment-only
+  // quick action — commenting happens inside the Task detail view, which
+  // is exactly where the row's own existing "Comment" hover button already
+  // sends a click (`task-row-content.tsx`'s Comment button calls the
+  // identical `onOpenDetail` the title and Edit buttons do) — so this
+  // binding reuses `onOpenTaskDetail`, the same option `edit-task` above
+  // already calls, rather than adding a second one for the same
+  // destination.
+  {
+    id: "comment-task",
+    section: "Edit task",
+    label: "Comment on task",
+    when: "task-focused",
+    keys: ["c"],
+  },
   // `T`/`D`/`Y` below all target Todoist's own three separate pickers —
   // `D`/`Y` (Deadline/Priority) still open the one shared
   // `TaskScheduleSheet` that holds both (`task-schedule-sheet.tsx`'s own
@@ -227,6 +400,17 @@ export const TODO_KEY_BINDINGS: readonly TodoKeyBinding[] = [
     label: "Delete task",
     when: "task-focused",
     keys: ["mod+backspace", "shift+delete"],
+  },
+  // KBD-01/KBD-06 — another missed (b): `copyTaskLink` (`todo-page.tsx`)
+  // already exists (it's what the row's own "More actions" → "Copy link
+  // to task" item calls), just never had a key. `keyboard.md`'s own
+  // wording for this row.
+  {
+    id: "copy-link",
+    section: "Edit task",
+    label: "Copy link to task",
+    when: "task-focused",
+    keys: ["mod+shift+c"],
   },
   // KBD-03/KBD-04 (parity ledger), measured live against Todoist
   // (`docs/reference/todoist/live-audit-dom/flow6-KBD-03-todoist.json`,
@@ -295,6 +479,75 @@ export const TODO_KEY_BINDINGS: readonly TodoKeyBinding[] = [
     label: "Go to Filters & Labels",
     when: "always",
     keys: ["g v"],
+  },
+  // Corrected after the coordinator's own re-audit: `/todo/labels`
+  // (`App.tsx`) is a real route — a second (b) this table missed for the
+  // identical reason as `go-projects` above, and resolved the identical
+  // way. `keyboard.md`'s own wording, "Open label…", implies a picker for
+  // one specific label the way "Open project…" implies a picker for one
+  // specific project; `go-projects` above already resolves that same
+  // wording onto the *list* view (`/todo/projects`) rather than a picker,
+  // since no picker component exists — this follows that established
+  // precedent rather than inventing a different rule for Labels.
+  {
+    id: "go-labels",
+    section: "Navigate",
+    label: "Open label…",
+    when: "always",
+    keys: ["g l"],
+  },
+  // Corrected after the coordinator's own re-audit: this row was wrongly
+  // excluded as "no reporting/insights feature exists," reasoned from the
+  // row's own name rather than checked. `/todo/activity` (`App.tsx`) is a
+  // real route, and `todo-sidebar.tsx` labels that exact destination
+  // "Reporting" (NAV-01, parity ledger, matched live against Todoist) —
+  // `todo-nav-destinations.ts`'s own header comment states the wording
+  // explicitly. `label` here keeps `keyboard.md`'s own transcribed
+  // wording ("Go to reporting"), the same convention every other `go-*`
+  // row in this table follows, rather than switching to the sidebar's own
+  // "Reporting".
+  {
+    id: "go-reporting",
+    section: "Navigate",
+    label: "Go to reporting",
+    when: "always",
+    keys: ["g a"],
+  },
+  // KBD-01/KBD-06 — the one `O then …` row with a real destination: unlike
+  // Productivity/notifications/user menu (this module's own header
+  // comment has the reasoning for those three), `/settings` (`App.tsx`) is
+  // a route this app actually has. Sequenced the same way as the `G
+  // then …` rows above — `"o s"`, space-separated, lowercase — which is
+  // also what registers `"o"` as a second sequence prefix in
+  // `SEQUENCE_PREFIXES` below, computed from the table rather than
+  // hand-listed.
+  { id: "go-settings", section: "Navigate", label: "Open settings", when: "always", keys: ["o s"] },
+  // Corrected after the coordinator's own re-audit: this row was wrongly
+  // excluded as "no theme picker exists," found by grepping only
+  // `settings-page.tsx` itself rather than the component tree it renders —
+  // the theme picker lives in `components/settings/appearance-section.tsx`
+  // (`THEME_OPTIONS`, a "Theme" `SettingsSection`), which that page mounts.
+  // There is no *separate* themes route or tab, though — the picker is
+  // one section on the same `/settings` screen `go-settings` above already
+  // opens — so this deliberately shares that destination rather than
+  // inventing a `?tab=appearance` deep link nothing on the page reads.
+  // Both rows are listed honestly in the overlay: same key hint shape,
+  // same destination, different Todoist-side labels.
+  { id: "go-themes", section: "Navigate", label: "Open themes", when: "always", keys: ["o t"] },
+  // KBD-01/KBD-06 — Todoist's own "Add task" section names the row-level
+  // Add affordance rather than the global Quick Add dialog (`quick-add`,
+  // `Q`, above). This app's Add field only ever appends at the list's end
+  // (no "top of list" placement exists for `⇧A` to target — this module's
+  // own header comment), so this binding jumps straight to that one spot
+  // rather than choosing between two. `focusAddTaskField()` below reuses
+  // `rowNavTargets()`'s own selector for the field rather than a second,
+  // hand-duplicated one.
+  {
+    id: "focus-add-task",
+    section: "Add task",
+    label: "Add new task to the bottom of the list",
+    when: "always",
+    keys: ["a"],
   },
 ];
 
@@ -595,6 +848,27 @@ export function focusAdjacentRow(direction: "next" | "previous"): void {
     collapsedDisclosure.open = true;
   }
   target.focus();
+}
+
+/**
+ * `focus-add-task` (`A`, KBD-01/KBD-06) — jumps straight to the "Add task"
+ * field's own live focusable descendant, rather than cycling row by row
+ * through `focusAdjacentRow` above to reach it. Reuses the identical
+ * `[data-add-task-field] [role="textbox"], [data-add-task-field]
+ * input:not([disabled])` selector `rowNavTargets()` folds into its own
+ * three-selector query, rather than a second, hand-duplicated one — so if
+ * `add-task-form.tsx` ever changes which element is live there, both
+ * functions stay in sync automatically. A silent no-op when the field
+ * isn't in the DOM at all, matching this module's existing posture for
+ * every other "no affordance for a gesture that can't happen here" case
+ * (`focusAdjacentRow`'s own `targets.length === 0` guard, `focusedTaskId()`
+ * returning `null`).
+ */
+export function focusAddTaskField(): void {
+  const field = document.querySelector<HTMLElement>(
+    '[data-add-task-field] [role="textbox"], [data-add-task-field] input:not([disabled])',
+  );
+  field?.focus();
 }
 
 // Symbols where Shift is already baked into `event.key` (Shift+/ reports
