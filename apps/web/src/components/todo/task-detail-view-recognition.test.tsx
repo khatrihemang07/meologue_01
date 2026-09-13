@@ -1,7 +1,8 @@
 import type { Comment, Label, Project, Task } from "@meologue/core";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { useEffect, useRef, useState } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MemoryRouter, Outlet, Route, Routes } from "react-router";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useSettingsStore } from "@/lib/settings";
 import { quickAddRecognitionPlugin } from "@/lib/todo-quick-add-recognition";
 import { TaskDetailView } from "./task-detail-view";
@@ -95,11 +96,29 @@ function task(overrides: Partial<Task> = {}): Task {
   };
 }
 
-// No `project`/`section`/`label`/`comment` factories here (unlike
-// `task-detail-view.test.tsx`) — every test below only exercises the
-// title, so `renderView`'s defaults (empty arrays, null `project`/
-// `section`) are all any of them need. The type imports stay, for the
-// array-literal casts just below.
+// `task-detail-view.test.tsx`'s own factory, reused verbatim: QA-14's own
+// suite below (unlike every OTHER suite in this file) needs at least one
+// real Project to list in the popup.
+function project(overrides: Partial<Project> = {}): Project {
+  return {
+    id: "p1",
+    deviceId: "device-a",
+    name: "Errands",
+    colour: "#ff8d85",
+    favourite: false,
+    archived: false,
+    parentId: null,
+    description: null,
+    orderKey: "V",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    seq: 1,
+    syncedAt: "2026-01-01T00:00:00.000Z",
+    deletedAt: null,
+    ...overrides,
+  };
+}
+
 function renderView(overrides: Partial<Parameters<typeof TaskDetailView>[0]> = {}) {
   const props = {
     task: task(),
@@ -136,6 +155,129 @@ function renderView(overrides: Partial<Parameters<typeof TaskDetailView>[0]> = {
   return props;
 }
 
+/**
+ * QA-14's own create-hook half: `task-detail-view.tsx`'s own
+ * `titleAutocomplete` reads `addProject`/`addLabel` off `useOutletContext`
+ * directly (that file's own doc comment on why: a new prop on
+ * `TaskDetailViewProps` would need `todo-page.tsx`/`composer-page.tsx`,
+ * both owned by another agent right now, to grow it). Proving that wiring
+ * needs a REAL `<Outlet context={...}>` ancestor, unlike every other test
+ * in this file — `renderView` above deliberately has none, which is what
+ * lets `task-detail-view.test.tsx`'s own Router-free suite keep working
+ * unchanged (`useOutletContext` returns `undefined` there, not a throw).
+ */
+function renderViewWithOutlet(
+  outletContext: { addProject?: (name: string) => void; addLabel?: (name: string) => void },
+  overrides: Partial<Parameters<typeof TaskDetailView>[0]> = {},
+) {
+  const props = {
+    task: task(),
+    project: null,
+    section: null,
+    projects: [] as Project[],
+    labels: [] as Label[],
+    prevTask: null,
+    nextTask: null,
+    onClose: vi.fn(),
+    onNavigate: vi.fn(),
+    onRename: vi.fn(),
+    onComplete: vi.fn(),
+    onUncomplete: vi.fn(),
+    onOpenSchedule: vi.fn(),
+    onSetDate: vi.fn(),
+    onSetDateString: vi.fn(),
+    datesWithTasks: new Map(),
+    onSetProject: vi.fn(),
+    onSetLabels: vi.fn(),
+    onSetDescription: vi.fn(),
+    comments: [] as Comment[],
+    onAddComment: vi.fn(),
+    onEditComment: vi.fn(),
+    onRemoveComment: vi.fn(),
+    subtasks: [] as Task[],
+    onAddSubtask: vi.fn(),
+    onCompleteSubtask: vi.fn(),
+    onUncompleteSubtask: vi.fn(),
+    events: [],
+    ...overrides,
+  };
+  render(
+    <MemoryRouter initialEntries={["/todo/task/x"]}>
+      <Routes>
+        <Route element={<Outlet context={outletContext} />}>
+          <Route path="/todo/task/x" element={<TaskDetailView {...props} />} />
+        </Route>
+      </Routes>
+    </MemoryRouter>,
+  );
+  return props;
+}
+
+/**
+ * Simulates typing into the real, mounted `TaskTitleEditor` without going
+ * through jsdom's absent contenteditable engine (this file's own header
+ * comment on why real typing/IME can't be driven here) — dispatched as a
+ * genuine `paste` DOM event instead, which `prosemirror-view`'s own
+ * `editHandlers.paste` (dist/index.js) handles entirely through
+ * `view.state.tr.replaceSelection(...)`, never through the DOM's own
+ * Selection/Range APIs. Verified directly against a raw `EditorView` built
+ * with this exact schema/plugin list before writing this file's own QA-14
+ * suite: a real `paste` event with a plain-text `clipboardData` inserts the
+ * text as a normal transaction, `docChanged` included, which is exactly
+ * what the autocomplete plugin's own `apply()` needs to see to compute a
+ * fresh `buildState` — nothing about detecting a live `#`/`@` trigger cares
+ * how the text arrived.
+ */
+/**
+ * jsdom implements neither method AT ALL on `Range` (verified directly —
+ * `"getClientRects" in document.createRange()` is `false`), not merely a
+ * zero-value stand-in the way `Element.prototype.getBoundingClientRect`
+ * already is (jsdom does implement that one, returning an all-zero rect).
+ * `task-title-editor.tsx`'s own `popupStyle` calls `EditorView.coordsAtPos`
+ * the instant a popup is open, which reaches exactly this gap
+ * (`prosemirror-view`'s own `singleRect`, dist/index.js) — every OTHER
+ * test in this codebase that exercises the popup avoids it by never
+ * mounting the real `TaskTitleEditor` REACT component while one is open
+ * (`task-title-editor.test.tsx`'s own suite drives a bare `EditorView`
+ * directly, calling neither `TaskTitleEditor` nor `popupStyle`). This
+ * file's own QA-14 suite is the first to mount the real component with a
+ * popup actually open, so it is also the first to need this shim — scoped
+ * to this file alone (not `src/test/setup.ts`) since nothing else in this
+ * codebase yet needs it. Falls through to `getBoundingClientRect` exactly
+ * as `singleRect` itself does when `getClientRects()` returns nothing,
+ * so both need stubbing, not just one.
+ */
+beforeAll(() => {
+  if (typeof Range.prototype.getClientRects !== "function") {
+    Range.prototype.getClientRects = (): DOMRectList => [] as unknown as DOMRectList;
+  }
+  if (typeof Range.prototype.getBoundingClientRect !== "function") {
+    Range.prototype.getBoundingClientRect = (): DOMRect =>
+      ({
+        x: 0,
+        y: 0,
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        width: 0,
+        height: 0,
+        toJSON() {
+          return this;
+        },
+      }) as DOMRect;
+  }
+});
+
+function pasteText(target: HTMLElement, text: string): Event {
+  const event = new Event("paste", { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "clipboardData", {
+    value: { getData: (type: string) => (type === "text/plain" ? text : "") },
+  });
+  target.dispatchEvent(event);
+  return event;
+}
+
 // Pinned to the identical instant `docs/reference/todoist/quick-add.md`
 // and `todo-quick-add-recognition.test.ts` already use, so "tod" resolves
 // to the same 2026-09-10 `matchId` both files assert on.
@@ -160,7 +302,7 @@ describe("DET-07 — recognition in the detail title", () => {
   it("renders the identical recognition span the composer produces, for the same phrase", async () => {
     renderView({ task: task({ content: "call mum tod p1" }) });
 
-    fireEvent.click(screen.getByRole("button", { name: "call mum tod p1" }));
+    fireEvent.click(screen.getByTestId("task-detail-title"));
     const titleEditor = await screen.findByLabelText("Task name");
 
     // Same three attributes `todo-quick-add-recognition.ts`'s own
@@ -188,7 +330,7 @@ describe("DET-07 — recognition in the detail title", () => {
   it("does not touch the underlying text: the editor's own text content is exactly what was seeded", async () => {
     renderView({ task: task({ content: "call mum tod p1" }) });
 
-    fireEvent.click(screen.getByRole("button", { name: "call mum tod p1" }));
+    fireEvent.click(screen.getByTestId("task-detail-title"));
     const titleEditor = await screen.findByLabelText("Task name");
 
     // Decorations are a view-layer overlay (ProseMirror's own contract);
@@ -234,5 +376,94 @@ describe("DET-07 — recognition in the detail title", () => {
     fireEvent.keyDown(getByRole("textbox"), { key: "Enter" });
 
     expect(onCommit).toHaveBeenCalledWith("call mum tod p1");
+  });
+});
+
+// QA-14's own second half, wired into the detail title (`task-detail-
+// view.tsx`'s own `titleAutocomplete`/`autocompletePopupOpenRef`) — mounted
+// through the REAL `TaskDetailView`/`TaskTitleEditor`, exactly as DET-07's
+// suite above, for the identical reason: this is the one place that can
+// prove Radix's own Escape handling and ProseMirror's popup-close are
+// actually ordered the way `task-detail-view.tsx`'s own `dismissGuardRef`
+// comment claims, not merely reasoned about.
+describe("QA-14 — #/@ autocomplete in the detail title, and DET-15's Escape gap", () => {
+  it("typing '#' opens the listbox with the supplied projects", async () => {
+    renderView({
+      task: task({ content: "buy " }),
+      projects: [project({ id: "p1", name: "Errands" })],
+    });
+
+    fireEvent.click(screen.getByTestId("task-detail-title"));
+    const titleEditor = await screen.findByLabelText("Task name");
+
+    pasteText(titleEditor, "#");
+
+    const listbox = await screen.findByRole("listbox");
+    expect(listbox).toHaveAttribute("data-testid", "content-editor-suggestions-dropdown");
+    expect(within(listbox).getByText("Errands")).toBeInTheDocument();
+  });
+
+  it("Escape closes only the popup — no discard confirmation, no end to editing — and a second Escape with unsaved changes still raises it", async () => {
+    const onClose = vi.fn();
+    const onRename = vi.fn();
+    renderView({
+      task: task({ content: "buy " }),
+      projects: [project({ id: "p1", name: "Errands" })],
+      onClose,
+      onRename,
+    });
+
+    fireEvent.click(screen.getByTestId("task-detail-title"));
+    const titleEditor = await screen.findByLabelText("Task name");
+    pasteText(titleEditor, "#");
+    await screen.findByRole("listbox");
+
+    // First Escape: dispatched once, exactly as a real keystroke would be.
+    // `dismissGuardRef`'s own DET-15 fix has to see the popup as OPEN at
+    // the instant Radix's own `document`-capture Escape listener asks —
+    // which fires before this same event ever reaches ProseMirror's
+    // bubble-phase handler on `titleEditor` itself, the ordering this
+    // suite's own header comment names. One `fireEvent.keyDown` exercises
+    // both listeners, in that real order, in one call.
+    fireEvent.keyDown(titleEditor, { key: "Escape" });
+
+    // The popup is gone (ProseMirror's own autocomplete plugin closed it)…
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    // …but nothing else happened: no discard confirmation,
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    // …editing did not end (Escape never reached `requestCancelEditing`),
+    expect(screen.queryByTestId("task-detail-title")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Task name")).toBeInTheDocument();
+    // …and neither Save nor Cancel's own callbacks fired.
+    expect(onRename).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+
+    // The paste itself changed the title ("buy " -> "buy #"), so a SECOND
+    // Escape — the popup already closed, nothing left for it to claim —
+    // reaches `requestCancelEditing` normally and finds unsaved changes,
+    // proving the fix above only swallows Escape while the popup is
+    // actually open, never more broadly.
+    fireEvent.keyDown(screen.getByLabelText("Task name"), { key: "Escape" });
+
+    const confirmDialog = await screen.findByRole("alertdialog");
+    expect(within(confirmDialog).getByText("Discard unsaved changes?")).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("selecting 'Create' calls the outlet's addProject, reached through useOutletContext — task-detail-view.tsx's own TaskDetailViewProps has no field for it", async () => {
+    const addProject = vi.fn();
+    renderViewWithOutlet(
+      { addProject },
+      { task: task({ content: "buy " }), projects: [project({ id: "p1", name: "Errands" })] },
+    );
+
+    fireEvent.click(screen.getByTestId("task-detail-title"));
+    const titleEditor = await screen.findByLabelText("Task name");
+    pasteText(titleEditor, "#brandnew");
+    await screen.findByRole("listbox");
+
+    fireEvent.keyDown(titleEditor, { key: "Enter" });
+
+    expect(addProject).toHaveBeenCalledWith("brandnew");
   });
 });

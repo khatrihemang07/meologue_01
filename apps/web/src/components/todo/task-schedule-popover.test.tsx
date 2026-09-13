@@ -410,65 +410,326 @@ describe("TaskSchedulePopover", () => {
     });
   });
 
-  describe("Add a time (issue #249 — relocated from task-schedule-sheet.tsx)", () => {
-    it("renders no toggle until a date is set", () => {
+  describe("Time dialog (SCHED-11/pass2 §7 — replaces issue #249's inline 'Add a time' toggle)", () => {
+    function openTimeDialog() {
+      fireEvent.click(screen.getByRole("button", { name: "Time" }));
+      return screen.getByRole("dialog", { name: "Select start and end time" });
+    }
+
+    it("renders no Time button until a date is set", () => {
       renderPopover({ dateDay: null });
       open();
 
-      expect(screen.queryByText("Add a time")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Time" })).not.toBeInTheDocument();
     });
 
-    it("shows the toggle unchecked and no time input when dateTime is null", () => {
-      renderPopover({ dateDay: "2026-09-05", dateTime: null });
-      open();
-
-      expect(screen.getByLabelText("Add a time")).not.toBeChecked();
-      expect(screen.queryByLabelText("Time")).not.toBeInTheDocument();
-    });
-
-    it("shows the time input, seeded with the existing value, once a time is set", () => {
+    it("the inline time field is gone — no bare time input renders in the scheduler itself", () => {
       renderPopover({ dateDay: "2026-09-05", dateTime: "14:30" });
       open();
 
-      expect(screen.getByLabelText("Add a time")).toBeChecked();
-      expect(screen.getByLabelText("Time")).toHaveValue("14:30");
+      expect(screen.queryByText("Add a time")).not.toBeInTheDocument();
+      expect(screen.queryByLabelText("Start time")).not.toBeInTheDocument();
+      expect(screen.queryByLabelText("Time")).not.toBeInTheDocument();
     });
 
-    it("checking the toggle calls onSetTime with a default time", () => {
+    it("the Time button opens a dialog with Todoist's own recorded title and fields", () => {
+      renderPopover({ dateDay: "2026-09-05", dateTime: null });
+      open();
+
+      const dialog = openTimeDialog();
+
+      // SCHED-11 (live-audit-dom/flow3-SCHED-todoist.json): role="dialog",
+      // aria-label "Select start and end time", a Start time field, and
+      // Duration/Time zone deliberately not built (issue #179's removal;
+      // no per-Task timezone concept exists — see task-time-dialog.tsx's
+      // own header comment).
+      expect(dialog).toBeInTheDocument();
+      expect(within(dialog).getByLabelText("Add a time")).not.toBeChecked();
+      expect(within(dialog).queryByLabelText("Start time")).not.toBeInTheDocument();
+      expect(within(dialog).getByRole("button", { name: "Save" })).toBeInTheDocument();
+      expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+      // Opening it doesn't close the scheduler underneath (this ticket's
+      // own Radix trap, issue #255's shape) — item 5 of this ticket's brief.
+      expect(screen.getByTestId("scheduler-view")).toBeInTheDocument();
+    });
+
+    it("checking 'Add a time' inside the dialog reveals the Start time field, seeded with the existing value", () => {
+      renderPopover({ dateDay: "2026-09-05", dateTime: "14:30" });
+      open();
+      const dialog = openTimeDialog();
+
+      expect(within(dialog).getByLabelText("Add a time")).toBeChecked();
+      expect(within(dialog).getByLabelText("Start time")).toHaveValue("14:30");
+    });
+
+    it("Save commits the drafted time through the same onSetTime callback the inline field used, and returns to the scheduler", () => {
       const { onSetTime } = renderPopover({ dateDay: "2026-09-05", dateTime: null });
       open();
+      const dialog = openTimeDialog();
 
-      fireEvent.click(screen.getByLabelText("Add a time"));
+      fireEvent.click(within(dialog).getByLabelText("Add a time"));
+      fireEvent.change(within(dialog).getByLabelText("Start time"), {
+        target: { value: "16:00" },
+      });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
 
-      expect(onSetTime).toHaveBeenCalledWith("09:00");
+      expect(onSetTime).toHaveBeenCalledWith("16:00");
+      expect(
+        screen.queryByRole("dialog", { name: "Select start and end time" }),
+      ).not.toBeInTheDocument();
+      // Back in the scheduler, not closed entirely.
+      expect(screen.getByTestId("scheduler-view")).toBeInTheDocument();
     });
 
-    it("unchecking the toggle calls onSetTime with null", () => {
+    it("Save with 'Add a time' unchecked commits null — the dialog's own mirror of the inline field's existing clear path", () => {
       const { onSetTime } = renderPopover({ dateDay: "2026-09-05", dateTime: "09:00" });
       open();
+      const dialog = openTimeDialog();
 
-      fireEvent.click(screen.getByLabelText("Add a time"));
+      fireEvent.click(within(dialog).getByLabelText("Add a time"));
+      fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
 
       expect(onSetTime).toHaveBeenCalledWith(null);
     });
 
-    it("changing the time input calls onSetTime with the new value", () => {
+    it("Cancel discards the draft: onSetTime is never called, and the Task's own time is unchanged next time the dialog opens", () => {
       const { onSetTime } = renderPopover({ dateDay: "2026-09-05", dateTime: "09:00" });
       open();
+      const dialog = openTimeDialog();
 
-      fireEvent.change(screen.getByLabelText("Time"), { target: { value: "16:00" } });
+      fireEvent.change(within(dialog).getByLabelText("Start time"), {
+        target: { value: "23:00" },
+      });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
 
-      expect(onSetTime).toHaveBeenCalledWith("16:00");
+      expect(onSetTime).not.toHaveBeenCalled();
+      expect(
+        screen.queryByRole("dialog", { name: "Select start and end time" }),
+      ).not.toBeInTheDocument();
+      expect(screen.getByTestId("scheduler-view")).toBeInTheDocument();
+
+      // Re-opening re-seeds from the Task's real, unchanged dateTime —
+      // the abandoned "23:00" draft is gone.
+      const reopened = openTimeDialog();
+      expect(within(reopened).getByLabelText("Start time")).toHaveValue("09:00");
     });
 
-    it("toggling the time never calls onPickDay and never closes the popover", () => {
+    it("never calls onPickDay, and the popover stays fully interactive underneath while the dialog is open", () => {
       const { onPickDay } = renderPopover({ dateDay: "2026-09-05", dateTime: null });
       open();
-
-      fireEvent.click(screen.getByLabelText("Add a time"));
+      openTimeDialog();
 
       expect(onPickDay).not.toHaveBeenCalled();
       expect(screen.getByTestId("scheduler-view")).toBeInTheDocument();
+      expect(screen.getByPlaceholderText("Type a date")).toBeInTheDocument();
+    });
+
+    // SCHED-11: pass2-2026-09-11.md §7 — "One Escape closes the Repeat/
+    // Time layer and the scheduler beneath it simultaneously," unlike the
+    // pre-follow-up shape where Escape closed only this dialog. Escape
+    // equals Cancel (no commit) plus closing the scheduler too — Save and
+    // Cancel themselves are unchanged, still returning to the scheduler
+    // (the tests above this one).
+    it("Escape closes both the Time dialog and the scheduler, without committing a time (SCHED-11's own follow-up)", () => {
+      const { onSetTime } = renderPopover({ dateDay: "2026-09-05", dateTime: "09:00" });
+      open();
+      const dialog = openTimeDialog();
+
+      fireEvent.change(within(dialog).getByLabelText("Start time"), {
+        target: { value: "23:00" },
+      });
+      fireEvent.keyDown(dialog, { key: "Escape" });
+
+      expect(onSetTime).not.toHaveBeenCalled();
+      expect(
+        screen.queryByRole("dialog", { name: "Select start and end time" }),
+      ).not.toBeInTheDocument();
+      expect(screen.queryByTestId("scheduler-view")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("Repeat menu (SCHED-14, issue #227)", () => {
+    // Radix's `DropdownMenu.Trigger` opens on `pointerdown`, not `click`
+    // (task-row.test.tsx's own identical "More actions" precedent) — a
+    // plain `fireEvent.click` alone never opens it under jsdom.
+    function openRepeatMenu() {
+      fireEvent.pointerDown(screen.getByRole("button", { name: "Repeat" }));
+      return screen.getByTestId("repeat-menu");
+    }
+
+    it("renders the six items, in Todoist's own order and wording, for the fixed injected now (undated Task)", () => {
+      renderPopover();
+      open();
+
+      const menu = openRepeatMenu();
+      const items = within(menu)
+        .getAllByRole("menuitem")
+        .map((item) => item.textContent);
+
+      // NOW = Thu 10 Sep 2026. Every day/week/workday/month/year phrase
+      // resolves against `now` (no `dateDay` on this Task) exactly as
+      // SCHED-04's typed input would, so the weekday/day-of-month/
+      // month-and-day text below is Thu 10 Sep's own, not invented.
+      expect(items).toEqual([
+        "Every day",
+        "Every week on Thursday",
+        "Every weekday (Mon - Fri)",
+        "Every month on the 10th",
+        "Every year on September 10th",
+        "Custom…",
+      ]);
+    });
+
+    it("computes the menu off the Task's current date, not `now`, when the Task already has one", () => {
+      // dateDay 2026-09-14 is a Monday. "every month"/"every year" are
+      // due-anchored (recurrence.ts's own header comment) so their labels
+      // follow dateDay's own day-of-month/month-and-day, and the weekly
+      // option names dateDay's own weekday.
+      renderPopover({ dateDay: "2026-09-14" });
+      open();
+
+      const menu = openRepeatMenu();
+      const items = within(menu)
+        .getAllByRole("menuitem")
+        .map((item) => item.textContent);
+
+      expect(items).toEqual([
+        "Every day",
+        "Every week on Monday",
+        "Every weekday (Mon - Fri)",
+        "Every month on the 14th",
+        "Every year on September 14th",
+        "Custom…",
+      ]);
+    });
+
+    it("'Every day' commits 'every day' through onPickRecurrence and closes", () => {
+      const { onPickRecurrence } = renderPopover();
+      open();
+      const menu = openRepeatMenu();
+
+      fireEvent.click(within(menu).getByRole("menuitem", { name: "Every day" }));
+
+      expect(onPickRecurrence).toHaveBeenCalledWith("every day", "2026-09-10");
+      expect(screen.queryByTestId("scheduler-view")).not.toBeInTheDocument();
+    });
+
+    it("'Every week on Thursday' commits the named weekday, which stays on Thursdays however late the task is completed", () => {
+      const { onPickRecurrence } = renderPopover();
+      open();
+      const menu = openRepeatMenu();
+
+      fireEvent.click(within(menu).getByRole("menuitem", { name: "Every week on Thursday" }));
+
+      expect(onPickRecurrence).toHaveBeenCalledWith("every thursday", "2026-09-10");
+    });
+
+    it("'Every weekday (Mon - Fri)' commits 'every workday' — this repo's own accepted spelling for the identical Mon-Fri pattern", () => {
+      const { onPickRecurrence } = renderPopover();
+      open();
+      const menu = openRepeatMenu();
+
+      fireEvent.click(within(menu).getByRole("menuitem", { name: "Every weekday (Mon - Fri)" }));
+
+      expect(onPickRecurrence).toHaveBeenCalledWith("every workday", "2026-09-10");
+    });
+
+    it("'Every month on the 10th' commits the bare 'every month' phrase", () => {
+      const { onPickRecurrence } = renderPopover();
+      open();
+      const menu = openRepeatMenu();
+
+      fireEvent.click(within(menu).getByRole("menuitem", { name: "Every month on the 10th" }));
+
+      expect(onPickRecurrence).toHaveBeenCalledWith("every month", "2026-09-10");
+    });
+
+    it("'Every year on September 10th' commits the bare 'every year' phrase", () => {
+      const { onPickRecurrence } = renderPopover();
+      open();
+      const menu = openRepeatMenu();
+
+      fireEvent.click(within(menu).getByRole("menuitem", { name: "Every year on September 10th" }));
+
+      expect(onPickRecurrence).toHaveBeenCalledWith("every year", "2026-09-10");
+    });
+
+    it("'Custom…' focuses the 'Type a date' input instead of committing anything, and leaves the scheduler open", async () => {
+      const { onPickRecurrence, onPickDay } = renderPopover();
+      open();
+      const menu = openRepeatMenu();
+
+      fireEvent.click(within(menu).getByRole("menuitem", { name: "Custom…" }));
+
+      // The focus hand-off happens on the menu's own `onCloseAutoFocus`
+      // (issue #255's own precedent) — real, not synthetic in jsdom, so
+      // it lands asynchronously once Radix tears the menu down.
+      await vi.waitFor(() => {
+        expect(screen.getByPlaceholderText("Type a date")).toHaveFocus();
+      });
+      expect(onPickRecurrence).not.toHaveBeenCalled();
+      expect(onPickDay).not.toHaveBeenCalled();
+      expect(screen.getByTestId("scheduler-view")).toBeInTheDocument();
+    });
+
+    it("'Custom…' leaves whatever text is already typed in place — it only focuses, never clears or resets", async () => {
+      // The Repeat control itself only shows while there's no active
+      // recurrence preview (the test below this one), so the case this
+      // is actually guarding is a Task with a plain date already typed —
+      // "Custom…" has to leave that text alone rather than blank it.
+      renderPopover();
+      open();
+      fireEvent.change(screen.getByPlaceholderText("Type a date"), {
+        target: { value: "21 sep" },
+      });
+      const menu = openRepeatMenu();
+
+      fireEvent.click(within(menu).getByRole("menuitem", { name: "Custom…" }));
+
+      await vi.waitFor(() => {
+        expect(screen.getByPlaceholderText("Type a date")).toHaveFocus();
+      });
+      expect(screen.getByPlaceholderText("Type a date")).toHaveValue("21 sep");
+    });
+
+    it("hides the Repeat entry point once a typed Recurrence is already resolving to a preview", () => {
+      renderPopover({ dateString: "every friday" });
+      open();
+
+      // Todoist's own recorded behaviour (scheduler-and-priority.md §7):
+      // "the Repeat button disappears from the panel and is replaced by
+      // the resolved preview" once a recurrence is active.
+      expect(screen.getByTestId("scheduler-date-preview")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Repeat" })).not.toBeInTheDocument();
+    });
+
+    it("still offers Repeat when the typed text resolves to a plain date, not a recurrence", () => {
+      renderPopover();
+      open();
+
+      fireEvent.change(screen.getByPlaceholderText("Type a date"), {
+        target: { value: "21 sep" },
+      });
+
+      expect(screen.getByTestId("scheduler-date-preview")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Repeat" })).toBeInTheDocument();
+    });
+
+    // SCHED-11's own follow-up — pass2-2026-09-11.md §7 records the same
+    // simultaneous close for "the Repeat/Time layer," not just the Time
+    // dialog: Escape here closes the Repeat menu (Radix's own default)
+    // and the scheduler beneath it together, committing nothing.
+    it("Escape closes both the Repeat menu and the scheduler, per the same pass2 §7 record as the Time dialog", () => {
+      const { onPickRecurrence, onPickDay } = renderPopover();
+      open();
+      const menu = openRepeatMenu();
+
+      fireEvent.keyDown(menu, { key: "Escape" });
+
+      expect(onPickRecurrence).not.toHaveBeenCalled();
+      expect(onPickDay).not.toHaveBeenCalled();
+      expect(screen.queryByTestId("repeat-menu")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("scheduler-view")).not.toBeInTheDocument();
     });
   });
 

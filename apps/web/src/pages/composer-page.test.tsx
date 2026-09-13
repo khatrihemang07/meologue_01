@@ -1745,9 +1745,9 @@ describe("ComposerPage", () => {
 
       expect(screen.getByRole("dialog")).toBeInTheDocument();
       // Issue #225: the detail title is a non-editable display element at
-      // rest (DET-02), not a form control with a `value` — a `<button>`,
-      // not `getByDisplayValue`.
-      expect(screen.getByRole("button", { name: "buy milk" })).toBeInTheDocument();
+      // rest (DET-02), not a form control with a `value` — a plain `<div>`,
+      // as Todoist's is.
+      expect(screen.getByTestId("task-detail-title")).toHaveTextContent("buy milk");
       stillOnComposer();
     });
 
@@ -1786,9 +1786,9 @@ describe("ComposerPage", () => {
 
       expect(screen.getByRole("dialog")).toBeInTheDocument();
       // Issue #225: the detail title is a non-editable display element at
-      // rest (DET-02), not a form control with a `value` — a `<button>`,
-      // not `getByDisplayValue`.
-      expect(screen.getByRole("button", { name: "buy milk" })).toBeInTheDocument();
+      // rest (DET-02), not a form control with a `value` — a plain `<div>`,
+      // as Todoist's is.
+      expect(screen.getByTestId("task-detail-title")).toHaveTextContent("buy milk");
     });
 
     it("shows nothing for a ?task= this Device cannot resolve", () => {
@@ -1924,7 +1924,8 @@ describe("ComposerPage — rename resolves recognised phrases (issue #247)", () 
       `/?task=${taskId}`,
     );
 
-    const titleButton = await screen.findByRole("button", { name: "buy milk" });
+    const titleButton = await screen.findByTestId("task-detail-title");
+    expect(titleButton).toHaveTextContent("buy milk");
     fireEvent.click(titleButton);
     const titleEditor = await screen.findByLabelText("Task name");
     fireEvent.change(titleEditor, { target: { value: "buy oat milk tomorrow p1" } });
@@ -1965,7 +1966,8 @@ describe("ComposerPage — rename resolves recognised phrases (issue #247)", () 
       `/?task=${taskId}`,
     );
 
-    const titleButton = await screen.findByRole("button", { name: "buy oat milk" });
+    const titleButton = await screen.findByTestId("task-detail-title");
+    expect(titleButton).toHaveTextContent("buy oat milk");
     fireEvent.click(titleButton);
     const titleEditor = await screen.findByLabelText("Task name");
     fireEvent.change(titleEditor, { target: { value: "buy plain oat milk" } });

@@ -1,14 +1,15 @@
 import type { Filter, Project, Section, Task } from "@meologue/core";
 import { today, upcoming } from "@meologue/core";
 import { useQuery } from "@tanstack/react-query";
-import { Suspense, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import { BackToChats } from "@/components/back-to-chats";
+import { inlineProse } from "@/components/inline-prose";
 import { Shell } from "@/components/shell";
 import { ActivityFeed } from "@/components/todo/activity-feed";
 import { AddTaskForm } from "@/components/todo/add-task-form";
-import { CompletedTasks } from "@/components/todo/completed-tasks";
+import { CompletionToastBody } from "@/components/todo/completion-toast";
 import { FilterView } from "@/components/todo/filter-view";
 import { FiltersView } from "@/components/todo/filters-view";
 import { LabelsView } from "@/components/todo/labels-view";
@@ -16,6 +17,7 @@ import { LazyTaskDetailView } from "@/components/todo/lazy-task-detail-view";
 import { LazyTaskScheduleSheet } from "@/components/todo/lazy-task-schedule-sheet";
 import { ProjectView } from "@/components/todo/project-view";
 import { ProjectsView } from "@/components/todo/projects-view";
+import { QuickAddDialog } from "@/components/todo/quick-add-dialog";
 import { TaskList } from "@/components/todo/task-list";
 import { TaskQuickFind } from "@/components/todo/task-quick-find";
 import type { TaskDetailActions } from "@/components/todo/task-row";
@@ -33,6 +35,7 @@ import type { QuickAddTaskFields } from "@/lib/quick-add-task";
 import { useSettingsStore } from "@/lib/settings";
 import { taskDetailPath, taskIdFromParam } from "@/lib/task-detail-route";
 import { commitTaskTitle } from "@/lib/task-title-commit";
+import { OPEN_QUICK_ADD_EVENT } from "@/lib/todo-keymap";
 import { useEntryStore } from "@/pages/entry-store-layout";
 
 /**
@@ -230,26 +233,42 @@ export interface TodoPageProps {
  * `composerSlot={<TodoNav />}` docking Todo's own internal navigation at
  * the pane's bottom edge, regardless of which view is open.
  *
- * The Add form, the Completed disclosure, the delete confirmation, and the
- * schedule sheet are all owned here, once, and shared by every view that
- * needs them rather than each growing its own copy — deleting or
- * scheduling a Task is the identical act regardless of which view's row a
- * reader tapped it from, and `confirmingTask`/`schedulingTask` below are
- * looked up against the flat `tasks` array precisely because that array
- * still holds every Task anywhere (its own doc comment, above), so one
- * lookup works for a row from any view without this component needing to
- * know which scope it came from.
+ * The Add form, the delete confirmation, and the schedule sheet are all
+ * owned here, once, and shared by every view that needs them rather than
+ * each growing its own copy — deleting or scheduling a Task is the
+ * identical act regardless of which view's row a reader tapped it from,
+ * and `confirmingTask`/`schedulingTask` below are looked up against the
+ * flat `tasks` array precisely because that array still holds every Task
+ * anywhere (its own doc comment, above), so one lookup works for a row
+ * from any view without this component needing to know which scope it
+ * came from.
+ *
+ * ROW-14 (parity-ledger.md), the user's 2026-09-13 decision to match
+ * Todoist: there is no Completed disclosure here any more.
+ * `completed-tasks.tsx` used to be exactly that — a separate, collapsed
+ * `<details>` this page rendered once, below Inbox's own list — and this
+ * page's own `completedTasks` (from `useEntryStore()`) now instead flows
+ * straight into `TaskList`/`ProjectView`, which interleave each completed
+ * Task inline, in place, alongside the active siblings it belongs among
+ * (`task-tree.tsx`'s own doc comment on the merge). `handleUncompleteTask`
+ * below is the one new door this page adds — the task-shaped callback
+ * `TaskList`'s own `onUncomplete` prop calls, adapting the store's
+ * id-based `uncompleteTask` the identical way `handleCompleteTask` already
+ * adapts `handleComplete`.
  *
  * The Add form is shared too, but it is **not** context-free — see
  * `captureDate`/`captureProjectId` below. It renders once, but not first:
- * issue #252 moved its render to just before `CompletedTasks` (near the
- * bottom of the JSX below) so it lands after whichever list is on screen
- * rather than above it, matching Todoist's own end-of-list "+ Add task"
- * row (NAV-10, parity ledger) — position only. The elements themselves are
- * unchanged: the field stays always-mounted and the Add button stays
- * rendered-but-disabled rather than either unmounting until a click, the
- * click-to-reveal composer with its own pickers being a deliberately
- * deferred, separate ticket (NAV-12, parity ledger).
+ * issue #252 moved its render to just before the Completed disclosure that
+ * used to sit here (near the bottom of the JSX below) so it lands after
+ * whichever list is on screen rather than above it, matching Todoist's own
+ * end-of-list "+ Add task" row (NAV-10, parity ledger) — position only,
+ * and unaffected by that disclosure's own later removal: the list itself
+ * is still whatever's on screen, now just interleaved rather than
+ * followed by a second block. The elements themselves are unchanged: the
+ * field stays always-mounted and the Add button stays rendered-but-
+ * disabled rather than either unmounting until a click, the click-to-
+ * reveal composer with its own pickers being a deliberately deferred,
+ * separate ticket (NAV-12, parity ledger).
  */
 export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   const {
@@ -405,6 +424,24 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   const [quickFindOpen, setQuickFindOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
+  // Issue #260 (NAV-07, parity ledger): the global Quick Add dialog's own
+  // `open` state, the identical "controlled from the page" shape
+  // `quickFindOpen`/`shortcutsOpen` above already use. Two different
+  // triggers ask for it — `Q` via `useTodoKeymap` below (dispatched as
+  // `OPEN_QUICK_ADD_EVENT`, `use-todo-keymap.ts`'s own `quick-add` case)
+  // and `todo-sidebar.tsx`'s "Add task" button, which dispatches the
+  // identical event directly since that component sits outside this
+  // page's own Outlet and has no other door in. One listener here answers
+  // both.
+  const [quickAddOpen, setQuickAddOpen] = useState(false);
+  useEffect(() => {
+    function handleOpenQuickAdd() {
+      setQuickAddOpen(true);
+    }
+    document.addEventListener(OPEN_QUICK_ADD_EVENT, handleOpenQuickAdd);
+    return () => document.removeEventListener(OPEN_QUICK_ADD_EVENT, handleOpenQuickAdd);
+  }, []);
+
   // CMT-05 (parity ledger) — the one thing `Z`/`⌘Z` (`use-todo-keymap.ts`'s
   // `undo-complete` binding) has to act on: the most recent completion's
   // own `uncompleteTask` call, live only while its toast is still showing.
@@ -425,33 +462,53 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
    * `duration`/`onAutoClose`/`onDismiss` are the CMT-05 pieces: a 10s
    * lifetime (`COMPLETION_TOAST_DURATION_MS`'s own doc comment has the
    * measurement) and clearing `pendingUndoRef` the moment this exact toast
-   * stops being on screen, by either path sonner offers for "it's gone." */
+   * stops being on screen, by either path sonner offers for "it's gone."
+   *
+   * CMT-04 (parity ledger): `toast.custom()` in place of the plain
+   * `toast(message, {...})` this used before — `completion-toast.tsx`'s
+   * own header comment has the full reasoning (sonner exposes no `role`
+   * option; `toast.custom()` is its documented escape hatch). The Undo
+   * button now lives inside that custom body rather than being sonner's
+   * own `action`, so its `onClick` has to do both things `action.onClick`
+   * used to get for free: run `undo`, then dismiss the toast itself
+   * (`toast.dismiss(id)`, the same id `toast.custom` handed the jsx
+   * callback and returned here) — sonner's own action button dismissed
+   * automatically after `onClick`; a bare custom button does not. */
   function raiseCompletionToast(taskId: string, message: string) {
     const undo = () => {
       uncompleteTask(taskId);
       pendingUndoRef.current = null;
     };
-    const toastId = toast(message, {
-      duration: COMPLETION_TOAST_DURATION_MS,
-      action: { label: "Undo", onClick: undo },
-      onAutoClose: () => {
-        if (pendingUndoRef.current?.toastId === toastId) {
-          pendingUndoRef.current = null;
-        }
+    const toastId = toast.custom(
+      (id) => (
+        <CompletionToastBody
+          message={message}
+          onUndo={() => {
+            undo();
+            toast.dismiss(id);
+          }}
+        />
+      ),
+      {
+        duration: COMPLETION_TOAST_DURATION_MS,
+        onAutoClose: () => {
+          if (pendingUndoRef.current?.toastId === toastId) {
+            pendingUndoRef.current = null;
+          }
+        },
+        onDismiss: () => {
+          if (pendingUndoRef.current?.toastId === toastId) {
+            pendingUndoRef.current = null;
+          }
+        },
       },
-      onDismiss: () => {
-        if (pendingUndoRef.current?.toastId === toastId) {
-          pendingUndoRef.current = null;
-        }
-      },
-    });
+    );
     pendingUndoRef.current = { toastId, undo };
   }
 
   // Issue #184: "completed work is reached by narrowing the log to
   // completions, not from a separate destination of its own" — a plain
   // toggle above the Activity view rather than a second route.
-  const [activityCompletedOnly, setActivityCompletedOnly] = useState(false);
 
   // The one TaskScheduleSheet instance for the whole page (this
   // component's own doc comment) — `schedulingId` names which Task it's
@@ -570,6 +627,19 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
 
   function handleRequestDeleteTask(task: Task) {
     handleRequestDelete(task.id);
+  }
+
+  // ROW-14 (parity-ledger.md), the user's 2026-09-13 decision to match
+  // Todoist: a completed row's own checkbox click reaches this — not
+  // `handleCompleteTask` again — through `TaskList`/`TaskTree`'s own
+  // `onUncomplete` prop (task-tree.tsx's own doc comment on why it's a
+  // second callback, not a branch inside `onComplete`). The task-shaped
+  // signature matches every other TaskList/TaskTree callback on this page
+  // (`handleCompleteTask` et al., just above) rather than the store's own
+  // id-based `uncompleteTask` — this page is the one place that adapts
+  // between the two shapes, not every caller several layers down.
+  function handleUncompleteTask(task: Task) {
+    uncompleteTask(task.id);
   }
 
   function handleOpenScheduleTask(task: Task) {
@@ -731,6 +801,10 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     onSetTaskDate: setTaskDate,
     onSetTaskDeadline: setTaskDeadline,
     onRequestDelete: handleRequestDelete,
+    // KBD-01: E completes the focused task, and Cmd/Ctrl+Shift+C copies its
+    // link — both reuse the handlers the row's own controls already call.
+    onCompleteTask: handleCompleteTask,
+    onCopyLink: copyTaskLink,
     onOpenQuickFind: () => setQuickFindOpen(true),
     onShowShortcuts: () => setShortcutsOpen(true),
     onNavigate: navigate,
@@ -902,6 +976,8 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
       {backgroundView.view === "inbox" && (
         <TaskList
           tasks={scopedTasks}
+          completedTasks={completedTasks}
+          onUncomplete={handleUncompleteTask}
           sections={[]}
           projectId={null}
           emptyMessage="Nothing in your Inbox. Add a Task above to get started."
@@ -931,6 +1007,8 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
             project={currentProject}
             sections={sections}
             tasks={scopedTasks}
+            completedTasks={completedTasks}
+            onUncomplete={handleUncompleteTask}
             detailActions={detailActions}
             onRename={(name) => renameProject(currentProject.id, name)}
             onSetColour={(colour) => setProjectColour(currentProject.id, colour)}
@@ -1027,19 +1105,11 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
       )}
 
       {/* Issue #184: the view across everything, or one Project's own
-          history when opened with `?projectId=` — never a second
-          destination for completed work alone (this component's own
-          `activityCompletedOnly` toggle narrows the same log instead). */}
+          history when opened with `?projectId=`. CMT-07: no "Completed
+          only" toggle, by the user's decision on 2026-09-13 to match
+          Todoist, which has none. */}
       {backgroundView.view === "activity" && (
         <div className="flex flex-col gap-2">
-          <label className="flex items-center gap-2 px-3 py-1 text-muted-foreground text-sm">
-            <input
-              type="checkbox"
-              checked={activityCompletedOnly}
-              onChange={(event) => setActivityCompletedOnly(event.target.checked)}
-            />
-            Completed only
-          </label>
           <ActivityFeed
             events={activityEvents}
             // Both active and completed — a `completed` Event's own Task
@@ -1047,7 +1117,6 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
             // to resolve either to name its subject live.
             tasks={[...tasks, ...completedTasks]}
             projects={projects}
-            completedOnly={activityCompletedOnly}
             emptyMessage={
               activityProjectId !== null
                 ? "Nothing has happened in this Project yet."
@@ -1077,20 +1146,35 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
         backgroundView.view !== "filters" &&
         backgroundView.view !== "filter" &&
         backgroundView.view !== "labels" &&
-        backgroundView.view !== "upcoming" && <AddTaskForm onAdd={handleAdd} disabled={disabled} />}
+        backgroundView.view !== "upcoming" && (
+          <AddTaskForm
+            onAdd={handleAdd}
+            disabled={disabled}
+            projects={projects}
+            labels={labels}
+            onCreateProject={addProject}
+            onCreateLabel={addLabel}
+          />
+        )}
 
-      {/* The Completed disclosure is Inbox-specific — Today's own Tasks
-          are never completed *from* Today in a way that would need a
-          second copy of this list; completing a Task from either view
-          moves it into the identical shared `completedTasks`, and this is
-          Todo's one door onto it, the same reasoning `handleComplete`'s
-          own doc comment gives for the schedule sheet being shared rather
-          than per-view. A Project's own view has no Completed disclosure
-          of its own — out of this ticket's scope, named in its report
-          rather than built ahead of being asked for. */}
-      {backgroundView.view === "inbox" && (
-        <CompletedTasks tasks={completedTasks} onUncomplete={uncompleteTask} />
-      )}
+      {/* NAV-07 (parity ledger): the global Quick Add dialog, reachable
+          from anywhere in Todo — the sidebar's "Add task" button and the
+          `Q` key both open it (this file's own `quickAddOpen` state doc
+          comment above). Shares `handleAdd` verbatim with the inline
+          composer above: `captureProjectId`/`captureDate`'s own doc
+          comment already resolves "the current view's Project, or Inbox"
+          for whichever view is on screen, exactly what this dialog needs
+          too, and there is no separate view-inheritance rule for it to
+          duplicate. */}
+      <QuickAddDialog
+        open={quickAddOpen}
+        onOpenChange={setQuickAddOpen}
+        onAdd={handleAdd}
+        projects={projects}
+        labels={labels}
+        onCreateProject={addProject}
+        onCreateLabel={addLabel}
+      />
 
       {schedulingTask !== null && (
         // `LazyTaskScheduleSheet`'s own header comment: this and
@@ -1139,8 +1223,19 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
          * clearer copy turns out to matter more than the match.
          */
         title="Delete task?"
+        // ROW-06 (parity-ledger.md): Todoist's own delete-confirmation
+        // dialog also renders a title's markdown — flow 10's decisive test
+        // quoted it as "The ZZ probe bold em code task will be permanently
+        // deleted." for a title verified to hold only literal `**bold**
+        // _em_ `code`` characters (`live-audit-dom/flow10-ROW-06-both.
+        // json`), where meologue's own dialog used to quote the raw
+        // markdown verbatim. Only the interpolated name gets `inlineProse`
+        // — the surrounding sentence ("The … task will be permanently
+        // deleted.") is this app's own copy, not part of the Task's title.
         description={
-          confirmingTask && <>The {confirmingTask.content} task will be permanently deleted.</>
+          confirmingTask && (
+            <>The {inlineProse(confirmingTask.content)} task will be permanently deleted.</>
+          )
         }
         confirmLabel="Delete"
         onConfirm={() => {

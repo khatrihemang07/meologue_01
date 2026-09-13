@@ -60,6 +60,14 @@ describe("FiltersView", () => {
     expect(screen.getByText(/No Filters yet/)).toBeInTheDocument();
   });
 
+  // Ledger row NAV-06: Todoist's own combined page carries this heading
+  // above its filters list; meologue's carried none.
+  it("carries a My Filters heading above the filter list", () => {
+    renderFiltersView([]);
+
+    expect(screen.getByRole("heading", { name: "My Filters", level: 2 })).toBeInTheDocument();
+  });
+
   it("lists every Filter by name, each linking to its own screen", () => {
     renderFiltersView([
       filter({ id: "a", name: "Due today" }),

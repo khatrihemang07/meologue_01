@@ -9,15 +9,26 @@ import { localDayKey } from "@/lib/local-day-key";
 import type { EntryStoreOutletContext } from "@/pages/entry-store-layout";
 import { TodoPage } from "./todo-page";
 
-// `toast` is both callable (the Undo toast, todo-page.tsx's own
-// `handleComplete`) and carries an `.error` method (task-tree.tsx's own
-// reparent-refused toast, issue #171) — mirroring history.test.tsx's own
-// `vi.mock("sonner", ...)` shape rather than the plain-callable one this
-// file used before #171 ever called `toast.error`.
+// `toast` is callable (task-tree.tsx's reparent-refused toast, issue #171,
+// via `.error`) and, since CMT-04, also carries a `.custom` and a
+// `.dismiss` — `raiseCompletionToast` (todo-page.tsx) switched its Undo
+// toast from plain `toast(message, {...})` to `toast.custom(jsx, {...})`
+// so the toast's own JSX can carry `role="alert"`/`aria-live="polite"`
+// (completion-toast.tsx's own header comment has the full reasoning; no
+// `role` option exists anywhere in sonner 2.0.8). `.custom`'s mock returns
+// an incrementing id — the same id `toast.custom` hands its `jsx`
+// callback in production — so a test can call the captured `jsx` factory
+// itself to get the real `CompletionToastBody` element and render it, and
+// `.dismiss` records the id `raiseCompletionToast`'s Undo handler closes.
 vi.mock("sonner", () => {
   const toast = vi.fn() as unknown as typeof import("sonner").toast;
-  // biome-ignore lint/suspicious/noExplicitAny: attaching a mock method to a mock function, the same shape sonner's own `toast` carries in production (a callable object with `.error`/`.success` etc as properties).
+  // biome-ignore lint/suspicious/noExplicitAny: attaching mock methods to a mock function, the same shape sonner's own `toast` carries in production (a callable object with `.error`/`.custom`/`.dismiss` etc as properties).
   (toast as any).error = vi.fn();
+  let nextCustomToastId = 1;
+  // biome-ignore lint/suspicious/noExplicitAny: see above.
+  (toast as any).custom = vi.fn(() => `custom-toast-${nextCustomToastId++}`);
+  // biome-ignore lint/suspicious/noExplicitAny: see above.
+  (toast as any).dismiss = vi.fn();
   return { toast };
 });
 
@@ -37,6 +48,7 @@ function StubTaskTitleEditor({
   value,
   onChange,
   onCommit,
+  onCancel,
   ariaLabel,
   placeholder,
 }: {
@@ -61,9 +73,25 @@ function StubTaskTitleEditor({
         if (event.key === "Enter") {
           onCommit(text);
         }
+        if (event.key === "Escape") {
+          onCancel();
+        }
       }}
     />
   );
+}
+
+/**
+ * Issue #260: `AddTaskForm` is collapsed by default (NAV-12, parity
+ * ledger) — every test that used to type straight into an always-open
+ * field now has to click the quiet "Add task" trigger row first. Scoped
+ * to nothing in particular because `QuickAddDialog` (also rendered by
+ * `TodoPage`, unconditionally) stays unmounted by Radix while `open` is
+ * false, so there is exactly one "Add task"-named button in the tree
+ * until this click reveals the editor.
+ */
+async function revealAddTaskField(): Promise<void> {
+  fireEvent.click(await screen.findByRole("button", { name: "Add task" }));
 }
 
 vi.mock("@/components/todo/task-title-editor", () => ({
@@ -258,6 +286,8 @@ describe("TodoPage", () => {
   beforeEach(() => {
     vi.mocked(toast).mockReset();
     vi.mocked(toast.error).mockReset();
+    vi.mocked(toast.custom).mockClear();
+    vi.mocked(toast.dismiss).mockClear();
 
     // jsdom lays nothing out — `getBoundingClientRect` is always zero
     // (`history.tsx`'s own comment names the identical gap) — so the drop
@@ -387,10 +417,10 @@ describe("TodoPage", () => {
     // an unscoped match that would resolve to both.
     expect(dialog.querySelector("header")).toHaveTextContent("Inbox");
     // Issue #225: the title is a non-editable display element at rest
-    // (DET-02) — a `<button>`, not a labelled textbox — until a reader
-    // activates it (task-detail-view.test.tsx's own suite covers that
-    // activation and the shared editor it swaps in).
-    expect(within(dialog).getByRole("button", { name: "call mum" })).toBeInTheDocument();
+    // (DET-02) — a plain `<div>`, as Todoist's is, not a labelled textbox —
+    // until a reader activates it (task-detail-view.test.tsx's own suite
+    // covers that activation and the shared editor it swaps in).
+    expect(within(dialog).getByTestId("task-detail-title")).toHaveTextContent("call mum");
   });
 
   // The coordinator's own gap-fix report: `openTask` used to be looked up
@@ -418,9 +448,8 @@ describe("TodoPage", () => {
     // Issue #237: `.completed-task-text` is the shared class the
     // completed-style setting drives (index.css) — `line-through` was the
     // bug this surface used to hardcode regardless of that setting. The
-    // selector is #229's: the at-rest title is a button now, not a
-    // labelled textarea.
-    const title = within(dialog).getByRole("button", { name: "call mum" });
+    // at-rest title is a plain display `<div>` (DET-02), found by its testid.
+    const title = within(dialog).getByTestId("task-detail-title");
     expect(title).toHaveClass("completed-task-text");
     expect(title).not.toHaveClass("line-through");
   });
@@ -499,6 +528,24 @@ describe("TodoPage", () => {
     expect(screen.getByText(/Nothing in your Inbox/)).toBeInTheDocument();
   });
 
+  // ROW-14 (parity-ledger.md), the user's 2026-09-13 decision to match
+  // Todoist: an Inbox holding only a completed Task is not the same thing
+  // as an empty one — this used to be indistinguishable, since the old
+  // "Completed (n)" disclosure lived below `TaskList`'s own empty-state
+  // paragraph regardless of what was inside it.
+  it("does not read Inbox as empty when it holds only a completed Task", () => {
+    renderTodoPage(
+      inboxContext([], {
+        completedTasks: [
+          task({ id: "a", content: "done already", completedAt: "2026-01-02T00:00:00.000Z" }),
+        ],
+      }),
+    );
+
+    expect(screen.queryByText(/Nothing in your Inbox/)).not.toBeInTheDocument();
+    expect(screen.getByText("done already")).toBeInTheDocument();
+  });
+
   it("lists active Tasks", async () => {
     renderTodoPage(inboxContext([task({ id: "a", content: "call mum" })]));
 
@@ -515,8 +562,9 @@ describe("TodoPage", () => {
     const addTask = vi.fn();
     renderTodoPage(inboxContext([], { addTask }));
 
-    fireEvent.change(await screen.findByLabelText("Add task"), { target: { value: "call mum" } });
-    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    await revealAddTaskField();
+    fireEvent.change(await screen.findByLabelText("Task name"), { target: { value: "call mum" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add task" }));
 
     // handleAdd (todo-page.tsx) awaits resolveLabelIds before calling
     // addTask — issue #170's own async label-resolution step, invisible
@@ -540,8 +588,9 @@ describe("TodoPage", () => {
     const addTask = vi.fn();
     renderTodoPage(readyContext({ addTask }), "/todo/today");
 
-    fireEvent.change(await screen.findByLabelText("Add task"), { target: { value: "call mum" } });
-    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    await revealAddTaskField();
+    fireEvent.change(await screen.findByLabelText("Task name"), { target: { value: "call mum" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add task" }));
 
     await waitFor(() =>
       expect(addTask).toHaveBeenCalledWith(
@@ -558,10 +607,11 @@ describe("TodoPage", () => {
     const addTask = vi.fn();
     renderTodoPage(readyContext({ addTask }), "/todo/today");
 
-    fireEvent.change(await screen.findByLabelText("Add task"), {
+    await revealAddTaskField();
+    fireEvent.change(await screen.findByLabelText("Task name"), {
       target: { value: "call mum tomorrow" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add task" }));
 
     await waitFor(() => expect(addTask).toHaveBeenCalled());
     const [content, overrides] = addTask.mock.calls[0] as [string, { date: string | null }];
@@ -572,12 +622,16 @@ describe("TodoPage", () => {
   it("disables the Add form while the store isn't ready", () => {
     renderTodoPage(readyContext({ disabled: true }));
 
-    expect(screen.getByLabelText("Add task")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Add task" })).toBeDisabled();
   });
 
-  // The completion toast mirrors register-service-worker.web.ts's own
-  // `toast(..., { action: { label, onClick } })` shape — this is the
-  // Undo affordance the ticket's own brief points at.
+  // CMT-04 (parity ledger): the completion toast is raised through
+  // `toast.custom()` (`raiseCompletionToast`, todo-page.tsx —
+  // completion-toast.tsx's own header comment has the full reasoning), so
+  // this asserts against the real `CompletionToastBody` element the `jsx`
+  // callback produces — a `role="alert"` element containing the message
+  // and a real "Undo" `<button>` — rather than against `toast`'s call
+  // args the way the old plain-`toast()` shape allowed.
   it("completes a Task and offers an Undo toast wired to uncompleteTask", async () => {
     const completeTask = vi.fn();
     const uncompleteTask = vi.fn();
@@ -586,25 +640,34 @@ describe("TodoPage", () => {
     );
 
     await waitFor(() => expect(screen.getByText("call mum")).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("checkbox", { name: "call mum" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Mark task as complete" }));
 
     expect(completeTask).toHaveBeenCalledWith("a");
-    expect(toast).toHaveBeenCalledWith(
-      // CMT-04: Todoist's own task-agnostic, count-based wording, not the
-      // task-specific `Completed "<name>"` this replaced.
-      "1 task completed",
+    expect(toast.custom).toHaveBeenCalledWith(
+      expect.any(Function),
       expect.objectContaining({
         // CMT-05: 10s, measured live (`COMPLETION_TOAST_DURATION_MS`'s own
         // doc comment, todo-page.tsx) — not sonner's unconfigured default.
         duration: 10_000,
-        action: expect.objectContaining({ label: "Undo", onClick: expect.any(Function) }),
       }),
     );
 
-    const toastCall = vi.mocked(toast).mock.calls[0];
-    const action = toastCall?.[1]?.action as { onClick: () => void } | undefined;
-    action?.onClick();
+    const customCall = vi.mocked(toast.custom).mock.calls[0];
+    if (!customCall) throw new Error("toast.custom was not called");
+    const [jsxFactory] = customCall;
+    render(jsxFactory("toast-a"));
+
+    const alertToast = screen.getByRole("alert");
+    // CMT-04: Todoist's own task-agnostic, count-based wording, not the
+    // task-specific `Completed "<name>"` this replaced.
+    expect(alertToast).toHaveTextContent("1 task completed");
+
+    fireEvent.click(within(alertToast).getByRole("button", { name: "Undo" }));
     expect(uncompleteTask).toHaveBeenCalledWith("a");
+    // The Undo click has to dismiss the toast itself now (completion-toast.tsx's
+    // own header comment) — sonner's own `action` button did this for free;
+    // a bare custom button does not.
+    expect(toast.dismiss).toHaveBeenCalledWith("toast-a");
   });
 
   // CMT-05 (parity ledger) — `Z`/`⌘Z` reach the identical `uncompleteTask`
@@ -623,7 +686,7 @@ describe("TodoPage", () => {
       );
 
       await waitFor(() => expect(screen.getByText("call mum")).toBeInTheDocument());
-      fireEvent.click(screen.getByRole("checkbox", { name: "call mum" }));
+      fireEvent.click(screen.getByRole("checkbox", { name: "Mark task as complete" }));
       expect(completeTask).toHaveBeenCalledWith("a");
 
       fireEvent.keyDown(document, { key: "z" });
@@ -639,7 +702,7 @@ describe("TodoPage", () => {
       );
 
       await waitFor(() => expect(screen.getByText("call mum")).toBeInTheDocument());
-      fireEvent.click(screen.getByRole("checkbox", { name: "call mum" }));
+      fireEvent.click(screen.getByRole("checkbox", { name: "Mark task as complete" }));
 
       fireEvent.keyDown(document, { key: "z", metaKey: true });
 
@@ -673,10 +736,11 @@ describe("TodoPage", () => {
       );
 
       await waitFor(() => expect(screen.getByText("call mum")).toBeInTheDocument());
-      fireEvent.click(screen.getByRole("checkbox", { name: "call mum" }));
+      fireEvent.click(screen.getByRole("checkbox", { name: "Mark task as complete" }));
       expect(completeTask).toHaveBeenCalledWith("a");
 
-      const addField = screen.getByLabelText("Add task");
+      await revealAddTaskField();
+      const addField = await screen.findByLabelText("Task name");
       addField.focus();
       fireEvent.keyDown(addField, { key: "z", metaKey: true });
 
@@ -684,7 +748,16 @@ describe("TodoPage", () => {
     });
   });
 
-  it("restores a completed Task from the durable Completed section, independent of any toast", () => {
+  // ROW-14 (parity-ledger.md), the user's 2026-09-13 decision to match
+  // Todoist: a completed Task no longer lives behind a separate, durable
+  // "Completed" disclosure with its own Restore button — it renders
+  // inline, in place, and its own checkbox (already `aria-checked="true"`,
+  // `aria-label="Mark task as incomplete"`) is what un-completes it, the
+  // same control an active row's checkbox already is. Independent of any
+  // toast still holds: this Task's own `completedAt` is what puts it here,
+  // not a pending-undo ref (`pendingUndoRef`, todo-page.tsx) that a toast
+  // could have long since cleared.
+  it("restores a completed Task inline, through its own checkbox, independent of any toast", () => {
     const uncompleteTask = vi.fn();
     renderTodoPage(
       readyContext({
@@ -695,7 +768,7 @@ describe("TodoPage", () => {
       }),
     );
 
-    fireEvent.click(screen.getByRole("button", { name: 'Restore "call mum"' }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Mark task as incomplete" }));
 
     expect(uncompleteTask).toHaveBeenCalledWith("a");
   });
@@ -716,6 +789,32 @@ describe("TodoPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
 
     expect(removeTask).toHaveBeenCalledWith("a");
+  });
+
+  // ROW-06 (parity-ledger.md): flow 10's decisive test quoted Todoist's
+  // own delete-confirmation dialog as "The ZZ probe bold em code task
+  // will be permanently deleted." for a title verified to hold only
+  // literal `**bold** _em_ `code`` characters
+  // (`live-audit-dom/flow10-ROW-06-both.json`) — meologue's own dialog
+  // used to quote the raw markdown verbatim instead. Only the
+  // interpolated name renders through `inlineProse`; the surrounding
+  // sentence is this app's own copy, not part of the Task.
+  it("renders markdown in the delete confirmation's quoted title — ROW-06", async () => {
+    renderTodoPage(inboxContext([task({ id: "a", content: "ZZ probe **bold** _em_ `code`" })]));
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "ZZ probe bold em code" })).toBeInTheDocument(),
+    );
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: 'More actions for "ZZ probe **bold** _em_ `code`"' }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: /Delete/ }));
+
+    const dialog = screen.getByRole("alertdialog");
+    expect(within(dialog).getByText("bold")?.tagName).toBe("STRONG");
+    expect(within(dialog).getByText("em")?.tagName).toBe("EM");
+    expect(within(dialog).getByText("code")?.tagName).toBe("CODE");
+    expect(dialog).toHaveTextContent("The ZZ probe bold em code task will be permanently deleted.");
   });
 
   it("cancelling the delete confirmation leaves the Task untouched", async () => {
@@ -959,7 +1058,7 @@ describe("TodoPage — rename resolves recognised phrases (issue #247)", () => {
       `/todo/task/buy-milk-${detailTaskId}`,
     );
 
-    fireEvent.click(await screen.findByRole("button", { name: "buy milk" }));
+    fireEvent.click(await screen.findByTestId("task-detail-title"));
     const editor = await screen.findByLabelText("Task name");
     fireEvent.change(editor, { target: { value: "buy oat milk tomorrow p1" } });
     fireEvent.keyDown(editor, { key: "Enter" });
@@ -1032,14 +1131,14 @@ describe("TodoPage — Today", () => {
   it("still offers the Add form and Todo's own nav from Today", () => {
     renderTodoPage(readyContext(), "/todo/today");
 
-    // The "Add" button, not the field itself: this describe block runs
-    // under fake timers (this file's own `beforeEach` above), and the
-    // field is behind a `React.lazy` boundary (`add-task-form.tsx`'s own
-    // header comment) whose resolution `findByLabelText`'s internal
-    // polling can't observe without the timers being advanced — the
-    // button sits outside that boundary and is always present
-    // synchronously, which is all "still offers the Add form" needs.
-    expect(screen.getByRole("button", { name: "Add" })).toBeInTheDocument();
+    // The quiet "Add task" trigger button, not the editor itself: this
+    // describe block runs under fake timers (this file's own `beforeEach`
+    // above), and the editor only mounts (behind a `React.lazy` boundary,
+    // `add-task-form.tsx`'s own header comment) once that button is
+    // clicked and revealed — the collapsed trigger itself is always
+    // present synchronously, which is all "still offers the Add form"
+    // needs.
+    expect(screen.getByRole("button", { name: "Add task" })).toBeInTheDocument();
     expect(screen.getByRole("navigation", { name: "Todo" })).toBeInTheDocument();
   });
 
@@ -1059,12 +1158,15 @@ describe("TodoPage — Today", () => {
       "/todo/today",
     );
 
-    fireEvent.click(screen.getByRole("checkbox", { name: "call mum" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Mark task as complete" }));
 
     expect(completeTask).toHaveBeenCalledWith("a");
-    expect(toast).toHaveBeenCalledWith(
-      "1 task completed",
-      expect.objectContaining({ action: expect.objectContaining({ label: "Undo" }) }),
+    // CMT-04: same `toast.custom()` path as Inbox's own test above —
+    // rendering the produced element here would only re-check what that
+    // test already covers, so this just confirms the same call shape.
+    expect(toast.custom).toHaveBeenCalledWith(
+      expect.any(Function),
+      expect.objectContaining({ duration: 10_000 }),
     );
   });
 });
@@ -1208,9 +1310,10 @@ describe("TodoPage — Projects", () => {
     );
 
     await waitFor(() => expect(screen.getByText("buy milk")).toBeInTheDocument());
-    // The identical row markup Inbox renders — a real checkbox naming the
-    // Task's own words, not a second, Project-specific list component.
-    expect(screen.getByRole("checkbox", { name: "buy milk" })).toBeInTheDocument();
+    // The identical row markup Inbox renders — a real checkbox with
+    // Todoist's own fixed wording (ROW-03), not a second, Project-specific
+    // list component.
+    expect(screen.getByRole("checkbox", { name: "Mark task as complete" })).toBeInTheDocument();
   });
 
   it("adding a Task from a Project's own view inherits that Project", async () => {
@@ -1233,8 +1336,9 @@ describe("TodoPage — Projects", () => {
     const addTask = vi.fn();
     renderTodoPage(readyContext({ projects: [project], addTask }), "/todo/projects/p1");
 
-    fireEvent.change(await screen.findByLabelText("Add task"), { target: { value: "buy milk" } });
-    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    await revealAddTaskField();
+    fireEvent.change(await screen.findByLabelText("Task name"), { target: { value: "buy milk" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add task" }));
 
     await waitFor(() =>
       expect(addTask).toHaveBeenCalledWith(

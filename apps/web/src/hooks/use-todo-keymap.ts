@@ -3,11 +3,13 @@ import { useEffect, useRef } from "react";
 import {
   canLeaveAddTaskField,
   chordFor,
+  focusAddTaskField,
   focusAdjacentRow,
   focusedTaskId,
   isInsideOverlay,
   isTypingTarget,
   OPEN_COMMAND_MENU_EVENT,
+  OPEN_QUICK_ADD_EVENT,
   OPEN_SCHEDULE_EVENT,
   TODO_KEY_BINDINGS,
   type TodoKeyBinding,
@@ -38,6 +40,21 @@ export interface UseTodoKeymapOptions {
    * `taskId !== null` guards just below).
    */
   onUndoComplete: () => void;
+  /**
+   * KBD-01/KBD-06 (parity ledger) — `complete-task` (`E`). Mirrors
+   * `onOpenTaskDetail`'s own "hand the whole Task in, not just its id"
+   * shape, because `todo-page.tsx`'s `handleCompleteTask` already takes
+   * one: a missed (b), not a documented exclusion — the handler existed
+   * the whole time, it just had no key.
+   */
+  onCompleteTask: (task: Task) => void;
+  /**
+   * KBD-01/KBD-06 — `copy-link` (`⌘⇧C`). `todo-page.tsx`'s `copyTaskLink`
+   * already exists (it's what "More actions" → "Copy link to task" calls)
+   * and already takes a whole Task, the same missed-(b) shape as
+   * `onCompleteTask` above.
+   */
+  onCopyLink: (task: Task) => void;
 }
 
 // Every sequence's own first key (currently just `"g"`, from `TODO_KEY_
@@ -108,6 +125,16 @@ export function useTodoKeymap(options: UseTodoKeymapOptions): void {
         case "show-shortcuts":
           opts.onShowShortcuts();
           return;
+        // Issue #260: `Q` opens the global Quick Add dialog — a bare
+        // document event, the same fan-in `command-menu`/`set-date` below
+        // already use, because `todo-page.tsx` (the one place that both
+        // mounts this hook and owns `QuickAddDialog`/`handleAdd`) is the
+        // only listener; no `onOpenQuickAdd` option was added here on
+        // purpose, to keep this hook's own option surface from growing for
+        // a call site that already has a working event to dispatch on.
+        case "quick-add":
+          document.dispatchEvent(new CustomEvent(OPEN_QUICK_ADD_EVENT));
+          return;
         case "undo-complete":
           opts.onUndoComplete();
           return;
@@ -133,6 +160,38 @@ export function useTodoKeymap(options: UseTodoKeymapOptions): void {
           const task = taskId !== null ? opts.resolveTask(taskId) : null;
           if (task !== null) {
             opts.onOpenTaskDetail(task);
+          }
+          return;
+        }
+        // KBD-01/KBD-06: a missed (b) — `handleCompleteTask` (`todo-
+        // page.tsx`) already exists, the same door the row's own checkbox
+        // click already uses.
+        case "complete-task": {
+          const task = taskId !== null ? opts.resolveTask(taskId) : null;
+          if (task !== null) {
+            opts.onCompleteTask(task);
+          }
+          return;
+        }
+        // KBD-01/KBD-06: this app has no comment-only surface — commenting
+        // lives inside the Task detail view, which is exactly where the
+        // row's own "Comment" hover button already sends a click
+        // (`task-row-content.tsx`), so this reuses `onOpenTaskDetail`
+        // rather than adding a second option for the same destination.
+        case "comment-task": {
+          const task = taskId !== null ? opts.resolveTask(taskId) : null;
+          if (task !== null) {
+            opts.onOpenTaskDetail(task);
+          }
+          return;
+        }
+        // KBD-01/KBD-06: another missed (b) — `copyTaskLink` (`todo-
+        // page.tsx`) already exists, the same door "More actions" → "Copy
+        // link to task" already uses.
+        case "copy-link": {
+          const task = taskId !== null ? opts.resolveTask(taskId) : null;
+          if (task !== null) {
+            opts.onCopyLink(task);
           }
           return;
         }
@@ -192,6 +251,38 @@ export function useTodoKeymap(options: UseTodoKeymapOptions): void {
           return;
         case "go-filters":
           opts.onNavigate("/todo/filters");
+          return;
+        // Coordinator's own re-audit: `/todo/labels` is real — see
+        // todo-keymap.ts's own doc comment on `go-labels` for why this
+        // follows `go-projects`' own "open X…" → "the list view"
+        // resolution rather than a picker that doesn't exist.
+        case "go-labels":
+          opts.onNavigate("/todo/labels");
+          return;
+        // Coordinator's own re-audit: `/todo/activity` is real, and
+        // `todo-sidebar.tsx` labels it "Reporting" (NAV-01) — see
+        // todo-keymap.ts's own doc comment on `go-reporting`.
+        case "go-reporting":
+          opts.onNavigate("/todo/activity");
+          return;
+        // KBD-01/KBD-06: the one `O then …` row with a real destination
+        // (`/settings`, App.tsx) — see todo-keymap.ts's own header comment
+        // for why the other three `O then …` rows stay unbound.
+        case "go-settings":
+          opts.onNavigate("/settings");
+          return;
+        // Coordinator's own re-audit: the theme picker lives on the same
+        // `/settings` screen (`appearance-section.tsx`), so this shares
+        // `go-settings`'s destination rather than a nonexistent themes
+        // route — see todo-keymap.ts's own doc comment on `go-themes`.
+        case "go-themes":
+          opts.onNavigate("/settings");
+          return;
+        // KBD-01/KBD-06: jumps straight to the Add-task field rather than
+        // cycling row by row (`focusAdjacentRow`) to reach it —
+        // `focusAddTaskField` (todo-keymap.ts) owns the whole selector.
+        case "focus-add-task":
+          focusAddTaskField();
           return;
         default:
           return;

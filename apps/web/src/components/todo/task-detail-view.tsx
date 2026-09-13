@@ -29,10 +29,10 @@
  * (issue #179) and nothing here reads or renders it.
  *
  * **Activity** (issue #184, ADR 0056) sits below Comments, a `<details>`
- * disclosure mirroring `CompletedTasks`'s own "collapsed by default, open
- * on request" shape — a secondary, occasional thing to check, not
- * something worth the vertical space open by default the way Comments
- * are. `events` is already narrowed to this one Task by the caller
+ * disclosure, collapsed by default and open on request — a secondary,
+ * occasional thing to check, not something worth the vertical space open
+ * by default the way Comments are. `events` is already narrowed to this
+ * one Task by the caller
  * (`listEventsByTask`, entry-store-layout.tsx), the identical "the
  * caller scopes it, this view only renders" split `comments` above
  * already takes.
@@ -62,8 +62,10 @@ import { ChevronLeft, ChevronRight, Pencil, Trash2, X } from "lucide-react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import type * as React from "react";
 import { forwardRef, Suspense, useEffect, useRef, useState } from "react";
+import { useOutletContext } from "react-router";
 import { toast } from "sonner";
 import { entryProse } from "@/components/entry-prose";
+import { inlineProse } from "@/components/inline-prose";
 import { ActivityFeed } from "@/components/todo/activity-feed";
 import { LazyTaskDescriptionEditor } from "@/components/todo/lazy-task-description-editor";
 import { LazyTaskTitleEditor } from "@/components/todo/lazy-task-title-editor";
@@ -74,10 +76,12 @@ import { useWideLayout } from "@/hooks/use-wide-layout";
 import { isRenderableEvent } from "@/lib/format-event";
 import { formatDay, formatTaskDate } from "@/lib/format-task-date";
 import { localDayKey } from "@/lib/local-day-key";
+import type { QuickAddAutocompleteOptions } from "@/lib/quick-add-autocomplete";
 import { useSettingsStore } from "@/lib/settings";
 import { priorityColour } from "@/lib/task-priority-colors";
 import { quickAddRecognitionPlugin } from "@/lib/todo-quick-add-recognition";
 import { cn } from "@/lib/utils";
+import type { EntryStoreOutletContext } from "@/pages/entry-store-layout";
 
 /**
  * DET-16 (parity-ledger.md): live Todoist's own "Date updated to Tomorrow"
@@ -602,6 +606,59 @@ function TaskDetailBody({
   const smartDates = useSettingsStore((state) => state.smartDatesEnabled);
   const titleRecognitionOptionsRef = useRef({ now: localDayKey(new Date()), smartDates });
   titleRecognitionOptionsRef.current = { now: localDayKey(new Date()), smartDates };
+  // QA-14's own second half, wired into the detail title: the `#`/`@`
+  // autocomplete popup needs a create hook (`addProject`/`addLabel`) that
+  // `TaskDetailViewProps` has no field for — `projects`/`labels` above
+  // already cover the list half (the identical arrays the Project/Labels
+  // attribute pickers already use). Reading `useOutletContext` directly
+  // here, the same door `task-row-content.tsx`'s own identical wiring
+  // uses (that file's own doc comment has the fuller account of why: this
+  // view only ever renders inside `todo-page.tsx`'s or `composer-page.tsx`'s
+  // own subtree, both children of `EntryStoreLayout`'s `<Outlet
+  // context={...}>`, so this is the exact context `useEntryStore()` itself
+  // is built on) — not a new prop on `TaskDetailViewProps`, which would
+  // need `todo-page.tsx` and `composer-page.tsx` (both owned by another
+  // agent mid-rebuild) to grow it. `useOutletContext` is plain
+  // `React.useContext` underneath, so it's safe with no `<Outlet>`
+  // ancestor at all — `task-detail-view.test.tsx`'s existing suite (no
+  // Router anywhere in it) keeps working unchanged, reading `undefined`
+  // here and falling through to "Create only inserts the token" exactly as
+  // `QuickAddAutocompleteOptions`'s own doc comment already allows.
+  const autocompleteOutlet = useOutletContext<EntryStoreOutletContext | undefined>();
+  const titleAutocomplete: QuickAddAutocompleteOptions = {
+    getProjects: () => projects,
+    getLabels: () => labels,
+    onCreateProject: autocompleteOutlet?.addProject,
+    onCreateLabel: autocompleteOutlet?.addLabel,
+  };
+  // DET-15: whether the popup above is currently open — fed by
+  // `TaskTitleEditor`'s own `onAutocompleteOpenChange` (task-title-
+  // editor.tsx) below, read from `dismissGuardRef`'s own assignment
+  // further down. A ref, not state: nothing here needs to re-render when
+  // this flips, only to have the CURRENT answer available the instant
+  // Radix's Escape handling asks for it, which happens synchronously
+  // inside the same keydown Radix's own `document`-capture listener sees
+  // — see that assignment's own comment for why this ref is guaranteed to
+  // still read `true` at that moment even though the popup is about to
+  // close.
+  const autocompletePopupOpenRef = useRef(false);
+  // DET-15's own real fix, discovered rather than merely reasoned about
+  // (`dismissGuardRef`'s own assignment below has the proof): Radix's
+  // `Dialog.Content` calls `onEscapeKeyDown` from a `document`-level,
+  // capture-phase listener — strictly before this same event ever reaches
+  // `TaskTitleEditor`'s own keydown handling, since a browser always runs
+  // an ancestor's capture-phase listener before any listener bound
+  // directly to a descendant target. Calling `event.preventDefault()`
+  // there (needed to keep Radix from closing the whole Dialog) makes
+  // `prosemirror-view`'s own dispatch gate refuse to run ANY of this
+  // editor's key handling for that same event afterward — its own
+  // autocomplete plugin included — so the popup can no longer be trusted
+  // to close itself. `closeAutocompleteRef` (`task-title-editor.tsx`'s own
+  // doc comment on it) is a plain `view.dispatch()` call, not a DOM event,
+  // so it is never subject to that gate — this is what lets the guard
+  // below close the popup for real in the same synchronous tick it also
+  // calls `preventDefault()`.
+  const closeAutocompleteRef = useRef<(() => void) | null>(null);
   // A literal id, not `useId()`: only one `TaskDetailView` is ever mounted
   // at a time (it's a modal over the whole app), so there is no second
   // instance for a fixed id to collide with.
@@ -883,6 +940,28 @@ function TaskDetailBody({
     if (!editing) {
       return false;
     }
+    // DET-15's own Escape gap against the `#`/`@` popup above: at the
+    // instant this callback runs, `autocompletePopupOpenRef` still reads
+    // whatever it was BEFORE this same keystroke would otherwise close the
+    // popup — Radix's own `document`-capture Escape listener always runs
+    // before this event ever reaches `TaskTitleEditor`'s own keydown
+    // handling (`closeAutocompleteRef`'s own doc comment, and this ref's
+    // own comment above, have the full ordering proof). Calling
+    // `closeAutocompleteRef.current?.()` here — a plain function call, not
+    // a DOM event — closes the popup directly, since letting this same
+    // keystroke's own bubble-phase reach `TaskTitleEditor`'s normal
+    // keydown handling can no longer be trusted to do it once this
+    // function returns `true` below (`onEscapeKeyDown`'s own
+    // `preventDefault()` call is exactly what blocks that path — proven,
+    // not just reasoned about, in task-detail-view-recognition.test.tsx's
+    // own "Escape closes only the popup" case). Returning `true` without
+    // calling `requestCancelEditing` is what keeps this one Escape from
+    // ALSO raising the discard confirmation or ending editing outright —
+    // every other source/state combination stays exactly as it was.
+    if (source === "escape" && autocompletePopupOpenRef.current) {
+      closeAutocompleteRef.current?.();
+      return true;
+    }
     requestCancelEditing(source === "outside");
     return true;
   };
@@ -1083,29 +1162,64 @@ function TaskDetailBody({
                       extraPlugins={[
                         quickAddRecognitionPlugin(() => titleRecognitionOptionsRef.current),
                       ]}
+                      // QA-14's own second half: the identical `#`/`@`
+                      // popup Quick Add and the row's rename already open,
+                      // wired to this view's own `projects`/`labels` and
+                      // whatever create hook the outlet context supplies
+                      // (this function's own `titleAutocomplete` comment
+                      // above). `onAutocompleteOpenChange` feeds
+                      // `autocompletePopupOpenRef`, which
+                      // `dismissGuardRef`'s own assignment above reads —
+                      // DET-15's fix for the Escape gap this file's own
+                      // header comment on that ref names.
+                      autocomplete={titleAutocomplete}
+                      onAutocompleteOpenChange={(open) => {
+                        autocompletePopupOpenRef.current = open;
+                      }}
+                      closeAutocompleteRef={closeAutocompleteRef}
                     />
                   </Suspense>
                 </div>
               ) : (
-                // DET-02/DET-03: Todoist's own detail title at rest is a
-                // non-editable `div.task_content`, paired with a
-                // visually-hidden "Activate to edit the task name" label
-                // (`titleHintId` below) — a real `<button>`, not a bare
-                // `<div>`, is this app's own choice for how "activate" is
-                // reached without a pointer (Tab, then Enter/Space), which
-                // the reference docs never had to specify since a click
-                // was the only gesture driven.
-                <button
-                  type="button"
+                // DET-02: matched to Todoist's own measured shape (live
+                // audit, flow 4 — `flow4-DET-02-03-05-14-todoist.json`),
+                // ratified by the user on 2026-09-13, reversing this
+                // file's own earlier `<button>` choice: a `DIV`, no
+                // `role`, `tabIndex={-1}` — non-editable and non-focusable
+                // by Tab, same as Todoist's `div.task_content`. That
+                // trades away "activate with just a keyboard" (Tab, then
+                // Enter/Space), which the reference never had either; the
+                // user accepted the loss rather than keep meologue's own
+                // divergence.
+                // DET-03: unlike Todoist (whose sibling hint carries no
+                // `aria-describedby` link — nothing points at it), this
+                // element keeps pointing at `titleHintId` — ratified
+                // separately, in meologue's favour, the same day.
+                // biome-ignore lint/a11y/noStaticElementInteractions: DET-02 — Todoist's title at rest is a plain, non-interactive div; matching that shape means the click handler has no button/role to live on. The click-catcher just below (`task-detail-edit-column`) already sets this file's precedent for a `biome-ignore` here rather than a synthetic role.
+                // biome-ignore lint/a11y/useKeyWithClickEvents: DET-02 — `tabIndex={-1}` (matched to Todoist) takes this out of Tab order, so there is no keyboard event to pair the click with; the user's 2026-09-13 decision accepted losing keyboard activation of the title specifically.
+                <div
                   onClick={() => startEditing("title")}
                   aria-describedby={titleHintId}
+                  tabIndex={-1}
+                  data-testid="task-detail-title"
                   className={cn(
                     "w-full text-left font-medium text-base",
                     task.completedAt !== null && "completed-task-text",
                   )}
                 >
-                  {task.content}
-                </button>
+                  {/* ROW-06 (parity-ledger.md): row-and-detail.md §2's own
+                      "single most consequential finding" is that this div
+                      IS the row's own display component, `div.task_content`
+                      — so the same live-measured markdown rendering
+                      (`live-audit-dom/flow10-ROW-06-both.json`) applies here
+                      at rest, through the same inline-only `inlineProse`
+                      task-row-content.tsx now uses. `task.content` itself is
+                      unread by anything else here — clicking still opens
+                      `LazyTaskTitleEditor` on the raw, unformatted value
+                      above, `data-testid`/`tabIndex`/`aria-describedby` are
+                      untouched. */}
+                  {inlineProse(task.content)}
+                </div>
               )}
             </DialogPrimitive.Title>
           </div>
@@ -1362,11 +1476,10 @@ function TaskDetailBody({
             }}
           />
 
-          {/* Activity (issue #184, ADR 0056) — collapsed by default,
-              mirroring CompletedTasks' own disclosure shape (this file's
-              own header comment). Renders nothing when there's nothing
-              to show yet, the same "don't show a section with nothing in
-              it" restraint CompletedTasks itself takes. */}
+          {/* Activity (issue #184, ADR 0056) — collapsed by default, open
+              on request (this file's own header comment). Renders
+              nothing when there's nothing to show yet, rather than an
+              always-visible disclosure with nothing inside it. */}
           {renderableEvents.length > 0 && (
             <details className="rounded-lg border border-border">
               <summary className="cursor-pointer select-none px-3 py-2 text-muted-foreground text-sm">

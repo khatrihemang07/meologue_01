@@ -219,7 +219,7 @@ describe("FilterView — opening a saved Filter (criterion 1)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Remove Filter" }));
     expect(onRemove).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     expect(onRemove).toHaveBeenCalled();
   });
 });

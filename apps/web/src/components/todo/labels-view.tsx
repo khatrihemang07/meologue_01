@@ -2,40 +2,40 @@
  * Every Label — issue #229's own gap: `use-labels.ts`'s own pre-#229
  * header comment states it plainly, "`rename`/`setColour`/`remove` exist
  * in core and are wired to no UI at all," and there was no `/todo/labels`
- * route for one to live behind. The Label-shaped sibling of
- * `projects-view.tsx`, following its exact shape (a colour-plus-name
- * inline "Add" form, then a flat list) for the identical reason —
- * `LABEL_COLOURS` (label-colors.ts) is the one palette Projects, Labels
- * and Filters all share, so a reader who has already added a Project
- * recognises this screen immediately.
+ * route for one to live behind.
+ *
+ * **STR-04 and STR-05 (docs/reference/todoist/parity-ledger.md).** This
+ * screen used to do create/rename/recolour inline on the row, following
+ * `projects-view.tsx`'s own shape. The 2026-09-13 live audit
+ * (`live-audit-dom/flow9-STR-04-todoist.json`,
+ * `flow9-STR-05-todoist.json`) recorded Todoist doing all three through a
+ * modal (`label-dialog.tsx`'s own `LabelDialog`, "Add label" / "Edit
+ * label") reached from an "Add new label" button and a per-row options
+ * menu — Edit · Add to favorites · Move to shared labels · Copy link to
+ * label · Delete, in that DOM order. The user decided on 2026-09-13 to
+ * match that shape. This file now builds the menu with only the two
+ * items that apply: Edit (opens `LabelDialog`) and Delete (opens the
+ * `ConfirmDialog` below, unchanged). "Add to favorites", "Move to shared
+ * labels" and "Copy link to label" have nothing to be built against —
+ * `label-types.ts` carries no favourite or shared-Label field, and there
+ * is no per-Label route for a link to point at — exactly as this file's
+ * own pre-2026-09-13 header comment already argued for the inline shape;
+ * that argument still holds for the menu shape.
  *
  * **Flat, unlike Projects.** A Label carries no `parentId` (../../../
  * packages/core/src/label-types.ts) — there is nothing here for
  * `depthOf` (projects-view.tsx) to compute, and no favourite/archived
  * flag either (that type's own doc comment never grew either field,
  * unlike Project's), so this view offers exactly what the type supports:
- * a name, a colour, and a delete — the same restraint CLAUDE.md's brief
- * asks for, applied to a screen this time rather than a store.
- *
- * **Reproducing Todoist's label menu, minus what doesn't apply.**
- * `docs/reference/todoist/quick-add.md`'s own "Menus seen in passing"
- * names Todoist's real menu: Edit · Add to favorites · Move to shared
- * labels · Copy link to label · Delete. This app has no Label favourite,
- * no shared Labels (a solo task list — CONTEXT.md's own admission for
- * why "Project" stays "Project" applies here too), and no per-Label
- * route for a link to point at, so only Edit and Delete survive: Edit is
- * this row's own inline name field (`onBlur` commits, mirroring
- * project-view.tsx's identical rename-on-blur), and Delete is the trash
- * icon below, behind `ConfirmDialog` with Todoist's own verbatim wording
- * (quick-add.md § "Destructive confirmation wording").
+ * a name, a colour, and a delete.
  */
 import type { Label } from "@meologue/core";
-import { LABEL_COLOURS } from "@meologue/core";
-import { Trash2 } from "lucide-react";
-import { type FormEvent, useState } from "react";
+import { MoreHorizontal } from "lucide-react";
+import { DropdownMenu } from "radix-ui";
+import { useState } from "react";
+import { LabelDialog } from "@/components/todo/label-dialog";
 import { ConfirmDialog } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 
 export interface LabelsViewProps {
   labels: Label[];
@@ -45,68 +45,27 @@ export interface LabelsViewProps {
   onRemove: (id: string) => void;
 }
 
-// Defect 32 (docs/reference/todoist/live-audit-2026-09-11.md): Todoist's
-// Add/Edit label dialogs cap the Name field at 60 characters and show a
-// live `n/60` counter. Neither existed anywhere here before this fix —
-// including on Project's own name field, despite the ledger citing an
-// `8/120` counter there; that reading turns out to be Todoist's Edit
-// Project dialog (parity-ledger.md's STR-02), not meologue's, which has
-// no counter or cap of its own. So there is no in-repo pattern to reuse;
-// this is the first one.
-const LABEL_NAME_MAX = 60;
+const menuItemClassName =
+  "flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none data-highlighted:bg-muted data-highlighted:text-foreground";
 
 export function LabelsView({ labels, onAdd, onRename, onSetColour, onRemove }: LabelsViewProps) {
-  const [name, setName] = useState("");
-  const [colour, setColour] = useState(LABEL_COLOURS[0]?.hex ?? "#808080");
+  // `undefined` — dialog closed. `null` — "Add label". A `Label` — "Edit
+  // label", prefilled. Mirrors `label` being the one thing `LabelDialog`
+  // needs to tell Add and Edit apart (that file's own doc comment).
+  const [dialogTarget, setDialogTarget] = useState<Label | null | undefined>(undefined);
   // The Label a pending delete confirmation targets — `null` means
   // closed, mirroring project-view.tsx's own `confirmingDelete` shape for
   // Section delete (that component's own doc comment on why the target
   // is captured, not just a boolean).
   const [confirmingDelete, setConfirmingDelete] = useState<Label | null>(null);
-  // Live length for each row's (uncontrolled, `defaultValue`-driven) name
-  // field, so its `n/60` counter can update on every keystroke without
-  // promoting the whole row to a controlled input. Falls back to the
-  // Label's own committed name whenever a row hasn't been touched yet.
-  const [editLengths, setEditLengths] = useState<Record<string, number>>({});
-
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (name.trim() === "") return;
-    onAdd(name, colour);
-    setName("");
-  }
 
   return (
     <div className="flex flex-col gap-4 p-3">
-      <form onSubmit={handleSubmit} className="flex gap-2">
-        <select
-          aria-label="New Label's colour"
-          value={colour}
-          onChange={(event) => setColour(event.target.value)}
-          className="shrink-0 rounded-md border border-border bg-background px-1.5 text-xs"
-        >
-          {LABEL_COLOURS.map((option) => (
-            <option key={option.hex} value={option.hex}>
-              {option.name.replace(/_/g, " ")}
-            </option>
-          ))}
-        </select>
-        <Input
-          type="text"
-          placeholder="New Label"
-          aria-label="New Label's name"
-          value={name}
-          onChange={(event) => setName(event.target.value)}
-          maxLength={LABEL_NAME_MAX}
-          className="flex-1"
-        />
-        <span className="shrink-0 self-center text-muted-foreground text-xs">
-          {name.length}/{LABEL_NAME_MAX}
-        </span>
-        <Button type="submit" disabled={name.trim() === ""}>
-          Add
+      <div className="flex justify-end">
+        <Button type="button" size="sm" onClick={() => setDialogTarget(null)}>
+          Add label
         </Button>
-      </form>
+      </div>
 
       {labels.length === 0 ? (
         <p className="px-1 text-center text-muted-foreground text-sm">
@@ -119,49 +78,58 @@ export function LabelsView({ labels, onAdd, onRename, onSetColour, onRemove }: L
               key={label.id}
               className="flex items-center gap-2 border-border border-b py-2 last:border-b-0"
             >
-              <select
-                aria-label={`"${label.name}"'s colour`}
-                value={label.colour}
-                onChange={(event) => onSetColour(label.id, event.target.value)}
-                className="shrink-0 rounded-md border border-border bg-background px-1.5 text-xs"
-              >
-                {LABEL_COLOURS.map((option) => (
-                  <option key={option.hex} value={option.hex}>
-                    {option.name.replace(/_/g, " ")}
-                  </option>
-                ))}
-              </select>
-              <input
-                type="text"
-                aria-label="Label name"
-                defaultValue={label.name}
-                maxLength={LABEL_NAME_MAX}
-                onChange={(event) =>
-                  setEditLengths((prev) => ({ ...prev, [label.id]: event.target.value.length }))
-                }
-                onBlur={(event) => {
-                  const trimmed = event.target.value.trim();
-                  if (trimmed !== "" && trimmed !== label.name) {
-                    onRename(label.id, trimmed);
-                  }
-                }}
-                className="min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-1.5 py-1 text-sm hover:border-border focus:border-border"
+              <span
+                aria-hidden="true"
+                className="size-2.5 shrink-0 rounded-full"
+                style={{ backgroundColor: label.colour }}
               />
-              <span className="shrink-0 text-muted-foreground text-xs">
-                {editLengths[label.id] ?? label.name.length}/{LABEL_NAME_MAX}
-              </span>
-              <button
-                type="button"
-                aria-label={`Delete Label "${label.name}"`}
-                onClick={() => setConfirmingDelete(label)}
-                className="flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-              >
-                <Trash2 aria-hidden="true" className="size-4" />
-              </button>
+              <span className="min-w-0 flex-1 truncate text-sm">{label.name}</span>
+              <DropdownMenu.Root>
+                <DropdownMenu.Trigger asChild>
+                  <button
+                    type="button"
+                    aria-label="Label options menu"
+                    className="flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+                  >
+                    <MoreHorizontal aria-hidden="true" className="size-4" />
+                  </button>
+                </DropdownMenu.Trigger>
+                <DropdownMenu.Portal>
+                  <DropdownMenu.Content
+                    align="end"
+                    className="z-50 flex w-40 flex-col gap-0.5 rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-lg data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0"
+                  >
+                    <DropdownMenu.Item
+                      className={menuItemClassName}
+                      onSelect={() => setDialogTarget(label)}
+                    >
+                      Edit
+                    </DropdownMenu.Item>
+                    <DropdownMenu.Item
+                      className={menuItemClassName}
+                      onSelect={() => setConfirmingDelete(label)}
+                    >
+                      Delete
+                    </DropdownMenu.Item>
+                  </DropdownMenu.Content>
+                </DropdownMenu.Portal>
+              </DropdownMenu.Root>
             </li>
           ))}
         </ul>
       )}
+
+      <LabelDialog
+        key={dialogTarget === undefined ? "closed" : (dialogTarget?.id ?? "add")}
+        open={dialogTarget !== undefined}
+        onOpenChange={(open) => {
+          if (!open) setDialogTarget(undefined);
+        }}
+        label={dialogTarget ?? null}
+        onAdd={onAdd}
+        onRename={onRename}
+        onSetColour={onSetColour}
+      />
 
       {/* Verbatim (quick-add.md § "Destructive confirmation wording"):
           "Delete label? The <name> label will be permanently deleted."

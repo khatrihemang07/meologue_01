@@ -26,9 +26,25 @@ function uniqueTaskContent(label: string): string {
   return `${label} ${randomUUID()}`;
 }
 
+/**
+ * Issue #260: the in-list add field is collapsed by default (NAV-12,
+ * parity ledger) — a quiet "Add task" row at the end of the list that
+ * expands into a real composer on click, rather than an always-open
+ * field. Every step below is scoped to `[data-add-task-field]`
+ * (`add-task-form.tsx`'s own wrapper, present in both its collapsed and
+ * expanded states) because Playwright's name matching is substring, not
+ * exact, and this page now has THREE things that can answer to "Add
+ * task": the sidebar's own global-Quick-Add button (`todo-sidebar.tsx`),
+ * this row's collapsed trigger, and its own expanded submit button —
+ * scoping to the one wrapper that only ever contains the list's own
+ * affordance (never the sidebar's) is what keeps `.click()` from ever
+ * landing on the wrong one.
+ */
 async function addTask(page: import("@playwright/test").Page, content: string): Promise<void> {
-  await page.getByLabel("Add task").fill(content);
-  await page.getByRole("button", { name: "Add" }).click();
+  const composer = page.locator("[data-add-task-field]");
+  await composer.getByRole("button", { name: "Add task", exact: true }).click();
+  await composer.getByLabel("Task name", { exact: true }).fill(content);
+  await composer.getByRole("button", { name: "Add task", exact: true }).click();
 }
 
 test("adding, completing (with Undo), reordering and reloading all leave Todo exactly where the reader left it", async ({
@@ -59,17 +75,36 @@ test("adding, completing (with Undo), reordering and reloading all leave Todo ex
   await expect(rows.nth(0)).toContainText(first);
   await expect(rows.nth(1)).toContainText(second);
 
+  // ROW-03 (parity-ledger.md), the user's 2026-09-13 decision: the
+  // checkbox's accessible name is now Todoist's own fixed wording
+  // ("Mark task as complete"), not the Task's content — with two rows on
+  // the page both checkboxes now carry the identical name, so "the
+  // checkbox for `first`" has to be found by locating `first`'s own row
+  // first and its checkbox within it, not by name alone. Declared here,
+  // ahead of the drag section below that already scoped its own row
+  // locators the same way, so this test scopes every row lookup
+  // consistently from the point two rows coexist.
+  const firstRow = page.locator("li[data-task-id]", { hasText: first });
+  const secondRow = page.locator("li[data-task-id]", { hasText: second });
+
   // Completing raises the same undo-toast pattern
   // register-service-worker.web.ts's own update prompt uses — undoing
   // through it is an ordinary uncomplete(), not a resurrection (ADR 0047),
   // so the Task lands right back where its own orderKey already puts it.
-  await page.getByRole("checkbox", { name: first }).click();
-  await expect(page.getByRole("checkbox", { name: first })).toHaveCount(0);
+  await firstRow.getByRole("checkbox").click();
+  // ROW-14 (parity-ledger.md), the user's 2026-09-13 decision to match
+  // Todoist: the row stays exactly where it was — struck through, its own
+  // checkbox now `aria-checked="true"` — rather than leaving the DOM the
+  // way this app's own now-removed "Completed" disclosure used to require.
+  // `rows` (both `first`/`second`, by content) still counts two: nothing
+  // left this list, one row inside it changed state.
+  await expect(firstRow.getByRole("checkbox")).toHaveAttribute("aria-checked", "true");
+  await expect(rows).toHaveCount(2);
   // CMT-04: Todoist's own task-agnostic, count-based wording.
   await expect(page.getByText("1 task completed")).toBeVisible();
 
   await page.getByRole("button", { name: "Undo" }).click();
-  await expect(page.getByRole("checkbox", { name: first })).toBeVisible();
+  await expect(firstRow.getByRole("checkbox")).toHaveAttribute("aria-checked", "false");
   await expect(rows.nth(0)).toContainText(first);
   await expect(rows.nth(1)).toContainText(second);
 
@@ -91,8 +126,9 @@ test("adding, completing (with Undo), reordering and reloading all leave Todo ex
   // produces. The gesture has to originate on the grip handle, same as a
   // real reader's finger — a pointerdown anywhere else on the row leaves
   // the list scrolling normally instead.
-  const firstRow = page.locator("li[data-task-id]", { hasText: first });
-  const secondRow = page.locator("li[data-task-id]", { hasText: second });
+  //
+  // `firstRow`/`secondRow` are already in scope, declared above alongside
+  // `rows` the moment two rows coexist on the page.
   const secondHandle = secondRow.getByTestId("task-drag-handle");
 
   const secondHandleBox = await secondHandle.boundingBox();
@@ -142,13 +178,13 @@ test("adding, completing (with Undo), reordering and reloading all leave Todo ex
   await page.reload();
 
   // The order survives — it was written to the Task's own row, not held in
-  // component state — and so does the earlier Undo: neither Task is back
-  // in the completed list.
+  // component state — and so does the earlier Undo: neither Task reads as
+  // completed.
   await expect(rows).toHaveCount(2);
   await expect(rows.nth(0)).toContainText(second);
   await expect(rows.nth(1)).toContainText(first);
-  await expect(page.getByRole("checkbox", { name: first })).not.toBeChecked();
-  await expect(page.getByRole("checkbox", { name: second })).not.toBeChecked();
+  await expect(firstRow.getByRole("checkbox")).not.toBeChecked();
+  await expect(secondRow.getByRole("checkbox")).not.toBeChecked();
 });
 
 // Deleting is destructive and goes behind the shared ConfirmDialog

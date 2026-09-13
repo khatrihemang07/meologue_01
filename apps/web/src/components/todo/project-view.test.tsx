@@ -1,8 +1,32 @@
-import type { Project, Section } from "@meologue/core";
+import type { Project, Section, Task } from "@meologue/core";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { describe, expect, it, vi } from "vitest";
 import { ProjectView } from "./project-view";
+
+/** Opens the project's own "Project options menu" (STR-02) and clicks the named item. */
+function openProjectMenuAndClick(itemName: string) {
+  // Radix's `DropdownMenu.Trigger` opens on `pointerdown`, not `click`
+  // (task-schedule-popover.test.tsx's own identical "Repeat menu"
+  // precedent) — a plain `fireEvent.click` alone never opens it under
+  // jsdom.
+  fireEvent.pointerDown(screen.getByRole("button", { name: "Project options menu" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: itemName }));
+}
+
+/** Opens the given Section row's "Section options menu" (STR-07) — mirrors labels-view.test.tsx's own identical `openRowMenuAndClick` for the identical `DropdownMenu` shape. */
+function openSectionMenu(rowIndex: number) {
+  const triggers = screen.getAllByRole("button", { name: "Section options menu" });
+  const trigger = triggers[rowIndex];
+  if (trigger === undefined) throw new Error(`No Section row at index ${rowIndex}`);
+  fireEvent.pointerDown(trigger);
+}
+
+/** Opens the given Section row's menu and clicks a top-level item by name. */
+function openSectionMenuAndClick(rowIndex: number, itemName: string) {
+  openSectionMenu(rowIndex);
+  fireEvent.click(screen.getByRole("menuitem", { name: itemName }));
+}
 
 function project(overrides: Partial<Project> = {}): Project {
   return {
@@ -39,6 +63,32 @@ function section(overrides: Partial<Section> = {}): Section {
     seq: 1,
     syncedAt: "2026-01-01T00:00:00.000Z",
     deletedAt: null,
+    ...overrides,
+  };
+}
+
+function task(overrides: Partial<Task> = {}): Task {
+  return {
+    id: "t1",
+    deviceId: "device-a",
+    content: "buy milk",
+    completedAt: null,
+    orderKey: "V",
+    dayOrder: "V",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    seq: 1,
+    syncedAt: "2026-01-01T00:00:00.000Z",
+    deletedAt: null,
+    date: null,
+    deadline: null,
+    priority: 1,
+    labelIds: [],
+    dateString: null,
+    projectId: "p1",
+    sectionId: null,
+    parentId: null,
+    description: null,
     ...overrides,
   };
 }
@@ -92,18 +142,113 @@ function renderProjectView(overrides: Partial<Parameters<typeof ProjectView>[0]>
   return { ...render(<ProjectView {...props} />, { wrapper: MemoryRouter }), props };
 }
 
-describe("ProjectView — colour and delete (issue #229)", () => {
-  it("recolours through the header's own colour select", () => {
-    const onSetColour = vi.fn();
-    renderProjectView({ onSetColour });
-
-    fireEvent.change(screen.getByLabelText("Project colour"), {
-      target: { value: "#4180FF" },
+describe("ProjectView — Edit project dialog (STR-02)", () => {
+  it("opens from the Project options menu, prefilled with the current name, colour and description", async () => {
+    renderProjectView({
+      project: project({ name: "Groceries", colour: "#DC4C3E", description: "Weekly shop" }),
     });
 
-    expect(onSetColour).toHaveBeenCalledWith("#4180FF");
+    openProjectMenuAndClick("Edit");
+
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+    expect(screen.getByText("Edit project")).toBeInTheDocument();
+    expect(screen.getByLabelText("Project name")).toHaveValue("Groceries");
+    expect(screen.getByLabelText("Project colour")).toHaveValue("#DC4C3E");
+    expect(screen.getByLabelText("Project description")).toHaveValue("Weekly shop");
   });
 
+  it("shows the 120-character counter and caps the name field (STR-02's own n/120 reading)", async () => {
+    renderProjectView({ project: project({ name: "Groceries" }) });
+
+    openProjectMenuAndClick("Edit");
+
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+    expect(screen.getByText("9/120")).toBeInTheDocument();
+    expect(screen.getByLabelText("Project name")).toHaveAttribute("maxLength", "120");
+  });
+
+  it("renames, recolours and sets the description together on Save", async () => {
+    const onRename = vi.fn();
+    const onSetColour = vi.fn();
+    const onSetDescription = vi.fn();
+    renderProjectView({
+      project: project({ name: "Groceries", colour: "#DC4C3E", description: null }),
+      onRename,
+      onSetColour,
+      onSetDescription,
+    });
+
+    openProjectMenuAndClick("Edit");
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText("Project name"), { target: { value: "Groceries 2" } });
+    fireEvent.change(screen.getByLabelText("Project colour"), { target: { value: "#4180FF" } });
+    fireEvent.change(screen.getByLabelText("Project description"), {
+      target: { value: "Weekly shop" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(onRename).toHaveBeenCalledWith("Groceries 2");
+    expect(onSetColour).toHaveBeenCalledWith("#4180FF");
+    expect(onSetDescription).toHaveBeenCalledWith("Weekly shop");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("does not call the setters for fields that did not change", async () => {
+    const onRename = vi.fn();
+    const onSetColour = vi.fn();
+    const onSetDescription = vi.fn();
+    renderProjectView({
+      project: project({ name: "Groceries", colour: "#DC4C3E", description: null }),
+      onRename,
+      onSetColour,
+      onSetDescription,
+    });
+
+    openProjectMenuAndClick("Edit");
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(onRename).not.toHaveBeenCalled();
+    expect(onSetColour).not.toHaveBeenCalled();
+    expect(onSetDescription).not.toHaveBeenCalled();
+  });
+
+  it("Cancel discards edits", async () => {
+    const onRename = vi.fn();
+    renderProjectView({ project: project({ name: "Groceries" }), onRename });
+
+    openProjectMenuAndClick("Edit");
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText("Project name"), { target: { value: "Renamed" } });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(onRename).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getByText("Groceries")).toBeInTheDocument();
+  });
+
+  // A reopen after an edited-then-cancelled session must show the
+  // Project's real name again, not whatever was typed and abandoned last
+  // time — the dialog remounts fresh on every open (this file's own
+  // `key={editing ? "open" : "closed"}` on `ProjectEditDialog`).
+  it("reopening after Cancel shows the Project's real name again, not the discarded edit", async () => {
+    renderProjectView({ project: project({ name: "Groceries" }) });
+
+    openProjectMenuAndClick("Edit");
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText("Project name"), { target: { value: "Discarded" } });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    openProjectMenuAndClick("Edit");
+
+    await waitFor(() => expect(screen.getByLabelText("Project name")).toHaveValue("Groceries"));
+  });
+});
+
+describe("ProjectView — delete (STR-01, unchanged wording)", () => {
   // Verbatim (docs/reference/todoist/quick-add.md § "Destructive
   // confirmation wording"): "Delete project? The <name> project and all
   // its tasks will be permanently deleted. This action cannot be undone."
@@ -146,66 +291,204 @@ describe("ProjectView — colour and delete (issue #229)", () => {
   });
 });
 
-describe("ProjectView — Section delete", () => {
-  // The confirmation names the count and says it cannot be undone (issue
-  // #171's own acceptance criterion, and the divergence 171-brief.md
-  // records from Todoist's own gentler dialog): the reader sees the real
-  // number before confirming, not a generic warning.
-  it("names the true destruction count, awaited fresh before the dialog opens", async () => {
-    const countSectionDestruction = vi.fn(async () => 7);
-    renderProjectView({ sections: [section()], countSectionDestruction });
+describe("ProjectView — Section options menu (STR-07)", () => {
+  it("carries Edit, Move to…, Archive and Delete, in Todoist's own DOM order minus Duplicate/Copy link to section", () => {
+    renderProjectView({ sections: [section()] });
 
-    fireEvent.click(screen.getByRole("button", { name: 'Delete Section "Errands"' }));
+    openSectionMenu(0);
 
-    await waitFor(() => expect(screen.getByRole("alertdialog")).toBeInTheDocument());
-    expect(countSectionDestruction).toHaveBeenCalledWith("s1");
-    expect(screen.getByText(/destroys 7 Tasks/)).toBeInTheDocument();
-    expect(screen.getByText(/cannot be undone/)).toBeInTheDocument();
+    const items = screen.getAllByRole("menuitem").map((item) => item.textContent);
+    expect(items).toEqual(["Edit", "Move to…", "Archive", "Delete"]);
   });
 
-  it('uses the singular "Task" for a count of exactly one', async () => {
-    renderProjectView({ sections: [section()], countSectionDestruction: vi.fn(async () => 1) });
+  it("shows 'Unarchive' instead of 'Archive' for an already-archived Section", () => {
+    renderProjectView({ sections: [section({ archived: true })] });
 
-    fireEvent.click(screen.getByRole("button", { name: 'Delete Section "Errands"' }));
+    openSectionMenu(0);
 
-    await waitFor(() => expect(screen.getByText(/destroys 1 Task\b/)).toBeInTheDocument());
+    expect(screen.getByRole("menuitem", { name: "Unarchive" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Archive" })).not.toBeInTheDocument();
   });
 
-  it("only calls onDeleteSection after the confirmation, not on the request alone", async () => {
-    const onDeleteSection = vi.fn();
-    renderProjectView({ sections: [section()], onDeleteSection });
+  it("the old always-visible inline buttons are gone", () => {
+    renderProjectView({ sections: [section(), section({ id: "s2", name: "Second" })] });
 
-    fireEvent.click(screen.getByRole("button", { name: 'Delete Section "Errands"' }));
-    await waitFor(() => expect(screen.getByRole("alertdialog")).toBeInTheDocument());
-    expect(onDeleteSection).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole("button", { name: "Delete Section" }));
-
-    expect(onDeleteSection).toHaveBeenCalledWith("s1");
+    expect(screen.queryByRole("button", { name: /Move ".*" earlier/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Move ".*" later/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Archive Section/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Delete Section/ })).not.toBeInTheDocument();
   });
 
-  it("cancelling leaves the Section untouched", async () => {
-    const onDeleteSection = vi.fn();
-    renderProjectView({ sections: [section()], onDeleteSection });
+  describe("Edit", () => {
+    it("shows the Section's plain name until Edit is chosen, with no inline field visible", () => {
+      renderProjectView({ sections: [section({ name: "Errands" })] });
 
-    fireEvent.click(screen.getByRole("button", { name: 'Delete Section "Errands"' }));
-    await waitFor(() => expect(screen.getByRole("alertdialog")).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      expect(screen.getByText("Errands")).toBeInTheDocument();
+      expect(screen.queryByLabelText("Section name")).not.toBeInTheDocument();
+    });
 
-    expect(onDeleteSection).not.toHaveBeenCalled();
+    it("reveals a prefilled inline field, replacing the plain name", () => {
+      renderProjectView({ sections: [section({ name: "Errands" })] });
+
+      openSectionMenuAndClick(0, "Edit");
+
+      expect(screen.getByLabelText("Section name")).toHaveValue("Errands");
+      expect(screen.queryByText("Errands")).not.toBeInTheDocument();
+    });
+
+    it("commits the rename on blur, exactly as the prior always-visible field did", () => {
+      const onRenameSection = vi.fn();
+      renderProjectView({ sections: [section({ name: "Errands" })], onRenameSection });
+
+      openSectionMenuAndClick(0, "Edit");
+      const field = screen.getByLabelText("Section name");
+      fireEvent.change(field, { target: { value: "Chores" } });
+      fireEvent.blur(field);
+
+      expect(onRenameSection).toHaveBeenCalledWith("s1", "Chores");
+      // The field closes back to plain text once committed.
+      expect(screen.queryByLabelText("Section name")).not.toBeInTheDocument();
+    });
+
+    // Enter's own handler calls `.blur()` on the field itself — a genuine
+    // blur event only fires if the field is really focused first (jsdom's
+    // own rule, not a test artifact), so this waits for the real focus
+    // Edit's own hand-off lands (this file's own
+    // `focusSectionInputAfterCloseRef`/`onCloseAutoFocus` pair, the
+    // identical issue #255 shape task-schedule-popover.test.tsx's "Custom…"
+    // test already waits on) before firing the key.
+    it("Enter commits the same way blur does", async () => {
+      const onRenameSection = vi.fn();
+      renderProjectView({ sections: [section({ name: "Errands" })], onRenameSection });
+
+      openSectionMenuAndClick(0, "Edit");
+      const field = screen.getByLabelText("Section name");
+      await vi.waitFor(() => expect(field).toHaveFocus());
+      fireEvent.change(field, { target: { value: "Chores" } });
+      fireEvent.keyDown(field, { key: "Enter" });
+
+      expect(onRenameSection).toHaveBeenCalledWith("s1", "Chores");
+    });
   });
 
-  // Archive is the adjacent, non-destructive action (issue #171's own
-  // brief: "make the difference in blast radius visible") — it never
-  // opens the confirmation at all, unlike Delete.
-  it("archiving a Section never opens the delete confirmation", () => {
-    const onArchiveSection = vi.fn();
-    renderProjectView({ sections: [section()], onArchiveSection });
+  describe("Move to… (reorders within the Project — meologue has no cross-Project Section move)", () => {
+    it("offers Move earlier and Move later, keyboard-reachable through the menu", () => {
+      renderProjectView({
+        sections: [
+          section({ id: "s1", name: "First", orderKey: "A" }),
+          section({ id: "s2", name: "Second", orderKey: "B" }),
+        ],
+      });
 
-    fireEvent.click(screen.getByRole("button", { name: 'Archive Section "Errands"' }));
+      openSectionMenu(0);
+      fireEvent.click(screen.getByRole("menuitem", { name: "Move to…" }));
 
-    expect(onArchiveSection).toHaveBeenCalledWith("s1");
-    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+      expect(screen.getByRole("menuitem", { name: "Move earlier" })).toBeInTheDocument();
+      expect(screen.getByRole("menuitem", { name: "Move later" })).toBeInTheDocument();
+    });
+
+    it("Move earlier/Move later call the same onReorderSection the old buttons did", () => {
+      const onReorderSection = vi.fn();
+      renderProjectView({
+        sections: [
+          section({ id: "s1", name: "First", orderKey: "A" }),
+          section({ id: "s2", name: "Second", orderKey: "B" }),
+        ],
+        onReorderSection,
+      });
+
+      openSectionMenu(1);
+      fireEvent.click(screen.getByRole("menuitem", { name: "Move to…" }));
+      fireEvent.click(screen.getByRole("menuitem", { name: "Move earlier" }));
+
+      expect(onReorderSection).toHaveBeenCalledWith("s2", expect.any(String));
+    });
+
+    it("disables Move earlier for the first Section and Move later for the last, with one Section disabling both", () => {
+      renderProjectView({ sections: [section({ id: "s1", name: "Only" })] });
+
+      openSectionMenu(0);
+      fireEvent.click(screen.getByRole("menuitem", { name: "Move to…" }));
+
+      expect(screen.getByRole("menuitem", { name: "Move earlier" })).toHaveAttribute(
+        "data-disabled",
+      );
+      expect(screen.getByRole("menuitem", { name: "Move later" })).toHaveAttribute("data-disabled");
+    });
+  });
+
+  describe("Archive and Delete", () => {
+    // The confirmation names the count and says it cannot be undone (issue
+    // #171's own acceptance criterion, and the divergence 171-brief.md
+    // records from Todoist's own gentler dialog): the reader sees the real
+    // number before confirming, not a generic warning. Wording itself is
+    // untouched by STR-07 (this file's own header comment) — Todoist's own
+    // was never captured.
+    it("Delete names the true destruction count, awaited fresh before the dialog opens", async () => {
+      const countSectionDestruction = vi.fn(async () => 7);
+      renderProjectView({ sections: [section()], countSectionDestruction });
+
+      openSectionMenuAndClick(0, "Delete");
+
+      await waitFor(() => expect(screen.getByRole("alertdialog")).toBeInTheDocument());
+      expect(countSectionDestruction).toHaveBeenCalledWith("s1");
+      expect(screen.getByText(/destroys 7 Tasks/)).toBeInTheDocument();
+      expect(screen.getByText(/cannot be undone/)).toBeInTheDocument();
+    });
+
+    it('uses the singular "Task" for a count of exactly one', async () => {
+      renderProjectView({ sections: [section()], countSectionDestruction: vi.fn(async () => 1) });
+
+      openSectionMenuAndClick(0, "Delete");
+
+      await waitFor(() => expect(screen.getByText(/destroys 1 Task\b/)).toBeInTheDocument());
+    });
+
+    it("only calls onDeleteSection after the confirmation, not on the menu selection alone", async () => {
+      const onDeleteSection = vi.fn();
+      renderProjectView({ sections: [section()], onDeleteSection });
+
+      openSectionMenuAndClick(0, "Delete");
+      await waitFor(() => expect(screen.getByRole("alertdialog")).toBeInTheDocument());
+      expect(onDeleteSection).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByRole("button", { name: "Delete Section" }));
+
+      expect(onDeleteSection).toHaveBeenCalledWith("s1");
+    });
+
+    it("cancelling leaves the Section untouched", async () => {
+      const onDeleteSection = vi.fn();
+      renderProjectView({ sections: [section()], onDeleteSection });
+
+      openSectionMenuAndClick(0, "Delete");
+      await waitFor(() => expect(screen.getByRole("alertdialog")).toBeInTheDocument());
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+      expect(onDeleteSection).not.toHaveBeenCalled();
+    });
+
+    // Archive is the adjacent, non-destructive action (issue #171's own
+    // brief: "make the difference in blast radius visible") — it never
+    // opens the confirmation at all, unlike Delete.
+    it("Archive never opens the delete confirmation", () => {
+      const onArchiveSection = vi.fn();
+      renderProjectView({ sections: [section()], onArchiveSection });
+
+      openSectionMenuAndClick(0, "Archive");
+
+      expect(onArchiveSection).toHaveBeenCalledWith("s1");
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    });
+
+    it("Unarchive calls onUnarchiveSection", () => {
+      const onUnarchiveSection = vi.fn();
+      renderProjectView({ sections: [section({ archived: true })], onUnarchiveSection });
+
+      openSectionMenuAndClick(0, "Unarchive");
+
+      expect(onUnarchiveSection).toHaveBeenCalledWith("s1");
+    });
   });
 });
 
@@ -234,5 +517,59 @@ describe("ProjectView — Sections cap", () => {
     await waitFor(() =>
       expect(screen.getByRole("alert")).toHaveTextContent("a Project may hold at most 20 Sections"),
     );
+  });
+});
+
+// ROW-14 (parity-ledger.md), the user's 2026-09-13 decision to match
+// Todoist: a Project's own view had NO completed-Task display at all
+// before this ticket (`todo-page.tsx`'s own pre-existing comment named
+// that gap explicitly) — `completedTasks`/`onUncomplete` are this file's
+// own new door onto `TaskList`'s identical props (that component's own
+// doc comment covers the interleaving itself; this only proves the
+// pass-through).
+describe("ProjectView — completed Tasks interleave inline (ROW-14)", () => {
+  it("renders a completed Task inline, even with no active Tasks in the Project", () => {
+    renderProjectView({
+      tasks: [],
+      completedTasks: [
+        task({ id: "done", content: "done already", completedAt: "2026-01-01T00:00:00.000Z" }),
+      ],
+    });
+
+    expect(screen.getByRole("checkbox", { name: "Mark task as incomplete" })).toBeInTheDocument();
+    expect(screen.getByText("done already")).toBeInTheDocument();
+    // A scope holding only completed rows must not read as empty.
+    expect(screen.queryByText(/Nothing in this Project yet/)).not.toBeInTheDocument();
+  });
+
+  it("un-completing calls the onUncomplete prop with the Task", () => {
+    const onUncomplete = vi.fn();
+    const completed = task({
+      id: "done",
+      content: "done already",
+      completedAt: "2026-01-01T00:00:00.000Z",
+    });
+    renderProjectView({ tasks: [], completedTasks: [completed], onUncomplete });
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Mark task as incomplete" }));
+
+    expect(onUncomplete).toHaveBeenCalledWith(completed);
+  });
+
+  it("only interleaves completed Tasks that belong to this Project", () => {
+    renderProjectView({
+      tasks: [],
+      completedTasks: [
+        task({
+          id: "elsewhere",
+          content: "in another Project",
+          projectId: "p2",
+          completedAt: "2026-01-01T00:00:00.000Z",
+        }),
+      ],
+    });
+
+    expect(screen.queryByText("in another Project")).not.toBeInTheDocument();
+    expect(screen.getByText(/Nothing in this Project yet/)).toBeInTheDocument();
   });
 });

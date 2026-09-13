@@ -119,6 +119,14 @@ export interface TaskRowProps {
    */
   onComplete: () => void;
   /**
+   * Un-completes this Task (ROW-14, parity-ledger.md) — the door back for
+   * a completed Task rendered inline through this same row, forwarded
+   * straight to `TaskRowContent`'s identical prop (that file's own doc
+   * comment). Optional: Today and Upcoming never hand this row a
+   * completed Task, so they never need to pass it.
+   */
+  onUncomplete?: () => void;
+  /**
    * Ends a recurring Task's series (TaskStore.completeForever's own doc
    * comment — "Complete and archive recurring task", the domain decision
    * this whole programme has to get right: not "complete this
@@ -246,18 +254,27 @@ export interface TaskRowProps {
 }
 
 /**
- * One active Task, in Inbox or in Today (issue #169 — both views render
- * this same row rather than each growing its own). This file owns the
- * `<li>` — identity (`data-task-id`), the full command set's own
- * `onContextMenu`/`.`-key handler, and this row's own sub-tasks as
+ * One Task's own row, active or completed, in Inbox, a Project's own
+ * view, or Today (issue #169 — every one of those renders this same row
+ * rather than each growing its own; ROW-14, parity-ledger.md, extended
+ * that to a completed Task too — Todoist's own completed row is "the same
+ * row component... distinguished only by an added `--completed` class,"
+ * not a second, reduced one). This file owns the `<li>` — identity
+ * (`data-task-id`, and `data-completed-task` once `task.completedAt` is
+ * set — see that attribute's own comment below), the full command set's
+ * own `onContextMenu`/`.`-key handler, and this row's own sub-tasks as
  * `children` — and the drag/keyboard-reorder wiring TaskTree hands it
  * unbound (`onHandlePointerDown` et al., `onMoveUp`/`onIndent` et al.,
- * TaskRowProps' own doc comments on each). Everything a reader actually
- * SEES — the checkbox, the title, the metadata line, the hover actions —
- * is issue #224's `TaskRowContent` (task-row-content.tsx), one call
- * below: that split exists because this file had grown to 41KB before
- * it, and nearly all of that weight was the drag/nesting/keyboard
- * machinery described above, not anything about what a row looks like.
+ * TaskRowProps' own doc comments on each) — omitted entirely for a
+ * completed row, task-tree.tsx's own call site, so it renders with no
+ * drag handle at all rather than an inert one (the same "no affordance
+ * for a gesture that can't happen here" rule Today's own rows already
+ * follow). Everything a reader actually SEES — the checkbox, the title,
+ * the metadata line, the hover actions — is issue #224's `TaskRowContent`
+ * (task-row-content.tsx), one call below: that split exists because this
+ * file had grown to 41KB before it, and nearly all of that weight was the
+ * drag/nesting/keyboard machinery described above, not anything about
+ * what a row looks like.
  *
  * **The `<li>` itself carries only identity and the full command set's own
  * handlers; `TaskRowContent`'s own root `<div data-task-row-box>` carries
@@ -300,6 +317,7 @@ export function TaskRow({
   subtaskCount = 0,
   onComplete,
   onCompleteForever,
+  onUncomplete,
   onRequestDelete,
   onOpenSchedule,
   isDropTarget = false,
@@ -384,6 +402,15 @@ export function TaskRow({
   return (
     <li
       data-task-id={task.id}
+      // ROW-14 (parity-ledger.md): a completed Task renders through this
+      // very row, inline, at its own `orderKey` position — this marker
+      // (derived straight from `task.completedAt`, the same field
+      // `TaskRowContent`'s own `isCompleted` reads, rather than a second
+      // prop this file would have to keep in sync with it) is what lets
+      // `task-tree.tsx`'s `measureRows` exclude a completed row from drag
+      // and keyboard-reorder geometry — that file's own header comment on
+      // why a completed row is never a legal drop/nest target.
+      data-completed-task={task.completedAt !== null ? "true" : undefined}
       // The full command set, reached from anywhere on the row — issue
       // #178's own reference behaviour ("the full command set lives
       // behind right-click and the `.` key, not on the row"). Right-click
@@ -430,6 +457,7 @@ export function TaskRow({
         subtaskCount={subtaskCount}
         onComplete={onComplete}
         onCompleteForever={onCompleteForever}
+        onUncomplete={onUncomplete}
         onRequestDelete={onRequestDelete}
         onOpenSchedule={onOpenSchedule}
         isDropTarget={isDropTarget}
