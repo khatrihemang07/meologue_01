@@ -523,6 +523,29 @@ describe("TaskSchedulePopover", () => {
       expect(screen.getByTestId("scheduler-view")).toBeInTheDocument();
       expect(screen.getByPlaceholderText("Type a date")).toBeInTheDocument();
     });
+
+    // SCHED-11: pass2-2026-09-11.md §7 — "One Escape closes the Repeat/
+    // Time layer and the scheduler beneath it simultaneously," unlike the
+    // pre-follow-up shape where Escape closed only this dialog. Escape
+    // equals Cancel (no commit) plus closing the scheduler too — Save and
+    // Cancel themselves are unchanged, still returning to the scheduler
+    // (the tests above this one).
+    it("Escape closes both the Time dialog and the scheduler, without committing a time (SCHED-11's own follow-up)", () => {
+      const { onSetTime } = renderPopover({ dateDay: "2026-09-05", dateTime: "09:00" });
+      open();
+      const dialog = openTimeDialog();
+
+      fireEvent.change(within(dialog).getByLabelText("Start time"), {
+        target: { value: "23:00" },
+      });
+      fireEvent.keyDown(dialog, { key: "Escape" });
+
+      expect(onSetTime).not.toHaveBeenCalled();
+      expect(
+        screen.queryByRole("dialog", { name: "Select start and end time" }),
+      ).not.toBeInTheDocument();
+      expect(screen.queryByTestId("scheduler-view")).not.toBeInTheDocument();
+    });
   });
 
   describe("Repeat menu (SCHED-14, issue #227)", () => {
@@ -690,6 +713,23 @@ describe("TaskSchedulePopover", () => {
 
       expect(screen.getByTestId("scheduler-date-preview")).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Repeat" })).toBeInTheDocument();
+    });
+
+    // SCHED-11's own follow-up — pass2-2026-09-11.md §7 records the same
+    // simultaneous close for "the Repeat/Time layer," not just the Time
+    // dialog: Escape here closes the Repeat menu (Radix's own default)
+    // and the scheduler beneath it together, committing nothing.
+    it("Escape closes both the Repeat menu and the scheduler, per the same pass2 §7 record as the Time dialog", () => {
+      const { onPickRecurrence, onPickDay } = renderPopover();
+      open();
+      const menu = openRepeatMenu();
+
+      fireEvent.keyDown(menu, { key: "Escape" });
+
+      expect(onPickRecurrence).not.toHaveBeenCalled();
+      expect(onPickDay).not.toHaveBeenCalled();
+      expect(screen.queryByTestId("repeat-menu")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("scheduler-view")).not.toBeInTheDocument();
     });
   });
 

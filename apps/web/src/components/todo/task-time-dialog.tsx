@@ -60,6 +60,19 @@
  * opening a Radix popover. That guard lives on the caller's
  * `PopoverContent`, not here — this file only needs to exist as an
  * ordinary Radix `Dialog`, not know anything about its host.
+ *
+ * **SCHED-11's own follow-up (pass2-2026-09-11.md §7):** "One `Escape`
+ * closes the Repeat/Time layer and the scheduler beneath it
+ * simultaneously" — captured live, not this file's own guess. Radix's
+ * default `Escape` handling already closes this dialog alone (the
+ * `onOpenChange(false)` every dismiss path here already goes through);
+ * `onEscapeKeyDown` below additionally calls `onEscape`, the caller's own
+ * hook for closing the scheduler popover too. Deliberately not
+ * `event.preventDefault()`-ed: this dialog is still meant to close itself
+ * on `Escape` exactly as before, only now with the popover closing
+ * alongside it, and no commit either way — `Escape` reaches this handler
+ * instead of Save, so `onSave` never fires and the draft is discarded the
+ * same as Cancel.
  */
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { useEffect, useId, useState } from "react";
@@ -77,9 +90,17 @@ export interface TaskTimeDialogProps {
   time: string | null;
   /** Fired only on Save, with the drafted value (or `null` once "Add a time" is unchecked) — the exact shape `task-schedule-popover.tsx`'s own `onSetTime` prop already expects, passed straight through by that caller. */
   onSave: (time: string | null) => void;
+  /** SCHED-11's own follow-up (this file's own header comment) — fired on `Escape` alongside this dialog's own default close, so the caller can close the scheduler popover it opened from too. Never fired by Save/Cancel/an outside click: those keep returning to the scheduler, as before. */
+  onEscape: () => void;
 }
 
-export function TaskTimeDialog({ open, onOpenChange, time, onSave }: TaskTimeDialogProps) {
+export function TaskTimeDialog({
+  open,
+  onOpenChange,
+  time,
+  onSave,
+  onEscape,
+}: TaskTimeDialogProps) {
   const [hasTime, setHasTime] = useState(time !== null);
   const [value, setValue] = useState(time ?? DEFAULT_TIME);
   const inputId = useId();
@@ -102,6 +123,11 @@ export function TaskTimeDialog({ open, onOpenChange, time, onSave }: TaskTimeDia
       <DialogPrimitive.Portal>
         <DialogPrimitive.Content
           data-testid="time-dialog"
+          // See this file's own header comment (SCHED-11's follow-up,
+          // pass2-2026-09-11.md §7) — not preventDefault()-ed, so Radix's
+          // own default `Escape` handling (close this dialog) still runs
+          // alongside it.
+          onEscapeKeyDown={onEscape}
           className="-translate-x-1/2 -translate-y-1/2 fixed top-1/2 left-1/2 z-[70] flex w-[306px] flex-col gap-3 p-3 text-sm outline-hidden"
           style={{
             minHeight: "216px",

@@ -718,6 +718,15 @@ export function TaskSchedulePopover({
                     event.preventDefault();
                     typedInputRef.current?.focus();
                   }}
+                  // SCHED-11's own follow-up (pass2-2026-09-11.md §7):
+                  // "One Escape closes the Repeat/Time layer and the
+                  // scheduler beneath it simultaneously" — recorded for
+                  // both layers this popover opens, not just
+                  // `TaskTimeDialog` (that file's own header comment).
+                  // Radix's own default `Escape` handling still closes
+                  // this menu alone; not preventDefault()-ed, so that
+                  // keeps happening alongside `setOpen(false)` here.
+                  onEscapeKeyDown={() => setOpen(false)}
                 >
                   {repeatOptions.map((option) => (
                     <DropdownMenu.Item
@@ -756,6 +765,11 @@ export function TaskSchedulePopover({
         onOpenChange={setTimeDialogOpen}
         time={dateTime}
         onSave={onSetTime}
+        // SCHED-11's own follow-up — see task-time-dialog.tsx's own
+        // header comment: fired on Escape only, alongside that dialog's
+        // own default close, so this popover closes with it rather than
+        // being left open behind a now-closed Time dialog.
+        onEscape={() => setOpen(false)}
       />
     </Popover>
   );
