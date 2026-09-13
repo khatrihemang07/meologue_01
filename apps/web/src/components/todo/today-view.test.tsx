@@ -163,7 +163,10 @@ describe("TodayView", () => {
       onComplete,
     });
 
-    fireEvent.click(screen.getByRole("checkbox", { name: "call mum" }));
+    // ROW-03 (parity-ledger.md): the checkbox's accessible name is now
+    // Todoist's own fixed wording, not the Task's content — see
+    // task-row.test.tsx's own header comment on the same change.
+    fireEvent.click(screen.getByRole("checkbox", { name: "Mark task as complete" }));
 
     expect(onComplete).toHaveBeenCalledWith("a", "call mum", null);
   });
@@ -179,7 +182,9 @@ describe("TodayView", () => {
       onCompleteForever,
     });
 
-    fireEvent.click(screen.getByRole("checkbox", { name: "pay rent" }), { shiftKey: true });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Mark task as complete" }), {
+      shiftKey: true,
+    });
 
     expect(onCompleteForever).toHaveBeenCalledWith("a", "pay rent");
     expect(onComplete).not.toHaveBeenCalled();

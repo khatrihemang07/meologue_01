@@ -36,6 +36,7 @@ import {
 } from "lucide-react";
 import type { MouseEvent, PointerEvent } from "react";
 import { Suspense, useRef, useState } from "react";
+import { Link } from "react-router";
 import { inlineProse } from "@/components/inline-prose";
 import { LazyTaskTitleEditor } from "@/components/todo/lazy-task-title-editor";
 import { TaskCommandMenu } from "@/components/todo/task-command-menu";
@@ -46,6 +47,7 @@ import { formatDay, formatTaskDate } from "@/lib/format-task-date";
 import { localDayKey } from "@/lib/local-day-key";
 import { projectNameFor } from "@/lib/project-name";
 import { useSettingsStore } from "@/lib/settings";
+import { taskDetailPath } from "@/lib/task-detail-route";
 import { priorityColour } from "@/lib/task-priority-colors";
 import { quickAddRecognitionPlugin } from "@/lib/todo-quick-add-recognition";
 import { cn } from "@/lib/utils";
@@ -269,10 +271,15 @@ export function TaskRowContent({
   // issue #224 with Labels/Project/sub-tasks alongside the pre-existing
   // Date/Deadline/Priority/recurrence/comment checks, so a plain Task
   // with none of these still renders no empty, gap-holding line.
+  // ROW-10(a) (parity-ledger.md): Todoist shows priority ONLY through the
+  // checkbox ring — `task-info-tags` reads empty even for a P1 Task
+  // (`live-audit-dom/flow2-ROW-09-10-todoist.json`) — so `task.priority`
+  // no longer counts toward whether this row has a metadata line. A
+  // priority-only Task is now a title-only row (43px, ROW-01), exactly
+  // Todoist's own P1 fixture (`flow2-ROW-01-02-todoist.json`).
   const hasMetadata =
     (dateDisplay !== null && !suppressDateBadge) ||
     task.deadline !== null ||
-    task.priority !== 1 ||
     isRecurring ||
     resolvedLabels.length > 0 ||
     projectName !== null ||
@@ -411,15 +418,25 @@ export function TaskRowContent({
         </button>
       )}
       {/*
-        ROW-03: a 24×24 hit box around an 18×18 visible ring — a `<label>`,
-        not a plain wrapping `<span>`, is what makes the OUTER box
-        clickable at all: a native `<label>` forwards a click anywhere in
-        its own box to the `<input>` it wraps, which is what turns "18px
-        input centred in a 24px box" into "24px hit box" rather than
-        merely "24px of padding around an 18px click target." The ring
-        itself is still the box-shadow `priorityColour` already produced
-        pre-#224 (issue #223's own token work) — only the two sizes
-        changed to match the measured pair.
+        ROW-03: a 24×24 hit box around an 18×18 visible ring. The user's
+        2026-09-13 decision was to match Todoist's own element/role/name
+        exactly here: `<button class="task_checkbox" role="checkbox"
+        aria-checked="…" aria-label="Mark task as complete">`
+        (`live-audit-dom/flow11-R2-ROW-03-PRI-05-06-both.json`'s own
+        structural note; the wording itself, including the completed-state
+        "Mark task as incomplete", is `lifecycle.md:70`). This used to be a
+        `<label><input type="checkbox" readOnly aria-label={task.content}>`
+        — a different element, role and accessible name than Todoist's own,
+        the one structural divergence ROW-03 still carried after issue #250
+        fixed the ring's width axis.
+        A `<button>`, not a `<label>` wrapping an `<input>`, is now what
+        supplies the 24×24 hit box directly — a button's own click target
+        IS its border-box, so there is no wrapper needed to turn "an 18px
+        control" into "a 24px hit box" the way `<label>` forwarding a click
+        to its `<input>` used to. The 18×18 ring itself moves to a plain
+        `aria-hidden` inner `<span>`, sized independently of the button's
+        own 24×24 box, so the ring's own dimensions and priority colour
+        (below) are untouched by the element swap.
 
         The ring's own WIDTH (issue #250, ROW-03's own "dimensionally
         incomplete" caveat) is a second axis pass2-2026-09-11.md §2
@@ -432,42 +449,49 @@ export function TaskRowContent({
         `uiPriorityOf(...) === 1`, so only P1 got the 2px ring and P2/P3
         fell through to the 1px branch alongside P4 — testing "not the
         default level" (`!== 4`) instead is what covers all three.
+
+        **CMT-05 trap, checked rather than assumed:** clicking this button
+        leaves focus ON it, exactly as the old `<input>` did — a `<button>`
+        is not one of `isTypingTarget`'s `INPUT`/`TEXTAREA`/
+        `isContentEditable` cases, so it was never at risk of re-tripping
+        the CMT-05 bug (`todo-keymap.ts`'s own denylist existed for the
+        `<input>` case specifically), and `z`/`Ctrl+Z` undo after a click
+        was re-verified against this exact button.
       */}
-      <label className="flex size-6 shrink-0 cursor-pointer items-center justify-center">
-        <input
-          type="checkbox"
-          checked={false}
-          readOnly
-          onClick={(event: MouseEvent<HTMLInputElement>) => {
-            // Shift+Click on a recurring Task's checkbox is Todoist's own
-            // documented "Complete and archive recurring task" — ends the
-            // series, not "complete this occurrence" (`onCompleteForever`'s
-            // own doc comment, task-row.tsx). Meaningless on a
-            // non-recurring Task, so the modifier is simply ignored there.
-            if (isRecurring && event.shiftKey) {
-              onCompleteForever();
-            } else {
-              onComplete();
-            }
-          }}
-          aria-label={task.content}
+      {/* biome-ignore lint/a11y/useSemanticElements: deliberately NOT a native `<input type="checkbox">` — ROW-03's own header comment above explains why (the 24×24 hit box has to be the button's own border-box, with the 18×18 ring on a separate inner span so the two sizes stay independent, which a native checkbox's own fixed widget can't do); this is also Todoist's own exact element (`<button class="task_checkbox" role="checkbox">`), not a divergence to fix. */}
+      <button
+        type="button"
+        role="checkbox"
+        aria-checked={isCompleted}
+        // Todoist's own exact wording (`lifecycle.md:70`,
+        // `keyboard.md:244/278`) — this row only ever renders an active
+        // Task (a completed one leaves the list, `CompletedTasks`'s own
+        // separate row), so `isCompleted` reads false here today; kept
+        // rather than a bare literal so this stays correct if this
+        // component is ever handed a completed Task directly.
+        aria-label={isCompleted ? "Mark task as incomplete" : "Mark task as complete"}
+        onClick={(event: MouseEvent<HTMLButtonElement>) => {
+          // Shift+Click on a recurring Task's checkbox is Todoist's own
+          // documented "Complete and archive recurring task" — ends the
+          // series, not "complete this occurrence" (`onCompleteForever`'s
+          // own doc comment, task-row.tsx). Meaningless on a
+          // non-recurring Task, so the modifier is simply ignored there.
+          if (isRecurring && event.shiftKey) {
+            onCompleteForever();
+          } else {
+            onComplete();
+          }
+        }}
+        className="flex size-6 shrink-0 cursor-pointer items-center justify-center"
+      >
+        <span
+          aria-hidden="true"
           style={{
             boxShadow: `0 0 0 ${uiPriorityOf(task.priority) === 4 ? "1px" : "2px"} ${priorityColour(uiPriorityOf(task.priority))}`,
           }}
-          // `appearance-none` is what makes `rounded-full` mean anything at
-          // all here (ROW-03). A native checkbox paints the platform widget
-          // and ignores border-radius entirely, so this rendered as a square
-          // against Todoist's circle while the computed style still
-          // truthfully reported `border-radius: 9999px` — measuring the
-          // property agreed; only the screenshot disagreed.
-          //
-          // Nothing is lost by dropping the native paint: this control never
-          // renders ticked. A completed Task leaves the list, which is why it
-          // is `checked={false} readOnly` above and why the priority ring,
-          // not a checkmark, is the whole of what it draws.
-          className="block size-[18px] shrink-0 appearance-none rounded-full accent-current"
+          className="block size-[18px] shrink-0 rounded-full"
         />
-      </label>
+      </button>
       <span className="flex min-w-0 flex-1 flex-col">
         {editingTitle ? (
           // Todoist's own display/edit split (row-and-detail.md §2,
@@ -571,7 +595,14 @@ export function TaskRowContent({
               </span>
             )}
             {task.deadline !== null && <span>Due {formatDay(task.deadline)}</span>}
-            {task.priority !== 1 && <span>P{uiPriorityOf(task.priority)}</span>}
+            {/* ROW-10(a): Todoist shows NO priority text badge on a row —
+                `task-info-tags` is empty even for a P1 Task
+                (`live-audit-dom/flow2-ROW-09-10-todoist.json`), priority
+                shows only through the checkbox ring (ROW-03/PRI-05/PRI-06).
+                This used to render `P1`/`P2`/`P3` here for every non-default
+                priority; removed rather than kept "for information," since
+                the reference itself never shows it and `hasMetadata` above
+                no longer counts priority either. */}
             {resolvedLabels.map((label) => (
               <LabelBadge key={label.id} label={label} />
             ))}
@@ -591,10 +622,37 @@ export function TaskRowContent({
               </span>
             )}
             {commentCount > 0 && (
-              <span className="flex items-center gap-0.5">
+              // ROW-08 (parity-ledger.md): Todoist's own badge is a real
+              // `<a aria-label="N comment(s)" href="…?intent=reply">`
+              // (`row-and-detail.md:120`, singular confirmed live —
+              // `flow10-ROW-09-both.json`'s own `"1 comment"` reading —
+              // plural `"2 comments"` from `flow2-ROW-06-07-08-todoist.
+              // json`) — this used to be a plain, non-interactive `<span>`.
+              // `taskDetailPath` (task-detail-route.ts) is the one place
+              // this app already builds a Task's own detail address; no
+              // `?intent=reply` equivalent is added here because
+              // `task-detail-view.tsx` has no query-param door onto
+              // focusing its comment composer to answer that intent (its
+              // `CommentComposer` is a plain always-visible field with no
+              // read of `useSearchParams` at all) — building that focus
+              // behaviour is a separate piece of work this row's own fix
+              // doesn't take on, so the link's destination is the bare
+              // detail path, same place the title/Comment hover action
+              // already open.
+              // `stopPropagation` keeps this link's own navigation from
+              // also bubbling into whatever ancestor click handling this
+              // row picks up in the future — the same defensive posture
+              // the checkbox's Shift+Click branch above already takes for
+              // a different reason.
+              <Link
+                to={taskDetailPath(task)}
+                aria-label={`${commentCount} comment${commentCount === 1 ? "" : "s"}`}
+                onClick={(event) => event.stopPropagation()}
+                className="flex items-center gap-0.5 hover:underline"
+              >
                 <MessageSquare aria-hidden="true" className="size-3" />
-                {commentCount}
-              </span>
+                <span aria-hidden="true">{commentCount}</span>
+              </Link>
             )}
           </span>
         )}

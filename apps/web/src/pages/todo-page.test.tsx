@@ -603,7 +603,7 @@ describe("TodoPage", () => {
     );
 
     await waitFor(() => expect(screen.getByText("call mum")).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("checkbox", { name: "call mum" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Mark task as complete" }));
 
     expect(completeTask).toHaveBeenCalledWith("a");
     expect(toast.custom).toHaveBeenCalledWith(
@@ -649,7 +649,7 @@ describe("TodoPage", () => {
       );
 
       await waitFor(() => expect(screen.getByText("call mum")).toBeInTheDocument());
-      fireEvent.click(screen.getByRole("checkbox", { name: "call mum" }));
+      fireEvent.click(screen.getByRole("checkbox", { name: "Mark task as complete" }));
       expect(completeTask).toHaveBeenCalledWith("a");
 
       fireEvent.keyDown(document, { key: "z" });
@@ -665,7 +665,7 @@ describe("TodoPage", () => {
       );
 
       await waitFor(() => expect(screen.getByText("call mum")).toBeInTheDocument());
-      fireEvent.click(screen.getByRole("checkbox", { name: "call mum" }));
+      fireEvent.click(screen.getByRole("checkbox", { name: "Mark task as complete" }));
 
       fireEvent.keyDown(document, { key: "z", metaKey: true });
 
@@ -699,7 +699,7 @@ describe("TodoPage", () => {
       );
 
       await waitFor(() => expect(screen.getByText("call mum")).toBeInTheDocument());
-      fireEvent.click(screen.getByRole("checkbox", { name: "call mum" }));
+      fireEvent.click(screen.getByRole("checkbox", { name: "Mark task as complete" }));
       expect(completeTask).toHaveBeenCalledWith("a");
 
       const addField = screen.getByLabelText("Add task");
@@ -1085,7 +1085,7 @@ describe("TodoPage — Today", () => {
       "/todo/today",
     );
 
-    fireEvent.click(screen.getByRole("checkbox", { name: "call mum" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Mark task as complete" }));
 
     expect(completeTask).toHaveBeenCalledWith("a");
     // CMT-04: same `toast.custom()` path as Inbox's own test above —
@@ -1237,9 +1237,10 @@ describe("TodoPage — Projects", () => {
     );
 
     await waitFor(() => expect(screen.getByText("buy milk")).toBeInTheDocument());
-    // The identical row markup Inbox renders — a real checkbox naming the
-    // Task's own words, not a second, Project-specific list component.
-    expect(screen.getByRole("checkbox", { name: "buy milk" })).toBeInTheDocument();
+    // The identical row markup Inbox renders — a real checkbox with
+    // Todoist's own fixed wording (ROW-03), not a second, Project-specific
+    // list component.
+    expect(screen.getByRole("checkbox", { name: "Mark task as complete" })).toBeInTheDocument();
   });
 
   it("adding a Task from a Project's own view inherits that Project", async () => {

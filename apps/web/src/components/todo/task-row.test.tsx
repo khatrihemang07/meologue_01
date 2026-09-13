@@ -1,6 +1,7 @@
 import type { Label, Project, Task } from "@meologue/core";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
+import { MemoryRouter } from "react-router";
 import { describe, expect, it, vi } from "vitest";
 import { OPEN_COMMAND_MENU_EVENT, OPEN_SCHEDULE_EVENT } from "@/lib/todo-keymap";
 import { TaskRow } from "./task-row";
@@ -156,10 +157,15 @@ function renderRow(overrides: Partial<Parameters<typeof TaskRow>[0]> = {}) {
     onOutdent: vi.fn(),
     ...overrides,
   };
+  // ROW-08 (parity-ledger.md): the comment-count badge is a real
+  // react-router `<Link>` now, not a plain `<span>` — it needs a Router
+  // context to render at all, which this suite had no reason to supply
+  // before.
   render(
     <ul>
       <TaskRow {...props} />
     </ul>,
+    { wrapper: MemoryRouter },
   );
   return props;
 }
@@ -178,12 +184,32 @@ function rowBox(): HTMLElement {
   return box;
 }
 
+/**
+ * The checkbox's own aria-hidden inner `<span>` (ROW-03) — the 18×18
+ * visible ring, carrying the priority `box-shadow` — now that the
+ * checkbox itself is a `<button role="checkbox">` supplying only the
+ * 24×24 hit box around it.
+ */
+function ringSpan(): HTMLElement {
+  const span = screen.getByRole("checkbox").querySelector<HTMLElement>("span");
+  if (!span) throw new Error("expected the checkbox's own ring span");
+  return span;
+}
+
 describe("TaskRow", () => {
   it("renders the Task's content, with the checkbox unticked", () => {
     renderRow({ task: task({ content: "call mum" }) });
 
     expect(screen.getByText("call mum")).toBeInTheDocument();
-    expect(screen.getByRole("checkbox", { name: "call mum" })).not.toBeChecked();
+    // ROW-03 (parity-ledger.md), the user's 2026-09-13 decision: the
+    // checkbox's accessible name is now Todoist's own fixed wording
+    // ("Mark task as complete"/"Mark task as incomplete", `lifecycle.md:70`),
+    // not the Task's content — a row no longer names the checkbox after
+    // itself. This file renders exactly one row per test (`renderRow`
+    // above), so the name alone is still unambiguous here; a caller
+    // rendering more than one row has to find the row first and the
+    // checkbox within it instead (see todo-page.test.tsx/today-view.test.tsx).
+    expect(screen.getByRole("checkbox", { name: "Mark task as complete" })).not.toBeChecked();
   });
 
   it("ticking the checkbox calls onComplete", () => {
@@ -277,13 +303,17 @@ describe("TaskRow", () => {
   ])("thickens the checkbox ring to 2px at %s", (_uiLabel, storedPriority) => {
     renderRow({ task: task({ priority: storedPriority }) });
 
-    expect(screen.getByRole("checkbox").style.boxShadow).toContain("2px");
+    // ROW-03: the ring itself now lives on the checkbox `<button>`'s own
+    // aria-hidden inner `<span>` (the 18×18 visible ring), not on the
+    // accessible checkbox element directly — the button supplies the
+    // 24×24 hit box, which carries no box-shadow of its own.
+    expect(ringSpan().style.boxShadow).toContain("2px");
   });
 
   it("keeps the checkbox ring at 1px for P4 ('no priority'), the one default level", () => {
     renderRow({ task: task({ priority: 1 }) });
 
-    expect(screen.getByRole("checkbox").style.boxShadow).toContain("1px");
+    expect(ringSpan().style.boxShadow).toContain("1px");
   });
 
   it("shows the recurrence exactly as typed, not a paraphrase", () => {
@@ -619,7 +649,7 @@ describe("TaskRow", () => {
     expect(screen.queryByText(/^P[1-4]$/)).not.toBeInTheDocument();
   });
 
-  it("summarises an all-day date, a deadline and a non-default priority", () => {
+  it("summarises an all-day date and a deadline — a non-default priority renders no text badge (ROW-10)", () => {
     renderRow({
       task: task({
         content: "call mum",
@@ -631,7 +661,10 @@ describe("TaskRow", () => {
 
     expect(screen.getByText("3 Sep")).toBeInTheDocument();
     expect(screen.getByText("Due 10 Sep")).toBeInTheDocument();
-    expect(screen.getByText("P1")).toBeInTheDocument();
+    // ROW-10(a): Todoist's own `task-info-tags` is empty for a P1 Task —
+    // priority shows only through the checkbox ring (ROW-03/PRI-05/06),
+    // never a `P1`/`P2`/`P3` text badge on the row itself.
+    expect(screen.queryByText("P1")).not.toBeInTheDocument();
   });
 
   it("summarises a timed date with its time of day", () => {
@@ -686,10 +719,17 @@ describe("TaskRow", () => {
       expect(rowBox().style.minHeight).toBe("59px");
     });
 
-    it("floors a row with a non-default priority (and no date) at 59px", () => {
+    // ROW-10(a): priority no longer counts toward `hasMetadata` — Todoist
+    // shows it only via the checkbox ring, never a row-level badge — so a
+    // Task whose only attribute is a non-default priority is now a
+    // title-only row, exactly Todoist's own P1 fixture
+    // (`flow2-ROW-01-02-todoist.json`, 43px). This test used to expect
+    // 59px, back when `task.priority !== 1` was one of the checks
+    // `hasMetadata` OR'd together.
+    it("floors a row with a non-default priority (and no date) at 43px — priority is not metadata (ROW-10)", () => {
       renderRow({ task: task({ content: "call mum", priority: 4 }) });
 
-      expect(rowBox().style.minHeight).toBe("59px");
+      expect(rowBox().style.minHeight).toBe("43px");
     });
 
     it("floors a row whose only metadata is a sub-task count at 59px", () => {
@@ -820,6 +860,42 @@ describe("TaskRow", () => {
       renderRow({ task: task({ content: "call mum" }), commentCount: 1 });
 
       expect(screen.getByText("1")).toBeInTheDocument();
+    });
+
+    // ROW-08 (parity-ledger.md): Todoist's own badge is a real
+    // `<a aria-label="N comment(s)" href="…?intent=reply">`
+    // (`row-and-detail.md:120`; singular confirmed live,
+    // `flow10-ROW-09-both.json`'s `"1 comment"` reading) — this used to be
+    // a plain, non-interactive `<span>`.
+    it("renders the comment badge as a link to the Task's own detail route, singular wording at 1", () => {
+      renderRow({ task: task({ id: "1", content: "call mum" }), commentCount: 1 });
+
+      const link = screen.getByRole("link", { name: "1 comment" });
+      expect(link).toHaveAttribute("href", "/todo/task/call-mum-1");
+    });
+
+    it("pluralises the comment badge's wording above 1", () => {
+      renderRow({ task: task({ id: "1", content: "call mum" }), commentCount: 2 });
+
+      expect(screen.getByRole("link", { name: "2 comments" })).toBeInTheDocument();
+    });
+
+    it("clicking the comment badge never completes the Task", () => {
+      // This row carries no click handler of its own today (only the
+      // checkbox and the title button call `onComplete`/`onOpenDetail`),
+      // so there is nothing live for a bubbled click to accidentally
+      // trigger yet — this pins that a click on the link stays a plain
+      // navigation, not a second door onto completing the row, should one
+      // ever get added. The link's own `stopPropagation` (task-row-content.tsx)
+      // is the guard; a real ambient row handler is a browser-only proof
+      // (jsdom's root-delegated event model can't stand in for one, see
+      // this file's own report).
+      const onComplete = vi.fn();
+      renderRow({ task: task({ id: "1", content: "call mum" }), commentCount: 1, onComplete });
+
+      fireEvent.click(screen.getByRole("link", { name: "1 comment" }));
+
+      expect(onComplete).not.toHaveBeenCalled();
     });
   });
 
