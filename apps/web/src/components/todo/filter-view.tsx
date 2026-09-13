@@ -286,16 +286,9 @@ export function FilterView({
       <ConfirmDialog
         open={confirmingRemove}
         onOpenChange={setConfirmingRemove}
-        title="Remove this Filter?"
-        description={
-          filter && (
-            <>
-              Removing "{filter.name}" only removes the saved query — none of the Tasks it matches
-              are touched.
-            </>
-          )
-        }
-        confirmLabel="Remove"
+        title="Delete filter?"
+        description={filter && <>The {filter.name} filter will be permanently deleted.</>}
+        confirmLabel="Delete"
         onConfirm={() => {
           onRemove();
           navigate("/todo/filters");

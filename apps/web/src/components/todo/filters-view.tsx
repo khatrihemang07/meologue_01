@@ -43,6 +43,13 @@ export function FiltersView({ filters, labels = [] }: FiltersViewProps) {
         New Filter
       </Link>
 
+      {/* Ledger row NAV-06: Todoist's own combined page carries an `h2`
+          "My Filters" above its filters list (live-audit-dom/flow6-NAV-06-
+          todoist.json, re-confirmed flow10-NAV-06-both.json), styled
+          identically to this page's own "Labels" `h2` below — no count or
+          link accompanies it on Todoist's side, so neither does this one. */}
+      <h2 className="font-medium text-sm">My Filters</h2>
+
       {filters.length === 0 ? (
         <p className="px-1 text-center text-muted-foreground text-sm">
           No Filters yet. A Filter is a saved query — add one above to see it here.

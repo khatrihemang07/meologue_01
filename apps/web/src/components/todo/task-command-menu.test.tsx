@@ -163,6 +163,21 @@ describe("TaskCommandMenu", () => {
     expect(onSetPriority).toHaveBeenCalledWith(4);
   });
 
+  // Ledger row PRI-02: Todoist's own picker exposes the identically-
+  // inverted value as `data-value` on each item (P1 -> "4" … P4 -> "1",
+  // live-audit-dom/flow3-PRI-01-02-03-todoist.json). Structural DOM
+  // parity only — the inversion itself already matched before this.
+  it("exposes the stored (inverted) priority as data-value on each picker item", () => {
+    renderMenu();
+
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Priority/ }));
+
+    expect(screen.getByRole("menuitem", { name: "P1" })).toHaveAttribute("data-value", "4");
+    expect(screen.getByRole("menuitem", { name: "P2" })).toHaveAttribute("data-value", "3");
+    expect(screen.getByRole("menuitem", { name: "P3" })).toHaveAttribute("data-value", "2");
+    expect(screen.getByRole("menuitem", { name: "P4" })).toHaveAttribute("data-value", "1");
+  });
+
   it("Move to…'s own submenu offers Inbox and every Project, and writes the chosen one", () => {
     const onSetProject = vi.fn();
     const errands = project({ id: "p1", name: "Errands" });
