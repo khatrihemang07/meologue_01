@@ -6,6 +6,22 @@
  * undone"), and its own Tasks via `TaskList` (task-list.tsx) — "opening a
  * Project lists its Tasks, reusing the list Inbox already uses."
  *
+ * **STR-02 (docs/reference/todoist/parity-ledger.md).** Name, colour and
+ * description used to be inline controls in this header — a
+ * rename-on-blur `Input`, a colour `<select>`, a description `<textarea>`
+ * committing on blur. The 2026-09-13 live audit
+ * (`live-audit-dom/flow9-STR-02-both.json`) recorded Todoist editing all
+ * three (plus fields this app has no concept of — Parent project, Access,
+ * Layout) through a modal reached from the project's own options menu,
+ * with a `n/120` name counter. The user decided on 2026-09-13 to match
+ * that shape: `project-edit-dialog.tsx`'s own `ProjectEditDialog` now
+ * owns Name/Colour/Description, opened from the "Project options menu"
+ * built here with a single "Edit" item (this screen had no options menu
+ * of its own before). Favourite, Archive, the activity link and Delete
+ * stay exactly where they were — Todoist's own recorded Edit dialog
+ * fields don't include Archive at all, and moving Favourite in on top of
+ * that would be inventing a shape the ledger never measured.
+ *
  * Section reordering is a pair of up/down buttons, not drag: nothing in
  * issue #171's acceptance criteria asks a Section's own order to be
  * drag-reorderable (only "ordered manually" — Tasks are the one thing
@@ -14,15 +30,20 @@
  * gesture would have saved them.
  */
 import type { Project, Section, Task } from "@meologue/core";
-import { LABEL_COLOURS, orderKeyBetween } from "@meologue/core";
-import { ChevronDown, ChevronUp, History, Trash2 } from "lucide-react";
+import { orderKeyBetween } from "@meologue/core";
+import { ChevronDown, ChevronUp, History, MoreHorizontal, Trash2 } from "lucide-react";
+import { DropdownMenu } from "radix-ui";
 import { type FormEvent, useState } from "react";
 import { Link } from "react-router";
+import { ProjectEditDialog } from "@/components/todo/project-edit-dialog";
 import { TaskList } from "@/components/todo/task-list";
 import type { TaskDetailActions } from "@/components/todo/task-row";
 import { ConfirmDialog } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+
+const menuItemClassName =
+  "flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none data-highlighted:bg-muted data-highlighted:text-foreground";
 
 export interface ProjectViewProps {
   project: Project;
@@ -106,8 +127,6 @@ export function ProjectView({
   listTaskChildren,
   listTasksInProject,
 }: ProjectViewProps) {
-  const [name, setName] = useState(project.name);
-  const [description, setDescription] = useState(project.description ?? "");
   const [newSectionName, setNewSectionName] = useState("");
   const [sectionError, setSectionError] = useState<string | null>(null);
   // The Section this dialog would delete, and the true count it's about
@@ -125,17 +144,11 @@ export function ProjectView({
   // own wording for a Project delete names nothing but the Project this
   // whole screen is already about, so there is nothing to look up first.
   const [confirmingDeleteProject, setConfirmingDeleteProject] = useState(false);
-
-  function commitRename() {
-    const trimmed = name.trim();
-    if (trimmed === "" || trimmed === project.name) return;
-    onRename(trimmed);
-  }
-
-  function handleDescriptionBlur() {
-    const trimmed = description.trim();
-    onSetDescription(trimmed === "" ? null : trimmed);
-  }
+  // STR-02 (this file's own header comment) — the "Edit project" dialog's
+  // own open state. A plain boolean, unlike Labels' own `dialogTarget`
+  // (labels-view.tsx): this screen is always about exactly one Project
+  // (`project` above), so there is no "which one" to also capture.
+  const [editing, setEditing] = useState(false);
 
   async function handleAddSection(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -166,31 +179,15 @@ export function ProjectView({
     <div className="flex flex-col gap-4 p-3">
       <div className="flex flex-col gap-2">
         <div className="flex items-center gap-2">
-          <select
-            aria-label="Project colour"
-            value={project.colour}
-            onChange={(event) => onSetColour(event.target.value)}
-            className="shrink-0 rounded-md border border-border bg-background px-1.5 text-xs"
-          >
-            {LABEL_COLOURS.map((option) => (
-              <option key={option.hex} value={option.hex}>
-                {option.name.replace(/_/g, " ")}
-              </option>
-            ))}
-          </select>
-          <Input
-            type="text"
-            aria-label="Project name"
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            onBlur={commitRename}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.currentTarget.blur();
-              }
-            }}
-            className="flex-1 font-medium"
+          <span
+            aria-hidden="true"
+            className="size-2.5 shrink-0 rounded-full"
+            style={{ backgroundColor: project.colour }}
           />
+          {/* Plain text, not a heading: todo-page.tsx already renders the
+              column's heading with this name (#254), and two headings would
+              announce the project twice. */}
+          <span className="min-w-0 flex-1 truncate font-medium text-sm">{project.name}</span>
           <Button
             type="button"
             size="sm"
@@ -220,6 +217,31 @@ export function ProjectView({
               <History aria-hidden="true" className="size-4" />
             </Link>
           </Button>
+          {/* STR-02 (this file's own header comment) — the one item this
+              menu carries today is "Edit," opening `ProjectEditDialog`
+              below. Favourite/Archive/Activity/Delete stay as their own
+              standalone controls, unchanged. */}
+          <DropdownMenu.Root>
+            <DropdownMenu.Trigger asChild>
+              <button
+                type="button"
+                aria-label="Project options menu"
+                className="flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+              >
+                <MoreHorizontal aria-hidden="true" className="size-4" />
+              </button>
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Portal>
+              <DropdownMenu.Content
+                align="end"
+                className="z-50 flex w-40 flex-col gap-0.5 rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-lg data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0"
+              >
+                <DropdownMenu.Item className={menuItemClassName} onSelect={() => setEditing(true)}>
+                  Edit
+                </DropdownMenu.Item>
+              </DropdownMenu.Content>
+            </DropdownMenu.Portal>
+          </DropdownMenu.Root>
           <button
             type="button"
             aria-label={`Delete Project "${project.name}"`}
@@ -229,16 +251,27 @@ export function ProjectView({
             <Trash2 aria-hidden="true" className="size-4" />
           </button>
         </div>
-        <textarea
-          aria-label="Project description"
-          placeholder="Description (optional)"
-          value={description}
-          onChange={(event) => setDescription(event.target.value)}
-          onBlur={handleDescriptionBlur}
-          rows={2}
-          className="w-full resize-none rounded-md border border-border bg-background px-2 py-1.5 text-sm"
-        />
+        {project.description !== null && project.description !== "" && (
+          <p className="whitespace-pre-wrap text-muted-foreground text-sm">{project.description}</p>
+        )}
       </div>
+
+      {/* Keyed on `editing` itself (mirrors labels-view.tsx's own
+          `dialogTarget`-keyed `LabelDialog`) — `ProjectEditDialog` seeds
+          its form fields from `project` once, in `useState`'s initial
+          value, not on every render, so it has to remount on each open
+          to pick up the Project's current name/colour/description rather
+          than whatever a previous open (edited, then cancelled) left
+          sitting in its own state. */}
+      <ProjectEditDialog
+        key={editing ? "open" : "closed"}
+        open={editing}
+        onOpenChange={setEditing}
+        project={project}
+        onRename={onRename}
+        onSetColour={onSetColour}
+        onSetDescription={onSetDescription}
+      />
 
       <div className="flex flex-col gap-2">
         <h2 className="font-medium text-sm">Sections ({sections.length}/20)</h2>

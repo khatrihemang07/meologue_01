@@ -4,6 +4,16 @@ import { MemoryRouter } from "react-router";
 import { describe, expect, it, vi } from "vitest";
 import { ProjectView } from "./project-view";
 
+/** Opens the project's own "Project options menu" (STR-02) and clicks the named item. */
+function openProjectMenuAndClick(itemName: string) {
+  // Radix's `DropdownMenu.Trigger` opens on `pointerdown`, not `click`
+  // (task-schedule-popover.test.tsx's own identical "Repeat menu"
+  // precedent) — a plain `fireEvent.click` alone never opens it under
+  // jsdom.
+  fireEvent.pointerDown(screen.getByRole("button", { name: "Project options menu" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: itemName }));
+}
+
 function project(overrides: Partial<Project> = {}): Project {
   return {
     id: "p1",
@@ -92,18 +102,113 @@ function renderProjectView(overrides: Partial<Parameters<typeof ProjectView>[0]>
   return { ...render(<ProjectView {...props} />, { wrapper: MemoryRouter }), props };
 }
 
-describe("ProjectView — colour and delete (issue #229)", () => {
-  it("recolours through the header's own colour select", () => {
-    const onSetColour = vi.fn();
-    renderProjectView({ onSetColour });
-
-    fireEvent.change(screen.getByLabelText("Project colour"), {
-      target: { value: "#4180FF" },
+describe("ProjectView — Edit project dialog (STR-02)", () => {
+  it("opens from the Project options menu, prefilled with the current name, colour and description", async () => {
+    renderProjectView({
+      project: project({ name: "Groceries", colour: "#DC4C3E", description: "Weekly shop" }),
     });
 
-    expect(onSetColour).toHaveBeenCalledWith("#4180FF");
+    openProjectMenuAndClick("Edit");
+
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+    expect(screen.getByText("Edit project")).toBeInTheDocument();
+    expect(screen.getByLabelText("Project name")).toHaveValue("Groceries");
+    expect(screen.getByLabelText("Project colour")).toHaveValue("#DC4C3E");
+    expect(screen.getByLabelText("Project description")).toHaveValue("Weekly shop");
   });
 
+  it("shows the 120-character counter and caps the name field (STR-02's own n/120 reading)", async () => {
+    renderProjectView({ project: project({ name: "Groceries" }) });
+
+    openProjectMenuAndClick("Edit");
+
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+    expect(screen.getByText("9/120")).toBeInTheDocument();
+    expect(screen.getByLabelText("Project name")).toHaveAttribute("maxLength", "120");
+  });
+
+  it("renames, recolours and sets the description together on Save", async () => {
+    const onRename = vi.fn();
+    const onSetColour = vi.fn();
+    const onSetDescription = vi.fn();
+    renderProjectView({
+      project: project({ name: "Groceries", colour: "#DC4C3E", description: null }),
+      onRename,
+      onSetColour,
+      onSetDescription,
+    });
+
+    openProjectMenuAndClick("Edit");
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText("Project name"), { target: { value: "Groceries 2" } });
+    fireEvent.change(screen.getByLabelText("Project colour"), { target: { value: "#4180FF" } });
+    fireEvent.change(screen.getByLabelText("Project description"), {
+      target: { value: "Weekly shop" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(onRename).toHaveBeenCalledWith("Groceries 2");
+    expect(onSetColour).toHaveBeenCalledWith("#4180FF");
+    expect(onSetDescription).toHaveBeenCalledWith("Weekly shop");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("does not call the setters for fields that did not change", async () => {
+    const onRename = vi.fn();
+    const onSetColour = vi.fn();
+    const onSetDescription = vi.fn();
+    renderProjectView({
+      project: project({ name: "Groceries", colour: "#DC4C3E", description: null }),
+      onRename,
+      onSetColour,
+      onSetDescription,
+    });
+
+    openProjectMenuAndClick("Edit");
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(onRename).not.toHaveBeenCalled();
+    expect(onSetColour).not.toHaveBeenCalled();
+    expect(onSetDescription).not.toHaveBeenCalled();
+  });
+
+  it("Cancel discards edits", async () => {
+    const onRename = vi.fn();
+    renderProjectView({ project: project({ name: "Groceries" }), onRename });
+
+    openProjectMenuAndClick("Edit");
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText("Project name"), { target: { value: "Renamed" } });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(onRename).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getByText("Groceries")).toBeInTheDocument();
+  });
+
+  // A reopen after an edited-then-cancelled session must show the
+  // Project's real name again, not whatever was typed and abandoned last
+  // time — the dialog remounts fresh on every open (this file's own
+  // `key={editing ? "open" : "closed"}` on `ProjectEditDialog`).
+  it("reopening after Cancel shows the Project's real name again, not the discarded edit", async () => {
+    renderProjectView({ project: project({ name: "Groceries" }) });
+
+    openProjectMenuAndClick("Edit");
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText("Project name"), { target: { value: "Discarded" } });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    openProjectMenuAndClick("Edit");
+
+    await waitFor(() => expect(screen.getByLabelText("Project name")).toHaveValue("Groceries"));
+  });
+});
+
+describe("ProjectView — delete (STR-01, unchanged wording)", () => {
   // Verbatim (docs/reference/todoist/quick-add.md § "Destructive
   // confirmation wording"): "Delete project? The <name> project and all
   // its tasks will be permanently deleted. This action cannot be undone."
