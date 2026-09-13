@@ -62,6 +62,7 @@ import { ChevronLeft, ChevronRight, Pencil, Trash2, X } from "lucide-react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import type * as React from "react";
 import { forwardRef, Suspense, useEffect, useRef, useState } from "react";
+import { useOutletContext } from "react-router";
 import { toast } from "sonner";
 import { entryProse } from "@/components/entry-prose";
 import { inlineProse } from "@/components/inline-prose";
@@ -75,10 +76,12 @@ import { useWideLayout } from "@/hooks/use-wide-layout";
 import { isRenderableEvent } from "@/lib/format-event";
 import { formatDay, formatTaskDate } from "@/lib/format-task-date";
 import { localDayKey } from "@/lib/local-day-key";
+import type { QuickAddAutocompleteOptions } from "@/lib/quick-add-autocomplete";
 import { useSettingsStore } from "@/lib/settings";
 import { priorityColour } from "@/lib/task-priority-colors";
 import { quickAddRecognitionPlugin } from "@/lib/todo-quick-add-recognition";
 import { cn } from "@/lib/utils";
+import type { EntryStoreOutletContext } from "@/pages/entry-store-layout";
 
 /**
  * DET-16 (parity-ledger.md): live Todoist's own "Date updated to Tomorrow"
@@ -603,6 +606,59 @@ function TaskDetailBody({
   const smartDates = useSettingsStore((state) => state.smartDatesEnabled);
   const titleRecognitionOptionsRef = useRef({ now: localDayKey(new Date()), smartDates });
   titleRecognitionOptionsRef.current = { now: localDayKey(new Date()), smartDates };
+  // QA-14's own second half, wired into the detail title: the `#`/`@`
+  // autocomplete popup needs a create hook (`addProject`/`addLabel`) that
+  // `TaskDetailViewProps` has no field for — `projects`/`labels` above
+  // already cover the list half (the identical arrays the Project/Labels
+  // attribute pickers already use). Reading `useOutletContext` directly
+  // here, the same door `task-row-content.tsx`'s own identical wiring
+  // uses (that file's own doc comment has the fuller account of why: this
+  // view only ever renders inside `todo-page.tsx`'s or `composer-page.tsx`'s
+  // own subtree, both children of `EntryStoreLayout`'s `<Outlet
+  // context={...}>`, so this is the exact context `useEntryStore()` itself
+  // is built on) — not a new prop on `TaskDetailViewProps`, which would
+  // need `todo-page.tsx` and `composer-page.tsx` (both owned by another
+  // agent mid-rebuild) to grow it. `useOutletContext` is plain
+  // `React.useContext` underneath, so it's safe with no `<Outlet>`
+  // ancestor at all — `task-detail-view.test.tsx`'s existing suite (no
+  // Router anywhere in it) keeps working unchanged, reading `undefined`
+  // here and falling through to "Create only inserts the token" exactly as
+  // `QuickAddAutocompleteOptions`'s own doc comment already allows.
+  const autocompleteOutlet = useOutletContext<EntryStoreOutletContext | undefined>();
+  const titleAutocomplete: QuickAddAutocompleteOptions = {
+    getProjects: () => projects,
+    getLabels: () => labels,
+    onCreateProject: autocompleteOutlet?.addProject,
+    onCreateLabel: autocompleteOutlet?.addLabel,
+  };
+  // DET-15: whether the popup above is currently open — fed by
+  // `TaskTitleEditor`'s own `onAutocompleteOpenChange` (task-title-
+  // editor.tsx) below, read from `dismissGuardRef`'s own assignment
+  // further down. A ref, not state: nothing here needs to re-render when
+  // this flips, only to have the CURRENT answer available the instant
+  // Radix's Escape handling asks for it, which happens synchronously
+  // inside the same keydown Radix's own `document`-capture listener sees
+  // — see that assignment's own comment for why this ref is guaranteed to
+  // still read `true` at that moment even though the popup is about to
+  // close.
+  const autocompletePopupOpenRef = useRef(false);
+  // DET-15's own real fix, discovered rather than merely reasoned about
+  // (`dismissGuardRef`'s own assignment below has the proof): Radix's
+  // `Dialog.Content` calls `onEscapeKeyDown` from a `document`-level,
+  // capture-phase listener — strictly before this same event ever reaches
+  // `TaskTitleEditor`'s own keydown handling, since a browser always runs
+  // an ancestor's capture-phase listener before any listener bound
+  // directly to a descendant target. Calling `event.preventDefault()`
+  // there (needed to keep Radix from closing the whole Dialog) makes
+  // `prosemirror-view`'s own dispatch gate refuse to run ANY of this
+  // editor's key handling for that same event afterward — its own
+  // autocomplete plugin included — so the popup can no longer be trusted
+  // to close itself. `closeAutocompleteRef` (`task-title-editor.tsx`'s own
+  // doc comment on it) is a plain `view.dispatch()` call, not a DOM event,
+  // so it is never subject to that gate — this is what lets the guard
+  // below close the popup for real in the same synchronous tick it also
+  // calls `preventDefault()`.
+  const closeAutocompleteRef = useRef<(() => void) | null>(null);
   // A literal id, not `useId()`: only one `TaskDetailView` is ever mounted
   // at a time (it's a modal over the whole app), so there is no second
   // instance for a fixed id to collide with.
@@ -884,6 +940,28 @@ function TaskDetailBody({
     if (!editing) {
       return false;
     }
+    // DET-15's own Escape gap against the `#`/`@` popup above: at the
+    // instant this callback runs, `autocompletePopupOpenRef` still reads
+    // whatever it was BEFORE this same keystroke would otherwise close the
+    // popup — Radix's own `document`-capture Escape listener always runs
+    // before this event ever reaches `TaskTitleEditor`'s own keydown
+    // handling (`closeAutocompleteRef`'s own doc comment, and this ref's
+    // own comment above, have the full ordering proof). Calling
+    // `closeAutocompleteRef.current?.()` here — a plain function call, not
+    // a DOM event — closes the popup directly, since letting this same
+    // keystroke's own bubble-phase reach `TaskTitleEditor`'s normal
+    // keydown handling can no longer be trusted to do it once this
+    // function returns `true` below (`onEscapeKeyDown`'s own
+    // `preventDefault()` call is exactly what blocks that path — proven,
+    // not just reasoned about, in task-detail-view-recognition.test.tsx's
+    // own "Escape closes only the popup" case). Returning `true` without
+    // calling `requestCancelEditing` is what keeps this one Escape from
+    // ALSO raising the discard confirmation or ending editing outright —
+    // every other source/state combination stays exactly as it was.
+    if (source === "escape" && autocompletePopupOpenRef.current) {
+      closeAutocompleteRef.current?.();
+      return true;
+    }
     requestCancelEditing(source === "outside");
     return true;
   };
@@ -1084,6 +1162,21 @@ function TaskDetailBody({
                       extraPlugins={[
                         quickAddRecognitionPlugin(() => titleRecognitionOptionsRef.current),
                       ]}
+                      // QA-14's own second half: the identical `#`/`@`
+                      // popup Quick Add and the row's rename already open,
+                      // wired to this view's own `projects`/`labels` and
+                      // whatever create hook the outlet context supplies
+                      // (this function's own `titleAutocomplete` comment
+                      // above). `onAutocompleteOpenChange` feeds
+                      // `autocompletePopupOpenRef`, which
+                      // `dismissGuardRef`'s own assignment above reads —
+                      // DET-15's fix for the Escape gap this file's own
+                      // header comment on that ref names.
+                      autocomplete={titleAutocomplete}
+                      onAutocompleteOpenChange={(open) => {
+                        autocompletePopupOpenRef.current = open;
+                      }}
+                      closeAutocompleteRef={closeAutocompleteRef}
                     />
                   </Suspense>
                 </div>

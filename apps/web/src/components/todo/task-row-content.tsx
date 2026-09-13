@@ -37,7 +37,7 @@ import {
 } from "lucide-react";
 import type { MouseEvent, PointerEvent } from "react";
 import { Suspense, useRef, useState } from "react";
-import { Link } from "react-router";
+import { Link, useOutletContext } from "react-router";
 import { inlineProse } from "@/components/inline-prose";
 import { LazyTaskTitleEditor } from "@/components/todo/lazy-task-title-editor";
 import { TaskCommandMenu } from "@/components/todo/task-command-menu";
@@ -47,11 +47,13 @@ import { useTaskDateState } from "@/hooks/use-task-date-state";
 import { formatDay, formatTaskDate } from "@/lib/format-task-date";
 import { localDayKey } from "@/lib/local-day-key";
 import { projectNameFor } from "@/lib/project-name";
+import type { QuickAddAutocompleteOptions } from "@/lib/quick-add-autocomplete";
 import { useSettingsStore } from "@/lib/settings";
 import { taskDetailPath } from "@/lib/task-detail-route";
 import { priorityColour } from "@/lib/task-priority-colors";
 import { quickAddRecognitionPlugin } from "@/lib/todo-quick-add-recognition";
 import { cn } from "@/lib/utils";
+import type { EntryStoreOutletContext } from "@/pages/entry-store-layout";
 
 export interface TaskRowContentProps {
   task: Task;
@@ -226,6 +228,40 @@ export function TaskRowContent({
   const smartDates = useSettingsStore((state) => state.smartDatesEnabled);
   const optionsRef = useRef<QuickAddOptions>({ now: localDayKey(new Date()), smartDates });
   optionsRef.current = { now: localDayKey(new Date()), smartDates };
+
+  // QA-14's own second half, wired into the row's rename editor: the
+  // `#`/`@` autocomplete popup (`quick-add-autocomplete.ts`) needs live
+  // Project/Label lists plus a create hook, none of which `TaskRowContent`
+  // otherwise has in scope — `detailActions.projects`/`.labels` (above,
+  // already threaded for the Project/Labels metadata badges) cover the
+  // list half, but the create half (`addProject`/`addLabel`) has no
+  // equivalent on `TaskDetailActions`, and adding one would mean
+  // `todo-page.tsx` growing two new fields on the object it builds — a
+  // file another agent owns right now, rebuilding the composer. Reading
+  // `useOutletContext` directly here instead, rather than through
+  // `TaskDetailActions` or a bespoke context/provider: `TaskRow`/
+  // `TaskRowContent` are never rendered anywhere but inside `todo-page.tsx`'s
+  // own subtree, itself a child of `EntryStoreLayout`'s `<Outlet
+  // context={...}>` (App.tsx) — the exact same door `todo-page.tsx`'s own
+  // `useEntryStore()` already opens (that hook is nothing but this call,
+  // typed — entry-store-layout.tsx's own header comment on the export).
+  // `useOutletContext` is a plain `React.useContext` under the hood
+  // (react-router's own `hooks.ts`), so it needs no `<Outlet>`/Router
+  // ancestor to be SAFE to call — outside one it simply reads the
+  // context's default (`undefined`), never throws — which is what keeps
+  // `task-row.test.tsx`'s existing `MemoryRouter`-only rendering (no
+  // `EntryStoreLayout` in that tree) working unchanged: `addProject`/
+  // `addLabel` there are `undefined`, so selecting "Create" only inserts
+  // the typed token and mints nothing (`QuickAddAutocompleteOptions`'s own
+  // doc comment already treats that as a fully supported, non-crashing
+  // case, not a special one this file has to guard itself).
+  const autocompleteOutlet = useOutletContext<EntryStoreOutletContext | undefined>();
+  const autocomplete: QuickAddAutocompleteOptions = {
+    getProjects: () => detailActions.projects,
+    getLabels: () => detailActions.labels,
+    onCreateProject: autocompleteOutlet?.addProject,
+    onCreateLabel: autocompleteOutlet?.addLabel,
+  };
 
   function commitTitle(next: string) {
     setEditingTitle(false);
@@ -525,6 +561,7 @@ export function TaskRowContent({
                 "text-[length:var(--td-row-font-size)] leading-[length:var(--td-row-line-height)]",
               )}
               extraPlugins={[quickAddRecognitionPlugin(() => optionsRef.current)]}
+              autocomplete={autocomplete}
             />
           </Suspense>
         ) : (

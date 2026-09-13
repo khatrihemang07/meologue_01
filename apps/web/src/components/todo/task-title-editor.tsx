@@ -71,10 +71,12 @@ import type { Node as PMNode } from "prosemirror-model";
 import { Fragment, Schema, Slice } from "prosemirror-model";
 import { EditorState, Plugin, Selection } from "prosemirror-state";
 import { Decoration, DecorationSet, EditorView } from "prosemirror-view";
+import type * as React from "react";
 import { useEffect, useId, useRef, useState } from "react";
 import { QuickAddAutocompleteListbox } from "@/components/todo/quick-add-autocomplete-listbox";
 import type { AutocompleteState, QuickAddAutocompleteOptions } from "@/lib/quick-add-autocomplete";
 import {
+  closeAutocomplete,
   quickAddAutocompletePlugin,
   quickAddAutocompletePluginKey,
 } from "@/lib/quick-add-autocomplete";
@@ -219,15 +221,46 @@ export interface TaskTitleEditorProps {
   /**
    * Fires whenever the autocomplete popup opens or closes. Exists for
    * exactly one reason today: `task-detail-view.tsx`'s own `dismissGuardRef`
-   * (its header comment on DET-15) currently calls `requestCancelEditing()`
+   * (its header comment on DET-15) used to call `requestCancelEditing()`
    * on ANY Escape while its editor is active, with no way to know a popup
-   * from THIS component just wants Escape for itself — a caller sitting
-   * inside a Radix `Dialog` needs this callback to gate that guard shut
-   * while a popup is open. Not wired to any of this ticket's three call
-   * sites yet — see this ticket's own report for the exact one-line change
-   * `task-detail-view.tsx` still needs.
+   * from THIS component just wanted Escape for itself — a caller sitting
+   * inside a Radix `Dialog` reads this into a ref to gate that guard shut
+   * while a popup is open.
    */
   onAutocompleteOpenChange?: (open: boolean) => void;
+  /**
+   * An imperative escape hatch `closeAutocomplete` (this module's own
+   * `quick-add-autocomplete.ts` export) — needed because a caller sitting
+   * inside a Radix `Dialog` cannot simply let Escape fall through to this
+   * editor's own `handleKeyDown` and trust it to close the popup.
+   * `Dialog.Content`'s own `onEscapeKeyDown` fires from a listener bound at
+   * `document`, capture phase; a browser always runs a capture-phase
+   * listener on an ANCESTOR before any listener bound directly to a
+   * DESCENDANT target, so that caller's own guard is asked, and can call
+   * `event.preventDefault()` to keep Radix from closing its whole Dialog,
+   * strictly before this editor's own keydown handling ever sees the same
+   * event. Once `event.preventDefault()` has been called by ANYONE earlier
+   * in that same event's lifecycle, `prosemirror-view`'s own dispatch gate
+   * (`eventBelongsToView`, `dist/index.js`) silently refuses to run this
+   * view's `handleKeyDown` at all for it — proven directly, not reasoned
+   * about, while wiring this into `task-detail-view.tsx`: a bare
+   * `TaskTitleEditor` (no Dialog ancestor) closed its own popup on Escape
+   * exactly as `task-title-editor.test.tsx` already covers, but the
+   * identical keystroke through the real `Dialog`-wrapped `TaskDetailView`
+   * did not, because Radix's own capture-phase `preventDefault()` had
+   * already run. `view.dispatch()` is a plain method call, not a DOM
+   * event — it is not subject to that gate at all — so a caller's OWN
+   * capture-phase handler can call this function directly, in the same
+   * synchronous tick it calls its own `event.preventDefault()`, and the
+   * popup closes for real regardless of what already happened to the
+   * event. Populated with a real function once this editor mounts (only
+   * when `autocomplete` was supplied at all), and reset to `null` on
+   * unmount — a caller invokes it unconditionally; it is a no-op once no
+   * popup is open (`closeAutocomplete` itself is idempotent, `quick-add-
+   * autocomplete.ts`'s own `apply()` returns `previous` unchanged from a
+   * `"close"` meta once state is already `null`).
+   */
+  closeAutocompleteRef?: React.RefObject<(() => void) | null>;
 }
 
 /**
@@ -362,6 +395,7 @@ export function TaskTitleEditor({
   extraPlugins = [],
   autocomplete,
   onAutocompleteOpenChange,
+  closeAutocompleteRef,
 }: TaskTitleEditorProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -516,11 +550,25 @@ export function TaskTitleEditor({
     if (autoFocus) {
       view.focus();
     }
+    // `closeAutocompleteRef`'s own doc comment has the full reasoning:
+    // populated only when this editor was actually given `autocomplete`
+    // options (a `null` popup plugin has nothing worth an imperative
+    // closer), and only ever with a plain `view.dispatch()` call — never
+    // routed back through this view's own (potentially gated) DOM keydown
+    // handling.
+    if (closeAutocompleteRef && autocompletePlugin !== null) {
+      closeAutocompleteRef.current = () => {
+        closeAutocomplete(view);
+      };
+    }
 
     return () => {
       view.destroy();
       viewRef.current = null;
       setPopupState(null);
+      if (closeAutocompleteRef) {
+        closeAutocompleteRef.current = null;
+      }
     };
   }, []);
 
