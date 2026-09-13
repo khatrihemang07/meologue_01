@@ -1,0 +1,42 @@
+{
+  "round": 4,
+  "driveDate": "2026-09-13 (round 4 re-drive, both apps, same session)",
+  "row": "CMT-04",
+  "method": "Completed a disposable 'ZZ probe complete' task by clicking its checkbox from the LIST view (not the detail view), polling every ~250ms for the toast and recording its text/role/aria-live chain the first time it was seen, then noting the last-present and gone-by timestamps. Deleted the task afterward (Todoist: via More actions > Delete, after confirming aria-checked=true on its checkbox; meologue: via taskStore.remove after locating it with taskStore.listCompleted()).",
+  "todoist": {
+    "text": "1 task completedUndo",
+    "hasUndo": true,
+    "firstSeenMs": 368,
+    "lastPresentMs": 10386,
+    "goneByMs": 10646,
+    "roleChainAtFirstSeen": [
+      { "tag": "DIV", "role": null, "ariaLive": null, "className": "...global-toasts-provider-container..." },
+      { "tag": "DIV", "role": null, "ariaLive": null },
+      { "tag": "DIV", "role": null, "ariaLive": null },
+      { "tag": "BODY", "role": null, "ariaLive": null },
+      { "tag": "HTML", "role": null, "ariaLive": null }
+    ],
+    "note": "Neither the toast element nor any ancestor up to <html> carried role or aria-live this round. This differs from the corpus's historical flow-5 record of role=\"alert\" aria-live=\"polite\", which round 3 could not re-confirm live either (toast had already gone by the time it checked). Two consecutive live rounds now find no role/aria-live on Todoist's toast chain -- recorded as observed, not asserted against the older corpus note."
+  },
+  "meologue": {
+    "text": "1 task completedUndo",
+    "hasUndo": true,
+    "firstSeenMs": 76,
+    "lastPresentMs": 10034,
+    "goneByMs": 10288,
+    "roleChainAtFirstSeen": [
+      { "tag": "OL", "role": null, "ariaLive": null, "className": "toaster group" },
+      { "tag": "SECTION", "role": null, "ariaLive": "polite" },
+      { "tag": "DIV", "role": null, "ariaLive": null },
+      { "tag": "BODY", "role": null, "ariaLive": null },
+      { "tag": "HTML", "role": null, "ariaLive": null, "className": "dark" }
+    ],
+    "note": "role is null on the toast <ol> itself, but the wrapping <section class=\"toaster group\">'s parent SECTION carries aria-live=\"polite\" two levels up. Duration ~10.2s (goneByMs - firstSeenMs), matching the brief's expected ~10s."
+  },
+  "verdict": {
+    "wording": "MATCH -- '1 task completedUndo' verbatim in both apps.",
+    "duration": "MATCH -- Todoist ~10.3s (10646-368ms), meologue ~10.2s (10288-76ms); both consistent with the expected ~10s toast duration.",
+    "roleAndAriaLive": "DIFFERS in mechanism, though neither exposes an ARIA role on the toast text element itself: Todoist's toast chain has no aria-live anywhere in the first 5 ancestors; meologue's toast chain has aria-live=\"polite\" on the toaster's SECTION ancestor two levels up. This is a real, newly-observed structural difference this round (round 3 did not capture Todoist's chain live, only meologue's).",
+    "overall": "MOSTLY MATCH -- text and timing match; the accessibility-tree exposure (aria-live) differs between the two toast implementations."
+  }
+}

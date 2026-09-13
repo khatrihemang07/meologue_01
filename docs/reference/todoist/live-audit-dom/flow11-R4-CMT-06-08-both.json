@@ -1,0 +1,40 @@
+{
+  "round": 4,
+  "driveDate": "2026-09-13 (round 4 re-drive, both apps, same session)",
+  "rows": ["CMT-08", "CMT-06"],
+  "CMT-08": {
+    "method": "On a disposable 'ZZ probe comments' task, added the comment '*italic*\\n~~strike~~\\n# heading\\n> quote\\n```\\ncode block\\n```\\n1. first' as one paste (page.keyboard.paste), submitted with Cmd+Enter, then read the rendered comment's raw innerHTML in both apps.",
+    "todoist": {
+      "renderedHtml": "<p><em>italic</em><br>\n<del>strike</del></p>\n<h1>heading</h1>\n<blockquote>\n<p>quote</p>\n</blockquote>\n<pre><code>code block\n</code></pre>\n<ol>\n<li>first</li>\n</ol>",
+      "elementTree": "p(em, br, del) / h1 / blockquote>p / pre>code / ol>li"
+    },
+    "meologue": {
+      "renderedHtml": "<p class=\"mt-0\"><em class=\"italic\">italic</em><br><del class=\"line-through\">strike</del></p><h1 class=\"text-lg font-semibold mt-0\">heading</h1><blockquote class=\"border-muted-foreground/40 border-l-2 pl-3 text-muted-foreground mt-0\"><p class=\"mt-0\">quote</p></blockquote><pre class=\"overflow-x-auto rounded-md bg-muted p-2 font-mono text-xs mt-0\"><code>code block\n</code></pre><ol class=\"list-decimal space-y-0.5 pl-5 mt-0\"><li>first</li></ol>",
+      "elementTree": "p(em, br, del) / h1 / blockquote>p / pre>code / ol>li"
+    },
+    "verdict": "MATCH -- comparing actual element trees, ignoring whitespace text nodes and class attributes, both apps now produce the IDENTICAL structure: one <p> containing <em>italic</em>, a <br>, and <del>strike</del> (same tag, del, not s); a real <h1>; <blockquote><p>quote</p></blockquote>; <pre><code>code block</code></pre>; and <ol><li>first</li></ol> with the list item holding the text directly, no wrapping <p>. This is a further fix beyond round 3, which had recorded two remaining differences: meologue rendering strike as <s> instead of <del>, and wrapping the ordered-list item text in a nested <p> (<li><p>first</p></li>). Both are now gone -- the element trees are structurally the same tag for tag."
+  },
+  "CMT-06": {
+    "method": "After CMT-08's comment, added a second comment '**bold** and https://example.com' in each app, then opened the task's own activity view (Todoist: More actions -> View activity; meologue: the Activity panel) and read every activity line verbatim. Note: Todoist's activity dialog needed a close+reopen to pick up the second comment's event -- the first read after posting only showed the events dialog's stale event count (2); closing and reopening it updated the count to 3 and surfaced the new 'commented bold and https://example.com' line. This is a read-refresh quirk of Todoist's own UI, not a measurement gap.",
+    "todoist": {
+      "activityLines": [
+        "You commented bold and https://example.com on ZZ probe comments -- 1 minute ago",
+        "You commented italic strike # heading > quote code block 1. first on ZZ probe comments -- 2 minutes ago",
+        "You added ZZ probe comments -- 2 minutes ago"
+      ],
+      "endOfListLine": "That's it. No more history to load.",
+      "note": "Each list item's raw textContent contains the comment text and task name twice (Todoist's own DOM has a duplicate '<span class=\"Y6wL85O\">' sibling alongside the visible '<span class=\"Y5eOaeu\">' content, apparently a hover-preview duplicate); the lines above are de-duplicated to what is visibly rendered once."
+    },
+    "meologue": {
+      "activityHeadingText": "Activity (2)",
+      "activityLines": [
+        "You commented bold and https://example.com on ZZ probe comments -- less than a minute ago",
+        "You commented italic strike # heading > quote code block 1. first on ZZ probe comments -- less than a minute ago"
+      ],
+      "contentIsRenderedNotRawMarkdown": true,
+      "hasCircleGlyphBeforeTaskName": false,
+      "missingAddedEvent": "No 'You added' line -- task was seeded directly through the store (taskStore.upsert), which records no creation event; a seeding artifact, not a product gap."
+    },
+    "verdict": "MATCH on both content-formatting points the round 4 brief flagged: the content chip now reads rendered/stripped text ('bold and https://example.com' and 'italic strike # heading > quote code block 1. first') instead of raw markdown source, and there is no longer a circle glyph (○) before the task name. Both are fixes from round 3's DIFFERS finding (meologue previously showed raw markdown with a ○ glyph). The only remaining difference is the missing 'You added' line, which is a test-seeding artifact (task created via the store, not the UI), the same conclusion round 3 reached."
+  }
+}

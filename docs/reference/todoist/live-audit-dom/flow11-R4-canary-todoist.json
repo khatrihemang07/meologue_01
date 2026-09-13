@@ -1,0 +1,36 @@
+{
+  "round": 4,
+  "driveDate": "2026-09-13 (round 4 re-drive)",
+  "method": "Captured Inbox titles (scrolled through 8 batches), Filters & Labels, and My Projects before creating any ZZ probe fixtures, and again after all ZZ probe tasks and their comments were deleted at the end of the session.",
+  "before": {
+    "browserClock": "Sun Sep 13 2026 07:37:54 GMT+0530 (India Standard Time)",
+    "inboxTitleCount": 16,
+    "inboxTitles": [
+      "Apply company", "Bat fix", "Buy bluetooth for vishal", "Buy mobile holder and get the bike fixed",
+      "Check for ipad cover", "Homeo medicine refil", "Lld", "Message ashu to connect",
+      "Need to improve reflect and todo completely. They are crap right now. Specially when typing long title or updating title",
+      "Quick dsa", "Roller thigh pain", "Room clean", "Thigh guard and marker order",
+      "add split and splid both without fail EOD", "hair wash", "naukri photo update"
+    ],
+    "filters": ["Assigned to me", "Priority 11", "All my Routines 🔁"],
+    "filtersUsed": "USED: 3/3",
+    "labels": [],
+    "projects": ["Getting Started 👋, 14 tasks"]
+  },
+  "after": {
+    "browserClock": "Sun Sep 13 2026 07:51:42 GMT+0530 (India Standard Time)",
+    "inboxTitleCount": 16,
+    "inboxTitles": [
+      "Apply company", "Bat fix", "Buy bluetooth for vishal", "Buy mobile holder and get the bike fixed",
+      "Check for ipad cover", "Homeo medicine refil", "Lld", "Message ashu to connect",
+      "Need to improve reflect and todo completely. They are crap right now. Specially when typing long title or updating title",
+      "Quick dsa", "Roller thigh pain", "Room clean", "Thigh guard and marker order",
+      "add split and splid both without fail EOD", "hair wash", "naukri photo update"
+    ],
+    "filters": ["Assigned to me", "Priority 11", "All my Routines 🔁"],
+    "filtersUsed": "USED: 3/3",
+    "labels": [],
+    "projects": ["Getting Started 👋, 14 tasks"]
+  },
+  "verdict": "SET-EQUAL -- before and after inbox title sets, filters, labels, and projects are identical (16/16 titles, same 3 filters at USED 3/3, 0 labels, same 1 project). All ZZ probe fixtures created this round (ZZ probe detail, ZZ probe comments, ZZ probe complete, and their comments) were deleted; the account is clean."
+}
