@@ -451,7 +451,7 @@ describe("entryProse", () => {
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });
 
-  // CMT-02/CMT-08 (docs/reference/todoist/parity-ledger.md): a Task
+  // CMT-02/CMT-08 (meologue-parity-docs/todoist/parity-ledger.md): a Task
   // comment (`entryProse(body, ..., "comment")`) renders four forms an
   // Entry's own default mode deliberately leaves as literal text — a
   // heading, a blockquote, a fenced code block, and a bare URL. Every case
@@ -554,7 +554,7 @@ describe("entryProse", () => {
       expect(screen.getByText("code", { selector: "code" })).toBeInTheDocument();
     });
 
-    // Live re-drive gaps (docs/reference/todoist/parity-ledger.md's CMT-08
+    // Live re-drive gaps (meologue-parity-docs/todoist/parity-ledger.md's CMT-08
     // row): strikethrough tag, one-`\n`-stays-in-one-paragraph, and a tight
     // list's unwrapped `<li>` text — each pinned against entry mode staying
     // exactly as it was, in the same test that pins the comment behaviour.

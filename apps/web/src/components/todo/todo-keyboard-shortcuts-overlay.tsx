@@ -6,7 +6,7 @@
  * menu.tsx` reads its own legend from — so this overlay can never advertise
  * a key that does nothing, the exact defect issue #228 closes elsewhere in
  * Todo. It is deliberately much shorter than the 80-row transcription in
- * `docs/reference/todoist/keyboard.md`: only bindings with a real target in
+ * `meologue-parity-docs/todoist/keyboard.md`: only bindings with a real target in
  * this app are in the table at all (that module's own header comment lists
  * what's missing and why).
  */

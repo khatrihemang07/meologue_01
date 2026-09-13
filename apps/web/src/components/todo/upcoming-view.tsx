@@ -9,7 +9,7 @@
  *
  * One section per calendar day `upcoming()` returns a day for, each
  * headed by `upcomingDayHeading()`'s exact wording
- * (docs/reference/todoist/scheduler-and-priority.md §9, DATE-05 in the
+ * (meologue-parity-docs/todoist/scheduler-and-priority.md §9, DATE-05 in the
  * parity ledger: "10 Sep ‧ Today ‧ Thursday," weekday-only past
  * tomorrow). No grouping control the way Today's own "Due today" section
  * has one (`group-today-tasks.ts`) — Upcoming's one and only grouping

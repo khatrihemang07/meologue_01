@@ -452,7 +452,7 @@ const CHUNK_BUDGETS = {
   // substituting a placeholder trigger breaks exactly the `asChild` ref
   // anchoring #253 exists to fix — anchoring that was verified by
   // measuring trigger and popover rects in a real browser
-  // (`docs/reference/todoist/verification-2026-09-11.md`), and which no
+  // (`meologue-parity-docs/todoist/verification-2026-09-11.md`), and which no
   // test in this repo can see. Trading a measured, verified behaviour for
   // 485 bytes is a bad trade; paying the bytes and recording why is not.
   //

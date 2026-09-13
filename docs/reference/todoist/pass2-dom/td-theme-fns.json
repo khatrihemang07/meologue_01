@@ -1,6 +1,0 @@
-{
-  "getThemeQueryParamSrc": "function getThemeQueryParam(e=window.location){let t=new URLSearchParams(e.search).get(\"theme\");if(!t)return null;let a=Number(t);return!isNaN(a)&&a>=0&&a<=13?t:null}",
-  "getThemeQueryParamResult": null,
-  "initThemeSrc": "function initTheme(){try{let e=JSON.parse(window.localStorage&&window.localStorage.getItem(\"CurrentTheme\")),t=getThemeQueryParam();if(null===t&&e&&(t=e),t){let e=themeNameMapping[t]??\"todoist\";changeThemeByThemeName(e)}}catch{}}",
-  "changeThemeByThemeNameSrc": "function changeThemeByThemeName(e){let t=document.documentElement;for(let e of[...t.classList].filter(e=>e.startsWith(\"theme_\")))t.classList.remove(e);t.classList.add(`theme_${e}`);let a=getComputedStyle(document.body).getPropertyValue(\"--product-library-background-base-secondary\"),r=document.querySelector('meta[name=\"theme-color\"]');r&&a&&r.setAttribute(\"content\",a)}"
-}

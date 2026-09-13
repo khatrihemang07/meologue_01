@@ -278,7 +278,7 @@ function pasteText(target: HTMLElement, text: string): Event {
   return event;
 }
 
-// Pinned to the identical instant `docs/reference/todoist/quick-add.md`
+// Pinned to the identical instant `meologue-parity-docs/todoist/quick-add.md`
 // and `todo-quick-add-recognition.test.ts` already use, so "tod" resolves
 // to the same 2026-09-10 `matchId` both files assert on.
 beforeEach(() => {

@@ -1,7 +1,7 @@
 /**
  * The `#project` / `@label` autocomplete popup — issue #226's own second
  * half, left unbuilt by the ledger's QA-13/QA-14 rows
- * (`docs/reference/todoist/parity-ledger.md`): the parser already
+ * (`meologue-parity-docs/todoist/parity-ledger.md`): the parser already
  * recognises `#project`/`@label` tokens
  * (`packages/core/src/quick-add/rules.ts`'s `matchProject`/`matchLabel`),
  * but nothing ever showed a picker while typing one. This file is the

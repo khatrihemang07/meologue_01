@@ -1,8 +1,0 @@
-{
-  "app": "meologue",
-  "rows": ["ROW-01", "ROW-02"],
-  "identityCheck": "measured [data-task-row-box=true] div inside li[data-task-id], the painted row box that carries min-height/border, not the bare <li>",
-  "plainRow": { "title": "ZZ probe P1", "height": 59, "borderBottom": "1px solid rgb(61, 61, 61)", "paddingLeft": "12px", "leftInset": 507.5 },
-  "descRow": { "title": "ZZ probe desc", "height": 59, "borderBottom": "1px solid rgb(61, 61, 61)", "paddingLeft": "12px", "leftInset": 507.5 },
-  "twoLineWrapRow_actuallyFourLineClampRow": { "title": "ZZ probe long", "height": 87, "borderBottom": "1px solid rgb(61, 61, 61)", "paddingLeft": "12px", "leftInset": 507.5, "note": "meologue clamps at 4 lines (ROW-05), not 2 -- this row measures the long-title case since no 2-line-only variant exists; height 87px reflects 4-line title" }
-}

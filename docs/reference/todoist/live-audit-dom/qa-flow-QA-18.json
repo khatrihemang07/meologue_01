@@ -1,9 +1,0 @@
-{
-  "row": "QA-18 - Tab from the title moves to More actions (Todoist-only chrome)",
-  "todoist": {
-    "before": { "focused": "Task name title field (contenteditable)" },
-    "after_Tab": { "tag": "BUTTON", "ariaLabel": "More actions", "text": "" }
-  },
-  "meologue": "Not applicable - meologue's Quick Add has no footer control row to Tab into (the only interactive element after the title is the external 'Add' submit button); not invented here.",
-  "verdict": "Todoist measured live and confirmed as described; meologue has no equivalent to compare"
-}

@@ -250,7 +250,7 @@ const AttributeRow = forwardRef<
  * two small buttons cost nothing to keep visible on hover.
  *
  * **CMT-03: explicit Cancel/Update, not save-on-blur.** Todoist's own
- * comment editor (`docs/reference/todoist/live-audit-dom/flow5-CMT-03-
+ * comment editor (`meologue-parity-docs/todoist/live-audit-dom/flow5-CMT-03-
  * todoist.json`) opens with those two buttons and never commits just
  * because focus left the field — clicking away leaves the draft sitting
  * there, unresolved, and only Cancel or Update decides its fate. The
@@ -593,7 +593,7 @@ function TaskDetailBody({
   // parsed itself.
   //
   // The reference is no longer silent on this either, as an earlier
-  // version of this comment said: `docs/reference/todoist/rename-capture-
+  // version of this comment said: `meologue-parity-docs/todoist/rename-capture-
   // 2026-09-11.md` drove both of Todoist's own rename surfaces directly
   // and found both resolve a recognised phrase, stripping it from the
   // stored title exactly as Quick Add does — the parity ledger's own

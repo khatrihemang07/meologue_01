@@ -131,7 +131,7 @@ its bullet).
 
 ## Consequences
 
-**`docs/reference/upnote-macos-detail.md`'s own Gap sweep Group B1's "Tab on the first item of a
+**`meologue-parity-docs/upnote-macos-detail.md`'s own Gap sweep Group B1's "Tab on the first item of a
 list also nests" finding, and `upnote-android-detail.md`'s Gap sweep Group D confirming the same on
 Android, are both now true of this Composer as well — proven live, not merely reasoned about: a
 real browser was driven by hand through exactly this scenario (a two-item list, caret moved back to

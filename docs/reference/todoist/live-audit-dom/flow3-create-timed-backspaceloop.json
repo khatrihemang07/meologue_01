@@ -1,9 +1,0 @@
-{
-  "steps": 3,
-  "overshoot": false,
-  "final": {
-    "editorText": "ZZ probe timed",
-    "hasMatch": false,
-    "matchId": null
-  }
-}

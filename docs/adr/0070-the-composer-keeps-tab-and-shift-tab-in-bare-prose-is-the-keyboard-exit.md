@@ -18,7 +18,7 @@ fixes indenting itself rather than what happens once indenting has nothing left 
 
 ## Context
 
-`docs/reference/upnote-macos-detail.md`'s Gap sweep Group B6 and `docs/reference/upnote-editor-behaviour.md`'s
+`meologue-parity-docs/upnote-macos-detail.md`'s Gap sweep Group B6 and `meologue-parity-docs/upnote-editor-behaviour.md`'s
 own pre-existing Tab/Shift-Tab table agree on what UpNote's Tab does outside a list: it inserts a
 literal U+2003 EM SPACE at the caret and keeps focus inside the note — confirmed live, via a
 `System Events` frontmost-process check taken immediately after the keypress, that focus never once

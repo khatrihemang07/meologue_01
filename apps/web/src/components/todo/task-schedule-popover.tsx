@@ -1,5 +1,5 @@
 /**
- * Todoist's own scheduler (issue #227, `docs/reference/todoist/
+ * Todoist's own scheduler (issue #227, `meologue-parity-docs/todoist/
  * scheduler-and-priority.md` §§1-4) — an anchored popover, not the
  * centred/bottom-sheet shape every other picker in this app uses
  * (`ui/popover.tsx`'s own header comment explains why that primitive

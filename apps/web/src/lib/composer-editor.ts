@@ -952,7 +952,7 @@ function historyKeymap(): Plugin {
  * (composer-commands.ts) are wired here exactly as `undo`/`redo` are just
  * above — the registry owns what each action IS, this file only owns which
  * keystroke reaches it. `Mod-Shift-x` for `strikethrough` is UpNote's own
- * verified chord for the same action (`docs/reference/upnote-macos-detail.md`,
+ * verified chord for the same action (`meologue-parity-docs/upnote-macos-detail.md`,
  * "Cmd+Shift+X"), not a choice made up for this app; it is not on the
  * never-claim list below (`Mod-1`-`Mod-9`, `Mod-l`, `Mod-[`/`Mod-]`,
  * `Mod-t`/`Mod-w`/`Mod-n`/`Mod-r`/`Mod-d`), and no browser this app ships on
@@ -968,7 +968,7 @@ function historyKeymap(): Plugin {
  *
  * **Lists gained exactly ONE chord, `checklist`'s own `Mod-Shift-9`, per
  * issue #235's chord-parity requirement — `bulletList`/`orderedList`
- * still get none.** `docs/reference/upnote-macos-detail.md`'s own "Full
+ * still get none.** `meologue-parity-docs/upnote-macos-detail.md`'s own "Full
  * Mac menu-bar accelerator table" section records UpNote's three verified
  * list chords: Bullet List = Cmd+7, Number List = Cmd+8, Checklist =
  * Cmd+Shift+9 (no menu-reported accelerator at all, but "verified alive"

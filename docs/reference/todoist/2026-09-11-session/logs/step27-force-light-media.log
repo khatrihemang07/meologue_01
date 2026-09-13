@@ -1,3 +1,0 @@
-BEFORE emulation: {"matchesDark":true,"matchesLight":false,"colorScheme":"dark","bodyBg":"rgb(40, 28, 17)"}
-AFTER forcing light media: {"matchesDark":false,"matchesLight":true,"colorScheme":"dark","bodyBg":"rgb(40, 28, 17)","bodyColor":"rgb(212, 208, 202)","htmlClass":"todoist_loaded theme_todoist"}
-

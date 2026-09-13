@@ -22,7 +22,7 @@
  *
  * `upnote` values, by contrast, DO go through `upnoteHtmlToCanonical`
  * wherever a literal HTML citation exists — copied verbatim from
- * `docs/reference/upnote-macos-detail.md`/`upnote-android-detail.md`'s own
+ * `meologue-parity-docs/upnote-macos-detail.md`/`upnote-android-detail.md`'s own
  * gap-sweep tables, so a row's citation and its assertion are the same
  * text. Android's own gap sweeps are screenshot-only (no on-device HTML
  * column to read, `upnote-android-detail.md`'s own method notes), so an

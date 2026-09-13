@@ -380,7 +380,7 @@
  * sets on the one element every `/todo/*` route AND its left pane both sit
  * under (see that file's own comment for why one attribute has to reach
  * both). Every measured value below is captured live, dark theme only, and
- * committed at docs/reference/todoist/parity-ledger.md and the sibling
+ * committed at meologue-parity-docs/todoist/parity-ledger.md and the sibling
  * reference docs it points at — nothing here is recalled from memory.
  *
  * Two rules are the whole design, and both exist to make this scope safe to
@@ -419,7 +419,7 @@
  * for `--radius` and the chart tokens.
  *
  * LIGHT THEME IS AN UNVERIFIED APPROXIMATION. Todoist was only ever
- * observed in dark theme (docs/reference/todoist/README.md's own "How it
+ * observed in dark theme (meologue-parity-docs/todoist/README.md's own "How it
  * was captured") — there is no light-mode evidence to match against, for
  * any value below. `--background`/`--foreground`/`--border`/`--muted`/
  * `--muted-foreground` in the base block are derived to be legible on a
@@ -848,7 +848,7 @@
  * real multi-block Entry loaded for editing, `getBoundingClientRect()` on
  * consecutive top-level children read a 4px top-to-bottom gap in the
  * Composer and a 0px gap for the identical text in History. UpNote's own
- * measurement (`docs/reference/upnote-macos-detail.md`'s Gap sweep, E1) is
+ * measurement (`meologue-parity-docs/upnote-macos-detail.md`'s Gap sweep, E1) is
  * that a bare, zero-margin block is what makes one Enter look like one new
  * line at all; this rule is what makes that true on the Composer side, not
  * only the read side. `li + li`'s own `0.125rem` below is deliberately left
@@ -999,7 +999,7 @@
  * A recognised natural-language match, highlighted state (issue #226,
  * `todo-quick-add-recognition.ts`'s own `decorationAttrs`) — the ONLY
  * class that plugin ever applies. Withdrawn is deliberately not a second
- * class here: docs/reference/todoist/quick-add.md's own measurement (§
+ * class here: meologue-parity-docs/todoist/quick-add.md's own measurement (§
  * "The recognised-match span") is that withdrawal drops the class
  * entirely, leaving a bare `<span>` — `display: inline`, no padding, no
  * background, inherited colour — which is already exactly what an
@@ -1023,7 +1023,7 @@
 
 /*
  * Keyboard focus (KBD-05/THEME-03), matched against a keyboard-focused
- * Todoist row (docs/reference/todoist/live-audit-dom/flow6-KBD-05-06-
+ * Todoist row (meologue-parity-docs/todoist/live-audit-dom/flow6-KBD-05-06-
  * todoist.json): an inset ring plus a background tint, with `outline`
  * itself unset — Todoist's own `outline` computed to `none` on the same
  * element, `box-shadow` doing all the work instead. `:focus-visible`, not

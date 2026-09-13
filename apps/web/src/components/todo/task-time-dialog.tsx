@@ -3,7 +3,7 @@
  * follow-up — that ticket relocated the "Add a time" toggle into
  * `task-schedule-popover.tsx` itself but explicitly left "Todoist's own
  * dedicated Time dialog... a separate follow-up, not part of this
- * ticket"). Captured structure (`docs/reference/todoist/live-audit-dom/
+ * ticket"). Captured structure (`meologue-parity-docs/todoist/live-audit-dom/
  * flow3-SCHED-todoist.json`'s `SCHED-11`, `pass2-2026-09-11.md` §7):
  * `role="dialog" aria-label="Select start and end time"`, 306×216, radius
  * 10px, background `rgb(40,40,40)`, box-shadow `0 2px 8px rgba(0,0,0,

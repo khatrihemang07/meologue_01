@@ -3,7 +3,7 @@
 ## Status
 
 Accepted. **Reverses the "What a status is pinned to" section of
-`docs/reference/todoist/parity-ledger.md`**, which is amended to point here rather than to keep
+`meologue-parity-docs/todoist/parity-ledger.md`**, which is amended to point here rather than to keep
 asserting the rule this ADR overrides. Does not touch that file's status vocabulary
 (`todoist-captured` / `built` / `matched` / `divergent` / `blocked`), nor its three axes for what
 `matched` requires — only the question of *what a row is measured against*.

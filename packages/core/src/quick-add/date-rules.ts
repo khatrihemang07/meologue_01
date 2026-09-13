@@ -134,7 +134,7 @@ export function matchAbsoluteDate(input: string, ctx: DateRuleContext): QuickAdd
   }
 
   // Bare two-part numeric form, no year (`12/25`) — QA-09's own measured
-  // gap: docs/reference/todoist/quick-add.md's vocabulary table has
+  // gap: meologue-parity-docs/todoist/quick-add.md's vocabulary table has
   // `12/25` resolving to 25 Dec in Todoist, and this form was previously
   // not recognised at all (the three-part regex above requires an
   // explicit `\d{4}` year, so a bare pair never matched it, and reading

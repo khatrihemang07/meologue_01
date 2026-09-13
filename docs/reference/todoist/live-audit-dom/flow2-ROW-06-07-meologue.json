@@ -1,9 +1,0 @@
-{
-  "app": "meologue",
-  "rows": ["ROW-06", "ROW-07"],
-  "identityCheck": "read the title <button> textContent (plain-text leaf, no nested markup possible) for ROW-06, and the description-preview <div class=truncate> innerHTML for ROW-07 on a task whose description literally contains **bold**",
-  "titleTaskUsed": "ZZ probe desc",
-  "descriptionInput": "first line **bold**\\nsecond line",
-  "descriptionPreviewHTML": "<button type=\"button\" class=\"line-clamp-4 block w-full text-left hover:underline text-[length:var(--td-row-font-size)] leading-[length:var(--td-row-line-height)]\">ZZ probe desc</button><div class=\"truncate text-muted-foreground text-xs\">first line <strong class=\"font-semibold\">bold</strong></div>",
-  "verdict": "ROW-07 confirmed: description first line renders as real HTML (<strong> for **bold**), truncated to one line, second line dropped from the preview as expected for a first-line-only preview. ROW-06 (title markdown stays literal) is structurally true by construction -- the title element is a plain <button>text</button> with no markdown parser in its render path; not separately re-tested with literal ** in a title since the fixture list has no such task, but the code path is unchanged from the already-built state"
-}
