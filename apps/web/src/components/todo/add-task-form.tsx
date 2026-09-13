@@ -36,6 +36,7 @@ import { LazyTaskTitleEditor } from "@/components/todo/lazy-task-title-editor";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { localDayKey } from "@/lib/local-day-key";
+import type { AutocompleteEntry } from "@/lib/quick-add-autocomplete";
 import { type QuickAddTaskFields, taskFieldsFromQuickAdd } from "@/lib/quick-add-task";
 import { useSettingsStore } from "@/lib/settings";
 import { quickAddRecognitionPlugin } from "@/lib/todo-quick-add-recognition";
@@ -51,6 +52,23 @@ export interface AddTaskFormProps {
    */
   onAdd: (fields: QuickAddTaskFields) => void;
   disabled: boolean;
+  /**
+   * Feeds the `#`/`@` autocomplete popup (issue #226's own second half,
+   * `quick-add-autocomplete.ts`'s header comment). `todo-page.tsx`'s own
+   * `useEntryStore()` already holds `projects`/`labels` — this ticket's own
+   * report has the exact one-line JSX change that call site still needs to
+   * pass them here; this component does not fetch them itself (the same
+   * "pass options in, don't have the editor reach out" convention
+   * `todo-quick-add-recognition.ts`'s own `getOptions` callback already
+   * follows for `now`/`smartDates`). Both default to empty, so an
+   * unmigrated caller keeps building without the popup listing anything —
+   * not a crash, just an always-empty list.
+   */
+  projects?: readonly AutocompleteEntry[];
+  labels?: readonly AutocompleteEntry[];
+  /** Wired to `useProjects().addProject`/`useLabels().addLabel` by a real caller — both are already fire-and-forget, name-only creators (see this ticket's own report on why that's "a clean callback path" per the brief), so selecting "Create" here needs nothing back from them. Omitted, selecting "Create" still inserts the typed token; it just mints nothing. */
+  onCreateProject?: (name: string) => void;
+  onCreateLabel?: (name: string) => void;
 }
 
 // The box-model classes `Input`'s own default className carries (the
@@ -95,7 +113,14 @@ export interface AddTaskFormProps {
 const EDITOR_BOX_CLASSES =
   "h-8 w-full min-w-0 rounded-lg border border-transparent bg-transparent px-2.5 py-1 text-[length:var(--td-composer-title-font-size)] leading-[length:var(--td-composer-title-line-height)] outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50";
 
-export function AddTaskForm({ onAdd, disabled }: AddTaskFormProps) {
+export function AddTaskForm({
+  onAdd,
+  disabled,
+  projects = [],
+  labels = [],
+  onCreateProject,
+  onCreateLabel,
+}: AddTaskFormProps) {
   const [value, setValue] = useState("");
   const [resetKey, setResetKey] = useState(0);
   const smartDates = useSettingsStore((state) => state.smartDatesEnabled);
@@ -108,6 +133,15 @@ export function AddTaskForm({ onAdd, disabled }: AddTaskFormProps) {
   // consults (a `smartDates` toggle, a date rollover at midnight) are not.
   const optionsRef = useRef<QuickAddOptions>({ now: localDayKey(new Date()), smartDates });
   optionsRef.current = { now: localDayKey(new Date()), smartDates };
+
+  // The identical live-ref shape, for the autocomplete popup's own
+  // `getProjects`/`getLabels` — `task-title-editor.tsx`'s own `autocomplete`
+  // prop doc comment on why the callbacks stay live even though the editor
+  // only reads the PROP once, at mount.
+  const projectsRef = useRef(projects);
+  projectsRef.current = projects;
+  const labelsRef = useRef(labels);
+  labelsRef.current = labels;
 
   // Date-only, matching todo-page.tsx's own `captureDate` (`localDayKey`):
   // every date-rule that reads `now`
@@ -209,6 +243,12 @@ export function AddTaskForm({ onAdd, disabled }: AddTaskFormProps) {
               onCancel={() => undefined}
               className={EDITOR_BOX_CLASSES}
               extraPlugins={[quickAddRecognitionPlugin(() => optionsRef.current)]}
+              autocomplete={{
+                getProjects: () => projectsRef.current,
+                getLabels: () => labelsRef.current,
+                onCreateProject,
+                onCreateLabel,
+              }}
             />
           </Suspense>
         )}

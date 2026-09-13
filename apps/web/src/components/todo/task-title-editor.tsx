@@ -71,7 +71,13 @@ import type { Node as PMNode } from "prosemirror-model";
 import { Fragment, Schema, Slice } from "prosemirror-model";
 import { EditorState, Plugin, Selection } from "prosemirror-state";
 import { Decoration, DecorationSet, EditorView } from "prosemirror-view";
-import { useEffect, useRef } from "react";
+import { useEffect, useId, useRef, useState } from "react";
+import { QuickAddAutocompleteListbox } from "@/components/todo/quick-add-autocomplete-listbox";
+import type { AutocompleteState, QuickAddAutocompleteOptions } from "@/lib/quick-add-autocomplete";
+import {
+  quickAddAutocompletePlugin,
+  quickAddAutocompletePluginKey,
+} from "@/lib/quick-add-autocomplete";
 import { cn } from "@/lib/utils";
 
 /**
@@ -196,6 +202,32 @@ export interface TaskTitleEditorProps {
    * identity here.
    */
   extraPlugins?: Plugin[];
+  /**
+   * Enables the `#project` / `@label` autocomplete popup (issue #226's own
+   * second half, `quick-add-autocomplete.ts`'s header comment carries the
+   * Todoist reference) when supplied; omitted entirely, this editor behaves
+   * exactly as it did before the popup existed. Read once at mount, same as
+   * `extraPlugins` — but unlike `extraPlugins`, the object itself is
+   * re-read on every render into a ref (below), so `getProjects`/
+   * `getLabels`/`onCreateProject`/`onCreateLabel` stay live even though
+   * whether the FEATURE is on at all is still a mount-time seed. A caller
+   * builds this the same way `add-task-form.tsx` already builds
+   * `quickAddRecognitionPlugin`'s own options: a ref holding the live
+   * Project/Label lists, read through a closure.
+   */
+  autocomplete?: QuickAddAutocompleteOptions;
+  /**
+   * Fires whenever the autocomplete popup opens or closes. Exists for
+   * exactly one reason today: `task-detail-view.tsx`'s own `dismissGuardRef`
+   * (its header comment on DET-15) currently calls `requestCancelEditing()`
+   * on ANY Escape while its editor is active, with no way to know a popup
+   * from THIS component just wants Escape for itself — a caller sitting
+   * inside a Radix `Dialog` needs this callback to gate that guard shut
+   * while a popup is open. Not wired to any of this ticket's three call
+   * sites yet — see this ticket's own report for the exact one-line change
+   * `task-detail-view.tsx` still needs.
+   */
+  onAutocompleteOpenChange?: (open: boolean) => void;
 }
 
 /**
@@ -219,6 +251,23 @@ export function buildTitlePlugins(options: {
   extraPlugins: Plugin[];
   commit: () => void;
   cancel: () => void;
+  /**
+   * The `#`/`@` autocomplete plugin (`quick-add-autocomplete.ts`), when this
+   * editor was given `autocomplete` options — placed ahead of `commitKeymap`
+   * below, not inside `extraPlugins`, because `handleKeyDown` is asked of
+   * plugins in array order (`ProseMirror`'s own `someProp`, first truthy
+   * return wins) and `Enter`/`Tab`/`Escape` all need to reach this plugin
+   * FIRST while a popup is open: `commitKeymap`'s own `Enter` would
+   * otherwise commit the whole title out from under it, and its own
+   * `Escape` would call `cancel()` instead of merely closing the popup.
+   * This plugin's `handleKeyDown` returns `false` for all three whenever no
+   * popup is open, so `commitKeymap` still runs normally the rest of the
+   * time. **Escape here is only half the story** — `TaskTitleEditor`'s own
+   * header comment on the Radix trap explains the other half, which this
+   * function cannot reach: a `Dialog`'s own document-capture dismissal can
+   * fire before this plugin ever sees the keystroke at all.
+   */
+  autocompletePlugin?: Plugin | null;
 }): Plugin[] {
   const commitKeymap = keymap({
     // A title has nowhere for a newline to go (this file's own header
@@ -278,6 +327,9 @@ export function buildTitlePlugins(options: {
     // (most published examples register it before `keymap(baseKeymap)`)
     // rather than after, as `composer-editor.ts` happens to.
     history(),
+    // Ahead of `commitKeymap` — this parameter's own doc comment above has
+    // the full ordering reasoning.
+    ...(options.autocompletePlugin ? [options.autocompletePlugin] : []),
     commitKeymap,
     historyKeymap,
     ...options.extraPlugins,
@@ -308,9 +360,12 @@ export function TaskTitleEditor({
   commitOnBlur = true,
   className,
   extraPlugins = [],
+  autocomplete,
+  onAutocompleteOpenChange,
 }: TaskTitleEditorProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
+  const listboxId = useId();
 
   // The "latest callback" ref pattern `composer.tsx`'s own header comment
   // names: the `EditorView` below is built once, in the mount effect, so
@@ -327,12 +382,30 @@ export function TaskTitleEditor({
   onCancelRef.current = onCancel;
   const commitOnBlurRef = useRef(commitOnBlur);
   commitOnBlurRef.current = commitOnBlur;
+  // `autocomplete`'s own doc comment: whether the feature is on at all is a
+  // mount-time seed (below), but `getProjects`/`getLabels`/the create hooks
+  // it carries stay live through this ref, the identical "read a ref
+  // through a closure" shape `add-task-form.tsx`'s own `optionsRef` gives
+  // `quickAddRecognitionPlugin`.
+  const autocompleteRef = useRef(autocomplete);
+  autocompleteRef.current = autocomplete;
+  const onAutocompleteOpenChangeRef = useRef(onAutocompleteOpenChange);
+  onAutocompleteOpenChangeRef.current = onAutocompleteOpenChange;
+
+  // Drives the React-rendered listbox (`quick-add-autocomplete-listbox.tsx`)
+  // — the one piece of state this otherwise fully-imperative component
+  // keeps, because rendering a portal-free popup is something only React,
+  // not a ProseMirror decoration, can do here. Kept in sync from
+  // `dispatchTransaction` below, never written any other way.
+  const [popupState, setPopupState] = useState<AutocompleteState | null>(null);
 
   // Mount-only: `value`, `ariaLabel`, `placeholder`, `autoFocus` and
   // `extraPlugins` are every one of them read exactly once, at
   // construction — this component's own prop doc comments explain why
   // each is a "seed," not a controlled value this effect needs to
-  // resync on every change.
+  // resync on every change. Whether `autocomplete` was supplied AT ALL is
+  // the identical kind of seed; only what it POINTS to (via
+  // `autocompleteRef`) stays live.
   // biome-ignore lint/correctness/useExhaustiveDependencies: deliberately mount-only, matching composer.tsx's own EditorView effect.
   useEffect(() => {
     const host = hostRef.current;
@@ -350,6 +423,20 @@ export function TaskTitleEditor({
       onCancelRef.current();
     }
 
+    const autocompletePlugin =
+      autocompleteRef.current !== undefined
+        ? quickAddAutocompletePlugin(() => {
+            // A non-null assertion would be sound here (this closure only
+            // ever runs because the plugin above was only ever constructed
+            // when `autocompleteRef.current` was defined at mount, and a
+            // caller supplying `autocomplete` at all is what this whole
+            // branch is gated on) — read fresh off the ref anyway, on
+            // every call, so a later render's new `getProjects`/`getLabels`
+            // closures are the ones actually consulted.
+            return autocompleteRef.current as QuickAddAutocompleteOptions;
+          })
+        : null;
+
     const doc = titleDocFromText(value);
     const state = EditorState.create({
       schema: taskTitleSchema,
@@ -358,25 +445,39 @@ export function TaskTitleEditor({
       // reader's own expectation on activating a rename: the cursor
       // lands where they'd naturally keep typing, not back at the start.
       selection: Selection.atEnd(doc),
-      plugins: buildTitlePlugins({ placeholder, extraPlugins, commit, cancel }),
+      plugins: buildTitlePlugins({ placeholder, extraPlugins, commit, cancel, autocompletePlugin }),
     });
 
     const view = new EditorView(
       { mount: host },
       {
         state,
-        attributes: () => ({
-          // `tiptap ProseMirror` is Todoist's own measured class pair
-          // (DET-06) — `ProseMirror` is ProseMirror's own base class,
-          // applied automatically underneath whatever `class` this
-          // function returns (`composer.tsx`'s own comment on this exact
-          // mechanism), so only `tiptap` needs adding here.
-          class: cn("tiptap", className),
-          role: "textbox",
-          "aria-label": ariaLabel,
-          "aria-multiline": "false",
-          ...(placeholder !== undefined ? { placeholder } : {}),
-        }),
+        attributes: (viewState) => {
+          const popup =
+            autocompletePlugin !== null ? quickAddAutocompletePluginKey.getState(viewState) : null;
+          return {
+            // `tiptap ProseMirror` is Todoist's own measured class pair
+            // (DET-06) — `ProseMirror` is ProseMirror's own base class,
+            // applied automatically underneath whatever `class` this
+            // function returns (`composer.tsx`'s own comment on this exact
+            // mechanism), so only `tiptap` needs adding here.
+            class: cn("tiptap", className),
+            // `qa-flow-QA-13-14.json`'s own recorded
+            // `role_of_composer_while_open: "combobox"` — Todoist's own
+            // field flips role the instant its popup opens.
+            role: popup !== null && popup !== undefined ? "combobox" : "textbox",
+            "aria-label": ariaLabel,
+            "aria-multiline": "false",
+            ...(popup !== null && popup !== undefined
+              ? {
+                  "aria-expanded": "true",
+                  "aria-controls": listboxId,
+                  "aria-activedescendant": `${listboxId}-option-${popup.activeIndex}`,
+                }
+              : {}),
+            ...(placeholder !== undefined ? { placeholder } : {}),
+          };
+        },
         transformPasted,
         dispatchTransaction: (tr) => {
           const current = viewRef.current;
@@ -387,6 +488,18 @@ export function TaskTitleEditor({
           current.updateState(nextState);
           if (tr.docChanged) {
             onChangeRef.current?.(titleTextFromDoc(nextState.doc));
+          }
+          if (autocompletePlugin !== null) {
+            const nextPopup = quickAddAutocompletePluginKey.getState(nextState) ?? null;
+            setPopupState((previous) => {
+              if (previous === nextPopup) {
+                return previous;
+              }
+              if ((previous === null) !== (nextPopup === null)) {
+                onAutocompleteOpenChangeRef.current?.(nextPopup !== null);
+              }
+              return nextPopup;
+            });
           }
         },
         handleDOMEvents: {
@@ -407,8 +520,46 @@ export function TaskTitleEditor({
     return () => {
       view.destroy();
       viewRef.current = null;
+      setPopupState(null);
     };
   }, []);
 
-  return <div ref={hostRef} />;
+  // `coordsAtPos` needs a live `EditorView` and returns viewport-relative
+  // coordinates — offset against `hostRef`'s own bounding rect to anchor
+  // the popup inside this component's own `position: relative` wrapper
+  // below, rather than against the viewport directly. jsdom implements no
+  // layout at all (`getBoundingClientRect`/`coordsAtPos` both return an
+  // all-zero rect — this file's own header comment on why no test here
+  // mounts a real browser), so this can only ever be verified in
+  // `apps/e2e`; this ticket's own report says so plainly rather than
+  // claiming a jsdom test proves real anchoring.
+  function popupStyle(): React.CSSProperties {
+    const view = viewRef.current;
+    const host = hostRef.current;
+    if (view === null || host === null || popupState === null) {
+      return { display: "none" };
+    }
+    const coords = view.coordsAtPos(popupState.from);
+    const hostRect = host.getBoundingClientRect();
+    return {
+      top: coords.bottom - hostRect.top,
+      left: coords.left - hostRect.left,
+    };
+  }
+
+  return (
+    <div className="relative">
+      <div ref={hostRef} />
+      {popupState !== null && (
+        <QuickAddAutocompleteListbox
+          id={listboxId}
+          sigil={popupState.sigil}
+          options={popupState.options}
+          activeIndex={popupState.activeIndex}
+          style={popupStyle()}
+          getOptionId={(index) => `${listboxId}-option-${index}`}
+        />
+      )}
+    </div>
+  );
 }

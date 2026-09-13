@@ -21,7 +21,13 @@
 import { redo, undo } from "prosemirror-history";
 import type { Transaction } from "prosemirror-state";
 import { EditorState, Selection } from "prosemirror-state";
-import { describe, expect, it } from "vitest";
+import { EditorView } from "prosemirror-view";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { AutocompleteEntry } from "@/lib/quick-add-autocomplete";
+import {
+  quickAddAutocompletePlugin,
+  quickAddAutocompletePluginKey,
+} from "@/lib/quick-add-autocomplete";
 import {
   buildTitlePlugins,
   taskTitleSchema,
@@ -94,5 +100,241 @@ describe("buildTitlePlugins — history()", () => {
     const redone = runHistoryCommand(redo, undone.next);
     expect(redone.applied).toBe(true);
     expect(titleTextFromDoc(redone.next.doc)).toBe("hello world");
+  });
+});
+
+// The `#`/`@` autocomplete popup (issue #226's own second half,
+// `quick-add-autocomplete.ts`'s header comment carries the full Todoist
+// reference). Mounts a real `EditorView` with the REAL `buildTitlePlugins`
+// list — the identical "build the actual thing, not a hand-rolled stand-in"
+// posture `todo-quick-add-recognition.test.ts`'s own QA-06 suite already
+// takes, and for the identical reason: this suite needs `commitKeymap` and
+// the autocomplete plugin fighting over the same `Enter`/`Escape` keys to
+// prove the ORDERING in `buildTitlePlugins` (this file's own comment on
+// why the autocomplete plugin sits ahead of `commitKeymap`), not just that
+// the plugin's own `handleKeyDown` works in isolation.
+//
+// Typing itself is simulated with a plain `insertText` transaction (the
+// identical technique this file's own "history()" suite above already
+// uses for "a bare `insertText` transaction standing in for a keystroke")
+// — nothing about detecting a live `#`/`@` trigger depends on how the text
+// arrived. Only the KEY events (arrows, Enter, Tab, Escape) need a real
+// `dispatchEvent` on `view.dom`, the same reason `todo-quick-add-
+// recognition.test.ts`'s own `backspace()` helper dispatches one for
+// Backspace.
+//
+// **What this suite cannot prove — said here rather than left implicit:**
+// jsdom implements no layout at all, so `EditorView.coordsAtPos` and
+// `getBoundingClientRect` both return an all-zero rect; the popup's own
+// on-screen anchoring (this file's own `popupStyle` in `task-title-
+// editor.tsx`) is therefore untested here and can only be verified in a
+// real browser (`apps/e2e`). This suite proves the STATE machine — which
+// options, which is active, what gets inserted, which keys are consumed —
+// never where the box is drawn.
+describe("TaskTitleEditor — #/@ autocomplete popup", () => {
+  let view: EditorView | undefined;
+  let host: HTMLDivElement | undefined;
+
+  afterEach(() => {
+    view?.destroy();
+    host?.remove();
+    view = undefined;
+    host = undefined;
+  });
+
+  function mount(options: {
+    text?: string;
+    projects?: AutocompleteEntry[];
+    labels?: AutocompleteEntry[];
+    onCreateProject?: (name: string) => void;
+    onCreateLabel?: (name: string) => void;
+    commit?: () => void;
+    cancel?: () => void;
+  }): { view: EditorView; commit: () => void; cancel: () => void } {
+    const commit = options.commit ?? vi.fn();
+    const cancel = options.cancel ?? vi.fn();
+    const autocompletePlugin = quickAddAutocompletePlugin(() => ({
+      getProjects: () => options.projects ?? [],
+      getLabels: () => options.labels ?? [],
+      onCreateProject: options.onCreateProject,
+      onCreateLabel: options.onCreateLabel,
+    }));
+    const doc = titleDocFromText(options.text ?? "");
+    const state = EditorState.create({
+      schema: taskTitleSchema,
+      doc,
+      selection: Selection.atEnd(doc),
+      // The REAL plugin list, autocomplete included — this suite's own
+      // header comment on why a hand-rolled `[autocompletePlugin,
+      // keymap(baseKeymap)]` array would only prove the plugin works in
+      // isolation, not that `buildTitlePlugins` orders it correctly
+      // against `commitKeymap`.
+      plugins: buildTitlePlugins({
+        placeholder: undefined,
+        extraPlugins: [],
+        commit,
+        cancel,
+        autocompletePlugin,
+      }),
+    });
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    view = new EditorView({ mount: host }, { state });
+    return { view, commit, cancel };
+  }
+
+  function type(target: EditorView, text: string): void {
+    target.dispatch(target.state.tr.insertText(text, target.state.selection.from));
+  }
+
+  function pressKey(target: EditorView, keyName: string): KeyboardEvent {
+    const event = new KeyboardEvent("keydown", { key: keyName, bubbles: true, cancelable: true });
+    target.dom.dispatchEvent(event);
+    return event;
+  }
+
+  it("opens a listbox on '#', listing every Project, and the typed query filters it", () => {
+    const { view: editorView } = mount({
+      projects: [
+        { id: "1", name: "Inbox" },
+        { id: "2", name: "Work" },
+      ],
+    });
+
+    type(editorView, "#");
+    let popup = quickAddAutocompletePluginKey.getState(editorView.state);
+    expect(popup?.sigil).toBe("#");
+    expect(popup?.options).toEqual([
+      { kind: "entry", entry: { id: "1", name: "Inbox" } },
+      { kind: "entry", entry: { id: "2", name: "Work" } },
+    ]);
+
+    type(editorView, "wo");
+    popup = quickAddAutocompletePluginKey.getState(editorView.state);
+    expect(popup?.query).toBe("wo");
+    expect(popup?.options).toEqual([{ kind: "entry", entry: { id: "2", name: "Work" } }]);
+  });
+
+  it("opens the identical popup on '@', listing Labels instead of Projects", () => {
+    const { view: editorView } = mount({ labels: [{ id: "9", name: "urgent" }] });
+
+    type(editorView, "@urg");
+    const popup = quickAddAutocompletePluginKey.getState(editorView.state);
+    expect(popup?.sigil).toBe("@");
+    expect(popup?.options).toEqual([{ kind: "entry", entry: { id: "9", name: "urgent" } }]);
+  });
+
+  it("ArrowDown moves the active option, and Enter inserts the canonical token", () => {
+    const { view: editorView } = mount({
+      projects: [
+        { id: "1", name: "Inbox" },
+        { id: "2", name: "Work" },
+      ],
+    });
+
+    type(editorView, "#");
+    expect(quickAddAutocompletePluginKey.getState(editorView.state)?.activeIndex).toBe(0);
+
+    const downEvent = pressKey(editorView, "ArrowDown");
+    expect(downEvent.defaultPrevented).toBe(true);
+    expect(quickAddAutocompletePluginKey.getState(editorView.state)?.activeIndex).toBe(1);
+
+    const enterEvent = pressKey(editorView, "Enter");
+    expect(enterEvent.defaultPrevented).toBe(true);
+    // The recorded spacing (quick-add.md: "e.g. #Inbox ") — sigil, the
+    // canonical name (not whatever was typed), one trailing space.
+    expect(editorView.state.doc.textContent).toBe("#Work ");
+    expect(quickAddAutocompletePluginKey.getState(editorView.state)).toBeNull();
+  });
+
+  it("ArrowUp wraps to the last option, and Tab selects exactly like Enter", () => {
+    const { view: editorView } = mount({
+      projects: [
+        { id: "1", name: "Inbox" },
+        { id: "2", name: "Work" },
+      ],
+    });
+
+    type(editorView, "#");
+    pressKey(editorView, "ArrowUp");
+    expect(quickAddAutocompletePluginKey.getState(editorView.state)?.activeIndex).toBe(1);
+
+    const tabEvent = pressKey(editorView, "Tab");
+    expect(tabEvent.defaultPrevented).toBe(true);
+    expect(editorView.state.doc.textContent).toBe("#Work ");
+  });
+
+  it("Escape closes only the popup — the composer's own cancel is not called", () => {
+    const cancel = vi.fn();
+    const { view: editorView } = mount({ projects: [{ id: "1", name: "Inbox" }], cancel });
+
+    type(editorView, "#");
+    expect(quickAddAutocompletePluginKey.getState(editorView.state)).not.toBeNull();
+
+    const firstEscape = pressKey(editorView, "Escape");
+    expect(firstEscape.defaultPrevented).toBe(true);
+    expect(quickAddAutocompletePluginKey.getState(editorView.state)).toBeNull();
+    expect(cancel).not.toHaveBeenCalled();
+    // The typed text is untouched — closing the popup discards only the
+    // popup, never the draft.
+    expect(editorView.state.doc.textContent).toBe("#");
+
+    // With the popup already closed, a SECOND Escape reaches `commitKeymap`
+    // normally — proving this plugin's own precedence over `commitKeymap`
+    // doesn't swallow Escape outright, only while a popup is actually open.
+    pressKey(editorView, "Escape");
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows Todoist's 'Create' fallback once the query matches no Project, and selecting it inserts the token and calls the create hook", () => {
+    const onCreateProject = vi.fn();
+    const { view: editorView } = mount({
+      projects: [{ id: "1", name: "Inbox" }],
+      onCreateProject,
+    });
+
+    type(editorView, "#brandnew");
+    const popup = quickAddAutocompletePluginKey.getState(editorView.state);
+    expect(popup?.options).toEqual([{ kind: "create", query: "brandnew" }]);
+
+    pressKey(editorView, "Enter");
+    expect(onCreateProject).toHaveBeenCalledWith("brandnew");
+    expect(editorView.state.doc.textContent).toBe("#brandnew ");
+  });
+
+  it("selecting 'Create' with no onCreateProject hook still inserts the token — Create is unbuilt only where wiring is missing, never a dead end", () => {
+    const { view: editorView } = mount({ projects: [] });
+
+    type(editorView, "#zzznope");
+    pressKey(editorView, "Enter");
+
+    expect(editorView.state.doc.textContent).toBe("#zzznope ");
+  });
+
+  it("a bare '@' with zero Labels opens an empty listbox, and Enter still submits normally (Todoist's own captured empty-listbox case)", () => {
+    const commit = vi.fn();
+    const { view: editorView } = mount({ labels: [], commit });
+
+    type(editorView, "@");
+    const popup = quickAddAutocompletePluginKey.getState(editorView.state);
+    expect(popup?.options).toEqual([]);
+
+    // The autocomplete plugin itself returns `false` here (nothing to
+    // select), letting `commitKeymap`'s own `Enter` binding run instead —
+    // `prosemirror-keymap`'s own wrapper calls `preventDefault()` whenever
+    // ANY bound command returns true, so `defaultPrevented` being `true`
+    // here reflects `commitKeymap` handling it, not this plugin.
+    pressKey(editorView, "Enter");
+    expect(commit).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes on its own once a space is typed, ending the trigger run", () => {
+    const { view: editorView } = mount({ projects: [{ id: "1", name: "Inbox" }] });
+
+    type(editorView, "#In");
+    expect(quickAddAutocompletePluginKey.getState(editorView.state)).not.toBeNull();
+
+    type(editorView, " ");
+    expect(quickAddAutocompletePluginKey.getState(editorView.state)).toBeNull();
   });
 });
