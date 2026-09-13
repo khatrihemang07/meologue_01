@@ -88,6 +88,10 @@ export interface ProjectViewProps {
   project: Project;
   sections: Section[];
   tasks: Task[];
+  /** ROW-14 (parity-ledger.md): every completed Task anywhere — forwarded straight through to `TaskList`, which does its own scoping down to this Project's own top-level rows (that component's own doc comment). Defaults to empty. */
+  completedTasks?: Task[];
+  /** Un-completes a Task from `completedTasks` above — forwarded straight through to `TaskList`. */
+  onUncomplete?: (task: Task) => void;
   /** Forwarded straight through to `TaskList` — see `TaskDetailActions`'s own doc comment (task-row.tsx). */
   detailActions: TaskDetailActions;
   onRename: (name: string) => void;
@@ -142,6 +146,8 @@ export function ProjectView({
   project,
   sections,
   tasks,
+  completedTasks = [],
+  onUncomplete,
   detailActions,
   onRename,
   onSetColour,
@@ -511,6 +517,8 @@ export function ProjectView({
         <h2 className="font-medium text-sm">Tasks</h2>
         <TaskList
           tasks={tasks}
+          completedTasks={completedTasks}
+          onUncomplete={onUncomplete}
           sections={sections.filter((section) => !section.archived)}
           projectId={project.id}
           emptyMessage="Nothing in this Project yet. Add a Task above to get started."

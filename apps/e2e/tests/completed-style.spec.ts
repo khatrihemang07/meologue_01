@@ -53,8 +53,11 @@ import { entryRow, sendEntry, uniqueEntryBody, waitForTaskCompleted } from "./he
  * (`li.list-none input:checked ~ div`, the Entry bubble/History checklist
  * item — unchanged by #237, and everything else has to match IT), the two
  * the ticket names (the day-tasks summary widget, `history.tsx`'s
- * `DayTasksRow`; Todo's "Completed (n)" disclosure,
- * `completed-tasks.tsx`), plus `task-detail-view.tsx`'s title and
+ * `DayTasksRow`; Todo's own Inbox list, `completed-tasks.tsx`'s
+ * `CompletedTaskRow` — ROW-14, parity-ledger.md, the user's 2026-09-13
+ * decision to match Todoist replaced this surface's own separate
+ * "Completed (n)" disclosure with an inline row, on screen with no click
+ * needed to reach it), plus `task-detail-view.tsx`'s title and
  * `task-search-page.tsx` — both cheap to reach from the Task this spec
  * already ticks. `filter-view.tsx` is deliberately skipped: that view
  * lists active Tasks only, and a completed row is not reachable there
@@ -268,13 +271,16 @@ test("a completed Task's look — decoration and colour — agrees across every 
     await page.keyboard.press("Escape");
     await expect(dialog).toHaveCount(0);
 
-    // 4. Todo's "Completed (n)" disclosure — completed-tasks.tsx.
+    // 4. Todo's own Inbox list — completed-tasks.tsx's `CompletedTaskRow`,
+    // interleaved inline since ROW-14 (parity-ledger.md, the user's
+    // 2026-09-13 decision to match Todoist) rather than behind a separate
+    // "Completed (n)" disclosure, so the row is already on screen with no
+    // click needed to reveal it.
     await page.goto("/todo/inbox");
-    await page.getByText(/^Completed \(\d+\)$/).click();
-    const completedDisclosure = page.locator(".completed-task-text");
-    await expect(completedDisclosure).toBeVisible();
-    const disclosure = await renderedStyle(completedDisclosure);
-    const disclosureExpected = await resolvedVarColor(completedDisclosure, variant.colorVar);
+    const inboxCompletedRow = page.locator(".completed-task-text");
+    await expect(inboxCompletedRow).toBeVisible();
+    const disclosure = await renderedStyle(inboxCompletedRow);
+    const disclosureExpected = await resolvedVarColor(inboxCompletedRow, variant.colorVar);
 
     // 5. task-search-page.tsx, "Show completed" on — reached directly by
     // URL (its own `?q=`/`completed=1` params) rather than driving the
@@ -293,7 +299,7 @@ test("a completed Task's look — decoration and colour — agrees across every 
       ["Entry bubble / History (reference)", reference, referenceExpected],
       ["Day-tasks summary widget", dayBlock, dayBlockExpected],
       ["Task detail dialog title", taskDetail, taskDetailExpected],
-      ["Todo Completed disclosure", disclosure, disclosureExpected],
+      ["Todo Inbox list (inline)", disclosure, disclosureExpected],
       ["Task search page", search, searchExpected],
     ];
 

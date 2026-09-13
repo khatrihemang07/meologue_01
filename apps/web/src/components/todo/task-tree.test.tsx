@@ -385,4 +385,128 @@ describe("TaskTree", () => {
     await waitFor(() => expect(reorderTask).toHaveBeenCalledTimes(1));
     expect(setTaskParent).not.toHaveBeenCalled();
   });
+
+  // ROW-14 (parity-ledger.md), the user's 2026-09-13 decision to match
+  // Todoist: a completed Task interleaves inline, at its own `orderKey`
+  // position, in this same list — not in a separate collapsed disclosure.
+  describe("completed Tasks interleave inline (ROW-14)", () => {
+    it("renders between its own active neighbours, by orderKey, with aria-checked", async () => {
+      const a = task({ id: "a", content: "first", orderKey: "A" });
+      const done = task({
+        id: "mid",
+        content: "middle, done",
+        orderKey: "B",
+        completedAt: "2026-01-01T00:00:00.000Z",
+      });
+      const c = task({ id: "c", content: "last", orderKey: "C" });
+      renderTree({ tasks: [a, c], completedTasks: [done] });
+
+      await waitFor(() => expect(screen.getByText("last")).toBeInTheDocument());
+      const rows = screen.getAllByRole("listitem");
+      // The trailing drop zone (an `aria-hidden` `<li>`) carries no
+      // `listitem` role, so this reads as exactly the three real rows,
+      // in DOM order.
+      expect(rows.map((row) => row.textContent)).toEqual([
+        expect.stringContaining("first"),
+        expect.stringContaining("middle, done"),
+        expect.stringContaining("last"),
+      ]);
+      const checkbox = screen.getByRole("checkbox", { name: "Mark task as incomplete" });
+      expect(checkbox).toHaveAttribute("aria-checked", "true");
+    });
+
+    it("renders even when every active Task is gone — a merely-completed list is not empty", async () => {
+      const done = task({
+        id: "a",
+        content: "only completed",
+        completedAt: "2026-01-01T00:00:00.000Z",
+      });
+      renderTree({ tasks: [], completedTasks: [done] });
+
+      expect(await screen.findByText("only completed")).toBeInTheDocument();
+    });
+
+    it("clicking a completed row's checkbox calls onUncomplete with the Task, not onComplete", async () => {
+      const onUncomplete = vi.fn();
+      const onComplete = vi.fn();
+      const done = task({ id: "a", content: "done", completedAt: "2026-01-01T00:00:00.000Z" });
+      renderTree({ tasks: [], completedTasks: [done], onUncomplete, onComplete });
+
+      fireEvent.click(screen.getByRole("checkbox", { name: "Mark task as incomplete" }));
+
+      expect(onUncomplete).toHaveBeenCalledWith(done);
+      expect(onComplete).not.toHaveBeenCalled();
+    });
+
+    it("clicking a completed row's own title opens its detail view", async () => {
+      const onOpenDetail = vi.fn();
+      const done = task({ id: "a", content: "done", completedAt: "2026-01-01T00:00:00.000Z" });
+      renderTree({
+        tasks: [],
+        completedTasks: [done],
+        detailActions: {
+          projects: [],
+          labels: [],
+          onOpenDetail,
+          onSetPriority: vi.fn(),
+          onSetDate: vi.fn(),
+          onSetDateString: vi.fn(),
+          datesWithTasks: new Map(),
+          onSetProject: vi.fn(),
+          onSetLabels: vi.fn(),
+          onCopyLink: vi.fn(),
+          onRename: vi.fn(),
+          commentCountFor: vi.fn(() => 0),
+        },
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "done" }));
+
+      expect(onOpenDetail).toHaveBeenCalledWith(done);
+    });
+
+    it("gives a completed row's own title the shared completed-style class", () => {
+      const done = task({ id: "a", content: "done", completedAt: "2026-01-01T00:00:00.000Z" });
+      renderTree({ tasks: [], completedTasks: [done] });
+
+      expect(screen.getByRole("button", { name: "done" })).toHaveClass("completed-task-text");
+    });
+
+    it("carries no drag handle and is excluded from measureRows' own selector", async () => {
+      // `task-tree.tsx`'s own `measureRows` reads
+      // `:scope > li[data-task-id]:not([data-completed-task])` — a
+      // completed row has to fail that selector, or an active drag's own
+      // index space (computed against the active-only `tasks` array)
+      // desyncs from the rects it's measured against (this file's own
+      // header comment on `TaskTreeProps.completedTasks`). Asserted
+      // directly against the attribute contract rather than through a
+      // simulated drag: `dropIndexForPointer`'s own banding can land on
+      // the same target rect whether or not the exclusion holds whenever
+      // a completed row's neighbour is what a drag would have hit anyway,
+      // which makes a black-box drag a weak proof of this specific
+      // exclusion — the attribute itself is what the selector actually
+      // reads.
+      const a = task({ id: "a", content: "a", orderKey: "A" });
+      const done = task({
+        id: "mid",
+        content: "done",
+        orderKey: "B",
+        completedAt: "2026-01-01T00:00:00.000Z",
+      });
+      renderTree({ tasks: [a], completedTasks: [done] });
+
+      await waitFor(() => expect(screen.getByText("done")).toBeInTheDocument());
+      const completedRow = screen.getByText("done").closest("li");
+      expect(completedRow).toHaveAttribute("data-completed-task", "true");
+      expect(completedRow).toHaveAttribute("data-task-id", "mid");
+      expect(completedRow?.querySelector('[data-testid="task-drag-handle"]')).toBeNull();
+      // The identical selector `measureRows` itself runs, scoped to the
+      // shared `<ul>` both rows are direct children of.
+      const list = completedRow?.parentElement;
+      const measured = list
+        ? Array.from(list.querySelectorAll(":scope > li[data-task-id]:not([data-completed-task])"))
+        : [];
+      expect(measured.map((el) => el.getAttribute("data-task-id"))).toEqual(["a"]);
+    });
+  });
 });

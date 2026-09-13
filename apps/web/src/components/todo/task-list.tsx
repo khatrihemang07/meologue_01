@@ -24,11 +24,25 @@ import { TaskTree } from "@/components/todo/task-tree";
 export interface TaskListProps {
   /** Top-level Tasks in this scope — TaskStore.listByProject's own result, Inbox's or one Project's. */
   tasks: Task[];
+  /**
+   * ROW-14 (parity-ledger.md), the user's 2026-09-13 decision to match
+   * Todoist: every completed Task anywhere (the flat `completedTasks`
+   * `useEntryStore()` already returns, `todo-page.tsx`) — this component
+   * narrows it to top-level, this-scope rows itself
+   * (`topLevelCompletedTasks` below), the identical "the caller hands
+   * over the flat list, this component does its own filtering" split
+   * `tasks`/`sections`/`projectId` already establish for the active half.
+   * Defaults to empty so a caller with nothing completed anywhere (or one
+   * that hasn't been updated yet) needs no change.
+   */
+  completedTasks?: Task[];
+  /** Un-completes a Task from `completedTasks` above — forwarded straight through to every `TaskTree` this list renders (see that component's own doc comment). */
+  onUncomplete?: (task: Task) => void;
   /** This Project's own Sections, flat and already in manual order (ProjectStore.listSections) — empty for Inbox, which has none (Section.projectId is required, never Inbox). */
   sections: Section[];
   /** The Project this list belongs to, or `null` for Inbox — task-tree.tsx's own `TaskTree.projectId` doc comment on why keyboard outdent needs it. */
   projectId: Project["id"] | null;
-  /** Shown in place of every row when `tasks` is empty — the caller's own words, since Inbox's and a Project's empty states read differently (todo-page.tsx). */
+  /** Shown in place of every row when both `tasks` AND every top-level completed Task in this scope are empty — the caller's own words, since Inbox's and a Project's empty states read differently (todo-page.tsx). ROW-14 widened this from "`tasks` alone" so a list holding only completed rows doesn't read as empty (this ticket's own report). */
   emptyMessage: string;
   /** Passed straight through to every `TaskTree`/`TaskRow` this list renders — see `TaskDetailActions`'s own doc comment (task-row.tsx). */
   detailActions: TaskDetailActions;
@@ -46,6 +60,8 @@ export interface TaskListProps {
 
 export function TaskList({
   tasks,
+  completedTasks = [],
+  onUncomplete,
   sections,
   projectId,
   emptyMessage,
@@ -60,10 +76,25 @@ export function TaskList({
   listTaskChildren,
   listTasksInProject,
 }: TaskListProps) {
-  if (tasks.length === 0) {
+  // ROW-14 (parity-ledger.md): narrowed to THIS scope's own top-level rows
+  // — `completedTasks` itself is the flat, whole-account list every other
+  // caller of it already filters client-side (`todo-page.tsx`'s
+  // `openTaskSubtasks`, its own doc comment on the identical narrowing).
+  // `parentId === null` is what "top-level" means here; a completed
+  // sub-task is deliberately left out of this narrowing — see
+  // `TaskTree`'s own `completedTasks` doc comment for why interleaving one
+  // level deeper is this ticket's own named, deferred gap rather than
+  // built ahead of being asked for.
+  const topLevelCompletedTasks = completedTasks.filter(
+    (task) => task.projectId === projectId && task.parentId === null,
+  );
+
+  if (tasks.length === 0 && topLevelCompletedTasks.length === 0) {
     // A real state, not a blank panel — todo-page.tsx's own pre-#171
     // Inbox comment on this exact rule, extended here to cover a Project
-    // with Sections but nothing filed in any of them yet.
+    // with Sections but nothing filed in any of them yet. ROW-14 widens
+    // the condition itself: a scope holding only completed Tasks now
+    // falls through to render them, rather than reading as empty.
     return <p className="px-3 py-6 text-center text-muted-foreground text-sm">{emptyMessage}</p>;
   }
 
@@ -81,6 +112,7 @@ export function TaskList({
     onRequestDelete,
     onOpenSchedule,
     onMoveToSection,
+    onUncomplete,
     reorderTask,
     setTaskParent,
     listTaskChildren,
@@ -90,28 +122,47 @@ export function TaskList({
   if (sections.length === 0) {
     // Inbox, or a Project with no Sections yet — one flat TaskTree, no
     // headers, identical to issue #168's own original Inbox rendering.
-    return <TaskTree tasks={tasks} depth={1} sectionOptions={sectionOptions} {...treeProps} />;
+    return (
+      <TaskTree
+        tasks={tasks}
+        completedTasks={topLevelCompletedTasks}
+        depth={1}
+        sectionOptions={sectionOptions}
+        {...treeProps}
+      />
+    );
   }
 
   const unsectioned = tasks.filter((task) => task.sectionId === null);
+  const unsectionedCompleted = topLevelCompletedTasks.filter((task) => task.sectionId === null);
 
   return (
     <div className="flex flex-col gap-4">
-      {unsectioned.length > 0 && (
-        <TaskTree tasks={unsectioned} depth={1} sectionOptions={sectionOptions} {...treeProps} />
+      {(unsectioned.length > 0 || unsectionedCompleted.length > 0) && (
+        <TaskTree
+          tasks={unsectioned}
+          completedTasks={unsectionedCompleted}
+          depth={1}
+          sectionOptions={sectionOptions}
+          {...treeProps}
+        />
       )}
       {sections.map((section) => {
         const sectionTasks = tasks.filter((task) => task.sectionId === section.id);
+        const sectionCompleted = topLevelCompletedTasks.filter(
+          (task) => task.sectionId === section.id,
+        );
         return (
           <section key={section.id}>
             <h2 className="px-3 py-1 font-medium text-sm">{section.name}</h2>
-            {sectionTasks.length === 0 ? (
+            {sectionTasks.length === 0 && sectionCompleted.length === 0 ? (
               <p className="px-3 py-2 text-muted-foreground text-xs">
                 Nothing in this Section yet.
               </p>
             ) : (
               <TaskTree
                 tasks={sectionTasks}
+                completedTasks={sectionCompleted}
                 depth={1}
                 sectionOptions={sectionOptions}
                 {...treeProps}

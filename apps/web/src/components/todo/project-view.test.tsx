@@ -1,4 +1,4 @@
-import type { Project, Section } from "@meologue/core";
+import type { Project, Section, Task } from "@meologue/core";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { describe, expect, it, vi } from "vitest";
@@ -63,6 +63,32 @@ function section(overrides: Partial<Section> = {}): Section {
     seq: 1,
     syncedAt: "2026-01-01T00:00:00.000Z",
     deletedAt: null,
+    ...overrides,
+  };
+}
+
+function task(overrides: Partial<Task> = {}): Task {
+  return {
+    id: "t1",
+    deviceId: "device-a",
+    content: "buy milk",
+    completedAt: null,
+    orderKey: "V",
+    dayOrder: "V",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    seq: 1,
+    syncedAt: "2026-01-01T00:00:00.000Z",
+    deletedAt: null,
+    date: null,
+    deadline: null,
+    priority: 1,
+    labelIds: [],
+    dateString: null,
+    projectId: "p1",
+    sectionId: null,
+    parentId: null,
+    description: null,
     ...overrides,
   };
 }
@@ -491,5 +517,59 @@ describe("ProjectView — Sections cap", () => {
     await waitFor(() =>
       expect(screen.getByRole("alert")).toHaveTextContent("a Project may hold at most 20 Sections"),
     );
+  });
+});
+
+// ROW-14 (parity-ledger.md), the user's 2026-09-13 decision to match
+// Todoist: a Project's own view had NO completed-Task display at all
+// before this ticket (`todo-page.tsx`'s own pre-existing comment named
+// that gap explicitly) — `completedTasks`/`onUncomplete` are this file's
+// own new door onto `TaskList`'s identical props (that component's own
+// doc comment covers the interleaving itself; this only proves the
+// pass-through).
+describe("ProjectView — completed Tasks interleave inline (ROW-14)", () => {
+  it("renders a completed Task inline, even with no active Tasks in the Project", () => {
+    renderProjectView({
+      tasks: [],
+      completedTasks: [
+        task({ id: "done", content: "done already", completedAt: "2026-01-01T00:00:00.000Z" }),
+      ],
+    });
+
+    expect(screen.getByRole("checkbox", { name: "Mark task as incomplete" })).toBeInTheDocument();
+    expect(screen.getByText("done already")).toBeInTheDocument();
+    // A scope holding only completed rows must not read as empty.
+    expect(screen.queryByText(/Nothing in this Project yet/)).not.toBeInTheDocument();
+  });
+
+  it("un-completing calls the onUncomplete prop with the Task", () => {
+    const onUncomplete = vi.fn();
+    const completed = task({
+      id: "done",
+      content: "done already",
+      completedAt: "2026-01-01T00:00:00.000Z",
+    });
+    renderProjectView({ tasks: [], completedTasks: [completed], onUncomplete });
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Mark task as incomplete" }));
+
+    expect(onUncomplete).toHaveBeenCalledWith(completed);
+  });
+
+  it("only interleaves completed Tasks that belong to this Project", () => {
+    renderProjectView({
+      tasks: [],
+      completedTasks: [
+        task({
+          id: "elsewhere",
+          content: "in another Project",
+          projectId: "p2",
+          completedAt: "2026-01-01T00:00:00.000Z",
+        }),
+      ],
+    });
+
+    expect(screen.queryByText("in another Project")).not.toBeInTheDocument();
+    expect(screen.getByText(/Nothing in this Project yet/)).toBeInTheDocument();
   });
 });

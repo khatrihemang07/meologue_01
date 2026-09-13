@@ -1,7 +1,7 @@
 import type { Task } from "@meologue/core";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { CompletedTasks } from "./completed-tasks";
+import { CompletedTaskRow } from "./completed-tasks";
 
 function task(overrides: Partial<Task> = {}): Task {
   return {
@@ -40,27 +40,58 @@ function task(overrides: Partial<Task> = {}): Task {
   };
 }
 
-describe("CompletedTasks", () => {
-  it("renders nothing when there is nothing completed yet", () => {
-    const { container } = render(<CompletedTasks tasks={[]} onUncomplete={vi.fn()} />);
+/**
+ * ROW-14 (parity-ledger.md), the user's 2026-09-13 decision to match
+ * Todoist: this file used to cover `CompletedTasks`, a collapsed
+ * `<details>` disclosure below Inbox's own list. That component is gone —
+ * `task-tree.tsx` now interleaves one `CompletedTaskRow` per completed
+ * sibling inline, in place, and this suite covers that row alone (its own
+ * position among other rows is `task-tree.test.tsx`'s "completed Tasks
+ * interleave inline (ROW-14)" describe block, not this file's concern).
+ */
+describe("CompletedTaskRow", () => {
+  it("renders with its own checkbox already checked, matching Todoist's element/role/name", () => {
+    render(
+      <CompletedTaskRow task={task()} depth={1} onUncomplete={vi.fn()} onOpenDetail={vi.fn()} />,
+    );
 
-    expect(container).toBeEmptyDOMElement();
-  });
-
-  it("lists a completed Task, findable behind the disclosure", () => {
-    render(<CompletedTasks tasks={[task()]} onUncomplete={vi.fn()} />);
-
-    expect(screen.getByText("Completed (1)")).toBeInTheDocument();
+    const checkbox = screen.getByRole("checkbox", { name: "Mark task as incomplete" });
+    expect(checkbox).toHaveAttribute("aria-checked", "true");
     expect(screen.getByText("buy milk")).toBeInTheDocument();
   });
 
-  it("restores a completed Task through its own control", () => {
+  it("un-completes through its own checkbox, with the whole Task, not just its id", () => {
     const onUncomplete = vi.fn();
-    render(<CompletedTasks tasks={[task({ id: "a" })]} onUncomplete={onUncomplete} />);
+    const completed = task({ id: "a" });
+    render(
+      <CompletedTaskRow
+        task={completed}
+        depth={1}
+        onUncomplete={onUncomplete}
+        onOpenDetail={vi.fn()}
+      />,
+    );
 
-    fireEvent.click(screen.getByRole("button", { name: 'Restore "buy milk"' }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Mark task as incomplete" }));
 
-    expect(onUncomplete).toHaveBeenCalledWith("a");
+    expect(onUncomplete).toHaveBeenCalledWith(completed);
+  });
+
+  it("opens the Task's own detail view when its title is clicked", () => {
+    const onOpenDetail = vi.fn();
+    const completed = task({ id: "a" });
+    render(
+      <CompletedTaskRow
+        task={completed}
+        depth={1}
+        onUncomplete={vi.fn()}
+        onOpenDetail={onOpenDetail}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "buy milk" }));
+
+    expect(onOpenDetail).toHaveBeenCalledWith(completed);
   });
 
   // Issue #237: this surface used to hardcode `line-through` unconditionally
@@ -71,13 +102,16 @@ describe("CompletedTasks", () => {
   // reads (alongside `.completed-sample`); asserting it, and asserting
   // `line-through` is gone, is what would catch a regression back to the
   // hardcoded class. jsdom applies no real cascade, so this only proves the
-  // class is present/absent, not the resulting decoration or colour.
+  // class is present/absent, not the resulting decoration or colour
+  // (`completed-style.spec.ts`, apps/e2e, is what proves that).
   it("gives a completed Task's own text the shared completed-style class instead of hardcoding line-through", () => {
-    render(<CompletedTasks tasks={[task()]} onUncomplete={vi.fn()} />);
+    render(
+      <CompletedTaskRow task={task()} depth={1} onUncomplete={vi.fn()} onOpenDetail={vi.fn()} />,
+    );
 
-    const text = screen.getByText("buy milk");
-    expect(text).toHaveClass("completed-task-text");
-    expect(text).not.toHaveClass("line-through");
+    const title = screen.getByRole("button", { name: "buy milk" });
+    expect(title).toHaveClass("completed-task-text");
+    expect(title).not.toHaveClass("line-through");
   });
 
   // ROW-15 (parity-ledger.md), issue #250: this surface used to drop a
@@ -91,14 +125,60 @@ describe("CompletedTasks", () => {
     // runs on, to fall past DATE-11's "further out" edge and land on the
     // plain absolute `formatDay` wording ("2 Jan", day-then-month) rather
     // than a relative word this test would then have to compute for itself.
-    render(<CompletedTasks tasks={[task({ date: "2020-01-02" })]} onUncomplete={vi.fn()} />);
+    render(
+      <CompletedTaskRow
+        task={task({ date: "2020-01-02" })}
+        depth={1}
+        onUncomplete={vi.fn()}
+        onOpenDetail={vi.fn()}
+      />,
+    );
 
     expect(screen.getByText("2 Jan")).toBeInTheDocument();
   });
 
   it("renders no date at all for a completed Task that never had one", () => {
-    render(<CompletedTasks tasks={[task({ date: null })]} onUncomplete={vi.fn()} />);
+    render(
+      <CompletedTaskRow
+        task={task({ date: null })}
+        depth={1}
+        onUncomplete={vi.fn()}
+        onOpenDetail={vi.fn()}
+      />,
+    );
 
     expect(screen.queryByText("2 Jan")).not.toBeInTheDocument();
+  });
+
+  it("indents by depth exactly like an active row (task-row-content.tsx's own formula)", () => {
+    render(
+      <CompletedTaskRow task={task()} depth={3} onUncomplete={vi.fn()} onOpenDetail={vi.fn()} />,
+    );
+
+    const row = screen.getByText("buy milk").closest("li");
+    expect(row).toHaveStyle({ paddingLeft: "52px" });
+  });
+
+  it("carries data-task-id (for todo-keymap.ts's focusedTaskId) and data-completed-task (for task-tree.tsx's own measureRows exclusion)", () => {
+    render(
+      <CompletedTaskRow
+        task={task({ id: "a" })}
+        depth={1}
+        onUncomplete={vi.fn()}
+        onOpenDetail={vi.fn()}
+      />,
+    );
+
+    const row = screen.getByText("buy milk").closest("li");
+    expect(row).toHaveAttribute("data-task-id", "a");
+    expect(row).toHaveAttribute("data-completed-task", "true");
+  });
+
+  it("marks its own title as a row-nav-target, the same cycle stop an active row's title is", () => {
+    render(
+      <CompletedTaskRow task={task()} depth={1} onUncomplete={vi.fn()} onOpenDetail={vi.fn()} />,
+    );
+
+    expect(screen.getByRole("button", { name: "buy milk" })).toHaveAttribute("data-row-nav-target");
   });
 });

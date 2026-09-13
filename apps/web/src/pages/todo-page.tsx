@@ -9,7 +9,6 @@ import { inlineProse } from "@/components/inline-prose";
 import { Shell } from "@/components/shell";
 import { ActivityFeed } from "@/components/todo/activity-feed";
 import { AddTaskForm } from "@/components/todo/add-task-form";
-import { CompletedTasks } from "@/components/todo/completed-tasks";
 import { CompletionToastBody } from "@/components/todo/completion-toast";
 import { FilterView } from "@/components/todo/filter-view";
 import { FiltersView } from "@/components/todo/filters-view";
@@ -234,26 +233,42 @@ export interface TodoPageProps {
  * `composerSlot={<TodoNav />}` docking Todo's own internal navigation at
  * the pane's bottom edge, regardless of which view is open.
  *
- * The Add form, the Completed disclosure, the delete confirmation, and the
- * schedule sheet are all owned here, once, and shared by every view that
- * needs them rather than each growing its own copy — deleting or
- * scheduling a Task is the identical act regardless of which view's row a
- * reader tapped it from, and `confirmingTask`/`schedulingTask` below are
- * looked up against the flat `tasks` array precisely because that array
- * still holds every Task anywhere (its own doc comment, above), so one
- * lookup works for a row from any view without this component needing to
- * know which scope it came from.
+ * The Add form, the delete confirmation, and the schedule sheet are all
+ * owned here, once, and shared by every view that needs them rather than
+ * each growing its own copy — deleting or scheduling a Task is the
+ * identical act regardless of which view's row a reader tapped it from,
+ * and `confirmingTask`/`schedulingTask` below are looked up against the
+ * flat `tasks` array precisely because that array still holds every Task
+ * anywhere (its own doc comment, above), so one lookup works for a row
+ * from any view without this component needing to know which scope it
+ * came from.
+ *
+ * ROW-14 (parity-ledger.md), the user's 2026-09-13 decision to match
+ * Todoist: there is no Completed disclosure here any more.
+ * `completed-tasks.tsx` used to be exactly that — a separate, collapsed
+ * `<details>` this page rendered once, below Inbox's own list — and this
+ * page's own `completedTasks` (from `useEntryStore()`) now instead flows
+ * straight into `TaskList`/`ProjectView`, which interleave each completed
+ * Task inline, in place, alongside the active siblings it belongs among
+ * (`task-tree.tsx`'s own doc comment on the merge). `handleUncompleteTask`
+ * below is the one new door this page adds — the task-shaped callback
+ * `TaskList`'s own `onUncomplete` prop calls, adapting the store's
+ * id-based `uncompleteTask` the identical way `handleCompleteTask` already
+ * adapts `handleComplete`.
  *
  * The Add form is shared too, but it is **not** context-free — see
  * `captureDate`/`captureProjectId` below. It renders once, but not first:
- * issue #252 moved its render to just before `CompletedTasks` (near the
- * bottom of the JSX below) so it lands after whichever list is on screen
- * rather than above it, matching Todoist's own end-of-list "+ Add task"
- * row (NAV-10, parity ledger) — position only. The elements themselves are
- * unchanged: the field stays always-mounted and the Add button stays
- * rendered-but-disabled rather than either unmounting until a click, the
- * click-to-reveal composer with its own pickers being a deliberately
- * deferred, separate ticket (NAV-12, parity ledger).
+ * issue #252 moved its render to just before the Completed disclosure that
+ * used to sit here (near the bottom of the JSX below) so it lands after
+ * whichever list is on screen rather than above it, matching Todoist's own
+ * end-of-list "+ Add task" row (NAV-10, parity ledger) — position only,
+ * and unaffected by that disclosure's own later removal: the list itself
+ * is still whatever's on screen, now just interleaved rather than
+ * followed by a second block. The elements themselves are unchanged: the
+ * field stays always-mounted and the Add button stays rendered-but-
+ * disabled rather than either unmounting until a click, the click-to-
+ * reveal composer with its own pickers being a deliberately deferred,
+ * separate ticket (NAV-12, parity ledger).
  */
 export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   const {
@@ -614,6 +629,19 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     handleRequestDelete(task.id);
   }
 
+  // ROW-14 (parity-ledger.md), the user's 2026-09-13 decision to match
+  // Todoist: a completed row's own checkbox click reaches this — not
+  // `handleCompleteTask` again — through `TaskList`/`TaskTree`'s own
+  // `onUncomplete` prop (task-tree.tsx's own doc comment on why it's a
+  // second callback, not a branch inside `onComplete`). The task-shaped
+  // signature matches every other TaskList/TaskTree callback on this page
+  // (`handleCompleteTask` et al., just above) rather than the store's own
+  // id-based `uncompleteTask` — this page is the one place that adapts
+  // between the two shapes, not every caller several layers down.
+  function handleUncompleteTask(task: Task) {
+    uncompleteTask(task.id);
+  }
+
   function handleOpenScheduleTask(task: Task) {
     handleOpenSchedule(task.id);
   }
@@ -773,6 +801,10 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
     onSetTaskDate: setTaskDate,
     onSetTaskDeadline: setTaskDeadline,
     onRequestDelete: handleRequestDelete,
+    // KBD-01: E completes the focused task, and Cmd/Ctrl+Shift+C copies its
+    // link — both reuse the handlers the row's own controls already call.
+    onCompleteTask: handleCompleteTask,
+    onCopyLink: copyTaskLink,
     onOpenQuickFind: () => setQuickFindOpen(true),
     onShowShortcuts: () => setShortcutsOpen(true),
     onNavigate: navigate,
@@ -944,6 +976,8 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
       {backgroundView.view === "inbox" && (
         <TaskList
           tasks={scopedTasks}
+          completedTasks={completedTasks}
+          onUncomplete={handleUncompleteTask}
           sections={[]}
           projectId={null}
           emptyMessage="Nothing in your Inbox. Add a Task above to get started."
@@ -973,6 +1007,8 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
             project={currentProject}
             sections={sections}
             tasks={scopedTasks}
+            completedTasks={completedTasks}
+            onUncomplete={handleUncompleteTask}
             detailActions={detailActions}
             onRename={(name) => renameProject(currentProject.id, name)}
             onSetColour={(colour) => setProjectColour(currentProject.id, colour)}
@@ -1139,19 +1175,6 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
         onCreateProject={addProject}
         onCreateLabel={addLabel}
       />
-
-      {/* The Completed disclosure is Inbox-specific — Today's own Tasks
-          are never completed *from* Today in a way that would need a
-          second copy of this list; completing a Task from either view
-          moves it into the identical shared `completedTasks`, and this is
-          Todo's one door onto it, the same reasoning `handleComplete`'s
-          own doc comment gives for the schedule sheet being shared rather
-          than per-view. A Project's own view has no Completed disclosure
-          of its own — out of this ticket's scope, named in its report
-          rather than built ahead of being asked for. */}
-      {backgroundView.view === "inbox" && (
-        <CompletedTasks tasks={completedTasks} onUncomplete={uncompleteTask} />
-      )}
 
       {schedulingTask !== null && (
         // `LazyTaskScheduleSheet`'s own header comment: this and

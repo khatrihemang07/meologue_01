@@ -528,6 +528,24 @@ describe("TodoPage", () => {
     expect(screen.getByText(/Nothing in your Inbox/)).toBeInTheDocument();
   });
 
+  // ROW-14 (parity-ledger.md), the user's 2026-09-13 decision to match
+  // Todoist: an Inbox holding only a completed Task is not the same thing
+  // as an empty one — this used to be indistinguishable, since the old
+  // "Completed (n)" disclosure lived below `TaskList`'s own empty-state
+  // paragraph regardless of what was inside it.
+  it("does not read Inbox as empty when it holds only a completed Task", () => {
+    renderTodoPage(
+      inboxContext([], {
+        completedTasks: [
+          task({ id: "a", content: "done already", completedAt: "2026-01-02T00:00:00.000Z" }),
+        ],
+      }),
+    );
+
+    expect(screen.queryByText(/Nothing in your Inbox/)).not.toBeInTheDocument();
+    expect(screen.getByText("done already")).toBeInTheDocument();
+  });
+
   it("lists active Tasks", async () => {
     renderTodoPage(inboxContext([task({ id: "a", content: "call mum" })]));
 
@@ -730,7 +748,16 @@ describe("TodoPage", () => {
     });
   });
 
-  it("restores a completed Task from the durable Completed section, independent of any toast", () => {
+  // ROW-14 (parity-ledger.md), the user's 2026-09-13 decision to match
+  // Todoist: a completed Task no longer lives behind a separate, durable
+  // "Completed" disclosure with its own Restore button — it renders
+  // inline, in place, and its own checkbox (already `aria-checked="true"`,
+  // `aria-label="Mark task as incomplete"`) is what un-completes it, the
+  // same control an active row's checkbox already is. Independent of any
+  // toast still holds: this Task's own `completedAt` is what puts it here,
+  // not a pending-undo ref (`pendingUndoRef`, todo-page.tsx) that a toast
+  // could have long since cleared.
+  it("restores a completed Task inline, through its own checkbox, independent of any toast", () => {
     const uncompleteTask = vi.fn();
     renderTodoPage(
       readyContext({
@@ -741,7 +768,7 @@ describe("TodoPage", () => {
       }),
     );
 
-    fireEvent.click(screen.getByRole("button", { name: 'Restore "call mum"' }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Mark task as incomplete" }));
 
     expect(uncompleteTask).toHaveBeenCalledWith("a");
   });

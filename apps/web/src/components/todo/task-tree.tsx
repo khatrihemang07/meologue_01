@@ -65,6 +65,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { PointerEvent } from "react";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
+import { CompletedTaskRow } from "@/components/todo/completed-tasks";
 import { type TaskDetailActions, TaskRow } from "@/components/todo/task-row";
 import { taskChildrenQueryKey } from "@/lib/query-keys";
 import { refocusTaskHandle } from "@/lib/refocus-task-handle";
@@ -74,6 +75,24 @@ import { reorderedTaskOrderKey, siblingMoveDropIndex } from "@/lib/task-reorder"
 export interface TaskTreeProps {
   /** This sibling group, in (orderKey, id) order — TaskStore.listByProject/listChildren's own guarantee, whichever one supplied it. */
   tasks: Task[];
+  /**
+   * ROW-14 (parity-ledger.md), the user's 2026-09-13 decision to match
+   * Todoist: this exact sibling group's own completed Tasks, interleaved
+   * inline at their own `orderKey` position rather than segregated into a
+   * separate list — `mergedRows` below is the one place that does the
+   * interleaving, and `CompletedTaskRow` (completed-tasks.tsx) is what
+   * each one renders as. Defaults to empty, which is what every *nested*
+   * recursive call below still passes (implicitly, by omitting this prop)
+   * — a completed sub-task still doesn't render at all, unchanged from
+   * before this ticket: the ROW-14 artifact only ever measured a flat,
+   * top-level list, and threading a completed-children merge through
+   * every nesting level is a materially bigger, unmeasured change this
+   * ticket's own report names as deferred rather than built ahead of
+   * being asked for.
+   */
+  completedTasks?: Task[];
+  /** Un-completes one of `completedTasks` above — the identical `uncompleteTask` door every other completion-reversal in this app already goes through (CMT-05, parity ledger). Meaningless, and never called, when `completedTasks` is empty. */
+  onUncomplete?: (task: Task) => void;
   /**
    * The Task that owns this group, or `undefined` for a Project/Inbox/
    * Section's own top-level group. Read only for `handleOutdent` below —
@@ -114,6 +133,8 @@ function describeReparentError(error: unknown): string {
 
 export function TaskTree({
   tasks,
+  completedTasks = [],
+  onUncomplete,
   parentTask,
   depth,
   projectId,
@@ -179,8 +200,21 @@ export function TaskTree({
     // of `<li>`s — this level's own siblings, and only those — but is
     // never asked for a *rect* below; see the `rowBox`/`rects.map` split
     // just below for what actually stands in for each `<li>`'s geometry.
+    // `:not([data-completed-task])` (ROW-14, parity ledger): a completed
+    // row now interleaves inline in this same `<ul>` (`CompletedTaskRow`,
+    // completed-tasks.tsx), and carries `data-task-id` too — for
+    // `todo-keymap.ts`'s `focusedTaskId()`, not for this query — so it has
+    // to be excluded explicitly here rather than relying on the selector
+    // above to miss it by accident. A completed row is not draggable and
+    // is never a legal drop/nest target (this file's own `completedTasks`
+    // doc comment on `TaskTreeProps`), and letting it into `rects`/`ids`
+    // would also desync this array's indices from `tasks`' own — every
+    // caller below reads `tasks.findIndex(...)` against the SAME index
+    // space `dropIndexForPointer` computes verdicts over.
     const rows = Array.from(
-      container.querySelectorAll<HTMLElement>(":scope > li[data-task-id]"),
+      container.querySelectorAll<HTMLElement>(
+        ":scope > li[data-task-id]:not([data-completed-task])",
+      ),
     ).filter((element) => element.dataset.taskId !== excludeId);
     return {
       ids: rows.map((element) => element.dataset.taskId ?? ""),
@@ -390,47 +424,92 @@ export function TaskTree({
     refocusTaskHandle(task.id);
   }
 
-  if (tasks.length === 0) {
+  if (tasks.length === 0 && completedTasks.length === 0) {
+    // Issue #171's own original guard, widened by ROW-14: a sibling group
+    // with nothing active AND nothing completed still renders nothing —
+    // but one with only completed rows now falls through to the merged
+    // render below instead of disappearing (see this ticket's own report
+    // on empty states: a list whose only rows are completed must not read
+    // as empty).
     return null;
   }
 
+  // ROW-14 (parity-ledger.md), the user's 2026-09-13 decision to match
+  // Todoist: interleave `completedTasks` into this sibling group's own
+  // render order by `orderKey` (falling back to `id` on a tie, mirroring
+  // TaskStore.listByProject's own `.orderBy(orderKey, id)`) rather than
+  // rendering them as a trailing block — a completed Task keeps the
+  // `orderKey` it had while active (TaskStore.complete never touches it),
+  // so this is genuinely "where it already was," not an approximation.
+  // Only `tasks`' own indices feed `handleMove`/`handleIndent`/
+  // `handlePointerDown` etc. below — `index` here is each active Task's
+  // position within `tasks` alone, untouched by where a completed row
+  // happens to land visually, so none of this file's drag/keyboard
+  // arithmetic (all of it computed against `tasks`) needs to change
+  // shape for this merge to be safe.
+  type Row = { kind: "active"; task: Task; index: number } | { kind: "completed"; task: Task };
+  const rows: Row[] = [
+    ...tasks.map((task, index): Row => ({ kind: "active", task, index })),
+    ...completedTasks.map((task): Row => ({ kind: "completed", task })),
+  ];
+  rows.sort((a, b) => {
+    if (a.task.orderKey !== b.task.orderKey) {
+      return a.task.orderKey < b.task.orderKey ? -1 : 1;
+    }
+    return a.task.id < b.task.id ? -1 : a.task.id > b.task.id ? 1 : 0;
+  });
+
   return (
     <ul ref={listRef} className="flex flex-col">
-      {tasks.map((task, index) => (
-        <TaskTreeRow
-          key={task.id}
-          task={task}
-          depth={depth}
-          projectId={projectId}
-          sectionOptions={sectionOptions}
-          detailActions={detailActions}
-          isDropTarget={drag !== null && overTarget?.kind === "before" && overTarget.id === task.id}
-          isNestTarget={drag !== null && overTarget?.kind === "nest" && overTarget.id === task.id}
-          // The raw, task-taking callbacks — not bound to this row here —
-          // so this row's own nested TaskTree (its sub-tasks, if any) can
-          // forward them unchanged one level deeper, rather than every
-          // level rebuilding a fresh closure over the *wrong* Task.
-          // TaskTreeRow itself binds each to `task` only for its own
-          // TaskRow, immediately below.
-          onComplete={onComplete}
-          onCompleteForever={onCompleteForever}
-          onRequestDelete={onRequestDelete}
-          onOpenSchedule={onOpenSchedule}
-          onMoveToSection={onMoveToSection}
-          onHandlePointerDown={handlePointerDown(task.id)}
-          onHandlePointerMove={handlePointerMove}
-          onHandlePointerUp={handlePointerUp}
-          onHandlePointerCancel={handlePointerCancel}
-          onMoveUp={() => handleMove(task.id, index, "up")}
-          onMoveDown={() => handleMove(task.id, index, "down")}
-          onIndent={() => handleIndent(task, index)}
-          onOutdent={() => handleOutdent(task)}
-          reorderTask={reorderTask}
-          setTaskParent={setTaskParent}
-          listTaskChildren={listTaskChildren}
-          listTasksInProject={listTasksInProject}
-        />
-      ))}
+      {rows.map((row) =>
+        row.kind === "completed" ? (
+          <CompletedTaskRow
+            key={row.task.id}
+            task={row.task}
+            depth={depth}
+            onUncomplete={onUncomplete ?? (() => {})}
+            onOpenDetail={detailActions.onOpenDetail}
+          />
+        ) : (
+          <TaskTreeRow
+            key={row.task.id}
+            task={row.task}
+            depth={depth}
+            projectId={projectId}
+            sectionOptions={sectionOptions}
+            detailActions={detailActions}
+            isDropTarget={
+              drag !== null && overTarget?.kind === "before" && overTarget.id === row.task.id
+            }
+            isNestTarget={
+              drag !== null && overTarget?.kind === "nest" && overTarget.id === row.task.id
+            }
+            // The raw, task-taking callbacks — not bound to this row here —
+            // so this row's own nested TaskTree (its sub-tasks, if any) can
+            // forward them unchanged one level deeper, rather than every
+            // level rebuilding a fresh closure over the *wrong* Task.
+            // TaskTreeRow itself binds each to `task` only for its own
+            // TaskRow, immediately below.
+            onComplete={onComplete}
+            onCompleteForever={onCompleteForever}
+            onRequestDelete={onRequestDelete}
+            onOpenSchedule={onOpenSchedule}
+            onMoveToSection={onMoveToSection}
+            onHandlePointerDown={handlePointerDown(row.task.id)}
+            onHandlePointerMove={handlePointerMove}
+            onHandlePointerUp={handlePointerUp}
+            onHandlePointerCancel={handlePointerCancel}
+            onMoveUp={() => handleMove(row.task.id, row.index, "up")}
+            onMoveDown={() => handleMove(row.task.id, row.index, "down")}
+            onIndent={() => handleIndent(row.task, row.index)}
+            onOutdent={() => handleOutdent(row.task)}
+            reorderTask={reorderTask}
+            setTaskParent={setTaskParent}
+            listTaskChildren={listTaskChildren}
+            listTasksInProject={listTasksInProject}
+          />
+        ),
+      )}
       {/* The trailing drop zone — dropping past the last row in this
           sibling group appends rather than being refused for having no
           row to land before. Mirrors todo-page.tsx's own pre-#171 Inbox

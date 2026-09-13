@@ -92,15 +92,19 @@ test("adding, completing (with Undo), reordering and reloading all leave Todo ex
   // through it is an ordinary uncomplete(), not a resurrection (ADR 0047),
   // so the Task lands right back where its own orderKey already puts it.
   await firstRow.getByRole("checkbox").click();
-  // The whole row — checkbox included — leaves the DOM once "first" is
-  // completed, not merely un-ticked (this row's own header comment: a
-  // completed Task never renders in this list at all).
-  await expect(firstRow).toHaveCount(0);
+  // ROW-14 (parity-ledger.md), the user's 2026-09-13 decision to match
+  // Todoist: the row stays exactly where it was — struck through, its own
+  // checkbox now `aria-checked="true"` — rather than leaving the DOM the
+  // way this app's own now-removed "Completed" disclosure used to require.
+  // `rows` (both `first`/`second`, by content) still counts two: nothing
+  // left this list, one row inside it changed state.
+  await expect(firstRow.getByRole("checkbox")).toHaveAttribute("aria-checked", "true");
+  await expect(rows).toHaveCount(2);
   // CMT-04: Todoist's own task-agnostic, count-based wording.
   await expect(page.getByText("1 task completed")).toBeVisible();
 
   await page.getByRole("button", { name: "Undo" }).click();
-  await expect(firstRow.getByRole("checkbox")).toBeVisible();
+  await expect(firstRow.getByRole("checkbox")).toHaveAttribute("aria-checked", "false");
   await expect(rows.nth(0)).toContainText(first);
   await expect(rows.nth(1)).toContainText(second);
 
@@ -174,8 +178,8 @@ test("adding, completing (with Undo), reordering and reloading all leave Todo ex
   await page.reload();
 
   // The order survives — it was written to the Task's own row, not held in
-  // component state — and so does the earlier Undo: neither Task is back
-  // in the completed list.
+  // component state — and so does the earlier Undo: neither Task reads as
+  // completed.
   await expect(rows).toHaveCount(2);
   await expect(rows.nth(0)).toContainText(second);
   await expect(rows.nth(1)).toContainText(first);
