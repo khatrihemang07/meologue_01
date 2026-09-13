@@ -473,7 +473,6 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   // Issue #184: "completed work is reached by narrowing the log to
   // completions, not from a separate destination of its own" — a plain
   // toggle above the Activity view rather than a second route.
-  const [activityCompletedOnly, setActivityCompletedOnly] = useState(false);
 
   // The one TaskScheduleSheet instance for the whole page (this
   // component's own doc comment) — `schedulingId` names which Task it's
@@ -1049,19 +1048,11 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
       )}
 
       {/* Issue #184: the view across everything, or one Project's own
-          history when opened with `?projectId=` — never a second
-          destination for completed work alone (this component's own
-          `activityCompletedOnly` toggle narrows the same log instead). */}
+          history when opened with `?projectId=`. CMT-07: no "Completed
+          only" toggle, by the user's decision on 2026-09-13 to match
+          Todoist, which has none. */}
       {backgroundView.view === "activity" && (
         <div className="flex flex-col gap-2">
-          <label className="flex items-center gap-2 px-3 py-1 text-muted-foreground text-sm">
-            <input
-              type="checkbox"
-              checked={activityCompletedOnly}
-              onChange={(event) => setActivityCompletedOnly(event.target.checked)}
-            />
-            Completed only
-          </label>
           <ActivityFeed
             events={activityEvents}
             // Both active and completed — a `completed` Event's own Task
@@ -1069,7 +1060,6 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
             // to resolve either to name its subject live.
             tasks={[...tasks, ...completedTasks]}
             projects={projects}
-            completedOnly={activityCompletedOnly}
             emptyMessage={
               activityProjectId !== null
                 ? "Nothing has happened in this Project yet."

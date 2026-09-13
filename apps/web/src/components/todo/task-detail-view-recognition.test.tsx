@@ -160,7 +160,7 @@ describe("DET-07 — recognition in the detail title", () => {
   it("renders the identical recognition span the composer produces, for the same phrase", async () => {
     renderView({ task: task({ content: "call mum tod p1" }) });
 
-    fireEvent.click(screen.getByRole("button", { name: "call mum tod p1" }));
+    fireEvent.click(screen.getByTestId("task-detail-title"));
     const titleEditor = await screen.findByLabelText("Task name");
 
     // Same three attributes `todo-quick-add-recognition.ts`'s own
@@ -188,7 +188,7 @@ describe("DET-07 — recognition in the detail title", () => {
   it("does not touch the underlying text: the editor's own text content is exactly what was seeded", async () => {
     renderView({ task: task({ content: "call mum tod p1" }) });
 
-    fireEvent.click(screen.getByRole("button", { name: "call mum tod p1" }));
+    fireEvent.click(screen.getByTestId("task-detail-title"));
     const titleEditor = await screen.findByLabelText("Task name");
 
     // Decorations are a view-layer overlay (ProseMirror's own contract);

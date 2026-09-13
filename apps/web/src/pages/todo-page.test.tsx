@@ -400,10 +400,10 @@ describe("TodoPage", () => {
     // an unscoped match that would resolve to both.
     expect(dialog.querySelector("header")).toHaveTextContent("Inbox");
     // Issue #225: the title is a non-editable display element at rest
-    // (DET-02) — a `<button>`, not a labelled textbox — until a reader
-    // activates it (task-detail-view.test.tsx's own suite covers that
-    // activation and the shared editor it swaps in).
-    expect(within(dialog).getByRole("button", { name: "call mum" })).toBeInTheDocument();
+    // (DET-02) — a plain `<div>`, as Todoist's is, not a labelled textbox —
+    // until a reader activates it (task-detail-view.test.tsx's own suite
+    // covers that activation and the shared editor it swaps in).
+    expect(within(dialog).getByTestId("task-detail-title")).toHaveTextContent("call mum");
   });
 
   // The coordinator's own gap-fix report: `openTask` used to be looked up
@@ -431,9 +431,8 @@ describe("TodoPage", () => {
     // Issue #237: `.completed-task-text` is the shared class the
     // completed-style setting drives (index.css) — `line-through` was the
     // bug this surface used to hardcode regardless of that setting. The
-    // selector is #229's: the at-rest title is a button now, not a
-    // labelled textarea.
-    const title = within(dialog).getByRole("button", { name: "call mum" });
+    // at-rest title is a plain display `<div>` (DET-02), found by its testid.
+    const title = within(dialog).getByTestId("task-detail-title");
     expect(title).toHaveClass("completed-task-text");
     expect(title).not.toHaveClass("line-through");
   });
@@ -985,7 +984,7 @@ describe("TodoPage — rename resolves recognised phrases (issue #247)", () => {
       `/todo/task/buy-milk-${detailTaskId}`,
     );
 
-    fireEvent.click(await screen.findByRole("button", { name: "buy milk" }));
+    fireEvent.click(await screen.findByTestId("task-detail-title"));
     const editor = await screen.findByLabelText("Task name");
     fireEvent.change(editor, { target: { value: "buy oat milk tomorrow p1" } });
     fireEvent.keyDown(editor, { key: "Enter" });

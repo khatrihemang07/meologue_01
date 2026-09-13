@@ -85,24 +85,6 @@ describe("ActivityFeed", () => {
     expect(screen.getByText("Today")).toBeInTheDocument();
   });
 
-  it("narrows to completions only when completedOnly is set", () => {
-    render(
-      <ActivityFeed
-        events={[
-          event({ id: "a", eventType: "added" }),
-          event({ id: "b", eventType: "completed" }),
-        ]}
-        tasks={[task()]}
-        projects={[]}
-        completedOnly
-      />,
-      { wrapper: MemoryRouter },
-    );
-    const rows = screen.getAllByRole("listitem");
-    expect(rows).toHaveLength(1);
-    expect(rows[0]?.textContent).toContain("You completed");
-  });
-
   // The coordinator's own gap-fix report: an activity row must name its
   // object — "Completed" alone is unusable in a feed that aggregates
   // across every Task, Project and Comment.

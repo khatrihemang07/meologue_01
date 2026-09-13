@@ -1087,25 +1087,34 @@ function TaskDetailBody({
                   </Suspense>
                 </div>
               ) : (
-                // DET-02/DET-03: Todoist's own detail title at rest is a
-                // non-editable `div.task_content`, paired with a
-                // visually-hidden "Activate to edit the task name" label
-                // (`titleHintId` below) — a real `<button>`, not a bare
-                // `<div>`, is this app's own choice for how "activate" is
-                // reached without a pointer (Tab, then Enter/Space), which
-                // the reference docs never had to specify since a click
-                // was the only gesture driven.
-                <button
-                  type="button"
+                // DET-02: matched to Todoist's own measured shape (live
+                // audit, flow 4 — `flow4-DET-02-03-05-14-todoist.json`),
+                // ratified by the user on 2026-09-13, reversing this
+                // file's own earlier `<button>` choice: a `DIV`, no
+                // `role`, `tabIndex={-1}` — non-editable and non-focusable
+                // by Tab, same as Todoist's `div.task_content`. That
+                // trades away "activate with just a keyboard" (Tab, then
+                // Enter/Space), which the reference never had either; the
+                // user accepted the loss rather than keep meologue's own
+                // divergence.
+                // DET-03: unlike Todoist (whose sibling hint carries no
+                // `aria-describedby` link — nothing points at it), this
+                // element keeps pointing at `titleHintId` — ratified
+                // separately, in meologue's favour, the same day.
+                // biome-ignore lint/a11y/noStaticElementInteractions: DET-02 — Todoist's title at rest is a plain, non-interactive div; matching that shape means the click handler has no button/role to live on. The click-catcher just below (`task-detail-edit-column`) already sets this file's precedent for a `biome-ignore` here rather than a synthetic role.
+                // biome-ignore lint/a11y/useKeyWithClickEvents: DET-02 — `tabIndex={-1}` (matched to Todoist) takes this out of Tab order, so there is no keyboard event to pair the click with; the user's 2026-09-13 decision accepted losing keyboard activation of the title specifically.
+                <div
                   onClick={() => startEditing("title")}
                   aria-describedby={titleHintId}
+                  tabIndex={-1}
+                  data-testid="task-detail-title"
                   className={cn(
                     "w-full text-left font-medium text-base",
                     task.completedAt !== null && "completed-task-text",
                   )}
                 >
                   {task.content}
-                </button>
+                </div>
               )}
             </DialogPrimitive.Title>
           </div>

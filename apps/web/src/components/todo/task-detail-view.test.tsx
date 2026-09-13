@@ -282,13 +282,13 @@ function renderView(overrides: Partial<Parameters<typeof TaskDetailView>[0]> = {
 describe("TaskDetailView", () => {
   it("renders as a dialog, carrying the Task's own title as a display element, not an editor, at rest", () => {
     // DET-02: Todoist's own detail title at rest is a non-editable
-    // display component, not the composer's editor — a `<button>` here,
-    // not `getByLabelText("Task name")`, which only exists once
-    // `editingTitle` is activated (below).
+    // display component, not the composer's editor — a plain `<div>`
+    // here (matched live, 2026-09-13), not `getByLabelText("Task name")`,
+    // which only exists once `editingTitle` is activated (below).
     renderView({ task: task({ content: "call mum" }) });
 
     expect(screen.getByRole("dialog")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "call mum" })).toBeInTheDocument();
+    expect(screen.getByTestId("task-detail-title")).toBeInTheDocument();
     expect(screen.queryByLabelText("Task name")).not.toBeInTheDocument();
   });
 
@@ -336,14 +336,14 @@ describe("TaskDetailView", () => {
   it("does not autofocus the title on open, so a phone doesn't pop the keyboard for a tap that's usually just a look", () => {
     renderView({ task: task({ content: "call mum" }) });
 
-    expect(screen.getByRole("button", { name: "call mum" })).not.toHaveFocus();
+    expect(screen.getByTestId("task-detail-title")).not.toHaveFocus();
     expect(document.activeElement).toBe(screen.getByRole("dialog"));
   });
 
   it("clicking the title activates the shared editor, seeded with the current content", async () => {
     renderView({ task: task({ content: "call mum" }) });
 
-    fireEvent.click(screen.getByRole("button", { name: "call mum" }));
+    fireEvent.click(screen.getByTestId("task-detail-title"));
 
     expect(await screen.findByLabelText("Task name")).toHaveValue("call mum");
   });
@@ -352,7 +352,7 @@ describe("TaskDetailView", () => {
     it("clicking the title activates BOTH the title and the description editors together, sharing one Cancel/Save pair", async () => {
       renderView({ task: task({ content: "call mum", description: "existing text" }) });
 
-      fireEvent.click(screen.getByRole("button", { name: "call mum" }));
+      fireEvent.click(screen.getByTestId("task-detail-title"));
 
       expect(await screen.findByLabelText("Task name")).toBeInTheDocument();
       expect(screen.getByLabelText("Description")).toBeInTheDocument();
@@ -380,7 +380,7 @@ describe("TaskDetailView", () => {
     it("clicking the title (a generic entry point, not the description's own) focuses the title", async () => {
       renderView({ task: task({ content: "call mum", description: "existing text" }) });
 
-      fireEvent.click(screen.getByRole("button", { name: "call mum" }));
+      fireEvent.click(screen.getByTestId("task-detail-title"));
 
       expect(await screen.findByLabelText("Task name")).toHaveFocus();
     });
@@ -399,7 +399,7 @@ describe("TaskDetailView", () => {
     it("DET-10: a generic click in the gap between the title and Description editors focuses the dialog, not either field", async () => {
       renderView({ task: task({ content: "call mum", description: "existing text" }) });
 
-      fireEvent.click(screen.getByRole("button", { name: "call mum" }));
+      fireEvent.click(screen.getByTestId("task-detail-title"));
       const titleField = await screen.findByLabelText("Task name");
       expect(titleField).toHaveFocus();
 
@@ -410,7 +410,7 @@ describe("TaskDetailView", () => {
       expect(screen.getByRole("dialog")).toHaveFocus();
     });
 
-    it("DET-10: clicking a descendant of the shared edit column (the title button, the Description block) does not re-target focus to the dialog", async () => {
+    it("DET-10: clicking a descendant of the shared edit column (the title display, the Description block) does not re-target focus to the dialog", async () => {
       renderView({ task: task({ content: "call mum", description: "existing text" }) });
 
       fireEvent.click(screen.getByText("existing text"));
@@ -427,7 +427,7 @@ describe("TaskDetailView", () => {
         onSetDescription,
       });
 
-      fireEvent.click(screen.getByRole("button", { name: "old title" }));
+      fireEvent.click(screen.getByTestId("task-detail-title"));
       fireEvent.change(await screen.findByLabelText("Task name"), {
         target: { value: "new title" },
       });
@@ -449,7 +449,7 @@ describe("TaskDetailView", () => {
         onSetDescription,
       });
 
-      fireEvent.click(screen.getByRole("button", { name: "old title" }));
+      fireEvent.click(screen.getByTestId("task-detail-title"));
       fireEvent.change(await screen.findByLabelText("Task name"), {
         target: { value: "discard me" },
       });
@@ -462,7 +462,7 @@ describe("TaskDetailView", () => {
 
       expect(onRename).not.toHaveBeenCalled();
       expect(onSetDescription).not.toHaveBeenCalled();
-      expect(screen.getByRole("button", { name: "old title" })).toBeInTheDocument();
+      expect(screen.getByTestId("task-detail-title")).toBeInTheDocument();
     });
   });
 
@@ -470,7 +470,7 @@ describe("TaskDetailView", () => {
     it("Cancel with an unsaved title change asks before discarding, with Todoist's own wording and a Cancel/Discard pair", async () => {
       renderView({ task: task({ content: "old title" }) });
 
-      fireEvent.click(screen.getByRole("button", { name: "old title" }));
+      fireEvent.click(screen.getByTestId("task-detail-title"));
       fireEvent.change(await screen.findByLabelText("Task name"), {
         target: { value: "discard me" },
       });
@@ -492,7 +492,7 @@ describe("TaskDetailView", () => {
     it("Cancelling the discard-confirmation dialog leaves the draft intact, still editing", async () => {
       renderView({ task: task({ content: "old title" }) });
 
-      fireEvent.click(screen.getByRole("button", { name: "old title" }));
+      fireEvent.click(screen.getByTestId("task-detail-title"));
       fireEvent.change(await screen.findByLabelText("Task name"), {
         target: { value: "discard me" },
       });
@@ -502,7 +502,7 @@ describe("TaskDetailView", () => {
 
       expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
       expect(screen.getByLabelText("Task name")).toHaveValue("discard me");
-      expect(screen.queryByRole("button", { name: "old title" })).not.toBeInTheDocument();
+      expect(screen.queryByTestId("task-detail-title")).not.toBeInTheDocument();
     });
 
     // The regression test for the keyboard-trap bug a first version of
@@ -519,7 +519,7 @@ describe("TaskDetailView", () => {
       const onClose = vi.fn();
       renderView({ task: task({ content: "old title" }), onClose });
 
-      fireEvent.click(screen.getByRole("button", { name: "old title" }));
+      fireEvent.click(screen.getByTestId("task-detail-title"));
       fireEvent.change(await screen.findByLabelText("Task name"), {
         target: { value: "discard me" },
       });
@@ -540,7 +540,7 @@ describe("TaskDetailView", () => {
       const onRename = vi.fn();
       renderView({ task: task({ content: "old title" }), onClose, onRename });
 
-      fireEvent.click(screen.getByRole("button", { name: "old title" }));
+      fireEvent.click(screen.getByTestId("task-detail-title"));
       fireEvent.change(await screen.findByLabelText("Task name"), {
         target: { value: "discard me" },
       });
@@ -550,7 +550,7 @@ describe("TaskDetailView", () => {
 
       expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
       expect(screen.queryByLabelText("Task name")).not.toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "old title" })).toBeInTheDocument();
+      expect(screen.getByTestId("task-detail-title")).toBeInTheDocument();
       expect(onRename).not.toHaveBeenCalled();
       expect(onClose).not.toHaveBeenCalled();
     });
@@ -558,12 +558,12 @@ describe("TaskDetailView", () => {
     it("Cancel with nothing changed discards immediately, with no confirmation", async () => {
       renderView({ task: task({ content: "old title" }) });
 
-      fireEvent.click(screen.getByRole("button", { name: "old title" }));
+      fireEvent.click(screen.getByTestId("task-detail-title"));
       await screen.findByLabelText("Task name");
       fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
       expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "old title" })).toBeInTheDocument();
+      expect(screen.getByTestId("task-detail-title")).toBeInTheDocument();
     });
 
     it("Cancel with an unsaved Description-only change also asks first", async () => {
@@ -624,7 +624,7 @@ describe("TaskDetailView", () => {
       const onClose = vi.fn();
       renderView({ task: task({ content: "old title" }), onClose });
 
-      fireEvent.click(screen.getByRole("button", { name: "old title" }));
+      fireEvent.click(screen.getByTestId("task-detail-title"));
       fireEvent.change(await screen.findByLabelText("Task name"), {
         target: { value: "discard me" },
       });
@@ -639,19 +639,19 @@ describe("TaskDetailView", () => {
       const onClose = vi.fn();
       renderView({ task: task({ content: "old title" }), onClose });
 
-      fireEvent.click(screen.getByRole("button", { name: "old title" }));
+      fireEvent.click(screen.getByTestId("task-detail-title"));
       await screen.findByLabelText("Task name");
       await clickOutside(document.body);
 
       expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "old title" })).toBeInTheDocument();
+      expect(screen.getByTestId("task-detail-title")).toBeInTheDocument();
       expect(onClose).not.toHaveBeenCalled();
     });
 
     it("a pointerdown INSIDE the panel while editing is left alone — DET-09's own 'clicking away inside does nothing' stays true", async () => {
       renderView({ task: task({ content: "old title" }) });
 
-      fireEvent.click(screen.getByRole("button", { name: "old title" }));
+      fireEvent.click(screen.getByTestId("task-detail-title"));
       await screen.findByLabelText("Task name");
       fireEvent.pointerDown(screen.getByTestId("task-detail-edit-column"));
 
@@ -676,7 +676,7 @@ describe("TaskDetailView", () => {
       const onRename = vi.fn();
       renderView({ task: task({ content: "old title" }), onClose, onRename });
 
-      fireEvent.click(screen.getByRole("button", { name: "old title" }));
+      fireEvent.click(screen.getByTestId("task-detail-title"));
       fireEvent.change(await screen.findByLabelText("Task name"), {
         target: { value: "discard me" },
       });
@@ -710,7 +710,7 @@ describe("TaskDetailView", () => {
     const onRename = vi.fn();
     renderView({ task: task({ content: "old title" }), onRename });
 
-    fireEvent.click(screen.getByRole("button", { name: "old title" }));
+    fireEvent.click(screen.getByTestId("task-detail-title"));
     const titleField = await screen.findByLabelText("Task name");
     fireEvent.change(titleField, { target: { value: "  new title  " } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -722,11 +722,11 @@ describe("TaskDetailView", () => {
     const onRename = vi.fn();
     renderView({ task: task({ content: "old title" }), onRename });
 
-    fireEvent.click(screen.getByRole("button", { name: "old title" }));
+    fireEvent.click(screen.getByTestId("task-detail-title"));
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(onRename).not.toHaveBeenCalled();
 
-    fireEvent.click(await screen.findByRole("button", { name: "old title" }));
+    fireEvent.click(await screen.findByTestId("task-detail-title"));
     const titleField = await screen.findByLabelText("Task name");
     fireEvent.change(titleField, { target: { value: "   " } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -741,13 +741,13 @@ describe("TaskDetailView", () => {
     const onRename = vi.fn();
     renderView({ task: task({ content: "old title" }), onRename });
 
-    fireEvent.click(screen.getByRole("button", { name: "old title" }));
+    fireEvent.click(screen.getByTestId("task-detail-title"));
     const titleField = await screen.findByLabelText("Task name");
     fireEvent.change(titleField, { target: { value: "discard me" } });
     fireEvent.blur(titleField);
 
     expect(onRename).not.toHaveBeenCalled();
-    expect(screen.queryByRole("button", { name: "old title" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("task-detail-title")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Task name")).toBeInTheDocument();
   });
 
@@ -755,7 +755,7 @@ describe("TaskDetailView", () => {
     const onRename = vi.fn();
     renderView({ task: task({ content: "old title" }), onRename });
 
-    fireEvent.click(screen.getByRole("button", { name: "old title" }));
+    fireEvent.click(screen.getByTestId("task-detail-title"));
     const titleField = await screen.findByLabelText("Task name");
     fireEvent.change(titleField, { target: { value: "new title" } });
     fireEvent.keyDown(titleField, { key: "Enter" });
@@ -767,12 +767,12 @@ describe("TaskDetailView", () => {
     const onRename = vi.fn();
     renderView({ task: task({ content: "old title" }), onRename });
 
-    fireEvent.click(screen.getByRole("button", { name: "old title" }));
+    fireEvent.click(screen.getByTestId("task-detail-title"));
     const titleField = await screen.findByLabelText("Task name");
     fireEvent.keyDown(titleField, { key: "Escape" });
 
     expect(onRename).not.toHaveBeenCalled();
-    expect(await screen.findByRole("button", { name: "old title" })).toBeInTheDocument();
+    expect(await screen.findByTestId("task-detail-title")).toBeInTheDocument();
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
   });
 
@@ -783,7 +783,7 @@ describe("TaskDetailView", () => {
     const onRename = vi.fn();
     renderView({ task: task({ content: "old title" }), onRename });
 
-    fireEvent.click(screen.getByRole("button", { name: "old title" }));
+    fireEvent.click(screen.getByTestId("task-detail-title"));
     const titleField = await screen.findByLabelText("Task name");
     fireEvent.change(titleField, { target: { value: "discard me" } });
     fireEvent.keyDown(titleField, { key: "Escape" });
@@ -796,7 +796,7 @@ describe("TaskDetailView", () => {
 
     fireEvent.click(within(confirmDialog).getByRole("button", { name: "Discard" }));
 
-    expect(await screen.findByRole("button", { name: "old title" })).toBeInTheDocument();
+    expect(await screen.findByTestId("task-detail-title")).toBeInTheDocument();
   });
 
   // DET-15 (a second, previously-unguarded bug found while fixing the
@@ -811,12 +811,12 @@ describe("TaskDetailView", () => {
     const onClose = vi.fn();
     renderView({ task: task({ content: "old title" }), onClose });
 
-    fireEvent.click(screen.getByRole("button", { name: "old title" }));
+    fireEvent.click(screen.getByTestId("task-detail-title"));
     const titleField = await screen.findByLabelText("Task name");
     fireEvent.keyDown(titleField, { key: "Escape" });
     expect(onClose).not.toHaveBeenCalled();
 
-    fireEvent.click(await screen.findByRole("button", { name: "old title" }));
+    fireEvent.click(await screen.findByTestId("task-detail-title"));
     fireEvent.change(screen.getByLabelText("Task name"), { target: { value: "discard me" } });
     fireEvent.keyDown(screen.getByLabelText("Task name"), { key: "Escape" });
     await screen.findByRole("alertdialog");
@@ -837,7 +837,7 @@ describe("TaskDetailView", () => {
     const onRename = vi.fn();
     renderView({ task: task({ content: "old title" }), onClose, onRename });
 
-    fireEvent.click(screen.getByRole("button", { name: "old title" }));
+    fireEvent.click(screen.getByTestId("task-detail-title"));
     const titleField = await screen.findByLabelText("Task name");
     fireEvent.change(titleField, { target: { value: "discard me" } });
     fireEvent.keyDown(titleField, { key: "Escape" });
@@ -845,7 +845,7 @@ describe("TaskDetailView", () => {
     fireEvent.click(within(confirmDialog).getByRole("button", { name: "Discard" }));
 
     expect(onRename).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", { name: "old title" })).toBeInTheDocument();
+    expect(screen.getByTestId("task-detail-title")).toBeInTheDocument();
     expect(onClose).not.toHaveBeenCalled();
   });
 
@@ -866,7 +866,7 @@ describe("TaskDetailView", () => {
   it("Escape inside the open confirmation returns focus to the Task name editor, with the draft intact", async () => {
     renderView({ task: task({ content: "old title" }) });
 
-    fireEvent.click(screen.getByRole("button", { name: "old title" }));
+    fireEvent.click(screen.getByTestId("task-detail-title"));
     const titleField = await screen.findByLabelText("Task name");
     fireEvent.change(titleField, { target: { value: "discard me" } });
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
@@ -1046,7 +1046,7 @@ describe("TaskDetailView", () => {
         onRename,
       });
 
-      fireEvent.click(screen.getByRole("button", { name: "buy milk" }));
+      fireEvent.click(screen.getByTestId("task-detail-title"));
       const titleField = await screen.findByLabelText("Task name");
       fireEvent.change(titleField, { target: { value: "buy milk tomorrow" } });
       fireEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -1077,7 +1077,7 @@ describe("TaskDetailView", () => {
         onRename,
       });
 
-      fireEvent.click(screen.getByRole("button", { name: "buy milk" }));
+      fireEvent.click(screen.getByTestId("task-detail-title"));
       const titleField = await screen.findByLabelText("Task name");
       fireEvent.change(titleField, { target: { value: "buy bread" } });
       fireEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -1106,7 +1106,7 @@ describe("TaskDetailView", () => {
         onSetDate,
       });
 
-      fireEvent.click(screen.getByRole("button", { name: "buy milk" }));
+      fireEvent.click(screen.getByTestId("task-detail-title"));
       const titleField = await screen.findByLabelText("Task name");
       fireEvent.change(titleField, { target: { value: "buy milk tomorrow" } });
       fireEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -1143,7 +1143,7 @@ describe("TaskDetailView", () => {
         onSetDate,
       });
 
-      fireEvent.click(screen.getByRole("button", { name: "buy milk" }));
+      fireEvent.click(screen.getByTestId("task-detail-title"));
       const titleField = await screen.findByLabelText("Task name");
       fireEvent.change(titleField, { target: { value: "buy bread" } });
       fireEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -1579,10 +1579,11 @@ describe("TaskDetailView", () => {
 
       const checkbox = screen.getByLabelText('Mark "call mum" not done');
       expect(checkbox).toBeChecked();
-      // Their selector (#229 made the at-rest title a button, not a
-      // labelled textarea), this branch's assertion (#237: the shared
-      // class, never a hardcoded decoration).
-      const title = screen.getByRole("button", { name: "call mum" });
+      // Their selector (`data-testid`, since DET-02's 2026-09-13 match
+      // to Todoist made the at-rest title a plain div rather than a
+      // named button), this branch's assertion (#237: the shared class,
+      // never a hardcoded decoration).
+      const title = screen.getByTestId("task-detail-title");
       expect(title).toHaveClass("completed-task-text");
       expect(title).not.toHaveClass("line-through");
     });
@@ -1603,7 +1604,7 @@ describe("TaskDetailView", () => {
       const onRename = vi.fn();
       renderView({ task: task({ completedAt: "2026-01-02T00:00:00.000Z" }), onRename });
 
-      fireEvent.click(screen.getByRole("button", { name: "buy milk" }));
+      fireEvent.click(screen.getByTestId("task-detail-title"));
       const field = await screen.findByLabelText("Task name");
       fireEvent.change(field, { target: { value: "changed" } });
       fireEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -1618,7 +1619,7 @@ describe("TaskDetailView", () => {
 
       const checkbox = screen.getByLabelText('Complete "call mum"');
       expect(checkbox).not.toBeChecked();
-      const title = screen.getByRole("button", { name: "call mum" });
+      const title = screen.getByTestId("task-detail-title");
       expect(title).not.toHaveClass("line-through");
       expect(title).not.toHaveClass("completed-task-text");
     });

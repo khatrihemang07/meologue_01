@@ -16,14 +16,6 @@ export interface ActivityFeedProps {
   /** Resolves a "# Project Name"/"▭ Section Name" chip. */
   projects: Project[];
   /**
-   * Narrows to completions only — issue #184's own acceptance criterion:
-   * "completed work is reached by narrowing the log to completions, not
-   * from a separate destination of its own." The caller owns the toggle
-   * itself (a checkbox above this component, say); this prop is only the
-   * narrowing.
-   */
-  completedOnly?: boolean;
-  /**
    * The Task this feed is already scoped to, when it's a per-Task history
    * (`task-detail-view.tsx`'s own Activity section) — every line's own
    * primary subject is suppressed when it would otherwise just repeat
@@ -109,13 +101,10 @@ export function ActivityFeed({
   events,
   tasks,
   projects,
-  completedOnly = false,
   currentTaskId,
   emptyMessage = "Nothing here yet.",
 }: ActivityFeedProps) {
-  const narrowed = (
-    completedOnly ? events.filter((e) => e.eventType === "completed") : events
-  ).filter(isRenderableEvent);
+  const narrowed = events.filter(isRenderableEvent);
   const groups = groupEventsByDay(narrowed);
 
   if (groups.length === 0) {
