@@ -65,7 +65,6 @@ import { useQuery } from "@tanstack/react-query";
 import type { PointerEvent } from "react";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
-import { CompletedTaskRow } from "@/components/todo/completed-tasks";
 import { type TaskDetailActions, TaskRow } from "@/components/todo/task-row";
 import { taskChildrenQueryKey } from "@/lib/query-keys";
 import { refocusTaskHandle } from "@/lib/refocus-task-handle";
@@ -79,10 +78,16 @@ export interface TaskTreeProps {
    * ROW-14 (parity-ledger.md), the user's 2026-09-13 decision to match
    * Todoist: this exact sibling group's own completed Tasks, interleaved
    * inline at their own `orderKey` position rather than segregated into a
-   * separate list — `mergedRows` below is the one place that does the
-   * interleaving, and `CompletedTaskRow` (completed-tasks.tsx) is what
-   * each one renders as. Defaults to empty, which is what every *nested*
-   * recursive call below still passes (implicitly, by omitting this prop)
+   * separate list — `rows` below is the one place that does the
+   * interleaving, and each one renders as the identical `TaskRow` an
+   * active sibling does (see this file's own follow-up: the first cut of
+   * this ticket rendered a separate, reduced `CompletedTaskRow` instead,
+   * which is why a completed row briefly lost its date badge, labels,
+   * Project name, comment count and priority ring — Todoist's own row is
+   * "the same row component... distinguished only by an added
+   * `--completed` class," not a second one). Defaults to empty, which is
+   * what every *nested* recursive call below still passes (implicitly, by
+   * omitting this prop)
    * — a completed sub-task still doesn't render at all, unchanged from
    * before this ticket: the ROW-14 artifact only ever measured a flat,
    * top-level list, and threading a completed-children merge through
@@ -201,9 +206,11 @@ export function TaskTree({
     // never asked for a *rect* below; see the `rowBox`/`rects.map` split
     // just below for what actually stands in for each `<li>`'s geometry.
     // `:not([data-completed-task])` (ROW-14, parity ledger): a completed
-    // row now interleaves inline in this same `<ul>` (`CompletedTaskRow`,
-    // completed-tasks.tsx), and carries `data-task-id` too — for
-    // `todo-keymap.ts`'s `focusedTaskId()`, not for this query — so it has
+    // row now interleaves inline in this same `<ul>`, rendered through the
+    // identical `TaskRow` an active sibling uses (that file's own header
+    // comment on `data-completed-task`, set there from `task.completedAt`),
+    // and carries `data-task-id` too — for `todo-keymap.ts`'s
+    // `focusedTaskId()`, not for this query — so it has
     // to be excluded explicitly here rather than relying on the selector
     // above to miss it by accident. A completed row is not draggable and
     // is never a legal drop/nest target (this file's own `completedTasks`
@@ -463,12 +470,40 @@ export function TaskTree({
     <ul ref={listRef} className="flex flex-col">
       {rows.map((row) =>
         row.kind === "completed" ? (
-          <CompletedTaskRow
+          // ROW-14 (parity-ledger.md), the fix for this ticket's own
+          // reduced-component gap: a completed Task now renders through
+          // the identical `TaskRow` an active sibling does, not a
+          // separate, smaller component — Todoist's own completed row IS
+          // "the same row component... distinguished only by an added
+          // `--completed` class" (flow2-ROW-14-15-DATE-02-todoist.json),
+          // so this is the one render path that actually matches it. No
+          // drag/reorder props are passed (the seven `TaskRowProps' own
+          // doc comment names, all omitted together) — a completed row
+          // gets no grip handle and stays out of `measureRows`' own
+          // selector (`data-completed-task`, set inside `task-row.tsx`
+          // itself from `task.completedAt`, needs no prop from here) — and
+          // no `children`, since a completed sub-task still doesn't
+          // render at all (this file's own `completedTasks` doc comment).
+          // `onComplete`/`onCompleteForever` are real callbacks rather
+          // than no-ops purely so a future caller flipping `isCompleted`
+          // off mid-render (there is none today) wouldn't find a dead
+          // wire; `TaskRowContent`'s own checkbox never reaches either
+          // once `isCompleted` is true, so in practice they're inert here.
+          <TaskRow
             key={row.task.id}
             task={row.task}
             depth={depth}
-            onUncomplete={onUncomplete ?? (() => {})}
-            onOpenDetail={detailActions.onOpenDetail}
+            sectionOptions={sectionOptions}
+            detailActions={detailActions}
+            commentCount={detailActions.commentCountFor(row.task.id)}
+            onComplete={() => onComplete(row.task)}
+            onCompleteForever={() => onCompleteForever(row.task)}
+            onUncomplete={() => onUncomplete?.(row.task)}
+            onRequestDelete={() => onRequestDelete(row.task)}
+            onOpenSchedule={() => onOpenSchedule(row.task)}
+            onMoveToSection={
+              onMoveToSection && ((sectionId) => onMoveToSection(row.task.id, sectionId))
+            }
           />
         ) : (
           <TaskTreeRow

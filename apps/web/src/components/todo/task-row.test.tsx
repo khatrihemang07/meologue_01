@@ -319,6 +319,142 @@ describe("TaskRow", () => {
     expect(screen.queryByRole("button", { name: /Complete and archive/ })).not.toBeInTheDocument();
   });
 
+  // ROW-14 (parity-ledger.md): a completed Task now renders through this
+  // same row rather than a separate, reduced component — this file's own
+  // fix for the gap the ROW-14 change first shipped with, per
+  // `task-row-content.tsx`'s own doc comment on the checkbox and title.
+  describe("ROW-14: a completed Task renders through this same row", () => {
+    it("carries aria-checked=true and 'Mark task as incomplete'", () => {
+      renderRow({ task: task({ completedAt: "2026-01-01T00:00:00.000Z" }) });
+
+      const checkbox = screen.getByRole("checkbox", { name: "Mark task as incomplete" });
+      expect(checkbox).toHaveAttribute("aria-checked", "true");
+    });
+
+    it("clicking the checkbox calls onUncomplete, not onComplete", () => {
+      const onComplete = vi.fn();
+      const onUncomplete = vi.fn();
+      renderRow({
+        task: task({ completedAt: "2026-01-01T00:00:00.000Z" }),
+        onComplete,
+        onUncomplete,
+      });
+
+      fireEvent.click(screen.getByRole("checkbox", { name: "Mark task as incomplete" }));
+
+      expect(onUncomplete).toHaveBeenCalledTimes(1);
+      expect(onComplete).not.toHaveBeenCalled();
+    });
+
+    it("gives the title the shared completed-style class", () => {
+      renderRow({ task: task({ content: "done", completedAt: "2026-01-01T00:00:00.000Z" }) });
+
+      expect(screen.getByRole("button", { name: "done" })).toHaveClass("completed-task-text");
+    });
+
+    it("does not give an active Task's title the completed-style class", () => {
+      renderRow({ task: task({ content: "not done", completedAt: null }) });
+
+      expect(screen.getByRole("button", { name: "not done" })).not.toHaveClass(
+        "completed-task-text",
+      );
+    });
+
+    it("keeps its date badge, Labels, Project name and comment count — the same metadata line an active row shows", () => {
+      renderRow({
+        task: task({
+          content: "done",
+          completedAt: "2026-01-01T00:00:00.000Z",
+          date: "2026-01-01",
+          labelIds: ["label-1"],
+          projectId: "project-1",
+        }),
+        commentCount: 2,
+        detailActions: {
+          projects: [project()],
+          labels: [label()],
+          onOpenDetail: vi.fn(),
+          onSetPriority: vi.fn(),
+          onSetDate: vi.fn(),
+          onSetDateString: vi.fn(),
+          datesWithTasks: new Map(),
+          onSetProject: vi.fn(),
+          onSetLabels: vi.fn(),
+          onCopyLink: vi.fn(),
+          onRename: vi.fn(),
+          commentCountFor: vi.fn(() => 2),
+        },
+      });
+
+      expect(screen.getByText("urgent")).toBeInTheDocument();
+      expect(screen.getByText("Errands")).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: "2 comments" })).toBeInTheDocument();
+      // The date badge itself is asserted by text elsewhere in this suite
+      // (ROW-01's own `describe` above) rather than by its exact,
+      // day-relative wording here — `hasMetadata` (and so the 59px floor)
+      // being true is what proves a date badge rendered at all alongside
+      // the fields above.
+      expect(rowBox().style.minHeight).toBe("59px");
+      // ROW-03: the priority ring is still drawn on a completed row's
+      // checkbox, filled with a check mark once ticked — the fill this
+      // component's own predecessor (`completed-tasks.tsx`'s now-removed
+      // `CompletedTaskRow`) added, carried over rather than dropped.
+      expect(ringSpan().querySelector("svg")).toBeInTheDocument();
+    });
+
+    it("hides the 'Complete and archive recurring task' button once the Task is completed", () => {
+      // ROW-14 decision, recorded in task-row-content.tsx's own comment:
+      // "end the series" has nothing left to do to a Task that's already
+      // done — not measured against either artifact, a judgment call.
+      renderRow({
+        task: task({
+          content: "pay rent",
+          dateString: "every month",
+          completedAt: "2026-01-01T00:00:00.000Z",
+        }),
+      });
+
+      expect(
+        screen.queryByRole("button", { name: /Complete and archive/ }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("carries data-completed-task, excluding it from drag/reorder geometry", () => {
+      renderRow({ task: task({ completedAt: "2026-01-01T00:00:00.000Z" }) });
+
+      expect(screen.getByRole("listitem")).toHaveAttribute("data-completed-task", "true");
+    });
+
+    it("keeps its hover controls (Edit, Date, Comment, More) working — neither artifact says otherwise", () => {
+      // Neither app's own ROW-14 artifact drove a completed row's hover
+      // controls specifically — this is the fallback this ticket's own
+      // brief asks for ("if the artifact doesn't settle it, keep them
+      // working"), not a read fact.
+      renderRow({ task: task({ content: "done", completedAt: "2026-01-01T00:00:00.000Z" }) });
+
+      expect(screen.getByRole("button", { name: 'Edit "done"' })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: 'Date "done"' })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: 'Comment on "done"' })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: 'More actions for "done"' })).toBeInTheDocument();
+    });
+
+    it("renders no drag handle when the caller omits the drag/reorder props (as task-tree.tsx does for a completed row)", () => {
+      renderRow({
+        task: task({ completedAt: "2026-01-01T00:00:00.000Z" }),
+        onHandlePointerDown: undefined,
+        onHandlePointerMove: undefined,
+        onHandlePointerUp: undefined,
+        onHandlePointerCancel: undefined,
+        onMoveUp: undefined,
+        onMoveDown: undefined,
+        onIndent: undefined,
+        onOutdent: undefined,
+      });
+
+      expect(screen.queryByTestId("task-drag-handle")).not.toBeInTheDocument();
+    });
+  });
+
   // ROW-03/PRI-06 (parity-ledger.md), issue #250 then a later fix pass:
   // pass2-2026-09-11.md §2 first measured the checkbox ring at 2px for P1,
   // 1px everywhere else — flow 2's live P1-P4 fixtures (PRI-06) then showed

@@ -53,10 +53,11 @@ import { entryRow, sendEntry, uniqueEntryBody, waitForTaskCompleted } from "./he
  * (`li.list-none input:checked ~ div`, the Entry bubble/History checklist
  * item — unchanged by #237, and everything else has to match IT), the two
  * the ticket names (the day-tasks summary widget, `history.tsx`'s
- * `DayTasksRow`; Todo's own Inbox list, `completed-tasks.tsx`'s
- * `CompletedTaskRow` — ROW-14, parity-ledger.md, the user's 2026-09-13
- * decision to match Todoist replaced this surface's own separate
- * "Completed (n)" disclosure with an inline row, on screen with no click
+ * `DayTasksRow`; Todo's own Inbox list, `task-row-content.tsx`'s title
+ * button rendering a completed Task — ROW-14, parity-ledger.md, the
+ * user's 2026-09-13 decision to match Todoist replaced this surface's own
+ * separate "Completed (n)" disclosure with an inline row rendered through
+ * the same row component an active Task uses, on screen with no click
  * needed to reach it), plus `task-detail-view.tsx`'s title and
  * `task-search-page.tsx` — both cheap to reach from the Task this spec
  * already ticks. `filter-view.tsx` is deliberately skipped: that view
@@ -271,11 +272,11 @@ test("a completed Task's look — decoration and colour — agrees across every 
     await page.keyboard.press("Escape");
     await expect(dialog).toHaveCount(0);
 
-    // 4. Todo's own Inbox list — completed-tasks.tsx's `CompletedTaskRow`,
-    // interleaved inline since ROW-14 (parity-ledger.md, the user's
-    // 2026-09-13 decision to match Todoist) rather than behind a separate
-    // "Completed (n)" disclosure, so the row is already on screen with no
-    // click needed to reveal it.
+    // 4. Todo's own Inbox list — rendered through the same `TaskRow`/
+    // `TaskRowContent` an active Task uses, interleaved inline since
+    // ROW-14 (parity-ledger.md, the user's 2026-09-13 decision to match
+    // Todoist) rather than behind a separate "Completed (n)" disclosure,
+    // so the row is already on screen with no click needed to reveal it.
     await page.goto("/todo/inbox");
     const inboxCompletedRow = page.locator(".completed-task-text");
     await expect(inboxCompletedRow).toBeVisible();

@@ -27,6 +27,7 @@ import { uiPriorityOf } from "@meologue/core";
 import {
   Calendar,
   CalendarClock,
+  Check,
   CheckCheck,
   GripVertical,
   ListTree,
@@ -70,6 +71,18 @@ export interface TaskRowContentProps {
   subtaskCount: number;
   onComplete: () => void;
   onCompleteForever: () => void;
+  /**
+   * Un-completes this Task — ROW-14's own gap (parity-ledger.md): this
+   * component already derives `isCompleted` from `task.completedAt` and
+   * renders the correct `aria-checked`/"Mark task as incomplete" wording
+   * (`git show c0d16a4`), but until now the checkbox's own `onClick`
+   * always called `onComplete`, with no way back. Optional — every caller
+   * that only ever hands this component an active Task (Today, Upcoming)
+   * has no completed state to reverse and needs no change; `task-tree.tsx`
+   * is the one caller that renders a completed Task through this
+   * component now and always supplies it.
+   */
+  onUncomplete?: () => void;
   onRequestDelete: () => void;
   /**
    * Opens the shared `TaskScheduleSheet` (Deadline and Priority) — narrowed
@@ -163,6 +176,7 @@ export function TaskRowContent({
   subtaskCount,
   onComplete,
   onCompleteForever,
+  onUncomplete,
   onRequestDelete,
   onOpenSchedule,
   isDropTarget,
@@ -501,13 +515,21 @@ export function TaskRowContent({
         role="checkbox"
         aria-checked={isCompleted}
         // Todoist's own exact wording (`lifecycle.md:70`,
-        // `keyboard.md:244/278`) — this row only ever renders an active
-        // Task (a completed one leaves the list, `CompletedTasks`'s own
-        // separate row), so `isCompleted` reads false here today; kept
-        // rather than a bare literal so this stays correct if this
-        // component is ever handed a completed Task directly.
+        // `keyboard.md:244/278`) — ROW-14 (parity-ledger.md) is what
+        // actually exercises the `true` branch now: a completed Task
+        // renders through this same row inline, in place, rather than
+        // leaving the list for a separate one, so `isCompleted` is real
+        // here, not merely future-proofing.
         aria-label={isCompleted ? "Mark task as incomplete" : "Mark task as complete"}
         onClick={(event: MouseEvent<HTMLButtonElement>) => {
+          // ROW-14: an already-completed Task's checkbox only ever
+          // reverses that — Shift+Click "complete and archive recurring"
+          // (below) has nothing left to end once the Task is done, so it
+          // isn't checked here at all.
+          if (isCompleted) {
+            onUncomplete?.();
+            return;
+          }
           // Shift+Click on a recurring Task's checkbox is Todoist's own
           // documented "Complete and archive recurring task" — ends the
           // series, not "complete this occurrence" (`onCompleteForever`'s
@@ -525,9 +547,19 @@ export function TaskRowContent({
           aria-hidden="true"
           style={{
             boxShadow: `0 0 0 ${uiPriorityOf(task.priority) === 4 ? "1px" : "2px"} ${priorityColour(uiPriorityOf(task.priority))}`,
+            color: priorityColour(uiPriorityOf(task.priority)),
           }}
-          className="block size-[18px] shrink-0 rounded-full"
-        />
+          className="flex size-[18px] shrink-0 items-center justify-center rounded-full"
+        >
+          {/* ROW-14: the fill this row's own predecessor
+              (`completed-tasks.tsx`'s now-removed `CompletedTaskRow`)
+              added on top of the ring so a checked row reads as checked
+              at a glance, not merely by `aria-checked` — carried over
+              here rather than dropped, since a ring that looks identical
+              whether ticked or not was never something either app's own
+              artifact asked for either way. */}
+          {isCompleted && <Check aria-hidden="true" className="size-3" strokeWidth={3} />}
+        </span>
       </button>
       <span className="flex min-w-0 flex-1 flex-col">
         {editingTitle ? (
@@ -571,9 +603,17 @@ export function TaskRowContent({
             // ROW-05: long titles wrap and clamp after 4 lines — they do
             // NOT truncate to one (the user's own complaint this ticket
             // names). `line-clamp-4` replaces the old `truncate`.
+            //
+            // ROW-14/ROW-15 (parity-ledger.md): `completed-task-text`
+            // (issue #237's shared completed-style class, the same one
+            // `task-detail-view.tsx`, `filter-view.tsx` and
+            // `task-search-page.tsx` already gate on `completedAt`) —
+            // this row's own predecessor gap: `isCompleted` was already
+            // computed above, but nothing here read it until now.
             className={cn(
               "line-clamp-4 block w-full text-left hover:underline",
               "text-[length:var(--td-row-font-size)] leading-[length:var(--td-row-line-height)]",
+              isCompleted && "completed-task-text",
             )}
             // KBD-03/04 (parity ledger): this button, not the `<li data-
             // task-id>` it lives inside, is what Todoist's own measured
@@ -740,7 +780,14 @@ export function TaskRowContent({
           </span>
         )}
       </span>
-      {isRecurring && (
+      {/* ROW-14 decision: hidden once the Task is already completed — "end
+          the series" has nothing left to do to a Task that's already
+          done, and the checkbox's own Shift+Click branch above is
+          disabled for the identical reason. Neither artifact measured a
+          completed recurring row's own hover controls (this ticket's own
+          report), so this is a judgment call, not a read fact: recorded
+          here rather than left to look like an oversight. */}
+      {isRecurring && !isCompleted && (
         <button
           type="button"
           aria-label={`Complete and archive recurring task "${task.content}"`}

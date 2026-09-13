@@ -134,9 +134,10 @@
  * missing binding, just an unwired synonym for one that already exists.
  *
  * *Add task* — `⇧A` ("add new task to the top of the list") — this app's
- * Add field only ever appends at the list's end (`todo-page.tsx`'s own
- * doc comment: it renders "just before `CompletedTasks`"); there is no
- * "top of list" placement for `⇧A` to target. `Enter`/`⇧Enter`/`⌃Enter`
+ * Add field only ever appends at the end of whichever list is showing
+ * (`todo-page.tsx`'s own doc comment: it renders after the list, not
+ * above it — issue #252); there is no "top of list" placement for `⇧A`
+ * to target. `Enter`/`⇧Enter`/`⌃Enter`
  * (save-and-continue variants) — owned by `task-title-editor.tsx`'s own
  * ProseMirror keymap, a different module entirely, not this table's
  * concern; `⇧Enter` specifically is QA-19 (parity ledger, tracked
@@ -672,14 +673,15 @@ export function focusedTaskId(): string | null {
  * a hand-maintained list, so a row type this table doesn't know about yet
  * can't silently fall out of navigation (this ticket's own report: that
  * exact defect already happened once, a destination added to one nav but
- * not the other). Three producers mark themselves:
+ * not the other). Two producers mark themselves:
  *   - `task-row-content.tsx`'s title button — `[data-row-nav-target]`
- *     directly, one per incomplete row, matching Todoist's own measured
- *     landing element (`flow6-KBD-03-todoist.json`'s `isTaskRowBody`).
- *   - `completed-tasks.tsx`'s Restore button — the identical
- *     `[data-row-nav-target]` marker, since a completed row's title
- *     renders as a plain, unfocusable `<span>` there (that file's own
- *     comment on why Restore, not the title, carries this).
+ *     directly, one per row, matching Todoist's own measured landing
+ *     element (`flow6-KBD-03-todoist.json`'s `isTaskRowBody`). ROW-14
+ *     (parity-ledger.md) is what makes this cover a completed row too:
+ *     that Task now renders through this identical title button rather
+ *     than a separate component with its own stand-in Restore button —
+ *     the shape this comment used to describe, back when a completed row
+ *     had no focusable title of its own to carry the marker.
  *   - `add-task-form.tsx`'s `[data-add-task-field]` wrapper — not marked
  *     directly on the focusable element itself, because that element is
  *     `TaskTitleEditor` (task-title-editor.tsx), the identical shared
@@ -689,14 +691,15 @@ export function focusedTaskId(): string | null {
  *     focusable descendant instead — the ProseMirror `role="textbox"`
  *     div once Todo's store has opened, or nothing at all while the
  *     disabled placeholder `Input` is showing (`:not([disabled])`
- *     excludes it, so the affordance simply isn't a stop yet, the same
- *     restraint `CompletedTasks` already takes for "nothing completed
- *     yet").
+ *     excludes it, so the affordance simply isn't a stop yet).
  *
- * A single `querySelectorAll` call across all three selectors returns
- * every match in one tree-order list — exactly `TaskList` → `AddTaskForm`
- * → `CompletedTasks`'s own render order (`todo-page.tsx`), matching
- * KBD-04's own verified traversal (open tasks → "Add task" → completed).
+ * A single `querySelectorAll` call across both selectors returns every
+ * match in one tree-order list — exactly `TaskList`'s own rows (active
+ * and completed, interleaved inline by `orderKey` since ROW-14) followed
+ * by `AddTaskForm` (`todo-page.tsx`; issue #252 moved it to render after
+ * the list, not above it), the two-producer union above being what keeps
+ * that traversal accurate without this function hand-maintaining a third
+ * list of its own.
  */
 function rowNavTargets(): HTMLElement[] {
   return Array.from(
@@ -818,16 +821,18 @@ export function canLeaveAddTaskField(
  * wraps at both ends, verified against Todoist's own measured traversal
  * (`flow6-KBD-04-todoist.json`: `wrapped: true`).
  *
- * A completed row's own stop sits inside `CompletedTasks`'s
- * collapsed-by-default `<details>` (that component's own header comment
- * on why it defaults closed). Todoist has no equivalent disclosure — every
- * row it measured was already visible — and the HTML spec (unlike
- * jsdom's looser default handling) makes a closed `<details>`'s
- * non-`summary` content genuinely unfocusable, not just visually hidden:
- * a bare `.focus()` on a completed row's Restore button would silently
- * no-op in a real browser while still "working" under jsdom. Opening the
- * `<details>` first, before focusing, is what makes landing on a
- * completed row real rather than a jsdom-only pass.
+ * A completed row's own stop now sits inline, in the same `<ul>` as an
+ * active row's (ROW-14, parity-ledger.md) — `task-row.tsx`'s own `<li>`,
+ * not a disclosure. The `<details>`-opening guard just below (`target.
+ * closest("details:not([open])")`) is a leftover from when a completed
+ * row lived behind exactly one collapsed `<summary>Completed (n)</summary>`
+ * (this function had to open it before a real browser's `.focus()` — unlike
+ * jsdom's looser default handling — would land inside it at all, since the
+ * HTML spec makes a closed `<details>`'s non-`summary` content genuinely
+ * unfocusable). Nothing in this app renders a row-nav target inside a
+ * `<details>` any more, so the guard is inert today; left in place rather
+ * than pulled, since this comment's own job is to describe the code
+ * accurately, not to prune it.
  */
 export function focusAdjacentRow(direction: "next" | "previous"): void {
   const targets = rowNavTargets();

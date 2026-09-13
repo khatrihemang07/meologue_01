@@ -29,10 +29,10 @@
  * (issue #179) and nothing here reads or renders it.
  *
  * **Activity** (issue #184, ADR 0056) sits below Comments, a `<details>`
- * disclosure mirroring `CompletedTasks`'s own "collapsed by default, open
- * on request" shape — a secondary, occasional thing to check, not
- * something worth the vertical space open by default the way Comments
- * are. `events` is already narrowed to this one Task by the caller
+ * disclosure, collapsed by default and open on request — a secondary,
+ * occasional thing to check, not something worth the vertical space open
+ * by default the way Comments are. `events` is already narrowed to this
+ * one Task by the caller
  * (`listEventsByTask`, entry-store-layout.tsx), the identical "the
  * caller scopes it, this view only renders" split `comments` above
  * already takes.
@@ -1476,11 +1476,10 @@ function TaskDetailBody({
             }}
           />
 
-          {/* Activity (issue #184, ADR 0056) — collapsed by default,
-              mirroring CompletedTasks' own disclosure shape (this file's
-              own header comment). Renders nothing when there's nothing
-              to show yet, the same "don't show a section with nothing in
-              it" restraint CompletedTasks itself takes. */}
+          {/* Activity (issue #184, ADR 0056) — collapsed by default, open
+              on request (this file's own header comment). Renders
+              nothing when there's nothing to show yet, rather than an
+              always-visible disclosure with nothing inside it. */}
           {renderableEvents.length > 0 && (
             <details className="rounded-lg border border-border">
               <summary className="cursor-pointer select-none px-3 py-2 text-muted-foreground text-sm">
