@@ -494,7 +494,7 @@ a personal list, but because it is the wrong word that saves the most future wor
 above). Todoist's own task-creation dialog is a different product entirely, and it is called
 "Quick Add" — that name is Todoist's own, not a coinage here. Referring to it as "the composer"
 cost a full round of confusion in a real session, once the Todoist reference docs
-(`docs/reference/todoist/`) had reused meologue's own term for a Todoist surface that shares none
+(`meologue-parity-docs/todoist/`) had reused meologue's own term for a Todoist surface that shares none
 of its properties. Write "Quick Add" for Todoist's
 dialog, "Composer" only for meologue's own Destination, and name the product explicitly wherever
 a sentence could be read either way.

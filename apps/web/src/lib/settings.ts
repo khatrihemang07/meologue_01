@@ -356,7 +356,7 @@ function writeStoredCompletedStyle(style: CompletedStyleId): void {
  * the bottom safe area (composer.tsx's own layout comments) — but on a
  * touch device the toolbar carries indent, outdent and the soft break,
  * which a phone's keyboard (there isn't one) has no other way to reach at
- * all (docs/reference/upnote-android-detail.md), so hiding it there by
+ * all (meologue-parity-docs/upnote-android-detail.md), so hiding it there by
  * default would hide the only path to those three actions until the
  * reader happens to find the toggle beside Send.
  *

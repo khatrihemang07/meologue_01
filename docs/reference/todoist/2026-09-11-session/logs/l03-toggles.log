@@ -1,7 +1,0 @@
-toggles: []
-mediaCheck: {
-  "prefersLight": true,
-  "prefersDark": false,
-  "htmlClass": "theme_dark todoist_loaded"
-}
-

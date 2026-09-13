@@ -4,7 +4,7 @@
  * in core and are wired to no UI at all," and there was no `/todo/labels`
  * route for one to live behind.
  *
- * **STR-04 and STR-05 (docs/reference/todoist/parity-ledger.md).** This
+ * **STR-04 and STR-05 (meologue-parity-docs/todoist/parity-ledger.md).** This
  * screen used to do create/rename/recolour inline on the row, following
  * `projects-view.tsx`'s own shape. The 2026-09-13 live audit
  * (`live-audit-dom/flow9-STR-04-todoist.json`,

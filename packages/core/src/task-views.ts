@@ -142,7 +142,7 @@ export interface UpcomingDay {
  * per calendar day that actually has a dated Task, starting with today
  * itself. Todoist's own Upcoming view groups the identical way — its day
  * headings run "10 Sep ‧ Today ‧ Thursday," "11 Sep ‧ Tomorrow ‧ Friday,"
- * "12 Sep ‧ Saturday" (docs/reference/todoist/scheduler-and-priority.md
+ * "12 Sep ‧ Saturday" (meologue-parity-docs/todoist/scheduler-and-priority.md
  * §9, DATE-05 in the parity ledger) — today's own section heading first,
  * not omitted the way a calendar app might start a "forthcoming" list on
  * tomorrow.

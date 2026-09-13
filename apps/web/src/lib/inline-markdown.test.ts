@@ -874,7 +874,7 @@ describe("refreshTaskReferenceLabel finds a task reference nested inside a mark"
   });
 });
 
-// CMT-02/CMT-08 (docs/reference/todoist/parity-ledger.md) — a Task
+// CMT-02/CMT-08 (meologue-parity-docs/todoist/parity-ledger.md) — a Task
 // comment's own dialect. `parseCommentMarkdown` reverses exactly the three
 // block removals `parseEntryMarkdown`'s own suite (entry-prose.test.tsx)
 // pins as literal text for an Entry, plus linkifies a bare `http`/`https`
@@ -1020,7 +1020,7 @@ describe("parseCommentMarkdown", () => {
   });
 });
 
-// CMT-06 (docs/reference/todoist/parity-ledger.md) — Activity's own
+// CMT-06 (meologue-parity-docs/todoist/parity-ledger.md) — Activity's own
 // content-preview chip (`format-event.ts`'s `describeEventLine`) shows a
 // plain-text flattening of a comment's/description's raw markdown, not the
 // source itself. Both cases here are Todoist's own live-measured strings,

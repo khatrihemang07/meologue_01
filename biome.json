@@ -7,17 +7,7 @@
   },
   "files": {
     "ignoreUnknown": true,
-    "includes": [
-      "**",
-      "!server",
-      "!**/dist",
-      "!**/generated",
-      "!**/public",
-      "!docs/reference/**/*-dom",
-      "!docs/reference/**/*-shots",
-      "!docs/reference/**/drivers",
-      "!docs/reference/**/logs"
-    ]
+    "includes": ["**", "!server", "!**/dist", "!**/generated", "!**/public"]
   },
   "formatter": {
     "enabled": true,

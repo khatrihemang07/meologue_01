@@ -6,7 +6,7 @@
  * undone"), and its own Tasks via `TaskList` (task-list.tsx) — "opening a
  * Project lists its Tasks, reusing the list Inbox already uses."
  *
- * **STR-02 (docs/reference/todoist/parity-ledger.md).** Name, colour and
+ * **STR-02 (meologue-parity-docs/todoist/parity-ledger.md).** Name, colour and
  * description used to be inline controls in this header — a
  * rename-on-blur `Input`, a colour `<select>`, a description `<textarea>`
  * committing on blur. The 2026-09-13 live audit
@@ -22,7 +22,7 @@
  * fields don't include Archive at all, and moving Favourite in on top of
  * that would be inventing a shape the ledger never measured.
  *
- * **STR-07 (docs/reference/todoist/parity-ledger.md).** A Section's own
+ * **STR-07 (meologue-parity-docs/todoist/parity-ledger.md).** A Section's own
  * Edit/Move/Archive/Delete used to be four always-visible row controls —
  * an always-on inline rename field, explicit `Move "x" earlier` /
  * `Move "x" later` buttons, and standalone Archive/Delete buttons. The
@@ -105,7 +105,7 @@ export interface ProjectViewProps {
    * own doc comment). The confirmation lives in this component
    * (`confirmingDeleteProject` below), mirroring Section delete's own
    * "capture, then confirm" shape just below it, with Todoist's own
-   * verbatim wording (docs/reference/todoist/quick-add.md § "Destructive
+   * verbatim wording (meologue-parity-docs/todoist/quick-add.md § "Destructive
    * confirmation wording").
    */
   onDeleteProject: () => void;

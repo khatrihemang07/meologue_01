@@ -13,7 +13,7 @@
  * Issue #224 is the same principle applied to *tone*, not just wording.
  * Before it, this module rendered `MMM d` and nothing else — never
  * "Today", never "Tomorrow", never a weekday, and always in the same
- * grey — which is docs/reference/todoist/row-and-detail.md §1's own
+ * grey — which is meologue-parity-docs/todoist/row-and-detail.md §1's own
  * "single most consequential finding": an overdue Task, one due today
  * and one due next year all read identically. `describeTaskDate` below
  * is the one place that now decides both words and colour for a Task's
@@ -23,7 +23,7 @@
  * independent `date < today` comparisons eventually would.
  *
  * Issue #250, driving both apps side by side, DARK theme only
- * (docs/reference/todoist/pass2-2026-09-11.md §1), measured Today and
+ * (meologue-parity-docs/todoist/pass2-2026-09-11.md §1), measured Today and
  * Tomorrow as two more distinct colours, not a shared "upcoming" purple —
  * closing DATE-09 (parity-ledger.md), which had recorded the Today colour
  * as an explicit, flagged guess that this measurement falsifies. Tomorrow

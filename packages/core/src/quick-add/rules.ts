@@ -67,7 +67,7 @@ export function matchSection(input: string): QuickAddToken[] {
 
 /**
  * `@label` — issue #170 chose `%`, retiring `@` as "unlikely to be
- * missed." Issue #226's own reference capture (docs/reference/todoist/
+ * missed." Issue #226's own reference capture (meologue-parity-docs/todoist/
  * quick-add.md § Recognised vocabulary and § Autocomplete popups) shows
  * Todoist using `@` for labels, verified, with its own autocomplete
  * popup and "Label not found. Create <text>" fallback — so this reverses

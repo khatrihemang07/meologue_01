@@ -618,7 +618,7 @@ export function TaskRowContent({
             // KBD-03/04 (parity ledger): this button, not the `<li data-
             // task-id>` it lives inside, is what Todoist's own measured
             // target actually is — a `role="button"` element carrying the
-            // task title (`docs/reference/todoist/live-audit-dom/flow6-
+            // task title (`meologue-parity-docs/todoist/live-audit-dom/flow6-
             // KBD-03-todoist.json`). `use-todo-keymap.ts`'s `focusAdjacentRow`
             // walks every `[data-row-nav-target]` in one live `querySelectorAll`
             // to build the row-to-row cycle straight from the DOM, so a

@@ -206,7 +206,7 @@ describe("LabelsView — Edit label dialog (STR-04)", () => {
 });
 
 describe("LabelsView — delete (STR-03, unchanged wording)", () => {
-  // Verbatim (docs/reference/todoist/quick-add.md § "Destructive
+  // Verbatim (meologue-parity-docs/todoist/quick-add.md § "Destructive
   // confirmation wording"): "Delete label? The <name> label will be
   // permanently deleted." Buttons Cancel/Delete.
   it("Delete in the options menu shows Todoist's own verbatim delete wording", async () => {

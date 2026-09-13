@@ -13,7 +13,7 @@
  * split).
  *
  * **Geometry, from the one live-measured artifact this ticket has**
- * (`docs/reference/todoist/live-audit-dom/quickadd-dialog-todoist.json`,
+ * (`meologue-parity-docs/todoist/live-audit-dom/quickadd-dialog-todoist.json`,
  * identity asserted `role="dialog"` `aria-label="Quick Add"`, dark theme):
  * 580×66px at rest, 580×97px once a date is recognised, radius 12px,
  * padding 16px on all four sides, border `1px solid rgb(61,61,61)`,
