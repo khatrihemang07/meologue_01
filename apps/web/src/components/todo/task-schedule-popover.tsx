@@ -39,7 +39,8 @@ import type { QuickAddToken } from "@meologue/core";
 import { firstOccurrence, parseQuickAdd, parseRecurrence } from "@meologue/core";
 import { addDays, format, nextMonday, nextSaturday } from "date-fns";
 import { CalendarDays, CalendarRange, CircleSlash, Repeat, Sofa, Sun, X } from "lucide-react";
-import { useEffect, useId, useState } from "react";
+import { DropdownMenu } from "radix-ui";
+import { useEffect, useId, useRef, useState } from "react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -90,6 +91,28 @@ function resolveSchedulePreview(
   }
   return null;
 }
+
+/** "1st"/"2nd"/"3rd"/"4th"… — the Repeat menu's own "Every month on the 13th"/"Every year on September 13th" wording (SCHED-14's captured strings), spelled out because `date-fns`'s own `format` has no ordinal-day token that produces "13th" on its own. */
+function ordinal(day: number): string {
+  const mod100 = day % 100;
+  if (mod100 >= 11 && mod100 <= 13) {
+    return `${day}th`;
+  }
+  switch (day % 10) {
+    case 1:
+      return `${day}st`;
+    case 2:
+      return `${day}nd`;
+    case 3:
+      return `${day}rd`;
+    default:
+      return `${day}th`;
+  }
+}
+
+/** Shared by every Repeat-menu item — deliberately not `task-command-menu.tsx`'s own identical-looking `itemClassName` (that file is out of scope here; this is its own copy, not an import, so the two are free to diverge). */
+const repeatItemClassName =
+  "flex cursor-pointer items-center rounded-md px-2 py-1.5 text-sm outline-none data-highlighted:bg-white/10";
 
 // A default time for the "Add a time" toggle below — 9am reads as "start
 // of a normal working day" without this file trying to guess a reader's
@@ -192,6 +215,21 @@ export function TaskSchedulePopover({
   const [typed, setTyped] = useState("");
   const [month, setMonth] = useState<Date>(() => parseDayKey(dateDay) ?? now);
   const inputId = useId();
+  // "Type a date" — read by the Repeat menu's own "Custom…" item below,
+  // which focuses this exact input rather than opening a second dialog
+  // (this ticket's own disclosed scope cut: Todoist's dedicated custom-
+  // recurrence dialog isn't built here).
+  const typedInputRef = useRef<HTMLInputElement>(null);
+  // Set by "Custom…"'s own `onSelect`, read once by the Repeat menu's
+  // `onCloseAutoFocus` below — the identical two-step handoff issue #255
+  // (task-command-menu.tsx's own "Date…" item) had to invent for the
+  // identical reason: focusing `typedInputRef` directly from `onSelect`
+  // races Radix's own FocusScope teardown for the menu that's still
+  // closing, which was that issue's whole root cause. Waiting for
+  // `onCloseAutoFocus` — fired once the menu's FocusScope has actually
+  // torn down, not merely been told to — is the one signal that a
+  // same-tick focus() won't just get yanked back.
+  const focusInputAfterRepeatCloseRef = useRef(false);
 
   // Re-seed on every open, mirroring DatePickerSheet's own identical
   // reasoning (date-picker-sheet.tsx's header comment): a dismiss never
@@ -227,6 +265,99 @@ export function TaskSchedulePopover({
     }
     setOpen(false);
   }
+
+  // Every Repeat-menu option (SCHED-14) commits through this exact same
+  // `onPickRecurrence` — the one recurrence door this file's own header
+  // comment already established for the typed phrase above. No second
+  // representation, no direct Task mutation from here.
+  function commitRepeatPhrase(phrase: string, day: string) {
+    onPickRecurrence(phrase, day);
+    setOpen(false);
+  }
+
+  // SCHED-14's five named cadences, each resolved through the identical
+  // `firstOccurrence` the typed input already uses — not reconstructed by
+  // hand from `dateDay`/`now`. That distinction is load-bearing, not
+  // stylistic: `../../packages/core/src/recurrence/recurrence.ts`'s own
+  // header comment records that a bare "every day" is
+  // completion-anchored to `now` regardless of `dateDay`, while "every
+  // month"/"every year" anchor to `dateDay` when one exists — two
+  // different rules a hand-written label would have to reimplement (and
+  // could drift from) to describe correctly. Reading each option's own
+  // weekday/day-of-month/month-and-day off its own real outcome can't.
+  const repeatAnchor = parseDayKey(dateDay) ?? now;
+  const repeatCandidates: ReadonlyArray<{
+    key: string;
+    phrase: string;
+    label: (resolvedDay: string) => string;
+  }> = [
+    { key: "day", phrase: "every day", label: () => "Every day" },
+    {
+      // A named weekday, not a bare "every week". The engine anchors bare
+      // "every week" to completion, so a task finished late would drift off
+      // the weekday this label promises; "every sunday" stays on Sundays.
+      // The weekday is the task's own date's, or today's for an undated
+      // task, as in Todoist's "Every week on Saturday" read on Sat 12 Sep.
+      key: "week",
+      phrase: `every ${format(repeatAnchor, "EEEE").toLowerCase()}`,
+      label: (resolvedDay) => `Every week on ${format(parseDayKey(resolvedDay) ?? now, "EEEE")}`,
+    },
+    {
+      key: "workday",
+      phrase: "every workday",
+      // Todoist's own captured wording, "weekday" — this codebase's own
+      // recurrence grammar spells the identical Mon-Fri pattern
+      // "workday(s)" instead (`../../packages/core/src/recurrence/
+      // parser.ts`'s `/^workdays?$/`). The menu keeps Todoist's label; the
+      // committed `dateString` keeps this repo's own accepted spelling —
+      // "workday" is not a silent parser extension, it's what already
+      // parses, just under a different English word than Todoist's.
+      label: () => "Every weekday (Mon - Fri)",
+    },
+    {
+      key: "month",
+      phrase: "every month",
+      label: (resolvedDay) =>
+        `Every month on the ${ordinal((parseDayKey(resolvedDay) ?? now).getDate())}`,
+    },
+    {
+      key: "year",
+      phrase: "every year",
+      label: (resolvedDay) => {
+        const resolved = parseDayKey(resolvedDay) ?? now;
+        return `Every year on ${format(resolved, "MMMM")} ${ordinal(resolved.getDate())}`;
+      },
+    },
+  ];
+  const repeatOptions = repeatCandidates.flatMap((candidate) => {
+    const outcome = firstOccurrence(candidate.phrase, { dueDate: dateDay, now: nowKey });
+    // None of these five bare phrases carries a bound, so a non-
+    // "occurrence" outcome would mean the engine and this menu have
+    // drifted apart, not that this particular input was bad — the same
+    // posture `resolveRecurrencePhrase`'s own doc comment (quick-add-
+    // task.ts) takes for the identical situation. Skipping the option
+    // rather than throwing keeps that drift non-fatal.
+    if (outcome.kind !== "occurrence") {
+      return [];
+    }
+    return [
+      {
+        key: candidate.key,
+        phrase: candidate.phrase,
+        day: outcome.date,
+        label: candidate.label(outcome.date),
+      },
+    ];
+  });
+  // Mirrors scheduler-and-priority.md §7's own captured behaviour: "the
+  // Repeat button disappears from the panel and is replaced by the
+  // resolved preview" once a recurrence is active. Here that's already
+  // true by construction — `typed` is seeded from `dateString` on every
+  // open (this file's own header comment), so an existing Recurrence
+  // already renders as the preview button above; this just hides the
+  // Repeat entry point while that's showing, rather than offering two
+  // controls that both claim to set the same thing at once.
+  const showRepeatControl = preview === null || preview.dateString === null;
 
   const tomorrow = addDays(now, 1);
   const nextWeek = nextMonday(now);
@@ -322,6 +453,7 @@ export function TaskSchedulePopover({
             Type a date
           </label>
           <input
+            ref={typedInputRef}
             id={inputId}
             type="text"
             placeholder="Type a date"
@@ -508,6 +640,92 @@ export function TaskSchedulePopover({
             onChange={(event) => onSetTime(event.target.value)}
             className="w-fit rounded-md border border-border bg-background px-2 py-1 text-sm"
           />
+        )}
+
+        {/*
+          Todoist's own Repeat control (issue #227, SCHED-14 — never
+          previously built here): "A Time button and a Repeat button sit
+          at the bottom, below the calendar" (pass2-2026-09-11.md §5),
+          so this sits directly after the Time controls above, in that
+          same order. Unlike Time (gated on `dateDay !== null`), this is
+          never gated: a recurrence's own anchor falls back to `now` for
+          an undated Task exactly as SCHED-04's typed input already does,
+          so there is no missing precondition here the way there is for
+          a time-of-day.
+        */}
+        {showRepeatControl && (
+          <DropdownMenu.Root>
+            <DropdownMenu.Trigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                className="h-8 w-fit justify-start gap-2 px-2 font-normal text-muted-foreground"
+              >
+                <Repeat className="size-4" />
+                Repeat
+              </Button>
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Portal>
+              <DropdownMenu.Content
+                data-testid="repeat-menu"
+                align="start"
+                className="flex flex-col gap-0.5 p-1 text-sm"
+                style={{
+                  width: "282px",
+                  borderRadius: "10px",
+                  background: "rgb(40, 40, 40)",
+                  border: "1px solid rgb(61, 61, 61)",
+                  boxShadow: "rgba(0, 0, 0, 0.12) 0px 0px 8px 0px",
+                  zIndex: 1000,
+                  color: "rgb(255, 255, 255)",
+                }}
+                // The identical hand-off task-command-menu.tsx's own
+                // "Date…" item needed for issue #255: focusing
+                // `typedInputRef` straight from "Custom…"'s `onSelect`
+                // would race this very menu's own `FocusScope` while it's
+                // still tearing down mid-close-animation. Waiting for
+                // `onCloseAutoFocus` — fired once that teardown is
+                // actually done — and skipping its own default (return
+                // focus to the trigger) is what lets the focus land on
+                // the input instead and stick there.
+                onCloseAutoFocus={(event) => {
+                  if (!focusInputAfterRepeatCloseRef.current) {
+                    return;
+                  }
+                  focusInputAfterRepeatCloseRef.current = false;
+                  event.preventDefault();
+                  typedInputRef.current?.focus();
+                }}
+              >
+                {repeatOptions.map((option) => (
+                  <DropdownMenu.Item
+                    key={option.key}
+                    className={repeatItemClassName}
+                    onSelect={() => commitRepeatPhrase(option.phrase, option.day)}
+                  >
+                    {option.label}
+                  </DropdownMenu.Item>
+                ))}
+                {/*
+                  Todoist's own dedicated custom-recurrence dialog isn't
+                  built here (this ticket's own disclosed scope cut) —
+                  this focuses the "Type a date" input instead, already
+                  pre-filled with whatever Recurrence the Task currently
+                  has (this file's own re-seed-on-open effect above), so
+                  a reader lands somewhere they can type a custom phrase
+                  rather than a dead end.
+                */}
+                <DropdownMenu.Item
+                  className={repeatItemClassName}
+                  onSelect={() => {
+                    focusInputAfterRepeatCloseRef.current = true;
+                  }}
+                >
+                  Custom…
+                </DropdownMenu.Item>
+              </DropdownMenu.Content>
+            </DropdownMenu.Portal>
+          </DropdownMenu.Root>
         )}
       </PopoverContent>
     </Popover>
