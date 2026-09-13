@@ -1268,3 +1268,97 @@ upper rows and two bottom ones, where upper rows had been 0 of 7.
 - **Commands are split by package.** `pnpm build:web` and `pnpm vitest run` exist only in
   `apps/web` — there is no root vitest binary at all — while `biome:check` and `graphify` run from
   the repo root. Handoffs quote these bare and send you to the wrong directory.
+
+## Flow 11 — the 24 fix candidates, defects 31–33, and a four-round re-drive
+
+Session 7, 13 Sep 2026 (a Sunday, which mattered twice). Every row the ledger flagged as a fix
+candidate was fixed or settled by a user decision, defects 31, 32 and 33 were fixed, and each fix was
+then read live on **both** sides in one session, as ADR 0077 requires. The re-drive ran in four
+serial rounds against four successive builds, each confirmed by unregistering the service worker and
+comparing the served `index-*.js` hash to the build output.
+
+**Tally, read back from the file: 79 `matched`, 34 `divergent`, 8 `todoist-captured`, 6 `blocked`**,
+against 59 / 54 / 8 / 6 at the start of the session. Every row the fixes touched now has a flow-11
+reading in its note.
+
+### Decisions the user made (2026-09-13)
+
+- **Keep meologue's accessibility where parity would remove it**: NAV-04, DET-03 and ROW-12. ROW-03's
+  remaining structural half (Todoist's `<button role="checkbox">` named "Mark task as complete" against
+  a native checkbox named after the task) was kept under the same principle **by the implementer**, and
+  is flagged in the row for the user to confirm.
+- **Keep `role="alertdialog"`** on destructive confirmations (STR-01, STR-03, and now DET-15).
+- **Match Todoist's `1 task completed`** (CMT-04), accepting that the toast no longer names the task.
+- **Keep `Shift+Enter` submitting** (QA-19, parity) and track the user's own complaint in **#258**.
+
+### What the re-drive found that no test could
+
+Each fix landed with passing tests. These are the ones the live reading still overturned. The
+reasons differ, which is why they are listed together.
+
+1. **A weekday-only rule broke on a Sunday (SCHED-02).** Todoist's quick options dropped *Next week*
+   because on a Sunday it lands on the same Monday as *Tomorrow*: three options, not four. Both apps
+   had only ever been read mid-week. meologue now deduplicates slots by day, confirmed live in R2.
+2. **A 4px height came from three places at once (ROW-01).** Removing the 59px floor left a title-only
+   row at 47px, not Todoist's 43. The artifact's child heights accounted for it exactly: a 44px row
+   action kept in layout at `opacity: 0` (ROW-12's ratified keyboard access) plus the row box's 2px
+   drop-target border and 1px divider. `-my-1` keeps the 44px hit area and lays the button out at
+   36px. Read at 43px in R3.
+3. **A confirmation completes the gesture that raised it (DET-15).** Todoist's Discard after an
+   *outside click* closes the whole task, while Discard after Cancel only ends editing. Escape inside
+   the confirmation hands focus back to the title editor. meologue did neither, because a
+   programmatically opened Radix dialog has no trigger to restore focus to. Both fixed and read in R4.
+4. **"MATCH" on a tag difference (CMT-08).** An agent called `<s>` against `<del>` "the same element".
+   The raw HTML showed three structural differences: that tag, a `<p>` per line against one `<p>` with
+   `<br>`, and `<li><p>` against `<li>`. All three are fixed in comment mode only, so journal Entries
+   keep ADR 0041's inline-only dialect. **Todoist itself has changed:** `1. first` is now a real
+   `<ol>`, where flow 5 read it as literal.
+5. **A count's position, not its presence (NAV-01).** Flow 6 read only the sidebar link's own text,
+   which cannot say whether a count is drawn beside it. An early fix removed meologue's visible count
+   on that basis. It was restored before commit, and R2 then showed Todoist's count is the link's
+   *sibling*, which is now meologue's structure too.
+
+### What review caught before any live reading
+
+- **A keyboard trap in the first DET-15 guard.** It listened on `window` in the capture phase and
+  filtered by a ref on the panel, but the confirmation portals *outside* that ref. While it was open,
+  Escape could not dismiss it, and a click on its own Discard counted as "outside". Rebuilt on Radix's
+  layer-aware `onEscapeKeyDown` / `onPointerDownOutside`, which fire only for the topmost layer.
+- **CMT-06 fixed the templates but not the measured view.** The per-task Activity passed
+  `currentTaskId`, which deliberately suppressed the task's name, and Todoist names it anyway. The
+  first pass would have left the exact surface the row measured unchanged.
+- **`next week` on a Monday would have meant today.** The parser's "on or after" rule disagreed with
+  the scheduler's own strictly-after `nextMonday`. Both measurements fitted either rule, so internal
+  consistency decided.
+- **The build failed while every test passed.** vitest strips types. CMT-08 widened the block-node
+  union, and two walkers in `task-reference-sync.ts` assumed anything not `prose` has `items`. Only
+  `tsc` saw it. **Run `npx tsc -b --noEmit` beside vitest on any change to a shared union.**
+
+### Measurement traps, new this flow
+
+- **Walking up from a container is not reading the element.** R4 reported Todoist's toast as having
+  no `role` anywhere, having started at `global-toasts-provider-container` and gone *up*. Flow 5 had
+  read the toast element itself: `role="alert"`. The readings do not conflict.
+- **A toast's lifetime is measured from when it appears.** Todoist's ~11s (flow 5) was about 10s from
+  first sight plus the exit animation. meologue at 11s read ~600ms long in R3, and at 10s agreed in R4.
+- **Todoist's activity dialog can serve a stale list.** A second comment's event appeared only after
+  closing and reopening it.
+
+### Safety log
+
+- **Todoist canary set-equal in all four rounds**: 16 Inbox titles, 3 filters (3/3), 0 labels,
+  1 project. About 30 disposable `ZZ probe` tasks, one project and one label were created across the
+  rounds, all deleted with their titles read back first. Completed ones were confirmed by
+  `aria-checked` before deletion.
+- **R1 was cut off by a usage limit mid-cleanup.** Before resuming, the account was checked from the
+  agent's own logs: its mid-run canary read the 16 baseline titles and no probe task, and the delete
+  in flight was on meologue's test origin. It was resumed rather than restarted.
+- meologue's test origin: every seeded fixture removed through the store.
+
+### What remains
+
+- **Android has still never been driven.** No device was attached this session (`adb devices` listed
+  nothing), so every reading in this programme is browser-only.
+- **Divergences decided by the implementer, flagged for the user**: ROW-03's checkbox structure (above),
+  and CMT-02's unfurl card, which needs a network fetch a local-first app does not make on its own.
+- **CMT-04's `role="alert"`** stays open on sonner 2.0.8's API.
