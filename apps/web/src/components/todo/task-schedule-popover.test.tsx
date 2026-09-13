@@ -410,65 +410,118 @@ describe("TaskSchedulePopover", () => {
     });
   });
 
-  describe("Add a time (issue #249 — relocated from task-schedule-sheet.tsx)", () => {
-    it("renders no toggle until a date is set", () => {
+  describe("Time dialog (SCHED-11/pass2 §7 — replaces issue #249's inline 'Add a time' toggle)", () => {
+    function openTimeDialog() {
+      fireEvent.click(screen.getByRole("button", { name: "Time" }));
+      return screen.getByRole("dialog", { name: "Select start and end time" });
+    }
+
+    it("renders no Time button until a date is set", () => {
       renderPopover({ dateDay: null });
       open();
 
-      expect(screen.queryByText("Add a time")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Time" })).not.toBeInTheDocument();
     });
 
-    it("shows the toggle unchecked and no time input when dateTime is null", () => {
-      renderPopover({ dateDay: "2026-09-05", dateTime: null });
-      open();
-
-      expect(screen.getByLabelText("Add a time")).not.toBeChecked();
-      expect(screen.queryByLabelText("Time")).not.toBeInTheDocument();
-    });
-
-    it("shows the time input, seeded with the existing value, once a time is set", () => {
+    it("the inline time field is gone — no bare time input renders in the scheduler itself", () => {
       renderPopover({ dateDay: "2026-09-05", dateTime: "14:30" });
       open();
 
-      expect(screen.getByLabelText("Add a time")).toBeChecked();
-      expect(screen.getByLabelText("Time")).toHaveValue("14:30");
+      expect(screen.queryByText("Add a time")).not.toBeInTheDocument();
+      expect(screen.queryByLabelText("Start time")).not.toBeInTheDocument();
+      expect(screen.queryByLabelText("Time")).not.toBeInTheDocument();
     });
 
-    it("checking the toggle calls onSetTime with a default time", () => {
+    it("the Time button opens a dialog with Todoist's own recorded title and fields", () => {
+      renderPopover({ dateDay: "2026-09-05", dateTime: null });
+      open();
+
+      const dialog = openTimeDialog();
+
+      // SCHED-11 (live-audit-dom/flow3-SCHED-todoist.json): role="dialog",
+      // aria-label "Select start and end time", a Start time field, and
+      // Duration/Time zone deliberately not built (issue #179's removal;
+      // no per-Task timezone concept exists — see task-time-dialog.tsx's
+      // own header comment).
+      expect(dialog).toBeInTheDocument();
+      expect(within(dialog).getByLabelText("Add a time")).not.toBeChecked();
+      expect(within(dialog).queryByLabelText("Start time")).not.toBeInTheDocument();
+      expect(within(dialog).getByRole("button", { name: "Save" })).toBeInTheDocument();
+      expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+      // Opening it doesn't close the scheduler underneath (this ticket's
+      // own Radix trap, issue #255's shape) — item 5 of this ticket's brief.
+      expect(screen.getByTestId("scheduler-view")).toBeInTheDocument();
+    });
+
+    it("checking 'Add a time' inside the dialog reveals the Start time field, seeded with the existing value", () => {
+      renderPopover({ dateDay: "2026-09-05", dateTime: "14:30" });
+      open();
+      const dialog = openTimeDialog();
+
+      expect(within(dialog).getByLabelText("Add a time")).toBeChecked();
+      expect(within(dialog).getByLabelText("Start time")).toHaveValue("14:30");
+    });
+
+    it("Save commits the drafted time through the same onSetTime callback the inline field used, and returns to the scheduler", () => {
       const { onSetTime } = renderPopover({ dateDay: "2026-09-05", dateTime: null });
       open();
+      const dialog = openTimeDialog();
 
-      fireEvent.click(screen.getByLabelText("Add a time"));
+      fireEvent.click(within(dialog).getByLabelText("Add a time"));
+      fireEvent.change(within(dialog).getByLabelText("Start time"), {
+        target: { value: "16:00" },
+      });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
 
-      expect(onSetTime).toHaveBeenCalledWith("09:00");
+      expect(onSetTime).toHaveBeenCalledWith("16:00");
+      expect(
+        screen.queryByRole("dialog", { name: "Select start and end time" }),
+      ).not.toBeInTheDocument();
+      // Back in the scheduler, not closed entirely.
+      expect(screen.getByTestId("scheduler-view")).toBeInTheDocument();
     });
 
-    it("unchecking the toggle calls onSetTime with null", () => {
+    it("Save with 'Add a time' unchecked commits null — the dialog's own mirror of the inline field's existing clear path", () => {
       const { onSetTime } = renderPopover({ dateDay: "2026-09-05", dateTime: "09:00" });
       open();
+      const dialog = openTimeDialog();
 
-      fireEvent.click(screen.getByLabelText("Add a time"));
+      fireEvent.click(within(dialog).getByLabelText("Add a time"));
+      fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
 
       expect(onSetTime).toHaveBeenCalledWith(null);
     });
 
-    it("changing the time input calls onSetTime with the new value", () => {
+    it("Cancel discards the draft: onSetTime is never called, and the Task's own time is unchanged next time the dialog opens", () => {
       const { onSetTime } = renderPopover({ dateDay: "2026-09-05", dateTime: "09:00" });
       open();
+      const dialog = openTimeDialog();
 
-      fireEvent.change(screen.getByLabelText("Time"), { target: { value: "16:00" } });
+      fireEvent.change(within(dialog).getByLabelText("Start time"), {
+        target: { value: "23:00" },
+      });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
 
-      expect(onSetTime).toHaveBeenCalledWith("16:00");
+      expect(onSetTime).not.toHaveBeenCalled();
+      expect(
+        screen.queryByRole("dialog", { name: "Select start and end time" }),
+      ).not.toBeInTheDocument();
+      expect(screen.getByTestId("scheduler-view")).toBeInTheDocument();
+
+      // Re-opening re-seeds from the Task's real, unchanged dateTime —
+      // the abandoned "23:00" draft is gone.
+      const reopened = openTimeDialog();
+      expect(within(reopened).getByLabelText("Start time")).toHaveValue("09:00");
     });
 
-    it("toggling the time never calls onPickDay and never closes the popover", () => {
+    it("never calls onPickDay, and the popover stays fully interactive underneath while the dialog is open", () => {
       const { onPickDay } = renderPopover({ dateDay: "2026-09-05", dateTime: null });
       open();
-
-      fireEvent.click(screen.getByLabelText("Add a time"));
+      openTimeDialog();
 
       expect(onPickDay).not.toHaveBeenCalled();
       expect(screen.getByTestId("scheduler-view")).toBeInTheDocument();
+      expect(screen.getByPlaceholderText("Type a date")).toBeInTheDocument();
     });
   });
 

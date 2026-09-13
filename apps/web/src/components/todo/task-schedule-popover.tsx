@@ -38,7 +38,16 @@
 import type { QuickAddToken } from "@meologue/core";
 import { firstOccurrence, parseQuickAdd, parseRecurrence } from "@meologue/core";
 import { addDays, format, nextMonday, nextSaturday } from "date-fns";
-import { CalendarDays, CalendarRange, CircleSlash, Repeat, Sofa, Sun, X } from "lucide-react";
+import {
+  CalendarDays,
+  CalendarRange,
+  CircleSlash,
+  Clock,
+  Repeat,
+  Sofa,
+  Sun,
+  X,
+} from "lucide-react";
 import { DropdownMenu } from "radix-ui";
 import { useEffect, useId, useRef, useState } from "react";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -47,6 +56,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { localDayKey, parseDayKey } from "@/lib/local-day-key";
 import { resolveRecurrencePhrase } from "@/lib/quick-add-task";
 import { cn } from "@/lib/utils";
+import { TaskTimeDialog } from "./task-time-dialog";
 
 /** One resolved "Type a date" preview — either a plain date or a Recurrence, never both (mirrors quick-add-task.ts's own resolveRecurrence: "a recognised recurrence's own computed first occurrence overrides whatever plain date token also matched"). */
 interface SchedulePreview {
@@ -114,15 +124,6 @@ function ordinal(day: number): string {
 const repeatItemClassName =
   "flex cursor-pointer items-center rounded-md px-2 py-1.5 text-sm outline-none data-highlighted:bg-white/10";
 
-// A default time for the "Add a time" toggle below — 9am reads as "start
-// of a normal working day" without this file trying to guess a reader's
-// actual schedule; the picker exists specifically so nobody has to type a
-// more precise one, and the `<input type="time">` right below it is where
-// that precision comes from instead. (Relocated here from
-// task-schedule-sheet.tsx by issue #249, along with the toggle and input
-// themselves — see this file's own dateDay/dateTime doc comments below.)
-const DEFAULT_TIME = "09:00";
-
 export interface TaskSchedulePopoverProps {
   /** The trigger this popover anchors under — task-schedule-sheet.tsx's own "Date" button. */
   trigger: React.ReactNode;
@@ -130,28 +131,30 @@ export interface TaskSchedulePopoverProps {
    * `Task.date`'s day component (`YYYY-MM-DD`), or `null`. `onPickDay`
    * itself still only ever commits a *day* — see its own doc comment,
    * unchanged by issue #249 — but this popover is no longer only a day
-   * picker: it also owns the "Add a time" toggle and the time-of-day input
-   * beneath the calendar (`dateTime`/`onSetTime` below), relocated here
-   * from `task-schedule-sheet.tsx`'s own Date section. The toggle and
-   * input render only once `dateDay` isn't `null` — there is no time-of-day
-   * to attach to an unset date.
+   * picker: it also owns the Time entry point (`dateTime`/`onSetTime`
+   * below) at the bottom, beside Repeat. That button — and the dedicated
+   * `TaskTimeDialog` it opens (this ticket's own follow-up to #249, which
+   * only relocated an inline toggle here and explicitly left Todoist's
+   * own dialog unbuilt) — renders only once `dateDay` isn't `null`: there
+   * is no time-of-day to attach to an unset date.
    */
   dateDay: string | null;
   /**
    * `Task.date`'s time-of-day component (`HH:MM`), or `null` when the Task
-   * is all-day. Seeds the "Add a time" checkbox (checked iff non-`null`)
-   * and the `<input type="time">` shown once it's checked (issue #249).
+   * is all-day. Seeds `TaskTimeDialog`'s own draft on every open (that
+   * file's own header comment).
    */
   dateTime: string | null;
   /**
    * Sets or clears the time-of-day on whatever day is already chosen —
-   * fired by checking/unchecking "Add a time" (with `DEFAULT_TIME`, or
-   * `null`) and by editing the time input directly. Unlike `onPickDay`,
-   * this never touches `dateString` and never closes the popover — setting
-   * a time is not "picking a day," and a caller combining this with the
-   * currently-chosen `dateDay` is what keeps a day change from dropping an
-   * already-chosen time and vice versa (`task-schedule-sheet.tsx`'s own
-   * wiring does this, mirroring its former `setDay` helper).
+   * fired only when `TaskTimeDialog`'s own Save is clicked (with whatever
+   * its draft resolved to, or `null` once its "Add a time" checkbox is
+   * unchecked). Unlike `onPickDay`, this never touches `dateString` and
+   * never closes this popover — setting a time is not "picking a day," and
+   * a caller combining this with the currently-chosen `dateDay` is what
+   * keeps a day change from dropping an already-chosen time and vice versa
+   * (`task-schedule-sheet.tsx`'s own wiring does this, mirroring its
+   * former `setDay` helper).
    */
   onSetTime: (time: string | null) => void;
   /** `Task.dateString` — the Recurrence phrase currently on the Task, or `null`. Seeds the "Type a date" input on every open (this file's own header comment: the one editable surface). */
@@ -215,6 +218,24 @@ export function TaskSchedulePopover({
   const [typed, setTyped] = useState("");
   const [month, setMonth] = useState<Date>(() => parseDayKey(dateDay) ?? now);
   const inputId = useId();
+  // Whether `TaskTimeDialog` is open — read by `PopoverContent`'s own
+  // `onFocusOutside`/`onPointerDownOutside` guards below, this popover's
+  // own version of the Radix trap issue #255 already named for a
+  // DropdownMenu opening a Popover: `TaskTimeDialog`'s own autofocus
+  // moves focus to a node this popover's `Content` doesn't contain (a
+  // sibling Radix `Dialog.Portal`, not a descendant), which Radix's
+  // `DismissableLayer` otherwise reads as "focus left the popover" and
+  // dismisses it on the spot. Guarding on this flag rather than removing
+  // the guard once the dialog opens is deliberate: the dialog's Save/
+  // Cancel buttons live in that same portalled subtree, so every pointer-
+  // down inside it needs the identical treatment for as long as it's
+  // open, not just the opening instant.
+  const [timeDialogOpen, setTimeDialogOpen] = useState(false);
+  function ignoreOutsideWhileTimeDialogOpen(event: { preventDefault: () => void }) {
+    if (timeDialogOpen) {
+      event.preventDefault();
+    }
+  }
   // "Type a date" — read by the Repeat menu's own "Custom…" item below,
   // which focuses this exact input rather than opening a second dialog
   // (this ticket's own disclosed scope cut: Todoist's dedicated custom-
@@ -447,6 +468,12 @@ export function TaskSchedulePopover({
           border: "1px solid var(--td-popover-border)",
           boxShadow: "var(--td-popover-shadow)",
         }}
+        // See `ignoreOutsideWhileTimeDialogOpen`'s own comment above —
+        // both handlers get the guard since either one alone stopping the
+        // eventual dismiss is enough, and a pointer-down and a focus
+        // change don't always arrive in the same order.
+        onFocusOutside={ignoreOutsideWhileTimeDialogOpen}
+        onPointerDownOutside={ignoreOutsideWhileTimeDialogOpen}
       >
         <div className="relative">
           <label htmlFor={inputId} className="sr-only">
@@ -612,122 +639,124 @@ export function TaskSchedulePopover({
         />
 
         {/*
-          Relocated from task-schedule-sheet.tsx's own Date section by
-          issue #249 — roughly where Todoist's own Time button sits,
-          below the calendar (this ticket's own reference: the dedicated
-          Time dialog behind that button is a separate follow-up, not
-          built here). Gated on `dateDay !== null` for the identical
-          reason the sheet gated it before: there is no time-of-day to
-          attach to an unset date.
+          Todoist's own bottom row (pass2-2026-09-11.md §5: "A Time button
+          and a Repeat button sit at the bottom, below the calendar" —
+          Time first, Repeat second, exactly this row's own order). The
+          former inline "Add a time" checkbox and `<input type="time">`
+          (issue #249) no longer render here directly — this ticket's own
+          follow-up builds the dedicated `TaskTimeDialog` Todoist itself
+          uses (SCHED-11/pass2 §7) behind this Time button instead, with
+          that same checkbox and input relocated inside it verbatim (see
+          that file's own header comment).
         */}
-        {dateDay !== null && (
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={dateTime !== null}
-              onChange={(event) => {
-                onSetTime(event.target.checked ? DEFAULT_TIME : null);
-              }}
-            />
-            Add a time
-          </label>
-        )}
-        {dateTime !== null && (
-          <input
-            type="time"
-            aria-label="Time"
-            value={dateTime}
-            onChange={(event) => onSetTime(event.target.value)}
-            className="w-fit rounded-md border border-border bg-background px-2 py-1 text-sm"
-          />
-        )}
+        <div className="flex items-center gap-2">
+          {/*
+            Gated on `dateDay !== null` for the identical reason the
+            former inline checkbox was: there is no time-of-day to attach
+            to an unset date.
+          */}
+          {dateDay !== null && (
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setTimeDialogOpen(true)}
+              className="h-8 w-fit justify-start gap-2 px-2 font-normal text-muted-foreground"
+            >
+              <Clock className="size-4" />
+              Time
+            </Button>
+          )}
 
-        {/*
-          Todoist's own Repeat control (issue #227, SCHED-14 — never
-          previously built here): "A Time button and a Repeat button sit
-          at the bottom, below the calendar" (pass2-2026-09-11.md §5),
-          so this sits directly after the Time controls above, in that
-          same order. Unlike Time (gated on `dateDay !== null`), this is
-          never gated: a recurrence's own anchor falls back to `now` for
-          an undated Task exactly as SCHED-04's typed input already does,
-          so there is no missing precondition here the way there is for
-          a time-of-day.
-        */}
-        {showRepeatControl && (
-          <DropdownMenu.Root>
-            <DropdownMenu.Trigger asChild>
-              <Button
-                type="button"
-                variant="ghost"
-                className="h-8 w-fit justify-start gap-2 px-2 font-normal text-muted-foreground"
-              >
-                <Repeat className="size-4" />
-                Repeat
-              </Button>
-            </DropdownMenu.Trigger>
-            <DropdownMenu.Portal>
-              <DropdownMenu.Content
-                data-testid="repeat-menu"
-                align="start"
-                className="flex flex-col gap-0.5 p-1 text-sm"
-                style={{
-                  width: "282px",
-                  borderRadius: "10px",
-                  background: "rgb(40, 40, 40)",
-                  border: "1px solid rgb(61, 61, 61)",
-                  boxShadow: "rgba(0, 0, 0, 0.12) 0px 0px 8px 0px",
-                  zIndex: 1000,
-                  color: "rgb(255, 255, 255)",
-                }}
-                // The identical hand-off task-command-menu.tsx's own
-                // "Date…" item needed for issue #255: focusing
-                // `typedInputRef` straight from "Custom…"'s `onSelect`
-                // would race this very menu's own `FocusScope` while it's
-                // still tearing down mid-close-animation. Waiting for
-                // `onCloseAutoFocus` — fired once that teardown is
-                // actually done — and skipping its own default (return
-                // focus to the trigger) is what lets the focus land on
-                // the input instead and stick there.
-                onCloseAutoFocus={(event) => {
-                  if (!focusInputAfterRepeatCloseRef.current) {
-                    return;
-                  }
-                  focusInputAfterRepeatCloseRef.current = false;
-                  event.preventDefault();
-                  typedInputRef.current?.focus();
-                }}
-              >
-                {repeatOptions.map((option) => (
-                  <DropdownMenu.Item
-                    key={option.key}
-                    className={repeatItemClassName}
-                    onSelect={() => commitRepeatPhrase(option.phrase, option.day)}
-                  >
-                    {option.label}
-                  </DropdownMenu.Item>
-                ))}
-                {/*
-                  Todoist's own dedicated custom-recurrence dialog isn't
-                  built here (this ticket's own disclosed scope cut) —
-                  this focuses the "Type a date" input instead, already
-                  pre-filled with whatever Recurrence the Task currently
-                  has (this file's own re-seed-on-open effect above), so
-                  a reader lands somewhere they can type a custom phrase
-                  rather than a dead end.
-                */}
-                <DropdownMenu.Item
-                  className={repeatItemClassName}
-                  onSelect={() => {
-                    focusInputAfterRepeatCloseRef.current = true;
+          {/*
+            Todoist's own Repeat control (issue #227, SCHED-14 — never
+            previously built here). Unlike Time (gated on
+            `dateDay !== null`), this is never gated: a recurrence's own
+            anchor falls back to `now` for an undated Task exactly as
+            SCHED-04's typed input already does, so there is no missing
+            precondition here the way there is for a time-of-day.
+          */}
+          {showRepeatControl && (
+            <DropdownMenu.Root>
+              <DropdownMenu.Trigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="h-8 w-fit justify-start gap-2 px-2 font-normal text-muted-foreground"
+                >
+                  <Repeat className="size-4" />
+                  Repeat
+                </Button>
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Portal>
+                <DropdownMenu.Content
+                  data-testid="repeat-menu"
+                  align="start"
+                  className="flex flex-col gap-0.5 p-1 text-sm"
+                  style={{
+                    width: "282px",
+                    borderRadius: "10px",
+                    background: "rgb(40, 40, 40)",
+                    border: "1px solid rgb(61, 61, 61)",
+                    boxShadow: "rgba(0, 0, 0, 0.12) 0px 0px 8px 0px",
+                    zIndex: 1000,
+                    color: "rgb(255, 255, 255)",
+                  }}
+                  // The identical hand-off task-command-menu.tsx's own
+                  // "Date…" item needed for issue #255: focusing
+                  // `typedInputRef` straight from "Custom…"'s `onSelect`
+                  // would race this very menu's own `FocusScope` while it's
+                  // still tearing down mid-close-animation. Waiting for
+                  // `onCloseAutoFocus` — fired once that teardown is
+                  // actually done — and skipping its own default (return
+                  // focus to the trigger) is what lets the focus land on
+                  // the input instead and stick there.
+                  onCloseAutoFocus={(event) => {
+                    if (!focusInputAfterRepeatCloseRef.current) {
+                      return;
+                    }
+                    focusInputAfterRepeatCloseRef.current = false;
+                    event.preventDefault();
+                    typedInputRef.current?.focus();
                   }}
                 >
-                  Custom…
-                </DropdownMenu.Item>
-              </DropdownMenu.Content>
-            </DropdownMenu.Portal>
-          </DropdownMenu.Root>
-        )}
+                  {repeatOptions.map((option) => (
+                    <DropdownMenu.Item
+                      key={option.key}
+                      className={repeatItemClassName}
+                      onSelect={() => commitRepeatPhrase(option.phrase, option.day)}
+                    >
+                      {option.label}
+                    </DropdownMenu.Item>
+                  ))}
+                  {/*
+                    Todoist's own dedicated custom-recurrence dialog isn't
+                    built here (this ticket's own disclosed scope cut) —
+                    this focuses the "Type a date" input instead, already
+                    pre-filled with whatever Recurrence the Task currently
+                    has (this file's own re-seed-on-open effect above), so
+                    a reader lands somewhere they can type a custom phrase
+                    rather than a dead end.
+                  */}
+                  <DropdownMenu.Item
+                    className={repeatItemClassName}
+                    onSelect={() => {
+                      focusInputAfterRepeatCloseRef.current = true;
+                    }}
+                  >
+                    Custom…
+                  </DropdownMenu.Item>
+                </DropdownMenu.Content>
+              </DropdownMenu.Portal>
+            </DropdownMenu.Root>
+          )}
+        </div>
       </PopoverContent>
+      <TaskTimeDialog
+        open={timeDialogOpen}
+        onOpenChange={setTimeDialogOpen}
+        time={dateTime}
+        onSave={onSetTime}
+      />
     </Popover>
   );
 }
