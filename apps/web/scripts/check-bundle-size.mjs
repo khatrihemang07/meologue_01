@@ -238,9 +238,26 @@ const CHUNK_BUDGETS = {
   // behind that claim used a shared visited-set, so it showed one path
   // rather than the cause. What was measured is recorded; what was not,
   // is not.
+  //
+  // Issues #255-#261 (PR #259) took this to **68,138 gzip (own chunk + 11
+  // shared)**, and once again almost none of it is this chunk's own code —
+  // that grew 4,266 -> 5,017. The whole movement is one shared chunk:
+  // `todo-quick-add-recognition-*.js` went 17,615 -> 26,323 (+8,708) when
+  // `SCHED-14`'s Repeat menu and `SCHED-11`'s Time dialog landed inside the
+  // scheduler it already carried (grep confirms "Repeat" in that chunk and
+  // not in this one). Because this table bills a shared chunk to every entry
+  // that reaches it, that single +8,708 is why TWO budgets failed in the same
+  // build — this one and `src/pages/todo-page.tsx` below. The bytes exist
+  // once in the artifact.
+  //
+  // Ceiling raised to 73,000: ~7% over the measured number, deliberately
+  // tight in the same way the 62,000 before it was. A split still removes
+  // nothing — the scheduler is reached by both surfaces regardless, so a
+  // `lazy()` would move bytes between budgets rather than out of the
+  // download.
   "src/components/todo/task-detail-view.tsx": {
-    ceilingBytes: 62_000,
-    baselineBytes: 58_089,
+    ceilingBytes: 73_000,
+    baselineBytes: 68_138,
   },
   // Not a route — `TaskScheduleSheet` (components/todo/task-schedule-
   // sheet.tsx), lazy from `todo-page.tsx` (issue #229 onward's own
@@ -290,9 +307,22 @@ const CHUNK_BUDGETS = {
   // entry is measured with the identical methodology every other one in
   // this table uses; it has not been separately audited against that open
   // question.
+  //
+  // **2.5x on one ticket, and the cause is entirely legible.** `QA-14`
+  // (PR #259) put Todoist's `#` project and `@` label autocomplete inside
+  // this editor, so the popup now ships wherever a title is edited — the
+  // Quick Add field, the row rename and the detail title, which is the point
+  // of it living here rather than in three places. Measured 2,734 gzip bytes
+  // (own chunk, no shared), up from 1,088; both "Project not found" and
+  // "Label not found" grep to this chunk and to no other.
+  //
+  // Ceiling raised to 3,400. A small chunk with a real feature in it is
+  // still small; what this entry is guarding against is this file quietly
+  // becoming a second home for scheduler or recognition weight, and 3,400
+  // still catches that.
   "src/components/todo/task-title-editor.tsx": {
-    ceilingBytes: 1_500,
-    baselineBytes: 1_088,
+    ceilingBytes: 3_400,
+    baselineBytes: 2_734,
   },
   // Not a route — `TaskDescriptionEditor` (components/todo/task-description-
   // editor.tsx), lazy from `task-detail-view.tsx` alone (issue #229,
@@ -459,7 +489,21 @@ const CHUNK_BUDGETS = {
   // If this route needs reclaiming, the candidate is a shared boundary
   // owning the whole scheduler family INCLUDING its trigger, not another
   // per-component `lazy()`.
-  "src/pages/todo-page.tsx": { ceilingBytes: 89_000, baselineBytes: 88_085 },
+  //
+  // **PR #259: 92,478 gzip (own chunk + 21 shared), up from 88,085.** The
+  // dominant term is not this route's own code but the shared
+  // `todo-quick-add-recognition-*.js` chunk's +8,708 (`SCHED-14`'s Repeat
+  // menu, `SCHED-11`'s Time dialog) — see `task-detail-view.tsx` above,
+  // which failed the same build off the same chunk. This route's own 20,438
+  // additionally carries the strings for the in-list Quick Add's footer
+  // ("Remove date", "More actions": `NAV-12`, `QA-15`) and the structural
+  // wording `NAV-06`/`STR-06` added ("My Filters", "Delete filter?").
+  //
+  // Ceiling 89,000 -> 99,000, still ~7% headroom rather than the ~30% this
+  // section's header describes, because Todo is the route where growth needs
+  // to stay deliberate: the previous ceiling left 915 bytes and that is what
+  // made this failure visible at all.
+  "src/pages/todo-page.tsx": { ceilingBytes: 99_000, baselineBytes: 92_478 },
 };
 
 /**
