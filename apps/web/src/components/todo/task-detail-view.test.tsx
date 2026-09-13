@@ -658,6 +658,35 @@ describe("TaskDetailView", () => {
       expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
       expect(screen.getByLabelText("Task name")).toBeInTheDocument();
     });
+
+    // DET-15 round 3 (`flow11-R3-DET-15-both.json`'s
+    // `attempt3_clickOutsideModal`, re-driven live against both apps):
+    // Discard after an OUTSIDE-CLICK trigger closes the whole detail
+    // modal in Todoist, because the click's own original intent — leave
+    // the task — completes once the discard is confirmed. This is new
+    // behaviour meologue didn't have before this fix: it used to only
+    // ever end editing, whichever gesture asked. Contrast the
+    // Cancel-button case (`clickDiscardAfterCancelTrigger` in the same
+    // artifact, and this file's own "clicking Discard in the
+    // confirmation ends editing... without closing the whole view" test
+    // above) and the Escape case just below — both keep `onClose`
+    // un-called, matching Todoist on every trigger but this one.
+    it("clicking Discard after an outside-click trigger closes the whole view too, matching Todoist", async () => {
+      const onClose = vi.fn();
+      const onRename = vi.fn();
+      renderView({ task: task({ content: "old title" }), onClose, onRename });
+
+      fireEvent.click(screen.getByRole("button", { name: "old title" }));
+      fireEvent.change(await screen.findByLabelText("Task name"), {
+        target: { value: "discard me" },
+      });
+      await clickOutside(document.body);
+      const confirmDialog = await screen.findByRole("alertdialog");
+      fireEvent.click(within(confirmDialog).getByRole("button", { name: "Discard" }));
+
+      expect(onRename).not.toHaveBeenCalled();
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("the breadcrumb reads Inbox for a Task with no Project", () => {
@@ -793,6 +822,69 @@ describe("TaskDetailView", () => {
     await screen.findByRole("alertdialog");
 
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  // DET-15 round 3: unlike the outside-click trigger (its own describe
+  // block above), Discard after an Escape-raised confirmation still only
+  // ends editing — Todoist's own re-drive never exercised Escape-then-
+  // Discard's scope directly, but `clickDiscardAfterCancelTrigger` in
+  // `flow11-R3-DET-15-both.json` groups "a Cancel-button or Escape-key
+  // trigger" together as one case, both leaving the modal open, and this
+  // is the spec's own explicit instruction: only the outside-click
+  // trigger changes scope.
+  it("clicking Discard after an Escape trigger ends editing but does not close the whole view", async () => {
+    const onClose = vi.fn();
+    const onRename = vi.fn();
+    renderView({ task: task({ content: "old title" }), onClose, onRename });
+
+    fireEvent.click(screen.getByRole("button", { name: "old title" }));
+    const titleField = await screen.findByLabelText("Task name");
+    fireEvent.change(titleField, { target: { value: "discard me" } });
+    fireEvent.keyDown(titleField, { key: "Escape" });
+    const confirmDialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(confirmDialog).getByRole("button", { name: "Discard" }));
+
+    expect(onRename).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "old title" })).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  // DET-15 round 3, gap 2 (`flow11-R3-DET-15-both.json`'s own
+  // `escapeInsideConfirmation`): live Todoist returns focus to the Task
+  // name editor, draft intact, once the confirmation itself is dismissed
+  // WITHOUT discarding. meologue previously dropped focus to
+  // `document.body` here, because the confirmation was opened
+  // programmatically (`requestCancelEditing`, not a click on a real
+  // trigger element), so Radix had nothing of its own to restore focus
+  // to. `lastFocusedEditorRef`/`onCloseAutoFocus` (task-detail-view.tsx)
+  // are what fix this — this test proves it inside jsdom, which is
+  // enough here: this suite's own `toHaveFocus` assertions elsewhere
+  // (e.g. the DET-10 focus-trap tests above) already rely on jsdom's
+  // focus tracking behaving like a real browser's for exactly this kind
+  // of check, so this is the same class of proof this file already
+  // leans on, not a new or weaker one.
+  it("Escape inside the open confirmation returns focus to the Task name editor, with the draft intact", async () => {
+    renderView({ task: task({ content: "old title" }) });
+
+    fireEvent.click(screen.getByRole("button", { name: "old title" }));
+    const titleField = await screen.findByLabelText("Task name");
+    fireEvent.change(titleField, { target: { value: "discard me" } });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    const confirmDialog = await screen.findByRole("alertdialog");
+
+    fireEvent.keyDown(confirmDialog, { key: "Escape" });
+
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    const titleFieldAfter = screen.getByLabelText("Task name");
+    expect(titleFieldAfter).toHaveValue("discard me");
+
+    // Radix's own `FocusScope` defers the close-autofocus dispatch by one
+    // tick (`setTimeout(..., 0)` in its unmount cleanup, so the closing
+    // container is fully out of the DOM first) — the identical async gap
+    // this file's own `clickOutside` helper above already waits out for
+    // Radix's outside-pointerdown listener, for the identical reason.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(titleFieldAfter).toHaveFocus();
   });
 
   it("prev/next chevrons are disabled when there's nothing further, and call onNavigate when there is", () => {

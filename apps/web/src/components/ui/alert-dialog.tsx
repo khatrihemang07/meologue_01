@@ -73,6 +73,20 @@ export interface ConfirmDialogProps {
    * run the delete itself.
    */
   onConfirm: () => void;
+  /**
+   * An optional passthrough to `Dialog.Content`'s own `onCloseAutoFocus`
+   * (task-detail-view.tsx's DET-15 focus-restore fix). Radix's default,
+   * with no caller here, is to return focus to whatever triggered the
+   * open — which is nothing, for a dialog `TaskDetailBody` opens
+   * programmatically rather than from a click, so that default leaves
+   * focus stranded on `document.body`. A caller that knows where focus
+   * should land instead (the field the reader was typing in before this
+   * confirmation interrupted them) calls `event.preventDefault()` here
+   * and focuses it directly. Every existing caller (this file's own two —
+   * entry-actions.tsx, sessions-page.tsx) omits this prop and keeps
+   * Radix's default behaviour unchanged.
+   */
+  onCloseAutoFocus?: (event: Event) => void;
 }
 
 /**
@@ -87,6 +101,7 @@ export function ConfirmDialog({
   description,
   confirmLabel,
   onConfirm,
+  onCloseAutoFocus,
 }: ConfirmDialogProps) {
   // See this file's top comment: reproduces AlertDialogContent's own
   // "focus Cancel, not the Content, on open" default by hand, since this
@@ -114,6 +129,7 @@ export function ConfirmDialog({
             event.preventDefault();
             cancelRef.current?.focus({ preventScroll: true });
           }}
+          onCloseAutoFocus={onCloseAutoFocus}
           className={cn(
             // Centered and fixed-width, unlike sheet.tsx's edge-anchored
             // SheetContent: this dialog is a single, short interruption

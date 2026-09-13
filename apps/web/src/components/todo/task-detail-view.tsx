@@ -486,6 +486,7 @@ function TaskDetailBody({
   labels,
   prevTask,
   nextTask,
+  onClose,
   onNavigate,
   onRename,
   onComplete,
@@ -509,7 +510,7 @@ function TaskDetailBody({
   wide,
   contentRef,
   dismissGuardRef,
-}: Omit<TaskDetailViewProps, "onClose"> & {
+}: TaskDetailViewProps & {
   wide: boolean;
   /**
    * DET-10: the dialog Content node itself (`TaskDetailView`'s own
@@ -532,11 +533,15 @@ function TaskDetailBody({
    * signal to `preventDefault()` so Radix's `DismissableLayer` never
    * dismisses the whole view for an interaction this form claimed first.
    * A ref rather than a prop read once: `TaskDetailView` calls
-   * `dismissGuardRef.current?.()` from a stable handler it hands to
+   * `dismissGuardRef.current?.(source)` from a stable handler it hands to
    * Radix at mount, so this needs to stay current across every render
-   * without that handler itself changing identity.
+   * without that handler itself changing identity. `source` distinguishes
+   * an outside click from Escape (DET-15 round 3's own gap): the two now
+   * disagree on what Discard does afterward — outside click closes the
+   * whole view, Escape does not — so this door needs to know which one
+   * it's answering, not just that a dismissal was attempted.
    */
-  dismissGuardRef: React.RefObject<(() => boolean) | null>;
+  dismissGuardRef: React.RefObject<((source: "escape" | "outside") => boolean) | null>;
 }) {
   // DET-09: editing is task-wide, not field-wide — clicking either the
   // title or the description puts BOTH into edit together, sharing one
@@ -615,6 +620,32 @@ function TaskDetailBody({
   // (once per field) would be asking about a boundary this form no
   // longer has.
   const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
+  // DET-15 round 3: which gesture opened the discard confirmation —
+  // Todoist's own live re-drive found this actually matters for what
+  // Discard does next (`flow11-R3-DET-15-both.json`'s
+  // `attempt3_clickOutsideModal`). An outside click's own intent was
+  // "leave the task," so confirming Discard there completes that intent
+  // and closes the whole view too; Cancel and Escape carry no such
+  // intent beyond "stop editing," so Discard there only ends editing,
+  // matching this file's pre-existing behaviour. Read once, at the
+  // moment `onConfirm` fires below — a plain ref, not state, since
+  // nothing here needs a re-render when it changes.
+  const cancelTriggeredByOutsideClickRef = useRef(false);
+  // DET-15 round 3, gap 2: sets when Discard itself was clicked, so the
+  // discard ConfirmDialog's own `onCloseAutoFocus` below can tell "this
+  // close is a Discard" (editing is ending or the whole view is closing —
+  // nothing to refocus) apart from "this close is a Cancel/Escape on the
+  // confirmation itself" (editing continues — focus belongs back on
+  // whichever editor the reader was last in).
+  const discardConfirmedRef = useRef(false);
+  // DET-15 round 3, gap 2: the editor element the reader was last typing
+  // in, tracked via a `focusin` listener on the edit column below rather
+  // than read from `document.activeElement` at confirm-dismiss time —
+  // by the time the confirmation (a separate, now-closing Radix layer)
+  // hands focus back, the field itself has already lost it, so there's
+  // nothing left in `document.activeElement` worth reading.
+  const lastFocusedEditorRef = useRef<HTMLElement | null>(null);
+  const editColumnRef = useRef<HTMLDivElement>(null);
   // ActivityFeed drops old "Edited a comment" events (CMT-06), so the badge
   // counts what it will actually show rather than what the store holds.
   const renderableEvents = events.filter(isRenderableEvent);
@@ -755,13 +786,67 @@ function TaskDetailBody({
   // still cancels straight through, matching Todoist's own behaviour —
   // the confirm is for data loss specifically, not for touching Cancel
   // at all.
-  function requestCancelEditing() {
+  // `fromOutsideClick` defaults to `false`: the Cancel button and both
+  // editors' own `onCancel` (their Escape handling — this file's own
+  // header comment on `CommentRow` above has the fuller account of why
+  // Escape inside an editor reaches its caller directly rather than
+  // through Radix) call this with no argument, and only ever meant "stop
+  // editing," never "leave the task." Only `dismissGuardRef` below ever
+  // passes `true`, and only for an actual outside click.
+  function requestCancelEditing(fromOutsideClick = false) {
     if (hasUnsavedChanges()) {
+      cancelTriggeredByOutsideClickRef.current = fromOutsideClick;
       setDiscardConfirmOpen(true);
       return;
     }
     cancelEditing();
   }
+
+  // DET-15 round 3, gap 2: remembers whichever editor (title or
+  // description) last held focus inside this form, so the discard
+  // confirmation's own `onCloseAutoFocus` below has somewhere real to
+  // send focus back to when it closes without a Discard. A `focusin`
+  // listener on the edit column rather than on each editor directly:
+  // this form's `editing` branch mounts/unmounts either editor freely
+  // (DET-09's shared Cancel/Save pair), and one listener on their common
+  // ancestor outlives both remounts without needing to be re-attached
+  // each time `focusField` changes. `focusin` (not `focus`, which
+  // doesn't bubble) is why this can live on the column at all rather
+  // than needing a ref on each editor's own host node.
+  //
+  // The real `TaskTitleEditor`/`TaskDescriptionEditor` are both
+  // ProseMirror instances whose focusable root is `[contenteditable=
+  // true]` (`task-title-editor.tsx`'s own header comment has the DOM
+  // shape); this file's own test doubles for both
+  // (`task-detail-view.test.tsx`'s `StubTaskTitleEditor`/
+  // `StubTaskDescriptionEditor`) stand in with a plain `<input>`/
+  // `<textarea>` instead, deliberately — mounting a real ProseMirror
+  // `EditorView` needs a real browser, the identical reason those
+  // doubles exist at all. Matching on tag name alongside the
+  // `contenteditable` attribute is what lets the identical listener
+  // track focus correctly against both, with no special-casing for
+  // which one is mounted.
+  useEffect(() => {
+    const column = editColumnRef.current;
+    if (column === null) {
+      return;
+    }
+    function handleFocusIn(event: FocusEvent) {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) {
+        return;
+      }
+      const isEditableSurface =
+        target.getAttribute("contenteditable") === "true" ||
+        target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA";
+      if (isEditableSurface) {
+        lastFocusedEditorRef.current = target;
+      }
+    }
+    column.addEventListener("focusin", handleFocusIn);
+    return () => column.removeEventListener("focusin", handleFocusIn);
+  }, []);
 
   // DET-15 (reworked after review): Escape and an outside click both used
   // to reach Radix's own Dialog Escape/outside-dismiss handling and close
@@ -794,11 +879,11 @@ function TaskDetailBody({
   // identical `xRef.current = ...` pattern `titleRecognitionOptionsRef`
   // above already uses), not in an effect: the value has to be current by
   // the time an interaction fires, and a plain assignment already is.
-  dismissGuardRef.current = () => {
+  dismissGuardRef.current = (source) => {
     if (!editing) {
       return false;
     }
-    requestCancelEditing();
+    requestCancelEditing(source === "outside");
     return true;
   };
 
@@ -917,6 +1002,7 @@ function TaskDetailBody({
         {/* biome-ignore lint/a11y/useKeyWithClickEvents: no keyboard equivalent of clicking empty space exists to pair this with — see the comment above. */}
         <div
           data-testid="task-detail-edit-column"
+          ref={editColumnRef}
           onClick={(event) => {
             if (editing && event.target === event.currentTarget) {
               contentRef.current?.focus();
@@ -1054,7 +1140,16 @@ function TaskDetailBody({
               <div className="flex justify-end gap-2">
                 <button
                   type="button"
-                  onClick={requestCancelEditing}
+                  // A wrapper, not `requestCancelEditing` passed
+                  // directly: React hands an `onClick` handler the
+                  // native (truthy) MouseEvent as its first argument,
+                  // which — passed straight through as this function's
+                  // now-optional `fromOutsideClick` parameter — would
+                  // read as "yes, this was an outside click" on every
+                  // ordinary Cancel-button press (DET-15 round 3's own
+                  // regression, caught by this file's own "clicking
+                  // Discard...without closing the whole view" test).
+                  onClick={() => requestCancelEditing()}
                   className="rounded-md border border-border px-2.5 py-1 text-sm transition hover:bg-muted"
                 >
                   Cancel
@@ -1196,7 +1291,56 @@ function TaskDetailBody({
             title="Discard unsaved changes?"
             description="Your unsaved changes will be discarded."
             confirmLabel="Discard"
-            onConfirm={cancelEditing}
+            // DET-15 round 3: matches live Todoist's own
+            // `attempt3_clickOutsideModal` finding
+            // (`flow11-R3-DET-15-both.json`) — Discard after an
+            // outside-click trigger completes that click's own original
+            // intent (leave the task) by closing the whole view too, on
+            // top of ending the edit every trigger already ends. Cancel
+            // and Escape leave `cancelTriggeredByOutsideClickRef` `false`
+            // (its own default, and `requestCancelEditing`'s), so Discard
+            // there stays exactly what it already was: end editing, keep
+            // the view open.
+            onConfirm={() => {
+              discardConfirmedRef.current = true;
+              cancelEditing();
+              if (cancelTriggeredByOutsideClickRef.current) {
+                onClose();
+              }
+            }}
+            // DET-15 round 3, gap 2: only reached when this confirmation
+            // closes WITHOUT Discard (Escape, or its own Cancel button —
+            // `discardConfirmedRef` is what tells the two apart, set only
+            // by `onConfirm` just above). Radix's own default here would
+            // restore focus to whatever triggered this dialog's open —
+            // nothing, since `requestCancelEditing` opens it
+            // programmatically — which is why live meologue previously
+            // dropped focus to `document.body`
+            // (`flow11-R3-DET-15-both.json`'s `escapeInsideConfirmation`).
+            // `preventDefault()` takes that default away in favour of the
+            // one place a reader dismissing this without discarding
+            // actually came from: whichever editor `lastFocusedEditorRef`
+            // last saw. A Discard close skips this entirely — editing is
+            // ending (or the whole view is), so there is no editor left
+            // to send focus back to.
+            // Radix defers this dispatch a tick (`FocusScope`'s own
+            // cleanup effect wraps it in `setTimeout(..., 0)`, so the
+            // container is fully gone from the DOM before anything tries
+            // to focus relative to it) — a caller (this file's own tests
+            // included) needs to let that tick pass before checking where
+            // focus landed, the identical `setTimeout(resolve, 0)` wait
+            // this file's own `clickOutside` test helper already uses for
+            // Radix's own outside-pointerdown listener, for the identical
+            // reason: a real async gap inside Radix, not a jsdom quirk to
+            // work around.
+            onCloseAutoFocus={(event) => {
+              if (discardConfirmedRef.current) {
+                discardConfirmedRef.current = false;
+                return;
+              }
+              event.preventDefault();
+              lastFocusedEditorRef.current?.focus();
+            }}
           />
 
           {/* CMT-03: deleting a Comment confirms first, verbatim wording
@@ -1434,7 +1578,7 @@ export function TaskDetailView(props: TaskDetailViewProps) {
   // for "not wired up" — `onEscapeKeyDown`/`onPointerDownOutside` below
   // both treat a missing or false-returning guard identically: let Radix
   // dismiss as it always has.
-  const dismissGuardRef = useRef<(() => boolean) | null>(null);
+  const dismissGuardRef = useRef<((source: "escape" | "outside") => boolean) | null>(null);
 
   function handleOpenChange(open: boolean) {
     if (!open) {
@@ -1515,12 +1659,12 @@ export function TaskDetailView(props: TaskDetailViewProps) {
           // buttons from ever reaching this Content's outside-pointerdown
           // detection as "outside" while it's open.
           onEscapeKeyDown={(event) => {
-            if (dismissGuardRef.current?.()) {
+            if (dismissGuardRef.current?.("escape")) {
               event.preventDefault();
             }
           }}
           onPointerDownOutside={(event) => {
-            if (dismissGuardRef.current?.()) {
+            if (dismissGuardRef.current?.("outside")) {
               event.preventDefault();
             }
           }}
