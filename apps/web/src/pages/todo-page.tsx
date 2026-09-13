@@ -1,7 +1,7 @@
 import type { Filter, Project, Section, Task } from "@meologue/core";
 import { today, upcoming } from "@meologue/core";
 import { useQuery } from "@tanstack/react-query";
-import { Suspense, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import { BackToChats } from "@/components/back-to-chats";
@@ -18,6 +18,7 @@ import { LazyTaskDetailView } from "@/components/todo/lazy-task-detail-view";
 import { LazyTaskScheduleSheet } from "@/components/todo/lazy-task-schedule-sheet";
 import { ProjectView } from "@/components/todo/project-view";
 import { ProjectsView } from "@/components/todo/projects-view";
+import { QuickAddDialog } from "@/components/todo/quick-add-dialog";
 import { TaskList } from "@/components/todo/task-list";
 import { TaskQuickFind } from "@/components/todo/task-quick-find";
 import type { TaskDetailActions } from "@/components/todo/task-row";
@@ -35,6 +36,7 @@ import type { QuickAddTaskFields } from "@/lib/quick-add-task";
 import { useSettingsStore } from "@/lib/settings";
 import { taskDetailPath, taskIdFromParam } from "@/lib/task-detail-route";
 import { commitTaskTitle } from "@/lib/task-title-commit";
+import { OPEN_QUICK_ADD_EVENT } from "@/lib/todo-keymap";
 import { useEntryStore } from "@/pages/entry-store-layout";
 
 /**
@@ -406,6 +408,24 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
   // neither owns a document listener of its own any more.
   const [quickFindOpen, setQuickFindOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+
+  // Issue #260 (NAV-07, parity ledger): the global Quick Add dialog's own
+  // `open` state, the identical "controlled from the page" shape
+  // `quickFindOpen`/`shortcutsOpen` above already use. Two different
+  // triggers ask for it — `Q` via `useTodoKeymap` below (dispatched as
+  // `OPEN_QUICK_ADD_EVENT`, `use-todo-keymap.ts`'s own `quick-add` case)
+  // and `todo-sidebar.tsx`'s "Add task" button, which dispatches the
+  // identical event directly since that component sits outside this
+  // page's own Outlet and has no other door in. One listener here answers
+  // both.
+  const [quickAddOpen, setQuickAddOpen] = useState(false);
+  useEffect(() => {
+    function handleOpenQuickAdd() {
+      setQuickAddOpen(true);
+    }
+    document.addEventListener(OPEN_QUICK_ADD_EVENT, handleOpenQuickAdd);
+    return () => document.removeEventListener(OPEN_QUICK_ADD_EVENT, handleOpenQuickAdd);
+  }, []);
 
   // CMT-05 (parity ledger) — the one thing `Z`/`⌘Z` (`use-todo-keymap.ts`'s
   // `undo-complete` binding) has to act on: the most recent completion's
@@ -1090,7 +1110,35 @@ export function TodoPage({ view = "inbox" }: TodoPageProps = {}) {
         backgroundView.view !== "filters" &&
         backgroundView.view !== "filter" &&
         backgroundView.view !== "labels" &&
-        backgroundView.view !== "upcoming" && <AddTaskForm onAdd={handleAdd} disabled={disabled} />}
+        backgroundView.view !== "upcoming" && (
+          <AddTaskForm
+            onAdd={handleAdd}
+            disabled={disabled}
+            projects={projects}
+            labels={labels}
+            onCreateProject={addProject}
+            onCreateLabel={addLabel}
+          />
+        )}
+
+      {/* NAV-07 (parity ledger): the global Quick Add dialog, reachable
+          from anywhere in Todo — the sidebar's "Add task" button and the
+          `Q` key both open it (this file's own `quickAddOpen` state doc
+          comment above). Shares `handleAdd` verbatim with the inline
+          composer above: `captureProjectId`/`captureDate`'s own doc
+          comment already resolves "the current view's Project, or Inbox"
+          for whichever view is on screen, exactly what this dialog needs
+          too, and there is no separate view-inheritance rule for it to
+          duplicate. */}
+      <QuickAddDialog
+        open={quickAddOpen}
+        onOpenChange={setQuickAddOpen}
+        onAdd={handleAdd}
+        projects={projects}
+        labels={labels}
+        onCreateProject={addProject}
+        onCreateLabel={addLabel}
+      />
 
       {/* The Completed disclosure is Inbox-specific — Today's own Tasks
           are never completed *from* Today in a way that would need a

@@ -1,7 +1,11 @@
 import type { Task } from "@meologue/core";
 import { fireEvent, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { OPEN_COMMAND_MENU_EVENT, OPEN_SCHEDULE_EVENT } from "@/lib/todo-keymap";
+import {
+  OPEN_COMMAND_MENU_EVENT,
+  OPEN_QUICK_ADD_EVENT,
+  OPEN_SCHEDULE_EVENT,
+} from "@/lib/todo-keymap";
 import { type UseTodoKeymapOptions, useTodoKeymap } from "./use-todo-keymap";
 
 function task(overrides: Partial<Task> = {}): Task {
@@ -240,6 +244,35 @@ describe("useTodoKeymap", () => {
 
     expect(listener).not.toHaveBeenCalled();
     document.removeEventListener(OPEN_COMMAND_MENU_EVENT, listener);
+  });
+
+  // Issue #260 (NAV-07/KBD-01, parity ledger): `Q` opens the global Quick
+  // Add dialog, dispatched as a bare document event (no `taskId` detail,
+  // unlike `command-menu`/`set-date` above) since `todo-page.tsx` is the
+  // one listener regardless of what, if anything, is focused.
+  it("dispatches OPEN_QUICK_ADD_EVENT on 'q'", () => {
+    renderKeymap();
+    const listener = vi.fn();
+    document.addEventListener(OPEN_QUICK_ADD_EVENT, listener);
+
+    fireEvent.keyDown(document, { key: "q" });
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    document.removeEventListener(OPEN_QUICK_ADD_EVENT, listener);
+  });
+
+  it("does not dispatch OPEN_QUICK_ADD_EVENT for 'q' typed into a text field", () => {
+    renderKeymap();
+    const listener = vi.fn();
+    document.addEventListener(OPEN_QUICK_ADD_EVENT, listener);
+    const input = document.createElement("input");
+    document.body.append(input);
+    input.focus();
+
+    fireEvent.keyDown(input, { key: "q" });
+
+    expect(listener).not.toHaveBeenCalled();
+    document.removeEventListener(OPEN_QUICK_ADD_EVENT, listener);
   });
 
   it("opens the focused Task's detail view on Cmd/Ctrl+E", () => {

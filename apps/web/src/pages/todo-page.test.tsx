@@ -48,6 +48,7 @@ function StubTaskTitleEditor({
   value,
   onChange,
   onCommit,
+  onCancel,
   ariaLabel,
   placeholder,
 }: {
@@ -72,9 +73,25 @@ function StubTaskTitleEditor({
         if (event.key === "Enter") {
           onCommit(text);
         }
+        if (event.key === "Escape") {
+          onCancel();
+        }
       }}
     />
   );
+}
+
+/**
+ * Issue #260: `AddTaskForm` is collapsed by default (NAV-12, parity
+ * ledger) — every test that used to type straight into an always-open
+ * field now has to click the quiet "Add task" trigger row first. Scoped
+ * to nothing in particular because `QuickAddDialog` (also rendered by
+ * `TodoPage`, unconditionally) stays unmounted by Radix while `open` is
+ * false, so there is exactly one "Add task"-named button in the tree
+ * until this click reveals the editor.
+ */
+async function revealAddTaskField(): Promise<void> {
+  fireEvent.click(await screen.findByRole("button", { name: "Add task" }));
 }
 
 vi.mock("@/components/todo/task-title-editor", () => ({
@@ -527,8 +544,9 @@ describe("TodoPage", () => {
     const addTask = vi.fn();
     renderTodoPage(inboxContext([], { addTask }));
 
-    fireEvent.change(await screen.findByLabelText("Add task"), { target: { value: "call mum" } });
-    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    await revealAddTaskField();
+    fireEvent.change(await screen.findByLabelText("Task name"), { target: { value: "call mum" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add task" }));
 
     // handleAdd (todo-page.tsx) awaits resolveLabelIds before calling
     // addTask — issue #170's own async label-resolution step, invisible
@@ -552,8 +570,9 @@ describe("TodoPage", () => {
     const addTask = vi.fn();
     renderTodoPage(readyContext({ addTask }), "/todo/today");
 
-    fireEvent.change(await screen.findByLabelText("Add task"), { target: { value: "call mum" } });
-    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    await revealAddTaskField();
+    fireEvent.change(await screen.findByLabelText("Task name"), { target: { value: "call mum" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add task" }));
 
     await waitFor(() =>
       expect(addTask).toHaveBeenCalledWith(
@@ -570,10 +589,11 @@ describe("TodoPage", () => {
     const addTask = vi.fn();
     renderTodoPage(readyContext({ addTask }), "/todo/today");
 
-    fireEvent.change(await screen.findByLabelText("Add task"), {
+    await revealAddTaskField();
+    fireEvent.change(await screen.findByLabelText("Task name"), {
       target: { value: "call mum tomorrow" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add task" }));
 
     await waitFor(() => expect(addTask).toHaveBeenCalled());
     const [content, overrides] = addTask.mock.calls[0] as [string, { date: string | null }];
@@ -584,7 +604,7 @@ describe("TodoPage", () => {
   it("disables the Add form while the store isn't ready", () => {
     renderTodoPage(readyContext({ disabled: true }));
 
-    expect(screen.getByLabelText("Add task")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Add task" })).toBeDisabled();
   });
 
   // CMT-04 (parity ledger): the completion toast is raised through
@@ -701,7 +721,8 @@ describe("TodoPage", () => {
       fireEvent.click(screen.getByRole("checkbox", { name: "Mark task as complete" }));
       expect(completeTask).toHaveBeenCalledWith("a");
 
-      const addField = screen.getByLabelText("Add task");
+      await revealAddTaskField();
+      const addField = await screen.findByLabelText("Task name");
       addField.focus();
       fireEvent.keyDown(addField, { key: "z", metaKey: true });
 
@@ -1083,14 +1104,14 @@ describe("TodoPage — Today", () => {
   it("still offers the Add form and Todo's own nav from Today", () => {
     renderTodoPage(readyContext(), "/todo/today");
 
-    // The "Add" button, not the field itself: this describe block runs
-    // under fake timers (this file's own `beforeEach` above), and the
-    // field is behind a `React.lazy` boundary (`add-task-form.tsx`'s own
-    // header comment) whose resolution `findByLabelText`'s internal
-    // polling can't observe without the timers being advanced — the
-    // button sits outside that boundary and is always present
-    // synchronously, which is all "still offers the Add form" needs.
-    expect(screen.getByRole("button", { name: "Add" })).toBeInTheDocument();
+    // The quiet "Add task" trigger button, not the editor itself: this
+    // describe block runs under fake timers (this file's own `beforeEach`
+    // above), and the editor only mounts (behind a `React.lazy` boundary,
+    // `add-task-form.tsx`'s own header comment) once that button is
+    // clicked and revealed — the collapsed trigger itself is always
+    // present synchronously, which is all "still offers the Add form"
+    // needs.
+    expect(screen.getByRole("button", { name: "Add task" })).toBeInTheDocument();
     expect(screen.getByRole("navigation", { name: "Todo" })).toBeInTheDocument();
   });
 
@@ -1288,8 +1309,9 @@ describe("TodoPage — Projects", () => {
     const addTask = vi.fn();
     renderTodoPage(readyContext({ projects: [project], addTask }), "/todo/projects/p1");
 
-    fireEvent.change(await screen.findByLabelText("Add task"), { target: { value: "buy milk" } });
-    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    await revealAddTaskField();
+    fireEvent.change(await screen.findByLabelText("Task name"), { target: { value: "buy milk" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add task" }));
 
     await waitFor(() =>
       expect(addTask).toHaveBeenCalledWith(

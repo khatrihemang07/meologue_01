@@ -114,6 +114,21 @@ export const TODO_KEY_BINDINGS: readonly TodoKeyBinding[] = [
     when: "always",
     keys: ["?"],
   },
+  // Issue #260 — NAV-07/KBD-01, parity ledger. `keyboard.md`'s own Quick
+  // Add section transcribes `Q` as "Add task", and its accessibility
+  // section (§3) DROVE this one live — "opened with `Q` for inspection
+  // only, then closed with Escape" — confirming the dialog it opens is
+  // the real `role="dialog"` `aria-label="Quick Add"` surface, not merely
+  // a transcribed claim. `allowInField` left at its default `false`: `q`
+  // is an ordinary letter, and every text field in this app (a rename, the
+  // add composer itself, a Description) needs to keep typing it.
+  {
+    id: "quick-add",
+    section: "General",
+    label: "Add task",
+    when: "always",
+    keys: ["q"],
+  },
   // CMT-05 (parity ledger), measured live: `docs/reference/todoist/
   // keyboard.md:74` transcribes the overlay's own General row as "Z or ⌘Z |
   // Undo" — bare `z` undoes there too, not just ⌘Z — so this follows the
@@ -374,6 +389,20 @@ export const OPEN_SCHEDULE_EVENT = "todo:open-schedule";
 export interface OpenScheduleEventDetail {
   taskId: string;
 }
+
+/**
+ * The identical fan-in one door over again (this module's own doc comment
+ * on `OPEN_SCHEDULE_EVENT`), for the `quick-add` binding (`Q`) above.
+ * `use-todo-keymap.ts` dispatches this with no detail — there is no Task
+ * to name, unlike the two events above — and `todo-page.tsx` listens for
+ * it to open its own `QuickAddDialog`. `todo-sidebar.tsx`'s "Add task"
+ * button dispatches the identical event directly, without going through
+ * the keymap at all: that component sits outside `EntryStoreLayout`'s
+ * Outlet (its own header comment) and has no `handleAdd`/store access to
+ * open the dialog itself, so a plain document event is the only door
+ * reaching across that boundary either trigger can use.
+ */
+export const OPEN_QUICK_ADD_EVENT = "todo:open-quick-add";
 
 /** The Task a keyboard action should act on — whichever row's own focusable element (`data-task-id`, `task-row.tsx`) currently holds focus, or `null` if none does. Read fresh at fire-time rather than tracked in state: the DOM's own focus is already the single source of truth every row's tab order already relies on (`keyboard.md` §2's own tab-order findings). */
 export function focusedTaskId(): string | null {

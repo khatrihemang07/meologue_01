@@ -69,6 +69,7 @@ import {
   PROJECTS_QUERY_KEY,
   TASKS_QUERY_KEY,
 } from "@/lib/query-keys";
+import { OPEN_QUICK_ADD_EVENT } from "@/lib/todo-keymap";
 import { cn } from "@/lib/utils";
 import { entryStoreQueryOptions } from "@/pages/entry-store-layout";
 
@@ -276,13 +277,25 @@ export function TodoSidebar() {
       aria-label="Todo"
       className="flex h-full flex-col gap-1 overflow-y-auto bg-muted p-2 text-[length:var(--td-chrome-font-size)]"
     >
-      <NavLink
-        to="/todo/inbox"
-        className="flex items-center gap-2.5 rounded-md px-2 py-1.5 hover:bg-muted"
+      {/*
+        NAV-07 (parity ledger), issue #260: this used to be a `NavLink` to
+        `/todo/inbox` — "the add field is *at* Inbox" was the old model.
+        Todoist's own sidebar "Add task" opens the global Quick Add dialog
+        from wherever the reader already is, not a navigation — so this is
+        now a plain button dispatching `OPEN_QUICK_ADD_EVENT`
+        (`todo-keymap.ts`'s own doc comment on that constant has the full
+        fan-in reasoning). This component sits outside `EntryStoreLayout`'s
+        Outlet (this file's own header comment) and has no `handleAdd` of
+        its own to call — `todo-page.tsx`, which does, is the listener.
+      */}
+      <button
+        type="button"
+        className="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-left hover:bg-muted"
+        onClick={() => document.dispatchEvent(new CustomEvent(OPEN_QUICK_ADD_EVENT))}
       >
         <Plus aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
         Add task
-      </NavLink>
+      </button>
       <NavLink
         to="/todo/search"
         className={({ isActive }) =>

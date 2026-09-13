@@ -26,9 +26,25 @@ function uniqueTaskContent(label: string): string {
   return `${label} ${randomUUID()}`;
 }
 
+/**
+ * Issue #260: the in-list add field is collapsed by default (NAV-12,
+ * parity ledger) — a quiet "Add task" row at the end of the list that
+ * expands into a real composer on click, rather than an always-open
+ * field. Every step below is scoped to `[data-add-task-field]`
+ * (`add-task-form.tsx`'s own wrapper, present in both its collapsed and
+ * expanded states) because Playwright's name matching is substring, not
+ * exact, and this page now has THREE things that can answer to "Add
+ * task": the sidebar's own global-Quick-Add button (`todo-sidebar.tsx`),
+ * this row's collapsed trigger, and its own expanded submit button —
+ * scoping to the one wrapper that only ever contains the list's own
+ * affordance (never the sidebar's) is what keeps `.click()` from ever
+ * landing on the wrong one.
+ */
 async function addTask(page: import("@playwright/test").Page, content: string): Promise<void> {
-  await page.getByLabel("Add task").fill(content);
-  await page.getByRole("button", { name: "Add" }).click();
+  const composer = page.locator("[data-add-task-field]");
+  await composer.getByRole("button", { name: "Add task", exact: true }).click();
+  await composer.getByLabel("Task name", { exact: true }).fill(content);
+  await composer.getByRole("button", { name: "Add task", exact: true }).click();
 }
 
 test("adding, completing (with Undo), reordering and reloading all leave Todo exactly where the reader left it", async ({

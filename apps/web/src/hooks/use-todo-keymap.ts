@@ -8,6 +8,7 @@ import {
   isInsideOverlay,
   isTypingTarget,
   OPEN_COMMAND_MENU_EVENT,
+  OPEN_QUICK_ADD_EVENT,
   OPEN_SCHEDULE_EVENT,
   TODO_KEY_BINDINGS,
   type TodoKeyBinding,
@@ -107,6 +108,16 @@ export function useTodoKeymap(options: UseTodoKeymapOptions): void {
           return;
         case "show-shortcuts":
           opts.onShowShortcuts();
+          return;
+        // Issue #260: `Q` opens the global Quick Add dialog — a bare
+        // document event, the same fan-in `command-menu`/`set-date` below
+        // already use, because `todo-page.tsx` (the one place that both
+        // mounts this hook and owns `QuickAddDialog`/`handleAdd`) is the
+        // only listener; no `onOpenQuickAdd` option was added here on
+        // purpose, to keep this hook's own option surface from growing for
+        // a call site that already has a working event to dispatch on.
+        case "quick-add":
+          document.dispatchEvent(new CustomEvent(OPEN_QUICK_ADD_EVENT));
           return;
         case "undo-complete":
           opts.onUndoComplete();

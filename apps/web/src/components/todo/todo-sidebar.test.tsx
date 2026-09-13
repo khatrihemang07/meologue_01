@@ -128,16 +128,47 @@ describe("TodoSidebar", () => {
     expect(screen.getByRole("navigation")).toHaveAccessibleName("Todo");
   });
 
-  it("offers Add task, Search, Inbox, Today, Upcoming and Filters & Labels as real links, in that order", async () => {
+  // NAV-07 (parity ledger), issue #260: "Add task" stopped being a link to
+  // `/todo/inbox` the moment it started opening the global Quick Add
+  // dialog instead of navigating anywhere — Todoist's own sidebar entry
+  // does the identical thing (opens Quick Add from wherever the reader
+  // already is). It is asserted separately, by role="button", from the
+  // five real navigation links below.
+  it("offers Add task as a button (not a link) that opens Quick Add from anywhere", async () => {
+    renderSidebar("/todo/inbox");
+    await screen.findByRole("link", { name: "Inbox" });
+
+    const nav = screen.getByRole("navigation");
+    expect(within(nav).getByRole("button", { name: "Add task" })).toBeInTheDocument();
+    expect(within(nav).queryByRole("link", { name: "Add task" })).not.toBeInTheDocument();
+  });
+
+  it("dispatches OPEN_QUICK_ADD_EVENT when Add task is clicked", async () => {
+    const { OPEN_QUICK_ADD_EVENT } = await import("@/lib/todo-keymap");
+    const { fireEvent } = await import("@testing-library/react");
+    const handler = vi.fn();
+    document.addEventListener(OPEN_QUICK_ADD_EVENT, handler);
+    try {
+      renderSidebar("/todo/inbox");
+      await screen.findByRole("link", { name: "Inbox" });
+
+      fireEvent.click(screen.getByRole("button", { name: "Add task" }));
+
+      expect(handler).toHaveBeenCalledTimes(1);
+    } finally {
+      document.removeEventListener(OPEN_QUICK_ADD_EVENT, handler);
+    }
+  });
+
+  it("offers Search, Inbox, Today, Upcoming and Filters & Labels as real links, in that order", async () => {
     renderSidebar("/todo/inbox");
     await screen.findByRole("link", { name: "Inbox" });
 
     const nav = screen.getByRole("navigation");
     const links = within(nav).getAllByRole("link");
-    const hrefs = links.slice(0, 6).map((link) => link.getAttribute("href"));
+    const hrefs = links.slice(0, 5).map((link) => link.getAttribute("href"));
 
     expect(hrefs).toEqual([
-      "/todo/inbox",
       "/todo/search",
       "/todo/inbox",
       "/todo/today",
